@@ -57,6 +57,11 @@ multipart = ["r2e-core/multipart"]
 quic = ["r2e-core/quic"]
 # NOTE: dev-reload is intentionally NOT in `full` — never include in production builds
 dev-reload = ["dep:r2e-devtools", "r2e-core/dev-reload"]
+# Paused clocks for `#[r2e::main(start_paused = true)]` / `#[r2e::test(...)]`.
+# NOT in `full`: `tokio/test-util` changes timer behaviour, and feature
+# unification would leak it into production builds. `r2e-test` turns it on, so
+# a crate that depends on r2e-test gets it in its dev graph only.
+test-util = ["r2e-core/test-util"]
 
 [dependencies]
 r2e-core = {workspace = true}

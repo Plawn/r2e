@@ -41,12 +41,12 @@ fn injection_is_a_noop_without_an_otel_span() {
 
 /// One-shot HTTP/1 server: accepts a single connection, returns the raw
 /// request head, answers `200 OK`.
-async fn one_shot_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<String>) {
+async fn one_shot_server() -> (std::net::SocketAddr, r2e_core::rt::JobHandle<String>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move {
+    let handle = r2e_core::rt::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut buf = vec![0u8; 8192];
         let mut head = String::new();

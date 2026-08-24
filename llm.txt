@@ -2847,8 +2847,8 @@ Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown
 
 ### Long-running services — `#[derive(BackgroundService)]`
 
-A service component is built from the bean graph and started once, with a
-`CancellationToken` cancelled at shutdown. Fields use the app-scoped injection
+A service component is built from the bean graph and started once, with an
+`rt::CancelToken` cancelled at shutdown. Fields use the app-scoped injection
 attributes (`#[inject]`, `#[config]`, `#[config_section]`, `#[live_config]`);
 you write `run`, the derive writes `ServiceComponent`:
 
@@ -2860,7 +2860,7 @@ pub struct MetricsExporter {
 }
 
 impl MetricsExporter {
-    async fn run(&self, shutdown: CancellationToken) { /* loop until cancelled */ }
+    async fn run(&self, shutdown: rt::CancelToken) { /* loop until cancelled */ }
 }
 
 AppBuilder::new()
@@ -2872,7 +2872,7 @@ AppBuilder::new()
 ```
 
 `spawn_service` comes from the `SpawnService` extension trait (in the prelude),
-like `register_controller`. Each service gets its own `CancellationToken`,
+like `register_controller`. Each service gets its own `rt::CancelToken`,
 minted as a **child of the app shutdown token** (itself created lazily on the
 first `register_service`/`run()` and shared through `plugin_data`): the normal
 shutdown sequence
@@ -2939,8 +2939,15 @@ a dropped future. `From` converts both ways with
 Also re-exported, identity unchanged, so the `tokio::` name disappears at zero
 cost: `rt::sync::{mpsc, oneshot, broadcast, watch, Mutex, RwLock, Notify,
 Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!}`, `rt::JoinSet`,
-`rt::stream` (`tokio-stream`), and `rt::{RuntimeBuilder, Runtime, block_on}`
-for owning a runtime yourself.
+`rt::stream` (`tokio-stream`), `rt::TcpListener`, and
+`rt::{RuntimeBuilder, Runtime, RuntimeHandle, block_on, block_in_place}` for
+owning a runtime yourself.
+
+`#[r2e::main]` / `#[r2e::test]` / `#[r2e::test_suite]` build their runtime
+through `rt::RuntimeBuilder`, so a generated project needs **no** `tokio` entry
+in its own `Cargo.toml`. `start_paused = true` needs the paused clock, which is
+behind a non-default feature: enable `r2e/test-util` (a crate depending on
+`r2e-test` already gets it in its dev graph).
 
 Serve-time work still goes through `ServeContext::track`, never a bare
 `rt::spawn` — see "AppBuilder — full assembly order".

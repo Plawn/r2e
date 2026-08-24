@@ -144,7 +144,7 @@ impl ServeContext {
 
     /// Token cancelled when graceful shutdown begins.
     pub fn shutdown_token(&self) -> crate::rt::CancelToken {
-        self.shutdown.clone().into()
+        self.shutdown.clone()
     }
 
     /// Spawn a tracked task: its completion is awaited after the HTTP drain

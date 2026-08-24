@@ -12,12 +12,3 @@
 #
 # Regenerate with: scripts/check-source-boundary.sh --update
 
-r2e-cli/src/commands/templates/project.rs:1
-r2e-devservices/src/common.rs:3
-r2e-devservices/src/lib.rs:1
-r2e-devservices/src/ryuk.rs:3
-r2e-devservices/src/service.rs:1
-r2e-macros/src/lib.rs:1
-r2e-macros/src/util/runtime_args.rs:3
-r2e-test/src/server.rs:3
-r2e-test/src/ws.rs:4

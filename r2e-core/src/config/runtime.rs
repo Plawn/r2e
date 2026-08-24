@@ -31,7 +31,7 @@ impl ConfigWatchContext {
     pub fn new(profile: impl Into<String>, shutdown: crate::rt::CancelToken) -> Self {
         Self {
             profile: profile.into(),
-            shutdown: shutdown.into(),
+            shutdown,
         }
     }
 
@@ -42,7 +42,7 @@ impl ConfigWatchContext {
 
     #[must_use]
     pub fn shutdown_token(&self) -> crate::rt::CancelToken {
-        self.shutdown.clone().into()
+        self.shutdown.clone()
     }
 }
 

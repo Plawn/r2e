@@ -15,3 +15,20 @@ disallowed-methods = [
     { path = "tokio::runtime::Handle::spawn", reason = "use r2e_rt::spawn_ctl / r2e_core::rt::spawn_ctl" },
     { path = "tokio::runtime::Handle::spawn_blocking", reason = "use r2e_rt::spawn_blocking / r2e_core::rt::spawn_blocking" },
 ]
+
+# Types that leak the runtime's identity into an API. Naming them outside
+# `r2e-rt` re-couples a signature to tokio, which is exactly what the facade
+# exists to prevent (plans/runtime-http-dependency-containment.md).
+#
+# Not denied: the runtime-neutral primitives (`tokio::sync::*`, `Instant`,
+# `JoinSet`, …) that r2e-rt re-exports *by identity* — flagging those would
+# flag the facade's own re-export sites for no gain.
+#
+# The only exemptions are the `#[expect]`-marked wrapper fields and
+# constructors in r2e-rt/src/lib.rs, plus the by-design test harnesses
+# (r2e-test, r2e-devservices) which own a runtime on purpose.
+disallowed-types = [
+    { path = "tokio_util::sync::CancellationToken", reason = "use r2e_rt::CancelToken / r2e_core::rt::CancelToken" },
+    { path = "tokio::task::JoinHandle", reason = "use r2e_rt::JobHandle / r2e_core::rt::JobHandle" },
+    { path = "tokio::runtime::Handle", reason = "use r2e_rt::RuntimeHandle / r2e_core::rt::RuntimeHandle" },
+]

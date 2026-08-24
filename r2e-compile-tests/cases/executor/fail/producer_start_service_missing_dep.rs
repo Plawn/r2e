@@ -10,7 +10,7 @@
 //! `ServiceComponent::from_context` when the service task started.
 
 use r2e::prelude::*;
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 /// The bean the service needs — deliberately never provided.
 #[derive(Clone)]
@@ -23,7 +23,7 @@ pub struct MetricsExporter {
 }
 
 impl MetricsExporter {
-    async fn run(&self, shutdown: CancellationToken) {
+    async fn run(&self, shutdown: CancelToken) {
         let _ = &self.sink;
         shutdown.cancelled().await;
     }

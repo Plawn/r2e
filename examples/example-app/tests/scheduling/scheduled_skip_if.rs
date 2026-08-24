@@ -19,7 +19,7 @@ use r2e::r2e_scheduler::{
 };
 use r2e::Controller as ControllerTrait;
 use r2e::TaskRegistryHandle;
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 // ─── Helper: call the generated `scheduled_tasks_boxed` while letting the
 // compiler infer the extraction-marker witness `W` (same pattern as
@@ -104,7 +104,7 @@ async fn controller_skip_if_gates_ticks() {
     assert_eq!(tasks.len(), 1);
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(
@@ -154,7 +154,7 @@ async fn bean_async_skip_if_gates_ticks() {
     assert_eq!(tasks[0].name(), "gated_bean_tick");
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(

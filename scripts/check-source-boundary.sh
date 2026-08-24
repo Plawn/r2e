@@ -13,10 +13,24 @@
 # NOT part of the boundary (test harnesses and user-facing examples may name
 # the runtime freely).
 #
-# Also excluded BY DESIGN: r2e-rt/ — it IS the runtime facade, the one crate the
-# workspace allows to name tokio (plans/runtime-http-dependency-containment.md
-# §4). Its occurrences are the destination of the migration, not debt to shrink;
-# baselining them would make every line moved INTO the facade look like growth.
+# Also excluded BY DESIGN from the *tokio* group (see
+# plans/runtime-http-dependency-containment.md §4 — the permanent allowlist):
+#
+#   r2e-rt/         it IS the runtime facade, the one crate the workspace allows
+#                   to name tokio. Its occurrences are the destination of the
+#                   migration, not debt to shrink; baselining them would make
+#                   every line moved INTO the facade look like growth.
+#   r2e-test/       the test harness owns a runtime on purpose: TestServer binds
+#                   a real TcpListener and drives axum::serve, WsTestClient
+#                   drives tokio-tungstenite. Routing those through the facade
+#                   would buy nothing — a harness is never in a production
+#                   binary — and would force runtime-shaped API into r2e-rt.
+#   r2e-devservices/ same, for testcontainers: the Ryuk reaper and the
+#                   workspace-session container plumbing are dev-only and speak
+#                   testcontainers' own tokio-typed API.
+#
+# These exclusions are *per group*: r2e-test still counts for the axum group,
+# where a harness naming axum::Router is ordinary debt like anywhere else.
 #
 # Each per-file count is compared against a checked-in baseline of `path:count`
 # lines. The check FAILS when a count grows or when a file that was clean gains
@@ -49,14 +63,22 @@ git ls-files \
     | grep -E '(^|/)src/' \
     | grep -vE '^(vendor|examples|docs|\.claude)/' \
     | grep -vE '(^|/)tests/' \
-    | grep -vE '^r2e-rt/' \
     | sort >"$FILELIST"
+
+# Per-group by-design exclusions (see the header). Empty = nothing excluded.
+TOKIO_EXCLUDE='^(r2e-rt|r2e-test|r2e-devservices)/'
+AXUM_EXCLUDE=''
 
 # ── scan: emit `path:count` for every file with >= 1 occurrence of $1 ──────
 scan_group() {
-    local pattern="$1"
+    local pattern="$1" exclude="${2:-}"
+    local list="$FILELIST"
+    if [ -n "$exclude" ]; then
+        list="$TMPDIR_BOUNDARY/files-filtered.txt"
+        grep -vE "$exclude" "$FILELIST" >"$list" || true
+    fi
     # `-H` keeps the filename prefix even when xargs hands grep a single file.
-    tr '\n' '\0' <"$FILELIST" \
+    tr '\n' '\0' <"$list" \
         | xargs -0 grep -oHE "$pattern" 2>/dev/null \
         | cut -d: -f1 \
         | sort \
@@ -66,8 +88,10 @@ scan_group() {
         || true
 }
 
+# A fully-migrated group has an empty baseline, so `grep -v '^$'` legitimately
+# matches nothing — swallow its exit 1 rather than letting pipefail kill the run.
 clean_baseline() {
-    sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$1" | grep -v '^$' | sort
+    sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$1" | grep -v '^$' | sort || true
 }
 
 write_baseline() {
@@ -94,10 +118,10 @@ write_baseline() {
 FAILED=0
 
 check_group() {
-    local group="$1" pattern="$2" baseline="$3"
+    local group="$1" pattern="$2" baseline="$3" exclude="${4:-}"
 
     local current="$TMPDIR_BOUNDARY/current-$group.txt"
-    scan_group "$pattern" >"$current"
+    scan_group "$pattern" "$exclude" >"$current"
 
     if [ "$MODE" = "update" ]; then
         write_baseline "$baseline" "$group" "$current"
@@ -167,8 +191,8 @@ check_group() {
     fi
 }
 
-check_group "tokio" '\btokio(_util|_stream)?::' "$BOUNDARY_DIR/src-baseline-tokio.txt"
-check_group "axum" '\baxum::' "$BOUNDARY_DIR/src-baseline-axum.txt"
+check_group "tokio" '\btokio(_util|_stream)?::' "$BOUNDARY_DIR/src-baseline-tokio.txt" "$TOKIO_EXCLUDE"
+check_group "axum" '\baxum::' "$BOUNDARY_DIR/src-baseline-axum.txt" "$AXUM_EXCLUDE"
 
 if [ "$FAILED" -ne 0 ]; then
     echo "source boundary check FAILED — see plans/runtime-http-dependency-containment.md" >&2

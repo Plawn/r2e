@@ -8,7 +8,7 @@
 //! by the producer).
 
 use r2e::prelude::*;
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 #[derive(Clone)]
 pub struct MetricsSink;
@@ -23,7 +23,7 @@ pub struct MetricsExporter {
 }
 
 impl MetricsExporter {
-    async fn run(&self, shutdown: CancellationToken) {
+    async fn run(&self, shutdown: CancelToken) {
         let _ = &self.sink;
         shutdown.cancelled().await;
     }

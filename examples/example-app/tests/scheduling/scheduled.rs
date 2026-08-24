@@ -9,7 +9,7 @@ use r2e::r2e_scheduler::{
     extract_tasks, start_jobs, ScheduledJobRegistry, SchedulerCommands,
 };
 use r2e::Controller as ControllerTrait;
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 // ─── Helper: call the generated `scheduled_tasks_boxed` while letting the
 // compiler infer the extraction-marker witness `W`.
@@ -172,7 +172,7 @@ async fn test_scheduled_interval_runs() {
         .await;
     let core = Arc::new(IntervalCounter::from_context(builder.bean_context()));
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
 
     // Get scheduled task definitions from the controller (type-erased)
     let boxed_tasks = IntervalCounter::boxed_tasks(builder.state(), core, builder.bean_context());
@@ -224,7 +224,7 @@ async fn test_scheduled_cancellation_stops() {
         .await;
     let core = Arc::new(IntervalCounter::from_context(builder.bean_context()));
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
 
     let boxed_tasks = IntervalCounter::boxed_tasks(builder.state(), core, builder.bean_context());
     let tasks = extract_tasks(boxed_tasks);
@@ -278,7 +278,7 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
     let tasks = extract_tasks(boxed);
     assert_eq!(tasks.len(), 2);
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(
@@ -406,7 +406,7 @@ async fn scheduled_task_reuses_supplied_core_for_every_tick() {
     let base = clones.load(Ordering::SeqCst);
 
     let tasks = extract_tasks(boxed);
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(

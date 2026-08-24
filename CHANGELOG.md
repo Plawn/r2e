@@ -76,6 +76,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (re-exported, since axum's `serve` takes the concrete type). Also new:
   `rt::block_in_place` and `CancelToken::cancelled_owned`.
 
+- **`#[r2e::main]` / `#[r2e::test]` / `#[r2e::test_suite]` and
+  `#[derive(BackgroundService)]` now emit facade paths** — the runtime is built
+  through `<crate root>::rt::RuntimeBuilder` and the service token is
+  `<crate root>::rt::CancelToken`, resolved through the same `r2e` /
+  `r2e_core` root every other emitted path uses. **A generated project no
+  longer needs `tokio` in its `Cargo.toml`** (`r2e new` stopped emitting it).
+  `start_paused = true` needs the paused clock, now behind a forwarded feature:
+  `r2e/test-util` → `r2e-core/test-util` → `r2e-rt/test-util`, which `r2e-test`
+  turns on so it is present in any crate's dev graph and absent from release
+  builds.
+
+- **`clippy.toml`** grew a `disallowed-types` list —
+  `tokio_util::sync::CancellationToken`, `tokio::task::JoinHandle`,
+  `tokio::runtime::Handle` — next to the existing `disallowed-methods` deny on
+  raw spawns. Runtime-neutral primitives (`tokio::sync::*`, `Instant`,
+  `JoinSet`, …) stay allowed: they are re-exported by identity. The only
+  exemptions are the `#[expect]`-marked wrapper definitions in `r2e-rt`.
+
 - `r2e-events` (+ the `iggy` / `kafka` / `pulsar` / `rabbitmq` backends),
   `r2e-scheduler`, `r2e-executor` and `r2e-tenant` now go through the `rt`
   facade for spawning, timers, sync primitives and `select!`, and **dropped

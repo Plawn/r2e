@@ -91,7 +91,7 @@ fn resolve_lazy_factory_without_runtime_panics() {
     });
     let msg = panic_message(result.unwrap_err());
     assert!(
-        msg.contains("requires a Tokio runtime"),
+        msg.contains("requires an async runtime"),
         "unexpected panic message: {msg}"
     );
 }

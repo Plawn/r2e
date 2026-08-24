@@ -182,7 +182,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         quote! {}
     };
 
-    let runtime_builder = args.runtime.builder_tokens();
+    let runtime_builder = args.runtime.builder_tokens(&krate);
 
     let test_attr = if is_test {
         quote! { #[::core::prelude::v1::test] }

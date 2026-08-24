@@ -63,7 +63,8 @@
 //!
 //! - **this crate** — it *is* the facade.
 //! - `r2e-test`, `r2e-devservices` — test harnesses; they legitimately own a
-//!   runtime.
+//!   runtime. `scripts/check-source-boundary.sh` excludes them from the tokio
+//!   group only, so `r2e-test` still counts for the axum one.
 //!
 //! `r2e-core/src/runtime/sharded.rs` used to be listed here — building the
 //! per-worker `current_thread` runtimes *is* the sharding mechanism. It no
@@ -146,6 +147,10 @@ impl std::error::Error for JoinError {}
 ///
 /// The inner `tokio::task::JoinHandle<T>` is private to decouple callers from
 /// tokio's type.
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 pub struct JobHandle<T>(tokio::task::JoinHandle<T>);
 
 impl<T> JobHandle<T> {
@@ -347,6 +352,10 @@ where
 /// may run outside a runtime (a `Drop` impl detaching cleanup work) check this
 /// before spawning.
 #[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 pub fn in_runtime() -> bool {
     tokio::runtime::Handle::try_current().is_ok()
 }
@@ -471,6 +480,10 @@ pub mod sync {
 /// [`cancelled`](Self::cancelled) resolves immediately, forever. Clones share
 /// one signal; [`child_token`](Self::child_token) creates a token that can be
 /// cancelled on its own **and** is cancelled with its parent.
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 #[derive(Clone, Debug, Default)]
 pub struct CancelToken(tokio_util::sync::CancellationToken);
 
@@ -530,6 +543,10 @@ impl CancelToken {
     /// `.into()` / this accessor. Not part of the stable surface.
     #[doc(hidden)]
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+    )]
     pub fn into_inner(self) -> tokio_util::sync::CancellationToken {
         self.0
     }
@@ -537,17 +554,29 @@ impl CancelToken {
     /// Borrow the wrapped tokio-util token. See [`into_inner`](Self::into_inner).
     #[doc(hidden)]
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+    )]
     pub fn inner(&self) -> &tokio_util::sync::CancellationToken {
         &self.0
     }
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 impl From<tokio_util::sync::CancellationToken> for CancelToken {
     fn from(token: tokio_util::sync::CancellationToken) -> Self {
         Self(token)
     }
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 impl From<CancelToken> for tokio_util::sync::CancellationToken {
     fn from(token: CancelToken) -> Self {
         token.0
@@ -594,6 +623,10 @@ impl Runtime {
 ///
 /// Wraps `tokio::runtime::Handle` so the sharded worker plumbing and the
 /// lazy-bean off-runtime resolution path never name `tokio::runtime`.
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
 #[derive(Clone, Debug)]
 pub struct RuntimeHandle(tokio::runtime::Handle);
 
@@ -606,12 +639,20 @@ impl RuntimeHandle {
     /// [`try_current`](Self::try_current) (or [`in_runtime`]) when that is
     /// possible.
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+    )]
     pub fn current() -> Self {
         Self(tokio::runtime::Handle::current())
     }
 
     /// The handle of the runtime driving the current thread, or `None`.
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+    )]
     pub fn try_current() -> Option<Self> {
         tokio::runtime::Handle::try_current().ok().map(Self)
     }

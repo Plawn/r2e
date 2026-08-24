@@ -1,14 +1,20 @@
 //! Shared attribute-parsing helpers for the runtime-driving macros
 //! (`#[r2e::main]` / `#[r2e::test]` and `#[r2e::test_suite]`).
 //!
-//! Both macros accept the same Tokio `runtime::Builder` knobs and the same
+//! Both macros accept the same runtime-builder knobs and the same
 //! literal-parsing helpers; [`RuntimeArgs`] owns that shared surface so the two
 //! argument parsers only spell out their macro-specific keys.
+//!
+//! The emitted chain goes through `#krate::rt::RuntimeBuilder` — the facade —
+//! rather than the runtime crate's own builder: user crates depend on `r2e` (or
+//! `r2e_core`), never on `r2e-rt` directly, so the path has to be resolved
+//! through [`r2e_core_path`](crate::util::crate_path::r2e_core_path) by the
+//! caller and passed in as `krate`.
 
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 
-/// The Tokio `runtime::Builder` knobs shared by every runtime-driving macro.
+/// The `rt::RuntimeBuilder` knobs shared by every runtime-driving macro.
 ///
 /// `flavor`: `None` = user did not set it, `Some(true)` = current_thread,
 /// `Some(false)` = multi_thread (the default).
@@ -60,13 +66,16 @@ impl RuntimeArgs {
         Ok(true)
     }
 
-    /// Generate the full `tokio::runtime::Builder` chain including `.build()`.
+    /// Generate the full `rt::RuntimeBuilder` chain including `.build()`.
     /// Defaults to `new_multi_thread()` unless `flavor = "current_thread"`.
-    pub fn builder_tokens(&self) -> TokenStream2 {
+    ///
+    /// `krate` is the resolved r2e-core root (`::r2e`, `::r2e_core` or
+    /// `crate`); the builder is reached through its `rt` re-export.
+    pub fn builder_tokens(&self, krate: &TokenStream2) -> TokenStream2 {
         let builder_fn = if self.flavor.unwrap_or(false) {
-            quote! { ::tokio::runtime::Builder::new_current_thread() }
+            quote! { #krate::rt::RuntimeBuilder::new_current_thread() }
         } else {
-            quote! { ::tokio::runtime::Builder::new_multi_thread() }
+            quote! { #krate::rt::RuntimeBuilder::new_multi_thread() }
         };
         let worker_threads = self.worker_threads.map(|n| quote! { .worker_threads(#n) });
         let max_blocking = self
@@ -100,7 +109,7 @@ impl RuntimeArgs {
                 #start_paused
                 .enable_all()
                 .build()
-                .expect("failed to build tokio runtime")
+                .expect("failed to build r2e runtime")
         }
     }
 }

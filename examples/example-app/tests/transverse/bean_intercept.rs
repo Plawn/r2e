@@ -18,7 +18,7 @@ use r2e::r2e_scheduler::{
     extract_tasks, start_jobs, ScheduledJobRegistry, Scheduler, SchedulerCommands,
 };
 use r2e::{Decorate, TaskRegistryHandle};
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 // ─── Evidence bean + a bean-reading interceptor spec (non-TNil Deps) ───
 
@@ -215,7 +215,7 @@ async fn scheduled_interceptor_fires_on_ticks() {
     let tasks = extract_tasks(registry.take_of::<ScheduledTaskMarker>());
     assert_eq!(tasks.len(), 2, "two scheduled methods collected");
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(

@@ -74,7 +74,7 @@ pub(crate) trait LazyResolve: Send + Sync {
 /// or the global fallback runtime via [`resolve_on`] — and the result is
 /// cached in `OnceLock`.
 ///
-/// **Runtime note:** this requires a Tokio multi-thread runtime, a
+/// **Runtime note:** this requires a multi-thread runtime, a
 /// registered control-plane handle, or the `lazy-fallback-runtime` feature
 /// (which covers current-thread runtimes and runtime-less threads).
 pub(crate) struct LazySlot<T: Clone + Send + Sync + 'static> {

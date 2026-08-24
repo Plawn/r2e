@@ -159,10 +159,16 @@ through the direct `tokio` dependency the emitting crates still have.
 **Permanently allowlisted, by design** — document each in `r2e-rt`'s module docs:
 
 - `r2e-rt` itself.
-- `r2e-core/src/runtime/sharded.rs` — building `current_thread` runtimes *is*
-  the sharding mechanism, not a touchpoint to abstract.
 - `r2e-test`, `r2e-devservices` — test harnesses; they legitimately own a
   runtime. Keep them out of the boundary check rather than pretending.
+  Excluded per-group in `check-source-boundary.sh` (`TOKIO_EXCLUDE`), so
+  `r2e-test` still counts for the axum group.
+
+~~`r2e-core/src/runtime/sharded.rs`~~ — was on this list on the assumption that
+building `current_thread` runtimes cannot be expressed on a facade. It can:
+2e added `rt::RuntimeHandle` (wrapping `tokio::runtime::Handle`) and
+`rt::TcpListener`, which together with the existing `rt::RuntimeBuilder` cover
+every construct the sharded path uses. It is migrated, not allowlisted.
 
 End state: `cargo tree -i tokio --workspace` shows `r2e-rt` as the only direct
 dependent outside that allowlist.
@@ -242,8 +248,10 @@ the axum goal.
 
 - `scripts/check-dep-boundary.sh` green with `tokio` allowlist =
   `{r2e-rt, r2e-test, r2e-devservices}` and `axum` allowlist = `{r2e-http}`.
-- `scripts/check-source-boundary.sh` allowlist contains only the four
-  by-design entries of §4.
+- `scripts/check-source-boundary.sh` allowlist contains only the
+  by-design entries of §4. **Reached at 2f**: the tokio source baseline is
+  empty — zero `tokio::` / `tokio_util::` / `tokio_stream::` occurrences under
+  any `src/` outside `r2e-rt`, `r2e-test` and `r2e-devservices`.
 - `CLAUDE.md` architecture block, `AGENTS.md`, `llm.txt`,
   `docs/claude/subsystems.md`, and `docs/features/22-serve-lifecycle.md`
   updated for `r2e-rt` and `CancelToken`.
@@ -263,7 +271,7 @@ before a phase is marked done.
 | 2 | Phase 1 — extract `r2e-rt` (facade move + sync/CancelToken/select widening) | done |
 | 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | done |
 | 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | done |
-| 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | pending |
+| 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | done |
 | 6 | Phase 3a — re-source neutral `http`/`bytes` types + docs/llm.txt/CHANGELOG sweep | pending |
 
 Phases 3b/3c stay out of this branch, gated on the §5.3d decision (A vs B).
