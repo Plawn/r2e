@@ -150,7 +150,10 @@ impl PreStatePlugin for GrpcServer {
                     #[cfg(feature = "reflection")]
                     let services = apply_reflection(services, &reflection);
                     let RegisteredServices { routes, names, .. } = services;
-                    let cancel = serve_ctx.shutdown_token();
+                    // Phase 2 will move this crate onto `CancelToken`; until then
+                    // the seam hands out the raw tokio-util token, which tonic's
+                    // `serve_with_incoming_shutdown` needs for `cancelled_owned()`.
+                    let cancel = serve_ctx.shutdown_token().into_inner();
                     serve_ctx.track(async move {
                         // Bind explicitly (instead of tonic's internal bind)
                         // so the resolved address — including an OS-assigned

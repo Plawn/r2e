@@ -1,0 +1,31 @@
+[package]
+name = "r2e-rt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["async", "runtime", "tokio", "framework"]
+categories = ["asynchronous"]
+description = "Async-runtime facade for R2E - the single crate in the workspace that names tokio"
+
+[features]
+default = []
+# Paused-clock runtimes (`#[r2e::test(start_paused = true)]`). Off by default:
+# `tokio/test-util` changes timer behaviour, and feature unification would
+# otherwise hand it to every crate in the workspace.
+test-util = ["tokio/test-util"]
+
+[dependencies]
+# The whole point of this crate: it is the ONLY workspace member allowed to
+# name tokio directly (see plans/runtime-http-dependency-containment.md §4).
+#
+# `features = ["full"]` mirrors what r2e-core used to declare, so extracting the
+# facade cannot change feature unification for anybody. FOLLOW-UP: trim to the
+# feature set actually needed (rt-multi-thread, macros, time, net, sync, signal,
+# io-util) once the phase-2 migration has settled which surfaces are in use.
+tokio = {workspace = true, features = ["full"]}
+tokio-util = {workspace = true}
+tokio-stream = {workspace = true, features = ["sync"]}
+tracing = {workspace = true}

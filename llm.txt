@@ -493,7 +493,7 @@ must therefore be started through `track`, never a bare `rt::spawn`:
 
 ```rust
 dctx.on_serve(move |serve_ctx| {
-    let shutdown = serve_ctx.shutdown_token();
+    let shutdown = serve_ctx.shutdown_token();   // r2e::rt::CancelToken
     serve_ctx.track(async move { my_server(shutdown).await; });  // future, not a handle
 });
 ```
@@ -717,7 +717,8 @@ Provider `load` mutates the boot `R2eConfig` before typed config is built.
 (logged, then retried with capped exponential backoff), returning `Ok(())`
 means "done watching, never call me again" (the default impl and one-shot
 providers). A long-lived watcher runs until
-`ConfigWatchContext::shutdown_token()` fires and returns `Ok(())` then.
+`ConfigWatchContext::shutdown_token()` (a `r2e::rt::CancelToken`) fires and
+returns `Ok(())` then.
 Runtime rotations do not mutate app-scoped `#[config]` fields or typed config
 beans; use the automatically provided `LiveConfigRegistry` / `LiveConfig<T>`
 handles for live values. This is plain live/dynamic config (feature flags,
@@ -2897,6 +2898,48 @@ producer's own registration deps, so a service reading a bean the producer
 itself never takes is still a **compile error** at `build_state()`; the
 service's declared keys and sections are validated during `build_state()`,
 merged with the bean graph's own into one `BeanError::MissingConfigKeys`.
+
+---
+
+## The runtime facade — `r2e::rt`
+
+`r2e-rt` is the crate R2E puts between the app and `tokio`. Reach for
+`r2e::rt::…` (= `r2e_core::rt`) instead of naming `tokio` directly: task
+placement has to go through it for the control-plane / data-plane split to hold
+under sharded serving (`server.workers`) — a raw `tokio::spawn` lands on
+whatever runtime is current, which on a sharded worker thread is the wrong one.
+A `clippy.toml` `disallowed-methods` rule fails the build on the spawn family.
+
+```rust
+use r2e::rt;
+
+let h: rt::JobHandle<u32> = rt::spawn(async { 1 });   // data plane
+rt::spawn_ctl(async { /* non-HTTP work */ });          // control plane
+rt::spawn_blocking(|| heavy_sync());
+h.await?;                                              // Result<T, rt::JoinError>
+
+rt::sleep(Duration::from_millis(50)).await;
+rt::timeout(Duration::from_secs(1), fut).await?;       // Err(rt::Elapsed)
+let mut tick = rt::interval(Duration::from_secs(30));  // rt::Interval
+let listener = rt::bind_tcp("0.0.0.0:3000").await?;
+rt::shutdown_signal().await;                           // SIGINT / SIGTERM
+```
+
+Cancellation is `rt::CancelToken` (a wrapper — an app never needs `tokio-util`
+in its own `Cargo.toml`): `cancel()`, `is_cancelled()`, `cancelled().await`
+(cancellation-safe, usable as a `select!` branch), `child_token()`, and
+`drop_guard() -> rt::CancelDropGuard` for cancellation that survives a panic or
+a dropped future. `From` converts both ways with
+`tokio_util::sync::CancellationToken` if you need the raw one.
+
+Also re-exported, identity unchanged, so the `tokio::` name disappears at zero
+cost: `rt::sync::{mpsc, oneshot, broadcast, watch, Mutex, RwLock, Notify,
+Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!}`, `rt::JoinSet`,
+`rt::stream` (`tokio-stream`), and `rt::{RuntimeBuilder, Runtime, block_on}`
+for owning a runtime yourself.
+
+Serve-time work still goes through `ServeContext::track`, never a bare
+`rt::spawn` — see "AppBuilder — full assembly order".
 
 ---
 

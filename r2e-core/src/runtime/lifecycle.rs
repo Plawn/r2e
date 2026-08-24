@@ -42,7 +42,7 @@ pub type DrainHook<T> = ShutdownHook<T>;
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct StopHandle {
-    token: tokio_util::sync::CancellationToken,
+    token: crate::rt::CancelToken,
 }
 
 impl StopHandle {

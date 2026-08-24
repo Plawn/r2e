@@ -566,7 +566,7 @@ impl PreStatePlugin for Scheduler {
                 if let Some(driver) = scheduled_tasks_driver(
                     tasks,
                     token,
-                    serve_ctx.shutdown_token(),
+                    serve_ctx.shutdown_token().into(),
                     registry,
                     executor,
                     commands,

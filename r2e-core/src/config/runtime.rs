@@ -27,10 +27,10 @@ pub struct ConfigWatchContext {
 
 impl ConfigWatchContext {
     #[must_use]
-    pub fn new(profile: impl Into<String>, shutdown: CancellationToken) -> Self {
+    pub fn new(profile: impl Into<String>, shutdown: crate::rt::CancelToken) -> Self {
         Self {
             profile: profile.into(),
-            shutdown,
+            shutdown: shutdown.into(),
         }
     }
 
@@ -40,8 +40,8 @@ impl ConfigWatchContext {
     }
 
     #[must_use]
-    pub fn shutdown_token(&self) -> CancellationToken {
-        self.shutdown.clone()
+    pub fn shutdown_token(&self) -> crate::rt::CancelToken {
+        self.shutdown.clone().into()
     }
 }
 
@@ -662,7 +662,7 @@ impl<T: FromConfigValue> LiveConfigReceiver<T> {
     ///
     /// `on_value` receives the conversion `Result`, so a value that stops being
     /// convertible is reported rather than silently skipped.
-    pub async fn drive<F, Fut>(mut self, shutdown: CancellationToken, mut on_value: F)
+    pub async fn drive<F, Fut>(mut self, shutdown: crate::rt::CancelToken, mut on_value: F)
     where
         F: FnMut(Result<T, ConfigError>) -> Fut,
         Fut: Future<Output = ()>,

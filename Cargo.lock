@@ -5751,6 +5751,7 @@ dependencies = [
  "pin-project-lite",
  "r2e-http",
  "r2e-macros",
+ "r2e-rt",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -5946,6 +5947,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "quinn",
+ "r2e-rt",
  "rcgen",
  "rustls",
  "rustls-pemfile",
@@ -6086,6 +6088,16 @@ dependencies = [
  "r2e-core",
  "serde_json",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "r2e-rt"
+version = "0.3.0"
+dependencies = [
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
 ]
 

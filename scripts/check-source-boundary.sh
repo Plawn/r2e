@@ -13,6 +13,11 @@
 # NOT part of the boundary (test harnesses and user-facing examples may name
 # the runtime freely).
 #
+# Also excluded BY DESIGN: r2e-rt/ — it IS the runtime facade, the one crate the
+# workspace allows to name tokio (plans/runtime-http-dependency-containment.md
+# §4). Its occurrences are the destination of the migration, not debt to shrink;
+# baselining them would make every line moved INTO the facade look like growth.
+#
 # Each per-file count is compared against a checked-in baseline of `path:count`
 # lines. The check FAILS when a count grows or when a file that was clean gains
 # an occurrence. A count that went DOWN is reported as an informational note:
@@ -44,6 +49,7 @@ git ls-files \
     | grep -E '(^|/)src/' \
     | grep -vE '^(vendor|examples|docs|\.claude)/' \
     | grep -vE '(^|/)tests/' \
+    | grep -vE '^r2e-rt/' \
     | sort >"$FILELIST"
 
 # ── scan: emit `path:count` for every file with >= 1 occurrence of $1 ──────

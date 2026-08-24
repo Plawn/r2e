@@ -134,6 +134,16 @@ Bottom-up, each step shrinking the Phase-0 allowlist. Sizes are file counts.
 | 2e | `r2e-core` internals: `web/{sse,ws,managed}`, `di/lazy`, `builder/prepared`, `runtime/{dev,service,lifecycle}`, `config/runtime`, `builtins/health`, `beans/registry` | 15 |
 | 2f | `r2e-macros` emitted paths → `::r2e_rt::`; then tighten `clippy.toml` with `disallowed-types` | 3 |
 
+**Step 2f note (from Phase 1)** — `r2e-rt` carries a non-default `test-util`
+feature (`tokio/test-util`), kept off by default because it changes timer
+behaviour and feature unification would otherwise hand paused clocks to every
+crate in the workspace. `#[r2e::test(start_paused = true)]` needs it, so when
+2f moves the macro-emitted paths onto `::r2e_rt::`, **forward the feature**:
+`r2e-core` → `test-util = ["r2e-rt/test-util"]`, `r2e` → `test-util =
+["r2e-core/test-util"]`, and have `r2e-test` enable it (its harness is where
+paused clocks are legitimate). Until then `start_paused` keeps resolving
+through the direct `tokio` dependency the emitting crates still have.
+
 **Permanently allowlisted, by design** — document each in `r2e-rt`'s module docs:
 
 - `r2e-rt` itself.
@@ -238,7 +248,7 @@ before a phase is marked done.
 | # | Phase | Status |
 |---|---|---|
 | 1 | Phase 0 — boundary scripts + baseline allowlists | done |
-| 2 | Phase 1 — extract `r2e-rt` (facade move + sync/CancelToken/select widening) | pending |
+| 2 | Phase 1 — extract `r2e-rt` (facade move + sync/CancelToken/select widening) | done |
 | 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | pending |
 | 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | pending |
 | 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | pending |
@@ -247,6 +257,6 @@ before a phase is marked done.
 Phases 3b/3c stay out of this branch, gated on the §5.3d decision (A vs B).
 
 Notes:
-- Disk is tight (~3 GiB free): use the shared global cargo target dir, never a
-  local `CARGO_TARGET_DIR`, and never run two builds concurrently.
+- Use the shared global cargo target dir, never a local `CARGO_TARGET_DIR`, and
+  never run two builds concurrently (disk has been tight on this machine).
 - Commits: no `Co-Authored-By` trailers.

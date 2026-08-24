@@ -207,7 +207,7 @@ where
         this.inner
             .url
             .subscribe()
-            .drive(shutdown, move |url| async move {
+            .drive(shutdown.into(), move |url| async move {
                 match url {
                     Ok(url) => {
                         if let Err(error) = this.rotate_to_url(url).await {

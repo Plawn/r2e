@@ -20,9 +20,8 @@ r2e-core/src/builder/typed.rs:1
 r2e-core/src/builtins/health.rs:2
 r2e-core/src/config/runtime.rs:6
 r2e-core/src/di/lazy.rs:8
-r2e-core/src/rt.rs:42
 r2e-core/src/runtime/dev.rs:4
-r2e-core/src/runtime/lifecycle.rs:2
+r2e-core/src/runtime/lifecycle.rs:1
 r2e-core/src/runtime/service.rs:3
 r2e-core/src/runtime/sharded.rs:7
 r2e-core/src/web/managed.rs:2
@@ -51,7 +50,6 @@ r2e-events/src/backend/reconnect.rs:2
 r2e-events/src/backend/state.rs:5
 r2e-events/src/local.rs:1
 r2e-executor/src/lib.rs:7
-r2e-http/src/quic.rs:9
 r2e-macros/src/derives/bg_service_derive.rs:2
 r2e-macros/src/lib.rs:1
 r2e-macros/src/util/runtime_args.rs:3

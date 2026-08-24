@@ -109,7 +109,7 @@ dctx.on_serve(move |serve_ctx| {
 ```
 
 - `task_registry()` — the shared `TaskRegistryHandle` (scheduled tasks, tagged subsystem tasks).
-- `shutdown_token()` — the app shutdown `CancellationToken`; cancelled when the graceful drain begins.
+- `shutdown_token()` — the app shutdown token; cancelled when the graceful drain begins. Since the `r2e-rt` extraction it is an `r2e::rt::CancelToken` (**breaking**), not a `tokio_util::sync::CancellationToken` — apps no longer need `tokio-util` in their own manifest. It behaves the same (`cancelled().await` is cancellation-safe, `child_token()`, `drop_guard()`); a call site that genuinely needs the raw tokio-util token converts with `.into()` / `.into_inner()`.
 - `track(fut)` — spawns `fut` and joins the post-drain await set (same pool as `spawn_service` handles), bounded by `shutdown_grace_period`.
 
 It takes the **future**, not a `JobHandle` (breaking — pass the `async` block instead of `rt::spawn(...)`): the task is wrapped so it owns a strong reference to the bean graph for its whole lifetime. That matters because the await set is best-effort — an elapsed `shutdown_grace_period` drops the join futures, and a dropped `run()` future (an `r2e dev` hot patch) joins nothing at all — so a task that resolves beans through a `GraphHandle` must carry the graph itself, which a pre-spawned handle cannot be given after the fact.

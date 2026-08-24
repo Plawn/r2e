@@ -399,7 +399,9 @@ where
                 .try_get::<Tenanted<T>>()
                 .unwrap_or(sweeper_fallback);
             dctx.on_serve(move |sctx| {
-                let token = sctx.shutdown_token();
+                // Phase 2 will move this crate onto `CancelToken`; until then the
+                // seam hands `ServiceComponent::start` the raw tokio-util token.
+                let token = sctx.shutdown_token().into_inner();
                 sctx.track(async move {
                     r2e_core::runtime::service::ServiceComponent::start(sweeper, token).await;
                 });

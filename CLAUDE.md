@@ -82,6 +82,7 @@ R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declar
 
 ```
 r2e             → Facade crate. Re-exports all subcrates behind feature flags. Users depend on this.
+r2e-rt          → Async-runtime facade. The ONLY workspace crate that names tokio/tokio-util/tokio-stream directly, and it sits at the BOTTOM of the graph (below r2e-http). Owns spawn/spawn_ctl/spawn_blocking + JobHandle, sleep/timeout/interval, bind_tcp, shutdown_signal, CancelToken/CancelDropGuard, the `sync` re-exports (mpsc/oneshot/broadcast/watch/Mutex/RwLock/Notify/Semaphore/OnceCell), select!/pin!/join!/JoinSet, `stream`, and RuntimeBuilder/Runtime/block_on. Re-exported as `r2e_core::rt` (hence `r2e::rt`).
 r2e-macros      → Proc-macro crate. #[controller] + #[routes] generate Axum handlers.
 r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, multipart, and QUIC/HTTP3 types. QUIC support (feature `quic`) provides HTTP/3 via h3+h3-quinn (bridged to axum Router) and raw QUIC streams via quinn.
 r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, build_state → HList state, serve_auto), Controller trait, ContextConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
@@ -118,9 +119,11 @@ r2e-compile-tests → Compile-time tests (trybuild) verifying macro error messag
 example-app     → Demo app (lib + bin) exercising all features. `lib.rs` declares the app via `impl App for ...` (`setup`/`build`); `main.rs` runs `r2e::launch::<App>()` and the integration tests boot the same type via `#[r2e::test(app = ...)]`.
 ```
 
-Dependency flow: `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-devtools` / `r2e-static` / `r2e-tenant` / `r2e-data-sqlx` / `r2e-data-diesel` / other integrations ← `r2e` ← applications. The data backends' `tenant` feature adds `r2e-tenant`, so `r2e-tenant` precedes them.
+Dependency flow: `r2e-rt` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-devtools` / `r2e-static` / `r2e-tenant` / `r2e-data-sqlx` / `r2e-data-diesel` / other integrations ← `r2e` ← applications. The data backends' `tenant` feature adds `r2e-tenant`, so `r2e-tenant` precedes them.
 
 **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
+
+**`r2e-rt` is the same rule for the runtime**: go through `r2e_core::rt` (or `r2e_rt` directly, in crates below `r2e-core`) rather than naming `tokio` / `tokio-util` / `tokio-stream`. Both boundaries are enforced in CI by `scripts/check-dep-boundary.sh` (manifests) and `scripts/check-source-boundary.sh` (source occurrences, against a baseline that only ever shrinks). Migration status and the by-design exceptions (`r2e-rt` itself, `r2e-core/src/runtime/sharded.rs`, `r2e-test`, `r2e-devservices`) live in `plans/runtime-http-dependency-containment.md`.
 
 ### Vendored Dependencies
 
