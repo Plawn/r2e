@@ -353,7 +353,7 @@ struct BuilderConfig {
 /// Builder for assembling a R2E application.
 ///
 /// Collects state, controller routes, and Tower layers, then produces an
-/// `axum::Router` (or starts serving directly) with everything wired together.
+/// `r2e::http::Router` (or starts serving directly) with everything wired together.
 ///
 /// # Two-phase builder
 ///

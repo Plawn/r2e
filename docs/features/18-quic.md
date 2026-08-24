@@ -30,7 +30,7 @@ Both endpoints share the same controller pipeline: guards, interceptors, middlew
 
 ### Request Body Streaming
 
-HTTP/3 request bodies are **streamed** through a channel rather than fully buffered. The h3 body reader and axum router run concurrently via `tokio::join!`, providing backpressure through an internal `mpsc` channel. A running total is enforced against `DEFAULT_MAX_BODY_SIZE` (2 MiB). If the client sends a `Content-Length` header exceeding the limit, the server rejects immediately with 413.
+HTTP/3 request bodies are **streamed** through a channel rather than fully buffered. The h3 body reader and axum router run concurrently via `r2e::rt::join!`, providing backpressure through an internal `mpsc` channel. A running total is enforced against `DEFAULT_MAX_BODY_SIZE` (2 MiB). If the client sends a `Content-Length` header exceeding the limit, the server rejects immediately with 413.
 
 ### Alt-Svc Header
 
@@ -118,7 +118,7 @@ let config = build_server_config_with_alpn(&cert, &key, vec![b"my-proto".to_vec(
 let endpoint = QuicEndpoint::bind("0.0.0.0:4433".parse()?, config)?;
 
 while let Some(incoming) = endpoint.accept().await {
-    tokio::spawn(async move {
+    r2e::rt::spawn(async move {
         let conn = QuicConnection::new(incoming.await.unwrap());
         let (mut send, mut recv) = conn.accept_bi().await.unwrap();
 

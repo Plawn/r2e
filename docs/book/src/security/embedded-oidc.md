@@ -405,7 +405,7 @@ impl ApiController {
     }
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     let users = InMemoryUserStore::new()
         .add_user("alice", "pass", OidcUser {

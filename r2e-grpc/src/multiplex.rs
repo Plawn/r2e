@@ -13,7 +13,7 @@ use tower::Service;
 /// all others to the HTTP (Axum) service.
 ///
 /// Both inner services must be infallible (`Error = Infallible`) — which
-/// `tonic::service::Routes` and `axum::Router` both are — so the multiplexer
+/// `tonic::service::Routes` and `r2e_core::http::Router` both are — so the multiplexer
 /// is itself infallible and can be mounted directly on an axum router (the
 /// `GrpcServer::multiplexed()` transport mounts it as the app's fallback
 /// service).

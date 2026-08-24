@@ -155,7 +155,7 @@ several controllers at once with
 #### Simple test (without authentication)
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_health_endpoint() {
     let (app, _jwt) = setup().await;
     app.get("/health").send().await.assert_ok();
@@ -165,7 +165,7 @@ async fn test_health_endpoint() {
 #### Test with authentication
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_list_users_authenticated() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -183,7 +183,7 @@ async fn test_list_users_authenticated() {
 #### Test of a protected endpoint without token
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_list_users_unauthenticated() {
     let (app, _jwt) = setup().await;
     app.get("/users").send().await.assert_unauthorized();
@@ -193,14 +193,14 @@ async fn test_list_users_unauthenticated() {
 #### Role-based access control test
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_endpoint_with_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("admin-1", &["admin"]);
     app.get("/admin/users").bearer(&token).send().await.assert_ok();
 }
 
-#[tokio::test]
+#[r2e::test]
 async fn test_admin_endpoint_without_admin_role() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -211,7 +211,7 @@ async fn test_admin_endpoint_without_admin_role() {
 #### POST test with JSON
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_create_user() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["admin"]);
@@ -232,7 +232,7 @@ async fn test_create_user() {
 #### Query parameter test
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_search_with_params() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -251,7 +251,7 @@ async fn test_search_with_params() {
 #### Form data test
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_login_form() {
     let (app, _) = setup().await;
     app.post("/login")
@@ -265,7 +265,7 @@ async fn test_login_form() {
 #### Session test
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_session_flow() {
     let (app, _) = setup().await;
     let session = app.session();
@@ -284,7 +284,7 @@ async fn test_session_flow() {
 #### Validation test (400 rejection)
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_create_user_with_invalid_email() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -304,7 +304,7 @@ async fn test_create_user_with_invalid_email() {
 #### Rate limiting test
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_rate_limited_endpoint() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -328,7 +328,7 @@ async fn test_rate_limited_endpoint() {
 #### JSON shape and partial matching
 
 ```rust
-#[tokio::test]
+#[r2e::test]
 async fn test_response_structure() {
     let (app, jwt) = setup().await;
     let token = jwt.token("user-1", &["user"]);
@@ -482,7 +482,7 @@ URL to inject into the test config:
 ```rust
 use r2e_devservices::DevPostgres;
 
-#[tokio::test]
+#[r2e::test]
 async fn users_are_persisted() {
     let pg = DevPostgres::shared().await;
     let app = TestApp::boot_with::<my_app::MyApp>(|b| {

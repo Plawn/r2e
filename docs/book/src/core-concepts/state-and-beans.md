@@ -309,7 +309,7 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
     SqlitePool::connect(&url).await.unwrap()
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     let event_bus = LocalEventBus::new();
 

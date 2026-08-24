@@ -2,7 +2,7 @@
 //!
 //! # WsStream
 //!
-//! An ergonomic wrapper around Axum's [`WebSocket`](axum::extract::ws::WebSocket)
+//! An ergonomic wrapper around the underlying [`WebSocket`](crate::http::ws::WebSocket)
 //! with typed helpers for text, JSON, and binary messages.
 //!
 //! # WsHandler

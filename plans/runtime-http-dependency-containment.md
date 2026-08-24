@@ -190,6 +190,40 @@ Cost: ~10 lines in `r2e-http`. Benefit: a large share of "axum names" in the
 workspace stops being an axum coupling at all, and the remaining count becomes
 an honest measure of the real problem. Do this before measuring 3b.
 
+**Done (phase 6).** `header.rs` and `lib.rs` now source `StatusCode`,
+`HeaderMap`, `HeaderName`, `HeaderValue`, `Method`, `Parts`, the header
+constants, `Extensions` and `Uri` from `http::…`. Identity-preserving: the lock
+resolves a single `http` (1.4.2) and `bytes` (1.12.0), which is what axum
+re-exports, so no signature anywhere changed. `Bytes` already came from `bytes`
+directly.
+
+The 8 occurrences that sat *outside* `r2e-http` turned out to be, every one of
+them, **doc-comment prose naming an axum path** — no code. They were rewritten
+to the path a user would actually type (`r2e::http::Router`,
+`r2e::http::routing::any`, `r2e::http::middleware::from_fn`,
+`crate::http::ws::WebSocket`), which also fixes two intra-doc links that pointed
+at a crate their own crate does not depend on (`[`axum::Router::layer`]` in
+`builder/typed.rs`, `[`WebSocket`](axum::extract::ws::WebSocket)` in
+`web/ws.rs`). Per-file disposition:
+
+| file | occ | what it was | disposition |
+|---|---|---|---|
+| `r2e-core/src/builder/mod.rs` | 1 | prose "produces an `axum::Router`" | → `r2e::http::Router` |
+| `r2e-core/src/builder/typed.rs` | 5 | 1 broken intra-doc link + 4 prose `axum::Router` | link → code span; prose → `r2e::http::Router` |
+| `r2e-core/src/web/ws.rs` | 1 | broken intra-doc link to `axum::extract::ws::WebSocket` | → `crate::http::ws::WebSocket` |
+| `r2e-grpc/src/multiplex.rs` | 1 | prose naming the infallible service types | → `r2e_core::http::Router` |
+| `r2e-macros/src/lib.rs` | 3 | prose naming what the macros emit | → `r2e::http::{routing::any, Router::fallback, middleware::from_fn}` — which is literally what the codegen emits (`#krate::http::…`) |
+| `r2e-macros/src/model/route.rs` | 1 | same, on an enum variant | → `r2e::http::routing::any` |
+| `r2e-openapi/src/handlers.rs` | 1 | prose "Build an `axum::Router`" | → `r2e::http::Router` |
+| `r2e-test/src/app.rs` | 1 | prose "from an assembled `axum::Router`" | → `r2e::http::Router` |
+
+No `AXUM_EXCLUDE` was added for `r2e-http`: the shrunken baseline (9 files / 14
+occurrences, all in `r2e-http/src/`) is the honest record of the coupling 3b/3c
+would have to pay for. What remains is `Router`/`MethodRouter`/`routing::*`,
+`middleware::{from_fn, Next}`, `IntoResponse`/`Response`/`Sse`, the extractors,
+`Json`/`Form`/`Extension`, `serve`/`ListenerExt`, `Body`/`to_bytes`, `Multipart`
+and the WS types — i.e. exactly the 3b + 3c surface, nothing accidental.
+
 ### 3b — R2E-owned traits over the impl sites (medium)
 
 The 24 `FromRequestParts` impls and 8 `IntoResponse` impls are the places
@@ -246,16 +280,43 @@ the axum goal.
 
 ## 7. Definition of done
 
-- `scripts/check-dep-boundary.sh` green with `tokio` allowlist =
+Status as of phase 6 (the last phase on this branch).
+
+- **DONE** — `scripts/check-dep-boundary.sh` green with `tokio` allowlist =
   `{r2e-rt, r2e-test, r2e-devservices}` and `axum` allowlist = `{r2e-http}`.
-- `scripts/check-source-boundary.sh` allowlist contains only the
+  Reached at phase 6: the 11 example crates were the last non-dev holders and
+  now go through the facade. (Dev-dependencies were always exempt by design —
+  in the end none of the examples needed one either.)
+- **DONE** — `scripts/check-source-boundary.sh` allowlist contains only the
   by-design entries of §4. **Reached at 2f**: the tokio source baseline is
   empty — zero `tokio::` / `tokio_util::` / `tokio_stream::` occurrences under
-  any `src/` outside `r2e-rt`, `r2e-test` and `r2e-devservices`.
-- `CLAUDE.md` architecture block, `AGENTS.md`, `llm.txt`,
-  `docs/claude/subsystems.md`, and `docs/features/22-serve-lifecycle.md`
-  updated for `r2e-rt` and `CancelToken`.
-- `CHANGELOG.md` records the `CancellationToken` → `CancelToken` break.
+  any `src/` outside `r2e-rt`, `r2e-test` and `r2e-devservices`. Examples are
+  outside the source check by construction, but they are clean too.
+- **DONE** — `CLAUDE.md` architecture block, `AGENTS.md` (a symlink to it),
+  `llm.txt`, `docs/claude/subsystems.md`, and
+  `docs/features/22-serve-lifecycle.md` updated for `r2e-rt` and `CancelToken`.
+  Phase 6 additionally: dropped the `tokio` entry from `llm.txt`'s Quick-Start
+  `Cargo.toml` (it contradicted the crate's own "a generated project needs no
+  tokio entry"), corrected CLAUDE.md's by-design exception list (`sharded.rs`
+  has not been one since 2e), and swept the user-facing docs — `docs/features/`
+  and `docs/book/src/` snippets now use `#[r2e::main]` / `#[r2e::test]`,
+  `rt::spawn`, `rt::select!`, `rt::sleep`, `rt::sync::*` and `rt::CancelToken`.
+  Prose that *describes* tokio (e.g. "wraps a `tokio::sync::broadcast`
+  channel", the thread-per-core research notes) was left alone on purpose.
+- **DONE** — `CHANGELOG.md` records the `CancellationToken` → `CancelToken`
+  break (phases 1–2f) plus, from phase 6, the `rt::io` / `rt::TcpStream`
+  additions and the 3a re-sourcing (flagged explicitly as **not** a type
+  change).
+- **NOT MET, DELIBERATELY** — the axum half of the goal ("the amount of R2E
+  code that *names* axum types is small enough that swapping the HTTP layer is
+  bounded") stops at 3a. Steps **3b** (R2E-owned `FromParts` /
+  `IntoHttpResponse`) and **3c** (`Router` newtype) are out of scope for this
+  branch: both are gated on the **§5.3d** decision — (A) "R2E types, axum
+  behind an escape hatch" vs (B) "axum, ergonomically wrapped" — which is a
+  user's call, not a refactor. The 14 remaining `axum::` occurrences are all in
+  `r2e-http/src/` and are exactly that deferred surface (see the 3a table).
+  Until 3d is decided, `r2e-http` remains a re-export shim by design, and the
+  baseline is the measurement of what 3b/3c would cost.
 
 ---
 
@@ -272,9 +333,23 @@ before a phase is marked done.
 | 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | done |
 | 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | done |
 | 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | done |
-| 6 | Phase 3a — re-source neutral `http`/`bytes` types + docs/llm.txt/CHANGELOG sweep | pending |
+| 6 | Phase 3a — re-source neutral `http`/`bytes` types + docs/llm.txt/CHANGELOG sweep | done |
 
 Phases 3b/3c stay out of this branch, gated on the §5.3d decision (A vs B).
+
+Phase 6 also carried two small items that belong to the record:
+
+- **Facade additions** — `rt::TcpStream` and the `rt::io` module
+  (`AsyncRead`/`AsyncWrite` + `…Ext`, `BufReader`, `BufWriter`, `duplex`), plus
+  tokio-stream's `net` feature so `rt::stream::wrappers::TcpListenerStream`
+  exists. Chosen over letting the examples keep a `tokio` dev-dependency: they
+  are plain re-exports (same treatment as `rt::TcpListener` / `rt::sync`), and
+  raw-socket test code was the only thing still forcing the direct dep.
+- **Leftover from 2b/2e** — `r2e-data-sqlx` and `r2e-data-diesel` had a `pool`
+  test target that still named `tokio_util::sync::CancellationToken` after
+  `ServiceComponent::start` flipped to `CancelToken`, while the crates' manifests
+  had already dropped `tokio-util`. Those two targets did not compile
+  (`cargo check --workspace --tests` was red at 2f); fixed in phase 6.
 
 Notes:
 - Use the shared global cargo target dir, never a local `CARGO_TARGET_DIR`, and

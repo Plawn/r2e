@@ -28,7 +28,8 @@ pub use self::header::{
     SET_COOKIE, USER_AGENT,
 };
 pub use self::response::{Html, IntoResponse, Redirect, Response, Sse, SseEvent, SseKeepAlive};
-pub use axum::http::{Extensions, Uri};
+// `http` crate types, re-sourced per plan §5 step 3a — see `header` for why.
+pub use http::{Extensions, Uri};
 pub use axum::serve::ListenerExt;
 pub use axum::{serve, Error, Extension, Json, Router};
 pub use bytes::Bytes;

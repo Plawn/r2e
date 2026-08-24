@@ -32,7 +32,7 @@ let app = AppBuilder::new().build_state().await;
 let prepared = app.prepare("127.0.0.1:8080");
 let stop = prepared.stop_handle();          // Clone-able
 
-let server = tokio::spawn(prepared.run());
+let server = r2e::rt::spawn(prepared.run());
 
 // ... later, from anywhere:
 stop.stop();                                 // triggers graceful shutdown
@@ -61,15 +61,15 @@ Resolution order at `prepare()`: explicit `with_stop_handle()` → `StopHandle` 
 
 ### In e2e tests
 
-`prepare() → stop_handle() → run()` replaces `tokio::spawn(app.serve(..)) + handle.abort()`. The test exercises the *real* shutdown path and asserts a clean exit:
+`prepare() → stop_handle() → run()` replaces `r2e::rt::spawn(app.serve(..)) + handle.abort()`. The test exercises the *real* shutdown path and asserts a clean exit:
 
 ```rust
 let prepared = app.prepare(&format!("127.0.0.1:{port}"));
 let stop = prepared.stop_handle();
-let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
+let server = r2e::rt::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 // ... requests ...
 stop.stop();
-assert!(tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().is_ok());
+assert!(r2e::rt::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().is_ok());
 ```
 
 ## `on_drain` — awaited pre-drain hooks
@@ -83,7 +83,7 @@ AppBuilder::new()
     .await
     .on_drain(|state| async move {
         state.bean::<Readiness>().unwrap().set_draining();     // health endpoint → unready
-        tokio::time::sleep(Duration::from_secs(5)).await;      // LB notices, deregisters
+        r2e::rt::sleep(Duration::from_secs(5)).await;      // LB notices, deregisters
     })
     .on_stop(|_state| async move {
         tracing::info!("drained and stopped");

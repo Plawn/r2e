@@ -12,21 +12,12 @@
 #
 # Regenerate with: scripts/check-source-boundary.sh --update
 
-r2e-core/src/builder/mod.rs:1
-r2e-core/src/builder/typed.rs:5
-r2e-core/src/web/ws.rs:1
-r2e-grpc/src/multiplex.rs:1
 r2e-http/src/body.rs:1
 r2e-http/src/extract.rs:2
-r2e-http/src/header.rs:3
-r2e-http/src/lib.rs:3
+r2e-http/src/lib.rs:2
 r2e-http/src/middleware.rs:1
 r2e-http/src/multipart.rs:1
 r2e-http/src/quic.rs:3
 r2e-http/src/response.rs:2
 r2e-http/src/routing.rs:1
 r2e-http/src/ws.rs:1
-r2e-macros/src/lib.rs:3
-r2e-macros/src/model/route.rs:1
-r2e-openapi/src/handlers.rs:1
-r2e-test/src/app.rs:1

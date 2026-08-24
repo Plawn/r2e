@@ -130,7 +130,7 @@ Use `SecureHeaders::builder()` to customize which headers are sent and their val
 ```rust
 use r2e::prelude::*;
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     let secure = SecureHeaders::builder()
         .content_type_options(true)

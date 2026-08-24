@@ -314,7 +314,7 @@ pub struct TestApp {
 }
 
 impl TestApp {
-    /// Create a `TestApp` from an assembled `axum::Router`.
+    /// Create a `TestApp` from an assembled `r2e::http::Router`.
     pub fn new(router: Router) -> Self {
         Self {
             router,

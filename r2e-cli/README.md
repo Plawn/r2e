@@ -58,7 +58,7 @@ r2e new my-app --no-interactive             # Minimal, no prompts
 ```
 my-app/
   .gitignore
-  Cargo.toml                    # r2e + tokio + serde + sqlx + tonic/prost
+  Cargo.toml                    # r2e + serde + sqlx + tonic/prost (no tokio)
   application.yaml              # App config (database, security, gRPC)
   AGENTS.md                     # Agent instructions (idiomatic R2E)
   CLAUDE.md                     # Imports AGENTS.md

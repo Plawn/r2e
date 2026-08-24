@@ -13,7 +13,7 @@ struct OpenApiState {
     spec_json: String,
 }
 
-/// Build an `axum::Router` that serves `/openapi.json` and optionally `/docs`.
+/// Build an `r2e::http::Router` that serves `/openapi.json` and optionally `/docs`.
 ///
 /// The returned router can be passed to `AppBuilder::register_routes()`.
 pub fn openapi_routes<T: Clone + Send + Sync + 'static>(

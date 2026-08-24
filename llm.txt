@@ -13,10 +13,14 @@
 ```toml
 [dependencies]
 r2e = { version = "0.1", features = ["full"] }
-tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ```
+
+No `tokio` entry: `r2e::main` / `r2e::app_main!` build the runtime through
+`r2e::rt`, and everything an app needs from the runtime (`spawn`, `sleep`,
+`select!`, `sync::*`, `CancelToken`, …) is re-exported there. See "Runtime
+facade" below.
 
 Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
@@ -2939,7 +2943,8 @@ a dropped future. `From` converts both ways with
 Also re-exported, identity unchanged, so the `tokio::` name disappears at zero
 cost: `rt::sync::{mpsc, oneshot, broadcast, watch, Mutex, RwLock, Notify,
 Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!}`, `rt::JoinSet`,
-`rt::stream` (`tokio-stream`), `rt::TcpListener`, and
+`rt::stream` (`tokio-stream`), `rt::{TcpListener, TcpStream}`, `rt::io`
+(`AsyncRead`/`AsyncWrite` + the `…Ext` traits), and
 `rt::{RuntimeBuilder, Runtime, RuntimeHandle, block_on, block_in_place}` for
 owning a runtime yourself.
 

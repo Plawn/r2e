@@ -147,7 +147,7 @@ use rust_embed::Embed;
 #[folder = "frontend/dist"]
 struct Assets;
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     AppBuilder::new()
         .build_state()

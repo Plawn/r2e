@@ -237,7 +237,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Apply a Tower layer to the entire application.
     ///
     /// The layer is applied during `build()`. Multiple calls are applied in
-    /// order. The layer must satisfy the same bounds as [`axum::Router::layer`].
+    /// order. The layer must satisfy the same bounds as `Router::layer`.
     ///
     /// # Example
     ///
@@ -272,8 +272,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Apply a custom transformation to the router.
     ///
     /// This is an escape hatch for cases where `with_layer` is too
-    /// restrictive. The closure receives the `axum::Router` and must return
-    /// a new `axum::Router`.
+    /// restrictive. The closure receives the `r2e::http::Router` and must
+    /// return a new one.
     ///
     /// # Example
     ///
@@ -420,7 +420,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Register a raw `axum::Router` fragment to be merged into the application.
+    /// Register a raw `r2e::http::Router` fragment to be merged into the application.
     pub fn register_routes(mut self, router: crate::http::Router<T>) -> Self {
         self.routes.push(router);
         self
@@ -744,7 +744,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Assemble the final `axum::Router` from all registered routes and layers.
+    /// Assemble the final `r2e::http::Router` from all registered routes and layers.
     ///
     /// Startup lifecycle work is NOT run here: consumer registrations AND
     /// controller `#[post_construct]` hooks are dropped. Use

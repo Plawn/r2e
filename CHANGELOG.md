@@ -36,6 +36,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - A non-default `test-util` feature (`tokio/test-util`), off by default
     because paused clocks must not reach the whole workspace through feature
     unification.
+  - `rt::TcpStream` and the `rt::io` module (`AsyncRead` / `AsyncWrite` and
+    their `…Ext` traits, `BufReader`, `BufWriter`, `duplex`) — re-exports, the
+    same treatment as `rt::TcpListener` and `rt::sync`. They are what raw-socket
+    test code and byte-stream plumbing need, and their absence was the last
+    reason to keep a direct `tokio` dependency around. `rt::stream::wrappers`
+    also carries `TcpListenerStream` now (tokio-stream's `net` feature).
 
 ### Changed
 
@@ -100,6 +106,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   their direct `tokio` / `tokio-util` / `tokio-stream` dependencies**. No
   behaviour change; the four distributed backends needed no client-API escape
   hatch.
+
+- **`r2e-http` re-sources the neutral HTTP types from the `http` crate** —
+  `StatusCode`, `HeaderMap`, `HeaderName`, `HeaderValue`, `Method`, `Uri`,
+  `Parts` and the header constants now come from `http::…` instead of
+  `axum::http::…`, and `Extensions` / `Uri` likewise. **No type changes**: axum
+  re-exports those very types from `http`, and the workspace resolves a single
+  `http` version, so this is identity-preserving for every downstream signature
+  — it only stops the workspace from calling `http` types "axum types". The
+  `axum::` source baseline drops from 18 files / 32 occurrences to 9 files / 14
+  occurrences, all inside `r2e-http/src/` (plan §5 step 3a). Steps 3b (R2E-owned
+  `FromParts` / `IntoHttpResponse` traits) and 3c (a `Router` newtype) are
+  deliberately **not** done — they are gated on the §5.3d decision about what
+  users are promised.
+
+- **The 11 example crates dropped their direct `tokio` / `tokio-util` /
+  `tokio-stream` dependencies** and go through the facade like the framework
+  does (`rt::sync::*`, `rt::sleep`/`rt::timeout`, `rt::select!`,
+  `rt::TcpListener`/`rt::TcpStream`, `rt::io`, `rt::stream`, `#[r2e::test]`).
+  With that the tokio dependency allowlist is exactly `{r2e-rt, r2e-test,
+  r2e-devservices}` — the by-design set — and the tokio *source* baseline is
+  empty workspace-wide.
 
 - **r2e-observability**: `traced_reqwest_client` / `TraceContextMiddleware`
   now open an OpenTelemetry **client** span per outgoing request

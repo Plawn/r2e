@@ -241,7 +241,7 @@ async fn event_emission(app: TestApp, #[inject] event_bus: LocalEventBus) {
         .assert_ok();
 
     // Give async event handlers time to run
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    r2e::rt::sleep(Duration::from_millis(100)).await;
     assert!(received.load(Ordering::SeqCst));
 }
 ```
