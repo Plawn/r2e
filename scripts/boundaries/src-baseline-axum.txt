@@ -23,6 +23,7 @@
 r2e-http/src/axum_compat.rs:2
 r2e-http/src/body.rs:1
 r2e-http/src/extract.rs:2
+r2e-http/src/json.rs:3
 r2e-http/src/lib.rs:2
 r2e-http/src/middleware.rs:1
 r2e-http/src/multipart.rs:1

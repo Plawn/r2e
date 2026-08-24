@@ -2868,7 +2868,12 @@ NOT supported on `#[grpc_routes]` methods (compile errors): `#[guard(...)]`,
 `#[roles(...)]`, `#[inject(identity)]`, `#[post_construct]`, `#[pre_destroy]`.
 The guard/identity infrastructure (`GrpcGuard`, `GrpcRolesGuard`,
 `GrpcIdentityExtractor`) exists in `r2e-grpc` for manual wiring but is not yet
-macro-wired.
+macro-wired. Manual wiring: `#[inject] jwt_validator: Arc<JwtClaimsValidator>`
+on the service, then `GrpcIdentityExtractor::extract_claims(request.metadata(),
+&self.jwt_validator).await?` → `r2e::StandardClaims` (same typed claims as
+HTTP; `Status::unauthenticated` on failure). `JwtClaimsValidator` implements
+`JwtClaimsValidatorLike` under `r2e-security/grpc`, enabled by `r2e`'s `grpc` +
+`security` features.
 
 ---
 

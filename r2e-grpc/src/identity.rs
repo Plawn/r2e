@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use r2e_core::StandardClaims;
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 
@@ -8,11 +9,11 @@ use tonic::Status;
 /// Looks for the `authorization` metadata key with a `Bearer ` prefix,
 /// then validates the token using the provided `JwtClaimsValidator`.
 ///
-/// Returns the validated claims as a JSON value, or a `Status::unauthenticated` error.
+/// Returns the validated [`StandardClaims`], or a `Status::unauthenticated` error.
 pub async fn extract_jwt_claims_from_metadata<V: JwtClaimsValidatorLike>(
     metadata: &MetadataMap,
     validator: &V,
-) -> Result<serde_json::Value, Status> {
+) -> Result<StandardClaims, Status> {
     let token = extract_bearer_token(metadata)?;
     validator
         .validate(token)
@@ -41,15 +42,16 @@ pub fn extract_bearer_token(metadata: &MetadataMap) -> Result<&str, Status> {
 /// Trait abstracting JWT claims validation.
 ///
 /// This allows the gRPC identity extraction to work with any validator
-/// that can validate tokens and return claims. The primary implementation
-/// is `r2e_security::JwtClaimsValidator`, but this trait allows testing
-/// with mock validators.
+/// that can validate tokens and return [`StandardClaims`]. The primary
+/// implementation is `r2e_security::JwtClaimsValidator` (behind
+/// `r2e-security`'s `grpc` feature — on by default through `r2e`'s `grpc` +
+/// `security` features); the trait also allows testing with mock validators.
 pub trait JwtClaimsValidatorLike: Send + Sync {
     fn validate(
         &self,
         token: &str,
     ) -> impl std::future::Future<
-        Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>,
+        Output = Result<StandardClaims, Box<dyn std::error::Error + Send + Sync>>,
     > + Send;
 }
 
@@ -66,7 +68,7 @@ impl GrpcIdentityExtractor {
     pub async fn extract_claims<V: JwtClaimsValidatorLike>(
         metadata: &MetadataMap,
         validator: &V,
-    ) -> Result<serde_json::Value, Status> {
+    ) -> Result<StandardClaims, Status> {
         extract_jwt_claims_from_metadata(metadata, validator).await
     }
 }
@@ -77,7 +79,7 @@ impl<T: JwtClaimsValidatorLike> JwtClaimsValidatorLike for Arc<T> {
         &self,
         token: &str,
     ) -> impl std::future::Future<
-        Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>,
+        Output = Result<StandardClaims, Box<dyn std::error::Error + Send + Sync>>,
     > + Send {
         (**self).validate(token)
     }

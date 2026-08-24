@@ -1,3 +1,4 @@
+use r2e_core::StandardClaims;
 use r2e_grpc::identity::{
     extract_bearer_token, extract_jwt_claims_from_metadata, JwtClaimsValidatorLike,
 };
@@ -5,11 +6,11 @@ use tonic::metadata::MetadataMap;
 
 /// Mock JWT claims validator for testing.
 struct MockValidator {
-    result: Result<serde_json::Value, String>,
+    result: Result<StandardClaims, String>,
 }
 
 impl MockValidator {
-    fn ok(claims: serde_json::Value) -> Self {
+    fn ok(claims: StandardClaims) -> Self {
         Self { result: Ok(claims) }
     }
 
@@ -25,7 +26,7 @@ impl JwtClaimsValidatorLike for MockValidator {
         &self,
         _token: &str,
     ) -> impl std::future::Future<
-        Output = Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>>,
+        Output = Result<StandardClaims, Box<dyn std::error::Error + Send + Sync>>,
     > + Send {
         let result = self
             .result
@@ -78,7 +79,11 @@ fn extract_bearer_token_not_bearer_scheme() {
 #[r2e_core::test]
 async fn extract_jwt_claims_success() {
     let metadata = metadata_with_bearer("valid-token");
-    let claims = serde_json::json!({ "sub": "user-1", "roles": ["admin"] });
+    let claims = StandardClaims {
+        sub: "user-1".into(),
+        roles: Some(vec!["admin".into()]),
+        ..Default::default()
+    };
     let validator = MockValidator::ok(claims.clone());
 
     let result = extract_jwt_claims_from_metadata(&metadata, &validator).await;
@@ -101,7 +106,7 @@ async fn extract_jwt_claims_validation_failure() {
 #[r2e_core::test]
 async fn extract_jwt_claims_missing_auth() {
     let metadata = MetadataMap::new();
-    let validator = MockValidator::ok(serde_json::json!({}));
+    let validator = MockValidator::ok(StandardClaims::default());
 
     let result = extract_jwt_claims_from_metadata(&metadata, &validator).await;
     assert!(result.is_err());
@@ -113,7 +118,10 @@ async fn extract_jwt_claims_missing_auth() {
 async fn arc_validator_works() {
     use std::sync::Arc;
 
-    let claims = serde_json::json!({ "sub": "user-arc" });
+    let claims = StandardClaims {
+        sub: "user-arc".into(),
+        ..Default::default()
+    };
     let validator = Arc::new(MockValidator::ok(claims.clone()));
     let metadata = metadata_with_bearer("arc-token");
 

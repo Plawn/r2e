@@ -236,8 +236,12 @@ plan (new row for `Json<T>: FromRequest`). `CLAUDE.md` architecture entry for
   rejection); `AuthenticatedUser` keeps owned `sub`/`email`/`roles`;
   optionals `skip_serializing_if` so re-serializing reproduces the payload;
   `get()` reads `extra` only. Escape hatch kept: `JwtClaimSet for Value`,
-  `validate_as::<C>`, `extract_jwt_claims_as`. Follow-up: gRPC
-  `GrpcIdentityExtractor` / `JwtClaimsValidatorLike` still return `Value`.
+  `validate_as::<C>`, `extract_jwt_claims_as`. gRPC aligned in
+  the same PR: `JwtClaimsValidatorLike` / `GrpcIdentityExtractor` return
+  `StandardClaims`, and the missing `impl JwtClaimsValidatorLike for
+  JwtClaimsValidator` (docs claimed a blanket impl that never existed) now
+  lives in `r2e-security/src/grpc.rs` behind feature `grpc`, forwarded by
+  `r2e/grpc` via `r2e-security?/grpc`. Tests: `r2e-security/tests/grpc.rs`.
 - 2026-08-24 — Phase 4 docs: `llm.txt` (JSON codec paragraph, `Json<T>`
   promise, `StandardClaims` section, custom-identity examples),
   `CLAUDE.md`, `docs/claude/{prelude-features,subsystems,guards-interceptors}.md`,

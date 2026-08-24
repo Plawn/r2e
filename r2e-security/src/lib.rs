@@ -1,6 +1,8 @@
 pub mod config;
 pub mod error;
 pub mod extractor;
+#[cfg(feature = "grpc")]
+pub mod grpc;
 pub mod guards;
 pub mod identity;
 pub mod jwks;

@@ -6166,10 +6166,12 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken",
  "r2e-core",
+ "r2e-grpc",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
  "tokio",
+ "tonic",
  "tracing",
 ]
 
