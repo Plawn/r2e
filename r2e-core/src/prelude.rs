@@ -145,7 +145,7 @@ pub use crate::http::header::{
 
 // Response types
 pub use crate::http::response::{
-    Html, IntoResponse, Redirect, Response, Sse, SseEvent, SseKeepAlive,
+    Html, IntoHttpResponse, IntoResponse, Redirect, Response, Sse, SseEvent, SseKeepAlive,
 };
 
 // Middleware

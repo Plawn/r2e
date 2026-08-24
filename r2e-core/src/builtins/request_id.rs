@@ -27,7 +27,7 @@
 
 use crate::http::extract::FromRequestParts;
 use crate::http::header::Parts;
-use crate::http::response::{IntoResponse, Response};
+use crate::http::response::{IntoHttpResponse, IntoResponse, Response};
 use crate::http::{HeaderName, HeaderValue};
 
 use crate::builder::AppBuilder;
@@ -39,7 +39,10 @@ static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 /// or generated as a UUID v4.
 ///
 /// Implements [`FromRequestParts`] for use as a handler parameter and [`Display`]
-/// for logging.
+/// for logging. That impl is a named bridge point (plan §5.3b): route-method
+/// parameters are extracted by the HTTP backend, not through
+/// `FromRequestPartsVia`. The response side went the other way — see the
+/// [`IntoHttpResponse`] impl below.
 #[derive(Debug, Clone)]
 pub struct RequestId(pub String);
 
@@ -62,11 +65,13 @@ impl<S: Send + Sync> FromRequestParts<S> for RequestId {
     }
 }
 
-impl IntoResponse for RequestId {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for RequestId {
+    fn into_http_response(self) -> Response {
         self.0.into_response()
     }
 }
+
+crate::http::impl_into_response!(RequestId);
 
 /// Middleware function that injects the request ID.
 async fn request_id_middleware(

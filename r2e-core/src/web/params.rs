@@ -1,4 +1,4 @@
-use crate::http::response::{IntoResponse, Response};
+use crate::http::response::{IntoHttpResponse, IntoResponse, Response};
 use crate::http::{Json, StatusCode};
 
 /// Error type for parameter extraction failures in `#[derive(Params)]`.
@@ -13,12 +13,14 @@ impl std::fmt::Display for ParamError {
     }
 }
 
-impl IntoResponse for ParamError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for ParamError {
+    fn into_http_response(self) -> Response {
         let body = serde_json::json!({ "error": self.message });
         (StatusCode::BAD_REQUEST, Json(body)).into_response()
     }
 }
+
+crate::http::impl_into_response!(ParamError);
 
 impl From<ParamError> for Response {
     fn from(err: ParamError) -> Self {

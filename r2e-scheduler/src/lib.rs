@@ -204,6 +204,10 @@ impl SchedulerHandle {
     }
 }
 
+// Named bridge point (plan §5.3b): `SchedulerHandle` is a documented
+// route-method parameter, and route-method parameters are extracted by the
+// HTTP backend itself — not through `FromRequestPartsVia`. Reached through
+// `r2e_core::http`'s re-exported names, never the backend crate directly.
 impl<S: Send + Sync> FromRequestParts<S> for SchedulerHandle {
     type Rejection = (StatusCode, &'static str);
 

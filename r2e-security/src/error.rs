@@ -1,4 +1,4 @@
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
 use r2e_core::http::StatusCode;
 
 /// Security-related errors for JWT validation and authentication.
@@ -70,12 +70,14 @@ impl SecurityError {
     }
 }
 
-impl IntoResponse for SecurityError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for SecurityError {
+    fn into_http_response(self) -> Response {
         let body = serde_json::json!({ "error": self.public_message() });
         (self.status(), r2e_core::http::Json(body)).into_response()
     }
 }
+
+r2e_core::http::impl_into_response!(SecurityError);
 
 impl From<SecurityError> for r2e_core::HttpError {
     fn from(err: SecurityError) -> Self {

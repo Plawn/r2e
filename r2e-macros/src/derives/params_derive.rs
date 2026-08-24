@@ -227,6 +227,8 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
             }
 
             // Thin wrapper: delegates to PrefixedExtract with empty prefix
+            // Named bridge point (plan §5.3b): a `#[derive(Params)]` struct is
+            // used as a route-method parameter, which the HTTP backend extracts.
             impl<__R2eParamsState: Send + Sync> #krate::http::extract::FromRequestParts<__R2eParamsState> for #name #ty_generics {
                 type Rejection = #krate::http::response::Response;
 

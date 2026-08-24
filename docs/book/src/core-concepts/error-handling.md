@@ -192,16 +192,17 @@ pub enum AppError {
 `#[derive(ApiError)]` generates:
 
 - `impl Display` — formats the error message
-- `impl IntoResponse` — converts to an HTTP response with JSON body
+- `impl IntoHttpResponse` (+ the bridging `IntoResponse` impl) — converts to an HTTP response with JSON body
 - `impl std::error::Error` — `source()` returns the inner `#[from]` error if present
 - `impl From<T>` — one per `#[from]` variant
 
 ## Manual custom error types
 
-You can also implement `IntoResponse` manually without the derive macro:
+You can also implement R2E's `IntoHttpResponse` manually without the derive
+macro, then emit the HTTP-backend bridge with `impl_into_response!`:
 
 ```rust
-use r2e::prelude::*; // IntoResponse, Response, StatusCode, Json
+use r2e::prelude::*; // IntoHttpResponse, IntoResponse, Response, StatusCode, Json
 
 #[derive(Debug)]
 pub enum MyHttpError {
@@ -209,8 +210,8 @@ pub enum MyHttpError {
     Database(String),
 }
 
-impl IntoResponse for MyHttpError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for MyHttpError {
+    fn into_http_response(self) -> Response {
         let (status, message) = match self {
             MyHttpError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             MyHttpError::Database(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
@@ -219,7 +220,15 @@ impl IntoResponse for MyHttpError {
         (status, Json(body)).into_response()
     }
 }
+
+// Bridges to the HTTP backend's response contract — this is what makes
+// `Result<T, MyHttpError>` returnable from a handler. Non-generic types only.
+r2e::http::impl_into_response!(MyHttpError);
 ```
+
+`IntoHttpResponse` is R2E's own trait, so an error type written this way does
+not name the HTTP backend. Implementing axum's `IntoResponse` directly still
+compiles, but it couples the type to that backend.
 
 ## Panic catching
 

@@ -249,6 +249,9 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
                 __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
             }
 
+            // Named bridge point (plan §5.3b): the generated extractor the HTTP
+            // backend invokes per request. Its *fields* go through
+            // `FromRequestPartsVia`; this outer impl is the backend's contract.
             impl<__R2eS> #krate::http::extract::FromRequestParts<__R2eS> for #data_name<()>
             where
                 __R2eS: Send + Sync,
@@ -308,6 +311,7 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
             __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
         }
 
+        // Named bridge point (plan §5.3b) — see the marker-free variant above.
         impl<__R2eS, #(#marker_idents),*> #krate::http::extract::FromRequestParts<__R2eS>
             for #data_name<(#(#marker_idents,)*)>
         where

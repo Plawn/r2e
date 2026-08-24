@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bytes::{Bytes, BytesMut};
 
 use crate::http::extract::{FromRequest, Request};
-use crate::http::response::{IntoResponse, Response};
+use crate::http::response::{IntoHttpResponse, IntoResponse, Response};
 use crate::http::{Json, StatusCode};
 
 /// Re-export the raw Axum multipart extractor for advanced use cases.
@@ -83,8 +83,8 @@ impl std::fmt::Display for MultipartError {
     }
 }
 
-impl IntoResponse for MultipartError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for MultipartError {
+    fn into_http_response(self) -> Response {
         let status = match &self {
             Self::FieldTooLarge { .. } | Self::PayloadTooLarge { .. } => {
                 StatusCode::PAYLOAD_TOO_LARGE
@@ -95,6 +95,8 @@ impl IntoResponse for MultipartError {
         (status, Json(body)).into_response()
     }
 }
+
+crate::http::impl_into_response!(MultipartError);
 
 // ── UploadedFile ─────────────────────────────────────────────────────────────
 

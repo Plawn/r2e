@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use crate::http::response::{IntoResponse, Response};
+use crate::http::response::{IntoHttpResponse, IntoResponse, Response};
 use crate::http::{Json, StatusCode};
 
 // ── Efficient error body serialization ────────────────────────────────
@@ -182,10 +182,10 @@ impl HttpError {
     }
 }
 
-// ── IntoResponse ──────────────────────────────────────────────────────
+// ── IntoHttpResponse ──────────────────────────────────────────────────
 
-impl IntoResponse for HttpError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for HttpError {
+    fn into_http_response(self) -> Response {
         match self {
             HttpError::Validation(resp) => {
                 let body = serde_json::json!({
@@ -212,6 +212,8 @@ impl IntoResponse for HttpError {
         }
     }
 }
+
+crate::http::impl_into_response!(HttpError);
 
 // ── Display ───────────────────────────────────────────────────────────
 

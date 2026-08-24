@@ -103,9 +103,19 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
+        impl #impl_generics #krate::http::response::IntoHttpResponse for #name #ty_generics #where_clause {
+            fn into_http_response(self) -> #krate::http::response::Response {
+                #into_response_impl
+            }
+        }
+
+        // Bridge to the HTTP backend's response contract. `impl_into_response!`
+        // cannot be used here (the type may be generic), so the derive emits
+        // the delegation itself — it is the second and last named bridge point
+        // on the response side (plan §5.3b).
         impl #impl_generics #krate::http::response::IntoResponse for #name #ty_generics #where_clause {
             fn into_response(self) -> #krate::http::response::Response {
-                #into_response_impl
+                <Self as #krate::http::response::IntoHttpResponse>::into_http_response(self)
             }
         }
 
