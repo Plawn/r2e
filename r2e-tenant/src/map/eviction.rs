@@ -3,9 +3,9 @@
 
 use std::sync::atomic::Ordering;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_core::type_list::{TCons, TNil};
 use r2e_core::BeanContext;
-use tokio_util::sync::CancellationToken;
 
 use crate::TenantId;
 
@@ -154,7 +154,7 @@ where
                 }
                 // Let whoever made those slots ready make progress before
                 // another round: a pass that evicts nothing never awaits.
-                tokio::task::yield_now().await;
+                rt::yield_now().await;
                 if this
                     .inner
                     .trimming
@@ -187,15 +187,15 @@ where
         ctx.get::<Self>()
     }
 
-    async fn start(self, shutdown: CancellationToken) {
+    async fn start(self, shutdown: CancelToken) {
         let interval = self.settings().sweep_interval();
         loop {
-            tokio::select! {
+            rt::select! {
                 _ = shutdown.cancelled() => {
                     self.drain().await;
                     break;
                 }
-                _ = tokio::time::sleep(interval) => {
+                _ = rt::sleep(interval) => {
                     let report = self.sweep().await;
                     if !report.is_empty() {
                         tracing::debug!(

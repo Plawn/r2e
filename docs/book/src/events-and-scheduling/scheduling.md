@@ -25,7 +25,7 @@ AppBuilder::new()
     .unwrap();
 ```
 
-Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancellationToken` and a `ScheduledJobRegistry` to the bean graph and **requires the `Executor` plugin**: it declares `type Deps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`Deps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
+Both plugins must be installed **before** `build_state()`. The `Scheduler` provides a `CancelToken` and a `ScheduledJobRegistry` to the bean graph and **requires the `Executor` plugin**: it declares `type Deps = (PoolExecutor,)`, so `.plugin(Scheduler)` without a `PoolExecutor` in the graph fails at `build_state()` with a guided "missing `.provide::<PoolExecutor>()` / `.register::<PoolExecutor>()`" error. Order between the two plugins does not matter (`Deps` are checked against the final provision list), and the `scheduler` feature pulls in `executor`.
 
 ### Configuration (`scheduler.*`)
 
@@ -135,12 +135,12 @@ Six fields: `second minute hour day_of_month month day_of_week`
 
 ## How it works
 
-1. `Scheduler` plugin creates a `CancellationToken` and defers setup
+1. `Scheduler` plugin creates a `CancelToken` and defers setup
 2. `build_state()` provides the token to the bean graph and verifies the `PoolExecutor` dependency (`Scheduler::Deps`)
 3. `register_controller::<ScheduledJobs>()` collects scheduled task definitions
 4. `serve()` starts **one** driver task for all schedules: a min-heap of next-fire times. The driver sleeps until the earliest deadline, then submits every due tick to the shared `PoolExecutor` and goes back to sleep — there is no task, and no loop, per schedule
 5. Re-arming depends on the job's overlap policy: `Concurrent` schedules the next fire *before* submitting the tick (ticks may overlap), `Skip` (the default) re-arms only when its own tick completes, so a slow tick silently skips the cadence fires it overran
-6. On shutdown (Ctrl-C / SIGTERM), the `CancellationToken` is cancelled: the driver stops arming, waits out the ticks already in flight, and they drain via the pool (`executor.shutdown-timeout`)
+6. On shutdown (Ctrl-C / SIGTERM), the `CancelToken` is cancelled: the driver stops arming, waits out the ticks already in flight, and they drain via the pool (`executor.shutdown-timeout`)
 
 Because ticks run as pool jobs, a panicking tick body is contained and logged (the driver and every other job keep running), scheduled work is bounded by `executor.max-concurrent`, and it appears in `ExecutorMetrics`. A panic while *constructing* a tick — the closure body before its first `await` — is caught by the driver itself and disables that one job (see the contract below).
 
@@ -195,7 +195,7 @@ impl AdminController {
 |--------|-------------|-------------|
 | `is_cancelled()` | `bool` | Check if the scheduler has been cancelled |
 | `cancel()` | `()` | Cancel the scheduler and all running tasks |
-| `token()` | `CancellationToken` | Get the underlying `CancellationToken` |
+| `token()` | `CancelToken` | Get the underlying `CancelToken` |
 | `pause(name).await` | `bool` | Pause a job by name (keeps advancing its cadence but never fires). `false` if the name is unknown, or the scheduler is shutting down / has no driver |
 | `resume(name).await` | `bool` | Resume a paused job by name; `true` iff the job can fire again (see the resume contract below). `false` if the name is unknown, the schedule can never fire again (spent cron, overflowed interval), or the scheduler is shutting down / has no driver |
 | `trigger_now(name).await` | `bool` | Fire a job once, immediately and out of band (allowed even when paused). `false` if the name is unknown, a `skip`-overlap tick is already in flight, the executor pool is closed (answered first, then the driver stops), the tick factory panicked (contained; the job is disabled), or the scheduler is shutting down / has no driver (a `trigger_now` can never start a tick once shutdown began) |

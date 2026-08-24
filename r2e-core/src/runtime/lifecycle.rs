@@ -35,14 +35,14 @@ pub type DrainHook<T> = ShutdownHook<T>;
 /// ```ignore
 /// let prepared = app.prepare("127.0.0.1:0");
 /// let stop = prepared.stop_handle();
-/// let server = tokio::spawn(prepared.run());
+/// let server = r2e::rt::spawn(prepared.run());
 /// // ... exercise the app ...
 /// stop.stop();
 /// server.await.unwrap().unwrap(); // resolves after graceful drain
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct StopHandle {
-    token: tokio_util::sync::CancellationToken,
+    token: crate::rt::CancelToken,
 }
 
 impl StopHandle {

@@ -56,7 +56,7 @@ r2e new my-app --no-interactive             # Minimal, no prompts
 ```
 my-app/
   .gitignore                      /target
-  Cargo.toml                      r2e + tokio + serde + tracing
+  Cargo.toml                      r2e + serde + tracing (no tokio — `r2e::main` owns the runtime)
   application.yaml                app name + port
   src/
     app.rs                        canonical App::setup/App::build

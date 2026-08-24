@@ -194,8 +194,8 @@ impl SseController {
         Item = Result<r2e_core::http::response::SseEvent, std::convert::Infallible>,
     > {
         self.sse.record();
-        // Use tokio_stream so we don't need futures_util.
-        use tokio_stream::wrappers::ReceiverStream;
+        // Use rt::stream so we don't need futures_util.
+        use r2e_core::rt::stream::wrappers::ReceiverStream;
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tx.send(Ok(
             r2e_core::http::response::SseEvent::default().data("hello")

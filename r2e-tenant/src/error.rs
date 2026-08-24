@@ -24,7 +24,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
 use r2e_core::http::StatusCode;
 use r2e_core::HttpError;
 
@@ -138,11 +138,13 @@ impl From<TenantError> for HttpError {
     }
 }
 
-impl IntoResponse for TenantError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for TenantError {
+    fn into_http_response(self) -> Response {
         HttpError::from(self).into_response()
     }
 }
+
+r2e_core::http::impl_into_response!(TenantError);
 
 /// The three configurable tenancy statuses.
 ///

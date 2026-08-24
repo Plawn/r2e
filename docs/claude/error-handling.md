@@ -2,7 +2,7 @@
 
 ## HttpError (r2e-core)
 
-R2E provides `HttpError` as a default error type, `#[derive(ApiError)]` for custom error types, and automatic validation error handling via garde integration. `HttpError` implements `std::error::Error`, `Clone`, `Display`, and `IntoResponse`.
+R2E provides `HttpError` as a default error type, `#[derive(ApiError)]` for custom error types, and automatic validation error handling via garde integration. `HttpError` implements `std::error::Error`, `Clone`, `Display`, and `IntoHttpResponse` (R2E's response contract) — plus the bridging `IntoResponse` impl, so it stays returnable from a handler.
 
 ### `HttpError` variants
 
@@ -102,7 +102,7 @@ r2e_core::map_error! {
 
 ### `#[derive(ApiError)]` (recommended for custom error types)
 
-Generates `Display`, `IntoResponse`, and `std::error::Error` impls automatically. Available in the prelude.
+Generates `Display`, `IntoHttpResponse` (plus the bridging `IntoResponse` impl), and `std::error::Error` impls automatically. Available in the prelude.
 
 ```rust
 #[derive(Debug, ApiError)]
@@ -139,7 +139,21 @@ Attribute syntax on variants:
 
 ### Manual custom error types
 
-Alternatively, implement `IntoResponse` manually (match variant → `(StatusCode, Json)` tuple).
+Alternatively, implement **`IntoHttpResponse`** manually (match variant →
+`(StatusCode, Json)` tuple) and emit the backend bridge with one line:
+
+```rust
+impl IntoHttpResponse for MyError {
+    fn into_http_response(self) -> Response { /* … */ }
+}
+
+r2e::http::impl_into_response!(MyError);   // non-generic types only
+```
+
+`IntoHttpResponse` is R2E's own trait; `impl_into_response!` emits the axum
+`IntoResponse` impl that makes `Result<T, MyError>` composable in handlers.
+Implementing axum's `IntoResponse` directly still works, but couples the type to
+the HTTP backend (see `plans/runtime-http-dependency-containment.md` §5.3b).
 
 ### Error middleware patterns
 

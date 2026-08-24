@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use pulsar::{producer::Producer, Pulsar, TokioExecutor};
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::sync::Mutex;
+use r2e_core::rt::CancelToken;
 use r2e_events::backend::{BackendState, PendingRequests};
 
 use crate::config::PulsarConfig;
@@ -38,8 +38,8 @@ pub(crate) struct PulsarInner {
     pub pending: Arc<PendingRequests>,
     /// Cancellation token for the lazily-started, per-instance reply consumer.
     /// Set exactly once on the first `request_with`; cancelled on shutdown.
-    pub reply_consumer: OnceLock<CancellationToken>,
+    pub reply_consumer: OnceLock<CancelToken>,
     /// Cancellation tokens for responder (request-topic) consumers, keyed by
     /// request `TypeId`. Short, await-free critical sections → a std mutex.
-    pub responder_cancels: std::sync::Mutex<HashMap<TypeId, CancellationToken>>,
+    pub responder_cancels: std::sync::Mutex<HashMap<TypeId, CancelToken>>,
 }

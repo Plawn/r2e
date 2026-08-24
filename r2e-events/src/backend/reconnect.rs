@@ -9,7 +9,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::{self, CancelToken};
 
 /// Run `inner` repeatedly with capped exponential backoff between attempts.
 ///
@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 pub async fn reconnect_loop<F, Fut>(
     reconnect: bool,
     max_backoff: Duration,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     label: &str,
     mut inner: F,
 ) where
@@ -50,7 +50,7 @@ pub async fn reconnect_loop<F, Fut>(
         }
 
         tracing::warn!("{label} disconnected, reconnecting in {backoff:?}");
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => break,
             _ = r2e_core::rt::sleep(backoff) => {}
         }

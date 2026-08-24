@@ -109,13 +109,13 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (MyService,);
-///     type Deps = (DbPool, CancellationToken);
+///     type Deps = (DbPool, CancelToken);
 ///     type Config = MyConfig;               // #[derive(ConfigProperties)]
 ///     const CONFIG_PREFIX: Option<&'static str> = Some("my-plugin");
 ///
 ///     async fn build(
 ///         self,
-///         (pool, token): (DbPool, CancellationToken),
+///         (pool, token): (DbPool, CancelToken),
 ///         config: Option<MyConfig>,
 ///         ctx: &mut PluginBuildContext,
 ///     ) -> Result<(MyService,), PluginBuildError> {

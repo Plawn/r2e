@@ -8,8 +8,8 @@
 
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::HttpRequest;
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{ScheduledJobInfo, ScheduledJobRegistry, SchedulerHandle};
-use tokio_util::sync::CancellationToken;
 
 // ── SchedulerHandle::send edge cases ────────────────────────────────────────
 
@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 async fn handle_without_commands_is_a_noop() {
     // Built via `new` — no command channel, so every control call returns false
     // (the `self.commands` is None short-circuit).
-    let handle = SchedulerHandle::new(CancellationToken::new());
+    let handle = SchedulerHandle::new(CancelToken::new());
     assert!(!handle.pause("anything").await, "pause is a no-op");
     assert!(!handle.resume("anything").await, "resume is a no-op");
     assert!(!handle.trigger_now("anything").await, "trigger is a no-op");
@@ -27,7 +27,7 @@ async fn handle_without_commands_is_a_noop() {
 async fn handle_returns_false_when_driver_receiver_is_gone() {
     // A wired handle whose `SchedulerCommands` receiver was dropped: the send
     // fails and the control call reports false instead of hanging.
-    let (handle, commands) = SchedulerHandle::channel(CancellationToken::new());
+    let (handle, commands) = SchedulerHandle::channel(CancelToken::new());
     drop(commands); // no driver ever reads the channel
 
     assert!(!handle.pause("job").await, "send fails → false");
@@ -37,7 +37,7 @@ async fn handle_returns_false_when_driver_receiver_is_gone() {
 
 #[tokio::test]
 async fn handle_cancellation_helpers() {
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let handle = SchedulerHandle::new(token.clone());
     assert!(!handle.is_cancelled());
     handle.cancel();
@@ -52,7 +52,7 @@ async fn extractor_succeeds_when_handle_is_in_extensions() {
     let (mut parts, _) = HttpRequest::builder().body(()).unwrap().into_parts();
     parts
         .extensions
-        .insert(SchedulerHandle::new(CancellationToken::new()));
+        .insert(SchedulerHandle::new(CancelToken::new()));
 
     let extracted = SchedulerHandle::from_request_parts(&mut parts, &())
         .await

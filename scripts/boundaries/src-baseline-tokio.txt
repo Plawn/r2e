@@ -1,0 +1,14 @@
+# tokio — source-occurrence baseline (path:count)
+#
+# Enforced by scripts/check-source-boundary.sh over git-tracked files
+# under a crate src/ directory — .rs only (vendor/, examples/, docs/, tests/,
+# excluded).
+#
+# This baseline ONLY EVER SHRINKS: each migration PR of
+# plans/runtime-http-dependency-containment.md deletes lines from it or
+# lowers counts. A count that grows, or a new file appearing here, fails
+# CI. A count that drops is reported as a note — shrink the line in the
+# same PR so the boundary stays honest.
+#
+# Regenerate with: scripts/check-source-boundary.sh --update
+

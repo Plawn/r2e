@@ -16,7 +16,7 @@ use r2e::r2e_scheduler::{
     extract_tasks, start_jobs, ScheduledJobRegistry, Scheduler, SchedulerCommands,
 };
 use r2e::TaskRegistryHandle;
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 // ─── Scheduled bean ───
 
@@ -113,7 +113,7 @@ async fn bean_scheduled_tasks_run_on_the_scheduler() {
     let tasks = extract_tasks(registry.take_of::<ScheduledTaskMarker>());
     assert_eq!(tasks.len(), 2);
 
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(
@@ -126,7 +126,7 @@ async fn bean_scheduled_tasks_run_on_the_scheduler() {
 
     // 1s interval task → >= 2 ticks after 2.5s; the 1h sync task fires its
     // initial tick once.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    r2e::rt::sleep(Duration::from_millis(2500)).await;
     cancel.cancel();
 
     let count = ticks.load(Ordering::SeqCst);

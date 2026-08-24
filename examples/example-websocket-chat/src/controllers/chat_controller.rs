@@ -39,7 +39,7 @@ impl ChatController {
         let event_bus = self.event_bus.clone();
 
         loop {
-            tokio::select! {
+            r2e::rt::select! {
                 // Forward broadcast messages from other clients to this WS
                 msg = rx.recv() => {
                     match msg {

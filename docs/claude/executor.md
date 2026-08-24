@@ -186,10 +186,13 @@ Generates `impl ServiceComponent` (no state generic) from the same `#[inject]` /
 `#[config]` field syntax used by `#[controller]`. The component is built from
 the resolved bean graph via `from_context(&BeanContext)` — each `#[inject]`
 field resolved by type. The user supplies an `async fn run(&self,
-CancellationToken)` method; the derived `start` just forwards to it.
+rt::CancelToken)` method; the derived `start` just forwards to it. The emitted
+`start` signature names the token through the resolved crate root
+(`#krate::rt::CancelToken`), so a user crate needs neither `tokio-util` nor
+`r2e-rt` in its manifest.
 
 ```rust
-use tokio_util::sync::CancellationToken;
+use r2e::rt::{self, CancelToken};
 
 #[derive(BackgroundService, Clone)]
 pub struct EmailWorker {
@@ -199,10 +202,10 @@ pub struct EmailWorker {
 }
 
 impl EmailWorker {
-    async fn run(&self, shutdown: CancellationToken) {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+    async fn run(&self, shutdown: CancelToken) {
+        let mut interval = rt::interval(Duration::from_secs(60));
         loop {
-            tokio::select! {
+            rt::select! {
                 _ = shutdown.cancelled() => break,
                 _ = interval.tick() => {
                     let mailer = self.mailer.clone();

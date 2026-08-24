@@ -36,7 +36,7 @@ impl NotificationController {
             .ok();
 
         loop {
-            tokio::select! {
+            r2e::rt::select! {
                 msg = ws.next() => {
                     match msg {
                         Some(Ok(Message::Close(_))) | None => break,

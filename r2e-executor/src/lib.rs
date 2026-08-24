@@ -44,10 +44,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{Notify, Semaphore};
-use tokio_util::sync::CancellationToken;
-
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::rt::sync::{Notify, Semaphore};
+use r2e_core::rt::{self, CancelToken};
 
 pub use r2e_core::rt::{JobHandle, JoinError};
 
@@ -136,7 +135,7 @@ struct Inner {
     max_concurrent: u64,
     /// Total in-flight cap = max_concurrent + queue_capacity. Used by `try_submit`.
     cap: u64,
-    shutdown: CancellationToken,
+    shutdown: CancelToken,
     queued: AtomicU64,
     /// Jobs currently holding a permit. Used for the shutdown drain path
     /// (idle notification) — the running count for metrics is derived from the
@@ -165,7 +164,7 @@ impl PoolExecutor {
                 semaphore: Arc::new(Semaphore::new(max_concurrent)),
                 max_concurrent: max_concurrent as u64,
                 cap: max_concurrent as u64 + config.queue_capacity,
-                shutdown: CancellationToken::new(),
+                shutdown: CancelToken::new(),
                 queued: AtomicU64::new(0),
                 drain_count: AtomicU64::new(0),
                 completed: AtomicU64::new(0),
@@ -204,10 +203,10 @@ impl PoolExecutor {
             return;
         }
         let inner = self.inner.clone();
-        r2e_core::rt::spawn_ctl(async move {
+        rt::spawn_ctl(async move {
             let permit = match inner.semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
-                Err(tokio::sync::TryAcquireError::NoPermits) => {
+                Err(rt::sync::TryAcquireError::NoPermits) => {
                     inner.queued.fetch_add(1, Ordering::Relaxed);
                     let p = match inner.semaphore.clone().acquire_owned().await {
                         Ok(p) => p,
@@ -219,7 +218,7 @@ impl PoolExecutor {
                     inner.queued.fetch_sub(1, Ordering::Relaxed);
                     p
                 }
-                Err(tokio::sync::TryAcquireError::Closed) => return,
+                Err(rt::sync::TryAcquireError::Closed) => return,
             };
             inner.drain_count.fetch_add(1, Ordering::Relaxed);
             fut.await;
@@ -262,15 +261,15 @@ impl PoolExecutor {
     {
         let inner = self.inner.clone();
         let shutdown = inner.shutdown.clone();
-        r2e_core::rt::spawn_ctl(async move {
+        rt::spawn_ctl(async move {
             let permit = match inner.semaphore.clone().try_acquire_owned() {
                 Ok(p) => p,
-                Err(tokio::sync::TryAcquireError::Closed) => {
+                Err(rt::sync::TryAcquireError::Closed) => {
                     panic!("executor shut down while job was pending");
                 }
-                Err(tokio::sync::TryAcquireError::NoPermits) => {
+                Err(rt::sync::TryAcquireError::NoPermits) => {
                     inner.queued.fetch_add(1, Ordering::Relaxed);
-                    let p = tokio::select! {
+                    let p = rt::select! {
                         biased;
                         _ = shutdown.cancelled() => {
                             inner.queued.fetch_sub(1, Ordering::Relaxed);
@@ -351,7 +350,7 @@ impl PoolExecutor {
                 waiter.await;
             }
         };
-        r2e_core::rt::timeout(timeout, drain).await.is_ok()
+        rt::timeout(timeout, drain).await.is_ok()
     }
 }
 

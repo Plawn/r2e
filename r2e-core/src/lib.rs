@@ -9,7 +9,12 @@ pub mod error;
 pub mod http;
 pub mod plugin;
 pub mod prelude;
-pub mod rt;
+/// Async-runtime facade — re-export of the [`r2e_rt`] crate.
+///
+/// `r2e-rt` sits at the bottom of the workspace graph (below `r2e-http`), so it
+/// is the crate that owns the `tokio` dependency. `r2e_core::rt::…` keeps
+/// resolving to exactly what it always did.
+pub use r2e_rt as rt;
 pub mod runtime;
 pub mod state;
 pub mod type_list;

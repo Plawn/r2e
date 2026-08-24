@@ -226,18 +226,18 @@ mod integration {
     /// the resolved port would surface as an `Err` here.
     #[test]
     fn sharded_port_zero_shares_one_ephemeral_port() {
-        use tokio_util::sync::CancellationToken;
+        use r2e_core::rt::CancelToken;
 
-        let token = CancellationToken::new();
+        let token = CancelToken::new();
         let cancel = token.clone();
         // A control-plane handle is required by serve_sharded; build a small
         // multi-thread runtime to act as the control plane for this test.
-        let cp_rt = tokio::runtime::Builder::new_multi_thread()
+        let cp_rt = r2e_core::rt::RuntimeBuilder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
             .build()
             .unwrap();
-        let cp_handle = cp_rt.handle().clone();
+        let cp_handle = cp_rt.handle();
         let handle = std::thread::spawn(move || {
             r2e_core::runtime::sharded::serve_sharded(
                 r2e_core::http::Router::new().with_state(()),
@@ -267,41 +267,38 @@ mod integration {
     fn worker_lazy_resolves_on_control_plane() {
         use std::future::Future;
         use std::pin::Pin;
-        use tokio::runtime::RuntimeFlavor;
 
-        let cp_rt = tokio::runtime::Builder::new_multi_thread()
+        let cp_rt = r2e_core::rt::RuntimeBuilder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .unwrap();
-        let cp_handle = cp_rt.handle().clone();
+        let cp_handle = cp_rt.handle();
 
         let worker = std::thread::Builder::new()
             .name("lazy-worker".to_string())
             .spawn(move || {
                 r2e_core::rt::set_control_plane(cp_handle);
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let worker_rt = r2e_core::rt::RuntimeBuilder::new_current_thread()
                     .enable_all()
                     .build()
                     .unwrap();
-                rt.block_on(async {
+                worker_rt.block_on(async {
                     // Factory captures the runtime flavor it executes under and
                     // does some async work (yield) — proving it runs on a real
                     // runtime, not block_in_place on the current_thread one.
                     let factory: Box<
-                        dyn FnOnce() -> Pin<Box<dyn Future<Output = RuntimeFlavor> + Send>>
-                            + Send
-                            + Sync,
+                        dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
                     > = Box::new(|| {
                         Box::pin(async {
-                            tokio::task::yield_now().await;
-                            tokio::runtime::Handle::current().runtime_flavor()
+                            r2e_core::rt::yield_now().await;
+                            r2e_core::rt::RuntimeHandle::current().is_multi_thread()
                         })
                     });
-                    let flavor = r2e_core::di::lazy::__resolve_lazy_factory_for_tests(factory);
-                    assert_eq!(
-                        flavor,
-                        RuntimeFlavor::MultiThread,
+                    let multi_thread =
+                        r2e_core::di::lazy::__resolve_lazy_factory_for_tests(factory);
+                    assert!(
+                        multi_thread,
                         "lazy factory must resolve on the multi-thread control plane"
                     );
                 });
@@ -319,22 +316,22 @@ mod integration {
         use std::future::Future;
         use std::pin::Pin;
 
-        let cp_rt = tokio::runtime::Builder::new_multi_thread()
+        let cp_rt = r2e_core::rt::RuntimeBuilder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
             .build()
             .unwrap();
-        let cp_handle = cp_rt.handle().clone();
+        let cp_handle = cp_rt.handle();
 
         let worker = std::thread::Builder::new()
             .name("lazy-panic-worker".to_string())
             .spawn(move || {
                 r2e_core::rt::set_control_plane(cp_handle);
-                let rt = tokio::runtime::Builder::new_current_thread()
+                let worker_rt = r2e_core::rt::RuntimeBuilder::new_current_thread()
                     .enable_all()
                     .build()
                     .unwrap();
-                rt.block_on(async {
+                worker_rt.block_on(async {
                     let factory: Box<
                         dyn FnOnce() -> Pin<Box<dyn Future<Output = u32> + Send>> + Send + Sync,
                     > = Box::new(|| Box::pin(async { panic!("boom-payload") }));

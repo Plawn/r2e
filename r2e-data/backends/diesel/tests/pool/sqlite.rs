@@ -4,7 +4,7 @@ use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{sql_query, QueryableByName, RunQueryDsl, SqliteConnection};
 use r2e_core::ServiceComponent;
 use r2e_data_diesel::DbPool;
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::CancelToken;
 
 use crate::support::{cleanup_sqlite_file, live_url, sqlite_file_path};
 
@@ -21,7 +21,7 @@ async fn rotating_pool_swaps_to_updated_live_config_url() {
     let (url, registry) = live_url("db.url", &initial_url);
     let pool = DbPool::<SqliteConnection>::connect(url).await.unwrap();
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let service = pool.clone();
     let service_token = token.clone();
     let handle = r2e_core::rt::spawn(async move {

@@ -96,7 +96,7 @@ fn parse_port(addr: &str) -> Option<u16> {
 #[cfg(feature = "dev-reload")]
 pub(crate) fn get_or_bind_listener(
     addr: &str,
-) -> Result<tokio::net::TcpListener, Box<dyn std::error::Error>> {
+) -> Result<crate::rt::TcpListener, Box<dyn std::error::Error>> {
     // Guard: prevent binding to the Dioxus devserver port.
     if let Some(port) = parse_port(addr) {
         if port == DIOXUS_DEVSERVER_PORT {
@@ -115,13 +115,13 @@ pub(crate) fn get_or_bind_listener(
         .lock()
         .map_err(|e| format!("listener store poisoned: {e}"))?;
     if let Some(existing) = map.get(addr) {
-        Ok(tokio::net::TcpListener::from_std(existing.try_clone()?)?)
+        Ok(crate::rt::TcpListener::from_std(existing.try_clone()?)?)
     } else {
         let l = std::net::TcpListener::bind(addr)?;
         l.set_nonblocking(true)?;
         let cloned = l.try_clone()?;
         map.insert(addr.to_string(), l);
-        Ok(tokio::net::TcpListener::from_std(cloned)?)
+        Ok(crate::rt::TcpListener::from_std(cloned)?)
     }
 }
 
@@ -397,7 +397,7 @@ async fn ping_handler() -> impl IntoResponse {
 ///   after each response. Without this, HTTP keep-alive lets the browser
 ///   reuse a connection bound to a *previous* server future. When subsecond
 ///   hot-patches, it drops the old server and starts a new one, but the old
-///   connection handler tasks (spawned via `tokio::spawn`) keep running.
+///   connection handler tasks (spawned by the HTTP server) keep running.
 ///   The browser's keep-alive connection stays routed to stale handlers.
 pub async fn dev_headers_middleware(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;

@@ -58,7 +58,9 @@ fn new_creates_cargo_toml() {
     let cargo = fs::read_to_string("myapp/Cargo.toml").unwrap();
     assert!(cargo.contains("name = \"myapp\""));
     assert!(cargo.contains("r2e"));
-    assert!(cargo.contains("tokio"));
+    // No direct tokio dependency: `#[r2e::main]` drives the runtime through
+    // `r2e::rt`, so a generated project never names the runtime crate.
+    assert!(!cargo.contains("tokio"));
     assert!(cargo.contains("dev-reload = [\"r2e/dev-reload\"]"));
 }
 

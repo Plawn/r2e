@@ -24,10 +24,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// and register a shutdown hook that cancels it. Shared by
     /// [`spawn_service`](Self::spawn_service) and
     /// [`collect_service_sources`](Self::collect_service_sources); `run`
-    /// receives the [`CancellationToken`] and returns the service future.
+    /// receives the [`CancelToken`] and returns the service future.
     fn register_service<F, Fut>(mut self, run: F) -> Self
     where
-        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
+        F: FnOnce(CancelToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         // A CHILD of the app shutdown root, not a fresh token. The sync
@@ -237,7 +237,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Apply a Tower layer to the entire application.
     ///
     /// The layer is applied during `build()`. Multiple calls are applied in
-    /// order. The layer must satisfy the same bounds as [`axum::Router::layer`].
+    /// order. The layer must satisfy the same bounds as `Router::layer`.
     ///
     /// # Example
     ///
@@ -272,8 +272,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Apply a custom transformation to the router.
     ///
     /// This is an escape hatch for cases where `with_layer` is too
-    /// restrictive. The closure receives the `axum::Router` and must return
-    /// a new `axum::Router`.
+    /// restrictive. The closure receives the `r2e::http::Router` and must
+    /// return a new one.
     ///
     /// # Example
     ///
@@ -377,7 +377,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// AppBuilder::new()
     ///     .on_drain(|state| async move {
     ///         state.get::<Readiness>().set_draining();
-    ///         tokio::time::sleep(Duration::from_secs(5)).await; // LB deregistration
+    ///         r2e::rt::sleep(Duration::from_secs(5)).await; // LB deregistration
     ///     })
     /// ```
     pub fn on_drain<F, Fut>(mut self, hook: F) -> Self
@@ -420,7 +420,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Register a raw `axum::Router` fragment to be merged into the application.
+    /// Register a raw `r2e::http::Router` fragment to be merged into the application.
     pub fn register_routes(mut self, router: crate::http::Router<T>) -> Self {
         self.routes.push(router);
         self
@@ -744,7 +744,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Assemble the final `axum::Router` from all registered routes and layers.
+    /// Assemble the final `r2e::http::Router` from all registered routes and layers.
     ///
     /// Startup lifecycle work is NOT run here: consumer registrations AND
     /// controller `#[post_construct]` hooks are dropped. Use

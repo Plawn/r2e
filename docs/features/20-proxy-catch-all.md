@@ -96,6 +96,7 @@ Reach for the first rung that fits; each step down trades framework integration 
 1. **`#[any]` / `#[fallback]` controller routes** — full DI, guards, interceptors, TestApp. This is the right level for proxies and gateways.
 2. **`merge_router(router)` / `register_routes(router)`** — merge a raw `Router<T>` fragment before state application: raw routes share the app state and global plugins (CORS, tracing, error handling) but get no controller DI, guards, or interceptors.
 3. **`with_layer_fn(|router| ...)`** — transform the final state-erased `Router` (add tower layers, nest sub-apps). Runs **after** `with_state`, so the `State` extractor is unusable inside — capture what you need in the closure.
+4. **`r2e::http::axum_compat`** — the raw axum API, for what `r2e::http` does not re-export (a tower layer with axum-typed bounds, `axum::debug_handler`, a third-party crate spelled in axum types). This rung is **outside R2E's public promise** ("R2E types under `r2e::http`") and is deliberately greppable; prefer asking for a re-export from `r2e::http`. See `plans/runtime-http-dependency-containment.md` §5.3d.
 
 ## Testing
 

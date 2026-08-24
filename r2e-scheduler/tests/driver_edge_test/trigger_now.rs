@@ -2,10 +2,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{
     ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef, SchedulerHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{await_next_run, counting_task, test_pool};
 
@@ -28,7 +28,7 @@ async fn trigger_now_against_a_closed_pool_stops_the_driver() {
     );
 
     let pool = test_pool();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();
@@ -80,7 +80,7 @@ async fn a_trigger_now_factory_panic_leaves_the_cadence_deadline_alone() {
     );
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(cancel.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();

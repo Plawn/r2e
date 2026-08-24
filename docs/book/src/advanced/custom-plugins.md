@@ -273,12 +273,12 @@ closures, no `Box`, no `DeferredAction`:
 
 ```rust
 use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 pub struct MyPlugin;
 
 impl PreStatePlugin for MyPlugin {
-    type Provided = (CancellationToken,);
+    type Provided = (CancelToken,);
     type Deps = ();
     type Config = ();
 
@@ -287,8 +287,8 @@ impl PreStatePlugin for MyPlugin {
         _deps: (),
         _config: Option<()>,
         ctx: &mut PluginBuildContext,
-    ) -> Result<(CancellationToken,), PluginBuildError> {
-        let token = CancellationToken::new();
+    ) -> Result<(CancelToken,), PluginBuildError> {
+        let token = CancelToken::new();
         let t = token.clone();
 
         // Add a Tower layer
@@ -367,13 +367,13 @@ tuple and return all of them. Each element becomes its own bean in the graph:
 
 ```rust
 use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 
 pub struct MyMultiPlugin;
 
 impl PreStatePlugin for MyMultiPlugin {
-    // Provides two beans: CancellationToken and MyRegistry
-    type Provided = (CancellationToken, MyRegistry);
+    // Provides two beans: CancelToken and MyRegistry
+    type Provided = (CancelToken, MyRegistry);
     type Deps = ();
     type Config = ();
 
@@ -382,8 +382,8 @@ impl PreStatePlugin for MyMultiPlugin {
         _deps: (),
         _config: Option<()>,
         ctx: &mut PluginBuildContext,
-    ) -> Result<(CancellationToken, MyRegistry), PluginBuildError> {
-        let token = CancellationToken::new();
+    ) -> Result<(CancelToken, MyRegistry), PluginBuildError> {
+        let token = CancelToken::new();
         let registry = MyRegistry::new();
 
         let t = token.clone();
@@ -397,7 +397,7 @@ impl PreStatePlugin for MyMultiPlugin {
 }
 ```
 
-Both beans are then injectable by type (`#[inject] token: CancellationToken`,
+Both beans are then injectable by type (`#[inject] token: CancelToken`,
 `#[inject] registry: MyRegistry`).
 
 Note that plugin-provided beans register **strictly**: an app
@@ -471,7 +471,7 @@ A pre-state plugin that spawns a periodic health check task and cancels it on sh
 
 ```rust
 use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
-use tokio_util::sync::CancellationToken;
+use r2e::rt::CancelToken;
 use std::time::Duration;
 
 pub struct HealthChecker {
@@ -480,7 +480,7 @@ pub struct HealthChecker {
 }
 
 impl PreStatePlugin for HealthChecker {
-    type Provided = (CancellationToken,);
+    type Provided = (CancelToken,);
     type Deps = ();
     type Config = ();
 
@@ -489,8 +489,8 @@ impl PreStatePlugin for HealthChecker {
         _deps: (),
         _config: Option<()>,
         ctx: &mut PluginBuildContext,
-    ) -> Result<(CancellationToken,), PluginBuildError> {
-        let token = CancellationToken::new();
+    ) -> Result<(CancelToken,), PluginBuildError> {
+        let token = CancelToken::new();
         let interval = self.interval;
         let url = self.url;
         let t = token.clone();
@@ -498,10 +498,10 @@ impl PreStatePlugin for HealthChecker {
 
         // Start the checker when the server begins serving
         ctx.on_serve(move |_serve_ctx| {
-            tokio::spawn(async move {
+            r2e::rt::spawn(async move {
                 loop {
-                    tokio::select! {
-                        _ = tokio::time::sleep(interval) => {
+                    r2e::rt::select! {
+                        _ = r2e::rt::sleep(interval) => {
                             match reqwest::get(&url).await {
                                 Ok(resp) => tracing::info!("Health check: {}", resp.status()),
                                 Err(e) => tracing::warn!("Health check failed: {}", e),

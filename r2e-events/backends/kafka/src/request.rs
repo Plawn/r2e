@@ -1,6 +1,3 @@
-// NOTE: The `rdkafka` (librdkafka) consumer is tokio-bound; any tokio APIs
-// that originate from the rdkafka SDK remain on direct tokio and are a
-// documented exception to the r2e_core::rt facade.
 //! Request-reply transport for `KafkaEventBus` (ReplyingKafkaTemplate pattern).
 //!
 //! - Requesters publish to a shared request topic (`<event-topic>.requests`)
@@ -21,8 +18,8 @@ use std::time::Duration;
 
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::Message;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_events::backend::{
     decode_metadata, decode_reply_headers, encode_reply_headers, reconnect_loop, responder_group,
     ReplyHeaders, COMPLETION_CHANNEL_CAPACITY, COMPLETION_DRAIN_TIMEOUT,
@@ -51,7 +48,7 @@ pub(crate) fn reply_consumer_group(config_group_id: &str, instance_id: u64) -> S
 pub(crate) async fn run_reply_consumer(
     inner: Arc<KafkaInner>,
     topic_name: String,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let label = format!("Kafka reply consumer [{topic_name}]");
     reconnect_loop(
@@ -64,11 +61,7 @@ pub(crate) async fn run_reply_consumer(
     .await;
 }
 
-async fn run_reply_consumer_inner(
-    inner: &Arc<KafkaInner>,
-    topic_name: &str,
-    cancel: &CancellationToken,
-) {
+async fn run_reply_consumer_inner(inner: &Arc<KafkaInner>, topic_name: &str, cancel: &CancelToken) {
     let mut cfg = inner.config.to_consumer_client_config();
     // Instance-private group; read from the beginning so a reply produced
     // during the join window is not lost (the topic is process-private, so
@@ -97,7 +90,7 @@ async fn run_reply_consumer_inner(
     tracing::info!(topic = %topic_name, "Kafka reply consumer started");
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "Kafka reply consumer cancelled");
                 break;
@@ -119,7 +112,7 @@ async fn run_reply_consumer_inner(
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka reply consumer error: {e}");
-                        r2e_core::rt::sleep(Duration::from_secs(1)).await;
+                        rt::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -134,7 +127,7 @@ pub(crate) async fn run_responder_consumer(
     inner: Arc<KafkaInner>,
     type_id: TypeId,
     topic_name: String,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let label = format!("Kafka responder consumer [{topic_name}]");
     reconnect_loop(
@@ -151,7 +144,7 @@ async fn run_responder_consumer_inner(
     inner: &Arc<KafkaInner>,
     type_id: TypeId,
     topic_name: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     let mut cfg = inner.config.to_consumer_client_config();
     cfg.set("group.id", responder_group(topic_name));
@@ -181,11 +174,11 @@ async fn run_responder_consumer_inner(
 
     tracing::info!(topic = %topic_name, "Kafka responder started");
     let (completion_tx, mut completion_rx) =
-        tokio::sync::mpsc::channel::<((u64, i32, i64), bool)>(COMPLETION_CHANNEL_CAPACITY);
-    let mut commit_interval = r2e_core::rt::interval(RESPONDER_COMMIT_INTERVAL);
+        rt::sync::mpsc::channel::<((u64, i32, i64), bool)>(COMPLETION_CHANNEL_CAPACITY);
+    let mut commit_interval = rt::interval(RESPONDER_COMMIT_INTERVAL);
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "Kafka responder cancelled");
                 break;
@@ -226,14 +219,14 @@ async fn run_responder_consumer_inner(
 
                         let inner = inner.clone();
                         let tx = completion_tx.clone();
-                        r2e_core::rt::spawn(async move {
+                        rt::spawn(async move {
                             let ok = handle_request(&inner, type_id, &payload, metadata, reply).await;
                             let _ = tx.send(((epoch, partition, offset), ok)).await;
                         });
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka responder error: {e}");
-                        r2e_core::rt::sleep(Duration::from_secs(1)).await;
+                        rt::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -249,7 +242,7 @@ async fn run_responder_consumer_inner(
             );
         }
     };
-    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+    let _ = rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
 
     if let Err(e) = consumer.commit_consumer_state(CommitMode::Sync) {
         tracing::debug!(topic = %topic_name, "responder final commit skipped: {e}");

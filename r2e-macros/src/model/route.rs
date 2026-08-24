@@ -8,7 +8,7 @@ pub enum HttpMethod {
     Put,
     Delete,
     Patch,
-    /// Matches every HTTP method (`axum::routing::any`). Used by `#[any]`
+    /// Matches every HTTP method (`r2e::http::routing::any`). Used by `#[any]`
     /// routes and as the placeholder method of `#[fallback]` routes.
     Any,
 }

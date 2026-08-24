@@ -214,7 +214,7 @@ The `GrpcServer` plugin must be installed **before** `build_state()`:
 ```rust
 use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
-#[tokio::main]
+#[r2e::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     r2e::init_tracing();
 

@@ -408,11 +408,11 @@ where
 /// ```ignore
 /// impl PreStatePlugin for MyPlugin {
 ///     type Provided = (MyThing,);
-///     type Deps = (DbPool, CancellationToken);
+///     type Deps = (DbPool, CancelToken);
 ///
 ///     async fn build(
 ///         self,
-///         (pool, token): (DbPool, CancellationToken),
+///         (pool, token): (DbPool, CancelToken),
 ///         _config: Option<()>,
 ///         _ctx: &mut PluginBuildContext,
 ///     ) -> Result<(MyThing,), PluginBuildError> {

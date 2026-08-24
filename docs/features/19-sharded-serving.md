@@ -168,6 +168,11 @@ worker runtimes serve HTTP and nothing else. When `server.workers` is absent,
 `spawn_ctl` is byte-for-byte equivalent to `spawn` — the default path is
 untouched.
 
+The `rt` module itself now lives in the **`r2e-rt`** crate at the bottom of the
+workspace graph; `r2e_core::rt` is a re-export, so every path above (and
+`r2e::rt::…`) resolves exactly as before. See
+`plans/runtime-http-dependency-containment.md`.
+
 Implication for `#[scheduled]` / `#[consumer]` code: the control plane is a
 multi-thread runtime, so such code must be `Send` (it already is — nothing
 changes for users). Lazy beans first touched from a request handler are now

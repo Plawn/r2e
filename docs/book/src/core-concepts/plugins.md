@@ -46,7 +46,7 @@ Some plugins need to install before `build_state()`. Use `.plugin()` instead of 
 ```rust
 AppBuilder::new()
     .plugin(Executor)     // provides PoolExecutor (Scheduler runs ticks on it)
-    .plugin(Scheduler)    // provides CancellationToken + ScheduledJobRegistry
+    .plugin(Scheduler)    // provides CancelToken + ScheduledJobRegistry
     .build_state()
     .await
     // ...

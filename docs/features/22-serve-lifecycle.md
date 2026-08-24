@@ -32,7 +32,7 @@ let app = AppBuilder::new().build_state().await;
 let prepared = app.prepare("127.0.0.1:8080");
 let stop = prepared.stop_handle();          // Clone-able
 
-let server = tokio::spawn(prepared.run());
+let server = r2e::rt::spawn(prepared.run());
 
 // ... later, from anywhere:
 stop.stop();                                 // triggers graceful shutdown
@@ -61,15 +61,15 @@ Resolution order at `prepare()`: explicit `with_stop_handle()` → `StopHandle` 
 
 ### In e2e tests
 
-`prepare() → stop_handle() → run()` replaces `tokio::spawn(app.serve(..)) + handle.abort()`. The test exercises the *real* shutdown path and asserts a clean exit:
+`prepare() → stop_handle() → run()` replaces `r2e::rt::spawn(app.serve(..)) + handle.abort()`. The test exercises the *real* shutdown path and asserts a clean exit:
 
 ```rust
 let prepared = app.prepare(&format!("127.0.0.1:{port}"));
 let stop = prepared.stop_handle();
-let server = tokio::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
+let server = r2e::rt::spawn(async move { prepared.run().await.map_err(|e| e.to_string()) });
 // ... requests ...
 stop.stop();
-assert!(tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().is_ok());
+assert!(r2e::rt::timeout(Duration::from_secs(5), server).await.unwrap().unwrap().is_ok());
 ```
 
 ## `on_drain` — awaited pre-drain hooks
@@ -83,7 +83,7 @@ AppBuilder::new()
     .await
     .on_drain(|state| async move {
         state.bean::<Readiness>().unwrap().set_draining();     // health endpoint → unready
-        tokio::time::sleep(Duration::from_secs(5)).await;      // LB notices, deregisters
+        r2e::rt::sleep(Duration::from_secs(5)).await;      // LB notices, deregisters
     })
     .on_stop(|_state| async move {
         tracing::info!("drained and stopped");
@@ -109,7 +109,7 @@ dctx.on_serve(move |serve_ctx| {
 ```
 
 - `task_registry()` — the shared `TaskRegistryHandle` (scheduled tasks, tagged subsystem tasks).
-- `shutdown_token()` — the app shutdown `CancellationToken`; cancelled when the graceful drain begins.
+- `shutdown_token()` — the app shutdown token; cancelled when the graceful drain begins. Since the `r2e-rt` extraction it is an `r2e::rt::CancelToken` (**breaking**), not a `tokio_util::sync::CancellationToken` — apps no longer need `tokio-util` in their own manifest. It behaves the same (`cancelled().await` is cancellation-safe, `child_token()`, `drop_guard()`); a call site that genuinely needs the raw tokio-util token converts with `.into()` / `.into_inner()`.
 - `track(fut)` — spawns `fut` and joins the post-drain await set (same pool as `spawn_service` handles), bounded by `shutdown_grace_period`.
 
 It takes the **future**, not a `JobHandle` (breaking — pass the `async` block instead of `rt::spawn(...)`): the task is wrapped so it owns a strong reference to the bean graph for its whole lifetime. That matters because the await set is best-effort — an elapsed `shutdown_grace_period` drops the join futures, and a dropped `run()` future (an `r2e dev` hot patch) joins nothing at all — so a task that resolves beans through a `GraphHandle` must carry the graph itself, which a pre-spawned handle cannot be given after the fact.

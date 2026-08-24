@@ -14,7 +14,6 @@ Add dependencies to `Cargo.toml`:
 ```toml
 [dependencies]
 r2e = { version = "0.3" }
-tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -147,7 +146,7 @@ Let's add a simple in-memory user service. Create `src/services.rs`:
 
 ```rust
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use r2e::rt::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use r2e::prelude::*;
 

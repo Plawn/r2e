@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use rdkafka::producer::FutureProducer;
-use tokio::sync::OnceCell;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::sync::OnceCell;
+use r2e_core::rt::CancelToken;
 use r2e_events::backend::{BackendState, PendingRequests};
 
 use crate::config::KafkaConfig;
@@ -20,13 +20,13 @@ pub(crate) struct KafkaInner {
     pub pending: Arc<PendingRequests>,
     /// Lazily-started per-process reply consumer; holds its cancel token so
     /// shutdown can stop it. Started on the first `request`/`request_with`.
-    pub reply_consumer: OnceCell<CancellationToken>,
+    pub reply_consumer: OnceCell<CancelToken>,
     /// Cancel tokens for responder (request-topic) consumers, keyed by the
     /// request `TypeId`. One per `respond` registration.
-    pub responder_cancels: std::sync::Mutex<HashMap<TypeId, CancellationToken>>,
+    pub responder_cancels: std::sync::Mutex<HashMap<TypeId, CancelToken>>,
     /// Sticky shutdown signal so requesters cannot miss cancellation between
     /// their initial shutdown check and the reply wait.
-    pub request_cancel: CancellationToken,
+    pub request_cancel: CancelToken,
     /// Per-bus-instance nonce identifying this instance's reply topic and reply
     /// consumer group. Minted once in the builder so two bus instances sharing a
     /// config in one process get disjoint reply topics AND groups.

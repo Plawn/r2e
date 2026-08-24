@@ -192,7 +192,7 @@ async fn controller_post_construct_runs_before_consumer_traffic() {
     );
 
     bus.emit(Ping { msg: "hi".into() }).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
         *log.lock().unwrap(),
@@ -232,7 +232,7 @@ async fn controller_consumer_intercept_impl_then_method() {
         .await;
 
     bus.emit(Ping { msg: "hi".into() }).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 1);
     // impl-level interceptor runs BEFORE method-level (same order as beans).

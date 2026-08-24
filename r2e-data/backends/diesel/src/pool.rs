@@ -5,8 +5,8 @@ use arc_swap::ArcSwap;
 use diesel::r2d2::{ConnectionManager, Pool, R2D2Connection};
 use diesel::Connection;
 use r2e_core::config::LiveConfig;
+use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ServiceComponent};
-use tokio_util::sync::CancellationToken;
 
 /// Error building or rotating a Diesel [`DbPool`].
 #[derive(Debug, Clone)]
@@ -202,7 +202,7 @@ where
         ctx.get::<Self>()
     }
 
-    async fn start(self, shutdown: CancellationToken) {
+    async fn start(self, shutdown: CancelToken) {
         let this = &self;
         this.inner
             .url

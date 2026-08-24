@@ -26,7 +26,7 @@
 //!   empty slots either. A caller that never runs an initializer — a waiter
 //!   parked behind someone else's creation — arms no guard, so its cancellation
 //!   cannot detach the creation it was waiting for.
-//!   Residual behaviour, inherited from `tokio::sync::OnceCell`: a failed
+//!   Residual behaviour, inherited from `rt::sync::OnceCell`: a failed
 //!   initialization does not fail the waiters parked on that cell — they take
 //!   turns running the initializer themselves, on the cell the failed attempt's
 //!   cleanup just detached. Such a retry **reattaches** its slot when it

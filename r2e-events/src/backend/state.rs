@@ -5,9 +5,9 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use r2e_core::rt::sync::{Notify, RwLock, Semaphore};
+use r2e_core::rt::{self, CancelToken};
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::sync::{Notify, RwLock, Semaphore};
-use tokio_util::sync::CancellationToken;
 
 use super::dispatch::{DeserializerFn, Handler, HandlerEntry, TopicHandlers};
 use super::topic::TopicRegistry;
@@ -61,7 +61,7 @@ pub enum DispatchOutcome {
 /// [`outcome`]: DispatchCompletion::outcome
 pub struct DispatchCompletion {
     resolved: Option<DispatchOutcome>,
-    receivers: Vec<tokio::sync::oneshot::Receiver<bool>>,
+    receivers: Vec<rt::sync::oneshot::Receiver<bool>>,
 }
 
 impl DispatchCompletion {
@@ -101,12 +101,12 @@ impl DispatchCompletion {
 pub struct BackendState {
     pub shutdown: AtomicBool,
     pub next_id: AtomicU64,
-    /// Per-TypeId handler registry (tokio RwLock — may be held across async dispatch).
+    /// Per-TypeId handler registry (async RwLock — may be held across async dispatch).
     pub handlers: RwLock<HashMap<TypeId, TopicHandlers>>,
     /// TypeId -> resolved topic name (std RwLock — never held across awaits).
     pub topic_registry: std::sync::RwLock<TopicRegistry>,
     /// Cancellation tokens for background pollers, keyed by TypeId.
-    pub poller_cancels: Mutex<HashMap<TypeId, CancellationToken>>,
+    pub poller_cancels: Mutex<HashMap<TypeId, CancelToken>>,
     /// Number of handlers currently executing.
     pub in_flight: AtomicUsize,
     /// Notified when `in_flight` drops to zero.
@@ -147,7 +147,7 @@ pub const COMPLETION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::f
 pub fn spawn_completion_forwarder<K: Send + 'static>(
     completion: DispatchCompletion,
     key: K,
-    tx: tokio::sync::mpsc::Sender<(K, DispatchOutcome)>,
+    tx: rt::sync::mpsc::Sender<(K, DispatchOutcome)>,
 ) {
     r2e_core::rt::spawn(async move {
         let outcome = completion.outcome().await;
@@ -235,8 +235,8 @@ impl BackendState {
     ///
     /// Returns the token — pass it to the poller task. Call `.cancel()` to stop
     /// the poller (done automatically by `cancel_all_pollers` on shutdown).
-    pub fn register_poller_cancel(&self, type_id: TypeId) -> CancellationToken {
-        let cancel = CancellationToken::new();
+    pub fn register_poller_cancel(&self, type_id: TypeId) -> CancelToken {
+        let cancel = CancelToken::new();
         self.poller_cancels
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -650,7 +650,7 @@ impl BackendState {
 
             let guard = self.acquire_in_flight();
 
-            let (tx, rx) = tokio::sync::oneshot::channel();
+            let (tx, rx) = rt::sync::oneshot::channel();
             receivers.push(rx);
 
             // The poller loop already runs on the control plane (registered at

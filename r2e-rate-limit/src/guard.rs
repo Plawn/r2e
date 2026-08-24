@@ -5,7 +5,6 @@ use r2e_core::config::R2eConfig;
 use r2e_core::decorators::guards::{
     ClientIp, Guard, GuardContext, Identity, PreAuthGuard, PreAuthGuardContext,
 };
-use r2e_core::http::response::IntoResponse;
 use r2e_core::type_list::{TCons, TNil};
 use r2e_core::DecoratorSpec;
 
@@ -475,11 +474,10 @@ impl DecoratorSpec for ConfiguredRateLimit {
 // ---------------------------------------------------------------------------
 
 fn too_many_requests() -> r2e_core::http::Response {
-    (
+    r2e_core::http::response::static_json(
         r2e_core::http::StatusCode::TOO_MANY_REQUESTS,
-        r2e_core::http::Json(serde_json::json!({ "error": "Rate limit exceeded" })),
+        r#"{"error":"Rate limit exceeded"}"#,
     )
-        .into_response()
 }
 
 /// A per-user limit reached without an identity: fail closed.
@@ -496,13 +494,10 @@ fn identity_required(controller: &str, method: &str) -> r2e_core::http::Response
         "rate limit: per-user limit on a request with no identity — rejecting with 401 \
          (a per-user bucket cannot be keyed without a subject)"
     );
-    (
+    r2e_core::http::response::static_json(
         r2e_core::http::StatusCode::UNAUTHORIZED,
-        r2e_core::http::Json(
-            serde_json::json!({ "error": "Authentication required for this rate-limited endpoint" }),
-        ),
+        r#"{"error":"Authentication required for this rate-limited endpoint"}"#,
     )
-        .into_response()
 }
 
 /// Post-authentication rate limit guard.

@@ -77,15 +77,13 @@ async fn spawn_ctl_without_control_plane_behaves_like_spawn() {
 
 #[test]
 fn spawn_ctl_with_control_plane_runs_on_control_plane_runtime() {
-    use tokio::runtime::RuntimeFlavor;
-
     // The control plane is a multi-thread runtime.
-    let control_plane = tokio::runtime::Builder::new_multi_thread()
+    let control_plane = rt::RuntimeBuilder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
         .build()
         .expect("build control-plane runtime");
-    let cp_handle = control_plane.handle().clone();
+    let cp_handle = control_plane.handle();
 
     // Simulate a sharded worker thread: a current_thread runtime on a thread
     // where the control-plane handle is registered.
@@ -93,29 +91,28 @@ fn spawn_ctl_with_control_plane_runs_on_control_plane_runtime() {
         .name("test-worker".to_string())
         .spawn(move || {
             rt::set_control_plane(cp_handle);
-            let rt = tokio::runtime::Builder::new_current_thread()
+            let worker_rt = rt::RuntimeBuilder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("build worker runtime");
-            rt.block_on(async {
+            worker_rt.block_on(async {
                 // From inside the worker's current_thread runtime, spawn_ctl
                 // must land on the multi-thread control plane.
-                let flavor =
-                    rt::spawn_ctl(async { tokio::runtime::Handle::current().runtime_flavor() })
+                let multi_thread =
+                    rt::spawn_ctl(async { rt::RuntimeHandle::current().is_multi_thread() })
                         .await
                         .expect("ctl task should not fail");
-                assert_eq!(
-                    flavor,
-                    RuntimeFlavor::MultiThread,
+                assert!(
+                    multi_thread,
                     "spawn_ctl must execute on the multi-thread control plane"
                 );
 
                 // A plain spawn, by contrast, stays on the worker's current_thread runtime.
-                let local_flavor =
-                    rt::spawn(async { tokio::runtime::Handle::current().runtime_flavor() })
+                let local_multi_thread =
+                    rt::spawn(async { rt::RuntimeHandle::current().is_multi_thread() })
                         .await
                         .expect("local task should not fail");
-                assert_eq!(local_flavor, RuntimeFlavor::CurrentThread);
+                assert!(!local_multi_thread);
             });
         })
         .expect("spawn worker thread");

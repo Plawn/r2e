@@ -4,7 +4,7 @@ use r2e::config::R2eConfig;
 use r2e::prelude::*;
 use r2e::r2e_security::AuthenticatedUser;
 use r2e_test::{TestApp, TestJwt};
-use tokio::sync::RwLock;
+use r2e::rt::sync::RwLock;
 
 // ─── Types ───
 

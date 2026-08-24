@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::{Algorithm, DecodingKey};
+use r2e_core::rt::sync::{Mutex, RwLock};
 use serde::Deserialize;
-use tokio::sync::{Mutex, RwLock};
 use tracing::warn;
 
 use crate::config::SecurityConfig;

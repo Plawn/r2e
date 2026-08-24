@@ -74,7 +74,7 @@ async fn boot() -> TestApp {
     TestApp::boot_with::<PostgresApp>(move |b| b.override_config_value("database.url", url)).await
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn list_is_empty_on_a_fresh_database() {
     let app = boot().await;
@@ -84,7 +84,7 @@ async fn list_is_empty_on_a_fresh_database() {
     resp.assert_json_path("content", serde_json::json!([]));
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn create_then_fetch_roundtrips_through_postgres() {
     let app = boot().await;
@@ -106,7 +106,7 @@ async fn create_then_fetch_roundtrips_through_postgres() {
     assert_eq!(fetched.body, "world");
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn update_persists_partial_changes() {
     let app = boot().await;
@@ -131,7 +131,7 @@ async fn update_persists_partial_changes() {
     assert_eq!(updated.body, "body");
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn delete_removes_the_row() {
     let app = boot().await;
@@ -154,7 +154,7 @@ async fn delete_removes_the_row() {
         .assert_not_found();
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn missing_article_is_not_found() {
     let app = boot().await;

@@ -12,7 +12,7 @@ use sqlx::SqlitePool;
 mod common {
     use r2e::r2e_events::{EventBus, LocalEventBus};
     use std::sync::Arc;
-    use tokio::sync::RwLock;
+    use r2e::rt::sync::RwLock;
 
     #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     pub struct User {

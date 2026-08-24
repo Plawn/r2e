@@ -55,7 +55,7 @@ async fn boot() -> TestApp {
     app
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn unauthenticated_request_is_rejected() {
     let app = boot().await;
@@ -65,7 +65,7 @@ async fn unauthenticated_request_is_rejected() {
         .assert_unauthorized();
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn viewer_is_allowed_to_read() {
     let app = boot().await;
@@ -80,7 +80,7 @@ async fn viewer_is_allowed_to_read() {
     assert_eq!(body["user"], "alice");
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn non_viewer_is_denied() {
     let app = boot().await;
@@ -94,7 +94,7 @@ async fn non_viewer_is_denied() {
 /// The typed write path end-to-end: an editor shares the document (grant
 /// through `FgaClient`), the grantee immediately gains access (write-through
 /// cache invalidation), then loses it again on unshare.
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn share_grants_and_unshare_revokes_view_access() {
     let app = boot().await;
@@ -132,7 +132,7 @@ async fn share_grants_and_unshare_revokes_view_access() {
 }
 
 /// Sharing is editor-gated: a mere viewer cannot grant access.
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn non_editor_cannot_share() {
     let app = boot().await;
@@ -153,7 +153,7 @@ async fn non_editor_cannot_share() {
 
 /// Metacharacters in the grantee id are rejected before reaching the store —
 /// the same `:`/`#`/`*` guard as the request-time object resolvers.
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn share_rejects_metacharacters_in_user_id() {
     let app = boot().await;
@@ -165,7 +165,7 @@ async fn share_rejects_metacharacters_in_user_id() {
         .assert_bad_request();
 }
 
-#[tokio::test]
+#[r2e::test]
 #[ignore = "requires Docker"]
 async fn editor_is_allowed_but_non_editor_is_denied() {
     let app = boot().await;

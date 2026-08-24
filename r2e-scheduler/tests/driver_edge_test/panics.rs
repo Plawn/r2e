@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_scheduler::{
     OverlapPolicy, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef,
     SchedulerCommands,
 };
-use tokio_util::sync::CancellationToken;
 
 use crate::support::{counting_task, start_one, test_pool};
 
@@ -15,7 +15,7 @@ use crate::support::{counting_task, start_one, test_pool};
 #[r2e_core::test]
 async fn panicking_tick_increments_panic_count() {
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
 
     // Struct-literal form with the future cast to `Output = ()` so the
     // diverging (`panic!`) body doesn't trip never-type inference.
@@ -99,7 +99,7 @@ async fn a_panicking_tick_factory_disables_its_job_without_killing_the_driver() 
     .with_overlap(OverlapPolicy::Concurrent);
 
     let registry = ScheduledJobRegistry::new();
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     let jobs: Vec<_> = [
         Box::new(panicky) as Box<dyn ScheduledTask>,
         Box::new(healthy) as Box<dyn ScheduledTask>,

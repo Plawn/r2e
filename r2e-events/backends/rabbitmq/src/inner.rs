@@ -8,9 +8,9 @@ use lapin::options::{
 };
 use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
 use lapin::{Channel, Connection, ConnectionProperties, ExchangeKind};
-use tokio::sync::Mutex;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::sync::Mutex;
+use r2e_core::rt::{self, CancelToken};
 use r2e_events::backend::{BackendState, PendingRequests, HEADER_REPLY_ERROR};
 use r2e_events::EventBusError;
 
@@ -56,7 +56,7 @@ pub(crate) struct RabbitMqInner {
     pub(crate) pending: Arc<PendingRequests>,
     /// Cancelled on shutdown so in-flight requesters fail promptly with
     /// [`EventBusError::Shutdown`] instead of blocking until their timeout.
-    pub(crate) request_cancel: CancellationToken,
+    pub(crate) request_cancel: CancelToken,
     pub state: Arc<BackendState>,
 }
 
@@ -80,7 +80,7 @@ impl RabbitMqInner {
             requester_generation: AtomicU64::new(1),
             requester_rebuild: Mutex::new(()),
             pending: Arc::new(PendingRequests::new()),
-            request_cancel: CancellationToken::new(),
+            request_cancel: CancelToken::new(),
             state,
         }
     }
@@ -372,7 +372,7 @@ impl RabbitMqInner {
 
         let pending = self.pending.clone();
         let weak = Arc::downgrade(self);
-        r2e_core::rt::spawn(async move {
+        rt::spawn(async move {
             let mut consumer = consumer;
             while let Some(next) = consumer.next().await {
                 match next {

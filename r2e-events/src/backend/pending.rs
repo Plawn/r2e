@@ -14,8 +14,9 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use r2e_core::rt;
+use r2e_core::rt::sync::oneshot;
 use serde::de::DeserializeOwned;
-use tokio::sync::oneshot;
 
 use super::metadata_codec::ReplyHeaders;
 use crate::EventBusError;
@@ -148,7 +149,7 @@ pub async fn await_reply<Resp>(
 where
     Resp: DeserializeOwned,
 {
-    let result: ReplyResult = tokio::select! {
+    let result: ReplyResult = rt::select! {
         r = rx => match r {
             Ok(reply) => reply,
             // Sender dropped without completing — treat as a timeout.

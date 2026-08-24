@@ -16,7 +16,7 @@ use r2e::web::sse::SseSubscription;
 use r2e_test::TestApp;
 
 async fn next_event(sub: &mut SseSubscription) -> Option<SseEvent> {
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    r2e::rt::timeout(std::time::Duration::from_secs(2), async {
         std::future::poll_fn(|cx| {
             use futures_core::Stream;
             Pin::new(&mut *sub).poll_next(cx)
@@ -63,8 +63,8 @@ async fn sse_topic_endpoint_is_reachable(app: TestApp) {
     // The infinite stream can't be collected in-process; hit the endpoint
     // over a live server and assert the SSE handshake headers.
     let server = app.serve().await;
-    let mut stream = tokio::net::TcpStream::connect(server.addr()).await.unwrap();
-    tokio::io::AsyncWriteExt::write_all(
+    let mut stream = r2e::rt::TcpStream::connect(server.addr()).await.unwrap();
+    r2e::rt::io::AsyncWriteExt::write_all(
         &mut stream,
         b"GET /sse/users HTTP/1.1\r\nHost: test\r\nAccept: text/event-stream\r\n\r\n",
     )
@@ -72,9 +72,9 @@ async fn sse_topic_endpoint_is_reachable(app: TestApp) {
     .unwrap();
 
     let mut buf = [0u8; 1024];
-    let n = tokio::time::timeout(
+    let n = r2e::rt::timeout(
         std::time::Duration::from_secs(2),
-        tokio::io::AsyncReadExt::read(&mut stream, &mut buf),
+        r2e::rt::io::AsyncReadExt::read(&mut stream, &mut buf),
     )
     .await
     .expect("server should answer the SSE handshake")

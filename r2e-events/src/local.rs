@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use tokio::sync::{Notify, RwLock, Semaphore};
+use r2e_core::rt::sync::{Notify, RwLock, Semaphore};
 
 use crate::{
     EmitReceipt, EventBus, EventBusError, EventEnvelope, EventMetadata, HandlerResult,

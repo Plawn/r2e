@@ -3,13 +3,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use r2e_core::rt::CancelToken;
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef,
     SchedulerCommands, SchedulerHandle,
 };
 use tokio::sync::Semaphore;
-use tokio_util::sync::CancellationToken;
 
 pub(crate) fn test_pool() -> PoolExecutor {
     PoolExecutor::new(ExecutorConfig::default())
@@ -115,7 +115,7 @@ pub(crate) async fn await_completion_processed(
 
 pub(crate) fn start_one(
     task: ScheduledTaskDef<impl Clone + Send + Sync + 'static>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     pool: PoolExecutor,
     registry: ScheduledJobRegistry,
 ) {

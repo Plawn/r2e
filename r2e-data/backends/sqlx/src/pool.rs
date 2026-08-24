@@ -7,10 +7,10 @@ use futures_core::future::BoxFuture;
 use futures_core::stream::BoxStream;
 use futures_util::TryStreamExt;
 use r2e_core::config::LiveConfig;
+use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ConfigError, ServiceComponent};
 use sqlx::pool::{PoolConnection, PoolOptions};
 use sqlx::{Database, Either, Error, Execute, Executor, Pool, SqlStr, Transaction};
-use tokio_util::sync::CancellationToken;
 
 /// How many times a `begin`/`acquire` is retried when it lands on a pool that
 /// was closed by a concurrent rotation.
@@ -211,7 +211,7 @@ where
         ctx.get::<Self>()
     }
 
-    async fn start(self, shutdown: CancellationToken) {
+    async fn start(self, shutdown: CancelToken) {
         let this = &self;
         this.inner
             .url

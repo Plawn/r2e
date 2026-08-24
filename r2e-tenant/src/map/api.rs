@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use r2e_core::plugin::GraphHandle;
-use tokio::sync::Notify;
+use r2e_core::rt::sync::Notify;
 
 use crate::error::{TenantError, TenantStatuses};
 use crate::source::{ResolutionChain, TenantSource};

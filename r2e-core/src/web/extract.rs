@@ -55,6 +55,30 @@
 //! bean-backed extractors are pinned this way). Do NOT re-add a blanket
 //! `OptionalFromRequestPartsVia<_, ViaAxum>` bridge — it would give every
 //! plain axum extractor's `Option<T>` a second route.
+//!
+//! # The named bridge surface (plan §5.3b)
+//!
+//! [`FromRequestPartsVia`] is the R2E-owned extraction contract, and every
+//! bean-backed extractor R2E ships implements it. A handful of impls of the
+//! *backend's* [`FromRequestParts`] necessarily remain, because the backend —
+//! not R2E — is what drives extraction of a handler's argument tuple. They are
+//! enumerated here so a backend swap has a list instead of a search:
+//!
+//! | site | why it speaks the backend contract |
+//! |---|---|
+//! | [`Via<T, M>`](Via) (this file) | *the* reverse bridge: the single adapter from `FromRequestPartsVia` back to the backend. A swap rewrites this impl. |
+//! | [`PeerAddr`] (this file) | emitted into the generated handler's argument tuple, and usable as a route-method parameter — both positions the backend extracts. |
+//! | [`BeanExtract<T, I>`](BeanExtract) (this file) | exists *for* hand-written backend handlers merged via `merge_router` (see `crate::http::axum_compat`). |
+//! | `RequestId` (`crate::builtins::request_id`) | documented route-method parameter. |
+//! | `SchedulerHandle` (`r2e-scheduler`) | documented route-method parameter. |
+//! | `__R2eRequestData_<C>` (emitted by `#[controller]`) | the generated extractor the backend invokes per request; its *fields* are extracted through `FromRequestPartsVia`. |
+//! | `#[derive(Params)]` (emitted by `r2e-macros`) | same, for user parameter structs used as route-method parameters. |
+//!
+//! Wrapping every route-method parameter in [`Via`] would remove the last five
+//! rows, at the cost of an inferred marker generic per parameter (compile time,
+//! and `E0283`-shaped errors on user types). That trade was measured and
+//! rejected — see the plan. None of these sites names `axum` directly: they all
+//! go through `r2e_http`'s re-exported names.
 
 use std::marker::PhantomData;
 
@@ -236,6 +260,11 @@ where
 ///
 /// Generated handlers extract this for guarded routes and pass it to
 /// `GuardContext::peer_addr`; hand-written handlers can use it directly.
+///
+/// Implements the backend's [`FromRequestParts`] rather than
+/// [`FromRequestPartsVia`] on purpose — it sits in the generated handler's
+/// argument tuple, which the backend extracts. Named bridge point (plan
+/// §5.3b); see the module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeerAddr(pub Option<std::net::SocketAddr>);
 
@@ -262,6 +291,10 @@ impl<S: Send + Sync> FromRequestParts<S> for PeerAddr {
 /// ```ignore
 /// async fn raw_handler(BeanExtract(pool, ..): BeanExtract<SqlitePool>) -> ... { }
 /// ```
+///
+/// Implements the backend's [`FromRequestParts`] (not [`FromRequestPartsVia`])
+/// by construction: its entire purpose is to be usable from a hand-written
+/// backend handler. Named bridge point (plan §5.3b).
 pub struct BeanExtract<T, I>(pub T, pub PhantomData<fn() -> I>);
 
 impl<S, T, I> FromRequestParts<S> for BeanExtract<T, I>

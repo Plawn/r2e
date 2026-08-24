@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use common::{connect_channel, free_port, stop_and_await_clean};
 use r2e::prelude::*;
 use r2e::r2e_grpc::{AppBuilderGrpcExt, GrpcServer};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use r2e::rt::io::{AsyncReadExt, AsyncWriteExt};
 
 pub mod proto {
     r2e::r2e_grpc::include_protos!();
@@ -178,7 +178,7 @@ async fn serve_multiplexes_grpc_and_http_on_one_port() {
     assert_eq!(entries, vec!["grpc:say_hello"]);
 
     // Plain HTTP/1.1 on the same port still reaches the axum router.
-    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+    let mut stream = r2e::rt::TcpStream::connect(("127.0.0.1", port))
         .await
         .unwrap();
     stream

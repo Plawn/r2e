@@ -334,7 +334,7 @@ struct BroadcastRequest {
 
 // -- Main --
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     let broadcaster = SseBroadcaster::new(256);
 

@@ -9,7 +9,6 @@ Add to your `Cargo.toml`:
 ```toml
 [dev-dependencies]
 r2e-test = "0.3"
-tokio = { version = "1", features = ["full"] }
 ```
 
 ## Recommended pattern: boot your `App`
@@ -171,7 +170,7 @@ containers on demand (features `postgres`, `redis`, `openfga`):
 ```rust
 use r2e_devservices::DevPostgres;
 
-#[tokio::test]
+#[r2e::test]
 async fn users_are_persisted() {
     let pg = DevPostgres::shared().await; // one container for the test session
     let app = TestApp::boot_with::<my_app::MyApp>(|b| {

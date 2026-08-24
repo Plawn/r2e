@@ -14,7 +14,7 @@ description = "HTTP abstraction layer for R2E - sole owner of the axum dependenc
 default = []
 ws = ["axum/ws"]
 multipart = ["axum/multipart"]
-quic = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:rustls", "dep:rustls-pemfile", "dep:http-body", "dep:http-body-util", "dep:tower", "dep:tracing", "dep:tokio"]
+quic = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:rustls", "dep:rustls-pemfile", "dep:http-body", "dep:http-body-util", "dep:tower", "dep:tracing", "dep:r2e-rt"]
 
 [dependencies]
 axum = {workspace = true}
@@ -29,7 +29,9 @@ http-body = {workspace = true, optional = true}
 http-body-util = {workspace = true, optional = true}
 tower = {workspace = true, optional = true}
 tracing = {workspace = true, optional = true}
-tokio = {workspace = true, optional = true}
+# The runtime facade — r2e-rt is at the bottom of the graph, so r2e-http can
+# reach it (see plans/runtime-http-dependency-containment.md §3).
+r2e-rt = {workspace = true, optional = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["full"]}

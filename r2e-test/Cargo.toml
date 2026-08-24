@@ -15,7 +15,10 @@ default = []
 ws = ["dep:tokio-tungstenite", "dep:futures-util"]
 
 [dependencies]
-r2e-core = {workspace = true}
+# `test-util`: paused clocks for `#[r2e::test(start_paused = true)]`. A test
+# harness is exactly the place that may turn it on — it never reaches a
+# production build, since r2e-test is a dev-dependency everywhere.
+r2e-core = {workspace = true, features = ["test-util"]}
 r2e-security = {workspace = true}
 tower = {workspace = true, features = ["util"]}
 http = {workspace = true}

@@ -4,6 +4,8 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use r2e_core::rt;
+
 use crate::error::TenantError;
 use crate::TenantId;
 
@@ -64,7 +66,7 @@ where
     ///
     /// Increments are therefore finite and each is paired with a decrement, so
     /// the counter strictly drains to zero. That is what makes notifying only on
-    /// the zero *transition* sufficient: [`Notified`](tokio::sync::Notify) is
+    /// the zero *transition* sufficient: [`Notified`](rt::sync::Notify) is
     /// registered before the count is read, so a transition after the read wakes
     /// this loop, and a transition before it is either already reflected in the
     /// read or followed by another one — a final state above zero is impossible.
@@ -100,7 +102,7 @@ where
             // counter that hits zero between here and the await is not a lost
             // wakeup.
             let settled = self.inner.settled.notified();
-            tokio::pin!(settled);
+            rt::pin!(settled);
             settled.as_mut().enable();
 
             // Before the pass — see the rustdoc.

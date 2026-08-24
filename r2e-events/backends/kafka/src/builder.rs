@@ -5,6 +5,7 @@ use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::producer::FutureProducer;
 
+use r2e_core::rt;
 use r2e_events::backend::{instance_id, reply_topic, BackendState, PendingRequests, TopicRegistry};
 use r2e_events::{DlqPublisher, EventBusError};
 
@@ -85,9 +86,9 @@ impl KafkaEventBusBuilder {
                     Some(dlq),
                 )),
                 pending: Arc::new(PendingRequests::new()),
-                reply_consumer: tokio::sync::OnceCell::new(),
+                reply_consumer: rt::sync::OnceCell::new(),
                 responder_cancels: std::sync::Mutex::new(std::collections::HashMap::new()),
-                request_cancel: tokio_util::sync::CancellationToken::new(),
+                request_cancel: rt::CancelToken::new(),
                 instance_id,
                 reply_topic,
             }

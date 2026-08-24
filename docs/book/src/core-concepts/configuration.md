@@ -25,7 +25,7 @@ pub struct AppConfig {
     pub greeting: String,
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     AppBuilder::new()
         .load_config::<AppConfig>()    // loads YAML + env, provides AppConfig as a bean

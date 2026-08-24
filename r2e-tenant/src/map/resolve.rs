@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use dashmap::mapref::entry::Entry;
+use r2e_core::rt;
 
 use crate::error::{BoxError, TenantError};
 use crate::source::{ResolutionChain, TenantContext};
@@ -141,7 +142,7 @@ where
                     let ctx = TenantContext::new(tenant, wiring.graph.clone(), chain);
                     let creating = wiring.source.create(tenant, &ctx);
                     let created = match wiring.settings.create_timeout {
-                        Some(budget) => match tokio::time::timeout(budget, creating).await {
+                        Some(budget) => match rt::timeout(budget, creating).await {
                             Ok(created) => created,
                             Err(_) => {
                                 self.inner.counters.timeouts.fetch_add(1, Ordering::Relaxed);
@@ -486,7 +487,7 @@ pub(super) enum SlotOwnership<T> {
 /// disarm it and own the map surgery themselves; what is left for the guard is
 /// the two paths that return through neither — a panic inside
 /// `TenantSource::create`, and the initializing future being dropped mid-create
-/// (a client disconnect, a `tokio::time::timeout` around the handler). Either
+/// (a client disconnect, a `rt::timeout` around the handler). Either
 /// would leave an empty slot mapped with no waiter to retry it, which a hostile
 /// tenant id could farm.
 ///

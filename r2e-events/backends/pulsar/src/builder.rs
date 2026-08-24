@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pulsar::{Authentication, Pulsar, TokioExecutor};
-use tokio::sync::Mutex;
 
+use r2e_core::rt::sync::Mutex;
 use r2e_events::backend::{instance_id, BackendState, PendingRequests, TopicRegistry};
 use r2e_events::{DlqPublisher, EventBusError};
 

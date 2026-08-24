@@ -244,7 +244,7 @@ impl HealthIndicator for ExternalApiHealth {
 
 // -- Application setup --
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:")
         .await

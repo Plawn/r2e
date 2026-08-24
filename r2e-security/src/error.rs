@@ -1,4 +1,4 @@
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, Response};
 use r2e_core::http::StatusCode;
 
 /// Security-related errors for JWT validation and authentication.
@@ -70,12 +70,22 @@ impl SecurityError {
     }
 }
 
-impl IntoResponse for SecurityError {
-    fn into_response(self) -> Response {
-        let body = serde_json::json!({ "error": self.public_message() });
-        (self.status(), r2e_core::http::Json(body)).into_response()
+impl IntoHttpResponse for SecurityError {
+    fn into_http_response(self) -> Response {
+        // Both bodies are constant (`public_message` returns one of two
+        // `&'static str`s), so they are pre-serialized: an unauthenticated
+        // request storm is the hot path here, and it should not pay a
+        // `serde_json::Value` allocation per rejection.
+        let body = if self.is_server_error() {
+            r#"{"error":"Service unavailable"}"#
+        } else {
+            r#"{"error":"Unauthorized"}"#
+        };
+        r2e_core::http::response::static_json(self.status(), body)
     }
 }
+
+r2e_core::http::impl_into_response!(SecurityError);
 
 impl From<SecurityError> for r2e_core::HttpError {
     fn from(err: SecurityError) -> Self {

@@ -39,7 +39,7 @@ r2e-core         Runtime. AppBuilder, Controller, HttpError, config, validation,
 r2e-security     JWT/JWKS, AuthenticatedUser, #[roles].
 r2e-core         Pageable, Page, and the managed-resource lifecycle.
 r2e-events       EventBus trait + LocalEventBus (typed pub/sub).
-r2e-scheduler    Scheduled tasks (interval, cron) with CancellationToken.
+r2e-scheduler    Scheduled tasks (interval, cron) with CancelToken.
 r2e-openapi      OpenAPI 3.1.0 spec generation + Swagger UI.
 r2e-static       Embedded static files with SPA support (wraps rust_embed).
 r2e-test         TestApp (in-process HTTP client) + TestJwt.

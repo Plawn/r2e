@@ -1,4 +1,4 @@
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
 use r2e_core::http::Json;
 use r2e_core::http::{header, HeaderMap, HeaderValue, StatusCode};
 use serde::Serialize;
@@ -90,8 +90,8 @@ impl OidcError {
     }
 }
 
-impl IntoResponse for OidcError {
-    fn into_response(self) -> Response {
+impl IntoHttpResponse for OidcError {
+    fn into_http_response(self) -> Response {
         let mut headers = HeaderMap::new();
         if let Some(value) = self.www_authenticate() {
             headers.insert(header::WWW_AUTHENTICATE, value);
@@ -104,6 +104,8 @@ impl IntoResponse for OidcError {
         (self.status_code(), headers, Json(body)).into_response()
     }
 }
+
+r2e_core::http::impl_into_response!(OidcError);
 
 impl std::fmt::Display for OidcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

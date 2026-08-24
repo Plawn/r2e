@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use iggy::prelude::*;
 
+use r2e_core::rt;
 use r2e_events::backend::{instance_id, reply_topic, BackendState, PendingRequests, TopicRegistry};
 use r2e_events::{DlqPublisher, EventBusError};
 
@@ -103,7 +104,7 @@ impl IggyEventBusBuilder {
                 stream_id,
                 topic_ids: std::sync::RwLock::new(std::collections::HashMap::new()),
                 pending: Arc::new(PendingRequests::new()),
-                request_cancel: tokio_util::sync::CancellationToken::new(),
+                request_cancel: rt::CancelToken::new(),
                 rr_cancels: std::sync::Mutex::new(Default::default()),
             }
         });

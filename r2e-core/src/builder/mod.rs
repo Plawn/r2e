@@ -30,6 +30,7 @@ use crate::di::module::{
     ModuleScope, RequiredPluginsInstalled,
 };
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
+use crate::rt::CancelToken;
 use crate::runtime::service::ServiceComponent;
 use crate::type_list::{AllSatisfied, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
@@ -37,7 +38,6 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 /// Builder returned by the NoState registration methods
@@ -129,7 +129,7 @@ type ServeHook = Box<dyn FnOnce(ServeContext) + Send>;
 ///   drains on the shutdown token so the process doesn't exit mid-drain.
 pub struct ServeContext {
     tasks: TaskRegistryHandle,
-    shutdown: CancellationToken,
+    shutdown: CancelToken,
     handles: ServiceHandles,
     /// The resolved bean graph, cloned into every task `track` spawns — see
     /// [`ServeContext::track`].
@@ -143,7 +143,7 @@ impl ServeContext {
     }
 
     /// Token cancelled when graceful shutdown begins.
-    pub fn shutdown_token(&self) -> CancellationToken {
+    pub fn shutdown_token(&self) -> crate::rt::CancelToken {
         self.shutdown.clone()
     }
 
@@ -226,16 +226,16 @@ impl ServiceHandles {
 /// can be cancelled on its own (the plugin sync shutdown hooks still do that,
 /// early in the shutdown sequence) **and** is cancelled with its parent.
 #[derive(Clone)]
-struct ShutdownRoot(CancellationToken);
+struct ShutdownRoot(CancelToken);
 
 /// Get-or-insert the one [`ShutdownRoot`] for this app.
 ///
 /// Called from `register_service` (build time, first writer) and from
 /// `run_inner` (serve time), which is why it is a free function over the
 /// `plugin_data` map both phases own.
-fn shutdown_root(data: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> CancellationToken {
+fn shutdown_root(data: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> CancelToken {
     data.entry(TypeId::of::<ShutdownRoot>())
-        .or_insert_with(|| Box::new(ShutdownRoot(CancellationToken::new())))
+        .or_insert_with(|| Box::new(ShutdownRoot(CancelToken::new())))
         .downcast_ref::<ShutdownRoot>()
         .expect("ShutdownRoot type mismatch in plugin_data")
         .0
@@ -353,7 +353,7 @@ struct BuilderConfig {
 /// Builder for assembling a R2E application.
 ///
 /// Collects state, controller routes, and Tower layers, then produces an
-/// `axum::Router` (or starts serving directly) with everything wired together.
+/// `r2e::http::Router` (or starts serving directly) with everything wired together.
 ///
 /// # Two-phase builder
 ///

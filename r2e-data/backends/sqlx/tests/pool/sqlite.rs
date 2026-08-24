@@ -3,7 +3,7 @@ use std::time::Duration;
 use r2e_core::ServiceComponent;
 use r2e_data_sqlx::DbPool;
 use sqlx::{Error, Executor, Row, Sqlite};
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::CancelToken;
 
 use crate::support::{cleanup_sqlite_file, live_url, sqlite_file_url};
 
@@ -18,7 +18,7 @@ async fn rotating_pool_swaps_to_updated_live_config_url() {
         .execute("CREATE TABLE items(id INTEGER PRIMARY KEY)")
         .await
         .unwrap();
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let service = pool.clone();
     let service_token = token.clone();
     let handle = r2e_core::rt::spawn(async move {

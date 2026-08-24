@@ -109,7 +109,7 @@ serve(addr)
 
 ### 1.5 Graceful Shutdown
 
-The scheduler uses a `CancellationToken` (from `tokio-util`) that is cancelled in an `on_stop` hook registered by `with_scheduler`. Each scheduled task watches this token via `tokio::select!` and stops cleanly.
+The scheduler uses an `r2e::rt::CancelToken` that is cancelled in an `on_stop` hook registered by `with_scheduler`. Each scheduled task watches this token via `rt::select!` and stops cleanly.
 
 In-flight HTTP requests are completed before closing (default Axum behavior).
 

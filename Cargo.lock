@@ -2512,8 +2512,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "tokio",
- "tokio-util",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
@@ -2526,8 +2524,6 @@ dependencies = [
  "r2e",
  "serde",
  "serde_json",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -2537,8 +2533,6 @@ dependencies = [
  "prost 0.14.4",
  "r2e",
  "r2e-grpc-build",
- "tokio",
- "tokio-stream",
  "tonic",
  "tonic-prost",
  "tonic-reflection",
@@ -2554,7 +2548,6 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2569,7 +2562,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2583,7 +2575,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2595,7 +2586,6 @@ dependencies = [
  "r2e",
  "serde",
  "serde_json",
- "tokio",
  "tracing-subscriber",
 ]
 
@@ -2609,7 +2599,6 @@ dependencies = [
  "r2e-test",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -2626,7 +2615,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -2638,7 +2626,6 @@ dependencies = [
  "r2e",
  "serde",
  "sqlx",
- "tokio",
  "tracing-subscriber",
 ]
 
@@ -2651,7 +2638,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -5726,7 +5712,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
- "tokio-util",
  "tonic",
  "tonic-prost",
  "trybuild",
@@ -5751,14 +5736,13 @@ dependencies = [
  "pin-project-lite",
  "r2e-http",
  "r2e-macros",
+ "r2e-rt",
  "serde",
  "serde_json",
  "serde_yaml",
  "socket2",
  "tempfile",
  "tokio",
- "tokio-stream",
- "tokio-util",
  "tower",
  "tower-http 0.7.0",
  "tracing",
@@ -5793,7 +5777,6 @@ dependencies = [
  "r2e-tenant",
  "sqlx",
  "tokio",
- "tokio-util",
  "tower",
 ]
 
@@ -5826,7 +5809,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -5843,7 +5825,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -5858,7 +5839,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -5873,7 +5853,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -5888,7 +5867,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -5918,7 +5896,6 @@ dependencies = [
  "r2e-core",
  "serde_json",
  "tokio",
- "tokio-util",
  "tonic",
  "tonic-reflection",
  "tower",
@@ -5946,6 +5923,7 @@ dependencies = [
  "http-body",
  "http-body-util",
  "quinn",
+ "r2e-rt",
  "rcgen",
  "rustls",
  "rustls-pemfile",
@@ -6084,8 +6062,17 @@ version = "0.3.0"
 dependencies = [
  "dashmap",
  "r2e-core",
- "serde_json",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "r2e-rt"
+version = "0.3.0"
+dependencies = [
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
 ]
 
@@ -6100,7 +6087,6 @@ dependencies = [
  "r2e-core",
  "r2e-executor",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 
@@ -6140,7 +6126,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tower",
  "tracing",
 ]
@@ -6176,7 +6161,6 @@ dependencies = [
  "r2e-core",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 
@@ -8106,7 +8090,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

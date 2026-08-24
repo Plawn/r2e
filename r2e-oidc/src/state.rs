@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use r2e_core::rt::sync::Semaphore;
 use r2e_security::JwtClaimsValidator;
-use tokio::sync::Semaphore;
 
 use crate::client::ClientRegistry;
 use crate::config::OidcServerConfig;

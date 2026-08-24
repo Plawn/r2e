@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use r2e_core::config::{ConfigValue, R2eConfig};
 use r2e_core::{AppBuilder, BeanContext, ServiceComponent, SpawnService};
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::CancelToken;
 
 static STARTED: AtomicUsize = AtomicUsize::new(0);
 static STOPPED: AtomicUsize = AtomicUsize::new(0);
@@ -18,7 +18,7 @@ impl ServiceComponent for ProbeService {
         ctx.get::<ProbeService>()
     }
 
-    async fn start(self, shutdown: CancellationToken) {
+    async fn start(self, shutdown: CancelToken) {
         STARTED.fetch_add(1, Ordering::SeqCst);
         shutdown.cancelled().await;
         STOPPED.fetch_add(1, Ordering::SeqCst);
@@ -81,7 +81,7 @@ struct ConfiguredService {
 }
 
 impl ConfiguredService {
-    async fn run(&self, shutdown: CancellationToken) {
+    async fn run(&self, shutdown: CancelToken) {
         shutdown.cancelled().await;
     }
 }
@@ -152,7 +152,7 @@ struct ProducedService {
 }
 
 impl ProducedService {
-    async fn run(&self, shutdown: CancellationToken) {
+    async fn run(&self, shutdown: CancelToken) {
         shutdown.cancelled().await;
     }
 }
@@ -242,7 +242,7 @@ struct SectionService {
 }
 
 impl SectionService {
-    async fn run(&self, shutdown: CancellationToken) {
+    async fn run(&self, shutdown: CancelToken) {
         shutdown.cancelled().await;
     }
 }
@@ -342,7 +342,7 @@ impl ServiceComponent for DropProbeService {
         DropProbeService
     }
 
-    async fn start(self, shutdown: CancellationToken) {
+    async fn start(self, shutdown: CancelToken) {
         DROP_STARTED.fetch_add(1, Ordering::SeqCst);
         shutdown.cancelled().await;
         DROP_STOPPED.fetch_add(1, Ordering::SeqCst);

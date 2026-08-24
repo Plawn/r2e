@@ -168,7 +168,7 @@ where
     ///
     /// The service is constructed from the retained bean graph via
     /// [`ServiceComponent::from_context`] and started in a Tokio task during
-    /// `on_start`. A `CancellationToken` is provided and cancelled
+    /// `on_start`. A `CancelToken` is provided and cancelled
     /// automatically during shutdown.
     ///
     /// # Example

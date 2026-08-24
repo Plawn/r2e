@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use r2e_core::builder::TaskRegistryHandle;
 use r2e_core::AppBuilder;
+use r2e_core::rt::CancelToken;
 use r2e_executor::{Executor, ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     extract_tasks, start_jobs, ScheduleConfig, ScheduledJobRegistry, ScheduledTask,
     ScheduledTaskDef, Scheduler, SchedulerCommands,
 };
-use tokio_util::sync::CancellationToken;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -117,7 +117,7 @@ async fn full_lifecycle_without_serve() {
     let tasks = extract_tasks(boxed);
     assert_eq!(tasks.len(), 1);
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let pool = PoolExecutor::new(ExecutorConfig::default());
     let jobs: Vec<_> = tasks.into_iter().map(|t| t.into_job()).collect();
     start_jobs(

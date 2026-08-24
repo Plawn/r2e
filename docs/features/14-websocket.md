@@ -247,7 +247,7 @@ async fn notifications(&self, mut ws: WsStream) {
     let client_id = rx.client_id();
 
     loop {
-        tokio::select! {
+        r2e::rt::select! {
             msg = rx.recv() => {
                 match msg {
                     Some(msg) => {
@@ -354,7 +354,7 @@ impl ChatController {
         });
 
         loop {
-            tokio::select! {
+            r2e::rt::select! {
                 msg = rx.recv() => {
                     match msg {
                         Some(msg) => {

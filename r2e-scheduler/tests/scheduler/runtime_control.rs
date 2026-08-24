@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use r2e_core::rt::CancelToken;
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     start_jobs, OverlapPolicy, ScheduleConfig, ScheduledJobRegistry, ScheduledTask,
     ScheduledTaskDef, SchedulerHandle,
 };
-use tokio_util::sync::CancellationToken;
 
 fn test_pool() -> PoolExecutor {
     PoolExecutor::new(ExecutorConfig::default())
@@ -19,8 +19,8 @@ fn test_pool() -> PoolExecutor {
 fn spawn(
     task: ScheduledTaskDef<impl Clone + Send + Sync + 'static>,
     registry: ScheduledJobRegistry,
-) -> (SchedulerHandle, CancellationToken) {
-    let token = CancellationToken::new();
+) -> (SchedulerHandle, CancelToken) {
+    let token = CancelToken::new();
     let (handle, commands) = SchedulerHandle::channel(token.clone());
     let boxed: Box<dyn ScheduledTask> = Box::new(task);
     let jobs: Vec<_> = [boxed].into_iter().map(|t| t.into_job()).collect();

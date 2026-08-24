@@ -57,7 +57,7 @@ async fn reflect_v1(
         message_request: Some(request),
     };
     let mut stream = client
-        .server_reflection_info(tokio_stream::iter(vec![request]))
+        .server_reflection_info(r2e::rt::stream::iter(vec![request]))
         .await
         .expect("ServerReflectionInfo call failed")
         .into_inner();
@@ -134,7 +134,7 @@ async fn reflection_lists_services_on_separate_port() {
         ),
     };
     let mut stream = client
-        .server_reflection_info(tokio_stream::iter(vec![request]))
+        .server_reflection_info(r2e::rt::stream::iter(vec![request]))
         .await
         .expect("v1alpha ServerReflectionInfo call failed")
         .into_inner();

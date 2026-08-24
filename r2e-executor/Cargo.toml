@@ -13,9 +13,10 @@ description = "Managed task pool executor for R2E - injectable, bounded, with gr
 [dependencies]
 r2e-core = {workspace = true}
 r2e-macros = {workspace = true}
-tokio = {workspace = true, features = ["rt", "sync", "time", "macros"]}
-tokio-util = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["full", "test-util"]}
+# `#[derive(BackgroundService)]` still emits `::tokio_util::sync::CancellationToken`
+# into user code (flipped in phase 2e/2f), so the derive tests need it linked.
+tokio-util = {workspace = true}

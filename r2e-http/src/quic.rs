@@ -1,7 +1,6 @@
-// FACADE EXCEPTION: r2e-http sits below r2e-core in the dependency graph
-// (r2e-core depends on r2e-http), so this file cannot use r2e_core::rt.
-// tokio::spawn is called directly here.  The quinn/h3 libraries are also
-// tokio-bound, so this is a permanent documented exception.
+// Runtime access goes through `r2e_rt` (the workspace runtime facade), which
+// sits at the bottom of the dependency graph and is therefore reachable from
+// r2e-http.  `r2e_core::rt` is the same crate under another name.
 use bytes::{Buf, Bytes};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -128,7 +127,7 @@ pub fn build_server_config_from_files(
 /// Channel-backed body that streams request data from an h3 stream into
 /// an axum-compatible [`http_body::Body`].
 struct ChannelBody {
-    rx: tokio::sync::mpsc::Receiver<Bytes>,
+    rx: r2e_rt::sync::mpsc::Receiver<Bytes>,
 }
 
 impl http_body::Body for ChannelBody {
@@ -201,12 +200,12 @@ pub async fn serve_h3_with_endpoint(
     let addr = endpoint.local_addr().map_err(QuicError::Io)?;
     tracing::info!(addr = %addr, "QUIC/HTTP3 endpoint listening");
 
-    tokio::pin!(shutdown);
+    r2e_rt::pin!(shutdown);
 
-    let mut tasks = tokio::task::JoinSet::new();
+    let mut tasks = r2e_rt::JoinSet::new();
 
     loop {
-        tokio::select! {
+        r2e_rt::select! {
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break };
                 let router = router.clone();
@@ -242,12 +241,9 @@ async fn handle_h3_connection(
         match h3_conn.accept().await {
             Ok(Some(resolver)) => {
                 let router = router.clone();
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "r2e-http sits below r2e-core and cannot call rt::spawn; \
-                              per-request H3 streams belong on the current (data-plane) runtime anyway"
-                )]
-                tokio::spawn(async move {
+                // Per-request H3 streams belong on the current (data-plane)
+                // runtime, so this is `spawn`, not `spawn_ctl`.
+                r2e_rt::spawn(async move {
                     match resolver.resolve_request().await {
                         Ok((req, stream)) => {
                             if let Err(e) =
@@ -301,7 +297,7 @@ where
 
     // Create a channel-backed streaming body. The body reader feeds chunks
     // into `tx` while the router pulls them through `ChannelBody`.
-    let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(BODY_CHANNEL_CAPACITY);
+    let (tx, rx) = r2e_rt::sync::mpsc::channel::<Bytes>(BODY_CHANNEL_CAPACITY);
     let body = crate::Body::new(ChannelBody { rx });
 
     let mut request = http::Request::from_parts(parts, body);
@@ -342,7 +338,7 @@ where
         (stream, false)
     };
 
-    let ((mut stream, too_large), response) = tokio::join!(body_reader, router_future);
+    let ((mut stream, too_large), response) = r2e_rt::join!(body_reader, router_future);
 
     if too_large {
         let resp = http::Response::builder()
@@ -426,7 +422,7 @@ pub fn apply_alt_svc(router: crate::Router, port: u16, max_age: u32) -> crate::R
 /// let endpoint = QuicEndpoint::bind("0.0.0.0:4433".parse()?, config)?;
 ///
 /// while let Some(conn) = endpoint.accept().await {
-///     tokio::spawn(async move {
+///     r2e_rt::spawn(async move {
 ///         let conn = conn.await.unwrap();
 ///         let conn = QuicConnection::new(conn);
 ///         while let Ok((send, recv)) = conn.accept_bi().await {

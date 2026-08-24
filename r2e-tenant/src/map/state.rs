@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use dashmap::DashMap;
 use r2e_core::plugin::GraphHandle;
-use tokio::sync::{Notify, OnceCell};
+use r2e_core::rt::sync::{Notify, OnceCell};
 
 use crate::source::TenantSource;
 use crate::TenantId;

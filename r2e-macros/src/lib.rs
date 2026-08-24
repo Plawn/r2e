@@ -309,7 +309,7 @@ pub fn patch(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Register a route handler matching **every HTTP method** (`axum::routing::any`).
+/// Register a route handler matching **every HTTP method** (`r2e::http::routing::any`).
 ///
 /// Combine with a `{*wildcard}` path segment for proxy-shaped endpoints, and
 /// take the raw [`Request`] as the **last** parameter to access the method,
@@ -333,7 +333,7 @@ pub fn any(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Register a **controller-scoped catch-all**: handles every request no other
-/// route matched, for any HTTP method (`axum::Router::fallback`).
+/// route matched, for any HTTP method (`r2e::http::Router::fallback`).
 ///
 /// ```ignore
 /// #[fallback]
@@ -719,7 +719,7 @@ pub fn middleware(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Apply a Tower layer directly to a single route.
 ///
-/// Unlike [`middleware`] (which wraps a function via `axum::middleware::from_fn`),
+/// Unlike [`middleware`] (which wraps a function via `r2e::http::middleware::from_fn`),
 /// `#[layer]` takes an arbitrary expression that evaluates to a Tower `Layer`
 /// and calls `.layer(expr)` on the route handler.
 ///
@@ -1167,14 +1167,14 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 ///   `#[live_config]` keys, presence-validated (`Required` only) when the
 ///   service is registered.
 ///
-/// The user supplies an async `run(&self, CancellationToken)` method on the
+/// The user supplies an async `run(&self, rt::CancelToken)` method on the
 /// struct; the generated `start` simply forwards to it.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use r2e::prelude::*;
-/// use tokio_util::sync::CancellationToken;
+/// use r2e::rt::CancelToken;
 ///
 /// #[derive(BackgroundService)]
 /// pub struct EmailWorker {
@@ -1184,7 +1184,7 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 /// }
 ///
 /// impl EmailWorker {
-///     async fn run(&self, shutdown: CancellationToken) { /* loop ... */ }
+///     async fn run(&self, shutdown: CancelToken) { /* loop ... */ }
 /// }
 ///
 /// // Register in builder (`SpawnService` comes from the prelude):

@@ -12,7 +12,6 @@ Add R2E and its common dependencies to your `Cargo.toml`:
 ```toml
 [dependencies]
 r2e = { version = "0.3", features = ["full"] }
-tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

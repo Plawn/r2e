@@ -6,9 +6,11 @@ use r2e_core::web::managed::ManagedErr;
 use r2e_core::prelude::*;
 use r2e_core::{
     Guard, GuardContext, HttpError, Identity, InterceptorContext, ManagedContext, ManagedDeps,
-    ManagedOutcome, ManagedResource, TNil,
+    ManagedGuard, ManagedOutcome, ManagedResource, TNil,
 };
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crate::support::send_get_with;
 
@@ -308,4 +310,62 @@ async fn require_request_reports_a_missing_head_uniformly() {
 
     let resp: Response = err.into();
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+// ── Guard arm/disarm ─────────────────────────────────────────────────────
+//
+// Moved out of `src/web/managed.rs` (the crate's inline `#[cfg(test)] mod
+// tests`) when the runtime facade migration removed the last `tokio::` name
+// from the crate's sources — tests belong in `tests/` per CLAUDE.md anyway.
+
+struct Tracked {
+    aborted: Arc<AtomicUsize>,
+}
+
+impl ManagedResource<Arc<AtomicUsize>> for Tracked {
+    type Error = ManagedErr<HttpError>;
+
+    async fn acquire(context: ManagedContext<'_, Arc<AtomicUsize>>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            aborted: context.state.clone(),
+        })
+    }
+
+    async fn finalize(&mut self, _outcome: &ManagedOutcome) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn abort(&mut self) {
+        self.aborted.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn outcome_uses_http_status_class() {
+    assert!(ManagedOutcome::from_status(StatusCode::CREATED).is_success());
+    assert!(ManagedOutcome::from_status(StatusCode::TEMPORARY_REDIRECT).is_success());
+    assert!(!ManagedOutcome::from_status(StatusCode::BAD_REQUEST).is_success());
+    assert!(!ManagedOutcome::from_status(StatusCode::INTERNAL_SERVER_ERROR).is_success());
+}
+
+#[r2e_core::test]
+async fn armed_guard_aborts_on_drop() {
+    let aborted = Arc::new(AtomicUsize::new(0));
+    let context = ManagedContext::new(&aborted, "Controller", "handler");
+    let guard = ManagedGuard::<Tracked, _>::acquire(context).await.unwrap();
+    drop(guard);
+    assert_eq!(aborted.load(Ordering::SeqCst), 1);
+}
+
+#[r2e_core::test]
+async fn finalized_guard_is_disarmed() {
+    let aborted = Arc::new(AtomicUsize::new(0));
+    let context = ManagedContext::new(&aborted, "Controller", "handler");
+    let mut guard = ManagedGuard::<Tracked, _>::acquire(context).await.unwrap();
+    guard
+        .finalize(&ManagedOutcome::from_status(StatusCode::OK))
+        .await
+        .unwrap();
+    drop(guard);
+    assert_eq!(aborted.load(Ordering::SeqCst), 0);
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use iggy::prelude::{Identifier, IggyClient};
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::CancelToken;
 
 use r2e_events::backend::{BackendState, PendingRequests};
 
@@ -31,7 +31,7 @@ pub(crate) struct IggyInner {
     /// Sticky shutdown token so requesters awaiting a reply fail fast with
     /// [`EventBusError::Shutdown`](r2e_events::EventBusError::Shutdown) instead
     /// of waiting out their per-request timeout.
-    pub request_cancel: CancellationToken,
+    pub request_cancel: CancelToken,
     /// Cancellation tokens for the request-reply poller tasks.
     pub rr_cancels: Mutex<RequestReplyCancels>,
 }
@@ -43,7 +43,7 @@ pub(crate) struct IggyInner {
 #[derive(Default)]
 pub(crate) struct RequestReplyCancels {
     /// The single per-process reply poller (`None` until the first request).
-    pub reply_poller: Option<CancellationToken>,
+    pub reply_poller: Option<CancelToken>,
     /// One responder poller per registered request type.
-    pub responder_pollers: Vec<CancellationToken>,
+    pub responder_pollers: Vec<CancelToken>,
 }

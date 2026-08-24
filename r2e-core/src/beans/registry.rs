@@ -62,7 +62,7 @@ pub(super) type EventSubscriberHook =
 pub(crate) type ServiceSourceHook = Box<
     dyn FnOnce(
             &BeanContext,
-            tokio_util::sync::CancellationToken,
+            crate::rt::CancelToken,
         ) -> Pin<Box<dyn Future<Output = ()> + Send>>
         + Send,
 >;

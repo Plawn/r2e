@@ -107,7 +107,6 @@ dev-reload = ["r2e/dev-reload"]
 
 [dependencies]
 r2e = {{ git = "{R2E_GIT}"{features_str} }}
-tokio = {{ version = "1", features = ["full"] }}
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"
 tracing = "0.1"
@@ -424,7 +423,8 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 | Shared services | `State<Arc<...>>` | `.provide()` / `.register::<T>()` + `#[inject]` |
 | Config values | `std::env` / lazy statics | `#[config("key")]` or typed `ConfigProperties` sections |
 | Logging/timing/caching | Tower middleware per concern | `#[intercept(Logged::info())]` / `Timed` / `Cache` |
-| Background jobs | `tokio::spawn` in main | `#[scheduled(every = "5m")]` methods |
+| Background jobs | a bare runtime `spawn` in main | `#[scheduled(every = "5m")]` methods |
+| A detached task, a sleep, a timer | depending on the runtime crate directly | `r2e::rt::spawn` / `rt::sleep` / `rt::interval` |
 | Errors | Hand-rolled `IntoResponse` | `HttpError` or `#[derive(ApiError)]` |
 
 ## Testing rules

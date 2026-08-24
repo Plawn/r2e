@@ -303,7 +303,7 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
     let suite_mod = format_ident!("__r2e_suite_{}", def.suite_ident);
     let self_ty = &def.self_ty;
     let total_cases = def.cases.len();
-    let runtime_builder = args.runtime.builder_tokens();
+    let runtime_builder = args.runtime.builder_tokens(&core_crate);
     let tracing_init = args
         .tracing
         .then(|| quote! { #core_crate::init_tracing(); });

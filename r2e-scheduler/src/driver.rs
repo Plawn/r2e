@@ -30,11 +30,9 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
-use tokio::sync::{mpsc, oneshot};
-use tokio::time::Instant;
-use tokio_util::sync::CancellationToken;
 
-use r2e_core::rt::JoinError;
+use r2e_core::rt::sync::{mpsc, oneshot};
+use r2e_core::rt::{self, CancelToken, Instant, JoinError};
 use r2e_executor::PoolExecutor;
 
 use crate::types::{OverlapPolicy, ScheduleConfig, ScheduledJob, SkipFn};
@@ -118,7 +116,7 @@ impl SchedulerCommands {
 #[allow(clippy::manual_async_fn)]
 pub fn jobs_driver(
     jobs: Vec<ScheduledJob>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     executor: PoolExecutor,
     registry: ScheduledJobRegistry,
     commands: SchedulerCommands,
@@ -138,7 +136,7 @@ pub fn jobs_driver(
 /// the [`Scheduler`](crate::Scheduler) plugin does).
 pub fn start_jobs(
     jobs: Vec<ScheduledJob>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     executor: PoolExecutor,
     registry: ScheduledJobRegistry,
     commands: SchedulerCommands,
@@ -206,7 +204,7 @@ type InFlight = FuturesUnordered<
     Pin<Box<dyn Future<Output = (usize, bool, Duration, bool, Result<(), JoinError>)> + Send>>,
 >;
 
-/// The next upcoming cron fire time as a tokio [`Instant`], or `None` if the
+/// The next upcoming cron fire time as a runtime [`Instant`], or `None` if the
 /// schedule has no further executions.
 fn cron_next_instant(schedule: &cron::Schedule) -> Option<Instant> {
     let now_utc = Utc::now();
@@ -225,7 +223,7 @@ fn cron_next_instant(schedule: &cron::Schedule) -> Option<Instant> {
     Some(at)
 }
 
-/// Project a tokio [`Instant`] onto wall-clock time for user-facing stats.
+/// Project a runtime [`Instant`] onto wall-clock time for user-facing stats.
 fn instant_to_datetime(t: Instant) -> DateTime<Utc> {
     let now_inst = Instant::now();
     let now_utc = Utc::now();
@@ -285,7 +283,7 @@ fn compute_next(rearm: &mut Rearm, now: Instant, name: &str) -> Option<Instant> 
 /// Sleep until `deadline`, or park forever when the heap is empty.
 async fn wait_until(deadline: Option<Instant>) {
     match deadline {
-        Some(t) => tokio::time::sleep_until(t).await,
+        Some(t) => rt::sleep_until(t).await,
         None => std::future::pending::<()>().await,
     }
 }
@@ -533,7 +531,7 @@ fn set_paused(
 
 async fn run_driver(
     jobs: Vec<ScheduledJob>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     executor: PoolExecutor,
     registry: ScheduledJobRegistry,
     commands: SchedulerCommands,
@@ -637,7 +635,7 @@ async fn run_driver(
     'driver: loop {
         let next_deadline = heap.peek().map(|Reverse((t, _))| *t);
 
-        tokio::select! {
+        rt::select! {
             // `biased`: arms are polled top-down, and CANCELLATION IS FIRST.
             // With the default random order, a command that arrived before the
             // token was cancelled could win the poll against an already
