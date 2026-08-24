@@ -129,6 +129,18 @@ Bottom-up, each step shrinking the Phase-0 allowlist. Sizes are file counts.
 |---|---|---|
 | 2a | Delete dead deps: `r2e-utils`, `r2e-openfga`, `r2e-grpc` | 0 (manifest only) |
 | 2b | `r2e-security` (Mutex/RwLock), `r2e-oidc` (Semaphore), `r2e-data-sqlx`, `r2e-data-diesel` (CancelToken only) | 4 |
+
+**Step 2b note (from execution)** — `r2e-security` and `r2e-oidc` migrated
+fully and dropped their `tokio` dependency. `r2e-data-sqlx` /
+`r2e-data-diesel` dropped their (already dead) `tokio` dependency and now
+convert to `CancelToken` at the top of `start`, but each keeps one
+`tokio_util::sync::CancellationToken` name — and the `tokio-util` dependency —
+because `ServiceComponent::start` still takes the raw token. That signature is
+r2e-core's (`runtime/service.rs`) *and* `#[derive(BackgroundService)]`'s
+(`bg_service_derive.rs` emits `::tokio_util::sync::CancellationToken`, and the
+user-written `run()` it forwards to takes the same type), so flipping it is a
+**user-visible break** that belongs to steps 2e+2f, not here. Those two files
+leave the baseline then.
 | 2c | `r2e-events` + 4 backends (iggy/kafka/pulsar/rabbitmq) — mostly `select!` + `sync` + `CancelToken` | 18 |
 | 2d | `r2e-scheduler`, `r2e-executor`, `r2e-tenant` | 11 |
 | 2e | `r2e-core` internals: `web/{sse,ws,managed}`, `di/lazy`, `builder/prepared`, `runtime/{dev,service,lifecycle}`, `config/runtime`, `builtins/health`, `beans/registry` | 15 |
@@ -249,7 +261,7 @@ before a phase is marked done.
 |---|---|---|
 | 1 | Phase 0 — boundary scripts + baseline allowlists | done |
 | 2 | Phase 1 — extract `r2e-rt` (facade move + sync/CancelToken/select widening) | done |
-| 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | pending |
+| 3 | Phase 2a+2b — dead deps + small crates (security/oidc/sqlx/diesel) | done |
 | 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | pending |
 | 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | pending |
 | 6 | Phase 3a — re-source neutral `http`/`bytes` types + docs/llm.txt/CHANGELOG sweep | pending |

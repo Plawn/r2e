@@ -23,7 +23,6 @@ arc-swap = "1"
 r2e-core = {workspace = true}
 r2e-tenant = {workspace = true, optional = true}
 diesel = {workspace = true, features = ["r2d2"]}
-tokio = {workspace = true, features = ["rt-multi-thread"]}
 tokio-util = {workspace = true}
 
 [dev-dependencies]

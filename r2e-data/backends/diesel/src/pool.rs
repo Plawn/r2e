@@ -5,6 +5,7 @@ use arc_swap::ArcSwap;
 use diesel::r2d2::{ConnectionManager, Pool, R2D2Connection};
 use diesel::Connection;
 use r2e_core::config::LiveConfig;
+use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ServiceComponent};
 use tokio_util::sync::CancellationToken;
 
@@ -202,12 +203,16 @@ where
         ctx.get::<Self>()
     }
 
+    // `ServiceComponent::start` still hands over the raw tokio-util token — the
+    // trait flips to `CancelToken` when r2e-core itself moves onto the facade.
+    // Convert once here so the body only ever sees the facade type.
     async fn start(self, shutdown: CancellationToken) {
+        let shutdown = CancelToken::from(shutdown);
         let this = &self;
         this.inner
             .url
             .subscribe()
-            .drive(shutdown.into(), move |url| async move {
+            .drive(shutdown, move |url| async move {
                 match url {
                     Ok(url) => {
                         if let Err(error) = this.rotate_to_url(url).await {
