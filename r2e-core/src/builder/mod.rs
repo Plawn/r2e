@@ -23,7 +23,6 @@ pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
-use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::di::meta::MetaRegistry;
 use crate::di::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
@@ -31,6 +30,7 @@ use crate::di::module::{
 };
 use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
 use crate::rt::CancelToken;
+use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::runtime::service::ServiceComponent;
 use crate::type_list::{AllSatisfied, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};

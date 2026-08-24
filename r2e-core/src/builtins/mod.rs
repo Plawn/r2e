@@ -92,8 +92,9 @@ impl Tracing {
     /// keys under the `tracing` prefix.
     pub fn from_config(r2e_config: &crate::config::R2eConfig) -> ConfiguredTracing {
         use crate::config::ConfigProperties;
-        let config = crate::runtime::tracing_config::TracingConfig::from_config(r2e_config, Some("tracing"))
-            .unwrap_or_default();
+        let config =
+            crate::runtime::tracing_config::TracingConfig::from_config(r2e_config, Some("tracing"))
+                .unwrap_or_default();
         ConfiguredTracing(config)
     }
 }
@@ -180,13 +181,17 @@ impl AdvancedHealth {
 impl Plugin for AdvancedHealth {
     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
         use std::sync::Arc;
-        let state = Arc::new(crate::builtins::health::HealthState::new(self.checks, self.cache_ttl));
+        let state = Arc::new(crate::builtins::health::HealthState::new(
+            self.checks,
+            self.cache_ttl,
+        ));
         let s1 = state.clone();
         app.register_routes(
             crate::http::Router::new()
                 .route(
                     "/health",
-                    crate::http::routing::get(crate::builtins::health::health_handler).with_state(state),
+                    crate::http::routing::get(crate::builtins::health::health_handler)
+                        .with_state(state),
                 )
                 .route(
                     "/health/live",
@@ -194,7 +199,8 @@ impl Plugin for AdvancedHealth {
                 )
                 .route(
                     "/health/ready",
-                    crate::http::routing::get(crate::builtins::health::readiness_handler).with_state(s1),
+                    crate::http::routing::get(crate::builtins::health::readiness_handler)
+                        .with_state(s1),
                 ),
         )
     }

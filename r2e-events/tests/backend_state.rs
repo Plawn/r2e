@@ -366,13 +366,13 @@ async fn responder_invoke_returns_serialized_reply() {
         .await
         .unwrap();
 
-    let payload = serde_json::to_vec(&Ping { n: 41 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Ping { n: 41 }).unwrap();
     let reply = state
         .invoke_responder(TypeId::of::<Ping>(), &payload, EventMetadata::new())
         .await
         .expect("responder registered")
         .expect("responder succeeded");
-    let pong: Pong = serde_json::from_slice(&reply).unwrap();
+    let pong: Pong = r2e_core::json::from_slice(&reply).unwrap();
     assert_eq!(pong.n, 42);
 }
 
@@ -386,7 +386,7 @@ async fn responder_error_surfaces_as_err_bytes() {
         .await
         .unwrap();
 
-    let payload = serde_json::to_vec(&Ping { n: 1 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Ping { n: 1 }).unwrap();
     let result = state
         .invoke_responder(TypeId::of::<Ping>(), &payload, EventMetadata::new())
         .await
@@ -437,13 +437,13 @@ async fn unregister_responder_allows_reregistration() {
         .await
         .expect("re-registration after unregister should succeed");
 
-    let payload = serde_json::to_vec(&Ping { n: 21 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Ping { n: 21 }).unwrap();
     let reply = state
         .invoke_responder(TypeId::of::<Ping>(), &payload, EventMetadata::new())
         .await
         .unwrap()
         .unwrap();
-    let pong: Pong = serde_json::from_slice(&reply).unwrap();
+    let pong: Pong = r2e_core::json::from_slice(&reply).unwrap();
     assert_eq!(pong.n, 42);
 }
 
@@ -459,12 +459,12 @@ async fn build_reply_success_has_no_error() {
         .await
         .unwrap();
 
-    let payload = serde_json::to_vec(&Ping { n: 41 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Ping { n: 41 }).unwrap();
     let (bytes, error) = state
         .build_reply(TypeId::of::<Ping>(), &payload, EventMetadata::new())
         .await;
     assert!(error.is_none());
-    let pong: Pong = serde_json::from_slice(&bytes).unwrap();
+    let pong: Pong = r2e_core::json::from_slice(&bytes).unwrap();
     assert_eq!(pong.n, 42);
 }
 
@@ -478,7 +478,7 @@ async fn build_reply_responder_error_carries_message_and_placeholder() {
         .await
         .unwrap();
 
-    let payload = serde_json::to_vec(&Ping { n: 1 }).unwrap();
+    let payload = r2e_core::json::to_vec(&Ping { n: 1 }).unwrap();
     let (bytes, error) = state
         .build_reply(TypeId::of::<Ping>(), &payload, EventMetadata::new())
         .await;

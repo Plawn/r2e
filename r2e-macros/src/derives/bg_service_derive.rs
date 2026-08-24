@@ -11,10 +11,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-use crate::util::crate_path::r2e_core_path;
 use crate::model::field_resolver::{
     classify_fields, config_init_panic, config_section_init_panic, ClassifyOpts, FieldKind,
 };
+use crate::util::crate_path::r2e_core_path;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -147,7 +147,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         dep_types.push(quote! { #krate::config::R2eConfig });
     }
     if has_live_config {
-        dep_types.push(crate::model::field_resolver::live_config_registry_ty(&krate));
+        dep_types.push(crate::model::field_resolver::live_config_registry_ty(
+            &krate,
+        ));
     }
     let deps_type = crate::model::type_list_gen::build_tcons_type(&dep_types, &krate);
 
@@ -180,8 +182,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     } else {
         quote! {}
     };
-    let live_config_prelude =
-        crate::model::field_resolver::live_config_prelude(&quote! { __ctx }, &krate, has_live_config);
+    let live_config_prelude = crate::model::field_resolver::live_config_prelude(
+        &quote! { __ctx },
+        &krate,
+        has_live_config,
+    );
 
     Ok(quote! {
         impl #krate::ServiceComponent for #name {

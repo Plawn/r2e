@@ -1,8 +1,7 @@
-use r2e::Identity;
 use r2e::r2e_security::{
-    impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims,
-    RoleBasedIdentity,
+    impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims, RoleBasedIdentity,
 };
+use r2e::{Identity, StandardClaims};
 use serde::Serialize;
 
 /// A tenant-aware identity that includes the tenant_id from JWT claims.
@@ -21,7 +20,7 @@ impl Identity for TenantUser {
     fn email(&self) -> Option<&str> {
         self.auth.email()
     }
-    fn claims(&self) -> Option<&serde_json::Value> {
+    fn claims(&self) -> Option<&StandardClaims> {
         self.auth.claims()
     }
 }
@@ -42,15 +41,13 @@ impl<S> FromValidatedJwtClaims<S> for TenantUser
 where
     S: Send + Sync,
 {
-    async fn from_jwt_claims(
-        claims: serde_json::Value,
-        _state: &S,
-    ) -> Result<Self, r2e::HttpError> {
-        let tenant_id = claims["tenant_id"]
-            .as_str()
-            .ok_or_else(|| {
-                r2e::HttpError::unauthorized("Missing tenant_id claim in JWT")
-            })?
+    async fn from_jwt_claims(claims: StandardClaims, _state: &S) -> Result<Self, r2e::HttpError> {
+        // `tenant_id` is an application claim, so it lives in `claims.extra`
+        // and is read through `StandardClaims::get`.
+        let tenant_id = claims
+            .get("tenant_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| r2e::HttpError::unauthorized("Missing tenant_id claim in JWT"))?
             .to_owned();
 
         let auth = AuthenticatedUser::from_claims(claims);

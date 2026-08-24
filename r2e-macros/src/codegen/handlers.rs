@@ -4,9 +4,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::util::crate_path::r2e_core_path;
-use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::model::types::*;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::util::crate_path::r2e_core_path;
 
 /// Generate all handler functions for a controller.
 ///
@@ -1071,8 +1071,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         super::decorators::generate_predeco_items(def, fn_name, &sm.decorators);
     // Same degrade check as the closure (specs_ok implies the method deco set
     // exists whenever the method has guards).
-    let specs_ok =
-        super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
+    let specs_ok = super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
     let has_guards = !sm.decorators.guard_fns.is_empty() && specs_ok;
     // Controller-level post-auth guards apply to SSE endpoints too — except
     // `#[anonymous]` ones (the marker opts out of the controller auth surface).
@@ -1103,7 +1102,10 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         invocation_prefix_params.push(quote! { __extensions: #krate::http::Extensions });
         invocation_prefix_params.push(quote! { __method: #krate::http::Method });
         if has_ctrl_guards {
-            let ctrl_ty = &ctrl_set.as_ref().expect("has_ctrl_guards implies a set").struct_ident;
+            let ctrl_ty = &ctrl_set
+                .as_ref()
+                .expect("has_ctrl_guards implies a set")
+                .struct_ident;
             invocation_prefix_params.push(quote! { __ctrl_deco: &#ctrl_ty });
         }
         if has_guards {
@@ -1266,8 +1268,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         super::decorators::generate_predeco_items(def, fn_name, &wm.decorators);
     // Same degrade check as the closure (specs_ok implies the method deco set
     // exists whenever the method has guards).
-    let specs_ok =
-        super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
+    let specs_ok = super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
     let has_guards = !wm.decorators.guard_fns.is_empty() && specs_ok;
     // Controller-level post-auth guards run in the same preflight — except on
     // `#[anonymous]` endpoints (the marker opts out of the controller auth
@@ -1370,8 +1371,11 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                 &[]
             },
         );
-        let guard_checks =
-            ws_guard_checks(quote! { __deco }, &guard_ctx_ident, deco_guard_fields(&deco_set));
+        let guard_checks = ws_guard_checks(
+            quote! { __deco },
+            &guard_ctx_ident,
+            deco_guard_fields(&deco_set),
+        );
         let ctrl_deco_param = has_ctrl_guards.then(|| {
             let ctrl_ty = &ctrl_set
                 .as_ref()
@@ -1816,8 +1820,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     let invocation = invocation_ident_for(controller_name, fn_name);
     // Mirror `generate_sse_handler` exactly — a drifted condition here changes
     // the closure's arity but not the handler's.
-    let specs_ok =
-        super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
+    let specs_ok = super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
     let has_guards = !sm.decorators.guard_fns.is_empty() && specs_ok;
     let ctrl_set = super::decorators::ctrl_deco_set(def);
     let has_ctrl_guards = ctrl_set.is_some()
@@ -1855,8 +1858,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
     // Same ordering rule as the ordinary route closure: the head snapshot goes
     // after the handler's own `FromRequestParts` params (a param identity can
     // populate the extensions a guard reads), before the trailing one.
-    let closure_params =
-        assemble_closure_params(Vec::new(), extras, head_params, last_is_identity);
+    let closure_params = assemble_closure_params(Vec::new(), extras, head_params, last_is_identity);
 
     let prefix_len = if needs_head { 6 } else { 0 };
     let (prefix, suffix) = fwd_args.split_at(prefix_len);
@@ -1923,8 +1925,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     let inner = handler_ident_for(controller_name, fn_name);
     // Mirror `generate_ws_handler` exactly — a drifted condition here changes
     // the closure's arity but not the handler's.
-    let specs_ok =
-        super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
+    let specs_ok = super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
     let has_guards = !wm.decorators.guard_fns.is_empty() && specs_ok;
     let ctrl_set = super::decorators::ctrl_deco_set(def);
     let has_ctrl_guards = ctrl_set.is_some()

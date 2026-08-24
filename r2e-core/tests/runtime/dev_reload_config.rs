@@ -233,10 +233,7 @@ async fn late_override_config_value_reaches_live_readers_and_stays_pinned() {
         !registry.set("db.url", "postgres://from-provider"),
         "an overridden key stays pinned against runtime writes"
     );
-    assert_eq!(
-        registry.get::<String>("db.url").unwrap(),
-        "postgres://late"
-    );
+    assert_eq!(registry.get::<String>("db.url").unwrap(), "postgres://late");
 }
 
 /// A bean holding only a subscribed value. Its `identity` field is a fresh

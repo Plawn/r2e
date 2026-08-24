@@ -418,7 +418,7 @@ impl EventBus for IggyEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -438,7 +438,7 @@ impl EventBus for IggyEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
@@ -456,7 +456,7 @@ impl EventBus for IggyEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -505,7 +505,7 @@ impl EventBus for IggyEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
 
@@ -556,7 +556,7 @@ impl EventBus for IggyEventBus {
 
             // Serialize the request up front (so we fail before touching the
             // broker on a bad payload).
-            let payload = serde_json::to_vec(&req)
+            let payload = r2e_core::json::to_vec(&req)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
 
             let base_topic = bus.resolve_topic::<Req>();

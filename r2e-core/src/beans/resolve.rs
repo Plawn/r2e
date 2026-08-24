@@ -1,4 +1,6 @@
-use super::{BeanContext, BeanError, BeanRegistration, BeanRegistry, Factory, PostConstructFn, ReusePlan};
+use super::{
+    BeanContext, BeanError, BeanRegistration, BeanRegistry, Factory, PostConstructFn, ReusePlan,
+};
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};

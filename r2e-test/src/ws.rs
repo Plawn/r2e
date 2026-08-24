@@ -32,7 +32,7 @@ pub enum WsTestError {
     /// A tungstenite protocol error.
     Protocol(tokio_tungstenite::tungstenite::Error),
     /// JSON serialization/deserialization error.
-    Json(serde_json::Error),
+    Json(r2e_core::json::JsonError),
 }
 
 impl std::fmt::Display for WsTestError {
@@ -81,7 +81,7 @@ impl WsTestClient {
 
     /// Send a JSON-serialized message.
     pub async fn send_json<T: Serialize>(&mut self, data: &T) -> Result<(), WsTestError> {
-        let json = serde_json::to_string(data).map_err(WsTestError::Json)?;
+        let json = r2e_core::json::to_string(data).map_err(WsTestError::Json)?;
         self.send_text(json).await
     }
 
@@ -121,7 +121,7 @@ impl WsTestClient {
     /// Receive the next message and deserialize as JSON, with timeout.
     pub async fn next_json<T: DeserializeOwned>(&mut self) -> Result<T, WsTestError> {
         let text = self.next_text().await?;
-        serde_json::from_str(&text).map_err(WsTestError::Json)
+        r2e_core::json::from_str(&text).map_err(WsTestError::Json)
     }
 
     /// Receive the next binary message, with timeout.

@@ -160,5 +160,6 @@ where
     };
 
     let bytes = result?;
-    serde_json::from_slice::<Resp>(&bytes).map_err(|e| EventBusError::Serialization(e.to_string()))
+    r2e_core::json::from_slice::<Resp>(&bytes)
+        .map_err(|e| EventBusError::Serialization(e.to_string()))
 }

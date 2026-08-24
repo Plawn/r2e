@@ -2,8 +2,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use r2e_core::config::{ConfigValue, R2eConfig};
-use r2e_core::{AppBuilder, BeanContext, ServiceComponent, SpawnService};
 use r2e_core::rt::CancelToken;
+use r2e_core::{AppBuilder, BeanContext, ServiceComponent, SpawnService};
 
 static STARTED: AtomicUsize = AtomicUsize::new(0);
 static STOPPED: AtomicUsize = AtomicUsize::new(0);

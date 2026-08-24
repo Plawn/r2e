@@ -5,8 +5,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::transverse::{self, ConsumerMethodDef, DecoFieldDef, ScheduledSourceMethod};
-use crate::util::crate_path::r2e_core_path;
 use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::util::crate_path::r2e_core_path;
 use crate::util::type_utils::type_last_segment_is;
 
 /// Generate the `Controller<State>` trait implementation.
@@ -35,8 +35,9 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // declared on its `DecoratorSpec` but only the host knows the sites, so the
     // controller's aggregated `validate_config` reports them at
     // `register_controller()` — before any `build_decorator` runs.
-    let decorator_config_stmts =
-        super::decorators::decorator_config_key_stmts(super::decorators::controller_site_exprs(def));
+    let decorator_config_stmts = super::decorators::decorator_config_key_stmts(
+        super::decorators::controller_site_exprs(def),
+    );
     let route_metadata_items = generate_route_metadata(def, name, &meta_mod);
     let sse_metadata_items = generate_sse_route_metadata(def, name, &meta_mod);
     let ws_metadata_items = generate_ws_route_metadata(def, name, &meta_mod);
@@ -413,7 +414,10 @@ fn has_auth_expr(
 }
 
 /// Extract path parameters from route method signature.
-fn extract_path_params(rm: &crate::model::types::RouteMethod, krate: &TokenStream) -> Vec<TokenStream> {
+fn extract_path_params(
+    rm: &crate::model::types::RouteMethod,
+    krate: &TokenStream,
+) -> Vec<TokenStream> {
     rm.fn_item
         .sig
         .inputs
@@ -828,7 +832,9 @@ const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data";
 
 /// Extract request body information.
 /// Returns (type_name_token, schema_token, content_type_token).
-fn extract_body_info(rm: &crate::model::types::RouteMethod) -> (TokenStream, TokenStream, TokenStream) {
+fn extract_body_info(
+    rm: &crate::model::types::RouteMethod,
+) -> (TokenStream, TokenStream, TokenStream) {
     let body_info: Option<BodyExtractor> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
         if let syn::FnArg::Typed(pt) = arg {
             extract_body_type_info(&pt.ty)
@@ -840,7 +846,8 @@ fn extract_body_info(rm: &crate::model::types::RouteMethod) -> (TokenStream, Tok
     let multipart_ct = MULTIPART_CONTENT_TYPE;
     match &body_info {
         Some(BodyExtractor::Json { name, ty }) => {
-            let schema_token = if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
+            let schema_token = if let Some(schemars) = crate::util::crate_path::r2e_schemars_path()
+            {
                 let krate = r2e_core_path();
                 quote! {
                     Some({

@@ -161,5 +161,8 @@ fn prefix_fingerprint_covers_the_subtree_only() {
     );
 
     // Prefixes are not interchangeable even when their subtrees hash alike.
-    assert_ne!(base.prefix_fingerprint("db"), base.prefix_fingerprint("nope"));
+    assert_ne!(
+        base.prefix_fingerprint("db"),
+        base.prefix_fingerprint("nope")
+    );
 }

@@ -77,7 +77,7 @@ Bulk `From<E> for HttpError` generation:
 ```rust
 r2e_core::map_error! {
     sqlx::Error => Internal,
-    serde_json::Error => BadRequest,
+    r2e_core::json::JsonError => BadRequest,
 }
 ```
 

@@ -32,7 +32,7 @@ use serde::{de::DeserializeOwned, Serialize};
 pub enum WsError {
     Send(crate::http::Error),
     Recv(crate::http::Error),
-    Json(serde_json::Error),
+    Json(crate::json::JsonError),
     Closed,
 }
 
@@ -78,7 +78,7 @@ impl WsStream {
 
     /// Send a JSON-serialized message.
     pub async fn send_json<T: Serialize>(&mut self, data: &T) -> Result<(), WsError> {
-        let json = serde_json::to_string(data).map_err(WsError::Json)?;
+        let json = crate::json::to_string(data).map_err(WsError::Json)?;
         self.send_text(json).await
     }
 
@@ -115,7 +115,7 @@ impl WsStream {
         loop {
             match self.next().await? {
                 Ok(Message::Text(bytes)) => {
-                    return Some(serde_json::from_slice(bytes.as_bytes()).map_err(WsError::Json));
+                    return Some(crate::json::from_slice(bytes.as_bytes()).map_err(WsError::Json));
                 }
                 Ok(Message::Close(_)) => return None,
                 Err(e) => return Some(Err(e)),
@@ -221,8 +221,8 @@ impl WsBroadcaster {
     }
 
     /// Broadcast a JSON-serialized message.
-    pub fn send_json<T: Serialize>(&self, data: &T) -> Result<(), serde_json::Error> {
-        let json = serde_json::to_string(data)?;
+    pub fn send_json<T: Serialize>(&self, data: &T) -> Result<(), crate::json::JsonError> {
+        let json = crate::json::to_string(data)?;
         self.send_text(json);
         Ok(())
     }
@@ -249,8 +249,8 @@ impl WsBroadcaster {
         &self,
         sender_id: u64,
         data: &T,
-    ) -> Result<(), serde_json::Error> {
-        let json = serde_json::to_string(data)?;
+    ) -> Result<(), crate::json::JsonError> {
+        let json = crate::json::to_string(data)?;
         self.send_text_from(sender_id, json);
         Ok(())
     }

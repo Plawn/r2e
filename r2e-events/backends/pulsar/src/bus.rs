@@ -429,7 +429,7 @@ impl EventBus for PulsarEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -449,7 +449,7 @@ impl EventBus for PulsarEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
@@ -467,7 +467,7 @@ impl EventBus for PulsarEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -487,7 +487,7 @@ impl EventBus for PulsarEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish_nowait(&topic_name, payload, &metadata).await
@@ -510,7 +510,7 @@ impl EventBus for PulsarEventBus {
             // Lazily start the per-instance reply consumer (one for all types).
             bus.ensure_reply_consumer();
 
-            let payload = serde_json::to_vec(&req)
+            let payload = r2e_core::json::to_vec(&req)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
 
             let resolved = bus.resolve_topic::<Req>();

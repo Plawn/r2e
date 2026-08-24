@@ -353,7 +353,7 @@ impl JwksCache {
 
         let body = read_body_limited(response, self.config.jwks_max_response_bytes).await?;
 
-        let jwks: JwksResponse = serde_json::from_slice(&body)
+        let jwks: JwksResponse = r2e_core::json::from_slice(&body)
             .map_err(|e| SecurityError::JwksFetchError(format!("Failed to parse JWKS: {e}")))?;
 
         let mut keys = HashMap::new();

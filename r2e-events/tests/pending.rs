@@ -128,7 +128,7 @@ async fn await_reply_deserializes_success() {
     let pending = Arc::new(PendingRequests::new());
     let (id, guard, rx) = pending.register();
 
-    let bytes = serde_json::to_vec(&Pong { value: 7 }).unwrap();
+    let bytes = r2e_core::json::to_vec(&Pong { value: 7 }).unwrap();
     pending.complete(id, Ok(bytes));
 
     let resp: Pong = await_reply(rx, Duration::from_secs(5), std::future::pending())

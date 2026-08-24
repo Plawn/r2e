@@ -146,7 +146,8 @@ struct StampSource(&'static str);
 
 struct Stamp(String);
 
-impl<S, I> r2e_core::web::extract::FromRequestPartsVia<S, r2e_core::web::extract::ViaBean<I>> for Stamp
+impl<S, I> r2e_core::web::extract::FromRequestPartsVia<S, r2e_core::web::extract::ViaBean<I>>
+    for Stamp
 where
     S: r2e_core::type_list::HasBean<StampSource, I> + Send + Sync,
     I: Send + Sync,

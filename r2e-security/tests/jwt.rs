@@ -83,9 +83,8 @@ async fn validate_valid_token() {
     let validator = test_claims_validator();
     let token = valid_token("user-1", &["admin"]);
     let claims = validator.validate(&token).await.unwrap();
-    assert_eq!(claims["sub"].as_str().unwrap(), "user-1");
-    let roles = claims["roles"].as_array().unwrap();
-    assert_eq!(roles[0].as_str().unwrap(), "admin");
+    assert_eq!(claims.sub, "user-1");
+    assert_eq!(claims.roles.as_deref(), Some(&["admin".to_string()][..]));
 }
 
 #[r2e_core::test]
@@ -395,7 +394,7 @@ async fn validate_claims_passthrough() {
     let token = valid_token("user-1", &["admin"]);
 
     let claims = validator.validate_claims(&token).await.unwrap();
-    assert_eq!(claims["sub"].as_str().unwrap(), "user-1");
+    assert_eq!(claims.sub, "user-1");
 }
 
 #[test]
@@ -409,4 +408,51 @@ fn claims_validator_accessor() {
 fn config_accessor() {
     let validator = test_validator();
     assert_eq!(validator.config().audience, TEST_AUDIENCE);
+}
+
+#[r2e_core::test]
+async fn validate_deserializes_keycloak_shaped_token_into_standard_claims() {
+    let validator = test_claims_validator();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = encode_claims(&serde_json::json!({
+        "sub": "kc-user",
+        "iss": TEST_ISSUER,
+        "aud": TEST_AUDIENCE,
+        "exp": now + 3600,
+        "iat": now,
+        "email": "kc@example.com",
+        "preferred_username": "kcuser",
+        "scope": "openid profile",
+        "realm_access": { "roles": ["realm-admin"] },
+        "resource_access": { "my-api": { "roles": ["api-reader"] } },
+        "tenant_id": "acme",
+    }));
+
+    let claims = validator.validate(&token).await.unwrap();
+
+    assert_eq!(claims.sub, "kc-user");
+    assert_eq!(claims.email.as_deref(), Some("kc@example.com"));
+    assert_eq!(claims.preferred_username.as_deref(), Some("kcuser"));
+    assert_eq!(claims.iat, Some(now));
+    assert_eq!(claims.realm_roles(), ["realm-admin"]);
+    assert_eq!(claims.client_roles("my-api"), ["api-reader"]);
+    assert_eq!(claims.scopes().collect::<Vec<_>>(), ["openid", "profile"]);
+    // Unknown claims survive in `extra`.
+    assert_eq!(
+        claims.get("tenant_id").and_then(|v| v.as_str()),
+        Some("acme")
+    );
+}
+
+#[r2e_core::test]
+async fn validate_as_value_is_still_the_dynamic_escape_hatch() {
+    let validator = test_claims_validator();
+    let token = valid_token("user-1", &["admin"]);
+
+    let claims: serde_json::Value = validator.validate_as(&token).await.unwrap();
+    assert_eq!(claims["sub"].as_str().unwrap(), "user-1");
+    assert_eq!(claims["roles"][0].as_str().unwrap(), "admin");
 }

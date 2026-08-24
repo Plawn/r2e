@@ -103,7 +103,11 @@ impl BeanContext {
     /// If the base `Arc` has no other references, the new entry is merged
     /// into the base directly (zero overhead). Otherwise the entry goes
     /// into the overlay (which is checked first by `get()`).
-    pub(super) fn with_new_entry(mut self, type_id: TypeId, value: Box<dyn Any + Send + Sync>) -> Self {
+    pub(super) fn with_new_entry(
+        mut self,
+        type_id: TypeId,
+        value: Box<dyn Any + Send + Sync>,
+    ) -> Self {
         // Fast path: if we're the sole owner of the base, merge everything
         // into a single HashMap for the next iteration.
         if let Some(base) = Arc::get_mut(&mut self.base) {

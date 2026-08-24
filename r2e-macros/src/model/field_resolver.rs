@@ -9,13 +9,23 @@ use crate::util::type_utils::{
 
 pub enum FieldKind {
     Inject,
-    InjectNamed { name: String },
-    Config { key: String, ty_name: String },
+    InjectNamed {
+        name: String,
+    },
+    Config {
+        key: String,
+        ty_name: String,
+    },
     /// `#[live_config("key")]` — a runtime-updatable `LiveConfig<T>` handle
     /// resolved from the `LiveConfigRegistry` bean. App-scoped like `#[config]`
     /// (resolved once at construction); the *value* is what changes at runtime.
-    LiveConfig { key: String, ty_name: String },
-    ConfigSection { prefix: String },
+    LiveConfig {
+        key: String,
+        ty_name: String,
+    },
+    ConfigSection {
+        prefix: String,
+    },
     Default,
 }
 
@@ -47,7 +57,10 @@ pub fn classify_fields<'a>(
             .attrs
             .iter()
             .find(|a| a.path().is_ident("config_section"));
-        let live_config_attr = field.attrs.iter().find(|a| a.path().is_ident("live_config"));
+        let live_config_attr = field
+            .attrs
+            .iter()
+            .find(|a| a.path().is_ident("live_config"));
         let is_default = field.attrs.iter().any(|a| a.path().is_ident("default"));
 
         check_live_config_exclusive(&field.attrs)?;
@@ -226,7 +239,11 @@ pub fn copied_config_key_entry(
 /// the generated init panics naming the prefix. Hosts that construct *late*
 /// (decorator beans, background services) pair this with a
 /// [`section_validator_entry`] so they can validate at registration instead.
-pub fn section_config_key_entry(krate: &TokenStream2, prefix: &str, ty: &syn::Type) -> TokenStream2 {
+pub fn section_config_key_entry(
+    krate: &TokenStream2,
+    prefix: &str,
+    ty: &syn::Type,
+) -> TokenStream2 {
     let ty_name = quote!(#ty).to_string();
     quote! { (#prefix, #ty_name, #krate::config::ConfigKeyKind::Section) }
 }

@@ -18,6 +18,7 @@
 - **Middleware:** `from_fn`, `Next`
 - **Type aliases:** `ApiResult`, `JsonResult`, `StatusResult`
 - **Multipart** (feature `multipart`): `Multipart`, `TypedMultipart`, `UploadedFile`, `FromMultipart`
+- **JSON codec** (feature `json-sonic`, off by default): switches the codec behind `r2e::json` (`to_vec`/`to_string`/`from_slice`/`from_str`, `JsonError`) and `Json<T>` from `serde_json` to `sonic-rs`. Forwarded `r2e` → `r2e-core` → `r2e-http`; additive (sonic wins when enabled). Measure on the deployment target first — `plans/json-codec-containment.md` §8. `serde_json::Value`/`json!` are unaffected.
 - **WebSocket** (feature `ws`): `WebSocket`, `WebSocketUpgrade`, `Message`, `CloseFrame`, `WsStream`, `WsHandler`, `WsBroadcaster`, `WsRooms`
 
 Additional types are available via `r2e::http::*` submodules for advanced use (e.g., `r2e::http::routing::{get, post, ...}`, `r2e::http::body::Body`).

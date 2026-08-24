@@ -3,10 +3,10 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
-use crate::util::crate_path::r2e_core_path;
 use crate::model::field_resolver::{classify_fields, ClassifyOpts, FieldKind};
-use crate::util::hash_tokens::hash_token_stream;
 use crate::model::type_list_gen::build_tcons_type;
+use crate::util::crate_path::r2e_core_path;
+use crate::util::hash_tokens::hash_token_stream;
 use crate::util::type_utils::named_bean_newtype_ident;
 
 pub fn expand(input: TokenStream) -> TokenStream {

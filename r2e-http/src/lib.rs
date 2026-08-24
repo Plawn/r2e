@@ -20,6 +20,10 @@
 //! Everything else that still speaks the backend's contracts is listed as a
 //! named bridge point in `plans/runtime-http-dependency-containment.md` §5.3b.
 //!
+//! - [`json`] — the JSON codec façade and R2E's own [`Json<T>`]. The one
+//!   place that (de)serializes typed values; the codec is a Cargo feature
+//!   (`json-sonic`). See `plans/json-codec-containment.md`.
+//!
 //! [`axum_compat`] is the explicit escape hatch for the rest of axum
 //! (§5.3d, decision A).
 
@@ -27,6 +31,7 @@ pub mod axum_compat;
 pub mod body;
 pub mod extract;
 pub mod header;
+pub mod json;
 pub mod labels;
 pub mod middleware;
 #[cfg(feature = "multipart")]
@@ -41,18 +46,20 @@ pub mod ws;
 pub use self::body::Body;
 pub use self::extract::{
     ConnectInfo, DefaultBodyLimit, Form, FromRef, FromRequest, FromRequestParts, MatchedPath,
-    OptionalFromRequestParts, OriginalUri, Path, Query, RawPathParams, Request, State,
+    OptionalFromRequest, OptionalFromRequestParts, OriginalUri, Path, Query, RawPathParams,
+    Request, State,
 };
 pub use self::header::{
     HeaderMap, HeaderName, HeaderValue, Method, Parts, StatusCode, ACCEPT, AUTHORIZATION,
     CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, LOCATION, ORIGIN, REFERER,
     SET_COOKIE, USER_AGENT,
 };
+pub use self::json::{Json, JsonError, JsonRejection};
 pub use self::response::{
     Html, IntoHttpResponse, IntoResponse, Redirect, Response, Sse, SseEvent, SseKeepAlive,
 };
 // `http` crate types, re-sourced per plan §5 step 3a — see `header` for why.
-pub use http::{Extensions, Uri};
 pub use axum::serve::ListenerExt;
-pub use axum::{serve, Error, Extension, Json, Router};
+pub use axum::{serve, Error, Extension, Router};
 pub use bytes::Bytes;
+pub use http::{Extensions, Uri};

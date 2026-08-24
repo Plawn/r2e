@@ -30,10 +30,10 @@ impl OidcState {
         issuer: String,
         claims_validator: Arc<JwtClaimsValidator>,
     ) -> Result<Self, crate::error::OidcError> {
-        let jwks_json = serde_json::to_string(&key_pair.jwks_json()).map_err(|e| {
+        let jwks_json = r2e_core::json::to_string(&key_pair.jwks_json()).map_err(|e| {
             crate::error::OidcError::Internal(format!("failed to serialize JWKS: {e}"))
         })?;
-        let discovery_json = serde_json::to_string(&build_discovery_document(
+        let discovery_json = r2e_core::json::to_string(&build_discovery_document(
             &config,
             &issuer,
             !client_registry.is_empty(),

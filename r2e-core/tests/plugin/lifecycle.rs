@@ -31,7 +31,10 @@ impl PreStatePlugin for FailingPlugin {
 
 #[r2e_core::test]
 async fn build_err_aborts_boot_with_plugin_build_error() {
-    let result = AppBuilder::new().plugin(FailingPlugin).try_build_state().await;
+    let result = AppBuilder::new()
+        .plugin(FailingPlugin)
+        .try_build_state()
+        .await;
 
     let err = result.err().expect("boot must fail");
     match &err {
@@ -44,7 +47,10 @@ async fn build_err_aborts_boot_with_plugin_build_error() {
     // The Display form names the plugin and carries the cause.
     let msg = err.to_string();
     assert!(msg.contains("FailingPlugin"), "names the plugin: {msg}");
-    assert!(msg.contains("backend unreachable"), "carries the cause: {msg}");
+    assert!(
+        msg.contains("backend unreachable"),
+        "carries the cause: {msg}"
+    );
 }
 
 #[r2e_core::test]

@@ -289,7 +289,7 @@ pub struct SseTopic<E> {
 
 /// Error returned by an [`SseTopic`] serializer (boxed so custom
 /// [`with_serializer`](SseTopic::with_serializer) formats are not forced
-/// into `serde_json::Error`).
+/// into the JSON façade's [`JsonError`](crate::json::JsonError)).
 pub type SseSerializeError = Box<dyn std::error::Error + Send + Sync>;
 
 // Manual impl: `derive(Clone)` would needlessly require `E: Clone`.
@@ -326,7 +326,7 @@ impl<E: serde::Serialize> SseTopic<E> {
             broadcaster: SseBroadcaster::new(capacity),
             event_name: Arc::from(short_type_name::<E>()),
             serializer: Arc::new(|event| {
-                serde_json::to_string(event).map_err(SseSerializeError::from)
+                crate::json::to_string(event).map_err(SseSerializeError::from)
             }),
         }
     }
@@ -339,7 +339,8 @@ impl<E> SseTopic<E> {
         self
     }
 
-    /// Replace the payload serializer (default: `serde_json::to_string`).
+    /// Replace the payload serializer (default: the [`json`](crate::json) façade's
+    /// `to_string`).
     ///
     /// SSE is a text protocol, so the serializer produces a `String` — use
     /// this for non-JSON text formats (NDJSON-ready lines, CSV, compact

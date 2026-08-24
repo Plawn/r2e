@@ -1,4 +1,4 @@
-# tokio — source-occurrence baseline (path:count)
+# serde_json — source-occurrence baseline (path:count)
 #
 # Enforced by scripts/check-source-boundary.sh over git-tracked files
 # under a crate src/ directory — .rs only (vendor/, examples/, docs/, tests/,
@@ -12,4 +12,14 @@
 # same PR so the boundary stays honest.
 #
 # Regenerate with: scripts/check-source-boundary.sh --update
+#
+# Only CODEC calls are counted (to_vec/to_string/from_slice/…);
+# serde_json::Value / json! are the dynamic-tree type and are not
+# boundary debt (plan §1.3). What remains here is either a
+# Value-bound path or a by-design exception noted in the plan.
 
+r2e-cli/src/commands/dev.rs:1
+r2e-devservices/src/openfga.rs:1
+r2e-openapi/src/handlers.rs:1
+r2e-openfga/macros/src/model_macro.rs:1
+r2e-test/src/app.rs:1

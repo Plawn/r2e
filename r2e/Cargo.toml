@@ -53,6 +53,7 @@ static = ["dep:r2e-static"]
 tenant = ["dep:r2e-tenant"]
 ws = ["r2e-core/ws"]
 multipart = ["r2e-core/multipart"]
+json-sonic = ["r2e-core/json-sonic"]
 # NOTE: quic is intentionally NOT in `full` — pulls heavy crypto deps (quinn, rustls, h3)
 quic = ["r2e-core/quic"]
 # NOTE: dev-reload is intentionally NOT in `full` — never include in production builds

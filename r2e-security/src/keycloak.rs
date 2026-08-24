@@ -39,7 +39,9 @@
 //! let builder = DefaultIdentityBuilder::new(extractor);
 //! ```
 
-use crate::openid::{self, extract_string_array};
+use r2e_core::StandardClaims;
+
+use crate::openid;
 
 /// Keycloak role extractor for realm-level roles only (`realm_access.roles`).
 ///
@@ -57,8 +59,8 @@ use crate::openid::{self, extract_string_array};
 pub struct RealmRoleExtractor;
 
 impl openid::RoleExtractor for RealmRoleExtractor {
-    fn extract_roles(&self, claims: &serde_json::Value) -> Vec<String> {
-        extract_string_array(claims, &["realm_access", "roles"])
+    fn extract_roles(&self, claims: &StandardClaims) -> Vec<String> {
+        claims.realm_roles().to_vec()
     }
 }
 
@@ -95,18 +97,8 @@ impl ClientRoleExtractor {
 }
 
 impl openid::RoleExtractor for ClientRoleExtractor {
-    fn extract_roles(&self, claims: &serde_json::Value) -> Vec<String> {
-        claims
-            .get("resource_access")
-            .and_then(|v| v.get(self.client_id.as_str()))
-            .and_then(|v| v.get("roles"))
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|r| r.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default()
+    fn extract_roles(&self, claims: &StandardClaims) -> Vec<String> {
+        claims.client_roles(&self.client_id).to_vec()
     }
 }
 
@@ -195,29 +187,17 @@ impl RoleExtractor {
 }
 
 impl openid::RoleExtractor for RoleExtractor {
-    fn extract_roles(&self, claims: &serde_json::Value) -> Vec<String> {
+    fn extract_roles(&self, claims: &StandardClaims) -> Vec<String> {
         let mut roles = Vec::new();
 
         // Extract realm roles
         if self.include_realm {
-            roles.extend(extract_string_array(claims, &["realm_access", "roles"]));
+            roles.extend(claims.realm_roles().iter().cloned());
         }
 
         // Extract client roles
-        if let Some(resource_access) = claims.get("resource_access") {
-            for client_id in &self.client_ids {
-                if let Some(client_roles) = resource_access
-                    .get(client_id.as_str())
-                    .and_then(|v| v.get("roles"))
-                    .and_then(|v| v.as_array())
-                {
-                    roles.extend(
-                        client_roles
-                            .iter()
-                            .filter_map(|r| r.as_str().map(String::from)),
-                    );
-                }
-            }
+        for client_id in &self.client_ids {
+            roles.extend(claims.client_roles(client_id).iter().cloned());
         }
 
         // Deduplicate while preserving order

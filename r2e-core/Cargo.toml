@@ -18,6 +18,7 @@ ws = ["r2e-http/ws"]
 test-util = ["r2e-rt/test-util"]
 multipart = ["r2e-http/multipart"]
 quic = ["r2e-http/quic"]
+json-sonic = ["r2e-http/json-sonic"]
 dev-reload = []
 lazy-fallback-runtime = []
 

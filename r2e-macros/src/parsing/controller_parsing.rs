@@ -1,9 +1,9 @@
 use syn::parse::Parser;
 
+use crate::model::types::*;
 use crate::util::type_utils::{
     parse_config_field, parse_config_section_prefix, parse_live_config_field, unwrap_option_type,
 };
-use crate::model::types::*;
 
 /// Parsed representation of a `#[controller(...)]` struct.
 pub struct ControllerStructDef {
@@ -146,7 +146,10 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
             .attrs
             .iter()
             .find(|a| a.path().is_ident("config_section"));
-        let live_config_attr = field.attrs.iter().find(|a| a.path().is_ident("live_config"));
+        let live_config_attr = field
+            .attrs
+            .iter()
+            .find(|a| a.path().is_ident("live_config"));
 
         // `#[live_config]` is app-scoped: stacking it on a request-scoped
         // `#[inject(identity)]` / `#[inject(request)]` field mixes two scopes on

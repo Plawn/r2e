@@ -68,8 +68,12 @@ pub trait Identity: Send + Sync {
         None
     }
 
-    /// Raw JWT claims, if available.
-    fn claims(&self) -> Option<&serde_json::Value> {
+    /// Validated JWT claims, if available.
+    ///
+    /// Custom (non-standard) claims live in
+    /// [`StandardClaims::extra`](crate::StandardClaims::extra) and are read
+    /// with [`StandardClaims::get`](crate::StandardClaims::get).
+    fn claims(&self) -> Option<&crate::decorators::claims::StandardClaims> {
         None
     }
 }
@@ -393,8 +397,8 @@ impl<'a, I: Identity> GuardContext<'a, I> {
         self.identity.and_then(|i| i.email())
     }
 
-    /// Convenience accessor for the identity raw claims.
-    pub fn identity_claims(&self) -> Option<&serde_json::Value> {
+    /// Convenience accessor for the identity's validated JWT claims.
+    pub fn identity_claims(&self) -> Option<&crate::decorators::claims::StandardClaims> {
         self.identity.and_then(|i| i.claims())
     }
 }

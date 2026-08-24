@@ -1,4 +1,4 @@
-use r2e_core::Identity;
+use r2e_core::{Identity, StandardClaims};
 use serde::Serialize;
 
 use crate::error::SecurityError;
@@ -11,7 +11,7 @@ use crate::openid::{Merge, RoleExtractor, StandardRoleExtractor};
 /// Combined with [`impl_claims_identity_extractor!`], this replaces the need to
 /// manually implement `FromRequestParts` for custom identity types.
 ///
-/// `C` defaults to [`serde_json::Value`]. Use an application struct implementing
+/// `C` defaults to [`StandardClaims`]. Use an application struct implementing
 /// [`JwtClaimSet`](crate::JwtClaimSet) to deserialize custom fields directly.
 ///
 /// # Example
@@ -26,7 +26,7 @@ use crate::openid::{Merge, RoleExtractor, StandardRoleExtractor};
 /// }
 ///
 /// impl FromValidatedJwtClaims<Services> for DbUser {
-///     async fn from_jwt_claims(claims: serde_json::Value, state: &Services) -> Result<Self, HttpError> {
+///     async fn from_jwt_claims(claims: StandardClaims, state: &Services) -> Result<Self, HttpError> {
 ///         let auth = AuthenticatedUser::from_claims(claims);
 ///         let profile = fetch_profile(auth.sub(), &state.pool).await?;
 ///         Ok(DbUser { auth, profile })
@@ -35,7 +35,7 @@ use crate::openid::{Merge, RoleExtractor, StandardRoleExtractor};
 ///
 /// impl_claims_identity_extractor!(DbUser);
 /// ```
-pub trait FromValidatedJwtClaims<S, C = serde_json::Value>: Identity + Sized
+pub trait FromValidatedJwtClaims<S, C = StandardClaims>: Identity + Sized
 where
     C: crate::JwtClaimSet,
 {
@@ -86,7 +86,7 @@ macro_rules! impl_claims_identity_extractor {
     ($identity:ty $(,)?) => {
         $crate::impl_claims_identity_extractor!(
             @impl $identity,
-            $crate::__macro_support::serde_json::Value
+            $crate::__macro_support::StandardClaims
         );
     };
 
@@ -174,10 +174,10 @@ macro_rules! impl_claims_identity_extractor {
 ///
 /// impl IdentityBuilder for MyIdentityBuilder {
 ///     type Identity = MyUser;
-///     fn build(&self, claims: serde_json::Value)
+///     fn build(&self, claims: StandardClaims)
 ///         -> impl Future<Output = Result<MyUser, SecurityError>> + Send
 ///     {
-///         let sub = claims.get("sub").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
+///         let sub = claims.sub.clone();
 ///         let tenant = claims.get("tenant_id").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
 ///         std::future::ready(Ok(MyUser { sub, tenant_id: tenant }))
 ///     }
@@ -191,12 +191,12 @@ macro_rules! impl_claims_identity_extractor {
 ///
 /// impl IdentityBuilder for DbIdentityBuilder {
 ///     type Identity = DbUser;
-///     fn build(&self, claims: serde_json::Value)
+///     fn build(&self, claims: StandardClaims)
 ///         -> impl Future<Output = Result<DbUser, SecurityError>> + Send
 ///     {
 ///         let pool = self.pool.clone();
 ///         async move {
-///             let sub = claims.get("sub").and_then(|v| v.as_str()).unwrap_or_default();
+///             let sub = claims.sub;
 ///             sqlx::query_as("SELECT * FROM users WHERE sub = ?")
 ///                 .bind(sub)
 ///                 .fetch_one(&pool)
@@ -210,7 +210,7 @@ pub trait IdentityBuilder: Send + Sync {
     type Identity: Clone + Send + Sync;
     fn build(
         &self,
-        claims: serde_json::Value,
+        claims: StandardClaims,
     ) -> impl std::future::Future<Output = Result<Self::Identity, SecurityError>> + Send;
 }
 
@@ -253,7 +253,7 @@ impl<R: RoleExtractor> IdentityBuilder for IdentityBuilderWith<R> {
 
     fn build(
         &self,
-        claims: serde_json::Value,
+        claims: StandardClaims,
     ) -> impl std::future::Future<Output = Result<AuthenticatedUser, SecurityError>> + Send {
         let user = build_authenticated_user(claims, &self.role_extractor);
         std::future::ready(Ok(user))
@@ -294,11 +294,16 @@ pub struct AuthenticatedUser {
     /// Email claim ("email"), if present in the token.
     pub email: Option<String>,
 
-    /// Roles extracted from the token claims.
+    /// Roles extracted from the token claims by the configured
+    /// [`RoleExtractor`].
     pub roles: Vec<String>,
 
-    /// Raw claims for advanced access.
-    pub claims: serde_json::Value,
+    /// The full validated claim set.
+    ///
+    /// `sub` and `email` above are copies of `claims.sub` / `claims.email`,
+    /// kept as owned fields so [`Identity::sub`] / [`Identity::email`] stay
+    /// plain borrows and the common `user.sub` access needs no indirection.
+    pub claims: StandardClaims,
 }
 
 impl crate::__macro_support::Identity for AuthenticatedUser {
@@ -308,7 +313,7 @@ impl crate::__macro_support::Identity for AuthenticatedUser {
     fn email(&self) -> Option<&str> {
         self.email.as_deref()
     }
-    fn claims(&self) -> Option<&serde_json::Value> {
+    fn claims(&self) -> Option<&StandardClaims> {
         Some(&self.claims)
     }
 }
@@ -331,7 +336,7 @@ impl AuthenticatedUser {
     /// let claims = validator.validate_claims(token).await?;
     /// let user = AuthenticatedUser::from_claims(claims);
     /// ```
-    pub fn from_claims(claims: serde_json::Value) -> Self {
+    pub fn from_claims(claims: StandardClaims) -> Self {
         let extractor = Merge(StandardRoleExtractor, keycloak::RealmRoleExtractor);
         build_authenticated_user(claims, &extractor)
     }
@@ -347,7 +352,7 @@ impl AuthenticatedUser {
     ///
     /// let user = AuthenticatedUser::from_claims_with(claims, &extractor);
     /// ```
-    pub fn from_claims_with(claims: serde_json::Value, extractor: &impl RoleExtractor) -> Self {
+    pub fn from_claims_with(claims: StandardClaims, extractor: &impl RoleExtractor) -> Self {
         build_authenticated_user(claims, extractor)
     }
 
@@ -369,20 +374,11 @@ impl AuthenticatedUser {
 /// are guaranteed a non-empty `sub` (validation rejects tokens without one); the
 /// fallback only applies when constructing directly from arbitrary claims.
 pub fn build_authenticated_user(
-    claims: serde_json::Value,
+    claims: StandardClaims,
     role_extractor: &impl RoleExtractor,
 ) -> AuthenticatedUser {
-    let sub = claims
-        .get("sub")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let email = claims
-        .get("email")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-
+    let sub = claims.sub.clone();
+    let email = claims.email.clone();
     let roles = role_extractor.extract_roles(&claims);
 
     AuthenticatedUser {

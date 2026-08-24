@@ -21,11 +21,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     Ok(quote! {
         impl #impl_generics #krate::Cacheable for #name #ty_generics #where_clause {
             fn to_cache(&self) -> Option<bytes::Bytes> {
-                serde_json::to_vec(self).ok().map(bytes::Bytes::from)
+                #krate::json::to_vec(self).ok().map(bytes::Bytes::from)
             }
 
             fn from_cache(bytes: &[u8]) -> Option<Self> {
-                serde_json::from_slice(bytes).ok()
+                #krate::json::from_slice(bytes).ok()
             }
         }
     })

@@ -26,9 +26,9 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::util::crate_path::r2e_core_path;
-use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::model::types::MethodDecorators;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::util::crate_path::r2e_core_path;
 
 /// Resolve a decorator expression to `(spec type path, value expression)`.
 ///

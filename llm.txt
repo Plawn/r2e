@@ -137,12 +137,22 @@ that gets DI, guards, interceptors, OpenAPI, and TestApp support for free.
 compile-time checking and framework integration.
 
 **What R2E promises.** The public surface is **R2E types**, under `r2e::http`
-and `r2e::prelude` — that is what R2E commits to keeping working. Many of those
-types are axum's today (`Json`, `Path`, `Router`, …), but you should reach them
-through `r2e::…` names, and implement R2E's own contracts rather than axum's:
+and `r2e::prelude` — that is what R2E commits to keeping working. `Json<T>` is
+R2E's own type (extractor + response, `JsonRejection` on failure); many others
+are axum's today (`Path`, `Router`, …), but you should reach them all through
+`r2e::…` names, and implement R2E's own contracts rather than axum's:
 `IntoHttpResponse` for response conversion (+ the one-line
 `r2e::http::impl_into_response!` bridge), and `FromRequestPartsVia` for
 bean-backed extractors. Do NOT add `axum` to your `Cargo.toml`.
+
+**JSON codec.** Typed (de)serialization in framework and app code goes through
+`r2e::json` (`to_vec`, `to_string`, `from_slice`, `from_str`, `JsonError` with
+`is_data()/is_syntax()/is_eof()`), never `serde_json::to_vec` & co. `Json<T>`,
+`HttpError` bodies, WebSocket/SSE payloads, the event bus and `#[derive(Cacheable)]`
+all use it, so the codec is one Cargo feature: default `serde_json`, or
+`json-sonic` (sonic-rs, SIMD — measure on your target first; on Apple Silicon
+it only pays on larger serialized responses). `serde_json::Value` / `json!`
+stay `serde_json` — they are the dynamic-tree type, not a codec call.
 
 When you genuinely need something R2E does not re-export, use the explicit
 escape hatch — `r2e::http::axum_compat` (`use r2e::http::axum_compat::axum;`).
@@ -386,7 +396,7 @@ a runtime value must keep going through `Json`/`json!` for escaping.
 ```rust
 r2e::map_error! {
     sqlx::Error => Internal,
-    serde_json::Error => BadRequest,
+    r2e::json::JsonError => BadRequest,
 }
 // `?` on sqlx::Error now auto-converts to HttpError::Internal
 ```
@@ -997,7 +1007,7 @@ extraction glue:
 
 ```rust
 use r2e::r2e_security::{impl_claims_identity_extractor, AuthenticatedUser, FromValidatedJwtClaims, RoleBasedIdentity};
-use r2e::{BeanLookup, Identity};
+use r2e::{BeanLookup, Identity, StandardClaims};
 
 #[derive(Clone, Serialize)]                 // NOT Deserialize — never body-constructible
 pub struct DbUser { pub auth: AuthenticatedUser, pub profile: UserProfile }
@@ -1005,14 +1015,14 @@ pub struct DbUser { pub auth: AuthenticatedUser, pub profile: UserProfile }
 impl Identity for DbUser {
     fn sub(&self) -> &str { self.auth.sub() }
     fn email(&self) -> Option<&str> { self.auth.email() }
-    fn claims(&self) -> Option<&serde_json::Value> { self.auth.claims() }
+    fn claims(&self) -> Option<&StandardClaims> { self.auth.claims() }
 }
 impl RoleBasedIdentity for DbUser {
     fn roles(&self) -> &[String] { self.auth.roles() }
 }
 
 impl<S: BeanLookup + Send + Sync> FromValidatedJwtClaims<S> for DbUser {
-    async fn from_jwt_claims(claims: serde_json::Value, state: &S) -> Result<Self, HttpError> {
+    async fn from_jwt_claims(claims: StandardClaims, state: &S) -> Result<Self, HttpError> {
         let auth = AuthenticatedUser::from_claims(claims);
         let pool = state.bean::<SqlitePool>().ok_or_else(|| HttpError::internal("no pool"))?;
         let profile = /* query DB with auth.sub() */;
@@ -1022,12 +1032,44 @@ impl<S: BeanLookup + Send + Sync> FromValidatedJwtClaims<S> for DbUser {
 impl_claims_identity_extractor!(DbUser);
 ```
 
+### Standard claims — `StandardClaims`
+
+JWT claims are **typed**, not a `serde_json::Value` tree. `r2e::StandardClaims`
+(in the prelude; also `r2e::r2e_security::StandardClaims`) is deserialized
+straight from the token and is what `AuthenticatedUser.claims`,
+`Identity::claims()`, `GuardContext::identity_claims()`, `RoleExtractor::extract_roles`
+and `IdentityBuilder::build` carry:
+
+```rust
+pub struct StandardClaims {
+    pub sub: String,                      // "" when absent → rejected as "no sub"
+    pub email: Option<String>,
+    pub exp: Option<u64>, pub iat: Option<u64>, pub nbf: Option<u64>,
+    pub iss: Option<String>,
+    pub aud: Option<Audience>,            // string | [string]; .iter() / .contains() / .as_str()
+    pub preferred_username: Option<String>, pub name: Option<String>,
+    pub scope: Option<String>,            // .scopes() splits it
+    pub roles: Option<Vec<String>>,       // plain OIDC
+    pub realm_access: Option<RealmAccess>,             // Keycloak; .realm_roles()
+    pub resource_access: Option<HashMap<String, ClientAccess>>, // .client_roles("client")
+    pub extra: serde_json::Map<String, Value>,         // #[serde(flatten)]: every other claim
+}
+```
+
+Known claims are fields; anything else is in `extra`, reached with
+`claims.get("tenant_id") -> Option<&Value>` (**`get` never returns a known
+field** — `claims.get("sub")` is `None`, use `claims.sub`). Custom
+`RoleExtractor`s read fields (`claims.realm_roles()`) or walk `extra` with
+`r2e::r2e_security::openid::extract_string_array`. The fully dynamic escape
+hatch remains: `JwtClaimsValidator::validate_as::<serde_json::Value>` /
+`extract_jwt_claims_as::<S, I, Value>` (`Value` still implements `JwtClaimSet`).
+
 ### Typed JWT claims — `JwtClaimSet`
 
-By default `from_jwt_claims` receives `serde_json::Value`. For typed
-application claims, implement `JwtClaimSet` on a `Deserialize` struct and pick
-it as the second type parameter — the validated payload deserializes straight
-into your type (no intermediate `Value`):
+By default `from_jwt_claims` receives `StandardClaims`. For your own claim
+struct, implement `JwtClaimSet` on a `Deserialize` type and pick it as the
+second type parameter — the validated payload deserializes straight into your
+type:
 
 ```rust
 #[derive(Deserialize)]

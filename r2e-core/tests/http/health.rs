@@ -100,8 +100,8 @@ async fn health_uptime_increases() {
 // ── Plugin-level: the `Health` plugin routes ──────────────────────────────
 
 use r2e_core::builder::AppBuilder;
-use r2e_core::http::StatusCode;
 use r2e_core::builtins::Health;
+use r2e_core::http::StatusCode;
 
 use crate::support::send_get;
 

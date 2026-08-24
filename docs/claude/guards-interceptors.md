@@ -138,7 +138,7 @@ guard's beans are fields, injected at build time.
 - `peer_addr` — transport peer address (`Option<SocketAddr>`), from
   `ConnectInfo<SocketAddr>`; `None` under `TestApp`'s in-process dispatch
 - `identity` — optional identity reference (`Option<&'a I>`)
-- Convenience accessors: `identity_sub()`, `identity_email()`, `identity_claims()`
+- Convenience accessors: `identity_sub()`, `identity_email()`, `identity_claims() -> Option<&StandardClaims>` (typed; custom claims via `.get("name")` on `extra`)
 - Client-IP accessors: `forwarded_for() -> Option<&str>` (leftmost
   `X-Forwarded-For` entry, **raw/unvalidated** — never key on it),
   `forwarded_ip() -> Option<IpAddr>` (that entry parsed; `None` when malformed),

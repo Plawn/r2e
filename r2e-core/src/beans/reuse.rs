@@ -1,6 +1,6 @@
+use super::{BeanContext, BeanRegistry};
 #[cfg(feature = "dev-reload")]
 use super::{BeanError, BeanFingerprints, RegMeta};
-use super::{BeanContext, BeanRegistry};
 #[cfg(feature = "dev-reload")]
 use crate::config::ConfigKeyKind;
 use std::any::{Any, TypeId};

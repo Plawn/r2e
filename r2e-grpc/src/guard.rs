@@ -1,4 +1,4 @@
-use r2e_core::Identity;
+use r2e_core::{Identity, StandardClaims};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 
@@ -24,8 +24,8 @@ impl<'a, I: Identity> GrpcGuardContext<'a, I> {
         self.identity.and_then(|i| i.email())
     }
 
-    /// Convenience accessor for the identity raw claims.
-    pub fn identity_claims(&self) -> Option<&serde_json::Value> {
+    /// Convenience accessor for the identity's validated JWT claims.
+    pub fn identity_claims(&self) -> Option<&StandardClaims> {
         self.identity.and_then(|i| i.claims())
     }
 }

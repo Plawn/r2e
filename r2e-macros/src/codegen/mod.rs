@@ -23,9 +23,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::util::crate_path::r2e_core_path;
-use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::model::types::MethodDecorators;
+use crate::parsing::routes_parsing::RoutesImplDef;
+use crate::util::crate_path::r2e_core_path;
 
 /// Main entry point: generate all code for a `#[routes]` impl block.
 pub fn generate(def: &RoutesImplDef) -> TokenStream {
@@ -163,7 +163,11 @@ fn generate_identity_requirement_asserts(def: &RoutesImplDef) -> Vec<TokenStream
                 .map(|m| m.identity_param.is_some()),
         )
         .all(|has| has);
-    emit(&def.controller_decorators.guard_fns, all_identity_param, false);
+    emit(
+        &def.controller_decorators.guard_fns,
+        all_identity_param,
+        false,
+    );
 
     asserts
 }

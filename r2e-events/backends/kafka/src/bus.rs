@@ -485,7 +485,7 @@ impl EventBus for KafkaEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -505,7 +505,7 @@ impl EventBus for KafkaEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             bus.publish(&topic_name, payload, &metadata).await
@@ -523,7 +523,7 @@ impl EventBus for KafkaEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
             let metadata = EventMetadata::new();
@@ -552,7 +552,7 @@ impl EventBus for KafkaEventBus {
         async move {
             bus.inner.state.check_shutdown()?;
 
-            let payload = serde_json::to_vec(&event)
+            let payload = r2e_core::json::to_vec(&event)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let topic_name = bus.resolve_topic::<E>();
 
@@ -587,7 +587,7 @@ impl EventBus for KafkaEventBus {
             // topic, so no reply ever arrives.
             bus.ensure_reply_consumer().await?;
 
-            let payload = serde_json::to_vec(&req)
+            let payload = r2e_core::json::to_vec(&req)
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
             let request_topic_name = request_topic(&bus.resolve_topic::<Req>());
             let reply_to = bus.reply_topic_name();

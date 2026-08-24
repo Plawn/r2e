@@ -73,7 +73,9 @@ fn resolve_lazy_factory_current_thread_runtime_panics() {
         .unwrap();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         rt.block_on(async {
-            r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| Box::pin(async { 1u32 })))
+            r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
+                Box::pin(async { 1u32 })
+            }))
         })
     }));
     let msg = panic_message(result.unwrap_err());
