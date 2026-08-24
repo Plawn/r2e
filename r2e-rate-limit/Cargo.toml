@@ -13,7 +13,6 @@ description = "Token-bucket rate limiting for R2E - per-user, per-IP, or global 
 [dependencies]
 dashmap = {workspace = true}
 r2e-core = {workspace = true}
-serde_json = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]

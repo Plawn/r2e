@@ -6062,7 +6062,6 @@ version = "0.3.0"
 dependencies = [
  "dashmap",
  "r2e-core",
- "serde_json",
  "tokio",
  "tracing",
 ]

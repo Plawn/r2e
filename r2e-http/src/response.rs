@@ -80,3 +80,31 @@ macro_rules! impl_into_response {
 #[doc(inline)]
 pub use crate::impl_into_response;
 
+/// Response with a pre-serialized `'static` JSON body.
+///
+/// For constant payloads — the fixed error bodies R2E returns on 401/429/500 —
+/// this skips what `Json(json!({ … }))` costs on every response: a
+/// `serde_json::Value` (map allocation + boxed entries) and a serializer pass
+/// over it. A `&'static str` body becomes `Bytes::from_static`, so the body is
+/// zero-copy and the only work left is setting the status and one header.
+///
+/// Use it only for bodies that are literally constant. Anything holding a
+/// runtime value must keep going through `Json`/`json!`, which escapes the
+/// interpolated string correctly.
+///
+/// ```ignore
+/// use r2e_core::http::{response::static_json, StatusCode};
+///
+/// static_json(StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#)
+/// ```
+pub fn static_json(status: crate::StatusCode, body: &'static str) -> Response {
+    (
+        status,
+        [(
+            crate::CONTENT_TYPE,
+            crate::HeaderValue::from_static("application/json"),
+        )],
+        body,
+    )
+        .into_response()
+}

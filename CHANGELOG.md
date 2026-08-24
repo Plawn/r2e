@@ -78,6 +78,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Perf (no API change)**: constant error bodies are no longer built through
+  `serde_json::json!` on every response. `SecurityError` (401/503), the panic
+  handler's 500, and the rate limiter's 429 / 401 now return a pre-serialized
+  `&'static str` body via the new `r2e::http::response::static_json(status,
+  body)` helper — `Bytes::from_static`, so no `Value` map allocation and no
+  serializer pass per rejection. This is the hot path under unauthenticated or
+  throttled traffic. Response bodies are byte-identical. Dynamic messages
+  (`ParamError`, `MultipartError`, `HttpError::from_status`) keep going through
+  `Json`/`json!`, which escapes interpolated values correctly.
+
 - **BREAKING (`r2e-core`)**: the shutdown-token surface now hands out
   `r2e::rt::CancelToken` instead of `tokio_util::sync::CancellationToken` —
   `ServeContext::shutdown_token()`, `ConfigWatchContext::{new, shutdown_token}`

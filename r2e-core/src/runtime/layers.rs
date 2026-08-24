@@ -1,4 +1,3 @@
-use crate::http::response::IntoResponse;
 use crate::http::StatusCode;
 use crate::runtime::tracing_config::{LogFormat, TracingConfig};
 use tower_http::catch_panic::CatchPanicLayer;
@@ -275,6 +274,8 @@ pub(crate) fn graph_keep_alive<S>(
 }
 
 fn panic_handler(_err: Box<dyn std::any::Any + Send>) -> crate::http::Response {
-    let body = serde_json::json!({ "error": "Internal server error" });
-    (StatusCode::INTERNAL_SERVER_ERROR, crate::http::Json(body)).into_response()
+    crate::http::response::static_json(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        r#"{"error":"Internal server error"}"#,
+    )
 }

@@ -368,6 +368,19 @@ r2e::http::impl_into_response!(MyError);   // bridge; non-generic types only
 `impl_into_response!` is what keeps handler composition working: `Result<T, E>`
 and `(StatusCode, T)` reach the HTTP backend through it.
 
+For a **constant** body, skip `json!` entirely — it allocates a `Value` and runs
+the serializer on every response:
+
+```rust
+use r2e::http::response::static_json;
+
+static_json(StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#)
+```
+
+`static_json` sets `content-type: application/json` and sends the `&'static str`
+as `Bytes::from_static` (zero-copy). Only for literal constants — a body holding
+a runtime value must keep going through `Json`/`json!` for escaping.
+
 ### `map_error!` — bulk From impls
 
 ```rust
