@@ -179,7 +179,7 @@ async fn await_reply_shutdown_wins() {
 async fn await_reply_observes_pre_cancelled_shutdown_token() {
     let pending = Arc::new(PendingRequests::new());
     let (_id, guard, rx) = pending.register();
-    let cancel = tokio_util::sync::CancellationToken::new();
+    let cancel = r2e_core::rt::CancelToken::new();
     cancel.cancel();
 
     let result: Result<Pong, _> = await_reply(rx, Duration::from_secs(5), cancel.cancelled()).await;

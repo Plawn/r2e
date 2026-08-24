@@ -1,6 +1,3 @@
-// NOTE: The `rdkafka` (librdkafka) consumer is tokio-bound; any tokio APIs
-// that originate from the rdkafka SDK remain on direct tokio and are a
-// documented exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::future::Future;
@@ -17,8 +14,8 @@ use rdkafka::ClientContext;
 use rdkafka::Message;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_events::backend::{
     await_reply, decode_metadata, encode_metadata, encode_reply_headers, reconnect_loop,
     request_topic, spawn_completion_forwarder, DispatchOutcome, Handler, HeaderPair,
@@ -234,10 +231,10 @@ impl KafkaEventBus {
                 self.ensure_topic_with_retention(&topic, Some(REPLY_TOPIC_RETENTION_MS))
                     .await?;
 
-                let cancel = CancellationToken::new();
+                let cancel = CancelToken::new();
                 let inner = self.inner.clone();
                 let cancel_child = cancel.clone();
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_reply_consumer(inner, topic, cancel_child).await;
                 });
                 Ok::<_, EventBusError>(cancel)
@@ -419,7 +416,7 @@ impl EventBus for KafkaEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_consumer(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -471,7 +468,7 @@ impl EventBus for KafkaEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_consumer(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -609,7 +606,7 @@ impl EventBus for KafkaEventBus {
 
             // Await the reply, the timeout, or a shutdown signal. The pending
             // guard drops after, evicting the correlation entry so a late reply
-            // is discarded instead of leaking a map slot. CancellationToken is
+            // is discarded instead of leaking a map slot. CancelToken is
             // sticky, so shutdown cannot be missed in the publish→wait window.
             let result =
                 await_reply::<Resp>(rx, options.timeout, bus.inner.request_cancel.cancelled())
@@ -651,7 +648,7 @@ impl EventBus for KafkaEventBus {
                 return Err(error);
             }
 
-            let cancel = CancellationToken::new();
+            let cancel = CancelToken::new();
             bus.inner
                 .responder_cancels
                 .lock()
@@ -661,7 +658,7 @@ impl EventBus for KafkaEventBus {
             let inner = bus.inner.clone();
             let cancel_child = cancel.clone();
             let topic = request_topic_name.clone();
-            r2e_core::rt::spawn(async move {
+            rt::spawn(async move {
                 run_responder_consumer(inner, type_id, topic, cancel_child).await;
             });
 
@@ -678,7 +675,7 @@ impl EventBus for KafkaEventBus {
                 let inner = inner_unreg.clone();
                 // Unregister may be triggered from a handler, so route to the
                 // control plane in sharded mode.
-                r2e_core::rt::spawn_ctl(async move {
+                rt::spawn_ctl(async move {
                     inner.state.unregister_responder(type_id).await;
                 });
             }))
@@ -736,7 +733,7 @@ impl EventBus for KafkaEventBus {
             // the async runtime thread during shutdown. `FutureProducer` is an
             // `Arc` handle and cheap to clone.
             let producer = inner.producer.clone();
-            match r2e_core::rt::spawn_blocking(move || producer.flush(timeout)).await {
+            match rt::spawn_blocking(move || producer.flush(timeout)).await {
                 Ok(res) => res.map_err(map_kafka_error)?,
                 Err(join_err) => {
                     // The blocking flush task panicked or was cancelled. On
@@ -756,7 +753,7 @@ async fn run_consumer(
     inner: Arc<KafkaInner>,
     type_id: TypeId,
     topic_name: Arc<str>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let label = format!("Kafka consumer [{topic_name}]");
     reconnect_loop(
@@ -773,7 +770,7 @@ async fn run_consumer_inner(
     inner: &Arc<KafkaInner>,
     type_id: TypeId,
     topic_name: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     // At-least-once delivery: offsets are stored only after local handlers
     // complete. Handlers run concurrently (pipelined), so completions arrive
@@ -808,17 +805,15 @@ async fn run_consumer_inner(
     // When the public `enable_auto_commit` is false, librdkafka never commits
     // the offsets we store, so the loop must commit them itself on a timer.
     let manual_commit = !inner.config.enable_auto_commit;
-    let mut commit_interval = r2e_core::rt::interval(MANUAL_COMMIT_INTERVAL);
+    let mut commit_interval = rt::interval(MANUAL_COMMIT_INTERVAL);
 
     // Completed dispatches report (key, outcome) back to this loop on a bounded
     // channel; the forwarder applies backpressure once the loop falls behind.
-    let (completion_tx, mut completion_rx) = tokio::sync::mpsc::channel::<(
-        (u64, i32, i64),
-        DispatchOutcome,
-    )>(COMPLETION_CHANNEL_CAPACITY);
+    let (completion_tx, mut completion_rx) =
+        rt::sync::mpsc::channel::<((u64, i32, i64), DispatchOutcome)>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "Kafka consumer cancelled");
                 break;
@@ -864,7 +859,7 @@ async fn run_consumer_inner(
                     }
                     Err(e) => {
                         tracing::warn!(topic = %topic_name, "Kafka consumer error: {e}");
-                        r2e_core::rt::sleep(Duration::from_secs(1)).await;
+                        rt::sleep(Duration::from_secs(1)).await;
                     }
                 }
             }
@@ -889,7 +884,7 @@ async fn run_consumer_inner(
             );
         }
     };
-    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+    let _ = rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
 
     // Final synchronous commit of everything stored during the drain, so a
     // clean shutdown does not needlessly redeliver acked messages. Only needed

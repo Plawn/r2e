@@ -24,11 +24,6 @@ r2e-core
 r2e-data-diesel
 r2e-data-sqlx
 r2e-devservices
-r2e-events
-r2e-events-iggy
-r2e-events-kafka
-r2e-events-pulsar
-r2e-events-rabbitmq
 r2e-executor
 r2e-rt
 r2e-scheduler

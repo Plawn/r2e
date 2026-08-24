@@ -1,6 +1,3 @@
-// NOTE: The `lapin` (AMQP) client library is tokio-bound; any tokio APIs that
-// originate from the lapin SDK remain on direct tokio and are a documented
-// exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::future::Future;
 use std::sync::atomic::Ordering;
@@ -12,8 +9,8 @@ use lapin::types::{AMQPValue, FieldTable, LongString, ShortString};
 use lapin::{BasicProperties, Channel};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_events::backend::{
     await_reply, decode_metadata, encode_metadata, reconnect_loop, request_topic, DispatchOutcome,
     Handler, HEADER_REPLY_ERROR,
@@ -236,7 +233,7 @@ impl EventBus for RabbitMqEventBus {
 
                 let inner_clone = bus.inner.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_consumer(
                         inner_clone,
                         type_id,
@@ -297,7 +294,7 @@ impl EventBus for RabbitMqEventBus {
 
                 let inner_clone = bus.inner.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_consumer(
                         inner_clone,
                         type_id,
@@ -516,7 +513,7 @@ impl EventBus for RabbitMqEventBus {
             let inner_clone = bus.inner.clone();
             let cancel_task = cancel.clone();
             let topic_task = request_topic.clone();
-            r2e_core::rt::spawn(async move {
+            rt::spawn(async move {
                 run_responder(
                     inner_clone,
                     type_id,
@@ -532,7 +529,7 @@ impl EventBus for RabbitMqEventBus {
                 // Stop the request consumer and drop the responder.
                 cancel.cancel();
                 let inner = inner_unreg.clone();
-                r2e_core::rt::spawn_ctl(async move {
+                rt::spawn_ctl(async move {
                     inner.state.unregister_responder(type_id).await;
                 });
             }))
@@ -610,7 +607,7 @@ async fn run_consumer(
     inner: Arc<RabbitMqInner>,
     type_id: TypeId,
     topic_name: Arc<str>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     mut initial: Option<(Channel, String)>,
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;
@@ -630,7 +627,7 @@ async fn run_consumer_inner(
     inner: &Arc<RabbitMqInner>,
     type_id: TypeId,
     topic_name: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     initial: Option<(Channel, String)>,
 ) {
     // The channel is kept alive for the whole function; dropping it on return
@@ -685,7 +682,7 @@ async fn run_consumer_inner(
 
     let mut consumer = consumer;
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(queue = %queue_name, "consumer cancelled");
                 break;
@@ -712,7 +709,7 @@ async fn run_consumer_inner(
                         // failed (retryable) messages, never poison payloads.
                         let acker = delivery.acker;
                         let queue = queue.clone();
-                        r2e_core::rt::spawn(async move {
+                        rt::spawn(async move {
                             match completion.outcome().await {
                                 DispatchOutcome::Ack => {
                                     if let Err(e) = acker.ack(BasicAckOptions::default()).await {
@@ -761,7 +758,7 @@ async fn run_responder(
     inner: Arc<RabbitMqInner>,
     type_id: TypeId,
     request_topic: String,
-    cancel: CancellationToken,
+    cancel: CancelToken,
     mut initial: Option<(Channel, String)>,
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;
@@ -780,7 +777,7 @@ async fn run_responder_inner(
     inner: &Arc<RabbitMqInner>,
     type_id: TypeId,
     request_topic: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     initial: Option<(Channel, String)>,
 ) {
     let (channel, queue_name) = match initial {
@@ -824,7 +821,7 @@ async fn run_responder_inner(
     tracing::info!(queue = %queue_name, "responder started");
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(queue = %queue_name, "responder cancelled");
                 break;
@@ -848,7 +845,7 @@ async fn run_responder_inner(
                         let inner = inner.clone();
                         let channel = channel.clone();
                         let queue = queue_name.clone();
-                        r2e_core::rt::spawn(async move {
+                        rt::spawn(async move {
                             // Shared outcome mapping: Ok reply bytes / responder
                             // error / (mid-flight-unregistered) no-responder all
                             // collapse to `(body, error)` with the shared wording.

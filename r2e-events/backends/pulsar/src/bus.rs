@@ -1,6 +1,3 @@
-// NOTE: The `pulsar` client library is tokio-bound; any tokio APIs that
-// originate from the pulsar SDK remain on direct tokio and are a documented
-// exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::future::Future;
@@ -14,8 +11,8 @@ use pulsar::producer::Message as ProducerMessage;
 use pulsar::{Error as PulsarError, TokioExecutor};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_events::backend::{
     await_reply, decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers,
     reconnect_loop, reply_topic, request_topic, responder_group, spawn_completion_forwarder,
@@ -96,7 +93,7 @@ impl PulsarEventBus {
     async fn get_or_create_producer(
         &self,
         full_topic: &str,
-    ) -> Result<Arc<tokio::sync::Mutex<pulsar::producer::Producer<TokioExecutor>>>, EventBusError>
+    ) -> Result<Arc<rt::sync::Mutex<pulsar::producer::Producer<TokioExecutor>>>, EventBusError>
     {
         // Fast path: return the existing handle under a brief map lock.
         {
@@ -122,7 +119,7 @@ impl PulsarEventBus {
         let mut producers = self.inner.producers.lock().await;
         let handle = producers
             .entry(full_topic.to_string())
-            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(producer)))
+            .or_insert_with(|| Arc::new(rt::sync::Mutex::new(producer)))
             .clone();
         Ok(handle)
     }
@@ -287,11 +284,11 @@ impl PulsarEventBus {
     /// return immediately.
     fn ensure_reply_consumer(&self) {
         self.inner.reply_consumer.get_or_init(|| {
-            let cancel = CancellationToken::new();
+            let cancel = CancelToken::new();
             let inner = self.inner.clone();
             let full_reply = self.reply_topic_full();
             let cancel_task = cancel.clone();
-            r2e_core::rt::spawn(async move {
+            rt::spawn(async move {
                 run_reply_consumer(inner, full_reply, cancel_task).await;
             });
             cancel
@@ -366,7 +363,7 @@ impl EventBus for PulsarEventBus {
                 let inner_clone = bus.inner.clone();
                 let config = bus.inner.config.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_poller(inner_clone, type_id, full_topic, config, cancel).await;
                 });
             }
@@ -415,7 +412,7 @@ impl EventBus for PulsarEventBus {
                 let inner_clone = bus.inner.clone();
                 let config = bus.inner.config.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_poller(inner_clone, type_id, full_topic, config, cancel).await;
                 });
             }
@@ -592,7 +589,7 @@ impl EventBus for PulsarEventBus {
             let responder_subscription = responder_group(&request_topic);
             let full_request_topic = bus.full_topic(&request_topic);
 
-            let cancel = CancellationToken::new();
+            let cancel = CancelToken::new();
             bus.inner
                 .responder_cancels
                 .lock()
@@ -601,7 +598,7 @@ impl EventBus for PulsarEventBus {
 
             let inner = bus.inner.clone();
             let cancel_task = cancel.clone();
-            r2e_core::rt::spawn(async move {
+            rt::spawn(async move {
                 run_responder(
                     inner,
                     type_id,
@@ -617,7 +614,7 @@ impl EventBus for PulsarEventBus {
                 let inner = inner_unreg.clone();
                 // Unregister may be triggered from a responder, so route to the
                 // control plane in sharded mode.
-                r2e_core::rt::spawn_ctl(async move {
+                rt::spawn_ctl(async move {
                     inner.state.unregister_responder(type_id).await;
                     if let Some(cancel) = inner
                         .responder_cancels
@@ -690,7 +687,7 @@ async fn run_poller(
     type_id: TypeId,
     full_topic: Arc<str>,
     config: PulsarConfig,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let label = format!("Pulsar poller [{full_topic}]");
     reconnect_loop(
@@ -708,7 +705,7 @@ async fn run_poller_inner(
     type_id: TypeId,
     full_topic: &str,
     config: &PulsarConfig,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     let consumer_result: Result<Consumer<Vec<u8>, TokioExecutor>, PulsarError> = inner
         .pulsar
@@ -734,13 +731,12 @@ async fn run_poller_inner(
     // is `!Sync` and its `ack`/`nack` take `&mut self`, so only the consume loop
     // may touch it — completion tasks send the decision here and the loop applies
     // it inline. The bound provides backpressure on ack throughput.
-    let (ack_tx, mut ack_rx) = tokio::sync::mpsc::channel::<(
-        (String, MessageIdData),
-        DispatchOutcome,
-    )>(COMPLETION_CHANNEL_CAPACITY);
+    let (ack_tx, mut ack_rx) = rt::sync::mpsc::channel::<((String, MessageIdData), DispatchOutcome)>(
+        COMPLETION_CHANNEL_CAPACITY,
+    );
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %full_topic, "poller cancelled");
                 break;
@@ -775,7 +771,7 @@ async fn run_poller_inner(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %full_topic, "consumer error: {e}");
-                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
+                        rt::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
                         tracing::info!(topic = %full_topic, "consumer stream ended");
@@ -797,7 +793,7 @@ async fn run_poller_inner(
             apply_ack(&mut consumer, full_topic, &msg_topic, msg_id, outcome).await;
         }
     };
-    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+    let _ = rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
 }
 
 /// Apply a single ack/nack decision to the consumer.
@@ -862,7 +858,7 @@ async fn run_responder(
     type_id: TypeId,
     full_topic: Arc<str>,
     subscription: String,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let label = format!("Pulsar responder [{full_topic}]");
     reconnect_loop(
@@ -880,7 +876,7 @@ async fn run_responder_inner(
     type_id: TypeId,
     full_topic: &str,
     subscription: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     let consumer_result: Result<Consumer<Vec<u8>, TokioExecutor>, PulsarError> = inner
         .pulsar
@@ -906,10 +902,10 @@ async fn run_responder_inner(
     // bounded channel because Pulsar's Consumer is !Sync. Shared subscription
     // means individual acks are required (no cumulative ack).
     let (ack_tx, mut ack_rx) =
-        tokio::sync::mpsc::channel::<((String, MessageIdData), bool)>(COMPLETION_CHANNEL_CAPACITY);
+        rt::sync::mpsc::channel::<((String, MessageIdData), bool)>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %full_topic, "responder cancelled");
                 break;
@@ -928,14 +924,14 @@ async fn run_responder_inner(
                         let inner = inner.clone();
                         let tx = ack_tx.clone();
                         let topic = full_topic.to_string();
-                        r2e_core::rt::spawn(async move {
+                        rt::spawn(async move {
                             let ok = handle_request(&inner, type_id, &topic, &received).await;
                             let _ = tx.send(((msg_topic, msg_id), ok)).await;
                         });
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %full_topic, "responder consumer error: {e}");
-                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
+                        rt::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
                         tracing::info!(topic = %full_topic, "responder stream ended");
@@ -953,7 +949,7 @@ async fn run_responder_inner(
             apply_responder_ack(&mut consumer, full_topic, &msg_topic, msg_id, ok).await;
         }
     };
-    let _ = r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
+    let _ = rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await;
 }
 
 /// Apply one responder ack/nack decision.
@@ -1043,11 +1039,7 @@ async fn handle_request(
 /// request id via [`PendingRequests::complete_reply`].
 ///
 /// [`PendingRequests::complete_reply`]: r2e_events::backend::PendingRequests::complete_reply
-async fn run_reply_consumer(
-    inner: Arc<PulsarInner>,
-    full_topic: Arc<str>,
-    cancel: CancellationToken,
-) {
+async fn run_reply_consumer(inner: Arc<PulsarInner>, full_topic: Arc<str>, cancel: CancelToken) {
     let label = format!("Pulsar reply consumer [{full_topic}]");
     reconnect_loop(
         inner.config.reconnect,
@@ -1062,7 +1054,7 @@ async fn run_reply_consumer(
 async fn run_reply_consumer_inner(
     inner: &Arc<PulsarInner>,
     full_topic: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     let consumer_result: Result<Consumer<Vec<u8>, TokioExecutor>, PulsarError> = inner
         .pulsar
@@ -1091,7 +1083,7 @@ async fn run_reply_consumer_inner(
     tracing::info!(topic = %full_topic, "reply consumer started");
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %full_topic, "reply consumer cancelled");
                 break;
@@ -1114,7 +1106,7 @@ async fn run_reply_consumer_inner(
                     }
                     Some(Err(e)) => {
                         tracing::warn!(topic = %full_topic, "reply consumer error: {e}");
-                        r2e_core::rt::sleep(std::time::Duration::from_secs(1)).await;
+                        rt::sleep(std::time::Duration::from_secs(1)).await;
                     }
                     None => {
                         tracing::info!(topic = %full_topic, "reply consumer stream ended");

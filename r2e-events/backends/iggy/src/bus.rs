@@ -1,6 +1,3 @@
-// NOTE: The `iggy` client library is tokio-bound; any tokio APIs that originate
-// from the iggy SDK (e.g. the consumer stream driver) remain on direct tokio
-// and are a documented exception to the r2e_core::rt facade.
 use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -10,8 +7,8 @@ use std::sync::Arc;
 use iggy::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 
+use r2e_core::rt::{self, CancelToken};
 use r2e_events::backend::{
     await_reply, decode_metadata, decode_reply_headers, encode_metadata, encode_reply_headers,
     reconnect_loop, request_topic, responder_group, spawn_completion_forwarder, DispatchOutcome,
@@ -224,13 +221,13 @@ impl IggyEventBus {
             if guard.reply_poller.is_some() {
                 return Ok(());
             }
-            let cancel = CancellationToken::new();
+            let cancel = CancelToken::new();
             guard.reply_poller = Some(cancel.clone());
             cancel
         };
 
         let bus = self.clone();
-        r2e_core::rt::spawn(async move {
+        rt::spawn(async move {
             run_reply_poller(bus, reply, cancel).await;
         });
 
@@ -352,7 +349,7 @@ impl EventBus for IggyEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_poller(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -404,7 +401,7 @@ impl EventBus for IggyEventBus {
                 let inner_clone = bus.inner.clone();
                 let topic_clone = topic_name.clone();
 
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     run_poller(inner_clone, type_id, topic_clone, cancel).await;
                 });
             }
@@ -481,8 +478,8 @@ impl EventBus for IggyEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
 
             let client = bus.inner.client.clone();
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            r2e_core::rt::spawn(async move {
+            let (tx, rx) = rt::sync::oneshot::channel();
+            rt::spawn(async move {
                 let result = client
                     .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
                     .await;
@@ -529,8 +526,8 @@ impl EventBus for IggyEventBus {
                 .map_err(|e| EventBusError::Serialization(e.to_string()))?;
 
             let client = bus.inner.client.clone();
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            r2e_core::rt::spawn(async move {
+            let (tx, rx) = rt::sync::oneshot::channel();
+            rt::spawn(async move {
                 let result = client
                     .send_messages(&stream_id, &topic_id, &partitioning, &mut [msg])
                     .await;
@@ -634,7 +631,7 @@ impl EventBus for IggyEventBus {
                 return Err(error);
             }
 
-            let cancel = CancellationToken::new();
+            let cancel = CancelToken::new();
             {
                 let mut guard = bus
                     .inner
@@ -647,7 +644,7 @@ impl EventBus for IggyEventBus {
             let poller_bus = bus.clone();
             let poller_topic = req_topic.clone();
             let poller_cancel = cancel.clone();
-            r2e_core::rt::spawn(async move {
+            rt::spawn(async move {
                 run_responder_poller(poller_bus, type_id, poller_topic, poller_cancel).await;
             });
 
@@ -657,7 +654,7 @@ impl EventBus for IggyEventBus {
                 // Stop the responder poller and drop the responder registration.
                 cancel.cancel();
                 let inner = inner.clone();
-                r2e_core::rt::spawn(async move {
+                rt::spawn(async move {
                     inner.state.unregister_responder(type_id).await;
                 });
             }))
@@ -730,7 +727,7 @@ async fn run_poller(
     inner: Arc<IggyInner>,
     type_id: TypeId,
     topic_name: Arc<str>,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let max_backoff = inner.config.reconnect_max_backoff;
     let reconnect = inner.config.reconnect;
@@ -745,7 +742,7 @@ async fn run_poller_inner(
     inner: &Arc<IggyInner>,
     type_id: TypeId,
     topic_name: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     let consumer_result = inner.client.consumer_group(
         &inner.config.consumer_group,
@@ -799,10 +796,10 @@ async fn run_poller_inner(
 
     let mut tracker: WatermarkTracker<u32, u64> = WatermarkTracker::new();
     let (tx, mut rx) =
-        tokio::sync::mpsc::channel::<((u32, u64), DispatchOutcome)>(COMPLETION_CHANNEL_CAPACITY);
+        rt::sync::mpsc::channel::<((u32, u64), DispatchOutcome)>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %topic_name, "poller cancelled");
                 break;
@@ -896,10 +893,7 @@ async fn run_poller_inner(
             .await;
         }
     };
-    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain)
-        .await
-        .is_err()
-    {
+    if rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await.is_err() {
         tracing::warn!(
             topic = %topic_name,
             "timed out draining completions on poller shutdown; \
@@ -986,7 +980,7 @@ fn extract_metadata_from_message(message: &IggyMessage) -> EventMetadata {
 /// Consumes the instance-private reply topic with a standalone (non-group)
 /// consumer so only this process reads its own replies, and routes each reply
 /// to the waiting requester by correlation id.
-async fn run_reply_poller(bus: IggyEventBus, reply_topic_name: String, cancel: CancellationToken) {
+async fn run_reply_poller(bus: IggyEventBus, reply_topic_name: String, cancel: CancelToken) {
     let max_backoff = bus.inner.config.reconnect_max_backoff;
     let reconnect = bus.inner.config.reconnect;
     let label = format!("Iggy reply poller [{reply_topic_name}]");
@@ -996,11 +990,7 @@ async fn run_reply_poller(bus: IggyEventBus, reply_topic_name: String, cancel: C
     .await;
 }
 
-async fn run_reply_poller_inner(
-    bus: &IggyEventBus,
-    reply_topic_name: &str,
-    cancel: &CancellationToken,
-) {
+async fn run_reply_poller_inner(bus: &IggyEventBus, reply_topic_name: &str, cancel: &CancelToken) {
     let inner = &bus.inner;
     // Process-unique standalone consumer: only this instance consumes its own
     // reply topic. Default (interval) auto-commit is fine — a lost reply just
@@ -1037,7 +1027,7 @@ async fn run_reply_poller_inner(
     let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %reply_topic_name, "reply poller cancelled");
                 break;
@@ -1082,7 +1072,7 @@ async fn run_responder_poller(
     bus: IggyEventBus,
     type_id: TypeId,
     req_topic: String,
-    cancel: CancellationToken,
+    cancel: CancelToken,
 ) {
     let max_backoff = bus.inner.config.reconnect_max_backoff;
     let reconnect = bus.inner.config.reconnect;
@@ -1097,7 +1087,7 @@ async fn run_responder_poller_inner(
     bus: &IggyEventBus,
     type_id: TypeId,
     req_topic: &str,
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
 ) {
     let inner = &bus.inner;
     let group = responder_group(req_topic);
@@ -1134,11 +1124,10 @@ async fn run_responder_poller_inner(
     let mut batches = futures_util::StreamExt::ready_chunks(consumer, batch_capacity);
 
     let mut tracker: WatermarkTracker<u32, u64> = WatermarkTracker::new();
-    let (tx, mut rx) =
-        tokio::sync::mpsc::channel::<((u32, u64), bool)>(COMPLETION_CHANNEL_CAPACITY);
+    let (tx, mut rx) = rt::sync::mpsc::channel::<((u32, u64), bool)>(COMPLETION_CHANNEL_CAPACITY);
 
     loop {
-        tokio::select! {
+        rt::select! {
             _ = cancel.cancelled() => {
                 tracing::info!(topic = %req_topic, "responder poller cancelled");
                 break;
@@ -1186,7 +1175,7 @@ async fn run_responder_poller_inner(
                             let message_payload = received.message.payload.to_vec();
                             let message_headers = extract_metadata_from_message(&received.message);
                             let reply_hdrs = reply_headers_from_message(&received.message);
-                            r2e_core::rt::spawn(async move {
+                            rt::spawn(async move {
                                 let ok = handle_request(
                                     &bus, type_id, &message_payload, message_headers, reply_hdrs,
                                 )
@@ -1212,10 +1201,7 @@ async fn run_responder_poller_inner(
                 .await;
         }
     };
-    if r2e_core::rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain)
-        .await
-        .is_err()
-    {
+    if rt::timeout(COMPLETION_DRAIN_TIMEOUT, drain).await.is_err() {
         tracing::warn!(
             topic = %req_topic,
             "timed out draining responder completions; \

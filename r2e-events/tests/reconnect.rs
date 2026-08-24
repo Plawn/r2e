@@ -5,12 +5,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use r2e_events::backend::reconnect_loop;
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::CancelToken;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn no_reconnect_runs_inner_exactly_once() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
 
     let c = calls.clone();
     // reconnect = false → exit after the first attempt, no backoff sleep.
@@ -26,7 +26,7 @@ async fn no_reconnect_runs_inner_exactly_once() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pre_cancelled_token_still_runs_inner_once() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
     cancel.cancel();
 
     let c = calls.clone();
@@ -43,7 +43,7 @@ async fn pre_cancelled_token_still_runs_inner_once() {
 #[tokio::test(flavor = "multi_thread")]
 async fn reconnects_until_cancelled() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let cancel = CancellationToken::new();
+    let cancel = CancelToken::new();
 
     let c = calls.clone();
     // Cancel on the second attempt: the loop reconnects once (one ~1s backoff),
