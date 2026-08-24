@@ -136,6 +136,20 @@ that gets DI, guards, interceptors, OpenAPI, and TestApp support for free.
 **Reach for the R2E construct first.** Dropping to raw axum forfeits
 compile-time checking and framework integration.
 
+**What R2E promises.** The public surface is **R2E types**, under `r2e::http`
+and `r2e::prelude` — that is what R2E commits to keeping working. Many of those
+types are axum's today (`Json`, `Path`, `Router`, …), but you should reach them
+through `r2e::…` names, and implement R2E's own contracts rather than axum's:
+`IntoHttpResponse` for response conversion (+ the one-line
+`r2e::http::impl_into_response!` bridge), and `FromRequestPartsVia` for
+bean-backed extractors. Do NOT add `axum` to your `Cargo.toml`.
+
+When you genuinely need something R2E does not re-export, use the explicit
+escape hatch — `r2e::http::axum_compat` (`use r2e::http::axum_compat::axum;`).
+It is deliberately greppable: importing from it couples your app to the axum
+backend and steps outside the promise above. Prefer asking for a re-export from
+`r2e::http` over spreading `axum_compat` imports.
+
 | You want | Do NOT write | Write instead |
 |---|---|---|
 | Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` (struct- or param-level); custom identities via `FromValidatedJwtClaims` |
@@ -156,7 +170,8 @@ compile-time checking and framework integration.
 Escape-hatch ladder when you genuinely need raw axum (each rung trades
 integration for control): 1. `#[any]`/`#[fallback]` controller routes →
 2. `merge_router(router)` (raw fragment, shares state + global plugins, no DI) →
-3. `with_layer_fn(|router| ...)` (transform the final `Router`).
+3. `with_layer_fn(|router| ...)` (transform the final `Router`) →
+4. `r2e::http::axum_compat` (the raw axum API, off the supported surface).
 
 ---
 
@@ -180,7 +195,8 @@ Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP ver
 `RegisterModule`, `BeanLookup`), plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
 (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
-`IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`, `SseBroadcaster`, `SseTopic`),
+`IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,
+`SseBroadcaster`, `SseTopic`),
 type aliases (`JsonResult`, `ApiResult`, `StatusResult`), events (`EventBus`,
 `LocalEventBus`), and with features: multipart (`TypedMultipart`, `UploadedFile`)
 and WebSocket (`WsStream`, `WsBroadcaster`, `WsRooms`).
@@ -310,7 +326,8 @@ let user = db.insert(&u).await.http_context("inserting user")?;  // via HttpErro
 
 ### `#[derive(ApiError)]` — custom error types (recommended)
 
-Generates `Display`, `IntoResponse`, and `std::error::Error`:
+Generates `Display`, `IntoHttpResponse` (plus the `IntoResponse` bridge impl,
+so the type is returnable from a handler), and `std::error::Error`:
 
 ```rust
 #[derive(Debug, ApiError)]
@@ -328,6 +345,28 @@ pub enum MyError {
     Http(#[from] HttpError),
 }
 ```
+
+### Hand-written response types
+
+When `#[derive(ApiError)]` does not fit, implement **`IntoHttpResponse`** (R2E's
+contract) and emit the backend bridge with one macro line — do NOT implement
+axum's `IntoResponse` yourself:
+
+```rust
+use r2e::prelude::*;                       // IntoHttpResponse, Response, ...
+
+impl IntoHttpResponse for MyError {
+    fn into_http_response(self) -> Response {
+        (StatusCode::CONFLICT, Json(serde_json::json!({ "error": "conflict" })))
+            .into_response()
+    }
+}
+
+r2e::http::impl_into_response!(MyError);   // bridge; non-generic types only
+```
+
+`impl_into_response!` is what keeps handler composition working: `Result<T, E>`
+and `(StatusCode, T)` reach the HTTP backend through it.
 
 ### `map_error!` — bulk From impls
 

@@ -238,6 +238,72 @@ problem — extend the same pattern:
 A swap then rewrites two bridge impls instead of 32 scattered ones.
 Cost: moderate; touches `r2e-macros` codegen and every extractor.
 
+**Done (phase 7).** Re-measured first: the "24 `FromRequestParts` impls" number
+predates the DI/extractor refactor. In `src/` today (worktrees, tests, benches
+and examples excluded) there are **5 hand-written** impls plus **3 macro
+emissions**, and the bean-backed extractors (`AuthenticatedUser`, `Tenant<T>`,
+`TenantId`) already implement `FromRequestPartsVia` — the R2E trait 3b asks
+for exists and is in use. So the extract half of 3b was largely already paid;
+what phase 7 did was decide, site by site, which of the survivors is a genuine
+bridge and write the list down.
+
+#### Extract side — disposition of the 8 sites
+
+| site | disposition | why |
+|---|---|---|
+| `r2e-core/src/web/extract.rs` `Via<T, M>` | **stays — the bridge** | *The* reverse adapter `FromRequestPartsVia` → backend. A swap rewrites this one impl. That is the 3b deliverable, not debt. |
+| `r2e-core/src/web/extract.rs` `PeerAddr` | **stays — named bridge point** | Emitted into the generated handler's argument tuple *and* usable as a route-method parameter. Both positions are extracted by the backend's `Handler`, not by R2E. |
+| `r2e-core/src/web/extract.rs` `BeanExtract<T, I>` | **stays — named bridge point** | Exists *for* hand-written backend handlers merged via `merge_router` (now `axum_compat` territory, §5.3d). Being a backend extractor is its entire purpose. |
+| `r2e-core/src/builtins/request_id.rs` `RequestId` | **stays — named bridge point** (extract); **migrated** (response) | Documented route-method parameter. Its `IntoResponse` impl became `IntoHttpResponse`. |
+| `r2e-scheduler/src/lib.rs` `SchedulerHandle` | **stays — named bridge point** | Same: documented route-method parameter. |
+| `r2e-macros` `controller_codegen.rs:252` + `:311` (`__R2eRequestData_<C>`) | **stays — named bridge point** | This IS the generated extractor the backend invokes per request; its *fields* already go through `FromRequestPartsVia` with inferred markers. Removing it would mean removing the boundary itself. |
+| `r2e-macros` `params_derive.rs:230` (`#[derive(Params)]`) | **stays — named bridge point** | Same, for user parameter structs used as route-method parameters. |
+
+The rejected alternative — wrapping **every** route-method parameter in
+`Via<T, M>`, the way identity parameters already are — would collapse the last
+five rows into the `Via` bridge, at the price of one inferred marker generic per
+handler parameter: measurably worse compile times on wide controllers, and
+`E0283`-shaped errors landing on *user* types (`Json<T>`, `Path<T>`) whenever
+inference stalls. Not worth it for five impls; revisit only alongside 3c.
+
+None of the survivors names `axum` directly — every one goes through
+`r2e_http`'s re-exported names, which is why the axum source baseline did not
+move on the extract side. Each is annotated in place ("Named bridge point (plan
+§5.3b)") and the full list is duplicated in the `r2e-core/src/web/extract.rs`
+module docs, so the list is findable from the code and not only from here.
+
+#### Response side — `IntoHttpResponse` + `impl_into_response!`
+
+Shipped as specified. `r2e_http::response::IntoHttpResponse` is the R2E
+contract; all 7 hand-written impls (`HttpError`, `MultipartError`, `ParamError`,
+`RequestId`, `SecurityError`, `TenantError`, `OidcError`) and the
+`#[derive(ApiError)]` emission implement it.
+
+The bridge is a **macro**, `r2e_http::impl_into_response!` (re-exported as
+`r2e::http::impl_into_response!`), not a blanket impl. Coherence forces this:
+
+- `impl<T: IntoHttpResponse> IntoResponse for T` — the impl 3b would want — is
+  an orphan impl (foreign trait, no local type). Not writable, anywhere.
+- The mirror, `impl<T: IntoResponse> IntoHttpResponse for T`, *is* legal in
+  `r2e-http`, but it conflicts with every per-type `IntoHttpResponse` impl, so
+  the migration could not happen at all; and it would leave the backend's trait
+  as the one R2E types implement, i.e. change nothing.
+- A `Respond<T>` wrapper applied by handler codegen (the `Via` trick) does not
+  work either: handler return types *compose* (`Result<Json<T>, HttpError>`,
+  `(StatusCode, T)`), and those composing impls are the backend's — they demand
+  `HttpError: IntoResponse` at the leaf however the outside is wrapped. Mirroring
+  the whole composition surface into `IntoHttpResponse` was not worth it.
+
+So the macro emits the delegating backend impl next to each R2E impl. The
+backend contract is named in exactly two places — the macro body, and the
+`#[derive(ApiError)]` emission (which cannot use the macro: the derived type may
+be generic). A swap rewrites those two.
+
+**No user-visible break**: the bridge keeps every migrated type returnable from
+a handler, composition is unchanged, and a user's own
+`impl IntoResponse for MyError` still compiles (the backend trait is still
+re-exported). `IntoHttpResponse` joins the prelude.
+
 ### 3c — `Router` newtype (expensive — decide explicitly, do not drift into it)
 
 `Router`, `MethodRouter`, `routing::{get,post,…}`, `middleware::from_fn`, and
@@ -254,6 +320,17 @@ that a real HTTP-layer swap also means replacing tower `Layer`/`Service`,
 a swap, it only buys the *option* of one. Revisit if and when a concrete
 second backend is on the roadmap.
 
+**DECISION (2026-08-24): DEFERRED — do not implement.** Recorded at phase 7,
+alongside the §5.3d decision that was said to gate it. Note that 3d landing as
+option A does *not* pull 3c in: option A promises "R2E **types**", which
+`r2e::http::Router` already satisfies by name, and `axum_compat` is what makes
+the remaining identity coupling explicit rather than accidental. The trigger to
+revisit is unchanged and concrete: **a second HTTP backend actually on the
+roadmap**. Absent that, wrapping `Router` would touch macro codegen, every
+plugin's `configure`, `r2e-static`, `r2e-grpc`, `r2e-test` and the `r2e-cli`
+templates to buy an option nobody has taken. Do not drift into it; re-open this
+section instead.
+
 ### 3d — decide what users see
 
 Today `use r2e::prelude::*` hands users `Json`, `Path`, `Query`, `Router` —
@@ -267,6 +344,34 @@ Pick one and write it down in `llm.txt`:
 
 (A) is consistent with the stated goal; (B) is cheaper and consistent with how
 `r2e-http` is documented today. This choice gates 3c.
+
+**DECISION (user, 2026-08-24): option (A).** Implemented in phase 7.
+
+The promise, as now written in `llm.txt`: the public surface is **R2E types**
+under `r2e::http` / `r2e::prelude`, plus R2E's own contracts —
+`IntoHttpResponse` for responses, `FromRequestPartsVia` for extraction. Apps do
+not add `axum` to their `Cargo.toml`.
+
+Consequences, all shipped:
+
+- New module `r2e-http/src/axum_compat.rs` — `pub use axum;` plus
+  `pub use axum::*;`, re-exported as `r2e::http::axum_compat`. Its doc comment
+  states plainly that importing from it couples the app to the axum backend and
+  steps outside the promise. It is deliberately **greppable** (`rg axum_compat`):
+  the point is not to forbid the coupling but to make each instance a visible,
+  reviewable choice instead of an unexamined `Cargo.toml` line.
+- The escape-hatch ladder in `llm.txt` gains a fourth rung
+  (`#[any]`/`#[fallback]` → `merge_router` → `with_layer_fn` → `axum_compat`).
+- `llm.txt`'s "Coming from Axum" section states the promise up front, and the
+  ApiError/error docs point at `IntoHttpResponse` + `impl_into_response!` rather
+  than at axum's `IntoResponse`.
+- Option (A) does **not** drag 3c in — see the decision recorded there.
+
+What (A) deliberately does *not* claim: R2E types are still axum types by
+identity (`r2e::http::Json` **is** `axum::Json`). Option A is a promise about
+the **names and contracts** users depend on, which is what bounds the blast
+radius of a swap; it is not a claim that the identities are already abstract.
+`axum_compat` is where that honesty lives.
 
 ## 6. Recommended sequencing
 
@@ -307,16 +412,23 @@ Status as of phase 6 (the last phase on this branch).
   break (phases 1–2f) plus, from phase 6, the `rt::io` / `rt::TcpStream`
   additions and the 3a re-sourcing (flagged explicitly as **not** a type
   change).
-- **NOT MET, DELIBERATELY** — the axum half of the goal ("the amount of R2E
-  code that *names* axum types is small enough that swapping the HTTP layer is
-  bounded") stops at 3a. Steps **3b** (R2E-owned `FromParts` /
-  `IntoHttpResponse`) and **3c** (`Router` newtype) are out of scope for this
-  branch: both are gated on the **§5.3d** decision — (A) "R2E types, axum
-  behind an escape hatch" vs (B) "axum, ergonomically wrapped" — which is a
-  user's call, not a refactor. The 14 remaining `axum::` occurrences are all in
-  `r2e-http/src/` and are exactly that deferred surface (see the 3a table).
-  Until 3d is decided, `r2e-http` remains a re-export shim by design, and the
-  baseline is the measurement of what 3b/3c would cost.
+- **DONE (phase 7)** — **§5.3d decided: option (A)**, and **3b shipped**.
+  `r2e-http` is no longer only a re-export shim: it owns `IntoHttpResponse` +
+  `impl_into_response!`, and `r2e-core` owns `FromRequestPartsVia` + `Via<T, M>`.
+  Every impl of a *backend* contract that survives is either the bridge itself
+  or one of the 7 named bridge points tabulated in §5.3b, each annotated in the
+  source. `r2e::http::axum_compat` is the explicit escape hatch.
+  Source baseline: **16 occurrences / 10 files, all in `r2e-http/src/`** — 14 as
+  at 3a, plus the 2 in `axum_compat.rs`, which is the one reviewed *addition*
+  the baseline has ever taken (noted in the baseline header: that module's job
+  IS to name axum).
+
+- **NOT MET, DELIBERATELY** — step **3c** (`Router` newtype) remains out of
+  scope, now with a written decision (§5.3c, 2026-08-24) rather than as a
+  pending gate. `Router`, `MethodRouter`, `routing::*`, `middleware::from_fn`
+  and the `Handler` bound stay axum by identity; option (A) is a promise about
+  names and contracts, not identities. Re-open §5.3c when a concrete second
+  HTTP backend is on the roadmap.
 
 ---
 
@@ -334,8 +446,28 @@ before a phase is marked done.
 | 4 | Phase 2c+2d — events + 4 backends; scheduler/executor/tenant | done |
 | 5 | Phase 2e+2f — r2e-core internals + macro-emitted paths + clippy tightening | done |
 | 6 | Phase 3a — re-source neutral `http`/`bytes` types + docs/llm.txt/CHANGELOG sweep | done |
+| 7 | Phase 3b + 3d — `IntoHttpResponse` bridge, extract-side re-measure + named bridge surface; §5.3d option A (`axum_compat`), §5.3c deferral written down | done |
 
-Phases 3b/3c stay out of this branch, gated on the §5.3d decision (A vs B).
+Phase 3c stays out of this branch **by decision**, not by gating — see §5.3c.
+
+Phase 7 notes for the record:
+
+- The baseline exception. `scripts/boundaries/src-baseline-axum.txt` gained a
+  *new* file, `r2e-http/src/axum_compat.rs:2` — normally a CI failure, since the
+  baseline only ever shrinks. It is a reviewed exception (the module exists to
+  name axum), documented both in the baseline header — `write_baseline()` in
+  `scripts/check-source-boundary.sh` emits that paragraph for the axum group, so
+  `--update` cannot silently drop it — and here. Nothing else may be added
+  without the same kind of written decision.
+- `cargo test -p r2e-scheduler` is red on this branch **before** phase 7 as well
+  (11 × `E0599: no method named start_paused on RuntimeBuilder`): the crate's
+  dev-dependency enables `tokio/test-util`, but `RuntimeBuilder::start_paused`
+  is gated on `r2e-rt`'s own `test-util` feature, which nothing in that
+  dev-dependency chain turns on. Leftover from 2f's feature-forwarding. Not
+  fixed here on purpose — the obvious one-line fix (adding
+  `r2e-core/test-util` to those dev-dependencies) re-introduces exactly the
+  feature-unification hazard §4's 2f note argues against, so it wants its own
+  decision.
 
 Phase 6 also carried two small items that belong to the record:
 

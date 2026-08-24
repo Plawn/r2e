@@ -11,7 +11,15 @@
 # same PR so the boundary stays honest.
 #
 # Regenerate with: scripts/check-source-boundary.sh --update
+#
+# ONE reviewed exception to "only ever shrinks":
+# r2e-http/src/axum_compat.rs was ADDED at phase 7 (plan §5.3d,
+# decision A, 2026-08-24). That module IS the explicit escape hatch —
+# naming axum is its entire job — so it is boundary surface by design,
+# not debt to shrink. Nothing else may appear here without the same
+# kind of written decision in the plan.
 
+r2e-http/src/axum_compat.rs:2
 r2e-http/src/body.rs:1
 r2e-http/src/extract.rs:2
 r2e-http/src/lib.rs:2

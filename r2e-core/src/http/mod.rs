@@ -1,3 +1,4 @@
+pub use r2e_http::axum_compat;
 pub use r2e_http::header;
 pub use r2e_http::{body, extract, labels, middleware, response, routing};
 #[cfg(feature = "ws")]

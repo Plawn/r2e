@@ -110,6 +110,15 @@ write_baseline() {
         echo "# same PR so the boundary stays honest."
         echo "#"
         echo "# Regenerate with: scripts/check-source-boundary.sh --update"
+        if [ "$group" = "axum" ]; then
+            echo "#"
+            echo "# ONE reviewed exception to \"only ever shrinks\":"
+            echo "# r2e-http/src/axum_compat.rs was ADDED at phase 7 (plan §5.3d,"
+            echo "# decision A, 2026-08-24). That module IS the explicit escape hatch —"
+            echo "# naming axum is its entire job — so it is boundary surface by design,"
+            echo "# not debt to shrink. Nothing else may appear here without the same"
+            echo "# kind of written decision in the plan."
+        fi
         echo
         cat "$current"
     } >"$file"

@@ -7,6 +7,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`r2e::http::IntoHttpResponse`** — R2E's own response-conversion contract,
+  the counterpart of `FromRequestPartsVia` on the extract side. R2E error types
+  (`HttpError`, `ParamError`, `MultipartError`, `RequestId`, `SecurityError`,
+  `TenantError`, `OidcError`) and everything `#[derive(ApiError)]` generates now
+  implement **this** trait instead of the HTTP backend's `IntoResponse`, and
+  bridge to the backend through a single macro:
+
+  ```rust
+  impl IntoHttpResponse for MyError {
+      fn into_http_response(self) -> Response { /* … */ }
+  }
+  r2e::http::impl_into_response!(MyError);
+  ```
+
+  **Not a break**: the bridge emits the backend impl, so every type that was
+  returnable from a handler still is, and `Result<T, E>` / `(StatusCode, T)`
+  composition is unchanged. A hand-written `impl IntoResponse for MyError` also
+  keeps working — `IntoHttpResponse` is the recommended way, not the only one.
+  The macro is a macro rather than a blanket impl because
+  `impl<T: IntoHttpResponse> IntoResponse for T` is an orphan impl and the
+  mirror blanket would forbid all per-type impls; see `r2e-http/src/response.rs`.
+  `IntoHttpResponse` is in the prelude.
+
+- **`r2e::http::axum_compat`** — the explicit escape hatch to the raw `axum`
+  API (`use r2e::http::axum_compat::axum;`), for the cases a re-export shim
+  cannot cover: tower layers with axum-typed bounds, `axum::debug_handler`,
+  third-party crates whose API is spelled in axum types. This settles §5.3d of
+  `plans/runtime-http-dependency-containment.md` as **decision A**: R2E's public
+  promise is *R2E types* under `r2e::http` / `r2e::prelude` plus R2E's own
+  contracts (`IntoHttpResponse`, `FromRequestPartsVia`); axum stays reachable,
+  but only through a name you have to type on purpose. Apps should still not
+  add `axum` to their own `Cargo.toml`.
+
 - **New crate `r2e-rt`** — the async-runtime facade, sitting at the **bottom**
   of the workspace dependency graph (below `r2e-http`). It is now the single
   workspace member allowed to name `tokio` / `tokio-util` / `tokio-stream`

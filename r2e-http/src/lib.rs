@@ -19,7 +19,11 @@
 //!
 //! Everything else that still speaks the backend's contracts is listed as a
 //! named bridge point in `plans/runtime-http-dependency-containment.md` §5.3b.
+//!
+//! [`axum_compat`] is the explicit escape hatch for the rest of axum
+//! (§5.3d, decision A).
 
+pub mod axum_compat;
 pub mod body;
 pub mod extract;
 pub mod header;
