@@ -7,7 +7,6 @@ use diesel::Connection;
 use r2e_core::config::LiveConfig;
 use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ServiceComponent};
-use tokio_util::sync::CancellationToken;
 
 /// Error building or rotating a Diesel [`DbPool`].
 #[derive(Debug, Clone)]
@@ -203,11 +202,7 @@ where
         ctx.get::<Self>()
     }
 
-    // `ServiceComponent::start` still hands over the raw tokio-util token — the
-    // trait flips to `CancelToken` when r2e-core itself moves onto the facade.
-    // Convert once here so the body only ever sees the facade type.
-    async fn start(self, shutdown: CancellationToken) {
-        let shutdown = CancelToken::from(shutdown);
+    async fn start(self, shutdown: CancelToken) {
         let this = &self;
         this.inner
             .url

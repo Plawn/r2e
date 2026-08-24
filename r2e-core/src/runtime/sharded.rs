@@ -1,7 +1,7 @@
 //! SO_REUSEPORT sharded serving — option A of the thread-per-core plan.
 //!
 //! When `server.workers` is configured, R2E serves HTTP with `N` worker
-//! threads, each running its own `current_thread` Tokio runtime with its own
+//! threads, each running its own `current_thread` runtime with its own
 //! `SO_REUSEPORT` listener bound to the same address. The kernel distributes
 //! incoming connections across the per-worker listeners, so there is no
 //! work-stealing on the accept path. Axum (and the whole ecosystem) is kept
@@ -116,11 +116,12 @@ pub const UNSUPPORTED_PLATFORM_MSG: &str =
 ))]
 mod imp {
     use std::net::SocketAddr;
-    use tokio_util::sync::CancellationToken;
+
+    use crate::rt::CancelToken;
 
     /// Create a `SO_REUSEPORT` listener bound to `addr`, returned as a
     /// non-blocking `std::net::TcpListener` ready for
-    /// `tokio::net::TcpListener::from_std`.
+    /// `rt::TcpListener::from_std`.
     ///
     /// `set_nonblocking(true)` is MANDATORY — `from_std` requires it.
     fn make_reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
@@ -137,7 +138,7 @@ mod imp {
         socket.bind(&addr.into())?;
         socket.listen(1024)?;
         let std_listener: std::net::TcpListener = socket.into();
-        // MANDATORY for tokio::net::TcpListener::from_std.
+        // MANDATORY for rt::TcpListener::from_std.
         std_listener.set_nonblocking(true)?;
         Ok(std_listener)
     }
@@ -147,7 +148,7 @@ mod imp {
     ///
     /// `addrs` holds the resolved bind-address candidates, in resolver order.
     /// The first listener tries each candidate until one binds (mirroring
-    /// `tokio::net::TcpListener::bind`'s multi-address fallback); the
+    /// [`rt::bind_tcp`](crate::rt::bind_tcp)'s multi-address fallback); the
     /// remaining workers then bind that listener's concrete `local_addr()`.
     /// Going through `local_addr()` also makes port `0` work: the kernel
     /// assigns the ephemeral port once, and every worker shares it.
@@ -162,8 +163,8 @@ mod imp {
         addrs: &[SocketAddr],
         workers: usize,
         tcp_nodelay: bool,
-        control_plane: tokio::runtime::Handle,
-        cancel_token: CancellationToken,
+        control_plane: crate::rt::RuntimeHandle,
+        cancel_token: CancelToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Pre-create the listeners on the main thread so that a bind failure
         // surfaces synchronously as a run error (rather than from inside a
@@ -183,7 +184,7 @@ mod imp {
             }
         }
         let Some(first_listener) = first_listener else {
-            // Mirror tokio's bind: surface the last bind error.
+            // Mirror `rt::bind_tcp`: surface the last bind error.
             return Err(match last_err {
                 Some(e) => Box::new(e),
                 None => format!("no addresses to bind for sharded serving: {addrs:?}").into(),
@@ -212,14 +213,14 @@ mod imp {
                     // lazy-bean first-touch run on the main multi-thread
                     // runtime, not this worker's current_thread runtime.
                     crate::rt::set_control_plane(control_plane);
-                    let rt = tokio::runtime::Builder::new_current_thread()
+                    let rt = crate::rt::RuntimeBuilder::new_current_thread()
                         .enable_all()
                         .build()
                         .map_err(|e| format!("failed to build worker runtime: {e}"))?;
                     rt.block_on(async move {
                         // `from_std` must run inside the worker's runtime
                         // context.
-                        let listener = tokio::net::TcpListener::from_std(std_listener)
+                        let listener = crate::rt::TcpListener::from_std(std_listener)
                             .map_err(|e| format!("failed to adopt worker listener: {e}"))?;
                         let svc = router.into_make_service_with_connect_info::<SocketAddr>();
                         let shutdown = child_token.cancelled_owned();

@@ -57,13 +57,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `tokio_util::sync::CancellationToken`, so a call site that needs the raw token
   adds `.into()`.
 
+- **BREAKING (`r2e-core`)**: `ServiceComponent::start` now takes
+  `r2e::rt::CancelToken` instead of `tokio_util::sync::CancellationToken`.
+  Hand-written background services update their signature (`async fn start(self,
+  shutdown: CancelToken)`); `#[derive(BackgroundService)]` users update the
+  `run` method it delegates to (`async fn run(&self, shutdown: CancelToken)`).
+  With that flip `r2e-tenant`, `r2e-data-sqlx` and `r2e-data-diesel` dropped
+  their last `tokio-util` dependency.
+
+- **`r2e-core` no longer depends on `tokio` / `tokio-util` / `tokio-stream` at
+  all** (dev-dependencies aside): every internal call site — the builder and
+  prepared-server paths, sharded serving, lazy-bean resolution, live-config
+  watching, health, SSE/WS, dev-reload — goes through `r2e_core::rt`. Sharded
+  serving in particular is now expressible on the facade thanks to two
+  additions: `rt::RuntimeHandle` (a wrapper over `tokio::runtime::Handle`, now
+  the type of `rt::current_handle`, `rt::control_plane_handle`,
+  `rt::set_control_plane` and `Runtime::handle`) and `rt::TcpListener`
+  (re-exported, since axum's `serve` takes the concrete type). Also new:
+  `rt::block_in_place` and `CancelToken::cancelled_owned`.
+
 - `r2e-events` (+ the `iggy` / `kafka` / `pulsar` / `rabbitmq` backends),
   `r2e-scheduler`, `r2e-executor` and `r2e-tenant` now go through the `rt`
   facade for spawning, timers, sync primitives and `select!`, and **dropped
-  their direct `tokio` / `tokio-util` / `tokio-stream` dependencies**
-  (`r2e-tenant` keeps `tokio-util` only for the `ServiceComponent::start`
-  signature, which is still typed on the raw token). No behaviour change; the
-  four distributed backends needed no client-API escape hatch.
+  their direct `tokio` / `tokio-util` / `tokio-stream` dependencies**. No
+  behaviour change; the four distributed backends needed no client-API escape
+  hatch.
 
 - **r2e-observability**: `traced_reqwest_client` / `TraceContextMiddleware`
   now open an OpenTelemetry **client** span per outgoing request

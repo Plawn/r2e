@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use r2e::prelude::*;
 use r2e::r2e_executor::{Executor, PoolExecutor};
+use r2e::rt::{self, CancelToken};
 use serde::Serialize;
-use tokio_util::sync::CancellationToken;
 
 #[derive(Serialize)]
 struct ReportSummary {
@@ -77,7 +77,7 @@ impl ReportController {
     /// Body runs on the `PoolExecutor`; returns `Result<JobHandle<Vec<u8>>, RejectedError>`.
     #[async_exec]
     async fn generate_pdf(&self, id: u64) -> Vec<u8> {
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        rt::sleep(Duration::from_millis(150)).await;
         format!("PDF for report #{id}").into_bytes()
     }
 }
@@ -89,10 +89,10 @@ pub struct TickWorker {
 }
 
 impl TickWorker {
-    async fn run(&self, shutdown: CancellationToken) {
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
+    async fn run(&self, shutdown: CancelToken) {
+        let mut interval = rt::interval(Duration::from_secs(1));
         loop {
-            tokio::select! {
+            rt::select! {
                 _ = shutdown.cancelled() => break,
                 _ = interval.tick() => {
                     let counter = self.counter.clone();

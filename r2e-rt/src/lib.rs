@@ -19,7 +19,7 @@
 //!   [`yield_now`], [`in_runtime`]
 //! - Control-plane handle: [`set_control_plane`], [`current_handle`]
 //! - Time: [`sleep`], [`sleep_until`], [`timeout`], [`interval`], [`Instant`]
-//! - Network: [`bind_tcp`], [`lookup_host`]
+//! - Network: [`bind_tcp`], [`lookup_host`], [`TcpListener`]
 //! - Signals: [`shutdown_signal`]
 //! - Cancellation: [`CancelToken`], [`CancelDropGuard`]
 //! - Synchronisation: the [`sync`] module (`mpsc`, `oneshot`, `broadcast`,
@@ -27,7 +27,8 @@
 //! - Async control flow: [`select!`](select), [`pin!`](pin), [`join!`](join),
 //!   [`JoinSet`]
 //! - Streams: the [`stream`] re-export of `tokio-stream`
-//! - Runtime construction: [`RuntimeBuilder`], [`Runtime`], [`block_on`]
+//! - Runtime construction: [`RuntimeBuilder`], [`Runtime`], [`RuntimeHandle`],
+//!   [`block_on`], [`block_in_place`]
 //!
 //! # Wrapped vs re-exported
 //!
@@ -61,11 +62,14 @@
 //! permanently allowlisted, by design:
 //!
 //! - **this crate** — it *is* the facade.
-//! - `r2e-core/src/runtime/sharded.rs` — constructs `current_thread` worker
-//!   runtimes via `tokio::runtime::Builder` directly. Runtime *construction* is
-//!   the sharding mechanism itself, not a touchpoint to abstract.
 //! - `r2e-test`, `r2e-devservices` — test harnesses; they legitimately own a
 //!   runtime.
+//!
+//! `r2e-core/src/runtime/sharded.rs` used to be listed here — building the
+//! per-worker `current_thread` runtimes *is* the sharding mechanism. It no
+//! longer is: [`RuntimeBuilder`], [`RuntimeHandle`] and [`TcpListener`] express
+//! everything it needs, so the sharded path goes through the facade like
+//! everything else.
 
 use std::future::Future;
 use std::io;
@@ -83,6 +87,15 @@ use std::time::Duration;
 // three are runtime-flavour-neutral; re-exporting them keeps migration
 // straightforward if the runtime ever changes.
 pub use tokio::time::{Instant, Interval, MissedTickBehavior};
+
+/// The async TCP listener, re-exported.
+///
+/// Not wrapped: axum's `serve` takes this concrete type, so a newtype would be
+/// unwrapped at every call site and buy nothing. Naming it `rt::TcpListener`
+/// still keeps `tokio::net` out of the rest of the workspace — a runtime swap
+/// rewrites this line and the two constructors below ([`bind_tcp`],
+/// `TcpListener::from_std`).
+pub use tokio::net::TcpListener;
 
 // ── JoinError ─────────────────────────────────────────────────────────────────
 
@@ -206,7 +219,7 @@ thread_local! {
     /// later apps spawn onto a possibly-dropped runtime. The thread-local is set
     /// only on sharded worker threads (see [`set_control_plane`]), scoping the
     /// control plane to the app that created the worker.
-    static CONTROL_PLANE: std::cell::RefCell<Option<tokio::runtime::Handle>> =
+    static CONTROL_PLANE: std::cell::RefCell<Option<RuntimeHandle>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -216,7 +229,7 @@ thread_local! {
 /// within a request handler (anything reaching [`spawn_ctl`], including
 /// lazy-bean first-touch) is routed onto the caller's main multi-thread runtime
 /// rather than the worker's `current_thread` runtime.
-pub fn set_control_plane(handle: tokio::runtime::Handle) {
+pub fn set_control_plane(handle: RuntimeHandle) {
     CONTROL_PLANE.with(|cp| *cp.borrow_mut() = Some(handle));
 }
 
@@ -225,17 +238,17 @@ pub fn set_control_plane(handle: tokio::runtime::Handle) {
 /// Callers outside the facade should prefer [`spawn_ctl`]; this is exposed for
 /// the one place that needs to *block* on the control plane rather than spawn
 /// onto it (lazy-bean first-touch resolution).
-pub fn control_plane_handle() -> Option<tokio::runtime::Handle> {
+pub fn control_plane_handle() -> Option<RuntimeHandle> {
     CONTROL_PLANE.with(|cp| cp.borrow().clone())
 }
 
 /// The handle of the runtime currently driving this thread.
 ///
-/// Thin wrapper over `tokio::runtime::Handle::current()` kept inside the facade
-/// so call sites do not touch `tokio::runtime` directly. Panics if called
-/// outside a runtime context (same contract as the underlying tokio call).
-pub fn current_handle() -> tokio::runtime::Handle {
-    tokio::runtime::Handle::current()
+/// Shorthand for [`RuntimeHandle::current`]. Panics if called outside a runtime
+/// context.
+#[must_use]
+pub fn current_handle() -> RuntimeHandle {
+    RuntimeHandle::current()
 }
 
 /// Spawn a task on the control-plane runtime, returning a [`JobHandle<T>`].
@@ -255,7 +268,7 @@ where
     T: Send + 'static,
 {
     match control_plane_handle() {
-        Some(handle) => JobHandle(handle.spawn(future)),
+        Some(handle) => handle.spawn(future),
         None => JobHandle(tokio::spawn(future)),
     }
 }
@@ -313,6 +326,21 @@ pub async fn yield_now() {
     tokio::task::yield_now().await;
 }
 
+/// Run a blocking section inside an async task without starving the runtime.
+///
+/// Tells the runtime this thread is about to block so it can move the other
+/// tasks it was driving elsewhere. Only valid on a multi-thread runtime — it
+/// **panics** on a `current_thread` one, so gate it on
+/// [`RuntimeHandle::is_multi_thread`].
+///
+/// Equivalent to `tokio::task::block_in_place`.
+pub fn block_in_place<F, T>(f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    tokio::task::block_in_place(f)
+}
+
 /// Whether the calling thread is currently driven by a runtime.
 ///
 /// The non-panicking probe behind [`current_handle`]: synchronous paths that
@@ -333,13 +361,11 @@ pub fn interval(period: Duration) -> Interval {
 
 /// Bind a TCP listener on `addr`.
 ///
-/// The concrete listener type remains `tokio::net::TcpListener` because axum
-/// requires it directly.  The binding itself goes through this facade so the
-/// call site is isolated.
-pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(
-    addr: A,
-) -> io::Result<tokio::net::TcpListener> {
-    tokio::net::TcpListener::bind(addr).await
+/// The concrete listener type remains [`TcpListener`] because axum requires it
+/// directly.  The binding itself goes through this facade so the call site is
+/// isolated.
+pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+    TcpListener::bind(addr).await
 }
 
 /// Resolve `addr` to all its [`std::net::SocketAddr`] candidates using async DNS.
@@ -480,6 +506,14 @@ impl CancelToken {
         self.0.cancelled().await;
     }
 
+    /// The owned form of [`cancelled`](Self::cancelled): a `'static` future,
+    /// for the callers that must hand cancellation to something outliving the
+    /// borrow (axum's `with_graceful_shutdown`, a spawned task).
+    #[must_use]
+    pub fn cancelled_owned(self) -> impl Future<Output = ()> + Send + 'static {
+        self.0.cancelled_owned()
+    }
+
     /// Convert into a guard that cancels the token when dropped.
     ///
     /// The way to make cancellation survive the *uncontrolled* exits — a panic
@@ -551,8 +585,70 @@ impl Runtime {
 
     /// A handle to this runtime, for spawning onto it from elsewhere.
     #[must_use]
-    pub fn handle(&self) -> tokio::runtime::Handle {
-        self.0.handle().clone()
+    pub fn handle(&self) -> RuntimeHandle {
+        RuntimeHandle(self.0.handle().clone())
+    }
+}
+
+/// A cloneable handle to a runtime, used to reach it from another thread.
+///
+/// Wraps `tokio::runtime::Handle` so the sharded worker plumbing and the
+/// lazy-bean off-runtime resolution path never name `tokio::runtime`.
+#[derive(Clone, Debug)]
+pub struct RuntimeHandle(tokio::runtime::Handle);
+
+impl RuntimeHandle {
+    /// The handle of the runtime driving the current thread.
+    ///
+    /// # Panics
+    ///
+    /// If the calling thread is not driven by a runtime — use
+    /// [`try_current`](Self::try_current) (or [`in_runtime`]) when that is
+    /// possible.
+    #[must_use]
+    pub fn current() -> Self {
+        Self(tokio::runtime::Handle::current())
+    }
+
+    /// The handle of the runtime driving the current thread, or `None`.
+    #[must_use]
+    pub fn try_current() -> Option<Self> {
+        tokio::runtime::Handle::try_current().ok().map(Self)
+    }
+
+    /// Spawn a task onto *this* runtime, wherever the caller runs.
+    ///
+    /// Unlike [`spawn`], which uses the current thread's runtime.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+    )]
+    pub fn spawn<F, T>(&self, future: F) -> JobHandle<T>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        JobHandle(self.0.spawn(future))
+    }
+
+    /// Drive `future` to completion on this runtime, blocking the calling
+    /// thread.
+    ///
+    /// # Panics
+    ///
+    /// If called from a thread already being driven by a runtime — wrap it in
+    /// [`block_in_place`] when that is the case.
+    pub fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.0.block_on(future)
+    }
+
+    /// Whether this runtime is the work-stealing multi-thread flavour.
+    ///
+    /// The two things that need to know: [`block_in_place`] (panics on
+    /// `current_thread`) and the sharded control-plane check.
+    #[must_use]
+    pub fn is_multi_thread(&self) -> bool {
+        self.0.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
     }
 }
 

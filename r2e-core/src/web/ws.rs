@@ -21,9 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::http::ws::{Message, WebSocket};
+use crate::rt::sync::broadcast;
 use dashmap::DashMap;
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::sync::broadcast;
 
 // ── WsError ──────────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ impl WsStream {
 
     /// Receive the next message, or `None` if the connection is closed.
     pub async fn next(&mut self) -> Option<Result<Message, WsError>> {
-        use tokio_stream::StreamExt;
+        use crate::rt::stream::StreamExt;
         self.inner.next().await.map(|r| r.map_err(WsError::Recv))
     }
 
@@ -278,7 +278,7 @@ impl WsBroadcaster {
 
     /// Returns true when no sent message is still pending for any subscriber.
     ///
-    /// Matches [`tokio::sync::broadcast::Sender::is_empty`] — reflects the slowest
+    /// Matches [`broadcast::Sender::is_empty`] — reflects the slowest
     /// receiver, not a sum across receivers.
     pub fn is_empty(&self) -> bool {
         self.tx.is_empty()

@@ -20,10 +20,6 @@ example-openfga
 example-postgres
 example-sharded-bench
 example-websocket-chat
-r2e-core
-r2e-data-diesel
-r2e-data-sqlx
 r2e-devservices
 r2e-rt
-r2e-tenant
 r2e-test

@@ -13,6 +13,9 @@ description = "Core runtime for R2E web framework - AppBuilder, plugins, guards,
 [features]
 default = []
 ws = ["r2e-http/ws"]
+# Paused-clock runtimes for `#[r2e::test(start_paused = true)]`; forwarded to
+# the facade so the emitting macro never needs a tokio feature of its own.
+test-util = ["r2e-rt/test-util"]
 multipart = ["r2e-http/multipart"]
 quic = ["r2e-http/quic"]
 dev-reload = []
@@ -21,7 +24,6 @@ lazy-fallback-runtime = []
 [dependencies]
 r2e-http = {workspace = true}
 r2e-rt = {workspace = true}
-tokio = {workspace = true, features = ["full"]}
 tower = {workspace = true}
 tower-http = {workspace = true, features = ["catch-panic", "cors", "normalize-path", "set-header", "trace"]}
 tracing = {workspace = true}
@@ -33,8 +35,6 @@ garde = {workspace = true, features = ["email"]}
 form_urlencoded = {workspace = true}
 serde_yaml = {workspace = true}
 dotenvy = {workspace = true}
-tokio-util = {workspace = true}
-tokio-stream = {workspace = true, features = ["sync"]}
 uuid = {workspace = true}
 dashmap = {workspace = true}
 arc-swap = "1"

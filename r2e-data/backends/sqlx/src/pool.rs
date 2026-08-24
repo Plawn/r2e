@@ -11,7 +11,6 @@ use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ConfigError, ServiceComponent};
 use sqlx::pool::{PoolConnection, PoolOptions};
 use sqlx::{Database, Either, Error, Execute, Executor, Pool, SqlStr, Transaction};
-use tokio_util::sync::CancellationToken;
 
 /// How many times a `begin`/`acquire` is retried when it lands on a pool that
 /// was closed by a concurrent rotation.
@@ -212,11 +211,7 @@ where
         ctx.get::<Self>()
     }
 
-    // `ServiceComponent::start` still hands over the raw tokio-util token — the
-    // trait flips to `CancelToken` when r2e-core itself moves onto the facade.
-    // Convert once here so the body only ever sees the facade type.
-    async fn start(self, shutdown: CancellationToken) {
-        let shutdown = CancelToken::from(shutdown);
+    async fn start(self, shutdown: CancelToken) {
         let this = &self;
         this.inner
             .url

@@ -337,7 +337,7 @@ impl PluginBuildContext {
     /// from it — which is how `spawn_service` tasks stop.
     //
     // MUST (declared window, not covered by a test): a plugin that mints a
-    // standalone `CancellationToken::new()` and cancels it ONLY from this hook
+    // standalone `CancelToken::new()` and cancels it ONLY from this hook
     // leaves its task running on those two hookless exits. Derive the token
     // from one the framework cancels (the `ServeContext::shutdown_token()`
     // handed to `on_serve`, or relay it like `r2e-scheduler` does) whenever the

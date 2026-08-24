@@ -713,7 +713,7 @@ impl SseIdentityController {
         Item = Result<r2e_core::http::response::SseEvent, std::convert::Infallible>,
     > {
         let sub = self.user.0.clone();
-        use tokio_stream::wrappers::ReceiverStream;
+        use r2e_core::rt::stream::wrappers::ReceiverStream;
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         tx.send(Ok(r2e_core::http::response::SseEvent::default().data(sub)))
             .await

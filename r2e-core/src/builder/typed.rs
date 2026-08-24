@@ -24,10 +24,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// and register a shutdown hook that cancels it. Shared by
     /// [`spawn_service`](Self::spawn_service) and
     /// [`collect_service_sources`](Self::collect_service_sources); `run`
-    /// receives the [`CancellationToken`] and returns the service future.
+    /// receives the [`CancelToken`] and returns the service future.
     fn register_service<F, Fut>(mut self, run: F) -> Self
     where
-        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
+        F: FnOnce(CancelToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         // A CHILD of the app shutdown root, not a fresh token. The sync
@@ -377,7 +377,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// AppBuilder::new()
     ///     .on_drain(|state| async move {
     ///         state.get::<Readiness>().set_draining();
-    ///         tokio::time::sleep(Duration::from_secs(5)).await; // LB deregistration
+    ///         r2e::rt::sleep(Duration::from_secs(5)).await; // LB deregistration
     ///     })
     /// ```
     pub fn on_drain<F, Fut>(mut self, hook: F) -> Self

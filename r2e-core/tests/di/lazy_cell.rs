@@ -129,7 +129,7 @@ fn resolve_lazy_factory_falls_back_on_current_thread_runtime() {
 
 /// The single worker thread of `rt` — spawned tasks land there, so the id
 /// identifies where a control-plane-resolved factory actually ran.
-fn single_worker_id(rt: &tokio::runtime::Runtime) -> std::thread::ThreadId {
+fn single_worker_id(rt: &r2e_core::rt::Runtime) -> std::thread::ThreadId {
     rt.block_on(async {
         r2e_core::rt::spawn(async { std::thread::current().id() })
             .await
@@ -141,13 +141,13 @@ fn single_worker_id(rt: &tokio::runtime::Runtime) -> std::thread::ThreadId {
 fn resolve_lazy_factory_uses_control_plane_when_registered() {
     // A thread with no runtime of its own but a registered control-plane
     // handle (the sharded-worker situation) resolves on the control plane.
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = r2e_core::rt::RuntimeBuilder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
         .build()
         .unwrap();
     let worker_id = single_worker_id(&rt);
-    let handle = rt.handle().clone();
+    let handle = rt.handle();
     let (value, factory_thread) = std::thread::spawn(move || {
         r2e_core::rt::set_control_plane(handle);
         r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
@@ -167,13 +167,13 @@ fn resolve_lazy_factory_uses_control_plane_when_registered() {
 fn resolve_lazy_factory_control_plane_panic_resurfaces() {
     // A factory panic on the control plane is re-raised on the calling
     // thread with the original payload.
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = r2e_core::rt::RuntimeBuilder::new_multi_thread()
         .worker_threads(1)
         .enable_all()
         .build()
         .unwrap();
     let worker_id = single_worker_id(&rt);
-    let handle = rt.handle().clone();
+    let handle = rt.handle();
     // Side-channel: record where the factory ran before it panics, so the
     // test can't silently pass through the fallback-runtime path.
     let seen = Arc::new(std::sync::Mutex::new(None::<std::thread::ThreadId>));

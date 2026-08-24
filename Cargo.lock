@@ -2527,7 +2527,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -5758,8 +5757,6 @@ dependencies = [
  "socket2",
  "tempfile",
  "tokio",
- "tokio-stream",
- "tokio-util",
  "tower",
  "tower-http 0.7.0",
  "tracing",
@@ -5794,7 +5791,6 @@ dependencies = [
  "r2e-tenant",
  "sqlx",
  "tokio",
- "tokio-util",
  "tower",
 ]
 
@@ -6145,7 +6141,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tower",
  "tracing",
 ]

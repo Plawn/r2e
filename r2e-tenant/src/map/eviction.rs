@@ -187,14 +187,7 @@ where
         ctx.get::<Self>()
     }
 
-    // The one raw-token touchpoint left in this crate: `ServiceComponent::start`
-    // is still typed on `tokio_util::sync::CancellationToken`, because
-    // `#[derive(BackgroundService)]` emits that type into user code and flipping
-    // it is a user-visible break owned by phase 2e/2f of
-    // `plans/runtime-http-dependency-containment.md`. Convert at the boundary so
-    // the body stays on the facade.
-    async fn start(self, shutdown: tokio_util::sync::CancellationToken) {
-        let shutdown = CancelToken::from(shutdown);
+    async fn start(self, shutdown: CancelToken) {
         let interval = self.settings().sweep_interval();
         loop {
             rt::select! {

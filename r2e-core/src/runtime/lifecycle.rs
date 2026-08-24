@@ -35,7 +35,7 @@ pub type DrainHook<T> = ShutdownHook<T>;
 /// ```ignore
 /// let prepared = app.prepare("127.0.0.1:0");
 /// let stop = prepared.stop_handle();
-/// let server = tokio::spawn(prepared.run());
+/// let server = r2e::rt::spawn(prepared.run());
 /// // ... exercise the app ...
 /// stop.stop();
 /// server.await.unwrap().unwrap(); // resolves after graceful drain

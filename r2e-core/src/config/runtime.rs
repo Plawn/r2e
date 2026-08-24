@@ -7,8 +7,9 @@ use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 use arc_swap::ArcSwapOption;
-use tokio::sync::watch;
-use tokio_util::sync::CancellationToken;
+
+use crate::rt::sync::watch;
+use crate::rt::CancelToken;
 
 use super::{ConfigError, ConfigValue, FromConfigValue, R2eConfig};
 
@@ -22,7 +23,7 @@ pub struct ConfigProviderContext<'a> {
 #[derive(Clone, Debug)]
 pub struct ConfigWatchContext {
     profile: String,
-    shutdown: CancellationToken,
+    shutdown: CancelToken,
 }
 
 impl ConfigWatchContext {
@@ -141,7 +142,7 @@ pub async fn supervise_config_watch_with_backoff(
         // hold the graceful drain open for as long as it stays stuck.
         // `biased` checks cancellation before polling the watch, so a token
         // already cancelled on entry returns without touching the provider.
-        let outcome = tokio::select! {
+        let outcome = crate::rt::select! {
             biased;
             () = shutdown.cancelled() => return,
             outcome = provider.clone().watch(ctx.clone(), sink.clone()) => outcome,
@@ -160,9 +161,9 @@ pub async fn supervise_config_watch_with_backoff(
                     retry_in_ms = delay.as_millis() as u64,
                     "config provider watch failed — restarting"
                 );
-                tokio::select! {
+                crate::rt::select! {
                     () = shutdown.cancelled() => return,
-                    () = tokio::time::sleep(delay) => {}
+                    () = crate::rt::sleep(delay) => {}
                 }
                 delay = std::cmp::min(delay.saturating_mul(2), max_backoff);
             }
@@ -669,7 +670,7 @@ impl<T: FromConfigValue> LiveConfigReceiver<T> {
     {
         on_value(self.borrow_and_update()).await;
         loop {
-            tokio::select! {
+            crate::rt::select! {
                 _ = shutdown.cancelled() => break,
                 changed = self.changed() => {
                     if changed.is_err() {

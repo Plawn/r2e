@@ -48,10 +48,10 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::http::response::SseEvent;
+use crate::rt::stream::wrappers::errors::BroadcastStreamRecvError;
+use crate::rt::stream::wrappers::BroadcastStream;
+use crate::rt::sync::broadcast;
 use dashmap::DashMap;
-use tokio::sync::broadcast;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::wrappers::BroadcastStream;
 
 // ── SseBroadcaster ───────────────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ impl SseBroadcaster {
 
     /// Messages sent but not yet received by every subscriber.
     ///
-    /// Matches [`tokio::sync::broadcast::Sender::len`] — the count of values
+    /// Matches [`broadcast::Sender::len`] — the count of values
     /// still waiting for the slowest receiver, not a sum across receivers.
     pub fn len(&self) -> usize {
         self.tx.len()
@@ -203,7 +203,7 @@ fn msg_to_event(msg: SseMessage) -> SseEvent {
 /// Implements `Stream<Item = Result<SseEvent, Infallible>>` — ready to pass
 /// to `Sse::new()`.
 ///
-/// Internally backed by [`tokio_stream::wrappers::BroadcastStream`], which
+/// Internally backed by [`BroadcastStream`], which
 /// uses a single reusable boxed future — there is no per-poll allocation
 /// on the hot path.
 pub struct SseSubscription {

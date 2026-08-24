@@ -174,7 +174,7 @@ pub struct HealthState {
     #[doc(hidden)]
     pub cache_ttl: Option<Duration>,
     #[doc(hidden)]
-    pub cache: tokio::sync::RwLock<Option<(HealthResponse, Instant)>>,
+    pub cache: crate::rt::sync::RwLock<Option<(HealthResponse, Instant)>>,
     /// Names of checks that affect readiness — derived from `checks` at construction.
     /// Lookup by name prevents drift when check order changes.
     #[doc(hidden)]
@@ -195,7 +195,7 @@ impl HealthState {
             checks,
             start_time: Instant::now(),
             cache_ttl,
-            cache: tokio::sync::RwLock::new(None),
+            cache: crate::rt::sync::RwLock::new(None),
             readiness_names,
         }
     }

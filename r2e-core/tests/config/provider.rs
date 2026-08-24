@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio_util::sync::CancellationToken;
+use r2e_core::rt::CancelToken;
 
 use r2e_core::beans::Producer;
 use r2e_core::config::{
@@ -297,7 +297,7 @@ async fn failed_watch_is_restarted_until_it_succeeds() {
         fail_times: 2,
     });
 
-    let ctx = ConfigWatchContext::new("test", CancellationToken::new());
+    let ctx = ConfigWatchContext::new("test", CancelToken::new());
     r2e_core::config::supervise_config_watch_with_backoff(
         provider,
         ctx,
@@ -326,7 +326,7 @@ async fn watch_returning_ok_is_not_restarted() {
         fail_times: 0,
     });
 
-    let ctx = ConfigWatchContext::new("test", CancellationToken::new());
+    let ctx = ConfigWatchContext::new("test", CancelToken::new());
     r2e_core::config::supervise_config_watch_with_backoff(
         provider,
         ctx,
@@ -352,7 +352,7 @@ async fn cancelled_shutdown_stops_the_retry_loop() {
         fail_times: usize::MAX,
     });
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let ctx = ConfigWatchContext::new("test", token.clone());
     let task = r2e_core::rt::spawn(r2e_core::config::supervise_config_watch_with_backoff(
         provider,
@@ -412,7 +412,7 @@ async fn cancelled_shutdown_aborts_an_in_flight_watch() {
         entered: entered.clone(),
     });
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     let ctx = ConfigWatchContext::new("test", token.clone());
     let task = r2e_core::rt::spawn(r2e_core::config::supervise_config_watch_with_backoff(
         provider,
@@ -448,7 +448,7 @@ async fn watch_is_not_started_when_shutdown_already_fired() {
         entered: entered.clone(),
     });
 
-    let token = CancellationToken::new();
+    let token = CancelToken::new();
     token.cancel();
     let ctx = ConfigWatchContext::new("test", token);
 

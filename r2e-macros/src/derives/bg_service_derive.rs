@@ -2,7 +2,7 @@
 //!
 //! Mirrors the field resolution of `#[controller(...)]` (struct-level
 //! identity is not supported here — background services have no request
-//! context). The user implements an async `run(&self, CancellationToken)`
+//! context). The user implements an async `run(&self, rt::CancelToken)`
 //! method on the struct; the derive wires `type Deps` + `config_keys` +
 //! `from_context` + `start`.
 
@@ -201,7 +201,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             fn start(
                 self,
-                __shutdown: ::tokio_util::sync::CancellationToken,
+                __shutdown: #krate::rt::CancelToken,
             ) -> impl ::core::future::Future<Output = ()> + Send {
                 async move { self.run(__shutdown).await }
             }
@@ -218,7 +218,7 @@ fn generate_unit_impl(name: &syn::Ident, krate: &TokenStream2) -> TokenStream2 {
 
             fn start(
                 self,
-                __shutdown: ::tokio_util::sync::CancellationToken,
+                __shutdown: #krate::rt::CancelToken,
             ) -> impl ::core::future::Future<Output = ()> + Send {
                 async move { self.run(__shutdown).await }
             }

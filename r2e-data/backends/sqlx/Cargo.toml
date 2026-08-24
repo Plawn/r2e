@@ -26,7 +26,6 @@ futures-util = {workspace = true}
 r2e-core = {workspace = true}
 r2e-tenant = {workspace = true, optional = true}
 sqlx = {workspace = true}
-tokio-util = {workspace = true}
 
 [dev-dependencies]
 http-body-util = {workspace = true}

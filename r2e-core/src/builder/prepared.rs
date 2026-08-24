@@ -62,7 +62,7 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
 /// [`PreparedApp::run_inner`]; only the bind-and-serve middle section differs.
 enum ServeStrategy {
     /// Single listener on the caller's runtime (default behavior, unchanged).
-    Single(tokio::net::TcpListener),
+    Single(crate::rt::TcpListener),
     /// SO_REUSEPORT sharded serving: `workers` worker threads, each with its
     /// own `current_thread` runtime and listener on the bound address (first
     /// candidate from `addrs` that binds).
@@ -112,7 +112,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// ```ignore
     /// let prepared = app.prepare("127.0.0.1:8080");
     /// let stop = prepared.stop_handle();
-    /// let server = tokio::spawn(prepared.run());
+    /// let server = r2e::rt::spawn(prepared.run());
     /// stop.stop();
     /// server.await??;
     /// ```
@@ -203,7 +203,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// and reuse it across hot-patches so we never fight port conflicts.
     pub async fn run_with_listener(
         self,
-        listener: tokio::net::TcpListener,
+        listener: crate::rt::TcpListener,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Sharding is unsupported on the explicit-listener path: the caller
         // owns the (single) listener. If `server.workers` was configured, warn
@@ -265,7 +265,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // running AFTER `run()` returns. On upgrade, hyper's
         // `UpgradeableConnection::poll` hands the IO to the upgrade and
         // immediately returns `Ready(Ok(()))`, so the connection counts as
-        // finished and axum's `on_upgrade` task (detached `tokio::spawn`, empty
+        // finished and axum's `on_upgrade` task (detached, spawned by axum itself, empty
         // 101 body) is watched by neither graceful shutdown nor the tracked
         // set. In a normal binary that window closes immediately (the runtime
         // is dropped right after `run()`, taking detached tasks with it); an
@@ -466,7 +466,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // workers would never see the cancellation and run() would hang
             // forever).
             let _cancel_guard = cancel_for_shutdown.drop_guard();
-            tokio::select! {
+            crate::rt::select! {
                 _ = crate::rt::shutdown_signal() => {}
                 _ = stop_handle.stopped() => {
                     tracing::info!("Programmatic stop requested, starting graceful shutdown");
@@ -537,7 +537,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 // initiated from request handlers (and lazy-bean first-touch)
                 // runs here, not on the workers' current_thread runtimes.
                 let control_plane = crate::rt::current_handle();
-                if control_plane.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
+                if !control_plane.is_multi_thread() {
                     // A current_thread control plane mostly works, but a
                     // worker-side lazy first-touch would block the worker on a
                     // runtime that may itself be busy — sharding is designed
@@ -545,7 +545,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     tracing::warn!(
                         "server.workers is set but run() is driven by a \
                          non-multi-thread runtime; the control plane should be \
-                         a multi-thread runtime (use #[tokio::main])"
+                         a multi-thread runtime (use #[r2e::main])"
                     );
                 }
                 // `serve_sharded` blocks the calling thread joining the worker
@@ -734,7 +734,7 @@ async fn drain_tracked_handles(handles: &ServiceHandles) {
 /// and firing them would hand user code a half-initialized world. The caller
 /// still returns the original error, which is what aborts the process.
 async fn abort_started_work(
-    cancel: &CancellationToken,
+    cancel: &CancelToken,
     plugin_hooks: &PluginShutdownCell,
     handles: &ServiceHandles,
     grace: Option<Duration>,

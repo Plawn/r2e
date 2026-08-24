@@ -1,5 +1,5 @@
+use crate::rt::CancelToken;
 use std::future::Future;
-use tokio_util::sync::CancellationToken;
 
 /// A background service that participates in DI but doesn't handle HTTP.
 ///
@@ -22,11 +22,11 @@ use tokio_util::sync::CancellationToken;
 ///         Self { pool: ctx.get::<SqlitePool>() }
 ///     }
 ///
-///     async fn start(self, shutdown: CancellationToken) {
+///     async fn start(self, shutdown: CancelToken) {
 ///         loop {
-///             tokio::select! {
+///             rt::select! {
 ///                 _ = shutdown.cancelled() => break,
-///                 _ = tokio::time::sleep(Duration::from_secs(60)) => {
+///                 _ = rt::sleep(Duration::from_secs(60)) => {
 ///                     // export metrics...
 ///                 }
 ///             }
@@ -99,5 +99,5 @@ pub trait ServiceComponent: Sized + Send + 'static {
     fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 
     /// Run until the shutdown token is cancelled.
-    fn start(self, shutdown: CancellationToken) -> impl Future<Output = ()> + Send;
+    fn start(self, shutdown: CancelToken) -> impl Future<Output = ()> + Send;
 }

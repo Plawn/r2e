@@ -3,7 +3,8 @@ use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::OnceCell;
+
+use crate::rt::sync::OnceCell;
 
 /// Boxed async factory for a lazy bean, held until first access.
 type LazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>;
@@ -135,11 +136,7 @@ impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
 /// that circularly re-touches the bean being resolved on this thread
 /// deadlocks instead of panicking with a cycle trace. Same-thread detection
 /// on the main runtime is unaffected (this helper is never used there).
-#[expect(
-    clippy::disallowed_methods,
-    reason = "deliberate placement on the captured boot-runtime handle — rt::spawn would land on the (wrong) current runtime"
-)]
-fn resolve_on<T>(handle: &tokio::runtime::Handle, factory: LazyFactory<T>, runtime_desc: &str) -> T
+fn resolve_on<T>(handle: &crate::rt::RuntimeHandle, factory: LazyFactory<T>, runtime_desc: &str) -> T
 where
     T: Send + 'static,
 {
@@ -187,10 +184,10 @@ where
         return resolve_on(&handle, factory, "control-plane runtime");
     }
 
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
-                tokio::task::block_in_place(|| handle.block_on(factory()))
+    match crate::rt::RuntimeHandle::try_current() {
+        Some(handle) => {
+            if handle.is_multi_thread() {
+                crate::rt::block_in_place(|| handle.block_on(factory()))
             } else {
                 // A current_thread runtime without a control plane. `block_on`
                 // on the fallback runtime would panic here whenever we are
@@ -203,35 +200,27 @@ where
                         bean = std::any::type_name::<T>(),
                         "resolving lazy bean on the lazy-fallback runtime"
                     );
-                    resolve_on(
-                        fallback_runtime().handle(),
-                        factory,
-                        "lazy-fallback runtime",
-                    )
+                    resolve_on(&fallback_runtime().handle(), factory, "lazy-fallback runtime")
                 }
                 #[cfg(not(feature = "lazy-fallback-runtime"))]
                 {
                     panic!(
-                        "Lazy bean resolution requires a Tokio multi-thread runtime. \
+                        "Lazy bean resolution requires a multi-thread runtime. \
                          Enable the `lazy-fallback-runtime` feature to allow a \
                          fallback runtime."
                     )
                 }
             }
         }
-        Err(_) => {
+        None => {
             #[cfg(feature = "lazy-fallback-runtime")]
             {
-                resolve_on(
-                    fallback_runtime().handle(),
-                    factory,
-                    "lazy-fallback runtime",
-                )
+                resolve_on(&fallback_runtime().handle(), factory, "lazy-fallback runtime")
             }
             #[cfg(not(feature = "lazy-fallback-runtime"))]
             {
                 panic!(
-                    "Lazy bean resolution requires a Tokio runtime. \
+                    "Lazy bean resolution requires an async runtime. \
                      Enable the `lazy-fallback-runtime` feature to allow a \
                      fallback runtime."
                 )
@@ -254,13 +243,13 @@ where
 }
 
 #[cfg(feature = "lazy-fallback-runtime")]
-fn fallback_runtime() -> &'static tokio::runtime::Runtime {
-    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+fn fallback_runtime() -> &'static crate::rt::Runtime {
+    static RUNTIME: OnceLock<crate::rt::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
+        crate::rt::RuntimeBuilder::new_multi_thread()
             .enable_all()
             .build()
-            .expect("Failed to build fallback Tokio runtime for lazy beans")
+            .expect("Failed to build fallback runtime for lazy beans")
     })
 }
 
@@ -296,7 +285,7 @@ pub struct Lazy<T: Clone + Send + Sync + 'static> {
 struct LazyInner<T: Clone + Send + Sync + 'static> {
     cell: OnceCell<T>,
     /// Holds the factory until first access. Uses `std::sync::Mutex` (not
-    /// tokio) because the critical section is just `Option::take()` — no
+    /// async) because the critical section is just `Option::take()` — no
     /// `.await` while holding the lock.
     factory: std::sync::Mutex<Option<LazyFactory<T>>>,
 }
