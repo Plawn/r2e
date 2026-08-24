@@ -459,15 +459,18 @@ Phase 7 notes for the record:
   `scripts/check-source-boundary.sh` emits that paragraph for the axum group, so
   `--update` cannot silently drop it — and here. Nothing else may be added
   without the same kind of written decision.
-- `cargo test -p r2e-scheduler` is red on this branch **before** phase 7 as well
+- `cargo test -p r2e-scheduler` was red in isolation after 2f
   (11 × `E0599: no method named start_paused on RuntimeBuilder`): the crate's
-  dev-dependency enables `tokio/test-util`, but `RuntimeBuilder::start_paused`
+  dev-dependency enabled `tokio/test-util`, but `RuntimeBuilder::start_paused`
   is gated on `r2e-rt`'s own `test-util` feature, which nothing in that
-  dev-dependency chain turns on. Leftover from 2f's feature-forwarding. Not
-  fixed here on purpose — the obvious one-line fix (adding
-  `r2e-core/test-util` to those dev-dependencies) re-introduces exactly the
-  feature-unification hazard §4's 2f note argues against, so it wants its own
-  decision.
+  dev-dependency chain turned on (a workspace-wide run passed only because
+  `r2e-test` unified the feature in). **Fixed after phase 7**: the scheduler's
+  dev-dependencies now enable `r2e-core/test-util` (and drop `tokio/test-util`).
+  This is the same scope the old `tokio/test-util` dev-dep already had — a
+  dev-dependency feature unifies only into that crate's test build, never into
+  a consumer's release graph — so it does not reopen the §4 hazard, which is
+  about *default* features. Rule going forward: any crate whose own tests use
+  `start_paused` enables `r2e-core/test-util` in its dev-dependencies.
 
 Phase 6 also carried two small items that belong to the record:
 

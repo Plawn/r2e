@@ -19,7 +19,10 @@ chrono = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
-tokio = {workspace = true, features = ["full", "test-util"]}
+# `test-util` feeds `#[r2e::test(start_paused = true)]` in tests/scheduler/core.rs;
+# an isolated `cargo test -p r2e-scheduler` has no other crate enabling it.
+r2e-core = {workspace = true, features = ["test-util"]}
+tokio = {workspace = true, features = ["full"]}
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
