@@ -5919,7 +5919,6 @@ dependencies = [
  "r2e-core",
  "serde_json",
  "tokio",
- "tokio-util",
  "tonic",
  "tonic-reflection",
  "tower",
@@ -6188,7 +6187,6 @@ dependencies = [
  "r2e-core",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
 ]
 

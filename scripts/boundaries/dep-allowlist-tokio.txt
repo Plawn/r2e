@@ -30,12 +30,9 @@ r2e-events-kafka
 r2e-events-pulsar
 r2e-events-rabbitmq
 r2e-executor
-r2e-grpc
 r2e-oidc
-r2e-openfga
 r2e-rt
 r2e-scheduler
 r2e-security
 r2e-tenant
 r2e-test
-r2e-utils
