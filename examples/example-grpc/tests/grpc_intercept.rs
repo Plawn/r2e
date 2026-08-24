@@ -88,9 +88,9 @@ async fn grpc_interceptor_is_built_from_the_bean_graph() {
     let routes =
         TestGreeter::add_to_routes(tonic::service::Routes::default(), builder.bean_context());
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = r2e::rt::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let incoming = tokio_stream::wrappers::TcpListenerStream::new(listener);
+    let incoming = r2e::rt::stream::wrappers::TcpListenerStream::new(listener);
     r2e::rt::spawn(async move {
         tonic::transport::Server::builder()
             .add_routes(routes)

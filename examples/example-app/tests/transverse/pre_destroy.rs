@@ -91,7 +91,7 @@ impl PdController {
 
 async fn serve_then_stop<T: Clone + Send + Sync + 'static>(prepared: r2e::builder::PreparedApp<T>) {
     let stop = prepared.stop_handle();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = r2e::rt::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let server = r2e::rt::spawn(async move {
         prepared
             .run_with_listener(listener)
@@ -99,9 +99,9 @@ async fn serve_then_stop<T: Clone + Send + Sync + 'static>(prepared: r2e::builde
             .map_err(|e| e.to_string())
     });
     // Give startup a beat, then trigger graceful shutdown.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    r2e::rt::sleep(Duration::from_millis(50)).await;
     stop.stop();
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
+    let result = r2e::rt::timeout(Duration::from_secs(5), server)
         .await
         .expect("server did not stop within 5s")
         .expect("server task panicked");

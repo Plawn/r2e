@@ -9,17 +9,6 @@
 #
 # Regenerate with: scripts/check-dep-boundary.sh --update
 
-example-app
-example-executor
-example-grpc
-example-microservice
-example-multi-tenant
-example-multi-tenant-db
-example-oidc
-example-openfga
-example-postgres
-example-sharded-bench
-example-websocket-chat
 r2e-devservices
 r2e-rt
 r2e-test

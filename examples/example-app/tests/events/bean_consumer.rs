@@ -82,7 +82,7 @@ async fn bean_consumers_auto_subscribe_at_startup() {
         .await;
 
     bus.emit(Ping { msg: "hi".into() }).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
         seen.load(Ordering::SeqCst),
@@ -109,7 +109,7 @@ async fn bean_consumers_do_not_subscribe_at_build_state_alone() {
     })
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 0);
 }
@@ -152,7 +152,7 @@ async fn provided_instance_does_not_auto_subscribe() {
     })
     .await
     .unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
         seen.load(Ordering::SeqCst),
@@ -180,7 +180,7 @@ async fn default_override_registration_subscribes_once() {
         .await;
 
     bus.emit(Ping { msg: "once".into() }).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(
         seen.load(Ordering::SeqCst),

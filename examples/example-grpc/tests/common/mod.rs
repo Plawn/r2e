@@ -32,7 +32,7 @@ pub async fn connect_channel(port: u16) -> tonic::transport::Channel {
                     Instant::now() < deadline,
                     "gRPC server did not come up on port {port}: {e}"
                 );
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                r2e::rt::sleep(Duration::from_millis(50)).await;
             }
         }
     }
@@ -46,7 +46,7 @@ pub async fn stop_and_await_clean(
     server: r2e::rt::JobHandle<Result<(), String>>,
 ) {
     stop.stop();
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
+    let result = r2e::rt::timeout(Duration::from_secs(5), server)
         .await
         .expect("server did not stop within 5s after StopHandle::stop()")
         .expect("server task panicked");

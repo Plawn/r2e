@@ -225,7 +225,7 @@ async fn scheduled_interceptor_fires_on_ticks() {
         ScheduledJobRegistry::new(),
         SchedulerCommands::disconnected(),
     );
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    r2e::rt::sleep(Duration::from_millis(2500)).await;
     cancel.cancel();
 
     assert!(ticks.load(Ordering::SeqCst) >= 2);
@@ -286,7 +286,7 @@ async fn consumer_interceptor_fires_impl_then_method() {
     bean.subscribe().await;
 
     bus.emit(Ping { msg: "hi".into() }).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     assert_eq!(seen.load(Ordering::SeqCst), 1);
     let entries = evidence.snapshot();
@@ -398,7 +398,7 @@ async fn two_intercepted_beans_co_resolved_in_one_app() {
         .await
         .expect("responder replies");
     assert_eq!(reply, "answer:x");
-    tokio::time::sleep(Duration::from_millis(150)).await;
+    r2e::rt::sleep(Duration::from_millis(150)).await;
 
     let entries = evidence.snapshot();
     assert!(entries.contains(&"tick:tick".to_string()), "{entries:?}");

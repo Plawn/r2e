@@ -116,7 +116,7 @@ async fn controller_skip_if_gates_ticks() {
     );
 
     // Maintenance on: every tick is skipped.
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    r2e::rt::sleep(Duration::from_millis(300)).await;
     assert_eq!(ticks.load(Ordering::SeqCst), 0, "ticks gated by skip_if");
     let info = registry.job("gated_tick").expect("job registered");
     assert!(info.skip_count >= 2, "got {}", info.skip_count);
@@ -124,7 +124,7 @@ async fn controller_skip_if_gates_ticks() {
 
     // Maintenance off: the task runs again.
     maintenance.store(false, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    r2e::rt::sleep(Duration::from_millis(300)).await;
     cancel.cancel();
 
     assert!(
@@ -165,7 +165,7 @@ async fn bean_async_skip_if_gates_ticks() {
         SchedulerCommands::disconnected(),
     );
 
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    r2e::rt::sleep(Duration::from_millis(300)).await;
     assert_eq!(
         ticks.load(Ordering::SeqCst),
         0,
@@ -176,7 +176,7 @@ async fn bean_async_skip_if_gates_ticks() {
     assert_eq!(info.run_count, 0);
 
     maintenance.store(false, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    r2e::rt::sleep(Duration::from_millis(300)).await;
     cancel.cancel();
 
     assert!(

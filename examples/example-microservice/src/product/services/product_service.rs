@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use r2e::rt::sync::RwLock;
 
 use r2e::prelude::*;
 

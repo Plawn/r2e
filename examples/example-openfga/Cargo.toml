@@ -9,7 +9,6 @@ dev-reload = ["r2e/dev-reload"]
 
 [dependencies]
 r2e = { workspace = true, features = ["openfga", "security", "openapi"] }
-tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 jsonwebtoken = { workspace = true }
@@ -18,5 +17,4 @@ tracing = { workspace = true }
 [dev-dependencies]
 r2e-test = { workspace = true }
 r2e-devservices = { workspace = true, features = ["openfga"] }
-tokio = { workspace = true, features = ["full"] }
 serde_json = { workspace = true }

@@ -148,9 +148,9 @@ impl PeerController {
 /// Minimal HTTP/1.1 GET over a raw socket — example-app has no HTTP client
 /// dependency, and the point of the test is the transport, not the client.
 async fn raw_get(addr: SocketAddr, path: &str) -> String {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use r2e::rt::io::{AsyncReadExt, AsyncWriteExt};
 
-    let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    let mut stream = r2e::rt::TcpStream::connect(addr).await.expect("connect");
     let request = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await.expect("write");
     let mut response = String::new();

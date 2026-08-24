@@ -19,7 +19,9 @@
 //!   [`yield_now`], [`in_runtime`]
 //! - Control-plane handle: [`set_control_plane`], [`current_handle`]
 //! - Time: [`sleep`], [`sleep_until`], [`timeout`], [`interval`], [`Instant`]
-//! - Network: [`bind_tcp`], [`lookup_host`], [`TcpListener`]
+//! - Network: [`bind_tcp`], [`lookup_host`], [`TcpListener`], [`TcpStream`]
+//! - Async I/O traits: the [`io`] module (`AsyncRead`/`AsyncWrite` + their
+//!   extension traits)
 //! - Signals: [`shutdown_signal`]
 //! - Cancellation: [`CancelToken`], [`CancelDropGuard`]
 //! - Synchronisation: the [`sync`] module (`mpsc`, `oneshot`, `broadcast`,
@@ -73,7 +75,6 @@
 //! everything else.
 
 use std::future::Future;
-use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -97,6 +98,27 @@ pub use tokio::time::{Instant, Interval, MissedTickBehavior};
 /// rewrites this line and the two constructors below ([`bind_tcp`],
 /// `TcpListener::from_std`).
 pub use tokio::net::TcpListener;
+
+/// The async TCP client socket, re-exported.
+///
+/// Same reasoning as [`TcpListener`]: it is the concrete type every async TCP
+/// API in the ecosystem speaks, so a newtype would be unwrapped at every call
+/// site. Naming it `rt::TcpStream` keeps `tokio::net` out of the rest of the
+/// workspace and out of examples/tests.
+pub use tokio::net::TcpStream;
+
+/// Async byte-stream traits and their extension methods.
+///
+/// Plain re-exports of `tokio::io`. The traits themselves are the de-facto
+/// async I/O contract (`hyper`, `tonic`, `tokio-rustls` and friends are all
+/// written against them), so wrapping them would buy a runtime swap nothing —
+/// a swap rewrites this module's `pub use` lines, exactly like [`sync`].
+pub mod io {
+    pub use tokio::io::{
+        AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
+        duplex,
+    };
+}
 
 // ── JoinError ─────────────────────────────────────────────────────────────────
 
@@ -373,7 +395,7 @@ pub fn interval(period: Duration) -> Interval {
 /// The concrete listener type remains [`TcpListener`] because axum requires it
 /// directly.  The binding itself goes through this facade so the call site is
 /// isolated.
-pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<TcpListener> {
+pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(addr: A) -> std::io::Result<TcpListener> {
     TcpListener::bind(addr).await
 }
 
@@ -385,11 +407,11 @@ pub async fn bind_tcp<A: tokio::net::ToSocketAddrs>(addr: A) -> io::Result<TcpLi
 /// to `::1` then `127.0.0.1`). Errors if resolution yields no address. This
 /// goes through the facade (tokio's async resolver) so we never perform
 /// blocking std DNS on an async thread.
-pub async fn lookup_host(addr: &str) -> io::Result<Vec<std::net::SocketAddr>> {
+pub async fn lookup_host(addr: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
     let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(addr).await?.collect();
     if addrs.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::AddrNotAvailable,
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AddrNotAvailable,
             format!("could not resolve address: {addr}"),
         ));
     }
@@ -782,7 +804,7 @@ impl RuntimeBuilder {
     }
 
     /// Build the runtime.
-    pub fn build(mut self) -> io::Result<Runtime> {
+    pub fn build(mut self) -> std::io::Result<Runtime> {
         self.0.build().map(Runtime)
     }
 }

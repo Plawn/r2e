@@ -126,7 +126,7 @@ async fn bean_scheduled_tasks_run_on_the_scheduler() {
 
     // 1s interval task → >= 2 ticks after 2.5s; the 1h sync task fires its
     // initial tick once.
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    r2e::rt::sleep(Duration::from_millis(2500)).await;
     cancel.cancel();
 
     let count = ticks.load(Ordering::SeqCst);

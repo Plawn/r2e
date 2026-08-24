@@ -59,7 +59,7 @@ pub struct DataCapturingConsumer {
     #[inject]
     event_bus: LocalEventBus,
     #[inject]
-    received: Arc<tokio::sync::Mutex<Option<String>>>,
+    received: Arc<r2e::rt::sync::Mutex<Option<String>>>,
 }
 
 #[routes]
@@ -141,7 +141,7 @@ async fn test_consumer_method_invoked() {
         .await;
 
     // Wait for async consumer to process
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    r2e::rt::sleep(Duration::from_millis(100)).await;
 
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }
@@ -149,7 +149,7 @@ async fn test_consumer_method_invoked() {
 #[r2e::test]
 async fn test_consumer_receives_correct_data() {
     let event_bus = LocalEventBus::new();
-    let received: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
+    let received: Arc<r2e::rt::sync::Mutex<Option<String>>> = Arc::new(r2e::rt::sync::Mutex::new(None));
     let builder = AppBuilder::new()
         .provide(event_bus.clone())
         .provide(received.clone())
@@ -165,7 +165,7 @@ async fn test_consumer_receives_correct_data() {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    r2e::rt::sleep(Duration::from_millis(100)).await;
 
     let captured = received.lock().await;
     assert_eq!(captured.as_deref(), Some("important payload"));
@@ -194,7 +194,7 @@ async fn test_consumer_with_injected_deps() {
             .await;
     }
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    r2e::rt::sleep(Duration::from_millis(200)).await;
 
     // The injected counter should have been incremented by each invocation
     assert_eq!(counter.load(Ordering::SeqCst), 5);
@@ -222,7 +222,7 @@ async fn test_multiple_consumers_same_event() {
         })
         .await;
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    r2e::rt::sleep(Duration::from_millis(100)).await;
 
     // Both consumers increment the same counter, so it should be 2
     assert_eq!(counter.load(Ordering::SeqCst), 2);
@@ -264,7 +264,7 @@ async fn consumer_reuses_supplied_core_for_every_event() {
             })
             .await;
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    r2e::rt::sleep(Duration::from_millis(200)).await;
 
     assert_eq!(handled.load(Ordering::SeqCst), 5);
     assert_eq!(

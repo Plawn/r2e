@@ -27,5 +27,5 @@ test-util = ["tokio/test-util"]
 # io-util) once the phase-2 migration has settled which surfaces are in use.
 tokio = {workspace = true, features = ["full"]}
 tokio-util = {workspace = true}
-tokio-stream = {workspace = true, features = ["sync"]}
+tokio-stream = {workspace = true, features = ["sync", "net"]}
 tracing = {workspace = true}
