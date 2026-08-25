@@ -100,6 +100,38 @@ ws.send_json(&MyPayload { value: 42 }).await?;
 ws.send_binary(vec![0x01, 0x02]).await?;
 ```
 
+#### Batching: `feed*` + `flush`
+
+Every `send*` call queues **one** frame and flushes it to the socket right
+away — the frame is on the wire when the future resolves. For bulk transport
+(proxies, file streaming, many small frames), queue several frames with
+`feed*` and push them in one write with `flush`:
+
+| Method | Description |
+|--------|-------------|
+| `feed(msg)` | Queue a raw `Message` **without** flushing (awaits sink readiness / backpressure) |
+| `feed_text(text)` | Queue a text message without flushing |
+| `feed_binary(bytes)` | Queue a binary message without flushing — `Bytes` payload, no copy |
+| `flush()` | Write every queued frame; a no-op when nothing is queued |
+| `close()` | Flush, then send the close handshake |
+
+```rust
+for message in batch {
+    ws.feed(message).await?;
+}
+ws.flush().await?;
+```
+
+`feed` vs `send`: `send(msg)` is exactly `feed(msg)` + `flush()`. Frames are
+delivered in `feed` order; a `send*` after some `feed*` flushes the whole queue.
+There is no timer, no background writer and no implicit flush — nothing leaves
+the process until you call `flush` (or a `send*`). The framework does **not**
+cap what you queue between flushes: **bound the batch yourself** (frames and
+bytes — e.g. 16 frames / 256 KiB) to keep memory and latency under control.
+
+`WsStream` also implements `futures::Sink<Message>` (error type `WsError`), so
+`SinkExt` combinators such as `send_all` / `forward` work on it directly.
+
 #### Receiving Messages
 
 | Method | Description |

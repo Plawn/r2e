@@ -5,6 +5,11 @@
 //! An ergonomic wrapper around the underlying [`WebSocket`](crate::http::ws::WebSocket)
 //! with typed helpers for text, JSON, and binary messages.
 //!
+//! `send*` methods write **and flush** one frame at a time. For bulk transport,
+//! the explicit batching API (`feed*` + `flush`) lets a caller queue several
+//! frames and hand them to the socket in a single write — see
+//! [`WsStream::feed`].
+//!
 //! # WsHandler
 //!
 //! An optional lifecycle trait for structured WebSocket handling. The framework
@@ -17,12 +22,15 @@
 use std::borrow::Borrow;
 use std::future::Future;
 use std::hash::Hash;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use crate::http::ws::{Message, WebSocket};
 use crate::rt::sync::broadcast;
 use dashmap::DashMap;
+use futures_util::{Sink, SinkExt};
 use serde::{de::DeserializeOwned, Serialize};
 
 // ── WsError ──────────────────────────────────────────────────────────────
@@ -51,7 +59,38 @@ impl std::error::Error for WsError {}
 
 // ── WsStream ─────────────────────────────────────────────────────────────
 
-/// Ergonomic wrapper around Axum's WebSocket with typed helpers.
+/// Ergonomic wrapper around the underlying WebSocket with typed helpers.
+///
+/// # Sending: `send*` vs `feed*` + `flush`
+///
+/// Every `send*` method (`send`, `send_text`, `send_json`, `send_binary`)
+/// queues **one** frame and flushes it to the socket immediately — the message
+/// is on the wire when the future resolves. That is the right default for
+/// request/response style traffic.
+///
+/// For bulk transport (proxies, file streaming, fan-out of many small frames)
+/// use the explicit batching API instead: [`feed`](Self::feed) /
+/// [`feed_text`](Self::feed_text) / [`feed_binary`](Self::feed_binary) queue a
+/// frame **without** flushing, and one [`flush`](Self::flush) pushes everything
+/// queued so far in a single write. Fewer syscalls, fewer wakeups, same frame
+/// order. There is no timer and no background writer: nothing leaves the
+/// process until you call `flush` (or a `send*`, which flushes too).
+///
+/// ```ignore
+/// for message in batch {
+///     ws.feed(message).await?;
+/// }
+/// ws.flush().await?;
+/// ```
+///
+/// `feed*` still awaits the sink's readiness before queueing, so backpressure
+/// from the transport is honoured. The framework does **not** cap what you
+/// queue between flushes — the caller must bound the batch (number of frames
+/// and total bytes, e.g. 16 frames / 256 KiB) to keep memory and latency in
+/// check.
+///
+/// `WsStream` also implements [`futures_util::Sink<Message>`], so it composes
+/// with `SinkExt` combinators (`send_all`, `forward`, …).
 pub struct WsStream {
     inner: WebSocket,
 }
@@ -64,9 +103,12 @@ impl WsStream {
         Self { inner: socket }
     }
 
-    // ── Send ──
+    // ── Send (queue + flush) ──
 
-    /// Send a raw message.
+    /// Send a raw message: queue it and flush the socket.
+    ///
+    /// The frame is on the wire when this resolves. Equivalent to
+    /// [`feed`](Self::feed) followed by [`flush`](Self::flush).
     pub async fn send(&mut self, msg: Message) -> Result<(), WsError> {
         self.inner.send(msg).await.map_err(WsError::Send)
     }
@@ -85,6 +127,55 @@ impl WsStream {
     /// Send a binary message.
     pub async fn send_binary(&mut self, data: impl Into<bytes::Bytes>) -> Result<(), WsError> {
         self.send(Message::Binary(data.into())).await
+    }
+
+    // ── Batching (queue without flush) ──
+
+    /// Queue a raw message **without** flushing.
+    ///
+    /// Waits for the sink to be ready (backpressure), then enqueues the frame.
+    /// Nothing is written to the socket until [`flush`](Self::flush) — or any
+    /// `send*` call, which flushes as part of its contract. Frames are
+    /// delivered in `feed` order.
+    ///
+    /// Bound the batch yourself: there is no built-in cap on queued frames or
+    /// bytes between flushes.
+    ///
+    /// ```ignore
+    /// for message in batch {
+    ///     ws.feed(message).await?;
+    /// }
+    /// ws.flush().await?;
+    /// ```
+    pub async fn feed(&mut self, msg: Message) -> Result<(), WsError> {
+        self.inner.feed(msg).await.map_err(WsError::Send)
+    }
+
+    /// Queue a text message without flushing. See [`feed`](Self::feed).
+    pub async fn feed_text(&mut self, text: impl Into<String>) -> Result<(), WsError> {
+        self.feed(Message::Text(text.into().into())).await
+    }
+
+    /// Queue a binary message without flushing. See [`feed`](Self::feed).
+    ///
+    /// The payload is moved into the frame as [`bytes::Bytes`] — no copy.
+    pub async fn feed_binary(&mut self, data: impl Into<bytes::Bytes>) -> Result<(), WsError> {
+        self.feed(Message::Binary(data.into())).await
+    }
+
+    /// Flush every queued frame to the socket.
+    ///
+    /// Valid with nothing queued (no-op). Resolves once the transport has
+    /// accepted all pending frames.
+    pub async fn flush(&mut self) -> Result<(), WsError> {
+        self.inner.flush().await.map_err(WsError::Send)
+    }
+
+    /// Flush queued frames, then close the sink.
+    ///
+    /// Sends the WebSocket close handshake; further `send*`/`feed*` calls fail.
+    pub async fn close(&mut self) -> Result<(), WsError> {
+        SinkExt::close(&mut self.inner).await.map_err(WsError::Send)
     }
 
     // ── Receive ──
@@ -145,6 +236,37 @@ impl WsStream {
     /// Unwrap into the raw Axum WebSocket (escape hatch).
     pub fn into_inner(self) -> WebSocket {
         self.inner
+    }
+}
+
+/// `Sink<Message>` bridge: `poll_ready`/`start_send` queue, `poll_flush`
+/// writes, `poll_close` flushes then closes — the same semantics as the
+/// inherent `feed`/`flush`/`close`, exposed for `SinkExt` combinators.
+impl Sink<Message> for WsStream {
+    type Error = WsError;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), WsError>> {
+        Pin::new(&mut self.inner)
+            .poll_ready(cx)
+            .map_err(WsError::Send)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), WsError> {
+        Pin::new(&mut self.inner)
+            .start_send(item)
+            .map_err(WsError::Send)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), WsError>> {
+        Pin::new(&mut self.inner)
+            .poll_flush(cx)
+            .map_err(WsError::Send)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), WsError>> {
+        Pin::new(&mut self.inner)
+            .poll_close(cx)
+            .map_err(WsError::Send)
     }
 }
 
