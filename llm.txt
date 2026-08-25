@@ -2173,6 +2173,26 @@ impl WsEchoController {
 }
 ```
 
+`WsStream` send API — two tiers, both `async -> Result<(), WsError>`:
+
+- `send(msg)` / `send_text` / `send_json(&T)` / `send_binary(impl Into<Bytes>)` —
+  queue one frame **and flush** (on the wire when the future resolves).
+- `feed(msg)` / `feed_text` / `feed_binary` — queue **without** flushing (awaits
+  sink readiness, honours backpressure); `flush()` writes everything queued
+  (no-op when empty); `close()` flushes then sends the close handshake.
+  `send(msg)` == `feed(msg)` + `flush()`. No timer, no writer task, no implicit
+  flush; frame order preserved. **The caller bounds the batch** (frames/bytes).
+
+```rust
+for message in batch {          // e.g. ≤ 16 frames / 256 KiB
+    ws.feed(message).await?;    // Bytes payloads are moved, never copied
+}
+ws.flush().await?;
+```
+
+`WsStream` implements `futures::Sink<Message>` (`Error = WsError`), so `SinkExt`
+combinators (`send_all`, `forward`) work directly.
+
 `WsBroadcaster` / `WsRooms` (prelude) support fan-out and room semantics.
 
 ---
