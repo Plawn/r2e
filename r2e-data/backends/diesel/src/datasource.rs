@@ -36,7 +36,7 @@ use diesel::r2d2::{ConnectionManager, Pool, R2D2Connection};
 use diesel::Connection;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness};
 use r2e_core::config::LiveConfig;
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::prelude::ConfigProperties;
 use r2e_core::LiveConfigRegistry;
 
@@ -184,7 +184,7 @@ impl<DB: Backend> MigrationSource<DB> for StaticMigrations {
     }
 }
 
-impl<Conn, Tag> PreStatePlugin for DieselDataSource<Conn, Tag>
+impl<Conn, Tag> Plugin for DieselDataSource<Conn, Tag>
 where
     Conn: Connection + R2D2Connection + MigrationHarness<Conn::Backend> + Send + 'static,
     Tag: DataSourceTag,
@@ -196,6 +196,7 @@ where
     /// the ordinary missing-bean error at `build_state()`.
     type Deps = (LiveConfigRegistry,);
     type Config = DataSourceConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some(Tag::CONFIG_PREFIX);
 
     /// `build` produces exactly one bean, and both effects it registers act on

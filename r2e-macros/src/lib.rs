@@ -621,7 +621,7 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Request-scoped fields are unavailable because scheduled tasks run outside
 /// HTTP context. Register the controller via
 /// `.register_controller::<MyJobs>()` and install the scheduler runtime
-/// with `.with(Scheduler)` (from `r2e-scheduler`).
+/// with `.plugin(Scheduler)` (from `r2e-scheduler`).
 ///
 /// `every` accepts an integer (seconds) or a duration string with suffixes
 /// `ms`, `s`, `m`, `h`, `d` (combinable: `"1h30m"`). Same for `initial_delay`.

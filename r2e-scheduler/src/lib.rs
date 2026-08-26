@@ -24,11 +24,11 @@ use r2e_core::builder::{ScheduledTaskMarker, TaskRegistryHandle};
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::header::Parts;
 use r2e_core::http::StatusCode;
-use r2e_core::prelude::ConfigProperties;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext};
+use r2e_core::prelude::ConfigProperties;
 use r2e_core::rt::sync::mpsc;
 use r2e_core::rt::{self, CancelToken};
-use r2e_core::{AppBuilder, BeanContext, PreStatePlugin};
+use r2e_core::{AppBuilder, BeanContext, Plugin};
 use r2e_executor::{ExecutorConfig, PoolExecutor};
 
 /// Handle to the scheduler runtime.
@@ -339,7 +339,10 @@ impl ScheduledJobRegistry {
 
     /// Register a job in the registry.
     pub fn register(&self, info: ScheduledJobInfo) {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).push(info);
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(info);
     }
 
     /// List all registered jobs (a snapshot of their current stats).
@@ -462,7 +465,7 @@ pub struct Scheduler;
 /// ```
 ///
 /// Because [`CONFIG_PREFIX`](Scheduler) is `Some("scheduler")`, the standard
-/// `scheduler.enabled = false` gate applies: the plugin's post-state effects
+/// `scheduler.enabled = false` gate applies: the plugin's surface effects
 /// (starting tasks) are skipped, while its provided beans remain in the graph.
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct SchedulerConfig {
@@ -480,7 +483,7 @@ pub struct SchedulerConfig {
     pub shutdown_timeout: Option<Duration>,
 }
 
-impl PreStatePlugin for Scheduler {
+impl Plugin for Scheduler {
     type Provided = (CancelToken, ScheduledJobRegistry);
     // `PoolExecutor` stays a hard `Deps` requirement even when the config
     // selects a dedicated pool — a type-level requirement cannot be made
@@ -488,6 +491,7 @@ impl PreStatePlugin for Scheduler {
     // to run ticks (a private pool is built instead).
     type Deps = (PoolExecutor,);
     type Config = SchedulerConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("scheduler");
 
     fn setup(&mut self, ctx: &mut PluginSetupContext) {

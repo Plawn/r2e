@@ -19,13 +19,13 @@
 //! #[folder = "frontend/dist"]
 //! struct Assets;
 //!
-//! app.with(EmbeddedFrontend::new::<Assets>())
+//! app.plugin(EmbeddedFrontend::new::<Assets>())
 //! ```
 //!
 //! # Builder API
 //!
 //! ```ignore
-//! app.with(EmbeddedFrontend::builder::<Assets>()
+//! app.plugin(EmbeddedFrontend::builder::<Assets>()
 //!     .exclude_prefix("api/")
 //!     .immutable_prefix("assets/")
 //!     .spa_fallback(true)
@@ -540,16 +540,28 @@ impl EmbeddedFrontend {
 // ── Plugin implementation ──────────────────────────────────────────────────
 
 impl r2e_core::plugin::Plugin for EmbeddedFrontend {
-    fn install<T: Clone + Send + Sync + 'static>(
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    /// Installs the SPA fallback as a Graph-stage router effect.
+    ///
+    /// Effects apply in **install order**, and a fallback must be the last
+    /// word on unmatched paths — so install this plugin *after* every other
+    /// plugin that touches the router.
+    async fn build(
         self,
-        app: r2e_core::AppBuilder<T>,
-    ) -> r2e_core::AppBuilder<T> {
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut r2e_core::plugin::PluginBuildContext,
+    ) -> Result<Self::Provided, r2e_core::plugin::PluginBuildError> {
         let handler = Arc::new(StaticFileHandler {
             file_server: self.file_server,
             config: self.config,
         });
 
-        app.with_layer_fn(move |router| {
+        ctx.add_layer(move |router| {
             let handler = handler.clone();
             router.fallback(move |req: r2e_core::http::extract::Request| async move {
                 let path = req.uri().path().to_string();
@@ -571,14 +583,8 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
 
                 handler.serve(effective_path, req.headers())
             })
-        })
-    }
+        });
 
-    fn should_be_last() -> bool {
-        true
-    }
-
-    fn name() -> &'static str {
-        "EmbeddedFrontend"
+        Ok(())
     }
 }

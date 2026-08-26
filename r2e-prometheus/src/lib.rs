@@ -1,7 +1,7 @@
 //! Prometheus metrics plugin for R2E.
 //!
 //! Provides automatic HTTP request tracking and a `/metrics` endpoint.
-//! Installs as a pre-state plugin so the registry is available for DI.
+//! Installs as a plugin (before `build_state()`) so the registry is a bean available for DI.
 //!
 //! # Usage
 //!
@@ -63,9 +63,9 @@ pub use prometheus;
 
 use handler::metrics_handler;
 use r2e_core::http::routing::get;
-use r2e_core::prelude::ConfigProperties;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
-use r2e_core::PreStatePlugin;
+use r2e_core::prelude::ConfigProperties;
+use r2e_core::Plugin;
 
 /// Typed configuration for the [`Prometheus`] plugin, read from the
 /// `prometheus.*` YAML section.
@@ -148,7 +148,7 @@ impl PrometheusRegistry {
 
 /// Prometheus metrics plugin.
 ///
-/// Installs as a [`PreStatePlugin`], providing a [`PrometheusRegistry`] bean
+/// Installs as a [`Plugin`], providing a [`PrometheusRegistry`] bean
 /// for dependency injection. The `/metrics` endpoint and tracking middleware
 /// are installed via a deferred action after state resolution.
 ///
@@ -242,10 +242,11 @@ pub fn resolve_config(
     (endpoint, config)
 }
 
-impl PreStatePlugin for Prometheus {
+impl Plugin for Prometheus {
     type Provided = (PrometheusRegistry,);
     type Deps = ();
     type Config = PrometheusConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("prometheus");
 
     async fn build(
@@ -297,7 +298,7 @@ impl PreStatePlugin for Prometheus {
                 .map_err(|e| format!("Failed to register custom Prometheus collector: {e}"))?;
         }
 
-        // Install the /metrics route + tracking layer post-state.
+        // Install the /metrics route + tracking layer as router effects.
         ctx.add_layer(move |router| {
             router
                 .route(&endpoint, get(metrics_handler))

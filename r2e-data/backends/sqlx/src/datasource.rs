@@ -30,7 +30,7 @@ use std::marker::PhantomData;
 use std::time::Duration;
 
 use r2e_core::config::LiveConfig;
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::prelude::ConfigProperties;
 use r2e_core::LiveConfigRegistry;
 use sqlx::migrate::{Migrate, Migrator};
@@ -139,7 +139,7 @@ pub struct DataSourceConfig {
 /// (same call as the [`Executor`](https://docs.rs/r2e-executor) plugin's).
 /// To point an app at a different database, change `datasource.url`; to replace
 /// it wholesale in a test, pin the pool (`override_bean`) — see
-/// [`SKIP_BUILD_WHEN_ALL_PINNED`](PreStatePlugin::SKIP_BUILD_WHEN_ALL_PINNED).
+/// [`SKIP_BUILD_WHEN_ALL_PINNED`](Plugin::SKIP_BUILD_WHEN_ALL_PINNED).
 pub struct SqlxDataSource<DB: Database, Tag = DefaultDataSource> {
     migrator: Option<&'static Migrator>,
     marker: PhantomData<fn() -> (DB, Tag)>,
@@ -173,7 +173,7 @@ impl<DB: Database, Tag> SqlxDataSource<DB, Tag> {
     }
 }
 
-impl<DB, Tag> PreStatePlugin for SqlxDataSource<DB, Tag>
+impl<DB, Tag> Plugin for SqlxDataSource<DB, Tag>
 where
     DB: Database,
     Tag: DataSourceTag,
@@ -187,6 +187,7 @@ where
     /// the ordinary missing-bean error at `build_state()`.
     type Deps = (LiveConfigRegistry,);
     type Config = DataSourceConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some(Tag::CONFIG_PREFIX);
 
     /// `build` produces exactly one bean, and both effects it registers act on

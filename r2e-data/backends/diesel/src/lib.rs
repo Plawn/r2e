@@ -18,19 +18,21 @@
 //! carries the wiring, the compile-time guarantees, and the migrations deferral.
 
 mod datasource;
+mod health;
 mod pool;
 #[cfg(feature = "tenant")]
 mod tenant;
 mod tx;
 
 pub use datasource::{DataSourceConfig, DataSourceTag, DefaultDataSource, DieselDataSource};
+pub use health::DataSourceHealth;
 pub use pool::{DbPool, PoolError, PoolFactory};
 #[cfg(feature = "tenant")]
 pub use tenant::{PoolSource, TenantPool, TenantPools, TenantTx};
 pub use tx::{DbTx, DieselTx, FixedPool, ManagedTx, RotatingPool, Tx, TxSource};
 
 pub mod prelude {
-    pub use crate::{DbPool, DbTx, DieselDataSource, DieselTx, Tx};
+    pub use crate::{DataSourceHealth, DbPool, DbTx, DieselDataSource, DieselTx, Tx};
     #[cfg(feature = "tenant")]
     pub use crate::{TenantPools, TenantTx};
 }

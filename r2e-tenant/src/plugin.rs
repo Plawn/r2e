@@ -14,7 +14,7 @@
 //!     .await
 //! ```
 //!
-//! Both are `PreStatePlugin`s whose `build` runs inside `build_state()` as a
+//! Both are `Plugin`s whose `build` runs inside `build_state()` as a
 //! graph node: the resolver / source bean is resolved first (a declared
 //! `Deps`), the typed `tenancy.*` config is guaranteed loaded, and the
 //! provided bean ([`TenantRouter`], [`Tenanted<T>`]) is built whole — no shell,
@@ -25,7 +25,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 
 use crate::config::TenancyConfig;
 use crate::error::TenantStatuses;
@@ -95,13 +95,14 @@ impl<R> Tenancy<R> {
     }
 }
 
-impl<R> PreStatePlugin for Tenancy<R>
+impl<R> Plugin for Tenancy<R>
 where
     R: TenantResolver + Clone + Send + Sync + 'static,
 {
     type Provided = (TenantRouter,);
     type Deps = (R,);
     type Config = TenancyConfig;
+    type Controllers = ();
 
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 
@@ -382,7 +383,7 @@ where
         // know of: it covers a graph MISS — the plugin built a map but the
         // graph exposes no `Tenanted<T>` (a future projection-less install
         // shape, or a graph that never materialized). It is explicitly NOT
-        // about `with_state`: that path never runs a pre-state plugin at all,
+        // about `with_state`: that path never runs a plugin `build` at all,
         // so `build_map` is not reached. Grooming the built map on a miss is
         // strictly better than grooming nothing.
 
@@ -445,7 +446,7 @@ where
     }
 }
 
-impl<T, Src> PreStatePlugin for PerTenant<T, Src, NoFallback>
+impl<T, Src> Plugin for PerTenant<T, Src, NoFallback>
 where
     T: Clone + Send + Sync + 'static,
     Src: TenantSource<T> + Clone + Send + Sync + 'static,
@@ -453,6 +454,7 @@ where
     type Provided = (Tenanted<T>,);
     type Deps = (Src,);
     type Config = TenancyConfig;
+    type Controllers = ();
 
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 
@@ -466,7 +468,7 @@ where
     }
 }
 
-impl<T, Src> PreStatePlugin for PerTenant<T, Src, DefaultFallback>
+impl<T, Src> Plugin for PerTenant<T, Src, DefaultFallback>
 where
     T: Clone + Send + Sync + 'static,
     Src: TenantSource<T> + Clone + Send + Sync + 'static,
@@ -475,6 +477,7 @@ where
     /// `T` is a dependency here: the fallback default must be a real bean.
     type Deps = (Src, T);
     type Config = TenancyConfig;
+    type Controllers = ();
 
     const CONFIG_PREFIX: Option<&'static str> = Some("tenancy");
 

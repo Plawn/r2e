@@ -1,7 +1,7 @@
 //! Embedded OAuth/JWT issuer plugin for R2E.
 //!
 //! Provides local RS256 access-token issuance without an external identity provider.
-//! Install as a `PreStatePlugin` and `AuthenticatedUser` works out-of-the-box.
+//! Install as a `Plugin` and `AuthenticatedUser` works out-of-the-box.
 //!
 //! This crate is not a full browser-facing OpenID Connect Provider: it does not
 //! implement an authorization endpoint, Authorization Code + PKCE, or ID tokens.
@@ -68,7 +68,7 @@ use std::sync::Arc;
 use r2e_core::http::routing::{get, post};
 use r2e_core::http::Router;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
-use r2e_core::PreStatePlugin;
+use r2e_core::Plugin;
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub use client::ClientRegistry;
@@ -258,10 +258,11 @@ pub struct OidcRuntime {
     base_path: String,
 }
 
-impl PreStatePlugin for OidcRuntime {
+impl Plugin for OidcRuntime {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -279,10 +280,11 @@ impl PreStatePlugin for OidcRuntime {
     }
 }
 
-impl PreStatePlugin for OidcServer {
+impl Plugin for OidcServer {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -293,7 +295,7 @@ impl PreStatePlugin for OidcServer {
         // Build the runtime, then delegate to its plugin `build` (fully
         // qualified: `OidcServer::build` is the inherent builder method).
         let runtime = self.try_build()?;
-        PreStatePlugin::build(runtime, deps, config, ctx).await
+        Plugin::build(runtime, deps, config, ctx).await
     }
 }
 

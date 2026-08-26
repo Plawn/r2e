@@ -194,9 +194,10 @@ async fn jwt_validator(
         );
     }
 
-    // Builder chain. Beans are `.provide()`-d or `.register()`-ed before
-    // `.build_state().await`, which infers the application state from the
-    // provision list. Plugins and controllers are wired afterward.
+    // Builder chain. Beans are `.provide()`-d or `.register()`-ed and plugins
+    // are `.plugin()`-installed before `.build_state().await`, which infers the
+    // application state from the provision list and runs the plugin builds.
+    // Controllers are registered afterward.
     let mut lines: Vec<String> = Vec::new();
     lines.push("        b".to_string());
 
@@ -222,18 +223,18 @@ async fn jwt_validator(
         lines.push("            .register::<JwtValidator>()".to_string());
     }
 
-    lines.push("            .build_state()".to_string());
-    lines.push("            .await".to_string());
-    lines.push("            .with(Health)".to_string());
-    lines.push("            .with(Tracing)".to_string());
+    lines.push("            .plugin(Health)".to_string());
+    lines.push("            .plugin(Tracing)".to_string());
 
     if opts.openapi {
         lines.push(
-            "            .with(OpenApiPlugin::new(OpenApiConfig::new(\"API\", \"0.1.0\").with_docs_ui(true)))"
+            "            .plugin(OpenApiPlugin::new(OpenApiConfig::new(\"API\", \"0.1.0\").with_docs_ui(true)))"
                 .to_string(),
         );
     }
 
+    lines.push("            .build_state()".to_string());
+    lines.push("            .await".to_string());
     lines.push("            .register_controller::<HelloController>()".to_string());
     if opts.grpc {
         lines.push("            .register_grpc_service::<GreeterService>()".to_string());
