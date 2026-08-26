@@ -793,12 +793,16 @@ mechanism:
 
 ```rust
 #[producer(start)]
-async fn create_pool(
-    #[live_config("database.url")] url: LiveConfig<String>,
-) -> DbPool<sqlx::Postgres> {
-    DbPool::connect(url).await.unwrap()
+async fn create_client(
+    #[live_config("search.endpoint")] endpoint: LiveConfig<String>,
+) -> SearchClient {
+    SearchClient::connect(endpoint).await.unwrap()
 }
 ```
+
+(A database pool is the one live-config consumer you do **not** hand-roll: the
+datasource plugin — `.plugin(SqlxDataSource::<sqlx::Postgres>::new())` — reads
+`datasource.url` as a live value and hands back a rotating `DbPool`.)
 
 `#[live_config("key")]` is also a field attribute, symmetric with
 `#[config("key")]` — on `#[derive(Bean)]` / `#[derive(DecoratorBean)]` /
@@ -1726,27 +1730,73 @@ transactions need — `type Deps` is `TCons<Pool<DB>, TNil>` for `FixedPool`
 `ManagedTx` forwards it (`type Deps = Src::Deps`). Using `Tx` without providing
 the pool no longer compiles.
 
-For rotating credentials/URLs, produce `DbPool<DB>` from a live
-`LiveConfig<String>` and mark the producer `start`:
+### The datasource plugin (`SqlxDataSource` / `DieselDataSource`)
+
+`DbPool<DB>` is not produced by hand: install the datasource plugin and it
+connects the pool from config, optionally migrates, starts the live-URL
+rotation loop at serve time, and closes the pool on graceful shutdown.
 
 ```rust
-use r2e_data_sqlx::{DbPool, DbTx};
+use r2e_data_sqlx::{DbPool, DbTx, SqlxDataSource};
 
-#[producer(start)]
-async fn create_pool(#[live_config("database.url")] url: LiveConfig<String>) -> DbPool<Sqlite> {
-    DbPool::connect(url).await.unwrap()
-}
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+AppBuilder::new()
+    .load_config::<()>()                    // provides LiveConfigRegistry (the plugin's dep)
+    .plugin(SqlxDataSource::<sqlx::Postgres>::new().migrations(&MIGRATOR))
+    .register::<ArticleService>();          // #[inject] pool: DbPool<sqlx::Postgres>
+
+// ... and the transaction is requested as before:
 #[post("/db")]
 async fn create_in_db(&self,
-                      #[managed] tx: &mut DbTx<'_, Sqlite>) -> JsonResult<User> {
+                      #[managed] tx: &mut DbTx<'_, sqlx::Postgres>) -> JsonResult<User> {
     sqlx::query("INSERT INTO users (name) VALUES (?)")
         .bind("Ada").execute(tx.as_mut()).await?;
     Ok(Json(user))
 }
 ```
 
-`DbPool` connects a replacement pool when `database.url` changes, swaps only
+```yaml
+datasource:
+  url: "postgres://user:pass@localhost/app"   # read live: the pool rotates on change
+  max-connections: 20                         # optional, SQLx default
+  min-connections: 2                          # optional, SQLx default
+  acquire-timeout: 10s                        # optional, SQLx default
+  migrate-at-start: true                      # default false
+```
+
+`migrate-at-start` (Quarkus' `quarkus.flyway.migrate-at-start`) is the only
+thing that runs the migrator attached with `.migrations(&MIGRATOR)` — attaching
+is not running, so the same binary migrates in dev and stays read-only in
+production. Migrations run **inside `build_state()`**, so a broken schema fails
+the boot (`Plugin 'SqlxDataSource' failed to build: ...`) and `TestApp` gets
+them too — which the old serve-only `.on_start(|state| migrate)` never did.
+`migrate-at-start: true` with no attached migrator only warns.
+
+A **named** datasource is a second tag: `datasource_tag!(pub Reporting =
+"reporting")` mints a marker whose config lives under `datasource.reporting.*`
+and whose bean is `DbPool<DB, Reporting>` — a distinct type, so the default and
+the named pool coexist and inject unambiguously. `DbPool<DB>` is
+`DbPool<DB, DefaultDataSource>`; `DbTx<'_, DB, Tag>` follows the same default.
+
+There is **no** `datasource.enabled` gate (a pool bean has no inert form —
+setting it only warns). To swap the database in a test, pin the pool with
+`.override_bean(pool)`: the plugin sets `SKIP_BUILD_WHEN_ALL_PINNED = true`, so
+neither the connection nor the migrations run.
+
+`DieselDataSource<Conn>` is the exact mirror — same `datasource.*` section, same
+`migrate-at-start` gate — taking `diesel_migrations::embed_migrations!()`:
+
+```rust
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+b.plugin(DieselDataSource::<PgConnection>::new().migrations(&MIGRATIONS))
+```
+
+r2d2's build and Diesel's migration harness are blocking, so both run on the
+blocking pool; r2d2 pools have no async close, so the plugin registers no
+shutdown hook (dropping the last handle is the close).
+
+`DbPool` connects a replacement pool when `datasource.url` changes, swaps only
 after the new connection succeeds, increments `generation()`, and closes the
 old pool in the background. In-flight `DbTx` values keep using the generation
 they acquired.
@@ -1780,12 +1830,9 @@ become `async fn`. `TxSource::Meta` is `Clone + Send + Sync + 'static` (was
 `generation()` / `tenant()`.
 
 ```rust
-use r2e_data_diesel::{DbPool, DbTx};
+use r2e_data_diesel::{DbPool, DbTx, DieselDataSource};
 
-#[producer(start)]
-async fn create_pool(#[live_config("database.url")] url: LiveConfig<String>) -> DbPool<SqliteConnection> {
-    DbPool::connect(url).await.unwrap()
-}
+// b.plugin(DieselDataSource::<SqliteConnection>::new())  provides DbPool<SqliteConnection>
 
 #[post("/db")]
 async fn create_in_db(&self, #[managed] tx: &mut DbTx<SqliteConnection>) -> JsonResult<User> {
@@ -3493,7 +3540,7 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], GrpcServer, OidcServer, Prometheus, Tenancy/PerTenant) |
+| `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, GrpcServer, OidcServer, Prometheus, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | pre-state | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
 | `.override_config(cfg)` | pre-state | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |

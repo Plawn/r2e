@@ -417,6 +417,42 @@ with `datasource.url` (live config), pool settings, and
 `DbPool` gains a defaulted type param (source-compatible unless a user
 spells `DbPool<DB>` in a position where defaults don't apply — impl blocks).
 
+### Status (2026-08-26) — steps 1–5 shipped, health deferred
+
+Shipped on `feat/plugin-module-lifecycle`: `SqlxDataSource<DB, Tag>` +
+`DieselDataSource<Conn, Tag>`, tagged `DbPool`/`DbTx`, `datasource_tag!`,
+`DataSourceConfig`, migrated `example-postgres`, tests
+(`r2e-data/backends/{sqlx,diesel}/tests/datasource/`), docs + `llm.txt`.
+
+Deviations from the design above:
+
+- **`Deps = (LiveConfigRegistry,)`, not `()`.** `Config` cannot carry
+  `url: LiveConfig<String>` (no `FromConfigValue` for a live handle), and the
+  bean graph is empty at plugin-build time, so the plugin takes the registry as
+  a real dep and mints the handle itself. The typed `url: Option<String>`
+  stays, purely so a missing key fails with `` `datasource.url` is not set ``
+  instead of an SQLx parse error.
+- **`DataSourceHealth<DB>` is NOT implemented** — it needs `HealthRegistry`
+  from plan 1d. Ship it with plan 1d, as a second plugin
+  (`Deps = (DbPool<DB, Tag>, HealthRegistry)`), keeping the datasource
+  independent of Health.
+- **No `migrations.locations` key** — it was already noted as unused for sqlx,
+  and Diesel's `embed_migrations!` is compile-time too. Omitted rather than
+  accepted-and-ignored.
+- **No `datasource.enabled` gate**: a pool bean has no inert form, so
+  `enabled = false` warns and is ignored. The test-time replacement is
+  `override_bean` + `SKIP_BUILD_WHEN_ALL_PINNED = true`.
+- **`DataSourceTag` is per backend**, not hoisted into `r2e-core`: an app uses
+  one backend, and a datasource marker is not runtime foundation. The trait
+  carries both `NAME` and `CONFIG_PREFIX` because a `const` cannot concatenate
+  `"datasource." + NAME` on stable; `datasource_tag!` mints the pair together.
+- **`example-multi-tenant-db` was left alone** — it never used
+  `.provide(pool)` + `on_start` migrations (it is the `PerTenant`/`TenantPools`
+  path, which the plugin does not change), and the `r2e-cli` templates emit no
+  pool producer either.
+- The rotation watcher moved from `#[producer(start)]` to
+  `ctx.on_serve(|serve| serve.track(ServiceComponent::start(pool, token)))`.
+
 ---
 
 ## Suggested order

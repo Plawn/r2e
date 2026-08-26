@@ -248,12 +248,16 @@ Producer params can request a runtime-updatable config handle:
 
 ```rust
 #[producer(start)]
-async fn create_pool(
-    #[live_config("database.url")] url: LiveConfig<String>,
-) -> DbPool<sqlx::Postgres> {
-    DbPool::connect(url).await.unwrap()
+async fn create_client(
+    #[live_config("search.endpoint")] endpoint: LiveConfig<String>,
+) -> SearchClient {
+    SearchClient::connect(endpoint).await.unwrap()
 }
 ```
+
+(A database pool is the one live-config consumer you do **not** hand-roll: the
+datasource plugin — `.plugin(SqlxDataSource::<sqlx::Postgres>::new())` — reads
+`datasource.url` as a live value and hands back a rotating `DbPool`.)
 
 `#[live_config("...")]` injects `LiveConfig<T>` from the automatically provided
 `LiveConfigRegistry` bean, so `load_config` must have run before the producer is

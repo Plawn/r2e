@@ -462,9 +462,9 @@ impl AdminController {
 
 - `Pageable` and `Page<T>` live in `r2e-core` and are always available.
 - `r2e-data-sqlx` contains cancellation-safe managed SQLx transactions.
-  Provide a normal `sqlx::Pool<DB>` and request `Tx<'_, DB>`, or produce a
-  rotating `DbPool<DB>` from a `LiveConfig<String>` and request
-  `DbTx<'_, DB>`. `DbPool` watches the live URL value as a `ServiceComponent`,
+  Provide a normal `sqlx::Pool<DB>` and request `Tx<'_, DB>`, or install the
+  datasource plugin for a rotating `DbPool<DB>` and request `DbTx<'_, DB>`.
+  `DbPool` watches the live URL value as a `ServiceComponent`,
   connects a replacement pool on rotation, swaps atomically on success, and
   closes the old pool in the background. The pool and its generation live in a
   single swapped cell — `snapshot() -> (Pool<DB>, u64)` reads both at once, so
@@ -481,6 +481,32 @@ impl AdminController {
   blocking-pool `run` helper. Its `DbPool` has the same atomic `snapshot()`,
   but no retry: rotation only drops the facade's handle and r2d2 pools are
   never explicitly closed, so a handle taken before the swap keeps working.
+- **The datasource plugin owns the pool's whole boot.**
+  `SqlxDataSource<DB, Tag = DefaultDataSource>` (and its mirror
+  `DieselDataSource<Conn, Tag>`) is a `PreStatePlugin` with
+  `Provided = (DbPool<DB, Tag>,)`, `Deps = (LiveConfigRegistry,)`,
+  `CONFIG_PREFIX = Tag::CONFIG_PREFIX`, and `SKIP_BUILD_WHEN_ALL_PINNED = true`.
+  `build()` reads the typed `DataSourceConfig` (`url`, `max-connections`,
+  `min-connections`, `acquire-timeout`, `migrate-at-start: bool = false`),
+  connects the pool from a `LiveConfig<String>` on `<prefix>.url` (the registry
+  is a *dep* because the URL must stay live — the typed `url` field exists only
+  so a missing key fails with a pointed message), runs the migrator attached by
+  `.migrations(&MIGRATOR)` when `migrate-at-start` is true, starts the rotation
+  `ServiceComponent` via `ctx.on_serve` + `serve.track`, and closes the pool via
+  `ctx.on_shutdown_async` (SQLx only — r2d2 has no async close). Any failure
+  aborts the boot as `Plugin 'SqlxDataSource' failed to build: ...`.
+- **Tags are how a second database exists.** `DataSourceTag` carries both
+  `NAME: Option<&'static str>` and `CONFIG_PREFIX: &'static str` because a
+  `const` cannot concatenate `"datasource." + NAME` on stable; the
+  `datasource_tag!(pub Reporting = "reporting")` macro mints the pair together.
+  The tag is a `PhantomData<fn() -> Tag>` parameter on `DbPool`/`DbTx`/
+  `RotatingPool`, defaulted to `DefaultDataSource`, so every pre-plugin
+  `DbPool<DB>` spelling still compiles. Each backend owns its own tag trait: an
+  app uses one of them, and a datasource marker is not runtime foundation.
+- **There is no `datasource.enabled` gate** — a pool bean has no inert form, so
+  `enabled = false` only logs a warning. The way to replace a datasource in a
+  test is to pin the pool (`override_bean`), which
+  `SKIP_BUILD_WHEN_ALL_PINNED` turns into "no connection, no migrations".
 - CRUD models and queries remain application-owned and use SQLx or Diesel
   directly.
 
