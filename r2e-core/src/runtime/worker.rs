@@ -102,11 +102,22 @@ impl WorkerService for () {}
 /// worker's [`WorkerContext`].
 #[derive(Clone)]
 pub struct PerWorkerServiceFactory {
-    inner: Arc<
-        dyn Fn(WorkerContext) -> LocalBoxFuture<'static, Result<Box<dyn WorkerService>, BoxError>>
-            + Send
-            + Sync,
-    >,
+    inner: Arc<dyn FactoryFn>,
+}
+
+/// Type-erased factory closure: `WorkerContext` → boxed `WorkerService`.
+trait FactoryFn:
+    Fn(WorkerContext) -> LocalBoxFuture<'static, Result<Box<dyn WorkerService>, BoxError>>
+    + Send
+    + Sync
+{
+}
+
+impl<F> FactoryFn for F where
+    F: Fn(WorkerContext) -> LocalBoxFuture<'static, Result<Box<dyn WorkerService>, BoxError>>
+        + Send
+        + Sync
+{
 }
 
 impl std::fmt::Debug for PerWorkerServiceFactory {
