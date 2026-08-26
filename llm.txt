@@ -908,7 +908,7 @@ and is never reported as missing.
 
 `server.host` (default `0.0.0.0`), `server.port` (default `3000`) — read by
 `serve_auto()`. `server.workers` (`N` or `"per-core"`) — SO_REUSEPORT sharded
-serving. `server.quic.*` — HTTP/3.
+serving (required by `per_worker_service`). `server.quic.*` — HTTP/3.
 
 ---
 
@@ -3062,8 +3062,10 @@ a dropped future. `From` converts both ways with
 Also re-exported, identity unchanged, so the `tokio::` name disappears at zero
 cost: `rt::sync::{mpsc, oneshot, broadcast, watch, Mutex, RwLock, Notify,
 Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!}`, `rt::JoinSet`,
-`rt::stream` (`tokio-stream`), `rt::{TcpListener, TcpStream}`, `rt::io`
-(`AsyncRead`/`AsyncWrite` + the `…Ext` traits), and
+`rt::stream` (`tokio-stream`), `rt::{TcpListener, TcpStream, UdpSocket}`, `rt::io`
+(`AsyncRead`/`AsyncWrite` + the `…Ext` traits), `rt::{LocalSet, spawn_local}`
+(only meaningful inside a per-worker service — prefer
+`WorkerContext::spawn_local`), and
 `rt::{RuntimeBuilder, Runtime, RuntimeHandle, block_on, block_in_place}` for
 owning a runtime yourself.
 
@@ -3075,6 +3077,52 @@ behind a non-default feature: enable `r2e/test-util` (a crate depending on
 
 Serve-time work still goes through `ServeContext::track`, never a bare
 `rt::spawn` — see "AppBuilder — full assembly order".
+
+### Per-worker services (shard-local `!Send` state)
+
+Under sharded serving each worker is a `current_thread` runtime that serves HTTP
+only. `AppBuilder::per_worker_service(factory)` (any phase, repeatable) runs
+`factory(WorkerContext)` **exactly once inside every worker's runtime** — after
+the worker exists, before it accepts traffic — and keeps the returned
+`WorkerService` alive until shutdown. The factory must be `Send + Sync` (shared
+by all workers); the future it returns and the service **may be `!Send`**
+(`Rc`, `RefCell`, sockets adopted into the worker runtime). This is how an app
+gets one Quinn/QUIC or UDP endpoint per shard with thread-local connection
+state, without r2e depending on Quinn.
+
+```rust
+use r2e::prelude::*;                         // WorkerContext, WorkerService
+use r2e::runtime::worker::{BoxError, LocalBoxFuture};
+
+struct Shard { hits: Rc<RefCell<u64>>, task: JobHandle<()> }
+impl WorkerService for Shard {
+    fn shutdown(self: Box<Self>) -> LocalBoxFuture<'static, ()> {
+        Box::pin(async move { let _ = self.task.await; })   // default impl is a no-op
+    }
+}
+
+builder.per_worker_service(move |worker: WorkerContext| async move {
+    let sock = r2e::rt::UdpSocket::from_std(bind_reuseport_udp(port)?)?; // socket2
+    let hits = Rc::new(RefCell::new(0u64));
+    let stop = worker.shutdown();                       // CancelToken, fires at shutdown
+    let task = worker.spawn_local(run(sock, hits.clone(), stop));
+    tracing::info!(id = worker.id(), of = worker.workers(), cpu = ?worker.cpu());
+    Ok::<_, BoxError>(Shard { hits, task })
+})
+```
+
+`WorkerContext` is `!Send + !Sync`: `id()` (stable `0..workers()`, thread name
+`r2e-worker-{id}`), `workers()`, `cpu()` (always `None` today — no affinity),
+`thread_id()`, `shutdown()`, `spawn_local(fut)`. `()` implements
+`WorkerService` for factories with nothing to tear down. Guarantees: startup is
+all-or-nothing (no worker serves until every worker started every service; a
+failing or panicking factory unwinds already-started services everywhere and
+`run()` errors with `worker {i}: per-worker service #{k} failed to start: …`);
+shutdown per worker is HTTP drain → `WorkerService::shutdown` in reverse start
+order → `LocalSet` dropped. Requires `server.workers` — with it unset, under
+`run_with_listener`, or under `dev-reload`, `run()` returns an error rather
+than falling back to the multi-thread control plane. Example:
+`examples/example-worker-udp`. Reference: `docs/features/19-sharded-serving.md`.
 
 ---
 
@@ -3461,6 +3509,7 @@ Alongside `&self`:
 | `.schedule_task(def)` | post-state | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | post-state | Raw axum escape hatches (last resort) |
 | `.on_start(f)` / `.on_stop(f)` | post-state | Lifecycle hooks |
+| `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
 | `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 
 Launching: normally write only `r2e::app_main!(MyApp);` in `main.rs`; it includes

@@ -137,15 +137,116 @@ setting `server.workers` returns:
 - **`run_with_listener` ignores sharding.** The caller owns the (single)
   listener; if `server.workers` is set, a `tracing::warn!` is logged and serving
   proceeds single-listener.
-- **QUIC/HTTP3 is out of scope.** In sharded mode the QUIC endpoint (if
-  configured) stays on the main runtime exactly as today; sharding affects TCP
-  only.
+- **R2E's own QUIC/HTTP3 endpoint is not sharded.** In sharded mode the QUIC
+  endpoint (if configured) stays on the control plane exactly as today;
+  sharding affects TCP only. Applications that want a *shard-local* QUIC (or
+  any other UDP) endpoint build it themselves on top of
+  [per-worker services](#per-worker-services) — R2E does not depend on Quinn.
 - **A worker dying mid-run does not stop the app.** If one worker exits early
   (serve error or panic), the remaining workers keep serving — capacity is
   degraded by 1/N and nothing restarts the dead worker. The failure is logged
   immediately, but a worker serve `Err` only propagates as the overall run
   error after shutdown, when all workers are joined. (The single-listener path,
   by contrast, tears the whole server down on a serve error.)
+
+## Per-worker services
+
+Sharded serving gives you N `current_thread` runtimes, but by default they run
+HTTP and nothing else — everything non-HTTP is routed to the control plane.
+**Per-worker services** are the opt-in for a workload that must live *inside* a
+worker: one QUIC endpoint per shard with its connection state, a per-shard UDP
+socket, a shard-local cache or mailbox. The canonical use case is a Quinn
+endpoint bound with `SO_REUSEPORT` on every worker, with `Rc`-based connection
+state that never crosses a thread — the thread-per-core model that makes QUIC
+scale.
+
+```rust
+use r2e::prelude::*;                    // WorkerContext, WorkerService
+use r2e::runtime::worker::BoxError;
+
+struct ShardEcho { count: Rc<RefCell<u64>>, loop_task: JobHandle<()> }
+
+impl WorkerService for ShardEcho {
+    fn shutdown(self: Box<Self>) -> LocalBoxFuture<'static, ()> {
+        Box::pin(async move { let _ = self.loop_task.await; })
+    }
+}
+
+AppBuilder::new()
+    .load_config::<()>()
+    .build_state().await
+    .register_controller::<PingController>()
+    .per_worker_service(move |worker: WorkerContext| async move {
+        // One SO_REUSEPORT UDP socket per shard, adopted into THIS worker's runtime.
+        let std_sock = bind_reuseport_udp(port)?;                // socket2, see example
+        let sock = r2e::rt::UdpSocket::from_std(std_sock)?;
+        let count = Rc::new(RefCell::new(0u64));                 // !Send is fine here
+        let shutdown = worker.shutdown();
+        let loop_task = worker.spawn_local(echo_loop(sock, count.clone(), shutdown));
+        Ok::<_, BoxError>(ShardEcho { count, loop_task })
+    })
+```
+
+Runnable version: `examples/example-worker-udp` (`cargo run -p example-worker-udp`,
+then `echo hi | nc -u 127.0.0.1 4433` → `shard=<id> n=<count> hi`). Replace the
+UDP echo loop with `quinn::Endpoint::new(config, None, std_sock, Arc::new(quinn::TokioRuntime))`
+and you have shard-local QUIC without r2e knowing about Quinn.
+
+### API
+
+- `AppBuilder::per_worker_service(factory)` — any phase, repeatable; factories
+  run in registration order. `factory: Fn(WorkerContext) -> impl Future<Output =
+  Result<S, BoxError>>` must be `Send + Sync` (it is shared by all workers —
+  capture `Arc`s / config); the **future and `S` need not be `Send`**.
+- `WorkerContext` (`!Send + !Sync`): `id()` (stable `0..workers()`, also the
+  thread-name suffix `r2e-worker-{id}`), `workers()`, `cpu()` (always `None` —
+  R2E does not pin threads; reserved for when it does), `thread_id()`,
+  `shutdown() -> CancelToken`, `spawn_local(fut) -> JobHandle` (a `!Send`-capable
+  task on this worker only; panics if called off-thread, which the type makes
+  impossible by accident).
+- `WorkerService` (`'static`): one method, `shutdown(self: Box<Self>) ->
+  LocalBoxFuture<'static, ()>`, defaulting to a no-op. `()` implements it —
+  return `Ok(())` from a factory that has nothing to tear down.
+- `r2e::rt::{spawn_local, LocalSet, UdpSocket}` are exposed for this purpose;
+  `rt::spawn_local` is only valid inside a worker's `LocalSet` — prefer
+  `WorkerContext::spawn_local`.
+
+### Ownership and threading guarantees
+
+1. **Exactly once per worker**, on the worker's own OS thread, inside its
+   `current_thread` runtime and `LocalSet`, *after* the control-plane handle is
+   registered and *before* the worker accepts its first connection.
+2. Everything the factory produces stays on that thread for life: the service,
+   `spawn_local` tasks, and any `Rc`/`RefCell` they share. Nothing can migrate
+   to the control plane or another worker.
+3. **All-or-nothing startup.** No worker serves until *every* worker has started
+   *every* service. If a factory returns `Err` or panics, the failing worker
+   shuts down what it already started (reverse order), every other worker is
+   cancelled and does the same, and `run()` returns
+   `worker {i}: per-worker service #{k} failed to start: {e}` (or
+   `worker {i} exited before reporting startup (panicked?)`).
+4. **Shutdown ordering per worker:** `worker.shutdown()` is cancelled together
+   with the HTTP listener → in-flight HTTP drains → `WorkerService::shutdown`
+   awaited for each service in reverse start order → `LocalSet` and runtime
+   dropped (which cancels any local task still running — await your tasks in
+   `shutdown` if they must finish). A service is never dropped while its
+   `shutdown` future is pending.
+5. **Requires sharding.** `per_worker_service()` with `server.workers` unset,
+   with `run_with_listener`, or under `dev-reload`, is a hard error at `run()`
+   (`per_worker_service() is registered but server.workers is not set …`).
+   Running the factory on the multi-thread control plane would silently break
+   the `!Send` promise, so there is no fallback.
+6. The control plane is untouched: scheduler, executor, consumers, and R2E's
+   own QUIC endpoint keep their placement from the table above.
+
+Platform note: on Linux the kernel hashes incoming UDP datagrams across the
+`SO_REUSEPORT` group by 4-tuple, so shards share the load. macOS delivers all
+datagrams of a reused UDP port to a single socket — the example runs there, but
+only one shard sees traffic.
+
+Tests: `r2e-core/tests/runtime/worker_services.rs` (1/2/4 workers: invocation
+count and identity, `!Send` state + local tasks, reverse-order shutdown,
+startup failure unwinding, panic, `StopHandle`).
 
 ## Which runtime executes what (control plane / data plane)
 
@@ -157,7 +258,8 @@ Sharded mode splits work across two kinds of runtime:
 | Scheduler tasks (`#[scheduled]`) | **Control plane** — one tracked driver task (`ServeContext::track`, a min-heap of next-fire times drives all schedules); tick bodies are submitted to the `PoolExecutor` (`spawn_ctl`, also control plane) |
 | `ServiceComponent`s / `spawn_service` | Control plane |
 | Event-bus consumers (`#[consumer]`), per-emit handler dispatch | Control plane |
-| QUIC / HTTP3 endpoint | Control plane |
+| QUIC / HTTP3 endpoint (R2E's `server.quic.*`) | Control plane |
+| Per-worker services (`per_worker_service`) + their `spawn_local` tasks | **HTTP workers** — inside each worker's `LocalSet`, `!Send` allowed |
 | Executor pool jobs (`PoolExecutor::submit`/`try_submit`) | Control plane |
 | Lazy-bean resolution (`#[bean(lazy)]` first-touch) | Control plane |
 

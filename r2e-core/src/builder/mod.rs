@@ -348,6 +348,10 @@ struct BuilderConfig {
     /// `build_state()` and folded into the async shutdown phase by
     /// [`AppBuilder::from_pre`].
     bean_disposers: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Per-worker service factories registered via
+    /// [`AppBuilder::per_worker_service`]; run once inside every sharded
+    /// worker before it serves (see [`crate::runtime::worker`]).
+    per_worker_services: Vec<crate::runtime::worker::PerWorkerServiceFactory>,
 }
 
 /// Builder for assembling a R2E application.
@@ -445,6 +449,50 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     /// prepared app (it takes precedence over a bean).
     pub fn with_stop_handle(mut self, handle: StopHandle) -> Self {
         self.shared.stop_handle = Some(handle);
+        self
+    }
+
+    /// Register a **per-worker service**: a shard-local, `!Send`-capable
+    /// service constructed once inside every sharded HTTP worker
+    /// (`server.workers`), after the worker runtime exists and before it
+    /// accepts its first connection.
+    ///
+    /// `factory` is shared by all workers (`Send + Sync`) and invoked once per
+    /// worker with that worker's [`WorkerContext`](crate::runtime::worker::WorkerContext)
+    /// — worker id, worker count, shutdown token, and `spawn_local`. The future
+    /// it returns and the [`WorkerService`](crate::runtime::worker::WorkerService)
+    /// it resolves to run on, and never leave, the worker thread: `Rc`,
+    /// `RefCell`, per-shard sockets (UDP `SO_REUSEPORT`, a QUIC endpoint) are
+    /// all valid. Return `()` when there is nothing to clean up.
+    ///
+    /// Startup is all-or-nothing across workers (a failing factory fails
+    /// `run()` with the worker id, after unwinding services already started);
+    /// at graceful shutdown each worker drains HTTP, then awaits
+    /// `WorkerService::shutdown` in reverse start order. Full guarantees in
+    /// [`crate::runtime::worker`].
+    ///
+    /// Requires sharded serving: `run()` errors when a per-worker service is
+    /// registered but `server.workers` is not set. Control-plane services
+    /// (`spawn_service`, `#[scheduled]`, `#[consumer]`) are unaffected and
+    /// remain the default for non-shard-local work.
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .per_worker_service(|worker| async move {
+    ///         let sock = bind_reuseport_udp("0.0.0.0:4433")?; // std::net::UdpSocket
+    ///         let sock = r2e::rt::UdpSocket::from_std(sock)?;  // adopted on this worker
+    ///         Ok(ShardEcho::start(worker, sock))
+    ///     })
+    /// ```
+    pub fn per_worker_service<F, Fut, S>(mut self, factory: F) -> Self
+    where
+        F: Fn(crate::runtime::worker::WorkerContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<S, crate::runtime::worker::BoxError>> + 'static,
+        S: crate::runtime::worker::WorkerService,
+    {
+        self.shared
+            .per_worker_services
+            .push(crate::runtime::worker::PerWorkerServiceFactory::new(factory));
         self
     }
 }

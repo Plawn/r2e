@@ -22,6 +22,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 shutdown_grace_period: None,
                 active_profile: "default".to_string(),
                 forced_profile: None,
+                per_worker_services: Vec::new(),
                 config_file: None,
                 config_overrides: Vec::new(),
                 preloaded_config: None,

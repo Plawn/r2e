@@ -11,7 +11,7 @@ disallowed-methods = [
     { path = "tokio::spawn", reason = "use r2e_rt::spawn / r2e_core::rt::spawn (or rt::spawn_ctl for control-plane work)" },
     { path = "tokio::task::spawn", reason = "use r2e_rt::spawn / r2e_core::rt::spawn (or rt::spawn_ctl for control-plane work)" },
     { path = "tokio::task::spawn_blocking", reason = "use r2e_rt::spawn_blocking / r2e_core::rt::spawn_blocking" },
-    { path = "tokio::task::spawn_local", reason = "no r2e-rt equivalent — spawn_local breaks the Send contract sharded serving relies on" },
+    { path = "tokio::task::spawn_local", reason = "use r2e_rt::spawn_local / WorkerContext::spawn_local — only valid inside a per-worker LocalSet" },
     { path = "tokio::runtime::Handle::spawn", reason = "use r2e_rt::spawn_ctl / r2e_core::rt::spawn_ctl" },
     { path = "tokio::runtime::Handle::spawn_blocking", reason = "use r2e_rt::spawn_blocking / r2e_core::rt::spawn_blocking" },
 ]

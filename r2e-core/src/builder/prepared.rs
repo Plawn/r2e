@@ -51,10 +51,20 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     /// `Ok(Some(n))` → SO_REUSEPORT sharded serving with `n` workers.
     /// `Err(msg)` → invalid config value, surfaced as an error at `run()` time.
     pub(super) workers: Result<Option<usize>, String>,
+    /// Per-worker service factories ([`AppBuilder::per_worker_service`]).
+    /// Non-empty requires the sharded strategy; checked at `run()`.
+    pub(super) per_worker_services: Vec<crate::runtime::worker::PerWorkerServiceFactory>,
     #[cfg(feature = "quic")]
     pub(super) quic_server_config:
         Option<(std::net::SocketAddr, r2e_http::quic::quinn::ServerConfig)>,
 }
+
+/// Error returned by `run()` when a per-worker service is registered but the
+/// app is not serving sharded (`server.workers` absent, hot-reload, or an
+/// explicit listener).
+pub const PER_WORKER_REQUIRES_SHARDING_MSG: &str =
+    "per_worker_service() is registered but server.workers is not set: per-worker \
+     services need SO_REUSEPORT sharded serving (set server.workers to N or \"per-core\")";
 
 /// Internal serving strategy chosen by [`PreparedApp::run`].
 ///
@@ -138,6 +148,23 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         // Resolve the `server.workers` config; an invalid value is a hard error.
         let workers = self.workers.clone()?;
+        // Per-worker services need worker runtimes to live on; the
+        // single-listener path (and the hot-reload path, which forces it) has
+        // none. Never fall back silently — the `!Send` ownership promise would
+        // be broken on the multi-thread runtime.
+        if !self.per_worker_services.is_empty() {
+            if workers.is_none() {
+                return Err(PER_WORKER_REQUIRES_SHARDING_MSG.into());
+            }
+            #[cfg(feature = "dev-reload")]
+            {
+                return Err(format!(
+                    "{PER_WORKER_REQUIRES_SHARDING_MSG} (the `dev-reload` feature forces \
+                     single-listener serving)"
+                )
+                .into());
+            }
+        }
 
         match workers {
             // Sharded SO_REUSEPORT serving requested.
@@ -214,6 +241,13 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                  explicit listener; SO_REUSEPORT sharding is ignored. Serving with \
                  the provided single listener."
             );
+        }
+        if !self.per_worker_services.is_empty() {
+            return Err(format!(
+                "{PER_WORKER_REQUIRES_SHARDING_MSG} (run_with_listener always serves \
+                 single-listener)"
+            )
+            .into());
         }
         self.run_inner(ServeStrategy::Single(listener)).await
     }
@@ -531,6 +565,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 let router = self.router.clone();
                 let tcp_nodelay = self.tcp_nodelay;
                 let cancel_for_workers = cancel_token.clone();
+                let per_worker_services = self.per_worker_services.clone();
                 // Capture the main (multi-thread) runtime handle as the control
                 // plane. Worker threads register it so that background work
                 // initiated from request handlers (and lazy-bean first-touch)
@@ -558,6 +593,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                         tcp_nodelay,
                         control_plane,
                         cancel_for_workers,
+                        &per_worker_services,
                     )
                 })
                 .await;

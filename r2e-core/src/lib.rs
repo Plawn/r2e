@@ -78,6 +78,7 @@ pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracin
 pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::service::ServiceComponent;
 pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
+pub use runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
 pub use state::R2eState;
 pub use type_list::{
     AllSatisfied, BeanAccess, BeanLookup, BuildHList, Contains, ControllerTuple, HCons, HNil,
