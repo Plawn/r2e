@@ -14,10 +14,10 @@
 //!
 //! ```ignore
 //! // Default headers
-//! .with(SecureHeaders::default())
+//! .plugin(SecureHeaders::default())
 //!
 //! // Custom configuration
-//! .with(SecureHeaders::builder()
+//! .plugin(SecureHeaders::builder()
 //!     .hsts(true)
 //!     .hsts_max_age(63072000)
 //!     .frame_options("SAMEORIGIN")
@@ -27,7 +27,6 @@
 
 use crate::http::{HeaderName, HeaderValue};
 
-use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
 
 /// Security headers plugin.
@@ -57,16 +56,27 @@ impl Default for SecureHeaders {
 }
 
 impl Plugin for SecureHeaders {
-    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut crate::plugin::PluginBuildContext,
+    ) -> Result<Self::Provided, crate::plugin::PluginBuildError> {
         let headers = self.headers;
-        app.with_layer_fn(move |mut router| {
+        ctx.add_layer(move |mut router| {
             for (name, value) in headers {
                 router = router.layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
                     name, value,
                 ));
             }
             router
-        })
+        });
+        Ok(())
     }
 }
 
