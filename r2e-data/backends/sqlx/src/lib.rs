@@ -1,9 +1,14 @@
 //! Managed SQLx transactions for R2E.
 //!
-//! Register an SQLx pool as a bean, then request a [`Tx`] from an HTTP route:
+//! Install the datasource plugin — it connects the pool, optionally migrates,
+//! and closes it on shutdown — then request a [`DbTx`] from an HTTP route:
 //!
 //! ```ignore
-//! AppBuilder::new().provide(pool).build_state().await;
+//! AppBuilder::new()
+//!     .load_config::<()>()
+//!     .plugin(SqlxDataSource::<sqlx::Postgres>::new().migrations(&MIGRATOR))
+//!     .build_state()
+//!     .await;
 //!
 //! #[post("/users")]
 //! async fn create(
@@ -30,18 +35,20 @@
 //! `TenantTx<'_, DB>` is the managed transaction on it. `TenantPool` carries the
 //! wiring, the compile-time guarantees, and the migrations deferral.
 
+mod datasource;
 mod pool;
 #[cfg(feature = "tenant")]
 mod tenant;
 mod tx;
 
+pub use datasource::{DataSourceConfig, DataSourceTag, DefaultDataSource, SqlxDataSource};
 pub use pool::DbPool;
 #[cfg(feature = "tenant")]
 pub use tenant::{PoolSource, TenantPool, TenantPools, TenantTx};
 pub use tx::{DbTx, FixedPool, ManagedTx, RotatingPool, SqlxTx, Tx, TxSource};
 
 pub mod prelude {
-    pub use crate::{DbPool, DbTx, SqlxTx, Tx};
+    pub use crate::{DbPool, DbTx, SqlxDataSource, SqlxTx, Tx};
     #[cfg(feature = "tenant")]
     pub use crate::{TenantPools, TenantTx};
 }

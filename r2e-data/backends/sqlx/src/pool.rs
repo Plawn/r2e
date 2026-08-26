@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
@@ -9,6 +10,8 @@ use futures_util::TryStreamExt;
 use r2e_core::config::LiveConfig;
 use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ConfigError, ServiceComponent};
+
+use crate::datasource::{DataSourceTag, DefaultDataSource};
 use sqlx::pool::{PoolConnection, PoolOptions};
 use sqlx::{Database, Either, Error, Execute, Executor, Pool, SqlStr, Transaction};
 
@@ -22,14 +25,26 @@ use sqlx::{Database, Either, Error, Execute, Executor, Pool, SqlStr, Transaction
 const MAX_POOL_ATTEMPTS: usize = 3;
 
 /// SQLx pool facade that can rotate to a new underlying pool at runtime.
-pub struct DbPool<DB: Database> {
+///
+/// `Tag` names *which* datasource this pool is: [`DefaultDataSource`] (the
+/// default) is the app's single, unnamed database — `DbPool<Postgres>` means
+/// exactly what it always did. A named tag (see
+/// [`datasource_tag!`](crate::datasource_tag)) makes a second, distinct bean
+/// type so several datasources can coexist in one app, each with its own
+/// `datasource.<name>.*` config section. The tag is a compile-time marker only:
+/// it costs nothing at runtime and never reaches SQLx.
+pub struct DbPool<DB: Database, Tag = DefaultDataSource> {
     inner: Arc<Inner<DB>>,
+    /// `fn() -> Tag` (not `Tag`): the marker must not make the pool's
+    /// auto-traits depend on it, and the pool never holds a `Tag` value.
+    tag: PhantomData<fn() -> Tag>,
 }
 
-impl<DB: Database> Clone for DbPool<DB> {
+impl<DB: Database, Tag> Clone for DbPool<DB, Tag> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            tag: PhantomData,
         }
     }
 }
@@ -57,7 +72,7 @@ struct Inner<DB: Database> {
     last_error: Mutex<Option<String>>,
 }
 
-impl<DB: Database> DbPool<DB> {
+impl<DB: Database, Tag> DbPool<DB, Tag> {
     /// Build the initial pool from a runtime live-config URL.
     pub async fn connect(url: LiveConfig<String>) -> Result<Self, Error> {
         Self::connect_with(PoolOptions::<DB>::new(), url).await
@@ -81,6 +96,7 @@ impl<DB: Database> DbPool<DB> {
                 url,
                 last_error: Mutex::new(None),
             }),
+            tag: PhantomData,
         })
     }
 
@@ -190,7 +206,7 @@ impl<DB: Database> DbPool<DB> {
     }
 }
 
-impl<DB: Database> fmt::Debug for DbPool<DB> {
+impl<DB: Database, Tag> fmt::Debug for DbPool<DB, Tag> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DbPool")
             .field("generation", &self.generation())
@@ -199,9 +215,10 @@ impl<DB: Database> fmt::Debug for DbPool<DB> {
     }
 }
 
-impl<DB> ServiceComponent for DbPool<DB>
+impl<DB, Tag> ServiceComponent for DbPool<DB, Tag>
 where
     DB: Database,
+    Tag: DataSourceTag,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     /// The pool is itself the bean: `from_context` reads it back by type.
@@ -230,9 +247,10 @@ where
     }
 }
 
-impl<'p, DB> Executor<'p> for &'_ DbPool<DB>
+impl<'p, DB, Tag> Executor<'p> for &'_ DbPool<DB, Tag>
 where
     DB: Database,
+    Tag: DataSourceTag,
     for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     type Database = DB;

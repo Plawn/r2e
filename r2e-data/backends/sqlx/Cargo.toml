@@ -25,7 +25,8 @@ futures-core = {workspace = true}
 futures-util = {workspace = true}
 r2e-core = {workspace = true}
 r2e-tenant = {workspace = true, optional = true}
-sqlx = {workspace = true}
+sqlx = {workspace = true, features = ["migrate"]}
+tracing = {workspace = true}
 
 [dev-dependencies]
 http-body-util = {workspace = true}
