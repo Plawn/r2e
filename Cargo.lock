@@ -2656,6 +2656,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-worker-udp"
+version = "0.3.0"
+dependencies = [
+ "r2e",
+ "socket2",
+ "tracing",
+]
+
+[[package]]
 name = "ext-trait"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

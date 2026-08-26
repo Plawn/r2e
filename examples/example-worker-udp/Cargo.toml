@@ -1,0 +1,17 @@
+[package]
+name = "example-worker-udp"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Minimal per-worker service example: one SO_REUSEPORT UDP echo socket per
+# sharded HTTP worker, with shard-local (`Rc<RefCell<_>>`) state.
+# See docs/features/19-sharded-serving.md § "Per-worker services".
+
+[dependencies]
+r2e = { workspace = true }
+socket2 = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+dev-reload = ["r2e/dev-reload"]

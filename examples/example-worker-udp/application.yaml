@@ -1,0 +1,10 @@
+server:
+  host: "127.0.0.1"
+  port: 3000
+  # Per-worker services REQUIRE sharded serving: one current_thread runtime
+  # per worker is what the shard-local services live on. Without this key,
+  # `run()` fails with a clear error instead of silently running the services
+  # somewhere they could not own `!Send` state.
+  workers: per-core
+
+# UDP echo port: `UDP_PORT` env var (default 4433).
