@@ -25,11 +25,11 @@ AppBuilder::new()
     .provide(pool)                        // 3. Pre-built beans (by type)
     .provide(event_bus)
     .register::<UserService>()            // 4. #[bean] / #[producer] beans
+    .plugin(Health)                         // 6. HTTP plugins
+    .plugin(Cors::permissive())
+    .plugin(ErrorHandling)
     .build_state()                        // 5. Graph resolution → inferred HList state
     .await
-    .with(Health)                         // 6. HTTP plugins
-    .with(Cors::permissive())
-    .with(ErrorHandling)
     .on_start(|_state| async move { Ok(()) })  // 7. Hooks
     .on_stop(|_| async {})
     .register_controllers::<(UserController, ScheduledJobs)>()  // 8. Controllers

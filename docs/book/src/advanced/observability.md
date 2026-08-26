@@ -10,9 +10,9 @@ The `Tracing` plugin initializes structured logging and adds HTTP-level trace sp
 use r2e::prelude::*;
 
 AppBuilder::new()
+    .plugin(Tracing)
     .build_state()
     .await
-    .with(Tracing)
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -92,9 +92,9 @@ let tracing_config = TracingConfig::default()
     .with_filter("debug,hyper=warn");
 
 AppBuilder::new()
+    .plugin(Tracing::configured(tracing_config))
     .build_state()
     .await
-    .with(Tracing::configured(tracing_config))
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -104,16 +104,16 @@ AppBuilder::new()
 When using `load_config`, you can read `TracingConfig` directly from your YAML:
 
 ```rust
-let app = AppBuilder::new()
-    .load_config::<RootConfig>()
+let builder = AppBuilder::new().load_config::<RootConfig>();
+
+// The builder exposes the loaded config via `r2e_config()`, so a
+// config-driven plugin can be constructed before `build_state()`.
+let tracing = Tracing::from_config(builder.r2e_config().unwrap());
+
+builder
+    .plugin(tracing)
     .build_state()
-    .await;
-
-// `R2eConfig` is itself a bean in the graph; the post-build_state builder
-// exposes it via `r2e_config()`.
-let tracing = Tracing::from_config(app.r2e_config().unwrap());
-
-app.with(tracing)
+    .await
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -123,11 +123,11 @@ app.with(tracing)
 ### Tracing under the canonical entrypoint
 
 The canonical entrypoint — `r2e::app_main!(MyApp)` / `r2e::launch!` — does **not**
-initialize tracing for you. Install the `Tracing` plugin inside `App::build`,
-after `build_state()`, with `.with(Tracing)` (or the config-driven
-`.with(Tracing::from_config(builder.r2e_config().unwrap()))` shown above, since
-`r2e_config()` is only available once the state is built). With no plugin, the
-app emits no tracing subscriber.
+initialize tracing for you. Install the `Tracing` plugin inside `App::setup`
+(or in `App::build`, before `build_state()`) with `.plugin(Tracing)` — or the
+config-driven `.plugin(Tracing::from_config(builder.r2e_config().unwrap()))`
+shown above, since `r2e_config()` is available as soon as `load_config` has
+run. With no plugin, the app emits no tracing subscriber.
 
 Only the custom-entrypoint macro `#[r2e::main]` auto-initializes tracing before
 config is loaded. If you use that form and want configurable tracing instead:
@@ -144,9 +144,9 @@ Enable the `observability` feature and install `Observability` instead of
 use r2e::r2e_observability::Observability;
 
 builder
+    .plugin(Observability::from_env("my-service"))
     .build_state()
     .await
-    .with(Observability::from_env("my-service"))
 ```
 
 `from_env` reads the standard OTLP endpoint, service-name, protocol, and
@@ -201,10 +201,10 @@ The `RequestIdPlugin` assigns a unique identifier to every request, enabling cor
 
 ```rust
 AppBuilder::new()
+    .plugin(RequestIdPlugin)
+    .plugin(Tracing)
     .build_state()
     .await
-    .with(RequestIdPlugin)
-    .with(Tracing)
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -322,16 +322,16 @@ A typical production setup uses all observability features together:
 use r2e::prelude::*;
 
 // Application setup
-let app = AppBuilder::new()
-    .load_config::<RootConfig>()
+let builder = AppBuilder::new().load_config::<RootConfig>();
+
+let tracing = Tracing::from_config(builder.r2e_config().unwrap());
+
+builder
+    .plugin(RequestIdPlugin)     // Assign request IDs
+    .plugin(tracing)             // Configurable tracing
+    .plugin(Health)              // Health check endpoint
     .build_state()
-    .await;
-
-let tracing = Tracing::from_config(app.r2e_config().unwrap());
-
-app.with(RequestIdPlugin)                                // Assign request IDs
-    .with(tracing)                                       // Configurable tracing
-    .with(Health)                                        // Health check endpoint
+    .await
     .register_controller::<ApiController>()
     .serve("0.0.0.0:3000")
     .await;

@@ -26,9 +26,9 @@ let openapi = OpenApiConfig::new("My API", "1.0.0")
     .with_docs_ui(true);
 
 AppBuilder::new()
+    .plugin(OpenApiPlugin::new(openapi))
     .build_state()
     .await
-    .with(OpenApiPlugin::new(openapi))
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000")
     .await;
@@ -65,7 +65,7 @@ Precedence: overrides > route schemas > registry > built-in error schemas.
 
 ## How it works
 
-1. Each controller registers its `RouteInfo` metadata into the shared `MetaRegistry` (via `Controller::register_meta`) during `register_controller()`; the plugin consumes it through `with_meta_consumer::<RouteInfo>`
+1. Each controller registers its `RouteInfo` metadata into the shared route registry (via `Controller::register_meta`) during `register_controller()`; the plugin reads it from `RoutesContext::routes()` in a Routes-stage effect
 2. Request/response schemas are auto-generated via `schemars` at compile time
 3. Extra schemas from `SchemaRegistry` are merged (with `$defs` promotion and `$ref` rewriting)
 4. The spec is assembled and served as a JSON endpoint

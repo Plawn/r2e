@@ -15,8 +15,8 @@ use r2e_static::EmbeddedFrontend;
 #[folder = "frontend/dist"]
 struct Assets;
 
-// In your AppBuilder chain:
-app.with(EmbeddedFrontend::new::<Assets>())
+// In your AppBuilder chain, before build_state():
+app.plugin(EmbeddedFrontend::new::<Assets>())
 ```
 
 Defaults: SPA fallback on, `api/` excluded, `assets/` gets immutable cache headers, compression on.
@@ -24,7 +24,7 @@ Defaults: SPA fallback on, `api/` excluded, `assets/` gets immutable cache heade
 ## Builder API
 
 ```rust
-app.with(EmbeddedFrontend::builder::<Assets>()
+app.plugin(EmbeddedFrontend::builder::<Assets>()
     .exclude_prefix("api/")
     .exclude_prefix("graphql/")
     .immutable_prefix(Some("assets/".into()))
@@ -37,7 +37,7 @@ app.with(EmbeddedFrontend::builder::<Assets>()
 Mount on a sub-path (no SPA):
 
 ```rust
-app.with(EmbeddedFrontend::builder::<DocsAssets>()
+app.plugin(EmbeddedFrontend::builder::<DocsAssets>()
     .spa_fallback(false)
     .base_path("/docs")
     .build())

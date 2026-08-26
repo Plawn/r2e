@@ -8,9 +8,9 @@ Install the `Health` plugin for a minimal `GET /health` endpoint that always ret
 
 ```rust
 AppBuilder::new()
+    .plugin(Health)
     .build_state()
     .await
-    .with(Health)
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -26,15 +26,15 @@ use r2e::prelude::*;
 use r2e::builtins::health::{HealthBuilder, HealthIndicator, HealthStatus};
 
 AppBuilder::new()
-    .build_state()
-    .await
-    .with(
+    .plugin(
         Health::builder()
             .check(DbHealth::new(pool.clone()))
             .check(RedisHealth::new(redis.clone()))
             .cache_ttl(Duration::from_secs(5))
             .build()
     )
+    .build_state()
+    .await
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -260,10 +260,10 @@ async fn main() {
         .build();
 
     AppBuilder::new()
+        .plugin(Tracing)
+        .plugin(health)
         .build_state()
         .await
-        .with(Tracing)
-        .with(health)
         .serve("0.0.0.0:3000")
         .await;
 }

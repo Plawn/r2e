@@ -21,7 +21,7 @@ transaction lifecycles:
 ## The datasource plugin
 
 Neither backend expects a hand-built pool. `SqlxDataSource<DB, Tag>` and
-`DieselDataSource<Conn, Tag>` are pre-state plugins that own a database's whole
+`DieselDataSource<Conn, Tag>` are plugins that own a database's whole
 boot:
 
 ```rust

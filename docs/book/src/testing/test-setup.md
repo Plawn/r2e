@@ -27,9 +27,9 @@ impl App for MyApp {
     async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
         b.load_config::<AppConfig>()
             .register::<UserService>()
+            .plugin(Health)
+            .plugin(ErrorHandling)
             .build_state().await
-            .with(Health)
-            .with(ErrorHandling)
             .register_controllers::<(UserController,)>()
     }
 }

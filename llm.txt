@@ -66,11 +66,11 @@ impl App for MyApp {
 
     async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
         b.load_config::<()>()                    // application.yaml + env (sole config entry)
+            .plugin(Health)                      // /health → 200 "OK"
+            .plugin(Tracing)
+            .plugin(ErrorHandling)               // panics → JSON 500
             .build_state()                       // resolve bean graph (state is inferred)
             .await
-            .with(Health)                        // /health → 200 "OK"
-            .with(Tracing)
-            .with(ErrorHandling)                 // panics → JSON 500
             .register_controller::<HelloController>()
     }
 }
@@ -481,22 +481,28 @@ impl ChatService {
 }
 ```
 
-For conditional plugins/layers (no provision-list change) use
-`.when(cond, |b| b.with(...))` with `config_flag("key")` / `profile_is("prod")`.
+`.plugin()` changes the compile-time provision list, so it can NOT be applied
+behind a runtime flag: `.when()` only accepts `Self -> Self` (raw layers, config
+toggles). Gate a plugin with its own `<prefix>.enabled = false` (config-driven,
+`build` still runs and returns an inert variant) — or, for a compile-time gate,
+`#[cfg(debug_assertions)] let b = b.plugin(DevReload);`.
 
-### Writing a pre-state plugin — one async fallible `build()`
+### Writing a plugin — one async fallible `build()`
 
-A pre-state plugin IS one async, fallible factory for its `Provided` tuple:
+There is exactly **one** plugin kind (`Plugin`) and **one** install call
+(`.plugin(p)`, always before `build_state()`). A plugin IS one async, fallible
+factory for its `Provided` tuple:
 `build` runs inside `build_state()` as a node of the bean graph, after `Deps`
 (real topological edges, delivered by value), with typed config guaranteed
 loaded. There is no `install`/`configure` split and no shell/fill dance.
 
 ```rust
-impl PreStatePlugin for MyPlugin {
+impl Plugin for MyPlugin {
     type Provided = (MyHandle,);          // tuple of beans; each becomes its own bean
     type Deps = (DbPool,);                // ANY bean (.provide()-d or .register()-ed),
                                           // verified at build_state(), order-independent
     type Config = ();                     // or a ConfigProperties struct + CONFIG_PREFIX
+    type Controllers = ();                // or a tuple of #[controller] types the plugin ships
 
     async fn build(self, (pool,): Self::Deps, _config: Option<()>,
                    ctx: &mut PluginBuildContext)
@@ -513,13 +519,27 @@ impl PreStatePlugin for MyPlugin {
 runs, return a cheap INERT disabled variant when false, checking the gate before
 any global side effect; the gate is decided once here, not re-read later),
 `graph() -> GraphHandle` (handle on the final resolved graph, for request-time
-lookups), `config_raw()`, `add_layer`, `wrap_router`, `store_data`, `on_serve`,
-`on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
-hatch). Effects apply in plugin INSTALL order; builds run in dependency order.
-Disabling drops the **surface** effects (`add_layer`, `wrap_router`, `on_serve`,
-`store_data`, `after_build`) but NOT the cleanup ones (`on_shutdown`,
-`on_shutdown_async`): `build` ran, so what it constructed must still be
-released. An effect that needs one of the plugin's own beans should resolve it
+lookups), `config_raw()`, `add_layer`, `after_routes`, `wrap_router`,
+`store_data`, `on_serve`, `on_shutdown`, `on_shutdown_async`, `after_build`
+(full-graph boot escape hatch).
+
+**Three effect stages**, applied in this order (install order *within* a stage;
+builds themselves run in dependency order):
+
+| Stage | Registered with | When it applies |
+|---|---|---|
+| Graph | `add_layer`, `after_build`, `store_data`, `on_serve` | during `build_state()` / router assembly; a later `add_layer` is the outer one |
+| Routes | `after_routes(FnOnce(&mut RoutesContext))` | in `build()`, once **every** controller (app, module and plugin-shipped) is registered — so install order is irrelevant |
+| Finalize | `wrap_router` | last, outermost (transport-level wrappers) |
+
+`RoutesContext` gives `routes() -> &[RouteInfo]` (the collected route registry —
+what `OpenApiPlugin` reads), `register_routes(Router)`, `bean_context()`,
+`config()`, `take_data::<D>()`. Nothing has to be "installed last" any more.
+
+Disabling drops all three **surface** stages (`add_layer`, `after_routes`,
+`wrap_router`, `on_serve`, `store_data`, `after_build`) but NOT the cleanup hooks
+(`on_shutdown`, `on_shutdown_async`): `build` ran, so what it constructed must
+still be released. An effect that needs one of the plugin's own beans should resolve it
 from the graph at apply time (`after_build(|dctx| dctx.bean_context()
 .try_get::<X>())`) instead of capturing what `build` made — otherwise a test
 that pins only *some* provisions leaves the effect talking to an instance the
@@ -576,6 +596,41 @@ socket loop. `get()`/`bean::<B>()` return `Some` for the app's lifetime and
 never a panic.
 `r2e::Late<T>` (write-once, Arc-shared cell) remains only as an escape hatch
 for genuinely post-boot fills.
+
+### Plugin-shipped controllers
+
+`type Controllers = (MyPluginController,)` — a plugin ships endpoints the normal
+way (`#[controller]` + `#[routes]`). They are registered by the builder like app
+controllers, with the same `EndpointDeps`/`AllSatisfied` compile check: a
+controller injecting a bean the plugin does not provide (and the app does not
+either) is a **compile error**, not a boot panic. Plugin controllers are visible
+to `after_routes` (Routes stage), so `OpenApiPlugin` documents them too.
+
+### `HealthRegistry` — plugins contributing health checks
+
+`Health` (simple `/health` → 200 "OK") provides nothing. `Health::builder()
+.check(..).build()` → `AdvancedHealth`, which serves `/health`, `/health/live`,
+`/health/ready` and provides `HealthRegistry`. Any other plugin publishes a
+probe by declaring it as a dependency:
+
+```rust
+impl Plugin for DataSourceHealth {
+    type Provided = ();
+    type Deps = (DbPool, HealthRegistry);   // installing AdvancedHealth is now a compile-time requirement
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(self, (pool, health): Self::Deps, _c: Option<()>,
+                   _ctx: &mut PluginBuildContext) -> Result<(), PluginBuildError> {
+        health.register(PingIndicator { pool });   // order vs AdvancedHealth is irrelevant
+        Ok(())
+    }
+}
+```
+
+In-tree: `DataSourceHealth<DB, Tag>` (`r2e-data-sqlx`) / `DataSourceHealth<Conn,
+Tag>` (`r2e-data-diesel`) run a `SELECT 1` against the pool;
+`.liveness_only()` keeps a check out of readiness.
 
 ### `#[post_construct]` — lifecycle hooks
 
@@ -740,28 +795,27 @@ performs around your `build`.
 
 ```rust
 AppBuilder::new()
-    // ── Pre-state (order among plugin/load_config/provide/register doesn't matter) ──
+    // ── Builder phase: every plugin, in any order relative to load_config/provide/register ──
     .load_config::<RootConfig>()                // or .load_config::<()>() for raw config only
     .plugin(Executor)                           // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                          // scheduler runtime
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    .plugin(Health)
+    .plugin(Cors::permissive())
+    .plugin(Tracing)                            // or Tracing::from_config(b.r2e_config().unwrap())
+    .plugin(ErrorHandling)
+    .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
+    .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
     .provide(bean)                              // constructed values
     .register::<CreatePool>()                   // beans / producers (one unified method)
-    .when(dev_mode, |b| b.with(DevReload))      // conditional Self→Self assembly
     .build_state().await
-    // ── Post-state ──
-    .with(Health)
-    .with(Cors::permissive())
-    .with(Tracing)                              // or Tracing::from_config(&config)
-    .with(ErrorHandling)
-    .with(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
+    // ── App phase: controllers, modules, lifecycle ──
     .on_start(|state| async move { Ok(()) })
     .on_stop(|state| async move { if let Some(p) = state.bean::<SqlitePool>() { p.close().await; } })
     .register_controller::<UserController>()
     .register_controllers::<(AccountController, ScheduledJobs)>()  // several at once
     .register_module::<UserModule>()
     // bean #[consumer] subscribers auto-collected at build_state() — no explicit call
-    .with(NormalizePath)                        // last plugin
     .serve_auto().await                         // server.host/server.port from config
     // or .serve("0.0.0.0:3000").await
     // or .build() → Router
@@ -1318,7 +1372,7 @@ use r2e::r2e_openfga::OpenFga;
 r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
 b.load_config::<()>()
-    .plugin(OpenFga::model(authz::MODEL))   // pre-state; order vs load_config doesn't matter
+    .plugin(OpenFga::model(authz::MODEL))   // order vs load_config doesn't matter
     .build_state().await
     .register_controller::<DocumentController>()
 ```
@@ -2385,7 +2439,7 @@ impl TenantSource<PgPool> for PoolDirectory {
     // optional: fn dispose(&self, tenant, value) -> BoxFuture<'_, ()>
 }
 
-// 2. wiring: two pre-state plugins
+// 2. wiring: two plugins
 AppBuilder::new()
     .provide(HeaderTenantResolver::default())            // x-tenant-id
     .plugin(Tenancy::resolver::<HeaderTenantResolver>()) // provides TenantRouter
@@ -2754,8 +2808,8 @@ impl App for MultiTenantDbApp {
             .provide(Branding::shared())              // the fallback value
             .provide(Brandings)
             .plugin(PerTenant::<Branding>::from::<Brandings>().fallback_to_default())
+            .plugin(Health)
             .build_state().await
-            .with(Health)
             .register_controllers::<(NotesController, ClientController, AdminController)>()
     }
 }
@@ -2803,11 +2857,11 @@ and derive `JsonSchema` on request/response types.
 ```rust
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
-.with(OpenApiPlugin::new(
+.plugin(OpenApiPlugin::new(
     OpenApiConfig::new("My API", "1.0.0")
         .with_description("API description")
         .with_docs_ui(true),               // serves /docs
-))
+))   // install order irrelevant — the spec is built from a Routes-stage effect
 ```
 
 Spec at `/openapi.json`. Request/response schemas auto-detected from `Json<T>`
@@ -2834,7 +2888,7 @@ Requires feature: `prometheus`
 ```rust
 use r2e::r2e_prometheus::Prometheus;
 
-.plugin(Prometheus::builder()             // pre-state plugin
+.plugin(Prometheus::builder()
     .endpoint("/metrics")
     .namespace("myapp")
     .exclude_path("/health")
@@ -2855,15 +2909,15 @@ Requires feature: `observability`. **Superset of `Tracing`** — do NOT install 
 ```rust
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
 
-.with(Observability::new(
+.plugin(Observability::new(
     ObservabilityConfig::new("my-service")
         .with_service_version("1.0.0")
         .with_endpoint("http://otel-collector:4318/v1/traces")
         .capture_header("x-tenant-id"),
 ))
-// or from YAML (observability.* keys): .with(Observability::from_config(&config, "my-service"))
+// or from YAML (observability.* keys): .plugin(Observability::from_config(&config, "my-service"))
 // or from standard OTEL_* env vars (tracing-only when no endpoint is set):
-// .with(Observability::from_env("my-service"))
+// .plugin(Observability::from_env("my-service"))
 ```
 
 OTLP/HTTP export (Jaeger, Tempo, …) + W3C `traceparent` propagation. The
@@ -2913,7 +2967,7 @@ let users = InMemoryUserStore::new()
         ..Default::default()
     });
 
-b.plugin(OidcServer::new()                // pre-state plugin
+b.plugin(OidcServer::new()
     .issuer("http://localhost:3000")
     .audience("my-app")
     .token_ttl(3600)
@@ -3000,7 +3054,9 @@ ETag/304 conditional requests, range requests, and pre-compressed (`.br`/`.gz`)
 variant negotiation — all on by default:
 
 ```rust
-.with(EmbeddedFrontend::new::<Assets>())          // SPA on, api/ excluded, assets/ immutable
+.plugin(EmbeddedFrontend::new::<Assets>())        // SPA on, api/ excluded, assets/ immutable
+// its SPA fallback is a Graph-stage effect applied in install order — install it
+// AFTER the other router plugins so no later fallback shadows it
 // custom:
 EmbeddedFrontend::builder::<Assets>()
     .spa_fallback(true)                            // serve index.html for unmatched routes
@@ -3226,10 +3282,10 @@ than falling back to the multi-thread control plane. Example:
 ## Additional Plugins
 
 ```rust
-.with(RequestIdPlugin)                     // X-Request-Id propagation
-.with(SecureHeaders::default())            // security headers
-.with(Health)                              // /health
-.with(NormalizePath)                       // trailing-slash normalization — LAST plugin
+.plugin(RequestIdPlugin)                   // X-Request-Id propagation
+.plugin(SecureHeaders::default())          // security headers
+.plugin(Health)                            // /health, or Health::builder() for live/ready probes
+.plugin(NormalizePath)                     // trailing-slash normalization (order irrelevant)
 ```
 
 ---
@@ -3590,22 +3646,22 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | pre-state | Pre-state plugins (Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, GrpcServer, OidcServer, Prometheus, Tenancy/PerTenant) |
-| `.with_config_provider(p)` | pre-state | Register an external `ConfigProvider` before `load_config` |
-| `.load_config::<C>()` | pre-state | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
-| `.override_config(cfg)` | pre-state | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
-| `.provide(value)` | pre-state | Provide a constructed bean |
-| `.register::<T>()` | pre-state | Register a Bean / AsyncBean / Producer |
-| `.when(cond, \|b\| ...)` | any | Conditional assembly (`config_flag`, `profile_is`) |
+| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, Tracing, ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus, Observability, OpenFga, Tenancy/PerTenant) |
+| `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
+| `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
+| `.r2e_config()` | builder/app | Borrow the loaded `R2eConfig` (available right after `load_config`, so config-driven plugin constructors can read it before `.plugin(..)`) |
+| `.override_config(cfg)` | builder | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
+| `.provide(value)` | builder | Provide a constructed bean |
+| `.register::<T>()` | builder | Register a Bean / AsyncBean / Producer |
+| `.register_module::<M>()` | builder | Feature module (providers + controllers) |
+| `.when(cond, \|b\| ...)` | any | Conditional `Self -> Self` assembly (`config_flag`, `profile_is`) — canNOT wrap `.plugin()` |
 | `.build_state().await` | — | Resolve graph → inferred HList state (no type args) |
-| `.with(plugin)` | post-state | Post-state plugins |
-| `.register_controller::<C>()` | post-state | Register controller (+ consumers + scheduled) |
-| `.register_controllers::<(A, B)>()` | post-state | Several at once |
-| `.register_module::<M>()` | pre-state | Feature module (providers + controllers) |
-| `.bridge_sse::<Bus, E>()` | post-state | EventBus → SSE topic bridge |
-| `.schedule_task(def)` | post-state | Dynamic scheduled task |
-| `.merge_router(r)` / `.with_layer_fn(f)` | post-state | Raw axum escape hatches (last resort) |
-| `.on_start(f)` / `.on_stop(f)` | post-state | Lifecycle hooks |
+| `.register_controller::<C>()` | app | Register controller (+ consumers + scheduled) |
+| `.register_controllers::<(A, B)>()` | app | Several at once |
+| `.bridge_sse::<Bus, E>()` | app | EventBus → SSE topic bridge |
+| `.schedule_task(def)` | app | Dynamic scheduled task |
+| `.merge_router(r)` / `.with_layer_fn(f)` | app | Raw axum escape hatches (last resort) |
+| `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
 | `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 

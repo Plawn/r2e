@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Diagnostic endpoints for dev tooling and restart detection. `.with(DevReload)` after `build_state()` exposes `GET /__r2e_dev/status` (returns `"dev"` as plain text) and `GET /__r2e_dev/ping` (JSON with `boot_time` + `status`). A changed `boot_time` (ms since epoch, captured once at startup via `OnceLock`) means the server restarted — this is how `r2e dev` detects reloads.
+Diagnostic endpoints for dev tooling and restart detection. `.plugin(DevReload)` (before `build_state()`) exposes `GET /__r2e_dev/status` (returns `"dev"` as plain text) and `GET /__r2e_dev/ping` (JSON with `boot_time` + `status`). A changed `boot_time` (ms since epoch, captured once at startup via `OnceLock`) means the server restarted — this is how `r2e dev` detects reloads.
 
 
 ## Objective
@@ -30,8 +30,8 @@ The `boot_time` is a timestamp (milliseconds since Unix epoch) captured once at 
 
 ```rust
 AppBuilder::new()
+    .plugin(DevReload)  // Enables /__r2e_dev/* endpoints
     .build_state().await
-    .with(DevReload)  // Enables /__r2e_dev/* endpoints
     // ...
     .serve("0.0.0.0:3000")
     .await
@@ -100,8 +100,8 @@ impl App for MyApp {
             .provide(env.event_bus)
             .provide(env.pool)
             .register::<UserService>()
+            .plugin(Health)
             .build_state().await       // no type args — state inferred from the provisions
-            .with(Health)
             .register_controller::<UserController>()
     }
 }
@@ -275,13 +275,15 @@ async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         .register::<UserService>()
         .register::<CacheService>()
         .register::<CreatePool>()
-        // 4. Build the state — no type args; the state type is the provision
+        // 4. Plugins — always before build_state(): they contribute beans,
+        //    router effects and their own controllers to the same graph
+        .plugin(Health)
+        .plugin(Cors::permissive())
+        // 5. Build the state — no type args; the state type is the provision
         //    list materialized as an HList, inferred by the builder chain
         .build_state().await
-        // 5. Post-state: plugins, controllers, hooks. Return the BootableApp —
+        // 6. After the state: controllers and hooks. Return the BootableApp —
         //    do NOT call serve here; r2e::launch! does that.
-        .with(Health)
-        .with(Cors::permissive())
         .register_controller::<UserController>()
 }
 ```
@@ -336,11 +338,12 @@ dev session pinned to stale first-boot config).
 
 ## Production note
 
-The `/__r2e_dev/*` endpoints must **not** be enabled in production. Don't call `.with(DevReload)` in production profile:
+The `/__r2e_dev/*` endpoints must **not** be enabled in production. Don't install `DevReload` in the production profile. `.plugin()` changes the
+builder's compile-time provision list, so gate it at compile time:
 
 ```rust
 #[cfg(debug_assertions)]
-builder = builder.with(DevReload);
+let builder = builder.plugin(DevReload);
 ```
 
 ## Validation criteria

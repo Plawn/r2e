@@ -1,8 +1,8 @@
 # Plugin / module / lifecycle unification (Quarkus-extension parity)
 
-Status: **proposal**, 2026-08-26. Not scheduled. R2E is not in production, so
-every phase below is allowed to break the public API; breaking changes are
-listed per plan.
+Status, 2026-08-26: **plans 1, 3 and 4 are DONE** (see the per-plan status
+blocks); plan 2 is still a proposal. R2E is not in production, so every phase
+here is allowed to break the public API; breaking changes are listed per plan.
 
 ## Why
 
@@ -180,6 +180,104 @@ removed; `OpenApiPlugin`/`Health`/`Cors`/… move to `.plugin()` before
 - `r2e dev`: plugin controllers are volatile like plugin beans; the
   `forced_rebuild` seed already covers dependents. Route re-registration per
   cycle is what modules do today — no new gap.
+
+---
+
+### Status (2026-08-26) — DONE
+
+Shipped on `feat/plugin-module-lifecycle`, all of 1a–1f plus plan 4's deferred
+`DataSourceHealth`.
+
+- **1a. Effect stages.** `PluginBuildContext` now sorts effects into **Graph**
+  (`add_layer`, `after_build`, `store_data`, `on_serve`), **Routes**
+  (`after_routes(FnOnce(&mut RoutesContext))`) and **Finalize**
+  (`wrap_router`). Graph effects drain in `build_state()`; Routes then Finalize
+  in `build()`. Install order applies *within* a stage; the exact assembly order
+  in `builder/typed.rs::build_inner` is: controller routes → meta consumers →
+  `with_state(state)` → Routes-stage routers merged → Graph `add_layer`s →
+  NormalizePath → `catch_panic_layer` → Finalize `wrap_router`s →
+  `graph_keep_alive` (outermost). `<prefix>.enabled = false` drops all three
+  surface stages; `on_shutdown`/`on_shutdown_async` still apply.
+- **1b. Plugin controllers.** `type Controllers = ()` is now a required
+  associated type on `Plugin`, folded through the same `Mods` deferred-controller
+  machinery as feature modules, with the same `EndpointDeps`/`AllSatisfied`
+  compile check. Trybuild case:
+  `r2e-compile-tests/cases/plugins/fail/plugin_controller_dep_missing.rs`.
+- **1c. Route registry.** Controller `RouteInfo` is collected by
+  `register_controller` plus the module/plugin controller folds and exposed as
+  `RoutesContext::routes()`. `OpenApiPlugin` is a plain `.plugin()` that mounts
+  `/openapi.json` + `/docs` from a Routes-stage effect, so install order no
+  longer matters.
+- **1d. `HealthRegistry`.** `AdvancedHealth` (`Health::builder()…build()`) has
+  `Provided = (HealthRegistry,)` and serves `/health`, `/health/live`,
+  `/health/ready`; simple `Health` keeps `Provided = ()`. A contributor declares
+  `Deps = (HealthRegistry,)` and calls `registry.register(indicator)` from its
+  own `build` — order-independent, since the routes are mounted in the Routes
+  stage.
+- **Plan 4 health.** `DataSourceHealth<DB, Tag>` (`r2e-data-sqlx`) and
+  `DataSourceHealth<Conn, Tag>` (`r2e-data-diesel`), `Deps = (DbPool<..>,
+  HealthRegistry)`, run `SELECT 1`; `.liveness_only()` keeps a check out of
+  readiness. Tests: `r2e-data/backends/sqlx/tests/health/`.
+- **1e. Builtins migrated** to the unified trait: `Health`, `AdvancedHealth`,
+  `Cors`, `Tracing`, `ConfiguredTracing`, `ErrorHandling`, `NormalizePath`,
+  `DevReload`, `SecureHeaders`, `RequestIdPlugin`, `OpenApiPlugin`,
+  `EmbeddedFrontend`, `Observability`, `Prometheus`. Process-wide tracing
+  subscriber installs happen in `setup()`.
+- **1f. Removals / renames.** `r2e-core/src/plugin/post_state.rs` deleted along
+  with the post-state `Plugin` trait, `AppBuilder::with()` and
+  `should_be_last()`. `PreStatePlugin` → `Plugin`, `RawPreStatePlugin` →
+  `PluginInstall` (`#[doc(hidden)]`), and `plugin/pre_state.rs` →
+  `plugin/install.rs`. Swept: all `examples/*`, `r2e-cli` templates, `r2e-test`,
+  `r2e-devservices`, every crate README, `docs/`, `llm.txt`, `CLAUDE.md`,
+  `REPO_MAP.md`.
+- **Tests added.** `r2e-core/tests/plugin/{stages,controllers,health_registry}.rs`
+  plus updates across `r2e-core/tests/{plugin,http,builder,di,controller,runtime}`.
+
+Deviations from the design above:
+
+- **No new `RouteRegistry` type.** 1c is implemented by reusing the existing
+  `MetaRegistry<RouteInfo>` behind `RoutesContext::routes() -> &[RouteInfo]`.
+  A parallel registry would have duplicated what `Controller::register_meta`
+  already fills, and `with_meta_consumer` stays for other meta types.
+- **`AppBuilder::r2e_config()` moved and generalised** (additive). It used to
+  exist only on the typed (post-`build_state`) builder; a config-driven plugin
+  constructor (`Tracing::from_config`, `Observability::from_config`) must now run
+  *before* `build_state()`, so the single definition lives on the fully generic
+  `impl<T, P, R, Mods> AppBuilder<T, P, R, Mods>` and is available right after
+  `load_config`.
+- **The sqlx health test does not assert `liveness_only` from the response.**
+  The `/health` JSON exposes no `affects_readiness` field, so the flag is
+  covered by asserting the check's absence from `/health/ready` rather than by
+  reading it back.
+- **`.when()` cannot gate a plugin**, so docs that showed
+  `.when(dev, |b| b.with(DevReload))` now show either the `<prefix>.enabled`
+  config gate or `#[cfg(debug_assertions)] let b = b.plugin(DevReload);`.
+  `.plugin()` changes the type-level provision list, which a runtime flag
+  cannot.
+- **`EmbeddedFrontend` keeps an ordering requirement**, expressed as
+  documentation rather than `should_be_last()`: its SPA fallback is a
+  Graph-stage effect applied in install order, so it must be installed after
+  the other router plugins.
+
+### Breaking changes (changelog)
+
+1. `AppBuilder::with(plugin)` is **removed**. Every plugin installs with
+   `.plugin(p)` **before** `build_state()`.
+2. The post-state `Plugin` trait is **removed** (`r2e_core::plugin::post_state`
+   is gone). `PreStatePlugin` is now `Plugin`; `RawPreStatePlugin` is now
+   `PluginInstall`.
+3. `Plugin::should_be_last()` is **removed**. Use `after_routes` (Routes stage)
+   or `wrap_router` (Finalize stage).
+4. `Plugin` gains a **required** associated type `type Controllers` (use
+   `type Controllers = ();` in existing impls).
+5. `AdvancedHealth` now provides a bean (`HealthRegistry`), so installing it
+   twice, or providing a `HealthRegistry` yourself as well, is a
+   `DuplicateBean` boot error.
+6. `OpenApiPlugin`, `Health`, `Health::builder()`, `Cors`, `Tracing`,
+   `ConfiguredTracing`, `ErrorHandling`, `NormalizePath`, `DevReload`,
+   `SecureHeaders`, `RequestIdPlugin`, `EmbeddedFrontend`, `Observability` all
+   move to `.plugin()` before `build_state()`.
+7. `AppBuilder::r2e_config()` is available on the builder phase too (additive).
 
 ---
 
@@ -453,7 +551,7 @@ with `datasource.url` (live config), pool settings, and
 `DbPool` gains a defaulted type param (source-compatible unless a user
 spells `DbPool<DB>` in a position where defaults don't apply — impl blocks).
 
-### Status (2026-08-26) — steps 1–5 shipped, health deferred
+### Status (2026-08-26) — steps 1–5 shipped; health shipped with plan 1d
 
 Shipped on `feat/plugin-module-lifecycle`: `SqlxDataSource<DB, Tag>` +
 `DieselDataSource<Conn, Tag>`, tagged `DbPool`/`DbTx`, `datasource_tag!`,
@@ -468,10 +566,9 @@ Deviations from the design above:
   a real dep and mints the handle itself. The typed `url: Option<String>`
   stays, purely so a missing key fails with `` `datasource.url` is not set ``
   instead of an SQLx parse error.
-- **`DataSourceHealth<DB>` is NOT implemented** — it needs `HealthRegistry`
-  from plan 1d. Ship it with plan 1d, as a second plugin
-  (`Deps = (DbPool<DB, Tag>, HealthRegistry)`), keeping the datasource
-  independent of Health.
+- **`DataSourceHealth<DB>` was deferred to plan 1d** and **shipped with it**
+  (2026-08-26) as a second plugin (`Deps = (DbPool<DB, Tag>, HealthRegistry)`),
+  keeping the datasource independent of Health. See plan 1's status block.
 - **No `migrations.locations` key** — it was already noted as unused for sqlx,
   and Diesel's `embed_migrations!` is compile-time too. Omitted rather than
   accepted-and-ignored.

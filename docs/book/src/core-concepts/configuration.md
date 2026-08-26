@@ -407,7 +407,7 @@ async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
 
 ## AppBuilder integration
 
-Two pre-state methods to provide config — call before `.build_state()` or `.with_state()`.
+Two builder-phase methods to provide config — call before `.build_state()` or `.with_state()`.
 
 ### `load_config::<C>()` (recommended)
 

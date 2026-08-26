@@ -25,7 +25,7 @@ framework bug to record here.
 Evidence base: the 2026-07-10 audit of two production-bound apps built on
 pre-refactor R2E — **threaty** (~44K LOC, deep user: 20 controllers, ~101
 routes, 138 injections, 48 path-parameterized guards, 3 custom
-`PreStatePlugin`s) and **patina** (~23K LOC, shallow user: hand-built 10-field
+`Plugin`s) and **patina** (~23K LOC, shallow user: hand-built 10-field
 state, registry-proxy core written as a raw axum fallback handler). Both leak
 out of the framework at the same seams.
 
@@ -286,7 +286,7 @@ Accepted limitations and remaining frictions from the external audit:
 
 ## W15 — Factory-first plugins — SHIPPED 2026-08-15
 
-`PreStatePlugin` fully integrated into DI: a plugin IS one async fallible
+`Plugin` fully integrated into DI: a plugin IS one async fallible
 factory for its `Provided` tuple, executed inside `build_state()` as a bean
 graph node (topologically after `Deps`, config guaranteed loaded).
 `install`/`configure` deleted; optional `setup()` remains the rare pre-graph

@@ -115,7 +115,7 @@ frameworks cannot offer.
   after materializing the state through an *unchecked* registration backend —
   module controllers may inject private beans, since cores construct from the
   retained `BeanContext`. `with_state` is restricted to `Mods = TNil`;
-  `RawPreStatePlugin::install` carries the `Mods` type param.
+  `PluginInstall::install` carries the `Mods` type param.
 - Encapsulation is enforced by dedicated check traits with module-targeted
   diagnostics: `InModuleScope` / `ModuleDepsSatisfied` (deps ⊆ Provides ∪
   Imports) and `ProvidedByModule` / `ExportsProvided` (exports must be

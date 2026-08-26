@@ -37,7 +37,7 @@ let oidc = OidcServer::new()
     .with_user_store(users);
 
 AppBuilder::new()
-    .plugin(oidc)                              // pre-state: provides Arc<JwtClaimsValidator>
+    .plugin(oidc)                              // provides Arc<JwtClaimsValidator>
     .build_state().await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000").await.unwrap();
@@ -47,7 +47,7 @@ That's it. `AuthenticatedUser` works immediately — no need to manually configu
 
 ## How it works
 
-`OidcServer` is a `PreStatePlugin`. During installation it:
+`OidcServer` is a `Plugin`. During installation it:
 
 1. **Generates an RSA-2048 key pair** for signing tokens
 2. **Creates a `JwtClaimsValidator`** with the public key and injects it into the bean graph
@@ -427,9 +427,9 @@ async fn main() {
     AppBuilder::new()
         .plugin(oidc)
         .register::<UserService>()
+        .plugin(Health)
+        .plugin(Tracing)
         .build_state().await
-        .with(Health)
-        .with(Tracing)
         .register_controller::<ApiController>()
         .serve("0.0.0.0:3000").await.unwrap();
 }

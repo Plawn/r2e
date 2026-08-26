@@ -69,9 +69,9 @@ impl App for MyApp {
     async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
         b.load_config::<()>()
             .register::<UserService>()
+            .plugin(Health)
+            .plugin(Tracing)
             .build_state().await
-            .with(Health)
-            .with(Tracing)
             .register_controller::<UserController>()
     }
 }

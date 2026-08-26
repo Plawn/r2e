@@ -63,7 +63,7 @@ executor:
 
 | Type | Description |
 |------|-------------|
-| `Executor` | `PreStatePlugin` — installs `PoolExecutor` into the bean graph |
+| `Executor` | `Plugin` — installs `PoolExecutor` into the bean graph |
 | `PoolExecutor` | Injectable task pool — `submit`, `submit_detached`, `try_submit` |
 | `ExecutorConfig` | Typed config from `executor.*` section |
 | `JobHandle` | Handle to a submitted job — `.await` for the result, `abort()` to cancel |
