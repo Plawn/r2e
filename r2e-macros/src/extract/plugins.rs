@@ -228,6 +228,7 @@ const GRPC_DISALLOWED_ATTRS: &[&str] = &[
     // (async shapes land in the tonic trait impl). Reject them up front.
     "pre_destroy",
     "post_construct",
+    "on_start",
     "scheduled",
     "consumer",
     "async_exec",

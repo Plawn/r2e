@@ -1182,6 +1182,26 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
         });
     }
 
+    // `#[on_start]` startup observers. Like `pre_destroy`, controller cores are
+    // not `Clone` and so cannot impl the `OnStart` trait; each hook binds a
+    // clone of the core `Arc` instead. The builder merges these with the bean
+    // hooks and awaits them in `order` at startup — an `Err` aborts boot.
+    if !def.on_start_methods.is_empty() {
+        let pushes = transverse::on_start_pushes(
+            &quote! { ::std::sync::Arc::clone(&__core) },
+            &def.on_start_methods,
+        );
+        controller_fns.push(quote! {
+            fn on_start(
+                __core: ::std::sync::Arc<Self>,
+            ) -> Vec<(i32, #krate::beans::OnStartHook)> {
+                let mut __r2e_hooks: Vec<(i32, #krate::beans::OnStartHook)> = Vec::new();
+                #(#pushes)*
+                __r2e_hooks
+            }
+        });
+    }
+
     (quote! { #(#module_items)* }, quote! { #(#controller_fns)* })
 }
 

@@ -407,10 +407,18 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             "#[bean(lazy)] does not yet support #[pre_destroy] — remove one or the other",
         ));
     }
+    let on_start_methods = transverse::scan_on_start_methods(item_impl)?;
+    if bean_args.lazy && !on_start_methods.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &item_impl.self_ty,
+            "#[bean(lazy)] does not yet support #[on_start] — remove one or the other",
+        ));
+    }
     // A single method must not be BOTH a lifecycle hook and a transverse marker;
-    // enforce the pre_destroy side of the matrix (mirrors post_construct). The
-    // forbidden-marker list lives once, next to the pre_destroy scan.
+    // enforce the pre_destroy and on_start sides of the matrix (mirrors
+    // post_construct). Each forbidden-marker list lives once, next to its scan.
     transverse::reject_bean_pre_destroy_clash(item_impl)?;
+    transverse::reject_bean_on_start_clash(item_impl)?;
 
     // An impl-level `#[intercept]` applies only to scheduled/consumer methods;
     // with none present it is a silent no-op (and would force the constructor
@@ -566,6 +574,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                         "async_exec",
                         "post_construct",
                         "pre_destroy",
+                        "on_start",
                         "intercept",
                     ]
                     .iter()
@@ -624,9 +633,11 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     let post_construct_impl = transverse::post_construct_impl(&quote! { #self_ty }, &pc_methods);
     let pre_destroy_impl =
         transverse::pre_destroy_impl(&quote! { #self_ty }, &type_ident.to_string(), &pd_methods);
+    let on_start_impl = transverse::on_start_impl(&quote! { #self_ty }, &on_start_methods);
 
     let after_register_fn = if !pc_methods.is_empty()
         || !pd_methods.is_empty()
+        || !on_start_methods.is_empty()
         || !scheduled_methods.is_empty()
         || !consumer_methods.is_empty()
         || has_decos
@@ -635,6 +646,8 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             .then(|| quote! { registry.register_post_construct::<Self>(); });
         let pd_hook =
             (!pd_methods.is_empty()).then(|| quote! { registry.register_pre_destroy::<Self>(); });
+        let on_start_hook = (!on_start_methods.is_empty())
+            .then(|| quote! { registry.register_on_start::<Self>(); });
         let sched_hook = (!scheduled_methods.is_empty())
             .then(|| quote! { registry.register_scheduled_source::<Self>(); });
         let sub_hook = (!consumer_methods.is_empty())
@@ -644,6 +657,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
                 #pc_hook
                 #pd_hook
+                #on_start_hook
                 #sched_hook
                 #sub_hook
                 #deco_hook
@@ -720,6 +734,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         #registrable_impl
         #post_construct_impl
         #pre_destroy_impl
+        #on_start_impl
         #subscriber_impl
         #scheduled_source_impl
     };
@@ -1161,6 +1176,7 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                     .filter(|a| {
                         !a.path().is_ident("post_construct")
                             && !a.path().is_ident("pre_destroy")
+                            && !a.path().is_ident("on_start")
                             && !a.path().is_ident("scheduled")
                             && !a.path().is_ident("intercept")
                     })
