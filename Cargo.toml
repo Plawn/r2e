@@ -145,6 +145,7 @@ rand = "0.8"
 # Data
 sqlx = { version = "0.9", features = ["runtime-tokio"] }
 diesel = "2"
+diesel_migrations = "2"
 
 # Events
 iggy = "0.10"

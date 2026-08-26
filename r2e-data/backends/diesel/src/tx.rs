@@ -10,7 +10,7 @@ use r2e_core::{
     ManagedResource, TCons, TNil,
 };
 
-use crate::DbPool;
+use crate::{DataSourceTag, DbPool, DefaultDataSource};
 
 /// Where a managed transaction gets its pool from.
 ///
@@ -87,7 +87,10 @@ pub type DieselTx<Conn> = ManagedTx<Conn, FixedPool<Conn>>;
 pub type Tx<Conn> = DieselTx<Conn>;
 
 /// Managed transaction on a rotating [`DbPool`] facade (aliased as [`DbTx`]).
-pub type DbTx<Conn> = ManagedTx<Conn, RotatingPool<Conn>>;
+///
+/// `Tag` names the datasource, and defaults to the app's unnamed one — a
+/// transaction on a named datasource is `DbTx<Conn, Reporting>`.
+pub type DbTx<Conn, Tag = DefaultDataSource> = ManagedTx<Conn, RotatingPool<Conn, Tag>>;
 
 impl<Conn, Src> ManagedTx<Conn, Src>
 where
@@ -137,9 +140,10 @@ where
     }
 }
 
-impl<Conn> ManagedTx<Conn, RotatingPool<Conn>>
+impl<Conn, Tag> ManagedTx<Conn, RotatingPool<Conn, Tag>>
 where
     Conn: Connection + R2D2Connection + Send + 'static,
+    Tag: DataSourceTag,
 {
     /// The [`DbPool`] generation this transaction was begun on.
     #[must_use]
@@ -267,14 +271,15 @@ where
 }
 
 /// [`TxSource`] backed by a rotating [`DbPool`] facade.
-pub struct RotatingPool<Conn>(PhantomData<fn() -> Conn>);
+pub struct RotatingPool<Conn, Tag = DefaultDataSource>(PhantomData<fn() -> (Conn, Tag)>);
 
-impl<Conn> TxSource<Conn> for RotatingPool<Conn>
+impl<Conn, Tag> TxSource<Conn> for RotatingPool<Conn, Tag>
 where
     Conn: Connection + R2D2Connection + Send + 'static,
+    Tag: DataSourceTag,
 {
     type Meta = u64;
-    type Deps = TCons<DbPool<Conn>, TNil>;
+    type Deps = TCons<DbPool<Conn, Tag>, TNil>;
 
     async fn acquire_pool<S>(
         context: &ManagedContext<'_, S>,
@@ -282,11 +287,11 @@ where
     where
         S: BeanLookup + Send + Sync,
     {
-        let rotating = context.state.bean::<DbPool<Conn>>().ok_or_else(|| {
+        let rotating = context.state.bean::<DbPool<Conn, Tag>>().ok_or_else(|| {
             context.missing_bean(
                 "rotating database pool bean",
-                std::any::type_name::<DbPool<Conn>>(),
-                "call .register::<CreatePool>()",
+                std::any::type_name::<DbPool<Conn, Tag>>(),
+                "install the datasource plugin: .plugin(DieselDataSource::<Conn>::new())",
             )
         })?;
         // One atomic read for both halves: reading the generation and the pool
