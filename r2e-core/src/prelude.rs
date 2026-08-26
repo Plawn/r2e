@@ -111,7 +111,7 @@ pub use crate::di::module::FeatureModule;
 pub use crate::di::scheduled_source::ScheduledSource;
 pub use crate::error::{HttpError, HttpErrorExt};
 pub use crate::plugin::{
-    GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin,
+    GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext,
 };
 pub use crate::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::type_list::BeanLookup;

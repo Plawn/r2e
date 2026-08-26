@@ -406,9 +406,11 @@ where
 /// # Example
 ///
 /// ```ignore
-/// impl PreStatePlugin for MyPlugin {
+/// impl Plugin for MyPlugin {
 ///     type Provided = (MyThing,);
 ///     type Deps = (DbPool, CancelToken);
+///     type Config = ();
+///     type Controllers = ();
 ///
 ///     async fn build(
 ///         self,
@@ -427,7 +429,7 @@ pub trait PluginDeps: Send {
     /// The runtime `(TypeId, type name)` pairs of these dependencies.
     ///
     /// Used as the plugin build node's edges in the bean graph's topological
-    /// sort — the plugin's [`build`](crate::PreStatePlugin::build) runs only
+    /// sort — the plugin's [`build`](crate::Plugin::build) runs only
     /// after every dependency is constructed. Generated from the tuple shape,
     /// so it can never drift from [`resolve_from_context`](Self::resolve_from_context).
     fn dependencies() -> Vec<(std::any::TypeId, &'static str)>;
@@ -435,7 +437,7 @@ pub trait PluginDeps: Send {
     /// Resolve all dependency values from the (partially or fully)
     /// materialized [`BeanContext`](crate::beans::BeanContext).
     ///
-    /// Used for [`PreStatePlugin::Deps`](crate::PreStatePlugin::Deps): the
+    /// Used for [`Plugin::Deps`](crate::Plugin::Deps): the
     /// plugin's build node is topologically ordered after its dependencies,
     /// so every one of them — `.provide()`-d, `.register()`-ed
     /// (factory-built), or produced by another plugin — is available when
@@ -508,11 +510,11 @@ impl_plugin_deps!(A, B, C, D, E, F, G, H);
 ///
 /// This is the mirror image of [`PluginDeps`]: where `PluginDeps` *reads*
 /// dependency values out of the graph, `PluginProvisions` describes the beans
-/// a [`PreStatePlugin`](crate::PreStatePlugin) produces. The plugin's
-/// [`build`](crate::PreStatePlugin::build) runs as one graph node yielding the
+/// a [`Plugin`](crate::Plugin) produces. The plugin's
+/// [`build`](crate::Plugin::build) runs as one graph node yielding the
 /// whole tuple; each element is then projected out as its own bean via
 /// [`element_ids`](Self::element_ids) + [`clone_element`](Self::clone_element).
-/// It also bridges the plugin's [`Provided`](crate::PreStatePlugin::Provided)
+/// It also bridges the plugin's [`Provided`](crate::Plugin::Provided)
 /// tuple to the type-level provision list (`TCons`/`TNil`) tracked on the
 /// builder.
 ///
@@ -548,7 +550,7 @@ pub trait PluginProvisions: Clone + Send + Sync + 'static {
     /// Each pair becomes one **projection node** in the bean graph: a bean
     /// registered under the element's `TypeId` whose factory clones the
     /// element out of the plugin's build output. Also used by the blanket
-    /// [`RawPreStatePlugin`](crate::plugin::RawPreStatePlugin) impl to detect
+    /// [`PluginInstall`](crate::plugin::PluginInstall) impl to detect
     /// when every provided type is pinned by a test override (the whole
     /// plugin build is then skipped).
     fn element_ids() -> Vec<(std::any::TypeId, &'static str)>;

@@ -102,7 +102,7 @@ pub trait FeatureModule {
     /// final provision list at `build_state()`.
     type Imports;
 
-    /// **Tuple** of pre-state plugin types this module requires (or `()` for
+    /// **Tuple** of plugin types this module requires (or `()` for
     /// none) — e.g. `(Scheduler,)`.
     ///
     /// Unlike [`Imports`](Self::Imports), which names individual bean types,
@@ -240,7 +240,7 @@ where
 // otherwise get on one of the plugin's internal handle types.
 
 /// Compile-time witness that required plugin `Plug` is installed — every bean
-/// in its [`RawPreStatePlugin::Provisions`](crate::plugin::RawPreStatePlugin::Provisions)
+/// in its [`PluginInstall::Provisions`](crate::plugin::PluginInstall::Provisions)
 /// is present in the provision list `Self` (the app-global `P`).
 #[diagnostic::on_unimplemented(
     message = "this feature module requires the `{Plug}` plugin, which is not installed before it",
@@ -258,7 +258,7 @@ pub trait RequiredPluginInstalled<Plug, Idx> {}
 #[diagnostic::do_not_recommend]
 impl<P, Plug, Idx> RequiredPluginInstalled<Plug, Idx> for P
 where
-    Plug: crate::plugin::RawPreStatePlugin,
+    Plug: crate::plugin::PluginInstall,
     Plug::Provisions: crate::type_list::AllSatisfied<P, Idx>,
 {
 }
@@ -408,7 +408,7 @@ impl<T: Clone + Send + Sync + 'static> ModuleList<T, ()> for TNil {
     }
 }
 
-impl<T, M, Rest, WC, WR> ModuleList<T, (WC, WR)> for TCons<M, Rest>
+impl<T, M, Rest, WC, WR> ModuleList<T, (WC, WR)> for TCons<ModEntry<M>, Rest>
 where
     T: Clone + Send + Sync + 'static,
     M: FeatureModule,
@@ -423,3 +423,155 @@ where
         ))
     }
 }
+
+impl<T, Pl, Rest, WC, WR> ModuleList<T, (WC, WR)> for TCons<PluginCtrls<Pl>, Rest>
+where
+    T: Clone + Send + Sync + 'static,
+    Pl: crate::plugin::PluginInstall,
+    Pl::Controllers: PluginControllerList<Pl, T, WC>,
+    Rest: ModuleList<T, WR>,
+{
+    fn register_controllers(builder: AppBuilder<T>) -> AppBuilder<T> {
+        <Pl::Controllers as PluginControllerList<Pl, T, WC>>::register_all(
+            Rest::register_controllers(builder),
+        )
+    }
+}
+
+// ── Deferred-controller entries ─────────────────────────────────────────────
+//
+// The builder's `Mods` list carries every controller set whose registration is
+// deferred to `build_state()`. Two kinds live there — feature modules and
+// plugin controllers — and each needs its own `ModuleList` impl. Rust has no
+// negative reasoning, so `TCons<M, _> where M: FeatureModule` and
+// `TCons<PluginCtrls<Pl>, _>` would be judged overlapping; both kinds are
+// therefore wrapped in a distinct marker so the two impls are structurally
+// disjoint.
+
+/// `Mods` entry for a feature module registered with `register_module::<M>()`.
+/// Marker only — never constructed.
+pub struct ModEntry<M>(std::marker::PhantomData<fn() -> M>);
+
+/// `Mods` entry for the controllers a plugin ships
+/// ([`Plugin::Controllers`](crate::plugin::Plugin::Controllers)). Marker only —
+/// never constructed. Pushed by [`PushPluginCtrls`] and only when the plugin
+/// actually declares controllers, so `.plugin(..)` on a controller-free plugin
+/// leaves `Mods` at `TNil` (which is what `with_state` requires).
+pub struct PluginCtrls<Pl>(std::marker::PhantomData<fn() -> Pl>);
+
+/// Type-level "push `Pl`'s controllers onto `Mods`, if it has any".
+///
+/// Implemented on the plugin's `Controllers` **tuple type**: `()` yields
+/// `Mods` unchanged, any non-empty tuple yields `TCons<PluginCtrls<Pl>, Mods>`.
+/// This keeps `Mods = TNil` — and therefore `with_state` — available for the
+/// overwhelming majority of plugins, which ship no controllers.
+pub trait PushPluginCtrls<Pl: ?Sized, Mods> {
+    /// The resulting pending-controller list.
+    type Output;
+}
+
+impl<Pl: ?Sized, Mods> PushPluginCtrls<Pl, Mods> for () {
+    type Output = Mods;
+}
+
+macro_rules! impl_push_plugin_ctrls {
+    ($($C:ident),+) => {
+        impl<Pl, Mods, $($C),+> PushPluginCtrls<Pl, Mods> for ($($C,)+) {
+            type Output = TCons<PluginCtrls<Pl>, Mods>;
+        }
+    };
+}
+
+impl_push_plugin_ctrls!(C0);
+impl_push_plugin_ctrls!(C0, C1);
+impl_push_plugin_ctrls!(C0, C1, C2);
+impl_push_plugin_ctrls!(C0, C1, C2, C3);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14);
+impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C13, C14, C15);
+
+/// Registers a plugin's controller tuple into the typed builder, **with** the
+/// global dependency check.
+///
+/// Unlike feature-module controllers (checked module-locally at
+/// `register_module`, so they may inject *private* module beans), a plugin's
+/// controllers may only inject beans that are in the application's provision
+/// list — the plugin's own [`Provided`](crate::plugin::Plugin::Provided) tuple
+/// included, since it joined `P` at `.plugin(..)`. The check therefore runs
+/// here, at `build_state()`, against the **final** state HList: order-
+/// independent, exactly like [`Plugin::Deps`](crate::plugin::Plugin::Deps).
+///
+/// `W` collects one `(extraction-marker, dependency-indices)` witness pair per
+/// element; it is always inferred. Implemented for `()` and tuples of arity
+/// 1..=16.
+#[diagnostic::on_unimplemented(
+    message = "the `{Pl}` plugin's controllers cannot be registered",
+    label = "installed here",
+    note = "every type in `{Pl}::Controllers` must be a `#[controller]` type whose `#[inject]` dependencies are all in the application's provision list",
+    note = "`.provide(..)` / `.register::<_>()` the missing bean, or add it to `{Pl}::Provided`"
+)]
+pub trait PluginControllerList<Pl, T: Clone + Send + Sync + 'static, W> {
+    /// Register every controller in the tuple, in tuple order.
+    fn register_all(builder: AppBuilder<T>) -> AppBuilder<T>;
+}
+
+impl<Pl, T: Clone + Send + Sync + 'static> PluginControllerList<Pl, T, ()> for () {
+    fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
+        builder
+    }
+}
+
+macro_rules! impl_plugin_controllers {
+    ($C0:ident $W0:ident $D0:ident) => {
+        // `do_not_recommend`: a missing bean otherwise surfaces as the inner
+        // `AllSatisfied`/`Contains` error on the controller's dependency, with
+        // no hint that a *plugin* pulled that controller in. Suppressing this
+        // impl from recommendation makes the compiler report the unsatisfied
+        // `PluginControllerList` bound, whose message names the plugin.
+        #[diagnostic::do_not_recommend]
+        impl<Pl, T, $C0, $W0, $D0> PluginControllerList<Pl, T, (($W0, $D0),)> for ($C0,)
+        where
+            T: Clone + Send + Sync + 'static,
+            $C0: Controller<T, $W0>,
+            $C0::Deps: crate::type_list::AllSatisfied<T, $D0>,
+        {
+            fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
+                builder.register_controller_impl::<$C0, $W0, $D0>()
+            }
+        }
+    };
+    ($C0:ident $W0:ident $D0:ident, $($Cs:ident $Ws:ident $Ds:ident),+) => {
+        #[diagnostic::do_not_recommend]
+        impl<Pl, T, $C0, $W0, $D0, $($Cs, $Ws, $Ds),+>
+            PluginControllerList<Pl, T, (($W0, $D0), $(($Ws, $Ds)),+)> for ($C0, $($Cs),+)
+        where
+            T: Clone + Send + Sync + 'static,
+            $C0: Controller<T, $W0>,
+            $C0::Deps: crate::type_list::AllSatisfied<T, $D0>,
+            $($Cs: Controller<T, $Ws>,)+
+            $($Cs::Deps: crate::type_list::AllSatisfied<T, $Ds>,)+
+        {
+            fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
+                builder
+                    .register_controller_impl::<$C0, $W0, $D0>()
+                    $(.register_controller_impl::<$Cs, $Ws, $Ds>())+
+            }
+        }
+        impl_plugin_controllers!($($Cs $Ws $Ds),+);
+    };
+}
+
+impl_plugin_controllers!(
+    C0 W0 D0, C1 W1 D1, C2 W2 D2, C3 W3 D3, C4 W4 D4, C5 W5 D5, C6 W6 D6,
+    C7 W7 D7, C8 W8 D8, C9 W9 D9, C10 W10 D10, C11 W11 D11, C12 W12 D12,
+    C13 W13 D13, C14 W14 D14, C15 W15 D15
+);

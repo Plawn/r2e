@@ -1,5 +1,5 @@
 #[allow(unused_imports)] // referenced by intra-doc links
-use super::{PluginBuildContext, PreStatePlugin};
+use super::{Plugin, PluginBuildContext};
 
 // ── Plugin build machinery ─────────────────────────────────────────────────
 
@@ -12,7 +12,7 @@ use super::{PluginBuildContext, PreStatePlugin};
 /// resolution — serve hooks, request handlers, tracked background tasks (see
 /// the ownership rules below for the exact extent). Reading it **during** a
 /// plugin's `build` returns `None` — take dependencies through
-/// [`Deps`](PreStatePlugin::Deps) instead; the handle exists for values that
+/// [`Deps`](Plugin::Deps) instead; the handle exists for values that
 /// must resolve beans lazily *after* boot (per-tenant sources, resource
 /// factories).
 ///

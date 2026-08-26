@@ -1,6 +1,6 @@
 //! Dev-mode support endpoints.
 //!
-//! When enabled via `.with(DevReload)`, the server exposes:
+//! When enabled via `.plugin(DevReload)`, the server exposes:
 //! - `GET /__r2e_dev/status` — Returns `"dev"` so tooling/scripts can
 //!   detect that the server is running in dev mode.
 //! - `GET /__r2e_dev/ping` — Returns a timestamp; can be polled by a

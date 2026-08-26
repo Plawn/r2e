@@ -2,11 +2,11 @@ use super::{reuse_clone_none, BeanError, BeanRegistration, BeanRegistry};
 use std::any::{type_name, Any, TypeId};
 
 impl BeanRegistry {
-    /// Register a [`PreStatePlugin`](crate::PreStatePlugin) as bean-graph
+    /// Register a [`Plugin`](crate::Plugin) as bean-graph
     /// nodes: one **group node** running the plugin's `build` (yielding the
     /// whole `Provided` tuple as a hidden `PluginOut<Pl>` bean), plus one
     /// **projection node** per `Provided` element cloning its slot out of the
-    /// group. Called by the blanket `RawPreStatePlugin` impl at `.plugin()`
+    /// group. Called by the blanket `PluginInstall` impl at `.plugin()`
     /// time; the caller has already handled the all-pinned skip.
     ///
     /// Projections register **strict** (`overridable: false`): colliding with
@@ -17,7 +17,7 @@ impl BeanRegistry {
     ///
     /// All plugin nodes are volatile: rebuilt every dev-reload cycle, and
     /// forcing resolution on a same-fingerprint cache hit.
-    pub(crate) fn register_plugin_group<Pl: crate::PreStatePlugin>(
+    pub(crate) fn register_plugin_group<Pl: crate::Plugin>(
         &mut self,
         plugin: Pl,
         effects: crate::plugin::EffectsSlot,
@@ -55,13 +55,12 @@ impl BeanRegistry {
                         crate::plugin::PluginBuildContext::new(enabled, graph_handle, config);
                     // Fully qualified so a plugin's own inherent `build` method
                     // (e.g. a builder-style `fn build(self)`) can't shadow it.
-                    let provided =
-                        crate::plugin::PreStatePlugin::build(plugin, deps, typed, &mut bctx)
-                            .await
-                            .map_err(|source| BeanError::PluginBuild {
-                                plugin: name,
-                                source,
-                            })?;
+                    let provided = crate::plugin::Plugin::build(plugin, deps, typed, &mut bctx)
+                        .await
+                        .map_err(|source| BeanError::PluginBuild {
+                            plugin: name,
+                            source,
+                        })?;
                     // The `enabled` decision travels WITH the effects: it was
                     // taken here, from the graph's `R2eConfig`, and the
                     // install-order action must not recompute it from the

@@ -8,7 +8,7 @@ use crate::type_list::{PluginDeps, PluginProvisions, TAppend};
 /// path segment of its type name, before any generic arguments. For example
 /// `r2e_prometheus::Prometheus` → `"Prometheus"`.
 ///
-/// Used by the blanket [`RawPreStatePlugin`] impl to name the single
+/// Used by the blanket [`PluginInstall`] impl to name the single
 /// [`DeferredAction`] flushed from a plugin's buffered sugar calls, so the
 /// plugin author never has to name it themselves.
 #[doc(hidden)]
@@ -23,9 +23,9 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
     }
 }
 
-/// A plugin that runs in the pre-state phase and provides beans.
+/// The one plugin kind: installed with `.plugin(..)` before `build_state()`.
 ///
-/// A pre-state plugin **is one async, fallible factory** for its
+/// A plugin **is one async, fallible factory** for its
 /// [`Provided`](Self::Provided) tuple: [`build`](Self::build) runs inside
 /// [`build_state()`](crate::AppBuilder::build_state) as a node of the bean
 /// graph, topologically ordered after its [`Deps`](Self::Deps), with the
@@ -75,23 +75,24 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// because `build` — and whatever it constructed — ran anyway.
 ///
 /// For plugins that need arbitrary builder access (calling `.register()`,
-/// `.provide()`, etc. by hand), implement [`RawPreStatePlugin`] instead — but
-/// that is rarely necessary. Every `PreStatePlugin` is automatically a
-/// [`RawPreStatePlugin`] via a blanket impl, so both work with `.plugin()`.
+/// `.provide()`, etc. by hand), implement [`PluginInstall`] instead — but
+/// that is rarely necessary. Every `Plugin` is automatically a
+/// [`PluginInstall`] via a blanket impl, so both work with `.plugin()`.
 ///
 /// # Examples
 ///
 /// Simple plugin (no dependencies):
 ///
 /// ```ignore
-/// use r2e_core::{PreStatePlugin, PluginBuildContext, PluginBuildError};
+/// use r2e_core::{Plugin, PluginBuildContext, PluginBuildError};
 ///
 /// pub struct MyPlugin { pub value: String }
 ///
-/// impl PreStatePlugin for MyPlugin {
+/// impl Plugin for MyPlugin {
 ///     type Provided = (String,);
 ///     type Deps = ();
 ///     type Config = ();
+///     type Controllers = ();
 ///
 ///     async fn build(
 ///         self,
@@ -107,10 +108,11 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// Plugin whose bean is built from dependencies, with effects:
 ///
 /// ```ignore
-/// impl PreStatePlugin for MyPlugin {
+/// impl Plugin for MyPlugin {
 ///     type Provided = (MyService,);
 ///     type Deps = (DbPool, CancelToken);
 ///     type Config = MyConfig;               // #[derive(ConfigProperties)]
+///     type Controllers = ();
 ///     const CONFIG_PREFIX: Option<&'static str> = Some("my-plugin");
 ///
 ///     async fn build(
@@ -127,11 +129,12 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
 /// }
 /// ```
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement a pre-state plugin trait (`PreStatePlugin`/`RawPreStatePlugin`), the API used by `.plugin()`",
-    label = "`.plugin()` needs a pre-state plugin",
-    note = "if `{Self}` is a post-state plugin, install it with `.with({Self})` AFTER `build_state()` instead of `.plugin({Self})`"
+    message = "`{Self}` does not implement `Plugin`, the trait `.plugin()` installs",
+    label = "not a plugin",
+    note = "implement `r2e::Plugin` for `{Self}`: `type Provided`, `type Deps`, `type Config`, `type Controllers`, and an async `build(self, deps, config, ctx)`",
+    note = "there is only one plugin kind — everything installs with `.plugin({Self})` BEFORE `build_state()`"
 )]
-pub trait PreStatePlugin: Send + Sized + 'static {
+pub trait Plugin: Send + Sized + 'static {
     /// The **tuple** of bean types this plugin provides to the bean graph.
     ///
     /// Use `(A,)` for a single bean, `(A, B)` for several, or `()` for none.
@@ -173,6 +176,36 @@ pub trait PreStatePlugin: Send + Sized + 'static {
     /// On stable Rust associated types have no defaults, so every impl must
     /// write it explicitly (`type Config = ();`).
     type Config: crate::config::PluginConfig;
+
+    /// **Tuple** of `#[controller]` types this plugin ships (or `()` for none).
+    ///
+    /// Plugin controllers are registered by `build_state()` — after the graph
+    /// resolves, alongside feature-module controllers — so they may
+    /// `#[inject]` the plugin's own [`Provided`](Self::Provided) beans as well
+    /// as any bean in the application's provision list. Their dependency lists
+    /// ride along in the builder's requirement list and are verified against
+    /// the **final** provision list at `build_state()`, exactly like
+    /// [`Deps`](Self::Deps).
+    ///
+    /// This is how a plugin ships endpoints written the normal way (`#[get]`,
+    /// guards, OpenAPI metadata) instead of hand-assembling a `Router` in
+    /// [`build`](Self::build). Routes registered this way are visible to every
+    /// [`after_routes`](PluginBuildContext::after_routes) effect, whatever the
+    /// install order.
+    ///
+    /// On stable Rust associated types have no defaults, so every impl must
+    /// write it explicitly (`type Controllers = ();`).
+    ///
+    /// ```ignore
+    /// impl Plugin for Metrics {
+    ///     type Provided = (MetricsRegistry,);
+    ///     type Deps = ();
+    ///     type Config = ();
+    ///     type Controllers = (MetricsController,);   // #[inject] MetricsRegistry
+    ///     // ...
+    /// }
+    /// ```
+    type Controllers;
 
     /// The YAML section prefix for [`Config`](Self::Config).
     ///
@@ -279,10 +312,11 @@ pub trait PreStatePlugin: Send + Sized + 'static {
     /// # Example
     ///
     /// ```ignore
-    /// impl PreStatePlugin for MetricsExporter {
+    /// impl Plugin for MetricsExporter {
     ///     type Provided = (ExporterHandle,);
     ///     type Deps = (MetricsRegistry,); // registered elsewhere via `.register()`
     ///     type Config = ExporterConfig;
+    ///     type Controllers = ();
     ///     const CONFIG_PREFIX: Option<&'static str> = Some("exporter");
     ///
     ///     async fn build(
@@ -306,23 +340,23 @@ pub trait PreStatePlugin: Send + Sized + 'static {
     ) -> impl std::future::Future<Output = Result<Self::Provided, PluginBuildError>> + Send;
 }
 
-/// The error type [`PreStatePlugin::build`] returns; an `Err` aborts boot with
+/// The error type [`Plugin::build`] returns; an `Err` aborts boot with
 /// a [`BeanError::PluginBuild`](crate::beans::BeanError::PluginBuild).
 pub type PluginBuildError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Internal machinery backing [`PreStatePlugin`] — **not** part of the public
+/// Internal machinery backing [`Plugin`] — **not** part of the public
 /// plugin-authoring surface.
 ///
 /// This trait is the HList-based, full-builder-access form that `.plugin()`
-/// actually dispatches on. Every [`PreStatePlugin`] gets a `RawPreStatePlugin`
+/// actually dispatches on. Every [`Plugin`] gets a `PluginInstall`
 /// impl for free via the blanket impl below, which is how multi-bean plugins,
 /// deferred actions, and compile-time dependency checking are wired into the
 /// builder's type-level provision/requirement lists.
 ///
 /// **Almost no one should implement this directly.** The simplified
-/// [`PreStatePlugin`] now supports multiple provided beans (via a tuple
-/// [`Provided`](PreStatePlugin::Provided)), so the only remaining reason to
-/// hand-write a `RawPreStatePlugin` is to call arbitrary builder methods
+/// [`Plugin`] now supports multiple provided beans (via a tuple
+/// [`Provided`](Plugin::Provided)), so the only remaining reason to
+/// hand-write a `PluginInstall` is to call arbitrary builder methods
 /// (`.register()`, `.provide()`, `.when()`, …) during install. It is kept as an
 /// escape hatch for that case.
 ///
@@ -334,11 +368,12 @@ pub type PluginBuildError = Box<dyn std::error::Error + Send + Sync>;
 /// `install()` to perform the zero-cost phantom type conversion.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement a pre-state plugin trait (`PreStatePlugin`/`RawPreStatePlugin`), the API used by `.plugin()`",
-    label = "`.plugin()` needs a pre-state plugin",
-    note = "if `{Self}` is a post-state plugin, install it with `.with({Self})` AFTER `build_state()` instead of `.plugin({Self})`"
+    message = "`{Self}` does not implement `Plugin`, the trait `.plugin()` installs",
+    label = "not a plugin",
+    note = "implement `r2e::Plugin` for `{Self}`: `type Provided`, `type Deps`, `type Config`, `type Controllers`, and an async `build(self, deps, config, ctx)`",
+    note = "there is only one plugin kind — everything installs with `.plugin({Self})` BEFORE `build_state()`"
 )]
-pub trait RawPreStatePlugin: Send + 'static {
+pub trait PluginInstall: Send + 'static {
     /// The type-level list of bean types this plugin provides.
     ///
     /// For a single provision: `TCons<MyType, TNil>`.
@@ -353,20 +388,30 @@ pub trait RawPreStatePlugin: Send + 'static {
     /// this plugin is installed.
     type Required;
 
-    /// Install the plugin in the pre-state phase with full builder access.
+    /// The plugin's controller tuple — see [`Plugin::Controllers`].
     ///
-    /// `Mods` is the builder's pending feature-module list — plugins carry it
-    /// through unchanged.
+    /// A hand-written `PluginInstall` must set this to `()` unless it also
+    /// wants its controllers folded through the deferred-controller list.
+    type Controllers;
+
+    /// Install the plugin on the builder (before `build_state()`) with full builder access.
+    ///
+    /// `Mods` is the builder's pending deferred-controller list: feature
+    /// modules plus plugin controller sets. A plugin with
+    /// `Controllers = ()` carries it through unchanged; one that ships
+    /// controllers pushes a [`PluginCtrls`](crate::di::module::PluginCtrls)
+    /// entry onto it.
     fn install<P, R, Mods>(
         self,
         app: AppBuilder<NoState, P, R, Mods>,
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>;
+        R: TAppend<Self::Required>,
+        Self::Controllers: crate::di::module::PushPluginCtrls<Self, Mods>;
 }
 
-// Blanket impl: every PreStatePlugin is automatically a RawPreStatePlugin.
+// Blanket impl: every Plugin is automatically a PluginInstall.
 //
 // The plugin's `Provided` tuple maps to the type-level provision list via
 // `PluginProvisions::AsList`. At the value level, the plugin becomes bean-graph
@@ -377,12 +422,13 @@ pub trait RawPreStatePlugin: Send + 'static {
 // strict — colliding with an app `.provide()`/`.register()` of the same type
 // (or installing the same plugin twice) is a `DuplicateBean` boot error, and a
 // `pin_provide` override placed BEFORE `.plugin()` wins per type.
-impl<T> RawPreStatePlugin for T
+impl<T> PluginInstall for T
 where
-    T: PreStatePlugin,
+    T: Plugin,
 {
     type Provisions = <T::Provided as PluginProvisions>::AsList;
     type Required = <T::Deps as PluginDeps>::AsList;
+    type Controllers = T::Controllers;
 
     fn install<P, R, Mods>(
         self,
@@ -391,6 +437,7 @@ where
     where
         P: TAppend<Self::Provisions>,
         R: TAppend<Self::Required>,
+        Self::Controllers: crate::di::module::PushPluginCtrls<Self, Mods>,
     {
         let name = plugin_action_name::<T>();
         let prefix = T::CONFIG_PREFIX;
@@ -477,7 +524,7 @@ where
                 // disabled plugin still built (a disabled Executor's pool would
                 // never drain). They run first so a disabled plugin's cleanup is
                 // registered even though nothing else of it is.
-                for op in built.shutdown {
+                for op in built.effects.shutdown {
                     op(dctx);
                 }
                 if !built.enabled {
@@ -488,16 +535,23 @@ where
                     );
                     return;
                 }
-                for op in built.effects {
+                // Graph stage: applied right here, inside `build_state()`.
+                for op in built.effects.surface {
                     op(dctx);
                 }
+                // Routes stage: queued for `build()`, once every controller
+                // (app, module and plugin) has registered.
+                dctx.routes_effects.extend(built.effects.routes);
+                // Finalize stage: outermost router wraps, applied last in
+                // `build()`.
+                dctx.router_wraps.extend(built.effects.finalize);
             }));
         }
-        builder.with_updated_types()
+        builder.with_updated_types_full()
     }
 }
 
-/// Load and validate a plugin's typed [`Config`](PreStatePlugin::Config)
+/// Load and validate a plugin's typed [`Config`](Plugin::Config)
 /// section from an already-resolved `R2eConfig` (the graph-provided bean),
 /// at plugin-build time.
 ///
@@ -507,7 +561,7 @@ where
 /// prefix. A present-but-invalid section panics with the same validation report
 /// a controller `#[config]` mismatch produces (`plugin` names the plugin in the
 /// message) — even when the plugin is disabled via `<prefix>.enabled = false`.
-pub(crate) fn load_plugin_config_from<T: PreStatePlugin>(
+pub(crate) fn load_plugin_config_from<T: Plugin>(
     config: Option<&crate::config::R2eConfig>,
     plugin: &str,
 ) -> Option<T::Config> {
@@ -532,20 +586,20 @@ pub(crate) fn load_plugin_config_from<T: PreStatePlugin>(
 }
 
 /// The group-node bean for a plugin `Pl`: the whole `Provided` tuple, built by
-/// one run of [`PreStatePlugin::build`]. Projection nodes clone individual
+/// one run of [`Plugin::build`]. Projection nodes clone individual
 /// elements out of it. Internal — never inject this type.
 #[doc(hidden)]
-pub struct PluginOut<Pl: PreStatePlugin>(pub Pl::Provided);
+pub struct PluginOut<Pl: Plugin>(pub Pl::Provided);
 
 // Manual impl: `#[derive(Clone)]` would bound `Pl: Clone`, but only the tuple
 // needs to be cloneable (and `PluginProvisions: Clone` guarantees it).
-impl<Pl: PreStatePlugin> Clone for PluginOut<Pl> {
+impl<Pl: Plugin> Clone for PluginOut<Pl> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-/// Whether a plugin's post-state effects should run, per the `<prefix>.enabled`
+/// Whether a plugin's surface effects should run, per the `<prefix>.enabled`
 /// convention (phase 6).
 ///
 /// Returns `true` (enabled) when the plugin declares no `CONFIG_PREFIX`, when no

@@ -2,7 +2,7 @@
 //! consumers were already handed out.
 //!
 //! This is an **escape hatch**, not the default pattern. Plugins no longer
-//! need it for their own beans: [`PreStatePlugin::build`](crate::PreStatePlugin::build)
+//! need it for their own beans: [`Plugin::build`](crate::Plugin::build)
 //! runs inside `build_state()` with resolved dependencies, so plugin beans are
 //! constructed whole. The framework's remaining first-party use is
 //! [`GraphHandle`](crate::plugin::GraphHandle), which wraps a

@@ -1,5 +1,5 @@
 //! NoState (pre-state) phase of [`AppBuilder`]: bean/producer registration,
-//! config loading, pre-state plugins, and the `build_state` transition.
+//! config loading, plugin installation, and the `build_state` transition.
 
 use super::*;
 
@@ -16,7 +16,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 bean_registry: BeanRegistry::new(),
                 deferred_actions: Vec::new(),
                 plugin_data: HashMap::new(),
-                last_plugin_name: None,
+                routes_effects: Vec::new(),
                 normalize_path: false,
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
@@ -56,7 +56,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
 
 impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Mutable access to the bean registry (for internal use by the blanket
-    /// `PreStatePlugin` impl to deposit a plugin's provided beans).
+    /// `Plugin` impl to deposit a plugin's provided beans).
     pub(crate) fn bean_registry_mut(&mut self) -> &mut BeanRegistry {
         &mut self.shared.bean_registry
     }
@@ -72,8 +72,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     }
 
     /// [`with_updated_types`](Self::with_updated_types), but also rewriting
-    /// the pending-module list. Internal — only `register_module` grows `Mods`.
-    fn with_updated_types_full<NewP, NewR, NewMods>(
+    /// the pending-module list. Internal — `register_module` and plugins that
+    /// ship controllers are what grow `Mods`.
+    pub(crate) fn with_updated_types_full<NewP, NewR, NewMods>(
         self,
     ) -> AppBuilder<NoState, NewP, NewR, NewMods> {
         AppBuilder {
@@ -622,14 +623,16 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self
     }
 
-    /// Install a pre-state plugin that provides beans to the graph.
+    /// Install a [`Plugin`](crate::Plugin) — the one and only plugin
+    /// install site.
     ///
-    /// Accepts any [`PreStatePlugin`](crate::PreStatePlugin) (the normal
-    /// authoring surface) or [`RawPreStatePlugin`] (rare, full builder
-    /// access). A `PreStatePlugin`'s [`build`](crate::PreStatePlugin::build)
-    /// runs **inside** `build_state()` as a node of the bean graph:
-    /// dependencies arrive constructed, config arrives loaded, and each
-    /// element of its `Provided` tuple becomes an ordinary bean.
+    /// Accepts any [`Plugin`](crate::Plugin) (the normal authoring surface) or
+    /// [`PluginInstall`] (rare, full builder access). A `Plugin`'s
+    /// [`build`](crate::Plugin::build) runs **inside** `build_state()` as a
+    /// node of the bean graph: dependencies arrive constructed, config arrives
+    /// loaded, and each element of its `Provided` tuple becomes an ordinary
+    /// bean. Its effects apply in three stages (Graph → Routes → Finalize) and
+    /// its `Controllers` are registered alongside feature-module controllers.
     ///
     /// **Call order does not matter**: `.plugin()` before or after
     /// `load_config()` / `.provide()` / `.register()` behaves identically —
@@ -647,7 +650,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     .build_state()
     ///     .await
     /// ```
-    pub fn plugin<Pl: RawPreStatePlugin>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
+    pub fn plugin<Pl: PluginInstall>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
         // Nothing is checked at the call site: the plugin's `Deps` are appended
@@ -655,30 +658,14 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // `build_state()`, so a dependency may be provided or registered after
         // this call.
         R: TAppend<Pl::Required>,
-    {
-        plugin.install(self)
-    }
-
-    /// Alias for [`.plugin()`](Self::plugin) for pre-state plugins.
-    ///
-    /// # Deprecated
-    ///
-    /// Use [`.plugin()`](Self::plugin) instead.
-    #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: RawPreStatePlugin>(
-        self,
-        plugin: Pl,
-    ) -> WithPluginInstalled<Pl, P, R, Mods>
-    where
-        P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::Required>,
+        Pl::Controllers: PushPluginCtrls<Pl, Mods>,
     {
         plugin.install(self)
     }
 
     /// Add a deferred action to be executed after state resolution.
     ///
-    /// This is the low-level escape hatch. [`PreStatePlugin`] implementations
+    /// This is the low-level escape hatch. [`Plugin`] implementations
     /// usually reach for the effect sugar on
     /// [`PluginBuildContext`](crate::plugin::PluginBuildContext)
     /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) from inside `build`
@@ -687,10 +674,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// # Example (sugar — preferred)
     ///
     /// ```ignore
-    /// impl PreStatePlugin for MyPlugin {
+    /// impl Plugin for MyPlugin {
     ///     type Provided = (MyToken,);
     ///     type Deps = ();
     ///     type Config = ();
+    ///     type Controllers = ();
     ///
     ///     async fn build(
     ///         self,

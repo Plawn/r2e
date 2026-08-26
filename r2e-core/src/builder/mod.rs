@@ -1,7 +1,7 @@
 //! Application builder: two-phase assembly of an R2E app.
 //!
 //! - [`nostate`]: the pre-state phase (`AppBuilder<NoState>`) — bean/producer
-//!   registration, config loading, pre-state plugins, `build_state`.
+//!   registration, config loading, plugin installation, `build_state`.
 //! - [`typed`]: the typed phase (`AppBuilder<T>`) — controllers, plugins,
 //!   layers, hooks, `build()` / `prepare()` / `serve()`.
 //! - [`prepared`]: [`PreparedApp`] + the serving lifecycle (`run()`).
@@ -25,10 +25,10 @@ use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
 use crate::di::meta::MetaRegistry;
 use crate::di::module::{
-    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
-    ModuleScope, RequiredPluginsInstalled,
+    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModEntry, ModuleDepsSatisfied,
+    ModuleList, ModuleScope, PushPluginCtrls, RequiredPluginsInstalled,
 };
-use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
+use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect};
 use crate::rt::CancelToken;
 use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::runtime::service::ServiceComponent;
@@ -68,14 +68,15 @@ pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
 >;
 
 /// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
-/// `Provisions` join `P` and its `Required` (`Deps`) joins `R`. Nothing is
-/// checked at the call site; `Required` is verified against the final
-/// provision list at `build_state()`.
+/// `Provisions` join `P`, its `Required` (`Deps`) joins `R`, and — when it
+/// ships any — its `Controllers` are queued on `Mods` so `build_state()`
+/// registers them. Nothing is checked at the call site; `Required` is verified
+/// against the final provision list at `build_state()`.
 pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     NoState,
-    <P as TAppend<<Pl as RawPreStatePlugin>::Provisions>>::Output,
-    <R as TAppend<<Pl as RawPreStatePlugin>::Required>>::Output,
-    Mods,
+    <P as TAppend<<Pl as PluginInstall>::Provisions>>::Output,
+    <R as TAppend<<Pl as PluginInstall>::Required>>::Output,
+    <<Pl as PluginInstall>::Controllers as PushPluginCtrls<Pl, Mods>>::Output,
 >;
 
 /// Builder returned by
@@ -87,7 +88,7 @@ pub type ModuleRegistered<M, P, R, Mods> = AppBuilder<
     NoState,
     <<M as FeatureModule>::Exports as TAppend<P>>::Output,
     <R as TAppend<<M as FeatureModule>::Imports>>::Output,
-    TCons<M, Mods>,
+    TCons<ModEntry<M>, Mods>,
 >;
 
 type ConsumerReg<T> =
@@ -312,8 +313,9 @@ struct BuilderConfig {
     deferred_actions: Vec<DeferredAction>,
     /// Plugin data storage (type-erased, keyed by TypeId).
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    /// Name of the last plugin that should be installed last (for ordering validation).
-    last_plugin_name: Option<&'static str>,
+    /// Routes-stage plugin effects: queued by the Graph-stage deferred action
+    /// and drained in `build()`, once every controller has registered.
+    routes_effects: Vec<RoutesEffect>,
     /// Whether to install the pre-routing trailing-slash normalization rewrite.
     normalize_path: bool,
     /// Whether the DevReload plugin has been applied (prevents double-install).
@@ -426,6 +428,22 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
 // ── Conditional assembly (any phase) ────────────────────────────────────────
 
 impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
+    /// Returns a reference to the loaded [`R2eConfig`], if any.
+    ///
+    /// Available after [`load_config`](AppBuilder::load_config) (or
+    /// [`with_config`](AppBuilder::with_config)). Plugins install **before**
+    /// `build_state()`, so this is the accessor a config-driven plugin
+    /// constructor reads from:
+    ///
+    /// ```ignore
+    /// let b = AppBuilder::new().load_config::<AppConfig>();
+    /// let tracing = Tracing::from_config(b.r2e_config().unwrap());
+    /// b.plugin(tracing).build_state().await
+    /// ```
+    pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
+        self.shared.config.as_ref()
+    }
+
     /// Conditionally apply a builder transformation.
     ///
     /// `f` must return the **same** builder type, so it may call `Self -> Self`
@@ -437,7 +455,7 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .when(cfg!(debug_assertions), |b| b.with(DevReload))
+    ///     .when(cfg!(debug_assertions), |b| b.with_layer_fn(no_store))
     /// ```
     pub fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
         if cond {
