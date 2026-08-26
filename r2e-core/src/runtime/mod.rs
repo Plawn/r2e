@@ -6,3 +6,4 @@ pub mod lifecycle;
 pub mod service;
 pub mod sharded;
 pub mod tracing_config;
+pub mod worker;

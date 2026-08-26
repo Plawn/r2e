@@ -941,6 +941,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // including parse errors for invalid values like 0 or unknown strings —
         // is carried on `PreparedApp` and surfaced at `run()` time.
         let workers = crate::runtime::sharded::parse_workers(this.shared.config.as_ref());
+        let per_worker_services = this.shared.per_worker_services.clone();
 
         // Stop-handle resolution: explicit `with_stop_handle` wins, then a
         // `StopHandle` bean from the graph (so `.provide(stop.clone())` alone
@@ -1000,6 +1001,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             shutdown_grace_period,
             tcp_nodelay,
             workers,
+            per_worker_services,
             #[cfg(feature = "quic")]
             quic_server_config,
         }

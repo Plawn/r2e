@@ -107,6 +107,22 @@ pub use tokio::net::TcpListener;
 /// workspace and out of examples/tests.
 pub use tokio::net::TcpStream;
 
+/// The async UDP socket, re-exported.
+///
+/// Same reasoning as [`TcpStream`]. Per-worker services (see
+/// `r2e_core::runtime::worker`) adopt a pre-configured `std::net::UdpSocket`
+/// (SO_REUSEPORT, buffer sizes, cBPF, …) with `UdpSocket::from_std`, which must
+/// run inside the owning worker's runtime.
+pub use tokio::net::UdpSocket;
+
+/// A set of `!Send` tasks pinned to the thread that runs it, re-exported.
+///
+/// This is the worker-local executor behind per-worker services: a sharded
+/// worker drives `LocalSet::run_until(..)` on its `current_thread` runtime, and
+/// [`spawn_local`] places tasks on it. Not wrapped: the only operations used
+/// (`run_until`, `spawn_local`) are already exposed by the free functions here.
+pub use tokio::task::LocalSet;
+
 /// Async byte-stream traits and their extension methods.
 ///
 /// Plain re-exports of `tokio::io`. The traits themselves are the de-facto
@@ -233,6 +249,31 @@ where
     T: Send + 'static,
 {
     JobHandle(tokio::spawn(future))
+}
+
+/// Spawn a `!Send` task on the current thread's [`LocalSet`], returning a
+/// [`JobHandle<T>`].
+///
+/// Equivalent to `tokio::task::spawn_local`. The task is pinned to the calling
+/// thread and never migrates — it may own `Rc`/`RefCell` state. This is the
+/// worker-local spawn used by per-worker services (`WorkerContext::spawn_local`
+/// in r2e-core); it is **not** a general-purpose spawn: outside a `LocalSet`
+/// context it panics, and it must never be reached from a request handler
+/// (handlers run on plain runtimes, not inside a `LocalSet`).
+///
+/// # Panics
+///
+/// If called outside a [`LocalSet`] context.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
+pub fn spawn_local<F>(future: F) -> JobHandle<F::Output>
+where
+    F: Future + 'static,
+    F::Output: 'static,
+{
+    JobHandle(tokio::task::spawn_local(future))
 }
 
 // ── Control plane ───────────────────────────────────────────────────────────

@@ -246,6 +246,7 @@ mod integration {
                 true,
                 cp_handle,
                 token,
+                &[],
             )
         });
         std::thread::sleep(Duration::from_millis(300));

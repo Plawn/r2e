@@ -116,8 +116,10 @@ pub const UNSUPPORTED_PLATFORM_MSG: &str =
 ))]
 mod imp {
     use std::net::SocketAddr;
+    use std::sync::Arc;
 
     use crate::rt::CancelToken;
+    use crate::runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
 
     /// Create a `SO_REUSEPORT` listener bound to `addr`, returned as a
     /// non-blocking `std::net::TcpListener` ready for
@@ -143,6 +145,41 @@ mod imp {
         Ok(std_listener)
     }
 
+    /// Sends the worker's startup outcome to the main thread exactly once —
+    /// including when the worker thread unwinds before reporting (runtime
+    /// build failure, factory panic): the `Drop` impl reports the failure so
+    /// the barrier in [`serve_sharded`] never hangs on a dead worker.
+    struct ReadyGuard {
+        worker: usize,
+        tx: Option<std::sync::mpsc::Sender<(usize, Result<(), String>)>>,
+    }
+
+    impl ReadyGuard {
+        fn report(&mut self, res: Result<(), String>) {
+            if let Some(tx) = self.tx.take() {
+                let _ = tx.send((self.worker, res));
+            }
+        }
+    }
+
+    impl Drop for ReadyGuard {
+        fn drop(&mut self) {
+            self.report(Err(format!(
+                "worker {} exited before reporting startup (panicked?)",
+                self.worker
+            )));
+        }
+    }
+
+    /// Shut down `services` in reverse start order, awaiting each cleanup.
+    async fn shutdown_services(worker: usize, mut services: Vec<Box<dyn WorkerService>>) {
+        while let Some(svc) = services.pop() {
+            let idx = services.len();
+            tracing::debug!(worker, service = idx, "shutting down per-worker service");
+            svc.shutdown().await;
+        }
+    }
+
     /// Serve `router` across `workers` worker threads, each with its own
     /// `current_thread` runtime and `SO_REUSEPORT` listener.
     ///
@@ -153,11 +190,22 @@ mod imp {
     /// Going through `local_addr()` also makes port `0` work: the kernel
     /// assigns the ephemeral port once, and every worker shares it.
     ///
-    /// Blocks until `cancel_token` is cancelled (each worker observes a child
-    /// token via graceful shutdown), then joins all worker threads.
+    /// `services` are the per-worker service factories (see
+    /// [`crate::runtime::worker`]). Each worker runs every factory, in order,
+    /// inside its runtime's `LocalSet` **before** accepting connections. Startup
+    /// is all-or-nothing across workers: the main thread waits for every
+    /// worker to report, then releases them all to serve; if any worker fails,
+    /// the shared token is cancelled (every worker unwinds its started
+    /// services), all threads are joined, and the error — naming the worker and
+    /// the failing service index — is returned.
     ///
-    /// Returns the first worker serve error, if any. Worker panics are logged
-    /// via `tracing::error!`.
+    /// Blocks until `cancel_token` is cancelled (each worker observes a child
+    /// token via graceful shutdown), then joins all worker threads. Inside a
+    /// worker, cancellation drains HTTP first, then shuts down the services in
+    /// reverse start order, then drops the runtime.
+    ///
+    /// Returns the first worker error, if any. Worker panics are logged via
+    /// `tracing::error!`.
     pub fn serve_sharded(
         router: crate::http::Router,
         addrs: &[SocketAddr],
@@ -165,6 +213,7 @@ mod imp {
         tcp_nodelay: bool,
         control_plane: crate::rt::RuntimeHandle,
         cancel_token: CancelToken,
+        services: &[PerWorkerServiceFactory],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Pre-create the listeners on the main thread so that a bind failure
         // surfaces synchronously as a run error (rather than from inside a
@@ -200,14 +249,28 @@ mod imp {
             std_listeners.push(make_reuseport_listener(addr)?);
         }
 
+        // Startup barrier: every worker reports (worker, Ok | Err) once its
+        // services are up; `start_gate` is cancelled to release them all to
+        // serve, or `cancel_token` is cancelled to abort startup.
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<(usize, Result<(), String>)>();
+        let start_gate = CancelToken::new();
+        let services: Arc<[PerWorkerServiceFactory]> = services.into();
+
         let mut handles = Vec::with_capacity(workers);
         for (i, std_listener) in std_listeners.into_iter().enumerate() {
             let router = router.clone();
             let child_token = cancel_token.child_token();
             let control_plane = control_plane.clone();
+            let services = Arc::clone(&services);
+            let start_gate = start_gate.clone();
+            let mut ready = ReadyGuard {
+                worker: i,
+                tx: Some(ready_tx.clone()),
+            };
             let handle = std::thread::Builder::new()
                 .name(format!("r2e-worker-{i}"))
                 .spawn(move || -> Result<(), String> {
+                    let _span = tracing::info_span!("r2e_worker", worker = i).entered();
                     // Register the control-plane handle so background work
                     // initiated from request handlers (rt::spawn_ctl) and
                     // lazy-bean first-touch run on the main multi-thread
@@ -216,14 +279,58 @@ mod imp {
                     let rt = crate::rt::RuntimeBuilder::new_current_thread()
                         .enable_all()
                         .build()
-                        .map_err(|e| format!("failed to build worker runtime: {e}"))?;
-                    rt.block_on(async move {
+                        .map_err(|e| format!("worker {i}: failed to build worker runtime: {e}"))?;
+                    // The LocalSet hosts the per-worker services and every
+                    // task they `spawn_local`; it is dropped (cancelling any
+                    // leftover local task) only after the services have shut
+                    // down.
+                    let local = crate::rt::LocalSet::new();
+                    rt.block_on(local.run_until(async move {
                         // `from_std` must run inside the worker's runtime
                         // context.
                         let listener = crate::rt::TcpListener::from_std(std_listener)
-                            .map_err(|e| format!("failed to adopt worker listener: {e}"))?;
+                            .map_err(|e| format!("worker {i}: failed to adopt worker listener: {e}"))?;
+
+                        // ── Per-worker services: start, in order ─────────
+                        let ctx = WorkerContext::new(i, workers, None, child_token.clone());
+                        let mut started: Vec<Box<dyn WorkerService>> =
+                            Vec::with_capacity(services.len());
+                        let mut startup_err: Option<String> = None;
+                        for (k, factory) in services.iter().enumerate() {
+                            match factory.build(ctx.clone()).await {
+                                Ok(svc) => started.push(svc),
+                                Err(e) => {
+                                    startup_err = Some(format!(
+                                        "worker {i}: per-worker service #{k} failed to start: {e}"
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(err) = startup_err {
+                            tracing::error!(worker = i, error = %err, "per-worker service startup failed");
+                            shutdown_services(i, started).await;
+                            ready.report(Err(err.clone()));
+                            return Err(err);
+                        }
+                        ready.report(Ok(()));
+
+                        // ── Barrier: wait for every worker, or abort ─────
+                        let released = crate::rt::select! {
+                            _ = start_gate.cancelled() => true,
+                            _ = child_token.cancelled() => false,
+                        };
+                        if !released {
+                            // Another worker failed to start (or shutdown was
+                            // requested before startup completed): unwind
+                            // without ever accepting a connection.
+                            shutdown_services(i, started).await;
+                            return Ok(());
+                        }
+
+                        // ── Serve ────────────────────────────────────────
                         let svc = router.into_make_service_with_connect_info::<SocketAddr>();
-                        let shutdown = child_token.cancelled_owned();
+                        let shutdown = child_token.clone().cancelled_owned();
                         let serve_result = if tcp_nodelay {
                             use crate::http::ListenerExt as _;
                             crate::http::serve(
@@ -244,16 +351,65 @@ mod imp {
                                 .with_graceful_shutdown(shutdown)
                                 .await
                         };
-                        serve_result.map_err(|e| format!("worker serve error: {e}"))
-                    })
+
+                        // ── Shutdown: HTTP drained, now the services ─────
+                        // Make sure local tasks see cancellation even when the
+                        // serve loop ended on an error rather than on the token.
+                        child_token.cancel();
+                        shutdown_services(i, started).await;
+                        serve_result.map_err(|e| format!("worker {i}: serve error: {e}"))
+                    }))
                 })
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
                     format!("failed to spawn worker thread {i}: {e}").into()
                 })?;
             handles.push((i, handle));
         }
+        drop(ready_tx);
 
-        tracing::info!(%addr, workers, "R2E server listening (sharded, SO_REUSEPORT)");
+        // ── Startup barrier (main thread) ───────────────────────────────────
+        // Collect one report per worker. A worker that dies before reporting
+        // is reported by its `ReadyGuard`, so this cannot hang.
+        let mut startup_err: Option<String> = None;
+        for _ in 0..workers {
+            match ready_rx.recv() {
+                Ok((_, Ok(()))) => {}
+                Ok((w, Err(e))) => {
+                    tracing::error!(worker = w, error = %e, "worker failed to start");
+                    if startup_err.is_none() {
+                        startup_err = Some(e);
+                    }
+                }
+                Err(_) => {
+                    // Every sender gone without `workers` reports: cannot
+                    // happen given the guards, but never hang on it.
+                    if startup_err.is_none() {
+                        startup_err = Some("a worker vanished during startup".to_string());
+                    }
+                    break;
+                }
+            }
+        }
+        match &startup_err {
+            None => {
+                start_gate.cancel();
+                if services.is_empty() {
+                    tracing::info!(%addr, workers, "R2E server listening (sharded, SO_REUSEPORT)");
+                } else {
+                    tracing::info!(
+                        %addr,
+                        workers,
+                        per_worker_services = services.len(),
+                        "R2E server listening (sharded, SO_REUSEPORT)"
+                    );
+                }
+            }
+            Some(_) => {
+                // Deterministic rollback: every worker unwinds its started
+                // services and exits before we return the error.
+                cancel_token.cancel();
+            }
+        }
 
         // Block the main thread until shutdown is signalled, then join the
         // workers. We are already past the point where the main runtime drives
@@ -274,6 +430,9 @@ mod imp {
             }
         }
 
+        if let Some(e) = startup_err {
+            return Err(e.into());
+        }
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
