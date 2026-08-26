@@ -11,3 +11,4 @@ mod rt;
 mod sharded;
 mod tcp_nodelay;
 mod tracing_config;
+mod worker_services;
