@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Run code at server startup and shutdown. `.on_start(|state| async move { ... })` fires before the server accepts connections and may return `Err` to abort boot; `.on_stop(|state| async move { ... })` fires after graceful shutdown and cannot fail. Both are registered after `build_state()` and receive the inferred bean HList — read beans by type with `state.bean::<T>()` (`BeanLookup`). For drain-time hooks and programmatic stop, see Feature 22 (`on_drain`, `StopHandle`).
+Run code at server startup and shutdown. `.on_start(|state| async move { ... })` fires before the server accepts connections and may return `Err` to abort boot; `.on_stop(|state| async move { ... })` fires after graceful shutdown and cannot fail. Both are registered after `build_state()` and receive the inferred bean HList — read beans by type with `state.bean::<T>()` (`BeanLookup`). Per-bean and per-controller hooks are method attributes: `#[post_construct]` (after the instance is built), `#[on_start]` (at boot, once the whole graph and all controller cores exist, ordered by `order = N`), `#[pre_destroy]` (at graceful shutdown). For drain-time hooks and programmatic stop, see Feature 22 (`on_drain`, `StopHandle`).
 
 
 ## Goal
@@ -186,6 +186,7 @@ This replaces the common pattern where users manually spawn a shutdown handler w
 ## Execution Order
 
 ```
+0. #[on_start] method hooks (sorted by `order`) — see the full ladder below
 1. on_start hooks (sequential, in registration order)
 2. Server starts listening (TCP bind)
 3. ... request processing ...
@@ -245,7 +246,7 @@ impl<S: BeanLookup + Clone + Send + Sync + 'static> LifecycleController<S> for M
 }
 ```
 
-## Bean & Controller Hooks: `#[post_construct]` / `#[pre_destroy]`
+## Bean & Controller Hooks: `#[post_construct]` / `#[on_start]` / `#[pre_destroy]`
 
 Besides the app-level `on_start`/`on_stop` closures, R2E provides per-bean and
 per-controller lifecycle hooks as method attributes. Both work on `#[bean]` methods
@@ -279,8 +280,79 @@ controller hooks first, then bean hooks, each in **reverse registration order**.
 **logged and swallowed** (it never aborts shutdown). It does **not** fire on
 `build_with_consumers`/`TestApp` (no shutdown occurs) — test it via `serve` + `StopHandle::stop()`.
 
-Combining `#[post_construct]` or `#[pre_destroy]` with a route / `#[scheduled]` / `#[consumer]`
-marker, with method params, or with `#[intercept]` is a compile error.
+### `#[on_start]`
+
+A **startup observer** — later than `#[post_construct]`. It runs once the whole bean graph
+**and** every controller core exist, so a hook may read anything the app declares, from any
+bean or controller, without ordering itself against the graph.
+
+```rust
+#[bean]
+impl SearchIndex {
+    pub fn new(repo: DocRepo) -> Self { Self { repo } }
+
+    /// Runs at boot, after the graph and all controller cores are built.
+    #[on_start]
+    async fn warm(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.repo.prime_index().await?;
+        Ok(())
+    }
+}
+```
+
+- **Ordering.** `#[on_start(order = N)]` takes an `i32` (default `0`); hooks run in
+  **ascending** order, ties in registration order (bean hooks before controller hooks at
+  equal `order`, since the graph is built first). Several `#[on_start]` methods per impl
+  are allowed and keep declaration order at equal `order`.
+- **Timing.** After all `#[post_construct]` hooks and all consumer registrations, **before**
+  the builder's `.on_start(...)` closures, before the plugins' serve hooks, and before the
+  TCP bind. Nothing is listening yet when an `#[on_start]` hook runs.
+- **Failure.** An `Err` **aborts boot**: remaining hooks are skipped, work already started is
+  rolled back, and the error is propagated exactly like a builder `.on_start` error.
+- **Pinned overrides.** A hook reads its instance from the resolved graph, so an
+  `override_bean` pin replaces it — and pinning the observing bean itself skips its
+  registration entirely, so the hook does not run (same rule as `#[post_construct]`
+  and `#[scheduled]`).
+- **Tests.** Unlike `#[pre_destroy]`, `#[on_start]` **does** run under
+  `build_with_consumers()` / `TestApp::boot::<A>()` — booting a test app is a real startup.
+  The asymmetry is deliberate: `TestApp` never shuts down, so there is no disposal phase.
+
+`#[on_start]` vs. `#[post_construct]`: use `#[post_construct]` to finish building *this*
+instance (it runs while the graph is still resolving, so it can only see its own deps); use
+`#[on_start]` for whole-application startup work — warming caches, verifying connectivity,
+seeding — that needs the finished application.
+
+### Rejections (compile errors)
+
+Combining `#[post_construct]`, `#[on_start]` or `#[pre_destroy]` with a route / `#[scheduled]` /
+`#[consumer]` / `#[async_exec]` marker, with each other on the same method, with method params,
+or with `#[intercept]` is a compile error.
+
+## The Full Startup / Shutdown Ladder
+
+```
+BOOT
+ 1. Plugin setup + bean graph resolution      (build_state)
+ 2. #[post_construct] — bean hooks            (inside build_state)
+ 3. Controller cores built
+ 4. #[post_construct] — controller-core hooks
+ 5. Consumer registrations (#[consumer])
+ 6. #[on_start] hooks — beans + controllers, sorted by `order`   ← Err aborts boot
+ 7. Plugin serve hooks (services, schedulers, ServeContext)
+ 8. Builder `.on_start(|state| …)` closures   ← Err aborts boot
+ 9. TCP bind + accept loop
+
+SHUTDOWN (signal or StopHandle::stop())
+10. on_drain hooks (still accepting — see Feature 22)
+11. Stop accepting, graceful drain
+12. #[pre_destroy] — controller hooks, reverse registration order
+13. #[pre_destroy] — bean hooks, reverse registration order
+14. Builder `.on_stop(|state| …)` closures
+15. Grace period exceeded → force exit
+```
+
+Steps 2–6 also run under `build_with_consumers()` / `TestApp::boot`; steps 10–14 do not
+(a test app is never served, so it never shuts down).
 
 ## Validation Criteria
 

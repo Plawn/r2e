@@ -348,6 +348,42 @@ shutdown:        on_drain → stop accepting → plugin on_shutdown* →
 
 None. Builder `.on_start` stays.
 
+### Status (2026-08-26) — DONE (steps 1–4)
+
+Shipped on `feat/plugin-module-lifecycle`: the `OnStart` trait +
+`OnStartHook`, `BeanRegistry::register_on_start` / `take_on_start_hooks`,
+`Controller::on_start(core)`, typed-builder collection + stable sort, the run
+site in `PreparedApp::run` (and in `build_with_consumers`), the
+`#[on_start(order = N)]` macro surface on `#[bean]` impls and `#[routes]`
+controller impls with the full rejection matrix, tests
+(`r2e-core/tests/di/lifecycle.rs`, `r2e-core/tests/controller/lifecycle.rs`,
+`r2e-test/tests/boot.rs`, trybuild cases in `r2e-compile-tests`) and docs
+(`docs/features/10-lifecycle-hooks.md`, `docs/claude/beans-di.md`, `CLAUDE.md`,
+`llm.txt`).
+
+Deviations from the design above:
+
+- **Trait shape: `fn on_start_hooks(&self) -> Vec<(i32, OnStartHook)>`, not
+  `on_start()` + `const ON_START_ORDER`.** A const cannot express per-method
+  ordering, and the design explicitly allows several `#[on_start]` methods per
+  impl; each method carries its own `order`, so the hooks must be returned as
+  `(order, hook)` pairs. `Controller::on_start(core) -> Vec<(i32, OnStartHook)>`
+  mirrors it (a controller core is not `Clone`, so it cannot impl `OnStart`; the
+  hooks bind `Arc::clone(&core)` instead).
+- **Run site: after the consumer registrations, *before* the plugin serve
+  hooks — but the builder `.on_start` closures still run after the serve
+  hooks.** The ladder above puts `.on_start` closures between `#[on_start]` and
+  the plugin serve hooks; `run_inner` deliberately runs serve hooks first
+  (`register_service`/`spawn_service` depend on it), and reordering that is out
+  of scope for this plan. The promise that matters is preserved:
+  `#[on_start]` runs after everything is built, before the builder closures, and
+  before the bind.
+- **`OnStart` lives in `beans/traits.rs`**, next to `PreDestroy` (the plan said
+  `di/lifecycle.rs`, which is not where `PreDestroy` actually lives).
+- **`#[on_start]` is not in the prelude** — like `#[post_construct]` /
+  `#[pre_destroy]`, the attribute is stripped by the enclosing `#[bean]` /
+  `#[routes]` macro, so only the no-op `proc_macro_attribute` is needed.
+
 ---
 
 ## Plan 4 — Datasource plugin (`SqlxDataSource<DB>`) — the acceptance case

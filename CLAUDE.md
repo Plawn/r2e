@@ -194,9 +194,22 @@ impl UserController {
 
 **Inter-macro liaison:** `#[controller]` generates `__r2e_meta_<Name>` (with `bind_request`), `__R2eRequestData_<Name>`, and the `__R2eRequest_<Name>` façade. `#[routes]` references these by naming convention and emits route methods on the façade.
 
-**No-op attribute macros:** `#[get]`, `#[any]`, `#[fallback]`, `#[roles]`, `#[anonymous]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, `#[pre_destroy]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
+**No-op attribute macros:** `#[get]`, `#[any]`, `#[fallback]`, `#[roles]`, `#[anonymous]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, `#[on_start]`, `#[pre_destroy]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
 
 **`#[post_construct]`** — lifecycle hook on `#[bean]` methods **and on `#[routes]` controller impls**. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates a `PostConstruct` trait impl. Timing differs by host: bean hooks run inside `build_state()` (after the graph resolves, before subscribers); controller-core hooks run at startup during `register_controller`/`build_with_consumers`, **before** consumer registrations (later than bean hooks, since cores are built after the graph). An `Err` aborts startup. On controllers, `#[post_construct]` combined with a route/`#[scheduled]`/`#[consumer]` marker, or with params, or with `#[intercept]`, is a compile error.
+
+**`#[on_start]`** — startup observer on `#[bean]` methods **and** `#[routes]`
+controller impls. Same signature/rejection rules as `#[post_construct]`, plus an
+optional `#[on_start(order = N)]` (`i32`, default 0). Runs at boot **after** the
+whole graph and every controller core are built (so a hook may read anything the
+app declares) and after consumer registrations, **before** the plugins' serve
+hooks, the builder's `.on_start` closures and the TCP bind. All hooks (beans +
+controllers) are sorted ascending by `order`, ties in registration order; an
+`Err` **aborts boot** like a builder `.on_start` error. A pinned `override_bean`
+skips the hook. Unlike `#[pre_destroy]`, it **does** run under
+`build_with_consumers` / `TestApp::boot` (a test boot is a real startup; it just
+never shuts down). Generates `impl OnStart` + `register_on_start` on beans, and
+the `Controller::on_start(core)` override on controllers.
 
 **`#[pre_destroy]`** — disposal hook (the `@PreDestroy` counterpart of `#[post_construct]`), on `#[bean]` methods **and** `#[routes]` controller impls. Same signature/rejection rules as `#[post_construct]`. Runs at **graceful shutdown** in the async shutdown phase — controller hooks first, then bean hooks, each in reverse registration order. An `Err` is logged and swallowed (never aborts shutdown); a pinned `override_bean` skips the hook. `#[bean]` generates `impl PreDestroy` + `register_pre_destroy`; a controller core (not `Clone`) uses the `Controller::pre_destroy(core)` override. Does NOT fire on `build_with_consumers`/`TestApp` (no shutdown) — test via serve + `StopHandle::stop()`.
 

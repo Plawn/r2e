@@ -302,8 +302,8 @@ Intended scope boundary: a request helper does not exist on the core, so calling
 it from a `#[consumer]`/`#[scheduled]`/`#[anonymous]` method is a "method not
 found" compile error. `#[request_helper]` cannot be combined with a route verb /
 `#[sse]` / `#[ws]` / `#[consumer]` / `#[scheduled]` / `#[async_exec]` /
-`#[post_construct]` / `#[pre_destroy]` / `#[anonymous]` / `#[intercept]`, and is
-rejected on a `#[bean]` impl (no façade).
+`#[post_construct]` / `#[pre_destroy]` / `#[on_start]` / `#[anonymous]` /
+`#[intercept]`, and is rejected on a `#[bean]` impl (no façade).
 
 ### Return Type Aliases
 
@@ -650,6 +650,54 @@ For values entering the graph via `.provide(instance)` (or plugin `Provided`
 beans), use the imperative form `AppBuilder::provide_with_pre_destroy(value)`
 (the value implements the `PreDestroy` trait) or, in a plugin's `install`,
 `ctx.run_pre_destroy::<T>()`.
+
+### `#[on_start]` — startup observers
+
+The bean/controller counterpart of the builder's `.on_start(closure)`, and the
+**late** sibling of `#[post_construct]`: a `#[post_construct]` hook runs *inside*
+`build_state()` while the graph is still being assembled, so it cannot observe
+controllers or anything registered after it; an `#[on_start]` hook runs once the
+whole graph **and every controller core** exist, and before the server binds.
+Works on `#[bean]` impls (via the `OnStart` trait, read by value from the
+resolved graph — a pinned `override_bean` **skips** the hook) and on `#[routes]`
+controller impls (run from the core `Arc`). Same signature rules as the two hooks
+above (`&self` only, sync or async, returns `()` or
+`Result<(), Box<dyn Error + Send + Sync>>`). An `Err` **aborts boot**, exactly
+like an `Err` from an `.on_start(…)` closure.
+
+`#[on_start(order = N)]` sets the run order (`i32`, default `0`, ascending; ties
+keep registration order — bean hooks before controller hooks, each in declaration
+order). Ordering is **global**: every `#[on_start]` hook in the application is
+sorted into one list. The hooks run after the consumer registrations and before
+the plugin serve hooks and the builder's `.on_start(…)` closures.
+
+Unlike `#[pre_destroy]`, these hooks **DO** run under `TestApp::boot` /
+`build_with_consumers` (there is a startup there; there is no shutdown) — an
+`Err` panics on that path instead of aborting `serve`.
+
+Same rejection matrix as the other two hooks: it is a compile error to combine
+`#[on_start]` with a route / `#[scheduled]` / `#[consumer]` / `#[sse]` / `#[ws]`
+/ `#[async_exec]` / `#[post_construct]` / `#[pre_destroy]` / `#[intercept]` on
+one method, or to give it parameters.
+
+```rust
+#[bean]
+impl WarmCache {
+    pub fn new(store: Store) -> Self { /* ... */ }
+
+    #[on_start(order = -10)]
+    async fn preload(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.load().await?;      // Err aborts boot
+        Ok(())
+    }
+}
+
+#[routes]
+impl LifecycleController {
+    #[on_start]
+    async fn announce(&self) { /* every controller core exists here */ }
+}
+```
 
 ### Feature modules — `#[module]`
 
@@ -2932,7 +2980,8 @@ impl GreeterService {
 (`descriptor = …` is optional — only needed for reflection.)
 
 NOT supported on `#[grpc_routes]` methods (compile errors): `#[guard(...)]`,
-`#[roles(...)]`, `#[inject(identity)]`, `#[post_construct]`, `#[pre_destroy]`.
+`#[roles(...)]`, `#[inject(identity)]`, `#[post_construct]`, `#[pre_destroy]`,
+`#[on_start]`.
 The guard/identity infrastructure (`GrpcGuard`, `GrpcRolesGuard`,
 `GrpcIdentityExtractor`) exists in `r2e-grpc` for manual wiring but is not yet
 macro-wired. Manual wiring: `#[inject] jwt_validator: Arc<JwtClaimsValidator>`
@@ -2988,7 +3037,8 @@ the `async fn(&self, ...) -> T` body is submitted to the `PoolExecutor` held
 in a field (default name `executor`; override with
 `#[async_exec(executor = "field")]`) and the call returns
 `Result<JobHandle<T>, RejectedError>` synchronously. Cannot be combined with
-`#[scheduled]`/`#[consumer]`/`#[post_construct]`/`#[intercept]` on one method —
+`#[scheduled]`/`#[consumer]`/`#[post_construct]`/`#[pre_destroy]`/`#[on_start]`/`#[intercept]`
+on one method —
 and on a **controller** also not with a route verb (`#[get]`, `#[post]`, …),
 `#[fallback]`, `#[sse]`, or `#[ws]` (the pool-submission rewrite and a route
 registration are mutually exclusive). Note: an **impl-level** `#[intercept]`
