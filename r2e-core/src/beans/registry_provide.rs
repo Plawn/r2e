@@ -1,6 +1,7 @@
 use super::{
     reuse_clone_of, AsyncBean, Bean, BeanContext, BeanRegistration, BeanRegistry,
-    LazyBeanRegistration, PostConstruct, PreDestroy, Producer, ServiceSourceHook,
+    LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct, PreDestroy,
+    Producer, ServiceSourceHook,
 };
 use std::any::{type_name, Any, TypeId};
 use std::collections::{HashMap, HashSet};
@@ -20,6 +21,7 @@ impl BeanRegistry {
             disposers: Vec::new(),
             scheduled_sources: Vec::new(),
             event_subscribers: Vec::new(),
+            on_start_hooks: Vec::new(),
             service_sources: Vec::new(),
             service_config_keys: Vec::new(),
             deco_fills: Vec::new(),
@@ -335,6 +337,40 @@ impl BeanRegistry {
         ));
     }
 
+    /// Register a bean as a startup observer.
+    ///
+    /// Called from generated `after_register` when a `#[bean]` impl carries
+    /// `#[on_start]` methods. The hook reads the bean by type from the resolved
+    /// graph and returns its `(order, hook)` pairs; `build_state()` drains the
+    /// sources via [`take_on_start_hooks`](Self::take_on_start_hooks) into the
+    /// builder, which merges them with the controller hooks into one
+    /// order-sorted list run at server startup — after the graph and all
+    /// controller cores exist, before the builder's `on_start` closures.
+    ///
+    /// Override semantics match post-construct hooks: an overridden
+    /// *dependency* is the instance the hooks observe (they resolve by type
+    /// from the final graph), while pinning the observing bean *itself*
+    /// (`override_bean`) skips its registration entirely — `after_register`
+    /// never runs, so its startup hooks are dropped along with the real bean.
+    ///
+    /// Idempotent per type: re-registering the same bean type (e.g. the
+    /// default/override pattern) keeps a single source — resolve dedups the
+    /// registrations to one instance, and its hooks must not run twice.
+    pub fn register_on_start<T: OnStart>(&mut self) {
+        let tid = TypeId::of::<T>();
+        if self.on_start_hooks.iter().any(|(t, _, _)| *t == tid) {
+            return;
+        }
+        self.on_start_hooks.push((
+            tid,
+            type_name::<T>(),
+            Box::new(|ctx: &BeanContext| {
+                let bean: T = ctx.get();
+                bean.on_start_hooks()
+            }),
+        ));
+    }
+
     /// Register a resolved bean as a background service.
     ///
     /// The service is constructed from the final [`BeanContext`] and started by
@@ -423,6 +459,17 @@ impl BeanRegistry {
         Box<dyn FnOnce(&BeanContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
     )> {
         std::mem::take(&mut self.event_subscribers)
+            .into_iter()
+            .map(|(_, name, hook)| (name, hook))
+            .collect()
+    }
+
+    /// Drain the on-start hook sources queued by
+    /// [`register_on_start`](Self::register_on_start).
+    /// Returns `(bean type name, source)` pairs. Builder-internal.
+    #[doc(hidden)]
+    pub fn take_on_start_hooks(&mut self) -> Vec<(&'static str, OnStartSourceHook)> {
+        std::mem::take(&mut self.on_start_hooks)
             .into_iter()
             .map(|(_, name, hook)| (name, hook))
             .collect()

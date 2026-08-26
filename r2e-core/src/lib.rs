@@ -34,7 +34,8 @@ pub use serde_json;
 pub use r2e_http::json;
 
 pub use beans::{
-    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, PreDestroy, Producer,
+    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, OnStart, OnStartHook, PostConstruct,
+    PreDestroy, Producer,
 };
 pub use builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,

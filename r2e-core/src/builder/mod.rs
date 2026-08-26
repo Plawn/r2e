@@ -103,6 +103,13 @@ type PostConstructReg = std::pin::Pin<
     >,
 >;
 
+/// A queued `#[on_start]` hook with its declared `order`, collected from beans
+/// (via [`BeanRegistry::register_on_start`](crate::beans::BeanRegistry::register_on_start))
+/// and from controller cores (via [`Controller::on_start`](crate::Controller::on_start)).
+/// Sorted by `order` (ascending, ties in registration order) and awaited in
+/// sequence at startup, before the builder's [`StartupHook`] closures.
+type OnStartReg = (i32, crate::beans::OnStartHook);
+
 type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
 
 /// A meta consumer that drains typed metadata from the registry and returns
@@ -390,6 +397,10 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     /// Controller-core `#[post_construct]` futures, awaited at startup before
     /// `consumer_registrations`.
     post_construct_registrations: Vec<PostConstructReg>,
+    /// `#[on_start]` hooks from beans and controller cores, awaited at startup
+    /// (sorted by declared order) after the consumer registrations and before
+    /// the plugin serve hooks and the builder's `on_start` closures.
+    on_start_hooks: Vec<OnStartReg>,
     /// Serve hooks from plugins (called when server starts).
     /// Tasks already capture their state, so only the token is needed.
     serve_hooks: Vec<ServeHook>,

@@ -100,6 +100,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
             post_construct_registrations: Vec::new(),
+            on_start_hooks: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
@@ -591,6 +592,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.post_construct_registrations
             .push(C::post_construct(Arc::clone(&core)));
 
+        // Queue this core's `#[on_start]` hooks — merged with the bean hooks
+        // into one order-sorted list and awaited at server startup, after the
+        // consumer registrations and before the builder's `on_start` closures.
+        // The default `Controller::on_start` returns an empty vec, so this is
+        // free for controllers without the attribute.
+        self.on_start_hooks.extend(C::on_start(Arc::clone(&core)));
+
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
         {
@@ -667,6 +675,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                     );
                 }
             }
+        }
+        self
+    }
+
+    /// Queue the bean `#[on_start]` hooks (registered by `#[bean]` via
+    /// `after_register` → `BeanRegistry::register_on_start`), read from the
+    /// resolved graph so pinned test overrides are honoured.
+    ///
+    /// Called by `build_state()` right after the typed builder exists —
+    /// i.e. before controllers register, so bean hooks precede controller
+    /// hooks at equal `order`.
+    pub(crate) fn collect_bean_on_start(
+        mut self,
+        sources: Vec<(&'static str, crate::beans::OnStartSourceHook)>,
+    ) -> Self {
+        for (_, hook) in sources {
+            self.on_start_hooks.extend(hook(&self.bean_context));
         }
         self
     }
@@ -775,6 +800,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         for reg in built.consumer_registrations {
             reg(built.state.clone()).await;
         }
+        // `#[on_start]` hooks DO run here (unlike `#[pre_destroy]`, which has no
+        // shutdown to fire on): the graph and every controller core exist, which
+        // is exactly the contract. `TestApp::boot` reaches this path, so tests
+        // observe production startup behaviour. An `Err` panics, like the
+        // controller `#[post_construct]` above.
+        for (_, hook) in sort_on_start(built.on_start_hooks) {
+            hook()
+                .await
+                .unwrap_or_else(|e| panic!("#[on_start] hook failed: {e}"));
+        }
         built.router
     }
 
@@ -865,6 +900,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             drain_hooks: self.drain_hooks,
             consumer_registrations: self.consumer_registrations,
             post_construct_registrations: self.post_construct_registrations,
+            on_start_hooks: self.on_start_hooks,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             async_shutdown_hooks,
@@ -968,6 +1004,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             drain_hooks,
             consumer_registrations,
             post_construct_registrations,
+            on_start_hooks,
             serve_hooks,
             plugin_shutdown_hooks,
             async_shutdown_hooks,
@@ -994,6 +1031,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             stop_handle,
             consumer_registrations,
             post_construct_registrations,
+            on_start_hooks,
             serve_hooks,
             plugin_shutdown_hooks,
             async_shutdown_hooks,
@@ -1047,6 +1085,9 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     drain_hooks: Vec<DrainHook<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
     post_construct_registrations: Vec<PostConstructReg>,
+    /// `#[on_start]` hooks from beans and controller cores, unsorted (sorted
+    /// once at run time by [`sort_on_start`]).
+    on_start_hooks: Vec<OnStartReg>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     /// Single ordered async-shutdown list: plugin async hooks ++ controller
@@ -1056,4 +1097,15 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     state: T,
     shutdown_grace_period: Option<Duration>,
+}
+
+/// Sort the collected `#[on_start]` hooks by their declared `order`, ascending.
+///
+/// `sort_by_key` is a **stable** sort, so hooks sharing an order keep
+/// registration order: bean hooks (collected at `build_state()`) before
+/// controller hooks (collected as controllers register), each group in
+/// declaration order.
+pub(super) fn sort_on_start(mut hooks: Vec<OnStartReg>) -> Vec<OnStartReg> {
+    hooks.sort_by_key(|(order, _)| *order);
+    hooks
 }

@@ -41,6 +41,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
             post_construct_registrations: Vec::new(),
+            on_start_hooks: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
@@ -87,6 +88,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             meta_consumers: self.meta_consumers,
             consumer_registrations: self.consumer_registrations,
             post_construct_registrations: self.post_construct_registrations,
+            on_start_hooks: self.on_start_hooks,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
@@ -483,7 +485,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// [`register_deco_fill`](crate::beans::BeanRegistry::register_deco_fill)
     /// (TypeId-deduped, run once against the final graph). Everything else the
     /// pin skips stays skipped — the bean's `#[scheduled]` tasks are still NOT
-    /// collected and its `#[post_construct]` still does NOT run.
+    /// collected and its `#[post_construct]` / `#[on_start]` still do NOT run.
     ///
     /// ```ignore
     /// TestApp::boot_with::<MyApp>(|b| {
@@ -828,6 +830,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let scheduled_sources = registry.take_scheduled_sources();
         let event_subscribers = registry.take_event_subscribers();
         let service_sources = registry.take_service_sources();
+        let on_start_hooks = registry.take_on_start_hooks();
         // Grab the deferred-fill graph handle before `resolve()` consumes the
         // registry; filled on every **successful** exit path below, right after
         // the resolved context lands in its final `Arc`. Plugin build factories
@@ -872,7 +875,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                         AppBuilder::from_pre(self.shared, cached_state, cached_ctx)
                             .collect_service_sources(service_sources)
                             .collect_bean_scheduled_tasks(scheduled_sources)
-                            .collect_bean_subscribers(event_subscribers),
+                            .collect_bean_subscribers(event_subscribers)
+                            .collect_bean_on_start(on_start_hooks),
                     ));
                 }
                 // Same graph but the provision list changed shape (e.g. a
@@ -932,7 +936,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 AppBuilder::from_pre(self.shared, state, ctx)
                     .collect_service_sources(service_sources)
                     .collect_bean_scheduled_tasks(scheduled_sources)
-                    .collect_bean_subscribers(event_subscribers),
+                    .collect_bean_subscribers(event_subscribers)
+                    .collect_bean_on_start(on_start_hooks),
             ));
         }
 
@@ -947,7 +952,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             AppBuilder::from_pre(self.shared, state, ctx)
                 .collect_service_sources(service_sources)
                 .collect_bean_scheduled_tasks(scheduled_sources)
-                .collect_bean_subscribers(event_subscribers),
+                .collect_bean_subscribers(event_subscribers)
+                .collect_bean_on_start(on_start_hooks),
         ))
     }
 }
