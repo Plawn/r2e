@@ -665,7 +665,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
     /// Add a deferred action to be executed after state resolution.
     ///
-    /// This is the low-level escape hatch. [`Plugin`] implementations
+    /// This is the low-level escape hatch. [`Plugin`](crate::Plugin) implementations
     /// usually reach for the effect sugar on
     /// [`PluginBuildContext`](crate::plugin::PluginBuildContext)
     /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) from inside `build`

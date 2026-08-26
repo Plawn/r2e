@@ -378,9 +378,10 @@ struct BuilderConfig {
 /// - [`.with_state(state)`](AppBuilder::<NoState>::with_state) — provide a pre-built state directly.
 /// - [`.build_state()`](AppBuilder::<NoState>::build_state) — resolve the bean graph and build state.
 ///
-/// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
-/// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`
-/// or `.serve()`.
+/// Plugins install with [`.plugin(p)`](AppBuilder::plugin) in the builder
+/// phase, *before* the transition: their `build` runs as a graph node inside
+/// `build_state()`. Once in the typed phase (`AppBuilder<T>`), you register
+/// controllers, add hooks, and call `.build()` or `.serve()`.
 pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil, Mods = TNil> {
     shared: BuilderConfig,
     state: T,
@@ -428,10 +429,10 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
 // ── Conditional assembly (any phase) ────────────────────────────────────────
 
 impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
-    /// Returns a reference to the loaded [`R2eConfig`], if any.
+    /// Returns a reference to the loaded [`R2eConfig`](crate::config::R2eConfig),
+    /// if any.
     ///
-    /// Available after [`load_config`](AppBuilder::load_config) (or
-    /// [`with_config`](AppBuilder::with_config)). Plugins install **before**
+    /// Available after `load_config` (or `with_config`). Plugins install **before**
     /// `build_state()`, so this is the accessor a config-driven plugin
     /// constructor reads from:
     ///
