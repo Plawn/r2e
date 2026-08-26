@@ -1,17 +1,19 @@
 use r2e::prelude::*;
-use sqlx::PgPool;
+use sqlx::Postgres;
 
 use crate::error::HttpError;
 use crate::models::{Article, CreateArticleRequest, UpdateArticleRequest};
 
 #[derive(Clone)]
 pub struct ArticleService {
-    pool: PgPool,
+    /// The datasource plugin's pool: a rotating facade, so `&self.pool` is the
+    /// executor and a live `datasource.url` change is picked up transparently.
+    pool: DbPool<Postgres>,
 }
 
 #[bean]
 impl ArticleService {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: DbPool<Postgres>) -> Self {
         Self { pool }
     }
 

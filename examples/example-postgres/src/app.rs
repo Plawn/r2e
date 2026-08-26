@@ -14,12 +14,9 @@ pub mod services;
 
 use controllers::article_controller::ArticleController;
 
-#[producer]
-async fn create_pool(#[config("database.url")] url: String) -> sqlx::PgPool {
-    sqlx::PgPool::connect(&url)
-        .await
-        .expect("Failed to connect to PostgreSQL")
-}
+/// The app's schema, compiled into the binary. The datasource plugin applies
+/// it at boot when `datasource.migrate-at-start` is true.
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 /// The canonical application blueprint.
 pub struct PostgresApp;
@@ -31,7 +28,9 @@ impl App for PostgresApp {
 
     async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
         b.load_config::<()>()
-            .register::<CreatePool>()
+            // Connects the pool from `datasource.*`, runs the migrations, and
+            // closes the pool on shutdown — no producer, no `on_start` hook.
+            .plugin(SqlxDataSource::<sqlx::Postgres>::new().migrations(&MIGRATOR))
             .register::<services::ArticleService>()
             .build_state()
             .await
@@ -44,18 +43,6 @@ impl App for PostgresApp {
                     .with_description("PostgreSQL CRUD example")
                     .with_docs_ui(true),
             ))
-            .on_start(|state| async move {
-                // Run migrations
-                let pool = state
-                    .bean::<sqlx::PgPool>()
-                    .expect("PgPool bean not found in state");
-                sqlx::migrate!("./migrations")
-                    .run(&pool)
-                    .await
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-                tracing::info!("Database migrations applied");
-                Ok(())
-            })
             .register_controller::<ArticleController>()
     }
 }
