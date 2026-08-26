@@ -1,0 +1,5 @@
+error: #[on_start] cannot be combined with #[post_construct], #[pre_destroy], #[scheduled], #[consumer], #[async_exec], or #[intercept] on the same method — it is a plain startup observer that runs once at boot
+  --> cases/beans/fail/bean_on_start_post_construct.rs:17:5
+   |
+17 |     async fn lifecycle(&self) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^

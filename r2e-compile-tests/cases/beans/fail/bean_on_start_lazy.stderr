@@ -1,0 +1,5 @@
+error: #[bean(lazy)] does not yet support #[on_start] — remove one or the other
+  --> cases/beans/fail/bean_on_start_lazy.rs:10:6
+   |
+10 | impl Warmer {
+   |      ^^^^^^

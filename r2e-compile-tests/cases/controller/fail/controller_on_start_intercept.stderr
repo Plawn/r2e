@@ -1,0 +1,5 @@
+error: #[intercept] on a #[on_start] method is not supported — a plain lifecycle hook has no dispatch wrapper to run the interceptor chain
+  --> cases/controller/fail/controller_on_start_intercept.rs:12:14
+   |
+12 |     async fn warm(&self) {}
+   |              ^^^^
