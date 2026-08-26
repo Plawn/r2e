@@ -332,17 +332,18 @@ async fn module_controller_with_bean_backed_extractor() {
 
 // ── Module-declared required plugins (Phase 6) ──────────────────────────────
 
-/// A bean provided by a pre-state plugin (not by any module).
+/// A bean provided by a plugin (not by any module).
 #[derive(Clone, Debug, PartialEq)]
 struct PluginBean(u32);
 
-/// Minimal pre-state plugin providing `PluginBean`.
+/// Minimal plugin providing `PluginBean`.
 struct MarkerPlugin;
 
-impl r2e_core::PreStatePlugin for MarkerPlugin {
+impl r2e_core::Plugin for MarkerPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

@@ -105,15 +105,11 @@ use r2e_core::http::StatusCode;
 
 use crate::support::send_get;
 
-fn build_app() -> AppBuilder<()> {
-    AppBuilder::new().with_state(())
-}
-
 // ── Health plugin ────────────────────────────────────────────────────────
 
 #[r2e_core::test]
 async fn health_returns_200_ok() {
-    let router = build_app().with(Health).build();
+    let router = AppBuilder::new().plugin(Health).build_state().await.build();
     let (status, body) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "OK");
@@ -134,8 +130,10 @@ impl HealthIndicator for LivenessOnly {
 
 #[r2e_core::test]
 async fn advanced_health_all_up() {
-    let router = build_app()
-        .with(Health::builder().check(AlwaysUp).build())
+    let router = AppBuilder::new()
+        .plugin(Health::builder().check(AlwaysUp).build())
+        .build_state()
+        .await
         .build();
     let (status, body) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -145,8 +143,10 @@ async fn advanced_health_all_up() {
 
 #[r2e_core::test]
 async fn advanced_health_one_down() {
-    let router = build_app()
-        .with(Health::builder().check(AlwaysUp).check(AlwaysDown).build())
+    let router = AppBuilder::new()
+        .plugin(Health::builder().check(AlwaysUp).check(AlwaysDown).build())
+        .build_state()
+        .await
         .build();
     let (status, body) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -156,8 +156,10 @@ async fn advanced_health_one_down() {
 
 #[r2e_core::test]
 async fn advanced_health_liveness_always_ok() {
-    let router = build_app()
-        .with(Health::builder().check(AlwaysDown).build())
+    let router = AppBuilder::new()
+        .plugin(Health::builder().check(AlwaysDown).build())
+        .build_state()
+        .await
         .build();
     let (status, _body) = send_get(router, "/health/live").await;
     assert_eq!(status, StatusCode::OK);
@@ -166,13 +168,15 @@ async fn advanced_health_liveness_always_ok() {
 #[r2e_core::test]
 async fn advanced_health_readiness_filters() {
     // LivenessOnly check is down but doesn't affect readiness
-    let router = build_app()
-        .with(
+    let router = AppBuilder::new()
+        .plugin(
             Health::builder()
                 .check(AlwaysUp)
                 .check(LivenessOnly)
                 .build(),
         )
+        .build_state()
+        .await
         .build();
     let (status, body) = send_get(router, "/health/ready").await;
     assert_eq!(status, StatusCode::OK);

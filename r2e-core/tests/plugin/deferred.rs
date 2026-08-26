@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use r2e_core::builder::ServeContext;
 use r2e_core::plugin::{
-    AsyncShutdownHook, DeferredAction, DeferredContext, PluginBuildContext, PluginBuildError,
-    PreStatePlugin,
+    AsyncShutdownHook, DeferredAction, DeferredContext, Plugin, PluginBuildContext,
+    PluginBuildError,
 };
 use r2e_core::AppBuilder;
 
@@ -23,10 +23,11 @@ struct ConsumerPlugin {
     log: EventLog,
 }
 
-impl PreStatePlugin for ConsumerPlugin {
+impl Plugin for ConsumerPlugin {
     type Provided = (Beta,);
     type Deps = (Alpha,);
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -46,10 +47,11 @@ struct ProducerPlugin {
     log: EventLog,
 }
 
-impl PreStatePlugin for ProducerPlugin {
+impl Plugin for ProducerPlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -110,6 +112,11 @@ fn make_deferred_context<'a>(
         async_shutdown_hooks,
         bean_context,
         config: None,
+        // Slots the raw-mechanics tests below don't inspect. Leaked so the
+        // helper can hand out `&'a mut` without changing every call site.
+        routes_effects: Box::leak(Box::new(Vec::new())),
+        normalize_path: Box::leak(Box::new(false)),
+        dev_reload_applied: Box::leak(Box::new(false)),
     }
 }
 
@@ -242,10 +249,11 @@ fn deferred_context_on_shutdown() {
 /// and a build that provides a bean plus a route.
 struct BypassedPlugin;
 
-impl PreStatePlugin for BypassedPlugin {
+impl Plugin for BypassedPlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     fn setup(&mut self, ctx: &mut r2e_core::plugin::PluginSetupContext) {
         ctx.store_data(crate::fixtures::SetupData(3));

@@ -5,7 +5,7 @@
 //! missing-dependency diagnostic.
 
 use r2e::prelude::*;
-use r2e::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
 #[derive(Clone)]
 pub struct MissingBean;
@@ -13,10 +13,11 @@ pub struct MissingBean;
 /// A plugin whose dependency is never supplied.
 pub struct NeedsBean;
 
-impl PreStatePlugin for NeedsBean {
+impl Plugin for NeedsBean {
     type Provided = ();
     type Deps = (MissingBean,);
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

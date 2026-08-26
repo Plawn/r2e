@@ -2,17 +2,18 @@
 //! (via `.plugin(..)`) before `register_module` — its provisions are in `P`.
 
 use r2e::prelude::*;
-use r2e::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
 #[derive(Clone)]
 pub struct PluginBean;
 
 pub struct MarkerPlugin;
 
-impl PreStatePlugin for MarkerPlugin {
+impl Plugin for MarkerPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

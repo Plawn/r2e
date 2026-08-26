@@ -6,7 +6,7 @@ use std::any::TypeId;
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, Registrable};
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, TNil};
 
@@ -41,10 +41,11 @@ impl Registrable for FactoryBean {
 /// provided bean, so tests can assert on the exact value `build` saw.
 struct AlphaEcho;
 
-impl PreStatePlugin for AlphaEcho {
+impl Plugin for AlphaEcho {
     type Provided = (Beta,);
     type Deps = (Alpha,);
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -72,10 +73,11 @@ async fn deps_resolve_bean_provided_after_the_plugin() {
 /// *after* this plugin.
 struct FactoryEcho;
 
-impl PreStatePlugin for FactoryEcho {
+impl Plugin for FactoryEcho {
     type Provided = (Beta,);
     type Deps = (FactoryBean,);
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -106,10 +108,11 @@ async fn deps_resolve_factory_built_bean_registered_after_plugin() {
 /// The "producer" side of the cross-plugin case: provides `Alpha` from build.
 struct AlphaProviderPlugin;
 
-impl PreStatePlugin for AlphaProviderPlugin {
+impl Plugin for AlphaProviderPlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -194,10 +197,11 @@ async fn registered_bean_can_depend_on_plugin_provided_bean() {
 /// computed from its deps.
 struct EffectfulEcho;
 
-impl PreStatePlugin for EffectfulEcho {
+impl Plugin for EffectfulEcho {
     type Provided = ();
     type Deps = (Alpha,);
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

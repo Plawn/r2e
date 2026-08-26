@@ -1,7 +1,7 @@
 error[E0277]: this feature module requires the `MarkerPlugin` plugin, which is not installed before it
-  --> cases/modules/fail/module_required_plugin_not_installed.rs:42:54
+  --> cases/modules/fail/module_required_plugin_not_installed.rs:43:54
    |
-42 |     let _ = r2e::AppBuilder::new().register_module::<NeedsPluginModule>();
+43 |     let _ = r2e::AppBuilder::new().register_module::<NeedsPluginModule>();
    |                                                      ^^^^^^^^^^^^^^^^^ `MarkerPlugin` must be installed before this module
    |
    = help: the trait `RequiredPluginInstalled<MarkerPlugin, (_, ())>` is not implemented for `TNil`

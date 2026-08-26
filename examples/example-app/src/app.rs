@@ -143,6 +143,22 @@ impl App for ExampleApp {
             // Both modules must be registered — `imports(module(UserModule))`
             // wires the dependency at the type level but does not auto-register.
             .register_module::<OrderModule>()
+            .plugin(Health)
+            .plugin(RequestIdPlugin)
+            .plugin(SecureHeaders::default())
+            .plugin(Cors::permissive())
+            .plugin(Observability::new(
+                ObservabilityConfig::new("r2e-example")
+                    .with_service_version("0.1.0")
+                    .capture_header("x-request-id"),
+            ))
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
+                OpenApiConfig::new("R2E Example API", "0.1.1")
+                    .with_description("Demo application showcasing all R2E features")
+                    .with_docs_ui(true),
+            ))
+            .plugin(NormalizePath)
             .build_state()
             .await
             // EventBus↔SSE bridge: every UserCreatedEvent emitted on the bus is
@@ -156,24 +172,9 @@ impl App for ExampleApp {
                 "30s".parse().expect("valid schedule"),
                 || async { tracing::debug!("dynamic heartbeat tick") },
             ))
-            .with(Health)
-            .with(RequestIdPlugin)
-            .with(SecureHeaders::default())
-            .with(Cors::permissive())
-            .with(Observability::new(
-                ObservabilityConfig::new("r2e-example")
-                    .with_service_version("0.1.0")
-                    .capture_header("x-request-id"),
-            ))
-            .with(ErrorHandling)
             .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
                 r2e::http::StatusCode::REQUEST_TIMEOUT,
                 Duration::from_secs(30),
-            ))
-            .with(OpenApiPlugin::new(
-                OpenApiConfig::new("R2E Example API", "0.1.1")
-                    .with_description("Demo application showcasing all R2E features")
-                    .with_docs_ui(true),
             ))
             .on_start(|_state| async move {
                 tracing::info!("R2E example-app startup hook executed");
@@ -197,6 +198,5 @@ impl App for ExampleApp {
                 ProxyController,
                 DocumentController,
             )>()
-            .with(NormalizePath)
     }
 }

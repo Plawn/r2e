@@ -4,7 +4,7 @@
 
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
 
@@ -25,10 +25,11 @@ struct GatedPlugin {
     probe: BuildProbe,
 }
 
-impl PreStatePlugin for GatedPlugin {
+impl Plugin for GatedPlugin {
     type Provided = (GatedService,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("gated");
 
     async fn build(
@@ -108,10 +109,11 @@ struct SetupAndBuildPlugin {
     disposed: DisposeProbe,
 }
 
-impl PreStatePlugin for SetupAndBuildPlugin {
+impl Plugin for SetupAndBuildPlugin {
     type Provided = (GatedService,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("gated");
 
     fn setup(&mut self, ctx: &mut PluginSetupContext) {

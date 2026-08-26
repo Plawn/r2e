@@ -6,11 +6,14 @@
 mod support;
 
 mod config;
+mod controllers;
 mod deferred;
 mod deps;
 mod enabled;
 mod fixtures;
+mod health_registry;
 mod late;
 mod lifecycle;
 mod provisions;
 mod setup;
+mod stages;

@@ -90,11 +90,11 @@ impl App for MultiTenantDbApp {
             .provide(Branding::shared())
             .provide(Brandings)
             .plugin(PerTenant::<Branding>::from::<Brandings>().fallback_to_default())
+            .plugin(Health)
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
             .build_state()
             .await
-            .with(Health)
-            .with(Tracing)
-            .with(ErrorHandling)
             .register_controllers::<(
                 NotesController,
                 WhoAmIController,

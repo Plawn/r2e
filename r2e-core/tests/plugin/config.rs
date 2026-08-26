@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::AppBuilder;
 
 /// An all-optional config section, so its presence — not any required key —
@@ -28,10 +28,11 @@ struct ConfigReadingPlugin {
     sink: Arc<Mutex<Option<Option<DemoConfig>>>>,
 }
 
-impl PreStatePlugin for ConfigReadingPlugin {
+impl Plugin for ConfigReadingPlugin {
     type Provided = ();
     type Deps = ();
     type Config = DemoConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("demo");
 
     async fn build(
@@ -48,10 +49,11 @@ impl PreStatePlugin for ConfigReadingPlugin {
 /// A plugin whose `build` must never run because validation panics first.
 struct StrictConfigPlugin;
 
-impl PreStatePlugin for StrictConfigPlugin {
+impl Plugin for StrictConfigPlugin {
     type Provided = ();
     type Deps = ();
     type Config = StrictConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("demo");
 
     async fn build(

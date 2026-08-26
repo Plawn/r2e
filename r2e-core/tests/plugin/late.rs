@@ -1,7 +1,7 @@
 //! `GraphHandle` — the deferred-fill handle on the resolved graph — and
 //! `Late<T>`, the underlying write-once cell (kept as an escape hatch).
 
-use r2e_core::plugin::{GraphHandle, PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{GraphHandle, Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, Late};
 
@@ -20,10 +20,11 @@ struct HandleHolder {
 
 struct GraphCapturePlugin;
 
-impl PreStatePlugin for GraphCapturePlugin {
+impl Plugin for GraphCapturePlugin {
     type Provided = (HandleHolder,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -124,10 +125,11 @@ struct ProbeMarker;
 /// handler, and from a response body that streams after the handler returned.
 struct GraphProbePlugin;
 
-impl PreStatePlugin for GraphProbePlugin {
+impl Plugin for GraphProbePlugin {
     type Provided = (ProbeMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -270,10 +272,11 @@ struct TrackedDrainPlugin {
     observed: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
-impl PreStatePlugin for TrackedDrainPlugin {
+impl Plugin for TrackedDrainPlugin {
     type Provided = (ProbeMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -356,10 +359,11 @@ struct AbandonedTaskPlugin {
     done: tokio::sync::oneshot::Sender<String>,
 }
 
-impl PreStatePlugin for AbandonedTaskPlugin {
+impl Plugin for AbandonedTaskPlugin {
     type Provided = (ProbeMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -437,10 +441,11 @@ struct TokenWaitingTaskPlugin {
     done: tokio::sync::oneshot::Sender<String>,
 }
 
-impl PreStatePlugin for TokenWaitingTaskPlugin {
+impl Plugin for TokenWaitingTaskPlugin {
     type Provided = (ProbeMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -517,10 +522,11 @@ struct FailingCapturePlugin {
     escaped: std::sync::Arc<std::sync::Mutex<Option<GraphHandle>>>,
 }
 
-impl PreStatePlugin for FailingCapturePlugin {
+impl Plugin for FailingCapturePlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

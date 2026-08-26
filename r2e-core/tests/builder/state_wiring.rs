@@ -25,9 +25,9 @@ struct TestDep(i32);
 async fn build_state_with_provide() {
     let router = AppBuilder::new()
         .provide(TestDep(42))
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .build();
     let (status, body) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -64,9 +64,9 @@ impl Registrable for TestService {
 async fn build_state_with_bean() {
     let router = AppBuilder::new()
         .register::<TestService>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .build();
     let (status, _) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -104,9 +104,9 @@ impl Registrable for AsyncService {
 async fn build_state_with_async_bean() {
     let router = AppBuilder::new()
         .register::<AsyncService>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .build();
     let (status, _) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -141,9 +141,9 @@ impl Registrable for TestProducer {
 async fn build_state_with_producer() {
     let router = AppBuilder::new()
         .register::<TestProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .build();
     let (status, _) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -159,9 +159,9 @@ async fn build_state_with_config_injection() {
     let router = AppBuilder::new()
         .provide(config)
         .provide(TestDep(99))
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .build();
     let (status, _) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -214,9 +214,9 @@ async fn producer_option_present_when_flag_true() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(true))
         .register::<MaybeServiceProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .prepare("127.0.0.1:0");
     assert!(
         prepared.state().get::<Option<TestService>>().is_some(),
@@ -229,9 +229,9 @@ async fn producer_option_absent_when_flag_false() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(false))
         .register::<MaybeServiceProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .prepare("127.0.0.1:0");
     assert!(
         prepared.state().get::<Option<TestService>>().is_none(),
@@ -273,9 +273,9 @@ async fn async_producer_option_present() {
     let prepared = AppBuilder::new()
         .provide(ServiceEnabled(true))
         .register::<MaybeAsyncProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .prepare("127.0.0.1:0");
     assert!(prepared.state().get::<Option<AsyncService>>().is_some());
 }
@@ -298,9 +298,9 @@ async fn producer_option_present_via_config_flag() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .prepare("127.0.0.1:0");
     assert!(prepared.state().get::<Option<TestService>>().is_some());
 }
@@ -321,9 +321,9 @@ async fn producer_option_absent_via_config_flag() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .prepare("127.0.0.1:0");
     assert!(prepared.state().get::<Option<TestService>>().is_none());
 }
@@ -342,9 +342,9 @@ async fn config_flag_missing_key_defaults_to_false() {
     let prepared = builder
         .provide(ServiceEnabled(enabled))
         .register::<MaybeServiceProducer>()
+        .plugin(Health)
         .build_state()
         .await
-        .with(Health)
         .prepare("127.0.0.1:0");
     assert!(prepared.state().get::<Option<TestService>>().is_none());
 }
@@ -352,11 +352,19 @@ async fn config_flag_missing_key_defaults_to_false() {
 #[r2e_core::test]
 async fn when_applies_transformation_conditionally() {
     // `when` runs a `Self -> Self` transformation only when the flag is true.
-    let with_plugin = build_app().when(true, |b| b.with(Health)).build();
+    let with_plugin = AppBuilder::new()
+        .when(true, |b| b.plugin(Health))
+        .build_state()
+        .await
+        .build();
     let (status, _) = send_get(with_plugin, "/health").await;
     assert_eq!(status, StatusCode::OK);
 
-    let without_plugin = build_app().when(false, |b| b.with(Health)).build();
+    let without_plugin = AppBuilder::new()
+        .when(false, |b| b.plugin(Health))
+        .build_state()
+        .await
+        .build();
     let (status, _) = send_get(without_plugin, "/health").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
@@ -393,8 +401,10 @@ async fn startup_hook_registration_accepted() {
 
     // Verify on_start hook registration doesn't panic.
     // Hooks only run in serve(), so we just verify build() succeeds.
-    let router = build_app()
-        .with(Health)
+    let router = AppBuilder::new()
+        .plugin(Health)
+        .build_state()
+        .await
         .on_start(move |_state| async move {
             flag_clone.store(true, Ordering::SeqCst);
             Ok(())
@@ -410,8 +420,10 @@ async fn startup_hook_registration_accepted() {
 async fn plugin_ordering_layers_respected() {
     use r2e_core::http::HeaderValue;
 
-    let router = build_app()
-        .with(Health)
+    let router = AppBuilder::new()
+        .plugin(Health)
+        .build_state()
+        .await
         .with_layer_fn(|router| {
             router.layer(r2e_core::http::middleware::from_fn(
                 |req, next: r2e_core::http::middleware::Next| async move {
@@ -450,8 +462,10 @@ async fn plugin_ordering_layers_respected() {
 async fn with_layer_fn_applied() {
     use r2e_core::http::HeaderValue;
 
-    let router = build_app()
-        .with(Health)
+    let router = AppBuilder::new()
+        .plugin(Health)
+        .build_state()
+        .await
         .with_layer_fn(|router| {
             router.layer(r2e_core::http::middleware::from_fn(
                 |req, next: r2e_core::http::middleware::Next| async move {
@@ -478,8 +492,15 @@ async fn with_layer_fn_applied() {
 
 #[r2e_core::test]
 async fn with_state_bypasses_bean_graph() {
-    // with_state() skips the bean graph entirely — verify it builds a working router.
-    let router = AppBuilder::new().with_state(()).with(Health).build();
+    // with_state() skips the bean graph entirely — verify it builds a working
+    // router. Plugins are NOT available on this path (their `build` runs as a
+    // bean-graph node), so the route comes from `register_routes`.
+    use r2e_core::http::routing::get;
+
+    let router = AppBuilder::new()
+        .with_state(())
+        .register_routes(r2e_core::http::Router::new().route("/health", get(|| async { "OK" })))
+        .build();
     let (status, body) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "OK");

@@ -318,13 +318,13 @@ async fn setup() -> (TestApp, TestJwt) {
             .provide(pool)
             .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
             .provide(r2e::r2e_cache::InMemoryStore::shared())
+            .plugin(Health)
+            .plugin(ErrorHandling)
+            .plugin(NormalizePath)
+            .plugin(DevReload)
+            .plugin(r2e::r2e_openapi::OpenApiPlugin::new(openapi_config))
             .build_state()
             .await
-            .with(Health)
-            .with(ErrorHandling)
-            .with(NormalizePath)
-            .with(DevReload)
-            .with(r2e::r2e_openapi::OpenApiPlugin::new(openapi_config))
             .register_controllers::<(
                 TestUserController,
                 TestSearchController,

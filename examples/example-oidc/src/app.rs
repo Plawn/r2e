@@ -137,17 +137,17 @@ impl App for OidcApp {
     /// Re-run on every hot-patch: assemble the app on the given builder.
     async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         b.plugin(env.oidc)
-            .build_state()
-            .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
-            .with(OpenApiPlugin::new(
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Example OIDC API", "0.1.0")
                     .with_description("Embedded OAuth/JWT issuer")
                     .with_docs_ui(true),
             ))
+            .build_state()
+            .await
             .register_controller::<GreetingController>()
     }
 }

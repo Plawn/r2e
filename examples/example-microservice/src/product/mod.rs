@@ -23,17 +23,17 @@ impl App for ProductApp {
         b.with_config_file("application-product.yaml")
             .load_config::<()>()
             .register::<services::ProductService>()
-            .build_state()
-            .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
-            .with(OpenApiPlugin::new(
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Product Service", "1.0.0")
                     .with_description("Product catalog microservice")
                     .with_docs_ui(true),
             ))
+            .build_state()
+            .await
             .register_controller::<ProductController>()
     }
 }

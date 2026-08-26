@@ -59,7 +59,7 @@ async fn invalid_executor_value_panics_at_boot() {
 
 #[r2e_core::test]
 async fn disabled_scheduler_boots_and_keeps_beans() {
-    // `scheduler.enabled: false` skips the plugin's post-state effects (the
+    // `scheduler.enabled: false` skips the plugin's surface effects (the
     // serve hook that starts tasks) but keeps the provided beans in the graph.
     let config = R2eConfig::from_yaml_str("scheduler:\n  enabled: false\n").unwrap();
     let app = AppBuilder::new()

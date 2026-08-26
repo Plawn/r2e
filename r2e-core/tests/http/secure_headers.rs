@@ -56,15 +56,13 @@ use r2e_core::http::StatusCode;
 
 use crate::support::raw_get_with;
 
-fn build_app() -> AppBuilder<()> {
-    AppBuilder::new().with_state(())
-}
-
 #[r2e_core::test]
 async fn secure_headers_in_response() {
-    let router = build_app()
-        .with(Health)
-        .with(SecureHeaders::default())
+    let router = AppBuilder::new()
+        .plugin(Health)
+        .plugin(SecureHeaders::default())
+        .build_state()
+        .await
         .build();
     let resp = raw_get_with(router, "/health", &[("accept", "*/*")]).await;
     assert_eq!(resp.status(), StatusCode::OK);

@@ -33,7 +33,7 @@ note: required for `StampedController` to implement `Controller<HNil, ((_,),)>`
 44 | impl StampedController {
    |      ^^^^^^^^^^^^^^^^^
    = note: required for `(StampedController,)` to implement `ModuleControllers<HNil, (((_,),),)>`
-   = note: required for `TCons<StampModule, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
+   = note: required for `TCons<ModEntry<StampModule>, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
 note: required by a bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
   --> $WORKSPACE/r2e-core/src/builder/nostate.rs
    |
@@ -81,7 +81,7 @@ note: required for `StampedController` to implement `Controller<HNil, ((_,),)>`
 44 | impl StampedController {
    |      ^^^^^^^^^^^^^^^^^
    = note: required for `(StampedController,)` to implement `ModuleControllers<HNil, (((_,),),)>`
-   = note: required for `TCons<StampModule, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
+   = note: required for `TCons<ModEntry<StampModule>, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
 note: required by a bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
   --> $WORKSPACE/r2e-core/src/builder/nostate.rs
    |
@@ -127,7 +127,7 @@ note: required for `StampedController` to implement `Controller<HNil, ((_,),)>`
 44 | impl StampedController {
    |      ^^^^^^^^^^^^^^^^^
    = note: required for `(StampedController,)` to implement `ModuleControllers<HNil, (((_,),),)>`
-   = note: required for `TCons<StampModule, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
+   = note: required for `TCons<ModEntry<StampModule>, TNil>` to implement `ModuleList<HNil, ((((_,),),), ())>`
 note: required by a bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
   --> $WORKSPACE/r2e-core/src/builder/nostate.rs
    |

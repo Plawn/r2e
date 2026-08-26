@@ -3,7 +3,7 @@
 
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
 
@@ -17,10 +17,11 @@ struct NoProvider {
     probe: BuildProbe,
 }
 
-impl PreStatePlugin for NoProvider {
+impl Plugin for NoProvider {
     type Provided = ();
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -35,10 +36,11 @@ impl PreStatePlugin for NoProvider {
 
 struct SingleProvider;
 
-impl PreStatePlugin for SingleProvider {
+impl Plugin for SingleProvider {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -58,10 +60,11 @@ struct DualProvider {
     probe: BuildProbe,
 }
 
-impl PreStatePlugin for DualProvider {
+impl Plugin for DualProvider {
     type Provided = (Alpha, Beta);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -83,10 +86,11 @@ struct SkippableDualProvider {
     probe: BuildProbe,
 }
 
-impl PreStatePlugin for SkippableDualProvider {
+impl Plugin for SkippableDualProvider {
     type Provided = (Alpha, Beta);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
     const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;
 
     async fn build(
@@ -102,10 +106,11 @@ impl PreStatePlugin for SkippableDualProvider {
 
 struct TripleProvider;
 
-impl PreStatePlugin for TripleProvider {
+impl Plugin for TripleProvider {
     type Provided = (Alpha, Beta, Gamma);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

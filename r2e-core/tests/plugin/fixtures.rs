@@ -17,7 +17,7 @@ pub struct Beta(pub String);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Gamma(pub bool);
 
-/// Marker bean for plugins that only exist to drive the post-state sugar.
+/// Marker bean for plugins that only exist to drive the effect-stage sugar.
 #[derive(Clone)]
 pub struct SugarMarker;
 

@@ -32,17 +32,17 @@ impl App for PostgresApp {
             // closes the pool on shutdown — no producer, no `on_start` hook.
             .plugin(SqlxDataSource::<sqlx::Postgres>::new().migrations(&MIGRATOR))
             .register::<services::ArticleService>()
-            .build_state()
-            .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
-            .with(OpenApiPlugin::new(
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Articles API", "1.0.0")
                     .with_description("PostgreSQL CRUD example")
                     .with_docs_ui(true),
             ))
+            .build_state()
+            .await
             .register_controller::<ArticleController>()
     }
 }

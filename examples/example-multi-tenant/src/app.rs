@@ -128,17 +128,17 @@ impl App for MultiTenantApp {
             .provide(env.pool)
             .provide(env.claims_validator)
             .register::<services::ProjectService>()
-            .build_state()
-            .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
-            .with(OpenApiPlugin::new(
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Multi-Tenant API", "1.0.0")
                     .with_description("Tenant isolation via JWT claims and custom guards")
                     .with_docs_ui(true),
             ))
+            .build_state()
+            .await
             .register_controllers::<(TenantController, AdminController)>()
     }
 }

@@ -209,9 +209,9 @@ async fn setup() -> (TestApp, TestJwt) {
             .override_config(config)
             .load_config::<()>()
             .provide(Arc::new(jwt.claims_validator()))
+            .plugin(ErrorHandling)
             .build_state()
             .await
-            .with(ErrorHandling)
             .register_controller::<GuardTestController>(),
     );
 
