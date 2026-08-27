@@ -205,20 +205,8 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
 
 /// Generate the user's impl block with member attributes stripped.
 fn generate_impl_block(def: &McpRoutesImplDef) -> TokenStream {
-    let controller_name = &def.controller_name;
-
-    let methods: Vec<&syn::ImplItemFn> = def
-        .members
-        .iter()
-        .map(|t| &t.fn_item)
-        .chain(def.other_methods.iter())
-        .collect();
-
-    quote! {
-        impl #controller_name {
-            #(#methods)*
-        }
-    }
+    let impl_block = &def.impl_block;
+    quote! { #impl_block }
 }
 
 /// Generate the single wrapper struct holding the controller core and every

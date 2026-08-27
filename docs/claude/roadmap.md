@@ -448,8 +448,9 @@ P3 (providers & dev) shipped on the same branch, in chunks:
   authorize-redirect shim (`extra-authorize-params` → mirror rewrites
   `authorization_endpoint` to `{mcp.path}/oauth/authorize`, 302 to the IdP,
   server params win; requires the DCR shim, boot error otherwise); r2e-oidc
-  RFC 8707 `resource` pass-through (`resource` form param → token `aud`,
-  invalid URI = 400 `invalid_target`; `scope` pass-through already existed);
+  RFC 8707 `resource` support (the form value must equal the configured
+  audience; invalid or unowned URI = 400 `invalid_target`; `scope`
+  pass-through already existed);
   `DevKeycloak` (r2e-devservices feature `keycloak`: `start-dev
   --import-realm`, bundled `r2e-mcp` realm with audience-mapped `mcp` scope,
   `password_token`/`client_token`/`admin_token`; realm JSON is part of the

@@ -30,16 +30,17 @@ pub(crate) struct TokenRequest {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub scope: Option<String>,
-    /// RFC 8707 `resource` indicator: when present, becomes the token's
-    /// `aud` (instead of the configured audience). One value only.
+    /// RFC 8707 `resource` indicator. One value only; this embedded issuer
+    /// accepts it only when it names the configured audience.
     pub resource: Option<String>,
 }
 
-/// Validate an RFC 8707 `resource` parameter: an absolute URI without a
-/// fragment. Loose on purpose — this is a dev/test issuer.
-fn validate_resource(resource: Option<&str>) -> Result<Option<&str>, OidcError> {
+/// Validate an RFC 8707 `resource` parameter and bind it to this issuer's
+/// configured audience. Accepting arbitrary targets would let a shared
+/// issuer mint tokens for resources it does not own.
+fn validate_resource(resource: Option<&str>, audience: &str) -> Result<(), OidcError> {
     let Some(resource) = resource else {
-        return Ok(None);
+        return Ok(());
     };
     let valid = url::Url::parse(resource).is_ok_and(|u| u.fragment().is_none());
     if !valid {
@@ -47,7 +48,12 @@ fn validate_resource(resource: Option<&str>) -> Result<Option<&str>, OidcError> 
             "'resource' must be an absolute URI without a fragment: got `{resource}`"
         )));
     }
-    Ok(Some(resource))
+    if resource != audience {
+        return Err(OidcError::InvalidTarget(format!(
+            "resource `{resource}` is not served by this issuer; expected `{audience}`"
+        )));
+    }
+    Ok(())
 }
 
 /// Token response.
@@ -124,8 +130,8 @@ async fn handle_password_grant(
     };
 
     let scope = normalize_scope(req.scope.as_deref(), DEFAULT_USER_SCOPE);
-    let resource = validate_resource(req.resource.as_deref())?;
-    let token = state.token_service.issue_user_token(&user, &scope, resource)?;
+    validate_resource(req.resource.as_deref(), &state.config.audience)?;
+    let token = state.token_service.issue_user_token(&user, &scope)?;
 
     Ok(Json(TokenResponse {
         access_token: token,
@@ -191,10 +197,8 @@ async fn handle_client_credentials_grant(
     }
 
     let scope = normalize_scope(req.scope.as_deref(), "");
-    let resource = validate_resource(req.resource.as_deref())?;
-    let token = state
-        .token_service
-        .issue_client_token(&client_id, &scope, resource)?;
+    validate_resource(req.resource.as_deref(), &state.config.audience)?;
+    let token = state.token_service.issue_client_token(&client_id, &scope)?;
 
     Ok(Json(TokenResponse {
         access_token: token,

@@ -3,7 +3,7 @@
 
 use r2e_core::http::Extensions;
 use r2e_mcp::auth::tools::tool_visible;
-use r2e_mcp::auth::{check_tool, AuthDisabled, McpAuthConfig};
+use r2e_mcp::auth::{check_tool, McpAuthConfig};
 use r2e_mcp::{McpPrincipal, ToolRequirements};
 use serde_json::json;
 
@@ -39,9 +39,7 @@ async fn check_tool_unit_matrix() {
 
     // No requirements → allowed with or without any extensions.
     assert!(check_tool(None, "t", &ToolRequirements::NONE).is_ok());
-    // AuthDisabled marker → allowed even with requirements.
-    assert!(check_tool(Some(&ext_with(AuthDisabled)), "t", &READ).is_ok());
-    // Requirements but no principal (layer bypassed) → fail closed.
+    // Requirements but no principal (auth disabled or layer bypassed) → fail closed.
     match check_tool(Some(&Extensions::new()), "t", &READ) {
         Err(r2e_mcp::McpError::Unauthorized(msg)) => {
             assert_eq!(msg, "tool `t` requires an authenticated caller")
@@ -97,10 +95,9 @@ async fn tool_visible_covers_scopes_and_roles() {
     assert!(!tool_visible(Some(&plain), &admin_req));
     assert!(tool_visible(Some(&plain), &READ));
     assert!(!tool_visible(Some(&admin), &READ));
-    // Unrestricted → always visible; AuthDisabled → all visible; no
-    // principal → restricted tools hidden.
+    // Unrestricted → always visible; no principal → restricted tools hidden.
     assert!(tool_visible(None, &ToolRequirements::NONE));
-    assert!(tool_visible(Some(&ext_with(AuthDisabled)), &admin_req));
+    assert!(!tool_visible(None, &admin_req));
     assert!(!tool_visible(Some(&Extensions::new()), &READ));
     // all_roles: every entry required.
     let all_roles = ToolRequirements {

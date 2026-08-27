@@ -1,0 +1,5 @@
+error: generic #[mcp_routes] impl blocks are not supported; use a concrete MCP adapter type
+ --> cases/mcp/fail/mcp_generic_impl.rs:6:5
+  |
+6 | impl<T> GenericTools<T> {
+  |     ^^^

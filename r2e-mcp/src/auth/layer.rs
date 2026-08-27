@@ -20,7 +20,6 @@ use r2e_core::http::{HeaderMap, Method, Request, Response, AUTHORIZATION};
 use tower::{Layer, Service};
 
 use super::error::{auth_error_response, McpAuthError};
-use super::tools::AuthDisabled;
 use super::validator::{McpPrincipal, McpTokenValidator};
 
 /// Everything the auth service needs per request, prebuilt once at plugin
@@ -43,8 +42,7 @@ pub(crate) struct AuthState {
 /// Tower layer enforcing `mcp.auth.*` on the MCP endpoint.
 #[derive(Clone)]
 pub struct McpAuthLayer {
-    /// `None` = auth disabled (no `mcp.auth` section): pass-through that
-    /// inserts the [`AuthDisabled`] marker so `check_tool` allows.
+    /// `None` = auth disabled (no `mcp.auth` section): plain pass-through.
     state: Option<Arc<AuthState>>,
 }
 
@@ -160,9 +158,6 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
         let Some(state) = self.state.clone() else {
-            // Auth off: mark the request so per-tool scope requirements
-            // resolve to "allow" (`check_tool`) instead of "wiring bug".
-            req.extensions_mut().insert(AuthDisabled);
             return Box::pin(async move { inner.call(req).await.map(IntoResponse::into_response) });
         };
 

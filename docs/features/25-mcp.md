@@ -353,6 +353,8 @@ impl AdminTools {
   challenge naming the missing scopes.
 - `#[tool(scopes/any_scopes)]` → JSON-RPC-level denial with agent-actionable
   text ("re-authorize requesting them"), checked before identity/guards.
+- Declaring `scopes`/`any_scopes` while `mcp.auth` is absent or disabled is a
+  boot error; a scoped member can never silently become public.
 - `#[roles]` / `#[all_roles]` → the shared `RolesGuard` over the validated
   principal's roles — identical semantics to HTTP routes.
 - `tools/list` is filtered by the caller's scopes/roles by default
@@ -448,9 +450,12 @@ shape: `.scopes()`, `.audiences()` (array `aud`), `.realm_roles()` /
 See `examples/example-mcp/tests/mcp_auth.rs` for the full pattern.
 
 For a real RS256/JWKS path without Docker, run the embedded `r2e-oidc` plugin
-as the issuer: its `POST /oauth/token` honors `scope` and the RFC 8707
+as the issuer: configure its audience to the MCP resource, then its
+`POST /oauth/token` honors `scope` and accepts the matching RFC 8707
 `resource` indicator (`resource=http://localhost:3000/mcp` → token `aud` =
-the MCP resource), so a password-grant token validates against
+the configured MCP resource). Any other resource is rejected with
+`invalid_target`, so a shared issuer cannot mint tokens for arbitrary APIs. A
+password-grant token then validates against
 `mcp.auth.issuer: http://localhost:<port>` end to end.
 
 ### Testing against a real Keycloak (Docker)

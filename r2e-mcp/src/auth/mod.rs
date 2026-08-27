@@ -47,5 +47,5 @@ pub use discovery::{DiscoveryClient, OAuthServerMetadata};
 pub use error::McpAuthError;
 pub use layer::McpAuthLayer;
 pub use opaque::{IntrospectionBackend, UserinfoBackend};
-pub use tools::{check_tool, AuthDisabled, ToolRequirements};
+pub use tools::{check_tool, ToolRequirements};
 pub use validator::{McpPrincipal, McpTokenValidator, ScopePolicy, TokenValidatorBackend};

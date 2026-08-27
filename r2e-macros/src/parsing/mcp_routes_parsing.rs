@@ -159,8 +159,10 @@ pub struct McpRoutesImplDef {
     pub controller_all_roles: Vec<String>,
     /// `#[tool]` / `#[resource]` / `#[prompt]` methods, in declaration order.
     pub members: Vec<McpTool>,
-    /// Non-tool methods (helpers), passed through unchanged.
-    pub other_methods: Vec<syn::ImplItemFn>,
+    /// The original inherent impl with only MCP-owned attributes stripped.
+    /// Keeping the complete item preserves helper ordering, associated items,
+    /// and passive impl attributes instead of reconstructing a lossy impl.
+    pub impl_block: syn::ItemImpl,
 }
 
 /// The argument keys each member family accepts, for validation and the
@@ -440,35 +442,48 @@ fn classify_args(
 }
 
 /// Parse an `#[mcp_routes] impl Name { ... }` block.
-pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
-    let controller_name = match *item.self_ty {
-        syn::Type::Path(ref type_path) => type_path
-            .path
-            .segments
-            .last()
-            .ok_or_else(|| syn::Error::new_spanned(&item.self_ty, "expected type name"))?
-            .ident
-            .clone(),
+pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
+    if let Some((_, trait_path, _)) = &item.trait_ {
+        return Err(syn::Error::new_spanned(
+            trait_path,
+            "#[mcp_routes] only supports inherent impl blocks",
+        ));
+    }
+    if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
+        return Err(syn::Error::new_spanned(
+            &item.generics,
+            "generic #[mcp_routes] impl blocks are not supported; use a concrete MCP adapter type",
+        ));
+    }
+
+    let controller_name = match &*item.self_ty {
+        syn::Type::Path(type_path)
+            if type_path.qself.is_none()
+                && type_path.path.segments.len() == 1
+                && matches!(
+                    type_path.path.segments[0].arguments,
+                    syn::PathArguments::None
+                ) => type_path.path.segments[0].ident.clone(),
         _ => {
             return Err(syn::Error::new_spanned(
                 &item.self_ty,
-                "expected a type path",
+                "#[mcp_routes] requires a concrete local adapter type without generic arguments",
             ))
         }
     };
 
-    // Impl-level decorators: guards/roles/intercepts allowed, everything else
-    // rejected up front (impl attrs are never re-emitted, so an unrejected
-    // marker would silently no-op).
+    // Impl-level decorators are consumed by MCP codegen. Every other
+    // attribute stays on the user's impl.
     validate_mcp_impl_attrs(&item.attrs)?;
     let controller_decorators = parse_mcp_decorators(&item.attrs)?;
     let controller_guards = controller_decorators.guard_fns;
     let controller_intercepts = controller_decorators.intercept_fns;
     let controller_roles = controller_decorators.roles;
     let controller_all_roles = controller_decorators.all_roles;
+    item.attrs = strip_known_attrs(std::mem::take(&mut item.attrs));
 
     let mut members = Vec::new();
-    let mut other_methods = Vec::new();
+    let mut impl_items = Vec::with_capacity(item.items.len());
     // Duplicate keys are per family: tool names, resource URIs, prompt names.
     let mut seen_tools: std::collections::HashMap<String, syn::Ident> =
         std::collections::HashMap::new();
@@ -477,9 +492,10 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
     let mut seen_prompts: std::collections::HashMap<String, syn::Ident> =
         std::collections::HashMap::new();
 
-    for impl_item in item.items {
+    for impl_item in std::mem::take(&mut item.items) {
         let syn::ImplItem::Fn(mut method) = impl_item else {
-            continue; // skip non-method items (consts, types)
+            impl_items.push(impl_item);
+            continue;
         };
         let all_attrs = std::mem::take(&mut method.attrs);
         let mut marker: Option<(McpMemberKind, &syn::Attribute)> = None;
@@ -525,7 +541,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
                 }
             }
             method.attrs = all_attrs;
-            other_methods.push(method);
+            impl_items.push(syn::ImplItem::Fn(method));
             continue;
         };
 
@@ -576,7 +592,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
             doc_text,
             decorators,
             args,
-            fn_item: method,
+            fn_item: method.clone(),
         };
         let (seen, key, what, hint) = match kind {
             McpMemberKind::Tool => (
@@ -605,7 +621,10 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
             ));
         }
         members.push(member);
+        impl_items.push(syn::ImplItem::Fn(method));
     }
+
+    item.items = impl_items;
 
     Ok(McpRoutesImplDef {
         controller_name,
@@ -614,6 +633,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
         controller_roles,
         controller_all_roles,
         members,
-        other_methods,
+        impl_block: item,
     })
 }

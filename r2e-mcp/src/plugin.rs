@@ -294,6 +294,7 @@ impl Plugin for McpServer {
         let filter_tools = auth_cfg
             .as_ref()
             .is_some_and(|auth| auth.filter_tools.unwrap_or(true));
+        let auth_enabled = auth_cfg.is_some();
         let (auth_layer, provided_validator, auth_slot, auth_routes) = match auth_cfg {
             Some(auth) => {
                 let artifacts = build_auth(AuthInputs {
@@ -373,7 +374,12 @@ impl Plugin for McpServer {
                 );
                 return router;
             };
-            let runtime = Arc::new(McpRuntime::build(services, identity, filter_tools));
+            let runtime = Arc::new(McpRuntime::build(
+                services,
+                identity,
+                filter_tools,
+                auth_enabled,
+            ));
             tracing::info!(
                 path = %path,
                 tools = ?runtime.tool_names(),

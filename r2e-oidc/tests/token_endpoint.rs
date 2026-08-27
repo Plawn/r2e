@@ -3,6 +3,8 @@ use r2e_core::http::{Body, Request, Response, Router, StatusCode};
 use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
+const AUDIENCE: &str = "http://localhost:3000/mcp";
+
 async fn build_app() -> Router {
     let users = InMemoryUserStore::new()
         .add_user(
@@ -27,7 +29,7 @@ async fn build_app() -> Router {
 
     let oidc = OidcServer::new()
         .issuer("http://localhost:3000")
-        .audience("test-app")
+        .audience(AUDIENCE)
         .enable_password_grant_for_development()
         .with_user_store(users);
 
@@ -206,7 +208,7 @@ async fn resource_indicator_becomes_the_audience() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let claims = jwt_payload(json["access_token"].as_str().unwrap());
-    assert_eq!(claims["aud"], "http://localhost:3000/mcp");
+    assert_eq!(claims["aud"], AUDIENCE);
 }
 
 #[r2e_core::test]
@@ -222,7 +224,23 @@ async fn no_resource_keeps_the_configured_audience() {
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let claims = jwt_payload(json["access_token"].as_str().unwrap());
-    assert_eq!(claims["aud"], "test-app");
+    assert_eq!(claims["aud"], AUDIENCE);
+}
+
+#[r2e_core::test]
+async fn unconfigured_resource_is_invalid_target() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123\
+             &resource=https%3A%2F%2Fevil.example%2Fmcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_target");
 }
 
 #[r2e_core::test]
@@ -263,7 +281,7 @@ async fn client_credentials_honors_the_resource_indicator() {
         .plugin(
             OidcServer::new()
                 .issuer("http://localhost:3000")
-                .audience("test-app")
+                .audience("https://api.example.com/mcp")
                 .with_user_store(InMemoryUserStore::new())
                 .with_client_registry(clients),
         )

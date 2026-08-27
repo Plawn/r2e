@@ -3,6 +3,8 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use r2e_core::prelude::*;
+use r2e_macros::mcp_routes;
 use r2e_mcp::{IntoToolResult, McpRoutes, McpServiceRegistry, ToolRequirements, ToolRoute};
 
 use crate::fixtures::{fixture_app, FixtureTools};
@@ -19,6 +21,17 @@ fn stub_tool(name: &'static str) -> ToolRoute {
         annotations: Default::default(),
         requirements: ToolRequirements::NONE,
         invoke: Arc::new(|_call| Box::pin(async { ().into_tool_result() })),
+    }
+}
+
+#[controller]
+pub struct ScopedWithoutAuth;
+
+#[mcp_routes]
+impl ScopedWithoutAuth {
+    #[tool(scopes = "mcp:read")]
+    async fn restricted(&self) -> String {
+        "secret".to_string()
     }
 }
 
@@ -69,6 +82,17 @@ async fn duplicate_tool_name_across_services_panics_at_boot() {
         .await
         .register_mcp_service::<FixtureTools>()
         .register_mcp_service::<FixtureTools>()
+        .build();
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "declares OAuth scopes but `mcp.auth` is disabled")]
+async fn scoped_member_without_auth_panics_at_boot() {
+    let _ = AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<ScopedWithoutAuth>()
         .build();
 }
 

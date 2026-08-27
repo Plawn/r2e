@@ -25,26 +25,14 @@ impl TokenService {
         }
     }
 
-    fn audience(&self, resource: Option<&str>) -> String {
-        resource
-            .map(str::to_string)
-            .unwrap_or_else(|| self.config.audience.clone())
-    }
-
-    /// Issue a JWT for the given user. `audience` (an RFC 8707 `resource`
-    /// indicator) overrides the configured audience.
-    pub fn issue_user_token(
-        &self,
-        user: &OidcUser,
-        scope: &str,
-        audience: Option<&str>,
-    ) -> Result<String, OidcError> {
+    /// Issue a JWT for the given user and the server's configured audience.
+    pub fn issue_user_token(&self, user: &OidcUser, scope: &str) -> Result<String, OidcError> {
         let (iat, exp) = self.timestamps()?;
 
         let claims = AccessTokenClaims {
             sub: user.sub.clone(),
             iss: self.issuer.clone(),
-            aud: self.audience(audience),
+            aud: self.config.audience.clone(),
             iat,
             exp,
             roles: user.roles.clone(),
@@ -59,20 +47,14 @@ impl TokenService {
         self.sign(&claims)
     }
 
-    /// Issue a JWT for a client_credentials grant. `audience` as on
-    /// [`issue_user_token`](Self::issue_user_token).
-    pub fn issue_client_token(
-        &self,
-        client_id: &str,
-        scope: &str,
-        audience: Option<&str>,
-    ) -> Result<String, OidcError> {
+    /// Issue a JWT for a client_credentials grant.
+    pub fn issue_client_token(&self, client_id: &str, scope: &str) -> Result<String, OidcError> {
         let (iat, exp) = self.timestamps()?;
 
         let claims = AccessTokenClaims {
             sub: format!("client:{client_id}"),
             iss: self.issuer.clone(),
-            aud: self.audience(audience),
+            aud: self.config.audience.clone(),
             iat,
             exp,
             roles: Vec::new(),

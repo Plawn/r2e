@@ -110,6 +110,7 @@ impl McpRuntime {
         services: Vec<RegisteredMcpService>,
         identity: ServerIdentity,
         filter_tools: bool,
+        auth_enabled: bool,
     ) -> Self {
         let mut tool_members = Vec::new();
         let mut resource_members = Vec::new();
@@ -117,6 +118,7 @@ impl McpRuntime {
         for service in services {
             let name = service.name;
             for tool in service.routes.tools {
+                require_auth_for_scopes(auth_enabled, "tool", &tool.name, &tool.requirements);
                 tool_members.push((
                     name,
                     tool.name.to_string(),
@@ -126,6 +128,12 @@ impl McpRuntime {
                 ));
             }
             for resource in service.routes.resources {
+                require_auth_for_scopes(
+                    auth_enabled,
+                    "resource",
+                    &resource.uri,
+                    &resource.requirements,
+                );
                 resource_members.push((
                     name,
                     resource.uri.to_string(),
@@ -135,6 +143,7 @@ impl McpRuntime {
                 ));
             }
             for prompt in service.routes.prompts {
+                require_auth_for_scopes(auth_enabled, "prompt", &prompt.name, &prompt.requirements);
                 prompt_members.push((
                     name,
                     prompt.name.to_string(),
@@ -181,6 +190,20 @@ impl McpRuntime {
 
     pub(crate) fn prompt_count(&self) -> usize {
         self.prompts.list.len()
+    }
+}
+
+fn require_auth_for_scopes(
+    auth_enabled: bool,
+    kind: &str,
+    name: &str,
+    requirements: &ToolRequirements,
+) {
+    if !auth_enabled && (!requirements.scopes.is_empty() || !requirements.any_scopes.is_empty()) {
+        panic!(
+            "MCP {kind} `{name}` declares OAuth scopes but `mcp.auth` is disabled; \
+             configure `mcp.auth.issuer` or remove the scope requirement"
+        );
     }
 }
 

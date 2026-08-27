@@ -11,15 +11,6 @@ use r2e_core::http::Extensions;
 use super::validator::McpPrincipal;
 use crate::error::McpError;
 
-/// Marker extension inserted by the auth layer when `mcp.auth` is absent or
-/// disabled: [`check_tool`] allows everything, tool identity params resolve
-/// to `None`.
-///
-/// Its absence with no [`McpPrincipal`] either means the tool call bypassed
-/// the auth layer — a wiring bug that fails closed.
-#[derive(Clone, Copy, Debug)]
-pub struct AuthDisabled;
-
 /// The authorization requirements of one tool, emitted by `#[mcp_routes]`
 /// from `#[tool(scopes/any_scopes)]` + `#[roles]`/`#[all_roles]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,7 +66,9 @@ impl ToolRequirements {
     /// Whether the principal satisfies every requirement (scopes AND
     /// roles). Used by the `tools/list` visibility filter.
     pub fn satisfied_by(&self, principal: &McpPrincipal) -> bool {
-        self.missing_scopes(principal).is_empty() && self.any_scope_ok(principal) && self.roles_ok(principal)
+        self.missing_scopes(principal).is_empty()
+            && self.any_scope_ok(principal)
+            && self.roles_ok(principal)
     }
 }
 
@@ -86,10 +79,8 @@ impl ToolRequirements {
 /// HTTP semantics. Rules:
 ///
 /// - no scope requirements → allow;
-/// - [`AuthDisabled`] marker present → allow (server runs unauthenticated);
 /// - no principal (call bypassed the auth layer, or hand-built) → deny —
-///   requirements on an unauthenticated call are a wiring bug and fail
-///   closed;
+///   requirements without active authentication always fail closed;
 /// - otherwise: every `scopes` entry AND at least one `any_scopes` entry.
 ///
 /// A denial is a domain-level tool failure (`is_error: true` with
@@ -113,9 +104,6 @@ pub fn check_access(
     req: &ToolRequirements,
 ) -> Result<(), McpError> {
     if req.scopes.is_empty() && req.any_scopes.is_empty() {
-        return Ok(());
-    }
-    if extensions.is_some_and(|ext| ext.get::<AuthDisabled>().is_some()) {
         return Ok(());
     }
     let Some(principal) = extensions.and_then(|ext| ext.get::<McpPrincipal>()) else {
@@ -151,14 +139,11 @@ pub fn check_access(
 /// Whether a tool should appear in `tools/list` for this caller
 /// (`mcp.auth.filter-tools`, default on).
 ///
-/// Auth disabled or no requirements → visible; principal present → visible
-/// iff every requirement (scopes AND recorded roles) is satisfied; no
-/// principal → only requirement-free tools.
+/// No requirements → visible; principal present → visible iff every
+/// requirement (scopes AND recorded roles) is satisfied; no principal → only
+/// requirement-free tools.
 pub fn tool_visible(extensions: Option<&Extensions>, req: &ToolRequirements) -> bool {
     if req.is_empty() {
-        return true;
-    }
-    if extensions.is_some_and(|ext| ext.get::<AuthDisabled>().is_some()) {
         return true;
     }
     match extensions.and_then(|ext| ext.get::<McpPrincipal>()) {
