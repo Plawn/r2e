@@ -194,6 +194,14 @@ request carrying the tool call. A guard's `#[inject]` dependencies are folded
 into the service's `EndpointDeps` — a missing bean is a compile error at
 `register_mcp_service`.
 
+Impl-level decorators are built once per MCP service and shared by all of its
+members. In particular, a stateful impl-level guard/interceptor keeps one state
+across tools, resources and prompts; an impl-level guard receives
+`method_name: "*"`, matching the controller-wide HTTP semantics. Method-level
+decorators remain one built product per member. The generated service uses one
+Arc containing the core and all decorator products, with no nested Arc or
+per-member decorator container.
+
 ## One bean, two transports
 
 `EndpointDeps` is one-per-type: a struct cannot carry both `#[routes]` and

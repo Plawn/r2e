@@ -4,15 +4,15 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::codegen::decorators::wrap_with_deco_interceptors;
+use crate::codegen::decorators::wrap_with_interceptor_refs;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool, McpToolArg};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
-use super::{invoke_ident, McpDecoSets};
+use super::{invoke_ident, McpDecoLayout};
 
 /// Generate `impl __R2eMcp<Name> { async fn __r2e_<kind>_<fn>(...) ... }` —
 /// one invocation method per member.
-pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> TokenStream {
+pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
     if def.members.is_empty() {
         return quote! {};
     }
@@ -24,7 +24,7 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> Token
         .members
         .iter()
         .enumerate()
-        .map(|(i, tool)| generate_invoke_method(def, tool, deco.set_for(i), &krate, &mcp))
+        .map(|(i, tool)| generate_invoke_method(def, tool, deco, i, &krate, &mcp))
         .collect();
 
     quote! {
@@ -46,7 +46,8 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> Token
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
-    deco_set: Option<&crate::codegen::decorators::DecoSet>,
+    deco: &McpDecoLayout,
+    member_index: usize,
     krate: &TokenStream,
     mcp: &TokenStream,
 ) -> TokenStream {
@@ -110,10 +111,11 @@ fn generate_invoke_method(
     };
 
     // --- guard checks ------------------------------------------------------
-    let has_guards = deco_set.is_some_and(|s| !s.guard_fields.is_empty());
+    let member_deco = deco.member(member_index);
+    let has_controller_guards = !deco.controller_guard_fields.is_empty();
+    let has_member_guards = !member_deco.guard_fields.is_empty();
+    let has_guards = has_controller_guards || has_member_guards;
     let guard_stmts = if has_guards {
-        let set = deco_set.unwrap();
-        let deco_field = McpDecoSets::field_ident(fn_name);
         let identity_ref = match identity_param {
             Some(p) if p.is_optional => quote! { __identity.as_ref() },
             Some(_) => quote! { ::core::option::Option::Some(&__identity) },
@@ -121,13 +123,13 @@ fn generate_invoke_method(
                 ::core::option::Option::<&#mcp::__macro_support::NoIdentity>::None
             },
         };
-        let checks: Vec<TokenStream> = set
-            .guard_fields
+        let controller_checks: Vec<TokenStream> = deco
+            .controller_guard_fields
             .iter()
             .map(|field| {
                 quote! {
                     if let ::core::result::Result::Err(__resp) =
-                        #krate::Guard::check(&__gdeco.#field, &__gctx).await
+                        #krate::Guard::check(&self.#field, &__ctrl_gctx).await
                     {
                         return ::core::result::Result::Err(
                             #mcp::__macro_support::guard_response_to_error(__resp).await,
@@ -136,16 +138,51 @@ fn generate_invoke_method(
                 }
             })
             .collect();
-        quote! {
-            {
-                let __gdeco = &self.__decos.#deco_field;
-                let __gctx = #mcp::__macro_support::member_guard_context(
+        let member_checks: Vec<TokenStream> = member_deco
+            .guard_fields
+            .iter()
+            .map(|field| {
+                quote! {
+                    if let ::core::result::Result::Err(__resp) =
+                        #krate::Guard::check(&self.#field, &__member_gctx).await
+                    {
+                        return ::core::result::Result::Err(
+                            #mcp::__macro_support::guard_response_to_error(__resp).await,
+                        );
+                    }
+                }
+            })
+            .collect();
+        let controller_context = if has_controller_guards {
+            quote! {
+                let __ctrl_gctx = #mcp::__macro_support::member_guard_context(
+                    __call.parts.as_deref(),
+                    "*",
+                    #controller_name_str,
+                    #identity_ref,
+                );
+                #(#controller_checks)*
+            }
+        } else {
+            quote! {}
+        };
+        let member_context = if has_member_guards {
+            quote! {
+                let __member_gctx = #mcp::__macro_support::member_guard_context(
                     __call.parts.as_deref(),
                     #fn_name_str,
                     #controller_name_str,
                     #identity_ref,
                 );
-                #(#checks)*
+                #(#member_checks)*
+            }
+        } else {
+            quote! {}
+        };
+        quote! {
+            {
+                #controller_context
+                #member_context
             }
         }
     } else {
@@ -155,11 +192,16 @@ fn generate_invoke_method(
     // --- params deserialization ---------------------------------------------
     let params_stmts = match tool.params_type() {
         Some(params_ty) => {
+            let arguments = if tool.args.iter().any(|arg| matches!(arg, McpToolArg::Call)) {
+                quote! { __call.arguments.clone() }
+            } else {
+                quote! { __call.arguments }
+            };
             // Spanned at the params type so a missing `Deserialize`/`JsonSchema`
             // is a trait-bound error pointing at the user's type.
             quote_spanned! {params_ty.span()=>
                 let __params = <#params_ty as #mcp::__macro_support::ToolParams>::from_arguments(
-                    __call.arguments.clone(),
+                    #arguments,
                 )?;
             }
         }
@@ -180,25 +222,24 @@ fn generate_invoke_method(
 
     let method_call = quote! { __core.#fn_name(#(#call_args),*).await };
 
-    // Interceptors are prebuilt wrapper fields (one set per member, built
-    // once from the bean graph in `routes()`); when the member has none (or spec
-    // inference failed — the `compile_error!` is already emitted) the call is
-    // unwrapped.
-    let has_intercepts = deco_set.is_some_and(|s| !s.intercept_fields.is_empty());
+    // Impl-level products live once on the wrapper and precede the member's
+    // own products. References are borrowed for the duration of this invoke;
+    // no nested Arc clone is needed.
+    let interceptor_refs: Vec<TokenStream> = deco
+        .controller_intercept_fields
+        .iter()
+        .chain(&member_deco.intercept_fields)
+        .map(|field| quote! { &self.#field })
+        .collect();
+    let has_intercepts = !interceptor_refs.is_empty();
     let body = if has_intercepts {
-        let set = deco_set.unwrap();
-        let deco_field = McpDecoSets::field_ident(fn_name);
-        let wrapped = wrap_with_deco_interceptors(
+        wrap_with_interceptor_refs(
             method_call,
             &fn_name_str,
             &controller_name_str,
-            &set.intercept_fields,
+            &interceptor_refs,
             krate,
-        );
-        quote! {
-            let __deco = &self.__decos.#deco_field;
-            #wrapped
-        }
+        )
     } else {
         method_call
     };
@@ -234,12 +275,7 @@ fn generate_invoke_method(
             }
         }
         McpMemberKind::Prompt => {
-            let desc = match tool
-                .meta
-                .description
-                .as_ref()
-                .or(tool.doc_text.as_ref())
-            {
+            let desc = match tool.meta.description.as_ref().or(tool.doc_text.as_ref()) {
                 Some(d) => quote! { ::core::option::Option::Some(#d) },
                 None => quote! { ::core::option::Option::None },
             };
@@ -259,7 +295,7 @@ fn generate_invoke_method(
             #identity_stmts
             #guard_stmts
             #params_stmts
-            let __core = ::std::sync::Arc::clone(&self.core);
+            let __core = &self.core;
             let __result = { #body };
             #convert
         }

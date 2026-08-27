@@ -30,10 +30,10 @@ use crate::route::McpRoutes;
 ///     fn service_name() -> &'static str { "MathTools" }
 ///
 ///     fn routes(ctx: &Arc<BeanContext>) -> McpRoutes {
-///         let wrapper = __R2eMcpMathTools {
-///             core: Arc::new(<MathTools as ContextConstruct>::from_context(ctx)),
-///             // plus prebuilt interceptor/guard sets when decorated
-///         };
+///         let wrapper = Arc::new(__R2eMcpMathTools {
+///             core: <MathTools as ContextConstruct>::from_context(ctx),
+///             // plus prebuilt interceptor/guard products when decorated
+///         });
 ///         McpRoutes {
 ///             tools: vec![/* one ToolRoute per #[tool] method */],
 ///             resources: vec![/* … per #[resource] method */],

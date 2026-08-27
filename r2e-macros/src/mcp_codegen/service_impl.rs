@@ -7,7 +7,7 @@ use syn::spanned::Spanned;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
-use super::McpDecoSets;
+use super::McpDecoLayout;
 
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
@@ -45,33 +45,16 @@ pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
 }
 
 /// Generate `impl McpService for ControllerName`.
-pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> TokenStream {
+pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
     let krate = r2e_core_path();
     let mcp = r2e_mcp_path();
     let controller_name = &def.controller_name;
     let controller_name_str = controller_name.to_string();
     let wrapper_name = super::wrapper_ident(controller_name);
 
-    // Prebuild every member's guard/interceptor set from the resolved graph —
-    // once, at registration, exactly like route decorator sets — into the
-    // single Arc'd container.
-    let decos_init = if deco.has_any() {
-        let container = McpDecoSets::container_ident(controller_name);
-        let field_inits: Vec<TokenStream> = deco
-            .fields(def)
-            .map(|(field, set)| {
-                let ctor = &set.ctor_ident;
-                quote! { #field: #ctor(__ctx) }
-            })
-            .collect();
-        quote! {
-            __decos: ::std::sync::Arc::new(#container {
-                #(#field_inits,)*
-            }),
-        }
-    } else {
-        quote! {}
-    };
+    // Products are built once and stored directly beside the core in the
+    // single Arc'd wrapper — no nested Arc/container and no per-member ctor.
+    let deco_field_inits = &deco.field_inits;
 
     // Aggregated config validation: the core's own `#[config]`/
     // `#[config_section]` keys (from the `#[controller]`-generated meta
@@ -109,12 +92,11 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> 
             fn routes(
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
             ) -> #mcp::__macro_support::McpRoutes {
-                let __wrapper = #wrapper_name {
-                    core: ::std::sync::Arc::new(
+                let __wrapper = ::std::sync::Arc::new(#wrapper_name {
+                    core:
                         <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
-                    ),
-                    #decos_init
-                };
+                    #(#deco_field_inits,)*
+                });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();
                 #(#member_pushes)*
                 __routes

@@ -2,8 +2,8 @@
 //!
 //! Generates:
 //! - The user's impl block (methods with stripped attributes)
-//! - A wrapper struct `__R2eMcp<Name>` holding the shared core and the
-//!   prebuilt per-member guard/interceptor sets
+//! - A wrapper struct `__R2eMcp<Name>` holding the core and every prebuilt
+//!   guard/interceptor product; the wrapper itself is shared through one Arc
 //! - One hidden invocation method per member on the wrapper
 //!   (`__r2e_tool_<fn>` / `__r2e_resource_<fn>` / `__r2e_prompt_<fn>`):
 //!   scope check → identity extraction → guards → params → method call
@@ -19,55 +19,33 @@ mod tool_impl;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::codegen::decorators::{generate_named_deco_items, DecoSet};
+use crate::codegen::decorators::spec_type_of;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
+use crate::util::crate_path::r2e_core_path;
 
-/// Per-member prebuilt decorator sets for an MCP impl block.
-///
-/// `sets` is parallel to `def.members`: `None` when the member has no
-/// guard/interceptor sites (or when spec inference failed — the
-/// `compile_error!` then lives in `items` and the member degrades to the
-/// unwrapped shape).
-///
-/// All sets live in one hidden container struct behind a single `Arc` on the
-/// wrapper, so cloning the wrapper per invoke closure costs one ref-count
-/// bump.
-pub(crate) struct McpDecoSets {
-    pub items: TokenStream,
-    sets: Vec<Option<DecoSet>>,
+#[derive(Default)]
+pub(crate) struct McpMemberDecos {
+    pub guard_fields: Vec<syn::Ident>,
+    pub intercept_fields: Vec<syn::Ident>,
 }
 
-impl McpDecoSets {
-    /// The hidden container struct holding every member's prebuilt set.
-    pub fn container_ident(controller_name: &syn::Ident) -> syn::Ident {
-        format_ident!("__R2eMcpDecos_{}", controller_name)
-    }
+/// Flat decorator layout embedded directly in the single MCP wrapper.
+///
+/// A flat layout keeps the generated surface compact: no per-member structs,
+/// constructors, or nested Arcs. Controller-level products have one field and
+/// are shared by every member; method-level products keep one field per site.
+pub(crate) struct McpDecoLayout {
+    pub items: TokenStream,
+    pub field_decls: Vec<TokenStream>,
+    pub field_inits: Vec<TokenStream>,
+    pub controller_guard_fields: Vec<syn::Ident>,
+    pub controller_intercept_fields: Vec<syn::Ident>,
+    members: Vec<McpMemberDecos>,
+}
 
-    /// The container field holding one member's prebuilt set.
-    pub fn field_ident(fn_name: &syn::Ident) -> syn::Ident {
-        format_ident!("__deco_{}", fn_name)
-    }
-
-    /// Whether any member has a prebuilt set (i.e. the container exists).
-    pub fn has_any(&self) -> bool {
-        self.sets.iter().any(Option::is_some)
-    }
-
-    /// The set for one member, positionally paired with `def.members`.
-    pub fn set_for(&self, index: usize) -> Option<&DecoSet> {
-        self.sets[index].as_ref()
-    }
-
-    /// `(container field, set)` for every decorated member, in `def.members`
-    /// order.
-    pub fn fields<'a>(
-        &'a self,
-        def: &'a McpRoutesImplDef,
-    ) -> impl Iterator<Item = (syn::Ident, &'a DecoSet)> {
-        def.members
-            .iter()
-            .zip(self.sets.iter())
-            .filter_map(|(t, set)| set.as_ref().map(|s| (Self::field_ident(&t.name), s)))
+impl McpDecoLayout {
+    pub fn member(&self, index: usize) -> &McpMemberDecos {
+        &self.members[index]
     }
 }
 
@@ -115,51 +93,99 @@ pub(crate) fn requirements_expr(
     }
 }
 
-/// The guard expressions of one member, controller-level first (impl-level
-/// `#[roles]`/`#[all_roles]`/`#[guard]` run before method-level ones) —
-/// mirroring HTTP route ordering. Controller-level guard products are
-/// duplicated per member (each member's set builds its own instance),
-/// unlike HTTP's shared controller set; acceptable because MCP impl-level
-/// guards are rare and stateless-by-convention. Documented in the feature
-/// guide.
-fn tool_guard_exprs(def: &McpRoutesImplDef, tool: &McpTool) -> Vec<syn::Expr> {
-    def.controller_guards
+/// Build one flat decorator layout for the wrapper. Controller-level sites
+/// are emitted once, followed by each member's own sites.
+fn build_deco_layout(def: &McpRoutesImplDef) -> McpDecoLayout {
+    let all_sites = def
+        .controller_intercepts
         .iter()
-        .chain(tool.decorators.guard_fns.iter())
-        .cloned()
-        .collect()
-}
-
-/// Build the decorator sets (hidden struct + ctor per member) from the guard
-/// and interceptor sites. Controller-level interceptors first, then
-/// method-level — same execution order as HTTP routes / gRPC methods.
-fn build_deco_sets(def: &McpRoutesImplDef) -> McpDecoSets {
-    let mut items = quote! {};
-    let mut sets = Vec::with_capacity(def.members.len());
-    for tool in &def.members {
-        let guard_exprs = tool_guard_exprs(def, tool);
-        let intercept_exprs: Vec<&syn::Expr> = def
-            .controller_intercepts
-            .iter()
-            .chain(tool.decorators.intercept_fns.iter())
-            .collect();
-        let (tool_items, set) = generate_named_deco_items(
-            &def.controller_name,
-            "McpDeco",
-            &tool.name,
-            &guard_exprs,
-            &intercept_exprs,
-            quote! {},
-        );
-        items.extend(tool_items);
-        sets.push(set);
+        .chain(def.controller_guards.iter())
+        .chain(def.members.iter().flat_map(|m| {
+            m.decorators
+                .guard_fns
+                .iter()
+                .chain(&m.decorators.intercept_fns)
+        }));
+    let mut items = TokenStream::new();
+    for expr in all_sites {
+        if let Err(err) = spec_type_of(expr) {
+            items.extend(err.to_compile_error());
+        }
     }
-    McpDecoSets { items, sets }
+    if !items.is_empty() {
+        return McpDecoLayout {
+            items,
+            field_decls: Vec::new(),
+            field_inits: Vec::new(),
+            controller_guard_fields: Vec::new(),
+            controller_intercept_fields: Vec::new(),
+            members: (0..def.members.len())
+                .map(|_| McpMemberDecos::default())
+                .collect(),
+        };
+    }
+
+    let krate = r2e_core_path();
+    let mut field_decls = Vec::new();
+    let mut field_inits = Vec::new();
+    let mut add_site = |field: syn::Ident, expr: &syn::Expr| {
+        let (spec, value) = spec_type_of(expr).expect("decorator specs prevalidated");
+        field_decls.push(quote! {
+            #field: <#spec as #krate::DecoratorSpec>::Product
+        });
+        field_inits.push(quote! {
+            #field: #krate::decorators::decorator::build_decorator::<_, #spec>(#value, __ctx)
+        });
+        field
+    };
+
+    let controller_intercept_fields = def
+        .controller_intercepts
+        .iter()
+        .enumerate()
+        .map(|(i, expr)| add_site(format_ident!("__ctrl_i{}", i), expr))
+        .collect();
+    let controller_guard_fields = def
+        .controller_guards
+        .iter()
+        .enumerate()
+        .map(|(i, expr)| add_site(format_ident!("__ctrl_g{}", i), expr))
+        .collect();
+    let members = def
+        .members
+        .iter()
+        .enumerate()
+        .map(|(member_index, member)| McpMemberDecos {
+            guard_fields: member
+                .decorators
+                .guard_fns
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| add_site(format_ident!("__m{}_g{}", member_index, i), expr))
+                .collect(),
+            intercept_fields: member
+                .decorators
+                .intercept_fns
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| add_site(format_ident!("__m{}_i{}", member_index, i), expr))
+                .collect(),
+        })
+        .collect();
+
+    McpDecoLayout {
+        items,
+        field_decls,
+        field_inits,
+        controller_guard_fields,
+        controller_intercept_fields,
+        members,
+    }
 }
 
 /// Main entry point: generate all code for an `#[mcp_routes]` impl block.
 pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
-    let deco = build_deco_sets(def);
+    let deco = build_deco_layout(def);
     let impl_block = generate_impl_block(def);
     let wrapper = generate_wrapper_struct(def, &deco);
     let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
@@ -195,48 +221,21 @@ fn generate_impl_block(def: &McpRoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate the wrapper struct holding the controller core + the prebuilt
-/// decorator-set container, plus the container struct itself.
+/// Generate the single wrapper struct holding the controller core and every
+/// prebuilt decorator product.
 ///
-/// The core is built ONCE from the bean graph (`ContextConstruct`) when the
-/// service is registered; invoke closures share it through the `Arc`.
-/// Guard/interceptor sets are built at the same time, from the same context
-/// (`DecoratorSpec::build`) — never per call.
-fn generate_wrapper_struct(def: &McpRoutesImplDef, deco: &McpDecoSets) -> TokenStream {
+/// `routes()` puts this wrapper behind one Arc. There are no nested core/deco
+/// Arcs and no per-member generated structs.
+fn generate_wrapper_struct(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
     let controller_name = &def.controller_name;
     let wrapper_name = wrapper_ident(controller_name);
-
-    let (container_decl, decos_field) = if deco.has_any() {
-        let container = McpDecoSets::container_ident(controller_name);
-        let fields: Vec<TokenStream> = deco
-            .fields(def)
-            .map(|(field, set)| {
-                let ty = set.ty();
-                quote! { #field: #ty }
-            })
-            .collect();
-        (
-            quote! {
-                #[allow(non_camel_case_types)]
-                #[doc(hidden)]
-                struct #container {
-                    #(#fields,)*
-                }
-            },
-            quote! { __decos: ::std::sync::Arc<#container>, },
-        )
-    } else {
-        (quote! {}, quote! {})
-    };
+    let field_decls = &deco.field_decls;
 
     quote! {
-        #container_decl
-
         #[doc(hidden)]
-        #[derive(Clone)]
         pub struct #wrapper_name {
-            core: ::std::sync::Arc<#controller_name>,
-            #decos_field
+            core: #controller_name,
+            #(#field_decls,)*
         }
     }
 }

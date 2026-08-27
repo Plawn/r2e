@@ -74,6 +74,22 @@ async fn tool_call_context_exposes_the_request_id() {
 }
 
 #[r2e_core::test]
+async fn typed_params_and_tool_call_can_be_used_together() {
+    let (router, _log) = fixture_app().await;
+    let session = initialize(&router, "/mcp").await;
+
+    let msg = tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "add_with_id",
+        json!({"a": 2.0, "b": 3.0}),
+    )
+    .await;
+    assert_eq!(msg["result"]["content"][0]["text"], "id=3;sum=5", "{msg}");
+}
+
+#[r2e_core::test]
 async fn guard_rejection_maps_to_invalid_request() {
     let (router, _log) = fixture_app().await;
     let session = initialize(&router, "/mcp").await;

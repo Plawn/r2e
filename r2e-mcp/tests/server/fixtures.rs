@@ -168,6 +168,12 @@ impl FixtureTools {
         format!("id={}", call.request_id)
     }
 
+    /// Exercise the mixed typed-params + raw-call path.
+    #[tool]
+    async fn add_with_id(&self, Params(p): Params<BinaryOperands>, call: ToolCall) -> String {
+        format!("id={};sum={}", call.request_id, self.calc.add(p.a, p.b))
+    }
+
     /// Locked behind the `x-test-key` header.
     #[tool]
     #[guard(KeyGuard)]

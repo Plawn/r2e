@@ -84,5 +84,8 @@ async fn service_tools_are_all_mounted() {
         .map(|t| t["name"].as_str().unwrap())
         .collect();
     names.sort_unstable();
-    assert_eq!(names, vec!["add", "div", "echo_id", "locked", "rich"]);
+    assert_eq!(
+        names,
+        vec!["add", "add_with_id", "div", "echo_id", "locked", "rich"]
+    );
 }
