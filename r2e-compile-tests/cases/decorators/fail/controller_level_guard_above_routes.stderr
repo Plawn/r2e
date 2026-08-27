@@ -1,4 +1,4 @@
-error: #[guard] is placed above the transforming macro — attribute macros expand top-down, so the macro below never sees it and the decorator would be silently dropped. Move #[guard] BELOW #[routes]/#[bean]/#[grpc_routes].
+error: #[guard] is placed above the transforming macro — attribute macros expand top-down, so the macro below never sees it and the decorator would be silently dropped. Move #[guard] BELOW #[routes]/#[bean]/#[grpc_routes]/#[mcp_routes].
   --> cases/decorators/fail/controller_level_guard_above_routes.rs:26:1
    |
 26 | #[guard(AllowAll)]

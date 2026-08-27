@@ -2574,8 +2574,10 @@ name = "example-mcp"
 version = "0.1.0"
 dependencies = [
  "r2e",
+ "r2e-test",
  "schemars 1.2.1",
  "serde",
+ "serde_json",
  "tracing",
 ]
 
@@ -6085,11 +6087,15 @@ dependencies = [
 name = "r2e-mcp"
 version = "0.3.0"
 dependencies = [
+ "http-body-util",
  "r2e-core",
+ "r2e-macros",
  "rmcp",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
  "tracing",
 ]
 

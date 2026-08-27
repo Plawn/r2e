@@ -1,0 +1,5 @@
+error: unsupported #[tool] parameter: expected `Params<T>` (tool arguments), `#[inject(identity)] user: I` (or `Option<I>`), `ToolCall`, or `CancelToken`. Beans and config go on the struct (`#[inject]`/`#[config]` fields)
+  --> cases/mcp/fail/mcp_tool_bad_param.rs:14:28
+   |
+14 |     async fn broken(&self, name: String) -> String {
+   |                            ^^^^^^^^^^^^
