@@ -2,4 +2,5 @@
 Dioxus.toml
 target
 .target-local
-.DS_Storedocs/book/book/
+.DS_Store
+docs/book/book/

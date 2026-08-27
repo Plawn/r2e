@@ -2,3 +2,4 @@
 ## Remaining (mirrored in docs/claude/roadmap.md § W11, triage 2026-07-17)
 
 - Avoir un conf provider type vault ou autre -> interface clean + implem de vault + version open source de vault
+Reste ouvert côté r2e : #970 (config, un null YAML explicite sur Option<T> fait échouer le boot), #971 (doc), #973 (high — le join des spawn_service et les hooks on_stop partagent un seul shutdown_grace_period, ce qui peut empêcher mark_cancelled_batch de tourner ; c'est le vrai blocage de la phase F), plus #965/#966 hérités du chantier précédent.
