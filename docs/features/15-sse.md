@@ -340,9 +340,9 @@ async fn main() {
 
     AppBuilder::new()
         .provide(broadcaster)
+        .plugin(ErrorHandling)
         .build_state()
         .await
-        .with(ErrorHandling)
         .register_controller::<LiveController>()
         .serve_auto()
         .await

@@ -25,13 +25,14 @@ use r2e_core::http::StatusCode;
 
 use crate::support::raw_get_with;
 
-fn build_app() -> AppBuilder<()> {
-    AppBuilder::new().with_state(())
-}
-
 #[r2e_core::test]
 async fn request_id_generated() {
-    let router = build_app().with(Health).with(RequestIdPlugin).build();
+    let router = AppBuilder::new()
+        .plugin(Health)
+        .plugin(RequestIdPlugin)
+        .build_state()
+        .await
+        .build();
     let resp = raw_get_with(router, "/health", &[("accept", "*/*")]).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let req_id = resp.headers().get("x-request-id");
@@ -42,7 +43,12 @@ async fn request_id_generated() {
 
 #[r2e_core::test]
 async fn request_id_propagated() {
-    let router = build_app().with(Health).with(RequestIdPlugin).build();
+    let router = AppBuilder::new()
+        .plugin(Health)
+        .plugin(RequestIdPlugin)
+        .build_state()
+        .await
+        .build();
     let resp = raw_get_with(router, "/health", &[("x-request-id", "test-123")]).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let req_id = resp

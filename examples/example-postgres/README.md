@@ -2,10 +2,10 @@
 
 Full CRUD REST API with PostgreSQL demonstrating:
 
-- `#[producer]` for `PgPool` with `#[config("database.url")]`
-- `sqlx::migrate!()` in `on_start` hook
+- `SqlxDataSource` plugin: pool + migrations from the `datasource.*` config
+- `sqlx::migrate!()` applied at boot via `datasource.migrate-at-start`
 - Full CRUD (GET list paginated, GET by id, POST, PUT, DELETE)
-- `#[managed] tx: &mut Tx<'_, Postgres>` for transactional writes
+- `DbPool<Postgres>` injected into a service bean (the rotating pool is the executor)
 - `Pageable`/`Page` for paginated listings
 - Custom `HttpError` with `IntoResponse` + `From<sqlx::Error>`
 - Automatic validation via `garde::Validate`
@@ -34,10 +34,10 @@ so a Docker-less CI stays green:
 cargo test -p example-postgres --test postgres_test -- --ignored
 ```
 
-Each test provisions an isolated database on the shared container and applies
-the migrations itself (the app's `on_start` migration hook runs only on the
-serve path, not under `TestApp`), then points the app at it with
-`override_config_value("database.url", ...)`.
+Each test provisions an isolated database on the shared container and points
+the app at it with `override_config_value("datasource.url", ...)`. Migrations
+need no help from the test: the datasource plugin runs them inside
+`build_state()`, which `TestApp` executes.
 
 ## Endpoints
 

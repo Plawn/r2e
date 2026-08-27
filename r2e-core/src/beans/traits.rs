@@ -261,6 +261,44 @@ pub trait PreDestroy: Clone + Send + Sync + 'static {
     fn pre_destroy(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
 }
 
+/// One `#[on_start]` hook, already bound to the bean (or controller core) it
+/// belongs to: calling it produces the future that runs the hook body.
+///
+/// Boxed and owned (rather than borrowing `&self`) so the builder can collect
+/// every hook of every bean into one list, sort that list by declared order,
+/// and only then start awaiting them.
+pub type OnStartHook = Box<
+    dyn FnOnce() -> Pin<
+            Box<
+                dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
+            >,
+        > + Send,
+>;
+
+/// Startup observer: the bean-level counterpart of the builder's
+/// [`AppBuilder::on_start`](crate::AppBuilder::on_start) closure.
+///
+/// Implemented automatically by `#[bean]` for every impl carrying at least one
+/// `#[on_start]` method. Unlike [`PostConstruct`] — which runs *inside*
+/// `build_state()`, while the graph is still being assembled — an `#[on_start]`
+/// hook runs at server startup, once the whole graph **and** all controller
+/// cores exist: it is the first place a bean may safely observe the fully
+/// assembled application.
+///
+/// Hooks are collected across all beans and controllers, sorted by their
+/// declared `order` (ascending, ties in registration order), and awaited in
+/// sequence. An `Err` aborts boot exactly like an `Err` from a builder
+/// `on_start` closure.
+///
+/// A hook is invoked against the bean **as it lives in the resolved graph**
+/// (override included) — and pinning the bean itself with `override_bean`
+/// skips its registration entirely, so its hooks never run.
+pub trait OnStart: Clone + Send + Sync + 'static {
+    /// This bean's `#[on_start]` hooks as `(order, hook)` pairs, in
+    /// declaration order.
+    fn on_start_hooks(&self) -> Vec<(i32, OnStartHook)>;
+}
+
 /// Unified registration entry point for beans, async beans, and producers.
 ///
 /// Implemented automatically by `#[bean]`, `#[derive(Bean)]`, and `#[producer]`

@@ -63,7 +63,7 @@ use openfga_rs::{
     ReadAuthorizationModelRequest, ReadAuthorizationModelsRequest, Store,
     WriteAuthorizationModelRequest,
 };
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::prelude::ConfigProperties;
 
 use crate::backend::{connect_client, request_with_token, GrpcBackend, OpenFgaBackend};
@@ -139,7 +139,7 @@ struct BootSettings {
     request_timeout_secs: u64,
 }
 
-/// The OpenFGA pre-state plugin. See the [module docs](self).
+/// The OpenFGA plugin. See the [module docs](self).
 pub struct OpenFga {
     model_json: &'static str,
 }
@@ -152,10 +152,11 @@ impl OpenFga {
     }
 }
 
-impl PreStatePlugin for OpenFga {
+impl Plugin for OpenFga {
     type Provided = (OpenFgaRegistry, FgaClient, OpenFgaHandle);
     type Deps = ();
     type Config = OpenFgaPluginConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("openfga");
     /// `build` is pure bean construction — the three `Provided` beans are the
     /// plugin's entire output, no routes, layers or hooks — and it costs a gRPC

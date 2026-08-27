@@ -74,17 +74,17 @@ impl App for OpenFgaApp {
             // `openfga.store` store, applies/verifies `authz::MODEL`, pins the
             // model id, and provides the registry + typed client beans.
             .plugin(OpenFga::model(authz::MODEL))
-            .build_state()
-            .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
-            .with(OpenApiPlugin::new(
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Documents API", "1.0.0")
                     .with_description("OpenFGA fine-grained authorization example")
                     .with_docs_ui(true),
             ))
+            .build_state()
+            .await
             .register_controller::<DocumentController>()
     }
 }

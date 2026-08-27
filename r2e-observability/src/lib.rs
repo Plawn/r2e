@@ -9,14 +9,14 @@
 //! use r2e_observability::{Observability, ObservabilityConfig};
 //!
 //! AppBuilder::new()
-//!     .build_state()
-//!     .await
-//!     .with(Observability::new(
+//!     .plugin(Observability::new(
 //!         ObservabilityConfig::new("my-service")
 //!             .with_service_version("1.0.0")
 //!             .with_endpoint("http://otel-collector:4318/v1/traces")
 //!             .capture_header("x-tenant-id"),
 //!     ))
+//!     .build_state()
+//!     .await
 //!     .serve("0.0.0.0:3000")
 //!     .await;
 //! ```
@@ -42,7 +42,7 @@ use r2e_core::Plugin;
 /// propagation, and HTTP request logging.
 ///
 /// This plugin is a **superset** of [`Tracing`](r2e_core::builtins::Tracing).
-/// It replaces both `init_tracing()` and `.with(Tracing)` with a single call
+/// It replaces both `init_tracing()` and `.plugin(Tracing)` with a single call
 /// that additionally exports distributed traces via OTLP.
 ///
 /// # What it does
@@ -51,7 +51,7 @@ use r2e_core::Plugin;
 /// 2. Installs a W3C `traceparent` propagator for cross-service context.
 /// 3. Adds a tower-http `TraceLayer` (same as the `Tracing` plugin).
 /// 4. Adds an `OtelTraceLayer` that creates OTel spans for each HTTP request.
-/// 5. Registers an `on_stop` hook that flushes pending traces on shutdown.
+/// 5. Registers a shutdown hook that flushes pending traces on shutdown.
 /// 6. Adds `trace_id` and `span_id` to logs emitted inside traced spans.
 ///
 /// # When to use `Observability` vs `Tracing`
@@ -75,14 +75,14 @@ use r2e_core::Plugin;
 /// use r2e_observability::{Observability, ObservabilityConfig};
 ///
 /// AppBuilder::new()
-///     .build_state()
-///     .await
 ///     // No init_tracing() call needed — the plugin handles it
-///     .with(Observability::new(
+///     .plugin(Observability::new(
 ///         ObservabilityConfig::new("my-service")
 ///             .with_service_version("1.0.0")
 ///             .with_endpoint("http://otel-collector:4318/v1/traces"),
 ///     ))
+///     .build_state()
+///     .await
 ///     .serve("0.0.0.0:3000")
 ///     .await;
 /// ```
@@ -132,16 +132,19 @@ impl Observability {
 }
 
 impl Plugin for Observability {
-    fn install<T: Clone + Send + Sync + 'static>(
-        self,
-        app: r2e_core::AppBuilder<T>,
-    ) -> r2e_core::AppBuilder<T> {
-        // 1. Install global propagator
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    /// The global propagator and the `tracing` subscriber are process-wide,
+    /// one-shot installs: they happen in `setup` (at `.plugin()` time) so bean
+    /// construction and every other plugin's `build` are already instrumented.
+    fn setup(&mut self, ctx: &mut r2e_core::plugin::PluginSetupContext) {
         if self.otlp_enabled {
             propagation::install_propagator(&self.config);
         }
 
-        // 2. Initialize tracing + OTel (if enabled)
         let guard = if self.config.tracing_enabled && self.otlp_enabled {
             Some(tracing_setup::init_tracing(&self.config))
         } else {
@@ -150,11 +153,22 @@ impl Plugin for Observability {
             }
             None
         };
+        // Park the guard where `build` can pick it up (it is not `Clone`, and
+        // `setup` cannot register effects).
+        ctx.store_data(OtelGuardSlot(std::sync::Mutex::new(guard)));
+    }
 
-        // 3. Add tower-http TraceLayer (replaces the Tracing plugin) + OTel context middleware
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut r2e_core::plugin::PluginBuildContext,
+    ) -> Result<Self::Provided, r2e_core::plugin::PluginBuildError> {
+        // tower-http TraceLayer (replaces the `Tracing` plugin) + OTel context
+        // middleware.
         let capture_headers = self.config.capture_headers.clone();
         let otlp_enabled = self.otlp_enabled;
-        let app = app.with_layer_fn(move |router| {
+        ctx.add_layer(move |router| {
             let router = router.layer(r2e_core::runtime::layers::default_trace());
             if otlp_enabled {
                 router.layer(middleware::OtelTraceLayer::new(capture_headers))
@@ -163,16 +177,37 @@ impl Plugin for Observability {
             }
         });
 
-        // 4. Store the guard so it lives for the app lifetime; flush on stop
-        if let Some(guard) = guard {
-            let guard = std::sync::Arc::new(std::sync::Mutex::new(Some(guard)));
-            let guard_clone = guard.clone();
-            app.on_stop(move |_| async move {
-                let _ = guard_clone.lock().unwrap().take();
-                tracing::info!("OpenTelemetry traces flushed");
-            })
-        } else {
-            app
-        }
+        // Keep the tracer-provider guard alive for the app lifetime and drop
+        // it (flushing spans) at shutdown.
+        ctx.after_build(|dctx| {
+            let Some(slot) = dctx.take_data::<OtelGuardSlot>() else {
+                return;
+            };
+            if slot
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+            {
+                return;
+            }
+            let slot = std::sync::Arc::new(slot);
+            dctx.on_shutdown_async(move || {
+                let slot = std::sync::Arc::clone(&slot);
+                async move {
+                    let _ = slot
+                        .0
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .take();
+                    tracing::info!("OpenTelemetry traces flushed");
+                }
+            });
+        });
+
+        Ok(())
     }
 }
+
+/// Carries the non-`Clone` OTel tracer-provider guard from `setup` to `build`.
+struct OtelGuardSlot(std::sync::Mutex<Option<tracing_setup::OtelGuard>>);

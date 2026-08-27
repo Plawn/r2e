@@ -61,12 +61,12 @@ impl App for ChatApp {
             .provide(env.ws_rooms)
             .provide(env.pool)
             .register::<services::ChatService>()
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
             .build_state()
             .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
             .register_controllers::<(ChatController, HistoryController, MessagePersistenceConsumer)>()
     }
 }

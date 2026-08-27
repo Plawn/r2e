@@ -36,6 +36,10 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     pub(super) stop_handle: StopHandle,
     pub(super) consumer_registrations: Vec<ConsumerReg<T>>,
     pub(super) post_construct_registrations: Vec<PostConstructReg>,
+    /// `#[on_start]` hooks from beans and controller cores, awaited (sorted by
+    /// declared order) after the consumer registrations and before the plugin
+    /// serve hooks and the builder's `on_start` closures.
+    pub(super) on_start_hooks: Vec<OnStartReg>,
     pub(super) serve_hooks: Vec<ServeHook>,
     pub(super) plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     /// Single ordered async-shutdown list, assembled once at build time as
@@ -363,6 +367,33 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // Register event consumers
             for reg in self.consumer_registrations {
                 reg(self.state.clone()).await;
+            }
+
+            // Bean and controller `#[on_start]` hooks, in declared order. They
+            // run once the whole graph and every controller core exist, and
+            // before the plugin serve hooks / builder `on_start` closures — so
+            // a hook may safely observe the fully assembled application but
+            // still runs before anything binds or starts accepting. An `Err`
+            // aborts boot; nothing tracked has started yet at this point, but
+            // the wind-down is run anyway for the hooks a `serve`-less plugin
+            // may already have armed.
+            let mut on_start_error = None;
+            for (_, hook) in super::typed::sort_on_start(self.on_start_hooks) {
+                if let Err(e) = hook().await {
+                    on_start_error = Some(e);
+                    break;
+                }
+            }
+            if let Some(e) = on_start_error {
+                abort_started_work(
+                    &cancel_token,
+                    &plugin_shutdown_hooks,
+                    &service_handles,
+                    self.shutdown_grace_period,
+                    "#[on_start] hook failed",
+                )
+                .await;
+                return Err(e);
             }
 
             // Call serve hooks (e.g., scheduler starts tasks).

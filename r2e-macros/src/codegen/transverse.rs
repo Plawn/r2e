@@ -35,7 +35,8 @@ use crate::util::crate_path::{
 use crate::util::type_utils::is_result_like;
 
 /// Strip the transverse wiring attributes (`#[consumer]`, `#[post_construct]`,
-/// `#[scheduled]`, `#[intercept]`) from a method's attribute list, preserving
+/// `#[pre_destroy]`, `#[on_start]`, `#[scheduled]`, `#[intercept]`) from a
+/// method's attribute list, preserving
 /// order. Used when re-emitting a source method's inner fn / dispatch wrapper.
 fn strip_transverse_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     strip_consumer_attrs(attrs)
@@ -43,6 +44,7 @@ fn strip_transverse_attrs(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
         .filter(|a| {
             !a.path().is_ident("post_construct")
                 && !a.path().is_ident("pre_destroy")
+                && !a.path().is_ident("on_start")
                 && !a.path().is_ident("scheduled")
                 && !a.path().is_ident("intercept")
         })
@@ -694,6 +696,19 @@ fn scan_lifecycle_methods(
     attr: &str,
     human: &str,
 ) -> syn::Result<Vec<LifecycleMethod>> {
+    Ok(scan_lifecycle_methods_with_attr(item_impl, attr, human)?
+        .into_iter()
+        .map(|(m, _)| m)
+        .collect())
+}
+
+/// [`scan_lifecycle_methods`], but also returning the matched attribute so a
+/// caller can parse its arguments (`#[on_start(order = N)]`).
+fn scan_lifecycle_methods_with_attr(
+    item_impl: &ItemImpl,
+    attr: &str,
+    human: &str,
+) -> syn::Result<Vec<(LifecycleMethod, syn::Attribute)>> {
     let mut methods = Vec::new();
 
     for item in &item_impl.items {
@@ -707,10 +722,9 @@ fn scan_lifecycle_methods(
                 continue;
             }
 
-            let has_attr = method.attrs.iter().any(|a| a.path().is_ident(attr));
-            if !has_attr {
+            let Some(marker) = method.attrs.iter().find(|a| a.path().is_ident(attr)) else {
                 continue;
-            }
+            };
 
             let param_count = method.sig.inputs.len();
             if param_count > 1 {
@@ -726,11 +740,14 @@ fn scan_lifecycle_methods(
                 ReturnType::Type(_, ty) => is_result_like(ty),
             };
 
-            methods.push(LifecycleMethod {
-                fn_name: method.sig.ident.clone(),
-                is_async,
-                returns_result,
-            });
+            methods.push((
+                LifecycleMethod {
+                    fn_name: method.sig.ident.clone(),
+                    is_async,
+                    returns_result,
+                },
+                marker.clone(),
+            ));
         }
     }
 
@@ -837,6 +854,144 @@ pub(crate) fn pre_destroy_impl(
                 Box::pin(async move {
                     #(#calls)*
                 })
+            }
+        }
+    }
+}
+
+// ── OnStart (startup observers) ──────────────────────────────────────────
+
+/// One `#[on_start]` method: the shared lifecycle dispatch shape plus the
+/// declared `order` (ascending, default `0`).
+pub(crate) struct OnStartMethod {
+    pub method: LifecycleMethod,
+    pub order: i32,
+}
+
+/// Parse `#[on_start]` / `#[on_start(order = N)]`. `N` is an `i32` literal,
+/// optionally negative; the bare form means `order = 0`.
+fn parse_on_start_order(attr: &syn::Attribute) -> syn::Result<i32> {
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok(0);
+    }
+    let mut order = 0i32;
+    attr.parse_nested_meta(|meta| {
+        if !meta.path.is_ident("order") {
+            return Err(meta.error("unsupported #[on_start] argument — expected `order = <int>`"));
+        }
+        let value = meta.value()?;
+        let negative = value.peek(syn::Token![-]);
+        if negative {
+            value.parse::<syn::Token![-]>()?;
+        }
+        let lit: syn::LitInt = value.parse()?;
+        let magnitude: i32 = lit.base10_parse()?;
+        order = if negative { -magnitude } else { magnitude };
+        Ok(())
+    })?;
+    Ok(order)
+}
+
+/// Scan all `&self` methods in an impl block for `#[on_start]`.
+pub(crate) fn scan_on_start_methods(item_impl: &ItemImpl) -> syn::Result<Vec<OnStartMethod>> {
+    scan_lifecycle_methods_with_attr(item_impl, "on_start", "#[on_start]")?
+        .into_iter()
+        .map(|(method, attr)| {
+            Ok(OnStartMethod {
+                method,
+                order: parse_on_start_order(&attr)?,
+            })
+        })
+        .collect()
+}
+
+/// Enforce the `#[on_start]` side of the lifecycle conflict matrix on a
+/// `#[bean]` impl: a startup observer must not double as a transverse marker
+/// or another lifecycle hook. The controller host uses
+/// `classify_lifecycle_hook`, which is route-aware.
+pub(crate) fn reject_bean_on_start_clash(item_impl: &ItemImpl) -> syn::Result<()> {
+    for item in &item_impl.items {
+        if let ImplItem::Fn(m) = item {
+            if !m.attrs.iter().any(|a| a.path().is_ident("on_start")) {
+                continue;
+            }
+            let clash = m.attrs.iter().any(|a| {
+                a.path().is_ident("post_construct")
+                    || a.path().is_ident("pre_destroy")
+                    || a.path().is_ident("scheduled")
+                    || a.path().is_ident("consumer")
+                    || a.path().is_ident("async_exec")
+                    || a.path().is_ident("intercept")
+            });
+            if clash {
+                return Err(syn::Error::new_spanned(
+                    &m.sig,
+                    "#[on_start] cannot be combined with #[post_construct], #[pre_destroy], \
+                     #[scheduled], #[consumer], #[async_exec], or #[intercept] on the same \
+                     method — it is a plain startup observer that runs once at boot",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The per-method `(order, hook)` pushes shared by the bean `OnStart` trait
+/// impl and the controller-core `Controller::on_start` override.
+///
+/// Each hook owns its receiver so the builder can collect every hook, sort the
+/// whole set by `order`, and only then await them: `bind` is the expression
+/// that produces that owned handle (`Clone::clone(self)` for a bean,
+/// `Arc::clone(&__core)` for a controller core). An `Err` propagates and
+/// aborts boot.
+pub(crate) fn on_start_pushes(bind: &TokenStream, methods: &[OnStartMethod]) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
+    methods
+        .iter()
+        .map(|m| {
+            let fn_name = &m.method.fn_name;
+            let order = m.order;
+            let call = match (m.method.is_async, m.method.returns_result) {
+                (true, true) => quote! { __r2e_owner.#fn_name().await?; },
+                (true, false) => quote! { __r2e_owner.#fn_name().await; },
+                (false, true) => quote! { __r2e_owner.#fn_name()?; },
+                (false, false) => quote! { __r2e_owner.#fn_name(); },
+            };
+            quote! {
+                {
+                    let __r2e_owner = #bind;
+                    __r2e_hooks.push((
+                        #order,
+                        Box::new(move || {
+                            Box::pin(async move {
+                                #call
+                                Ok(())
+                            }) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>>
+                        }) as #krate::beans::OnStartHook,
+                    ));
+                }
+            }
+        })
+        .collect()
+}
+
+/// Emit `impl OnStart for <target>` from a list of `#[on_start]` methods.
+/// `target` must be `Clone` (the bean path; each hook owns a clone of the bean
+/// read from the resolved graph). Returns empty when `methods` is empty.
+pub(crate) fn on_start_impl(target: &TokenStream, methods: &[OnStartMethod]) -> TokenStream {
+    if methods.is_empty() {
+        return quote! {};
+    }
+
+    let krate = r2e_core_path();
+    let pushes = on_start_pushes(&quote! { ::core::clone::Clone::clone(self) }, methods);
+
+    quote! {
+        impl #krate::beans::OnStart for #target {
+            fn on_start_hooks(&self) -> Vec<(i32, #krate::beans::OnStartHook)> {
+                let mut __r2e_hooks: Vec<(i32, #krate::beans::OnStartHook)> = Vec::new();
+                #(#pushes)*
+                __r2e_hooks
             }
         }
     }

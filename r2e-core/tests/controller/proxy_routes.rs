@@ -321,10 +321,10 @@ async fn fallback_runs_identity_and_guards() {
 async fn normalize_path_composes_with_fallback() {
     let router = r2e_core::AppBuilder::new()
         .provide(Greeting("sorry".to_string()))
+        .plugin(r2e_core::builtins::NormalizePath)
         .build_state()
         .await
         .register_controller::<FallbackController>()
-        .with(r2e_core::builtins::NormalizePath)
         .build();
 
     // Trailing slash is normalized onto the declared route.
@@ -348,8 +348,9 @@ async fn normalize_path_without_fallback_still_404s() {
     // No controller fallback: plain misses 404, trailing-slash misses
     // normalize (pre-routing rewrite) then 404.
     let router = r2e_core::AppBuilder::new()
-        .with_state(())
-        .with(r2e_core::builtins::NormalizePath)
+        .plugin(r2e_core::builtins::NormalizePath)
+        .build_state()
+        .await
         .build();
 
     let (status, _) = send(router.clone(), "GET", "/missing", &[], Body::empty()).await;

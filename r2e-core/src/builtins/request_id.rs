@@ -13,9 +13,9 @@
 //!
 //! // As a plugin
 //! AppBuilder::new()
+//!     .plugin(RequestIdPlugin)
 //!     .build_state()
 //!     .await
-//!     .with(RequestId)
 //!     // ...
 //!
 //! // As an extractor in handlers
@@ -30,7 +30,6 @@ use crate::http::header::Parts;
 use crate::http::response::{IntoHttpResponse, IntoResponse, Response};
 use crate::http::{HeaderName, HeaderValue};
 
-use crate::builder::AppBuilder;
 use crate::plugin::Plugin;
 
 static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -114,14 +113,25 @@ fn fresh_request_id() -> (String, HeaderValue) {
 /// Plugin that installs the Request ID middleware.
 ///
 /// ```ignore
-/// .with(RequestIdPlugin)
+/// .plugin(RequestIdPlugin)
 /// ```
 pub struct RequestIdPlugin;
 
 impl Plugin for RequestIdPlugin {
-    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        app.with_layer_fn(|router| {
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut crate::plugin::PluginBuildContext,
+    ) -> Result<Self::Provided, crate::plugin::PluginBuildError> {
+        ctx.add_layer(|router| {
             router.layer(crate::http::middleware::from_fn(request_id_middleware))
-        })
+        });
+        Ok(())
     }
 }

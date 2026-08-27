@@ -15,7 +15,51 @@ r2e = { version = "0.3", features = ["sqlx-postgres"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "postgres"] }
 ```
 
-Provide the pool as a bean:
+Install the datasource plugin — it connects the pool from configuration, runs
+migrations if asked, rotates onto a new URL when one is published, and closes
+the pool at shutdown:
+
+```rust
+use r2e::r2e_data_sqlx::{DbPool, SqlxDataSource};
+
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+AppBuilder::new()
+    .load_config::<()>()
+    .plugin(SqlxDataSource::<sqlx::Postgres>::new().migrations(&MIGRATOR))
+    .build_state()
+    .await;
+```
+
+```yaml
+datasource:
+  url: "postgres://user:pass@localhost/app"
+  max-connections: 20       # optional
+  min-connections: 2        # optional
+  acquire-timeout: 10s      # optional
+  migrate-at-start: true    # default false
+```
+
+The plugin provides `DbPool<sqlx::Postgres>`, which routes ask for as
+`DbTx<'_, Postgres>` (below). Attaching a migrator does not run it —
+`migrate-at-start` does, so the same binary can migrate in dev and stay
+read-only in production. Migrations run inside `build_state()`: a migration
+that cannot apply fails the boot rather than leaving the app on a schema it
+does not have, and tests booting the app get the same schema.
+
+A **second** database is a named datasource: `datasource_tag!` mints a marker
+whose configuration lives under `datasource.<name>` and whose pool is a
+distinct bean type.
+
+```rust
+r2e::r2e_data_sqlx::datasource_tag!(pub Reporting = "reporting");
+
+b.plugin(SqlxDataSource::<sqlx::Postgres>::new())                 // DbPool<Postgres>
+ .plugin(SqlxDataSource::<sqlx::Postgres, Reporting>::new());     // DbPool<Postgres, Reporting>
+```
+
+If you would rather own the pool yourself, provide a plain `sqlx::Pool<DB>` as
+a bean and use `Tx<'_, DB>` instead of `DbTx<'_, DB>`:
 
 ```rust
 let pool = sqlx::PgPool::connect(&database_url).await?;
@@ -63,7 +107,25 @@ r2e = { version = "0.3", features = ["diesel-postgres"] }
 diesel = { version = "2", features = ["postgres", "r2d2"] }
 ```
 
-Provide an r2d2 pool:
+Install the datasource plugin — the exact mirror of the SQLx one, reading the
+same `datasource.*` section and taking Diesel's embedded migrations:
+
+```rust
+use diesel::PgConnection;
+use diesel_migrations::{embed_migrations, EmbeddedMigrations};
+use r2e::r2e_data_diesel::{DbPool, DieselDataSource};
+
+const MIGRATIONS: EmbeddedMigrations = embed_migrations!("./migrations");
+
+AppBuilder::new()
+    .load_config::<()>()
+    .plugin(DieselDataSource::<PgConnection>::new().migrations(&MIGRATIONS))
+    .build_state()
+    .await;
+```
+
+Routes then ask for `DbTx<PgConnection>`. Or provide an r2d2 pool yourself and
+use `DieselTx<Conn>`:
 
 ```rust
 use diesel::{PgConnection, r2d2::{ConnectionManager, Pool}};

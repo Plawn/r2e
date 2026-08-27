@@ -138,12 +138,16 @@ secret placeholders above:
 
 ```rust
 #[producer(start)]
-async fn create_pool(
-    #[live_config("database.url")] url: LiveConfig<String>,
-) -> DbPool<sqlx::Postgres> {
-    DbPool::connect(url).await.unwrap()
+async fn create_client(
+    #[live_config("search.endpoint")] endpoint: LiveConfig<String>,
+) -> SearchClient {
+    SearchClient::connect(endpoint).await.unwrap()
 }
 ```
+
+(A database pool is the one live-config consumer you do **not** hand-roll: the
+datasource plugin — `.plugin(SqlxDataSource::<sqlx::Postgres>::new())` — reads
+`datasource.url` as a live value and hands back a rotating `DbPool`.)
 
 `#[live_config("key")]` is also a **field** attribute, symmetric with
 `#[config("key")]` — on `#[derive(Bean)]` / `#[derive(DecoratorBean)]` /

@@ -488,10 +488,11 @@ struct PluginBean {
 
 struct CountingPlugin;
 
-impl r2e_core::PreStatePlugin for CountingPlugin {
+impl r2e_core::Plugin for CountingPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

@@ -82,3 +82,52 @@ async fn boot_wires_a_test_jwt() {
     let token = app.test_jwt().token("alice", &["admin"]);
     assert_eq!(token.matches('.').count(), 2, "expected a JWT-shaped token");
 }
+
+// ── `#[on_start]` under TestApp::boot ───────────────────────────────────
+
+type StartLog = std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>;
+
+/// A bean with a startup observer. `#[on_start]` runs on the boot path (there
+/// IS a startup under `TestApp::boot`), unlike `#[pre_destroy]`, which needs a
+/// shutdown and therefore never fires here.
+#[derive(Clone)]
+struct Warmer {
+    log: StartLog,
+}
+
+#[r2e_core::prelude::bean]
+impl Warmer {
+    fn new(log: StartLog) -> Self {
+        Self { log }
+    }
+
+    #[on_start]
+    async fn warm(&self) {
+        self.log.lock().unwrap().push("warmed");
+    }
+}
+
+static BOOT_LOG: std::sync::OnceLock<StartLog> = std::sync::OnceLock::new();
+
+struct WarmApp;
+
+impl App for WarmApp {
+    type Env = ();
+
+    async fn setup() {}
+
+    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+        let log = std::sync::Arc::clone(BOOT_LOG.get().expect("BOOT_LOG set by the test"));
+        b.provide(log).register::<Warmer>().build_state().await
+    }
+}
+
+#[tokio::test]
+async fn boot_runs_on_start_hooks() {
+    let log: StartLog = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    BOOT_LOG.set(std::sync::Arc::clone(&log)).ok();
+
+    let _app = TestApp::boot::<WarmApp>().await;
+
+    assert_eq!(*log.lock().unwrap(), vec!["warmed"]);
+}

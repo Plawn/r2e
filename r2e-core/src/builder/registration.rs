@@ -26,15 +26,26 @@ use crate::type_list::ControllerTuple;
 /// Registers a [`FeatureModule`] on the NoState builder, inferring the
 /// encapsulation-check witnesses.
 ///
-/// One call registers the module's providers, queues its controllers for
-/// registration at `build_state()`, and applies the closed-subgraph
-/// encapsulation checks at compile time:
+/// One call installs the plugins the module brings, registers the module's
+/// providers, queues its controllers for registration at `build_state()`, and
+/// applies the closed-subgraph encapsulation checks at compile time:
 ///
 /// - every provider dependency must be another provider's output or a
 ///   declared import (`Deps ⊆ Provided ∪ Imports`);
 /// - every controller `#[inject]` dependency must be in the same module
 ///   scope;
-/// - `Exports ⊆ Provided` — a module cannot export what it does not provide.
+/// - `Exports ⊆ Provided` — a module cannot export what it does not provide;
+/// - every plugin in `RequiredPlugins` must already be installed (by the app,
+///   an earlier module, or this module's own `Plugins`).
+///
+/// The plugins in [`Plugins`](FeatureModule::Plugins) are installed **first**,
+/// exactly as `.plugin(..)` at this position would: their provisions join the
+/// app-global `P` (so they need no `exports(..)` entry, and must not appear in
+/// one), their `Deps` join `R`, their controllers are queued, and their
+/// effects apply at this `register_module` call's position in install order.
+/// A plugin installed twice (app + module, or two modules) is a
+/// [`DuplicatePlugin`](crate::beans::BeanError::DuplicatePlugin) boot error
+/// naming both owners.
 ///
 /// Only `Exports` join the app-global provision list `P` (the application
 /// state); other providers stay private — depending on them from outside the
@@ -61,15 +72,17 @@ pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>: Sized {
     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
     where
         M: FeatureModule,
+        M::Plugins: ModulePlugins<P, R, Mods>,
         M::Providers: BeanList,
-        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        <M::Providers as BeanList>::Provided: TAppend<ModulePluginProvisions<M>>,
+        ModuleProvided<M>: TAppend<M::Imports>,
         M::Controllers: ControllerDepsList,
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
-        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
-        M::Exports: TAppend<P>,
-        R: TAppend<M::Imports>;
+        M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
+        M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
+        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>;
 }
 
 impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
@@ -79,15 +92,17 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
     where
         M: FeatureModule,
+        M::Plugins: ModulePlugins<P, R, Mods>,
         M::Providers: BeanList,
-        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        <M::Providers as BeanList>::Provided: TAppend<ModulePluginProvisions<M>>,
+        ModuleProvided<M>: TAppend<M::Imports>,
         M::Controllers: ControllerDepsList,
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
-        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
-        M::Exports: TAppend<P>,
-        R: TAppend<M::Imports>,
+        M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
+        M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
+        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     {
         self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, PlugIdx>()
     }

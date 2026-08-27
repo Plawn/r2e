@@ -7,7 +7,7 @@ use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use crate::DbPool;
+use crate::{DataSourceTag, DbPool, DefaultDataSource};
 
 /// Where a managed transaction comes from.
 ///
@@ -68,7 +68,10 @@ pub type SqlxTx<'a, DB> = ManagedTx<'a, DB, FixedPool<DB>>;
 pub type Tx<'a, DB> = SqlxTx<'a, DB>;
 
 /// Managed transaction on a rotating [`DbPool<DB>`] facade (aliased as [`DbTx`]).
-pub type DbTx<'a, DB> = ManagedTx<'a, DB, RotatingPool<DB>>;
+///
+/// `Tag` names the datasource, and defaults to the app's unnamed one — a
+/// transaction on a named datasource is `DbTx<'_, DB, Reporting>`.
+pub type DbTx<'a, DB, Tag = DefaultDataSource> = ManagedTx<'a, DB, RotatingPool<DB, Tag>>;
 
 impl<'a, DB: Database, Src: TxSource<DB>> ManagedTx<'a, DB, Src> {
     pub fn connection(&mut self) -> &mut DB::Connection {
@@ -93,7 +96,7 @@ impl<'a, DB: Database, Src: TxSource<DB>> ManagedTx<'a, DB, Src> {
     }
 }
 
-impl<'a, DB: Database> ManagedTx<'a, DB, RotatingPool<DB>> {
+impl<'a, DB: Database, Tag: DataSourceTag> ManagedTx<'a, DB, RotatingPool<DB, Tag>> {
     /// The [`DbPool`] generation this transaction was begun on.
     #[must_use]
     pub fn generation(&self) -> u64 {
@@ -182,12 +185,12 @@ impl<DB: Database> TxSource<DB> for FixedPool<DB> {
     }
 }
 
-/// [`TxSource`] backed by a rotating [`DbPool<DB>`] facade.
-pub struct RotatingPool<DB>(PhantomData<fn() -> DB>);
+/// [`TxSource`] backed by a rotating [`DbPool<DB, Tag>`] facade.
+pub struct RotatingPool<DB, Tag = DefaultDataSource>(PhantomData<fn() -> (DB, Tag)>);
 
-impl<DB: Database> TxSource<DB> for RotatingPool<DB> {
+impl<DB: Database, Tag: DataSourceTag> TxSource<DB> for RotatingPool<DB, Tag> {
     type Meta = u64;
-    type Deps = TCons<DbPool<DB>, TNil>;
+    type Deps = TCons<DbPool<DB, Tag>, TNil>;
 
     async fn begin<S>(
         context: &ManagedContext<'_, S>,
@@ -195,11 +198,11 @@ impl<DB: Database> TxSource<DB> for RotatingPool<DB> {
     where
         S: BeanLookup + Send + Sync,
     {
-        let rotating = context.state.bean::<DbPool<DB>>().ok_or_else(|| {
+        let rotating = context.state.bean::<DbPool<DB, Tag>>().ok_or_else(|| {
             context.missing_bean(
                 "rotating database pool bean",
-                std::any::type_name::<DbPool<DB>>(),
-                "call .register::<CreatePool>()",
+                std::any::type_name::<DbPool<DB, Tag>>(),
+                "install the datasource plugin: .plugin(SqlxDataSource::<DB>::new())",
             )
         })?;
         // `DbPool::begin` takes the (pool, generation) pair atomically and

@@ -2,36 +2,39 @@
 
 ## AppBuilder (r2e-core)
 
-Central orchestrator for assembling an R2E application. Two phases: pre-state and post-state.
+Central orchestrator for assembling an R2E application. Two phases: **builder**
+(everything before `build_state()`) and **app** (after it). There is exactly one
+plugin kind and one install call — `.plugin(..)`, always in the builder phase.
 
 ```rust
 AppBuilder::new()
-    // ── Pre-state phase ──
+    // ── Builder phase (before build_state) ──
     .plugin(Executor)                      // required by Scheduler (ticks run on the pool)
-    .plugin(Scheduler)                     // scheduler runtime - MUST be before build_state()
+    .plugin(Scheduler)                     // scheduler runtime
+    .plugin(Health)                        // /health → 200 "OK"
+    .plugin(Cors::permissive())            // or Cors::custom(layer)
+    .plugin(Tracing)                       // default tracing (RUST_LOG only)
+    // or: .plugin(Tracing::configured(config))     // with TracingConfig (format, ansi, etc.)
+    // or: .plugin(Tracing::from_config(&r2e_config)) // from YAML tracing.* keys
+    .plugin(ErrorHandling)                 // catch panics → JSON 500
+    .plugin(DevReload)                     // /__r2e_dev/* endpoints
+    .plugin(OpenApiPlugin::new(openapi_cfg)) // /openapi.json (+ /docs if docs_ui enabled)
     .load_config::<RootConfig>()             // load yaml + env, construct typed config, auto-register children (sole config entry)
     // test harness only: .override_config(cfg) BEFORE load_config stashes an in-memory R2eConfig it uses instead of disk
     .provide(services.pool.clone())        // provide beans
     .register::<CreatePool>()              // async producer (registers SqlitePool)
     .register::<MyAsyncService>()          // async bean constructor
     .register::<UserService>()             // sync bean — one unified register()
-    // ── Conditional Self->Self assembly (plugins/layers, provision list P unchanged) ──
-    .when(dev_mode, |b| b.with(DevReload))              // runtime bool
-    .when(b.config_flag("metrics.enabled"), |b| b.with(Prometheus::default()))
+    // ── Conditional Self->Self assembly (layers, provision list P unchanged) ──
+    .when(dev_mode, |b| b.on_start(|_| async { Ok(()) }))   // runtime bool
+    // NOTE: `.when()` cannot wrap `.plugin()` (it would change the type-level
+    // provision list). Gate a plugin with `<prefix>.enabled = false` instead.
     // For conditional *bean* presence: register a `#[producer] -> Option<T>`
     // (slot always in P; producer returns Some/None). config sections are
     // auto-registered as beans by load_config (inject with #[inject]).
     .build_state()                         // resolve bean graph → inferred HList state (async, no type args)
     .await                                 // .try_build_state().await is the non-panicking variant
-    // ── Post-state phase ──
-    .with(Health)                          // /health → 200 "OK"
-    .with(Cors::permissive())              // or Cors::new(custom_layer)
-    .with(Tracing)                         // default tracing (RUST_LOG only)
-    // or: .with(Tracing::configured(config))  // with TracingConfig (format, ansi, etc.)
-    // or: .with(Tracing::from_config(&r2e_config))  // from YAML tracing.* keys
-    .with(ErrorHandling)                   // catch panics → JSON 500
-    .with(DevReload)                       // /__r2e_dev/* endpoints
-    .with(OpenApiPlugin::new(openapi_cfg)) // /openapi.json (+ /docs if docs_ui enabled)
+    // ── App phase (after build_state) ──
     .on_start(|state| async move { Ok(()) })
     .on_stop(|state| async move { if let Some(p) = state.bean::<SqlitePool>() { p.close().await; } })
     .register_controller::<UserController>()
@@ -44,7 +47,7 @@ AppBuilder::new()
     // or .serve_auto().await              // reads server.host / server.port from config (defaults: 0.0.0.0:3000)
 ```
 
-**Lifecycle hooks** (post-state):
+**Lifecycle hooks** (app phase, after `build_state()`):
 - `on_start(|state| async move { Ok(()) })` — runs before the server starts listening. Receives state, returns `Result`.
 - `on_stop(|state| async move { })` — runs after graceful shutdown. Receives state, returns `()`.
 
@@ -137,7 +140,7 @@ Because the core never holds identity fields, `ContextConstruct` is available ev
 
 See [configuration.md](./configuration.md) for the full reference.
 
-**AppBuilder integration** (pre-state methods):
+**AppBuilder integration** (builder-phase methods, before `build_state()`):
 - `load_config::<C>()` (the sole config registration point) — load YAML + env, construct typed config (`C: ConfigProperties`), **auto-register all nested `#[config(section)]` children as beans**, provide both `C` and `R2eConfig` in the type list. Use `load_config::<()>()` for raw only.
 - `override_config(config)` — stash a pre-loaded/in-memory `R2eConfig` that the next `load_config` consumes instead of reading disk (test-harness primitive, not dev-reload plumbing — under `dev-reload`, `build()` re-runs per patch and its `load_config` re-reads `application.yaml`). Not a registration point on its own; `load_config` must still be called (else `build_state` panics).
 
@@ -154,9 +157,9 @@ Config sections registered via `load_config` are available as bean dependencies 
 
 ## Embedded OIDC (r2e-oidc)
 
-`OidcServer` — embedded OAuth 2.0 / OIDC server plugin. Generates RSA-2048 keys, issues JWT tokens, exposes standard endpoints (`/oauth/token`, `/.well-known/openid-configuration`, `/.well-known/jwks.json`, `/userinfo`). Implements `PreStatePlugin` and provides `Arc<JwtClaimsValidator>` to the bean graph.
+`OidcServer` — embedded OAuth 2.0 / OIDC server plugin. Generates RSA-2048 keys, issues JWT tokens, exposes standard endpoints (`/oauth/token`, `/.well-known/openid-configuration`, `/.well-known/jwks.json`, `/userinfo`). Implements `Plugin` and provides `Arc<JwtClaimsValidator>` to the bean graph.
 
-`OidcRuntime` — pre-built OIDC runtime (`Clone`). Created via `OidcServer::build()`. Holds all expensive state (`Arc`-wrapped RSA keys, user store, client registry). Reusable across hot-reload cycles — only re-registers routes without regenerating keys. Also implements `PreStatePlugin`.
+`OidcRuntime` — pre-built OIDC runtime (`Clone`). Created via `OidcServer::build()`. Holds all expensive state (`Arc`-wrapped RSA keys, user store, client registry). Reusable across hot-reload cycles — only re-registers routes without regenerating keys. Also implements `Plugin`.
 
 Two usage patterns:
 - **Simple:** `AppBuilder::new().plugin(OidcServer::new().with_user_store(users))` — generates keys on each install. Works without hot-reload.
@@ -462,9 +465,9 @@ impl AdminController {
 
 - `Pageable` and `Page<T>` live in `r2e-core` and are always available.
 - `r2e-data-sqlx` contains cancellation-safe managed SQLx transactions.
-  Provide a normal `sqlx::Pool<DB>` and request `Tx<'_, DB>`, or produce a
-  rotating `DbPool<DB>` from a `LiveConfig<String>` and request
-  `DbTx<'_, DB>`. `DbPool` watches the live URL value as a `ServiceComponent`,
+  Provide a normal `sqlx::Pool<DB>` and request `Tx<'_, DB>`, or install the
+  datasource plugin for a rotating `DbPool<DB>` and request `DbTx<'_, DB>`.
+  `DbPool` watches the live URL value as a `ServiceComponent`,
   connects a replacement pool on rotation, swaps atomically on success, and
   closes the old pool in the background. The pool and its generation live in a
   single swapped cell — `snapshot() -> (Pool<DB>, u64)` reads both at once, so
@@ -481,6 +484,32 @@ impl AdminController {
   blocking-pool `run` helper. Its `DbPool` has the same atomic `snapshot()`,
   but no retry: rotation only drops the facade's handle and r2d2 pools are
   never explicitly closed, so a handle taken before the swap keeps working.
+- **The datasource plugin owns the pool's whole boot.**
+  `SqlxDataSource<DB, Tag = DefaultDataSource>` (and its mirror
+  `DieselDataSource<Conn, Tag>`) is a `Plugin` with
+  `Provided = (DbPool<DB, Tag>,)`, `Deps = (LiveConfigRegistry,)`,
+  `CONFIG_PREFIX = Tag::CONFIG_PREFIX`, and `SKIP_BUILD_WHEN_ALL_PINNED = true`.
+  `build()` reads the typed `DataSourceConfig` (`url`, `max-connections`,
+  `min-connections`, `acquire-timeout`, `migrate-at-start: bool = false`),
+  connects the pool from a `LiveConfig<String>` on `<prefix>.url` (the registry
+  is a *dep* because the URL must stay live — the typed `url` field exists only
+  so a missing key fails with a pointed message), runs the migrator attached by
+  `.migrations(&MIGRATOR)` when `migrate-at-start` is true, starts the rotation
+  `ServiceComponent` via `ctx.on_serve` + `serve.track`, and closes the pool via
+  `ctx.on_shutdown_async` (SQLx only — r2d2 has no async close). Any failure
+  aborts the boot as `Plugin 'SqlxDataSource' failed to build: ...`.
+- **Tags are how a second database exists.** `DataSourceTag` carries both
+  `NAME: Option<&'static str>` and `CONFIG_PREFIX: &'static str` because a
+  `const` cannot concatenate `"datasource." + NAME` on stable; the
+  `datasource_tag!(pub Reporting = "reporting")` macro mints the pair together.
+  The tag is a `PhantomData<fn() -> Tag>` parameter on `DbPool`/`DbTx`/
+  `RotatingPool`, defaulted to `DefaultDataSource`, so every pre-plugin
+  `DbPool<DB>` spelling still compiles. Each backend owns its own tag trait: an
+  app uses one of them, and a datasource marker is not runtime foundation.
+- **There is no `datasource.enabled` gate** — a pool bean has no inert form, so
+  `enabled = false` only logs a warning. The way to replace a datasource in a
+  test is to pin the pool (`override_bean`), which
+  `SKIP_BUILD_WHEN_ALL_PINNED` turns into "no connection, no migrations".
 - CRUD models and queries remain application-owned and use SQLx or Diesel
   directly.
 
@@ -493,7 +522,7 @@ User-facing guide: `docs/features/24-tenancy.md`. This section is the internals.
 (`Tenant<T>` / `TenantId` extractors), `plugin` (`Tenancy`, `PerTenant`),
 `config` (`TenancyConfig`), `error` (`TenantError` → status).
 
-**Two plugins, both `PreStatePlugin`, both factory-first.** Each plugin's
+**Two plugins, both `Plugin`, both factory-first.** Each plugin's
 `build` runs inside `build_state()` with the resolver / source bean already
 constructed (`Deps` is a real topo edge), so `TenantRouter` and `Tenanted<T>`
 are built **directly wired** — no shell/fill. When `tenancy.enabled: false`,
@@ -505,7 +534,7 @@ remains for the true wiring bug: injecting `Tenant<T>` for a `T` whose
 `Tenancy` declares `Deps = (R,)`; `PerTenant` declares `Deps = (Src,)`, and
 `.fallback_to_default()` switches the impl to `Deps = (Src, T)` so the fallback
 bean is compile-checked (the `DefaultFallback` / `NoFallback` marker parameter
-selects which `PreStatePlugin` impl applies). The fallback is consulted only
+selects which `Plugin` impl applies). The fallback is consulted only
 after a resolved tenant's `TenantSource::create` returns `Ok(None)`. A missing
 tenant is rejected by `TenantRouter`, or becomes `None` for an optional
 extractor under the allow policy, before the map is called.
@@ -634,7 +663,7 @@ Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualif
 
 - Generates **OpenAPI 3.1.0** specs. Uses **schemars 1.x** (JSON Schema Draft 2020-12) for schema generation.
 - `OpenApiConfig` — configuration for the generated spec (title, version, description). `with_docs_ui(true)` enables the interactive documentation page.
-- `OpenApiPlugin` — registers OpenAPI routes. Use `.with(OpenApiPlugin::new(config))` on the builder.
+- `OpenApiPlugin` — registers OpenAPI routes. Use `.plugin(OpenApiPlugin::new(config))` on the builder (before `build_state()`; install order is irrelevant — the spec is built from a Routes-stage effect, after every controller is registered).
 - `SchemaRegistry` — extra schema collection. `register_for::<T: JsonSchema>()` for schemars types, `register(name, value)` for manual schemas. Wire into `OpenApiConfig` via `with_schema::<T>()`, `with_raw_schema(name, json)`, `with_schema_registry(registry)`, `with_schema_override(name, json)`. Precedence: overrides > route schemas > registry > built-in error schemas.
 - `SchemaProvider` — trait for types without `JsonSchema` derive; returns `Cow<'static, str>` name + `Value` schema. Use `SchemaRegistry::register_provider::<T>()` to register.
 - Route metadata is collected from `Controller::route_metadata()` via `RouteInfo` (in `r2e-core/src/di/meta.rs`).
@@ -653,7 +682,7 @@ Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualif
 
 `EmbeddedFrontend` — plugin that serves static files embedded in the binary via `rust_embed`, with SPA fallback support. Installs as a fallback handler on the Axum router.
 
-- **Quick start:** `app.with(EmbeddedFrontend::new::<Assets>())` — serves files from a `#[derive(Embed)]` struct with sensible defaults (SPA on, `api/` excluded, `assets/` immutable).
+- **Quick start:** `builder.plugin(EmbeddedFrontend::new::<Assets>())` — serves files from a `#[derive(Embed)]` struct with sensible defaults (SPA on, `api/` excluded, `assets/` immutable).
 - **Builder API:** `EmbeddedFrontend::builder::<Assets>()` for custom configuration. Builder methods:
   - `spa_fallback(bool)` — enable/disable SPA fallback (default `true`).
   - `fallback_file(impl Into<String>)` — file served for unmatched routes in SPA mode (default `"index.html"`).
@@ -668,7 +697,7 @@ Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualif
 - **Handler logic:** check excluded prefixes → exact file match → directory index (`foo/` → `foo/index.html`) → SPA fallback → 404.
 - **Cache headers:** files under `immutable_prefix` (default `assets/`) get `Cache-Control: public, max-age=31536000, immutable`. Others get `public, max-age=3600`.
 - **ETag:** SHA-256 hash from `rust_embed` metadata, served as `ETag` header.
-- **`should_be_last() = true`** — the fallback handler must be installed after all route registrations.
+- **Install it after the other router plugins** — its SPA fallback is a Graph-stage effect, and Graph effects apply in install order, so a later fallback would shadow it.
 - **Feature flag:** `r2e = { features = ["static"] }` or depend on `r2e-static` directly.
 
 ## Testing (r2e-test)

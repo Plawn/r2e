@@ -1,5 +1,5 @@
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
-use r2e_core::PreStatePlugin;
+use r2e_core::Plugin;
 
 use crate::multiplex::MultiplexService;
 use crate::registry::{GrpcServiceRegistry, RegisteredServices};
@@ -15,7 +15,7 @@ pub enum GrpcTransport {
 
 /// gRPC server plugin for R2E.
 ///
-/// Install as a `PreStatePlugin` before `build_state()`. The plugin stores a
+/// Install as a `Plugin` before `build_state()`. The plugin stores a
 /// [`GrpcServiceRegistry`] that `register_grpc_service` fills with built
 /// services, and drains it once at serve time:
 ///
@@ -108,13 +108,14 @@ impl GrpcServer {
     }
 }
 
-impl PreStatePlugin for GrpcServer {
+impl Plugin for GrpcServer {
     /// GrpcServer doesn't provide meaningful beans — it uses `GrpcMarker` as a
     /// placeholder. The real coordination happens via `GrpcServiceRegistry` in
     /// plugin_data.
     type Provided = (GrpcMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

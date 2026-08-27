@@ -621,7 +621,7 @@ pub fn consumer(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Request-scoped fields are unavailable because scheduled tasks run outside
 /// HTTP context. Register the controller via
 /// `.register_controller::<MyJobs>()` and install the scheduler runtime
-/// with `.with(Scheduler)` (from `r2e-scheduler`).
+/// with `.plugin(Scheduler)` (from `r2e-scheduler`).
 ///
 /// `every` accepts an integer (seconds) or a duration string with suffixes
 /// `ms`, `s`, `m`, `h`, `d` (combinable: `"1h30m"`). Same for `initial_delay`.
@@ -989,6 +989,54 @@ pub fn post_construct(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// This attribute is consumed by [`bean`] / [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
 pub fn pre_destroy(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Mark a method as a **startup observer** — called at server startup, once the
+/// whole bean graph *and* every controller core exist.
+///
+/// This is the bean/controller-level counterpart of the builder's
+/// `.on_start(closure)`, and it is later than
+/// [`post_construct`]: a `#[post_construct]` hook runs *inside*
+/// `build_state()`, while the graph is still being assembled, so it cannot
+/// observe controllers or anything registered after it. An `#[on_start]` hook
+/// runs after the whole application is assembled and before the server binds.
+///
+/// The annotated method must take `&self` and return either `()` or
+/// `Result<(), Box<dyn Error + Send + Sync>>`. It may be `async`. An `Err`
+/// **aborts boot**, exactly like an `Err` from an `.on_start(…)` closure.
+///
+/// `#[on_start(order = N)]` sets the run order (`i32`, default `0`, ascending;
+/// ties keep registration order — bean hooks before controller hooks, each in
+/// declaration order). Ordering is global: every `#[on_start]` hook in the
+/// application is sorted into one list.
+///
+/// Works on `#[bean]` impls (via [`OnStart`](r2e_core::OnStart), read by value
+/// from the resolved graph — a pinned `override_bean` skips the hook) and on
+/// `#[routes]` controller impls (run from the core `Arc`). It cannot be
+/// combined with a route / `#[scheduled]` / `#[consumer]` / `#[async_exec]` /
+/// `#[post_construct]` / `#[pre_destroy]` marker on the same method, takes no
+/// parameters, and takes no `#[intercept]`.
+///
+/// Unlike `#[pre_destroy]`, these hooks DO run under `TestApp::boot` /
+/// `build_with_consumers` (there is a startup there; there is no shutdown).
+///
+/// ```ignore
+/// #[bean]
+/// impl WarmCache {
+///     pub fn new(store: Store) -> Self { /* ... */ }
+///
+///     #[on_start(order = -10)]
+///     async fn preload(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+///         self.load().await?;
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// This attribute is consumed by [`bean`] / [`routes`] — it is a no-op on its own.
+#[proc_macro_attribute]
+pub fn on_start(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 

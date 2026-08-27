@@ -8,9 +8,9 @@ The `SecureHeaders` plugin automatically adds security-related HTTP headers to e
 use r2e::prelude::*;
 
 AppBuilder::new()
+    .plugin(SecureHeaders::default())   // sensible defaults
     .build_state()
     .await
-    .with(SecureHeaders::default())   // sensible defaults
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
@@ -76,13 +76,13 @@ Use `SecureHeaders::builder()` to customize which headers are sent and their val
 ### Using all defaults
 
 ```rust
-.with(SecureHeaders::default())
+.plugin(SecureHeaders::default())
 ```
 
 ### Allowing iframe embedding from the same origin
 
 ```rust
-.with(SecureHeaders::builder()
+.plugin(SecureHeaders::builder()
     .frame_options("SAMEORIGIN")
     .build())
 ```
@@ -90,7 +90,7 @@ Use `SecureHeaders::builder()` to customize which headers are sent and their val
 ### Adding a Content Security Policy
 
 ```rust
-.with(SecureHeaders::builder()
+.plugin(SecureHeaders::builder()
     .content_security_policy("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:")
     .build())
 ```
@@ -98,7 +98,7 @@ Use `SecureHeaders::builder()` to customize which headers are sent and their val
 ### Strict production configuration
 
 ```rust
-.with(SecureHeaders::builder()
+.plugin(SecureHeaders::builder()
     .hsts_max_age(63072000)                          // 2 years
     .hsts_include_subdomains(true)
     .content_security_policy("default-src 'self'")
@@ -110,7 +110,7 @@ Use `SecureHeaders::builder()` to customize which headers are sent and their val
 ### Development configuration (disable HSTS)
 
 ```rust
-.with(SecureHeaders::builder()
+.plugin(SecureHeaders::builder()
     .hsts(false)
     .build())
 ```
@@ -118,7 +118,7 @@ Use `SecureHeaders::builder()` to customize which headers are sent and their val
 ### Disabling specific headers
 
 ```rust
-.with(SecureHeaders::builder()
+.plugin(SecureHeaders::builder()
     .content_type_options(false)   // remove X-Content-Type-Options
     .no_frame_options()            // remove X-Frame-Options
     .xss_protection(false)         // remove X-XSS-Protection
@@ -145,12 +145,12 @@ async fn main() {
         .build();
 
     AppBuilder::new()
+        .plugin(Tracing)
+        .plugin(ErrorHandling)
+        .plugin(secure)
+        .plugin(Health)
         .build_state()
         .await
-        .with(Tracing)
-        .with(ErrorHandling)
-        .with(secure)
-        .with(Health)
         .serve("0.0.0.0:3000")
         .await
         .unwrap();

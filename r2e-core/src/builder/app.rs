@@ -26,8 +26,8 @@
 //!         b.provide(env)
 //!             .load_config::<AppConfig>()
 //!             .register::<UserService>()
+//!             .plugin(Health)
 //!             .build_state().await
-//!             .with(Health)
 //!             .register_controllers::<(UserController,)>()
 //!     }
 //! }

@@ -32,6 +32,9 @@ pub struct RoutesImplDef {
     /// `#[pre_destroy]` disposal methods (bodies stay on the core impl,
     /// recorded here to drive the `Controller::pre_destroy` override codegen).
     pub pre_destroy_methods: Vec<crate::codegen::transverse::PreDestroyMethod>,
+    /// `#[on_start]` startup observers (bodies stay on the core impl, recorded
+    /// here to drive the `Controller::on_start` override codegen).
+    pub on_start_methods: Vec<crate::codegen::transverse::OnStartMethod>,
     /// `#[request_helper]` methods — emitted verbatim on the request façade
     /// (`impl __R2eRequest_<Name>`), so they can read the request-scoped identity
     /// / `#[inject(request)]` fields directly and reach core fields via `Deref`.
@@ -271,6 +274,10 @@ fn classify_request_helper(
             all_attrs.iter().any(|a| a.path().is_ident("pre_destroy")),
         ),
         (
+            "#[on_start]",
+            all_attrs.iter().any(|a| a.path().is_ident("on_start")),
+        ),
+        (
             "#[anonymous]",
             all_attrs.iter().any(|a| a.path().is_ident("anonymous")),
         ),
@@ -308,8 +315,8 @@ fn classify_request_helper(
 /// Shared classifier for the two plain lifecycle hooks on a controller impl
 /// (`#[post_construct]` and `#[pre_destroy]`). Both are `&self` bodies that stay
 /// on the core impl, reject `#[intercept]`, and cannot double as a route or any
-/// transverse marker — *including the other lifecycle hook*. Checking `other`
-/// here (rather than only in whichever arm happens to run first) keeps the two
+/// transverse marker — *including the other lifecycle hooks*. Checking `others`
+/// here (rather than only in whichever arm happens to run first) keeps the
 /// conflict sets symmetric by construction, independent of arm order.
 ///
 /// Returns the marker-stripped attributes when the method carried `marker` (the
@@ -321,7 +328,7 @@ fn classify_lifecycle_hook(
     sig: &syn::Signature,
     all_attrs: &[syn::Attribute],
     marker: &str,
-    other: &str,
+    others: &[&str],
     combined_msg: &str,
     intercept_msg: &str,
 ) -> syn::Result<Option<Vec<syn::Attribute>>> {
@@ -334,7 +341,9 @@ fn classify_lifecycle_hook(
         || extract_ws_attr(all_attrs)?.is_some()
         || extract_async_exec(all_attrs)?.is_some()
         || extract_route_kind(all_attrs)?.is_some()
-        || all_attrs.iter().any(|a| a.path().is_ident(other));
+        || all_attrs
+            .iter()
+            .any(|a| others.iter().any(|o| a.path().is_ident(o)));
     if combined {
         return Err(syn::Error::new(sig.ident.span(), combined_msg));
     }
@@ -368,6 +377,7 @@ fn reject_unsupported_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
         "async_exec",
         "post_construct",
         "pre_destroy",
+        "on_start",
         "request_helper",
     ];
     for attr in attrs {
@@ -429,6 +439,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // swallow them silently.
     let post_construct_methods = crate::codegen::transverse::scan_post_construct_methods(&item)?;
     let pre_destroy_methods = crate::codegen::transverse::scan_pre_destroy_methods(&item)?;
+    let on_start_methods = crate::codegen::transverse::scan_on_start_methods(&item)?;
 
     // Classify methods
     let mut route_methods = Vec::new();
@@ -467,11 +478,11 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     &method.sig,
                     &all_attrs,
                     "post_construct",
-                    "pre_destroy",
+                    &["pre_destroy", "on_start"],
                     "#[post_construct] cannot be combined with a route, #[scheduled], \
-                     #[consumer], #[sse], #[ws], #[async_exec], or #[pre_destroy] on the \
-                     same method — it is a plain lifecycle hook that runs once after the \
-                     graph resolves",
+                     #[consumer], #[sse], #[ws], #[async_exec], #[pre_destroy], or \
+                     #[on_start] on the same method — it is a plain lifecycle hook that \
+                     runs once after the graph resolves",
                     "#[intercept] on a #[post_construct] method is not supported — a plain \
                      lifecycle hook has no dispatch wrapper to run the interceptor chain",
                 )? {
@@ -486,11 +497,32 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     &method.sig,
                     &all_attrs,
                     "pre_destroy",
-                    "post_construct",
+                    &["post_construct", "on_start"],
                     "#[pre_destroy] cannot be combined with a route, #[scheduled], \
-                     #[consumer], #[sse], #[ws], #[async_exec], or #[post_construct] on the \
-                     same method — it is a plain disposal hook that runs once at shutdown",
+                     #[consumer], #[sse], #[ws], #[async_exec], #[post_construct], or \
+                     #[on_start] on the same method — it is a plain disposal hook that \
+                     runs once at shutdown",
                     "#[intercept] on a #[pre_destroy] method is not supported — a plain \
+                     lifecycle hook has no dispatch wrapper to run the interceptor chain",
+                )? {
+                    method.attrs = attrs;
+                    other_methods.push(method);
+                    continue;
+                }
+
+                // `#[on_start]` — a plain startup observer. Same combination /
+                // param rules as the two hooks above; it runs at boot, once the
+                // whole graph and every controller core exist.
+                if let Some(attrs) = classify_lifecycle_hook(
+                    &method.sig,
+                    &all_attrs,
+                    "on_start",
+                    &["post_construct", "pre_destroy"],
+                    "#[on_start] cannot be combined with a route, #[scheduled], \
+                     #[consumer], #[sse], #[ws], #[async_exec], #[post_construct], or \
+                     #[pre_destroy] on the same method — it is a plain startup observer \
+                     that runs once at boot",
+                    "#[intercept] on a #[on_start] method is not supported — a plain \
                      lifecycle hook has no dispatch wrapper to run the interceptor chain",
                 )? {
                     method.attrs = attrs;
@@ -799,6 +831,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         async_exec_methods,
         post_construct_methods,
         pre_destroy_methods,
+        on_start_methods,
         request_helper_methods,
         other_methods,
     })

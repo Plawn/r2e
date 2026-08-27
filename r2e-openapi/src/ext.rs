@@ -1,8 +1,12 @@
 use crate::{openapi_routes, OpenApiConfig};
-use r2e_core::di::meta::RouteInfo;
-use r2e_core::Plugin;
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 
 /// Plugin that adds OpenAPI spec generation and optional documentation UI.
+///
+/// It mounts `/openapi.json` (and, with `with_docs_ui(true)`, `/docs`) from a
+/// **Routes-stage** effect: the spec is built once every controller has
+/// registered, so install order does not matter — no more "install this one
+/// last".
 ///
 /// # Example
 ///
@@ -10,12 +14,12 @@ use r2e_core::Plugin;
 /// use r2e_openapi::{OpenApiPlugin, OpenApiConfig};
 ///
 /// AppBuilder::new()
-///     .build_state()
-///     .await
-///     .with(OpenApiPlugin::new(
+///     .plugin(OpenApiPlugin::new(
 ///         OpenApiConfig::new("My API", "1.0.0")
 ///             .with_docs_ui(true),
 ///     ))
+///     .build_state()
+///     .await
 /// ```
 pub struct OpenApiPlugin {
     config: OpenApiConfig,
@@ -29,11 +33,22 @@ impl OpenApiPlugin {
 }
 
 impl Plugin for OpenApiPlugin {
-    fn install<T: Clone + Send + Sync + 'static>(
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
         self,
-        app: r2e_core::AppBuilder<T>,
-    ) -> r2e_core::AppBuilder<T> {
+        _deps: Self::Deps,
+        _config: Option<Self::Config>,
+        ctx: &mut PluginBuildContext,
+    ) -> Result<Self::Provided, PluginBuildError> {
         let config = self.config;
-        app.with_meta_consumer::<RouteInfo, _>(move |routes| openapi_routes::<T>(config, routes))
+        ctx.after_routes(move |routes| {
+            let router = openapi_routes::<()>(config, routes.routes());
+            routes.register_routes(router);
+        });
+        Ok(())
     }
 }

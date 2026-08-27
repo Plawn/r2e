@@ -1,5 +1,5 @@
 //! NoState (pre-state) phase of [`AppBuilder`]: bean/producer registration,
-//! config loading, pre-state plugins, and the `build_state` transition.
+//! config loading, plugin installation, and the `build_state` transition.
 
 use super::*;
 
@@ -16,7 +16,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 bean_registry: BeanRegistry::new(),
                 deferred_actions: Vec::new(),
                 plugin_data: HashMap::new(),
-                last_plugin_name: None,
+                routes_effects: Vec::new(),
                 normalize_path: false,
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
@@ -41,6 +41,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
             post_construct_registrations: Vec::new(),
+            on_start_hooks: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
@@ -55,7 +56,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
 
 impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Mutable access to the bean registry (for internal use by the blanket
-    /// `PreStatePlugin` impl to deposit a plugin's provided beans).
+    /// `Plugin` impl to deposit a plugin's provided beans).
     pub(crate) fn bean_registry_mut(&mut self) -> &mut BeanRegistry {
         &mut self.shared.bean_registry
     }
@@ -71,8 +72,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     }
 
     /// [`with_updated_types`](Self::with_updated_types), but also rewriting
-    /// the pending-module list. Internal — only `register_module` grows `Mods`.
-    fn with_updated_types_full<NewP, NewR, NewMods>(
+    /// the pending-module list. Internal — `register_module` and plugins that
+    /// ship controllers are what grow `Mods`.
+    pub(crate) fn with_updated_types_full<NewP, NewR, NewMods>(
         self,
     ) -> AppBuilder<NoState, NewP, NewR, NewMods> {
         AppBuilder {
@@ -87,6 +89,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             meta_consumers: self.meta_consumers,
             consumer_registrations: self.consumer_registrations,
             post_construct_registrations: self.post_construct_registrations,
+            on_start_hooks: self.on_start_hooks,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             plugin_async_shutdown_hooks: self.plugin_async_shutdown_hooks,
@@ -483,7 +486,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// [`register_deco_fill`](crate::beans::BeanRegistry::register_deco_fill)
     /// (TypeId-deduped, run once against the final graph). Everything else the
     /// pin skips stays skipped — the bean's `#[scheduled]` tasks are still NOT
-    /// collected and its `#[post_construct]` still does NOT run.
+    /// collected and its `#[post_construct]` / `#[on_start]` still do NOT run.
     ///
     /// ```ignore
     /// TestApp::boot_with::<MyApp>(|b| {
@@ -620,14 +623,16 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self
     }
 
-    /// Install a pre-state plugin that provides beans to the graph.
+    /// Install a [`Plugin`](crate::Plugin) — the one and only plugin
+    /// install site.
     ///
-    /// Accepts any [`PreStatePlugin`](crate::PreStatePlugin) (the normal
-    /// authoring surface) or [`RawPreStatePlugin`] (rare, full builder
-    /// access). A `PreStatePlugin`'s [`build`](crate::PreStatePlugin::build)
-    /// runs **inside** `build_state()` as a node of the bean graph:
-    /// dependencies arrive constructed, config arrives loaded, and each
-    /// element of its `Provided` tuple becomes an ordinary bean.
+    /// Accepts any [`Plugin`](crate::Plugin) (the normal authoring surface) or
+    /// [`PluginInstall`] (rare, full builder access). A `Plugin`'s
+    /// [`build`](crate::Plugin::build) runs **inside** `build_state()` as a
+    /// node of the bean graph: dependencies arrive constructed, config arrives
+    /// loaded, and each element of its `Provided` tuple becomes an ordinary
+    /// bean. Its effects apply in three stages (Graph → Routes → Finalize) and
+    /// its `Controllers` are registered alongside feature-module controllers.
     ///
     /// **Call order does not matter**: `.plugin()` before or after
     /// `load_config()` / `.provide()` / `.register()` behaves identically —
@@ -645,7 +650,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///     .build_state()
     ///     .await
     /// ```
-    pub fn plugin<Pl: RawPreStatePlugin>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
+    pub fn plugin<Pl: PluginInstall>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
         // Nothing is checked at the call site: the plugin's `Deps` are appended
@@ -653,30 +658,14 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // `build_state()`, so a dependency may be provided or registered after
         // this call.
         R: TAppend<Pl::Required>,
-    {
-        plugin.install(self)
-    }
-
-    /// Alias for [`.plugin()`](Self::plugin) for pre-state plugins.
-    ///
-    /// # Deprecated
-    ///
-    /// Use [`.plugin()`](Self::plugin) instead.
-    #[deprecated(since = "0.2.0", note = "Use .plugin() instead")]
-    pub fn with_plugin<Pl: RawPreStatePlugin>(
-        self,
-        plugin: Pl,
-    ) -> WithPluginInstalled<Pl, P, R, Mods>
-    where
-        P: TAppend<Pl::Provisions>,
-        R: TAppend<Pl::Required>,
+        Pl::Controllers: PushPluginCtrls<Pl, Mods>,
     {
         plugin.install(self)
     }
 
     /// Add a deferred action to be executed after state resolution.
     ///
-    /// This is the low-level escape hatch. [`PreStatePlugin`] implementations
+    /// This is the low-level escape hatch. [`Plugin`](crate::Plugin) implementations
     /// usually reach for the effect sugar on
     /// [`PluginBuildContext`](crate::plugin::PluginBuildContext)
     /// (`ctx.add_layer(..)`, `ctx.on_shutdown(..)`, …) from inside `build`
@@ -685,10 +674,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// # Example (sugar — preferred)
     ///
     /// ```ignore
-    /// impl PreStatePlugin for MyPlugin {
+    /// impl Plugin for MyPlugin {
     ///     type Provided = (MyToken,);
     ///     type Deps = ();
     ///     type Config = ();
+    ///     type Controllers = ();
     ///
     ///     async fn build(
     ///         self,
@@ -735,24 +725,39 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> ModuleRegistered<M, P, R, Mods>
     where
         M: FeatureModule,
+        M::Plugins: ModulePlugins<P, R, Mods>,
         M::Providers: BeanList,
-        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        <M::Providers as BeanList>::Provided: TAppend<ModulePluginProvisions<M>>,
+        ModuleProvided<M>: TAppend<M::Imports>,
         M::Controllers: ControllerDepsList,
         // Encapsulation: provider deps, exports, and controller deps must
-        // resolve inside the module scope (Provided ∪ Imports).
+        // resolve inside the module scope (Provided ∪ brought-plugin beans ∪
+        // Imports).
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
-        // Every required plugin must already be installed (its provisions in P).
-        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
-        M::Exports: TAppend<P>,
-        R: TAppend<M::Imports>,
+        // Every required plugin must already be installed — in the *post-fold*
+        // provision list, so a module may both bring and require a plugin.
+        M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
+        M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
+        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     {
-        <M::Providers as BeanList>::register_into(&mut self.shared.bean_registry);
+        // The plugins the module brings are installed FIRST, exactly as
+        // `.plugin(..)` would install them (their provisions join the
+        // app-global P, so the module's own providers can be scope-checked
+        // against them), attributed to this module so a double install names
+        // both owners.
+        self.shared
+            .bean_registry
+            .set_plugin_owner(Some(crate::plugin::plugin_action_name::<M>()));
+        let mut app = <M::Plugins as ModulePlugins<P, R, Mods>>::install_all(M::plugins(), self);
+        app.bean_registry_mut().set_plugin_owner(None);
+
+        <M::Providers as BeanList>::register_into(app.bean_registry_mut());
         // Exports join P, imports join R, and M is queued on Mods. Provider
         // -internal deps are consumed by the module-local check above — they
         // must NOT join the global R (private providers are absent from P).
-        self.with_updated_types_full()
+        app.with_updated_types_full()
     }
 
     /// Resolve the bean dependency graph and build the application state.
@@ -828,6 +833,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let scheduled_sources = registry.take_scheduled_sources();
         let event_subscribers = registry.take_event_subscribers();
         let service_sources = registry.take_service_sources();
+        let on_start_hooks = registry.take_on_start_hooks();
         // Grab the deferred-fill graph handle before `resolve()` consumes the
         // registry; filled on every **successful** exit path below, right after
         // the resolved context lands in its final `Arc`. Plugin build factories
@@ -872,7 +878,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                         AppBuilder::from_pre(self.shared, cached_state, cached_ctx)
                             .collect_service_sources(service_sources)
                             .collect_bean_scheduled_tasks(scheduled_sources)
-                            .collect_bean_subscribers(event_subscribers),
+                            .collect_bean_subscribers(event_subscribers)
+                            .collect_bean_on_start(on_start_hooks),
                     ));
                 }
                 // Same graph but the provision list changed shape (e.g. a
@@ -932,7 +939,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 AppBuilder::from_pre(self.shared, state, ctx)
                     .collect_service_sources(service_sources)
                     .collect_bean_scheduled_tasks(scheduled_sources)
-                    .collect_bean_subscribers(event_subscribers),
+                    .collect_bean_subscribers(event_subscribers)
+                    .collect_bean_on_start(on_start_hooks),
             ));
         }
 
@@ -947,7 +955,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             AppBuilder::from_pre(self.shared, state, ctx)
                 .collect_service_sources(service_sources)
                 .collect_bean_scheduled_tasks(scheduled_sources)
-                .collect_bean_subscribers(event_subscribers),
+                .collect_bean_subscribers(event_subscribers)
+                .collect_bean_on_start(on_start_hooks),
         ))
     }
 }

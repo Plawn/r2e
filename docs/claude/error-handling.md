@@ -171,7 +171,7 @@ async fn error_enrichment(req: Request, next: Next) -> Response {
 }
 ```
 
-**Automatic 5xx logging:** The `ErrorHandling` plugin (applied via `.with(ErrorHandling)`) wraps the router with `CatchPanicLayer` and returns a 500 JSON response on panics. For custom 5xx logging, add a middleware layer that inspects response status codes.
+**Automatic 5xx logging:** The `ErrorHandling` plugin (installed via `.plugin(ErrorHandling)`) wraps the router with `CatchPanicLayer` and returns a 500 JSON response on panics. For custom 5xx logging, add a middleware layer that inspects response status codes.
 
 **Key files:** `r2e-core/src/error.rs` (HttpError, `error_response()`, `map_error!`, `HttpErrorExt`), `r2e-macros/src/derives/api_error_derive.rs` (derive implementation), `r2e-core/tests/api_error.rs` (comprehensive tests)
 

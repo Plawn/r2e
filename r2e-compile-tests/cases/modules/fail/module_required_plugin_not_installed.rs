@@ -4,17 +4,18 @@
 //! one of the plugin's internal handle types.
 
 use r2e::prelude::*;
-use r2e::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
 #[derive(Clone)]
 pub struct PluginBean;
 
 pub struct MarkerPlugin;
 
-impl PreStatePlugin for MarkerPlugin {
+impl Plugin for MarkerPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -34,6 +35,9 @@ impl FeatureModule for NeedsPluginModule {
     type Exports = r2e::type_list::TNil;
     type Imports = r2e::type_list::TNil;
     type RequiredPlugins = (MarkerPlugin,);
+    type Plugins = ();
+
+    fn plugins() {}
 }
 
 fn main() {

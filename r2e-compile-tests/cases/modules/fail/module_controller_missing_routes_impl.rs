@@ -25,6 +25,9 @@ impl FeatureModule for BadModule {
     type Controllers = (PlainService,);
     type Exports = TCons<Svc, TNil>;
     type Imports = TNil; type RequiredPlugins = ();
+    type Plugins = ();
+
+    fn plugins() {}
 }
 
 fn main() {

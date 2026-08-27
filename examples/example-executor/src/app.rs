@@ -124,10 +124,10 @@ impl App for ExecutorApp {
             .load_config::<()>()
             .plugin(Executor)
             .provide(counter)
+            .plugin(Health)
+            .plugin(Cors::permissive())
             .build_state()
             .await
-            .with(Health)
-            .with(Cors::permissive())
             .spawn_service::<TickWorker>()
             .register_controller::<ReportController>()
     }

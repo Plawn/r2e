@@ -44,7 +44,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::rt::sync::{Notify, Semaphore};
 use r2e_core::rt::{self, CancelToken};
 
@@ -370,7 +370,7 @@ impl PoolExecutor {
 /// must exist whether or not the plugin is "enabled". Disabling it therefore only
 /// drops the plugin's *surface* effects — and this plugin has none: its single
 /// effect is the graceful drain, which is a cleanup hook and survives the gate by
-/// design (see `PreStatePlugin` § Disabled plugins).
+/// design (see `Plugin` § Disabled plugins).
 ///
 /// What `enabled = false` buys you is nothing but a log line, so the build logs a
 /// warning instead of silently pretending the pool went away. A pool that is never
@@ -379,10 +379,11 @@ impl PoolExecutor {
 /// `executor.max-concurrent`.
 pub struct Executor;
 
-impl PreStatePlugin for Executor {
+impl Plugin for Executor {
     type Provided = (PoolExecutor,);
     type Deps = ();
     type Config = ExecutorConfig;
+    type Controllers = ();
     const CONFIG_PREFIX: Option<&'static str> = Some("executor");
 
     async fn build(

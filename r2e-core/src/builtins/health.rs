@@ -164,6 +164,113 @@ impl Default for HealthBuilder {
     }
 }
 
+/// The health-check registry: a **bean** the
+/// [`AdvancedHealth`](crate::builtins::AdvancedHealth) plugin provides so any
+/// other plugin can contribute a check.
+///
+/// `AdvancedHealth` declares `type Provided = (HealthRegistry,)`; a plugin that
+/// wants to publish a probe declares `type Deps = (HealthRegistry,)` and pushes
+/// into it from its own `build`:
+///
+/// ```ignore
+/// impl Plugin for DataSourceHealth {
+///     type Provided = ();
+///     type Deps = (DbPool, HealthRegistry);
+///     type Config = ();
+///     type Controllers = ();
+///
+///     async fn build(self, (pool, health): Self::Deps, _c: Option<()>, _ctx: &mut PluginBuildContext)
+///         -> Result<(), PluginBuildError>
+///     {
+///         health.register(PingIndicator { pool });
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// Order does not matter: every plugin `build` runs before the health routes
+/// are assembled (the plugin mounts them in the Routes stage), so a check
+/// registered by a plugin installed *after* `AdvancedHealth` is still picked
+/// up. Contributions made after the router is built are ignored.
+#[derive(Clone, Default)]
+pub struct HealthRegistry {
+    inner: Arc<std::sync::Mutex<RegistryInner>>,
+}
+
+#[derive(Default)]
+struct RegistryInner {
+    checks: Vec<Box<dyn HealthIndicatorErased>>,
+    cache_ttl: Option<Duration>,
+}
+
+impl std::fmt::Debug for HealthRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HealthRegistry")
+            .field("checks", &self.names())
+            .finish()
+    }
+}
+
+impl HealthRegistry {
+    /// An empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn with_inner<R>(&self, f: impl FnOnce(&mut RegistryInner) -> R) -> R {
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(&mut guard)
+    }
+
+    /// Contribute a health check.
+    pub fn register<H: HealthIndicator>(&self, indicator: H) -> &Self {
+        self.register_boxed(Box::new(indicator))
+    }
+
+    /// Contribute an already-erased health check.
+    pub fn register_boxed(&self, indicator: Box<dyn HealthIndicatorErased>) -> &Self {
+        self.with_inner(|i| i.checks.push(indicator));
+        self
+    }
+
+    /// Set the TTL health results are cached for (last writer wins).
+    pub fn set_cache_ttl(&self, ttl: Duration) -> &Self {
+        self.with_inner(|i| i.cache_ttl = Some(ttl));
+        self
+    }
+
+    /// The TTL health results are cached for, if any.
+    pub fn cache_ttl(&self) -> Option<Duration> {
+        self.with_inner(|i| i.cache_ttl)
+    }
+
+    /// The names of the checks registered so far, in registration order.
+    pub fn names(&self) -> Vec<String> {
+        self.with_inner(|i| i.checks.iter().map(|c| c.name().to_string()).collect())
+    }
+
+    /// How many checks are registered.
+    pub fn len(&self) -> usize {
+        self.with_inner(|i| i.checks.len())
+    }
+
+    /// Whether no check is registered.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Take every registered check out of the registry and freeze it into a
+    /// [`HealthState`]. Called once, when the health routes are mounted.
+    #[doc(hidden)]
+    pub fn into_state(&self) -> HealthState {
+        let (checks, cache_ttl) = self.with_inner(|i| (std::mem::take(&mut i.checks), i.cache_ttl));
+        HealthState::new(checks, cache_ttl)
+    }
+}
+
 /// Shared state for health check handlers.
 #[doc(hidden)]
 pub struct HealthState {

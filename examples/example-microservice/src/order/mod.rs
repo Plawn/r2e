@@ -25,17 +25,17 @@ impl App for OrderApp {
             .load_config::<()>()
             .register::<services::ProductClient>()
             .register::<services::OrderService>()
-            .build_state()
-            .await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(Tracing)
-            .with(ErrorHandling)
-            .with(OpenApiPlugin::new(
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(Tracing)
+            .plugin(ErrorHandling)
+            .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Order Service", "1.0.0")
                     .with_description("Order management microservice")
                     .with_docs_ui(true),
             ))
+            .build_state()
+            .await
             .register_controller::<OrderController>()
     }
 }

@@ -248,12 +248,16 @@ Producer params can request a runtime-updatable config handle:
 
 ```rust
 #[producer(start)]
-async fn create_pool(
-    #[live_config("database.url")] url: LiveConfig<String>,
-) -> DbPool<sqlx::Postgres> {
-    DbPool::connect(url).await.unwrap()
+async fn create_client(
+    #[live_config("search.endpoint")] endpoint: LiveConfig<String>,
+) -> SearchClient {
+    SearchClient::connect(endpoint).await.unwrap()
 }
 ```
+
+(A database pool is the one live-config consumer you do **not** hand-roll: the
+datasource plugin — `.plugin(SqlxDataSource::<sqlx::Postgres>::new())` — reads
+`datasource.url` as a live value and hands back a rotating `DbPool`.)
 
 `#[live_config("...")]` injects `LiveConfig<T>` from the automatically provided
 `LiveConfigRegistry` bean, so `load_config` must have run before the producer is
@@ -563,6 +567,60 @@ The `#[bean]` macro generates:
 | Database migrations | Periodic tasks (use `#[scheduled]`) |
 | Validation that needs other beans | Simple field init |
 
+## `#[on_start]` — startup observers
+
+The phase **after** `#[post_construct]`: hooks that run at boot once the whole
+bean graph **and** every controller core exist, before anything is served. Works
+on `#[bean]` impls **and** `#[routes]` controller impls, with the same signature
+rules (`&self` only, sync or async, `()` or `Result<(), Box<dyn Error + Send +
+Sync>>`) and the same rejection matrix as `#[post_construct]` / `#[pre_destroy]`
+(a route / `#[scheduled]` / `#[consumer]` / `#[async_exec]` / another lifecycle
+marker / `#[intercept]` on the same method, or extra params, is a compile error).
+
+```rust
+#[bean]
+impl SearchIndex {
+    pub fn new(repo: DocRepo) -> Self { /* ... */ }
+
+    #[on_start(order = -10)]           // ascending; default 0
+    async fn warm(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.repo.prime_index().await?;
+        Ok(())
+    }
+}
+```
+
+Semantics:
+
+- **When:** after all `#[post_construct]` hooks and consumer registrations,
+  **before** the plugins' serve hooks, before the builder's `.on_start(...)`
+  closures, and before the TCP bind.
+- **Order:** `order = N` is an `i32`, default `0`; all hooks (beans +
+  controllers) are collected into one list, sorted **ascending** with a stable
+  sort — ties keep registration order, and bean hooks precede controller hooks at
+  equal `order` because the graph is built first. Several `#[on_start]` methods
+  per impl are allowed and keep declaration order.
+- **Err:** **aborts boot** — remaining hooks are skipped, started work is rolled
+  back (`abort_started_work`) and the error is propagated exactly like a builder
+  `.on_start` error.
+- **Override skip:** the hook reads its bean by value from the resolved graph, so
+  a pinned `override_bean` is the instance it runs against; pinning the observing
+  bean itself skips its registration, so the hook does not run at all (same rule
+  as `#[post_construct]` / `#[scheduled]`).
+- **Wiring:** `#[bean]` generates `impl OnStart for T`
+  (`fn on_start_hooks(&self) -> Vec<(i32, OnStartHook)>`) + an `after_register`
+  calling `BeanRegistry::register_on_start::<Self>()`; the builder drains them at
+  `build_state()` (`take_on_start_hooks` → `collect_bean_on_start`). A controller
+  core is not `Clone`, so it cannot impl `OnStart`; the generated
+  `Controller::on_start(core)` returns the same `(i32, OnStartHook)` pairs from
+  the core `Arc`, queued at `register_controller`.
+- **`#[bean(lazy)]`:** rejected (a lazy bean has no instance at registration
+  time to observe from) — same rule as `#[post_construct]` / `#[pre_destroy]`.
+- **Test boot:** unlike `#[pre_destroy]`, `#[on_start]` **does** run under
+  `build_with_consumers` / `TestApp::boot` — booting a test app is a real
+  startup. (There is no shutdown in a test boot, hence the asymmetry.) A failing
+  hook panics there, since `build_with_consumers` is infallible.
+
 ## `#[pre_destroy]` — disposal hooks
 
 The `@PreDestroy` counterpart of `#[post_construct]`, on `#[bean]` impls **and**
@@ -653,8 +711,8 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 - `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
 - `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
 - `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
-- `r2e-macros/src/attrs/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]`/`#[async_exec]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper / pool-submission codegen to the shared `codegen/transverse.rs`
-- `r2e-macros/src/codegen/transverse.rs` — shared "transverse" (off-request) codegen reused by **both** `#[bean]` and `#[routes]` controller cores: `scan_post_construct_methods` + `post_construct_impl`, `scheduled_source_impl`/`scheduled_task_defs`, `event_subscriber_impl`/`event_subscribe_blocks`, `deco_container_and_fill`, `intercepted_dispatch_wrapper`, `async_exec_method` (parameterized over impl-target type and decorator-slot access)
+- `r2e-macros/src/attrs/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]`/`#[pre_destroy]`/`#[on_start]`/`#[async_exec]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper / pool-submission codegen to the shared `codegen/transverse.rs`
+- `r2e-macros/src/codegen/transverse.rs` — shared "transverse" (off-request) codegen reused by **both** `#[bean]` and `#[routes]` controller cores: `scan_post_construct_methods` + `post_construct_impl`, `scan_on_start_methods` + `on_start_impl`/`on_start_pushes`, `scheduled_source_impl`/`scheduled_task_defs`, `event_subscriber_impl`/`event_subscribe_blocks`, `deco_container_and_fill`, `intercepted_dispatch_wrapper`, `async_exec_method` (parameterized over impl-target type and decorator-slot access)
 - `r2e-macros/src/derives/bean_derive.rs` — `#[derive(Bean)]` (`#[inject]` + `#[config]` field support, `Option<T>` detection)
 - `r2e-macros/src/attrs/producer_attr.rs` — `#[producer]` macro (`Option<T>` detection)
 - `r2e-macros/src/util/type_utils.rs` — `unwrap_option_type()` helper shared by all bean macros

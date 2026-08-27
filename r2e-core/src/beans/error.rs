@@ -9,6 +9,14 @@ pub enum BeanError {
     MissingDependency { bean: String, dependency: String },
     /// The same type was registered more than once.
     DuplicateBean { type_name: String },
+    /// The same plugin was installed more than once — by the app and a
+    /// module, or by two modules. A plugin has exactly one owner; every other
+    /// module that needs it declares `requires_plugins(..)` instead.
+    DuplicatePlugin {
+        plugin: &'static str,
+        /// Rendered owner labels in install order, e.g. `["app", "module 'Billing'"]`.
+        owners: Vec<String>,
+    },
     /// One or more config keys required by beans are missing.
     MissingConfigKeys(crate::config::ConfigValidationError),
     /// A post-construct hook failed.
@@ -42,6 +50,26 @@ impl fmt::Display for BeanError {
                      register the base with .with_default_bean() (last-wins); in \
                      tests, pin a replacement with .override_bean()",
                     type_name
+                )
+            }
+            BeanError::DuplicatePlugin { plugin, owners } => {
+                let rendered = match owners.split_last() {
+                    Some((last, [])) => format!("by {last}"),
+                    Some((last, head)) => format!(
+                        "by {} and by {last}",
+                        head.iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", by ")
+                    ),
+                    None => "more than once".to_string(),
+                };
+                write!(
+                    f,
+                    "Plugin '{plugin}' is installed {rendered}. A plugin has exactly one \
+                     owner — the app or ONE module. Use `requires_plugins({plugin})` in \
+                     every module that only needs it, and keep the single `.plugin({plugin})` \
+                     / `plugins({plugin} = ..)` install."
                 )
             }
             BeanError::MissingConfigKeys(err) => {

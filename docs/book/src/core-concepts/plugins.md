@@ -4,17 +4,18 @@ Plugins extend R2E applications with reusable middleware, routes, and services. 
 
 ## Built-in plugins
 
-Install plugins with `.with(plugin)` on the builder (after `build_state()`):
+Install plugins with `.plugin(p)` on the builder — **always before**
+`build_state()`. There is only one plugin kind and one install call:
 
 ```rust
 AppBuilder::new()
+    .plugin(Health)
+    .plugin(Cors::permissive())
+    .plugin(Tracing)
+    .plugin(ErrorHandling)
+    .plugin(NormalizePath)
     .build_state()
     .await
-    .with(Health)
-    .with(Cors::permissive())
-    .with(Tracing)
-    .with(ErrorHandling)
-    .with(NormalizePath)
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
@@ -39,9 +40,10 @@ AppBuilder::new()
 | `Prometheus` | Prometheus metrics at `/metrics` |
 | `EmbeddedFrontend` | Embedded static file serving with SPA fallback (feature `static`) |
 
-### Pre-state plugins
+### Plugins that provide beans
 
-Some plugins need to install before `build_state()`. Use `.plugin()` instead of `.with()`:
+Many plugins publish beans into the graph, which other beans and controllers
+then `#[inject]`:
 
 ```rust
 AppBuilder::new()
@@ -59,7 +61,7 @@ in the graph fails at `build_state()` with the guided "missing
 checked against the final provision list, so the order between the two plugins does
 not matter.
 
-| Pre-state Plugin | Description |
+| Plugin | Description |
 |-----------------|-------------|
 | `Executor` | Managed task pool (`PoolExecutor`) with bounded concurrency and graceful drain |
 | `Scheduler` | Background task scheduling runtime (requires `Executor`; ticks run on its pool) |
@@ -83,10 +85,15 @@ anything injecting the beans keeps working. See
 [Custom Plugins](../advanced/custom-plugins.md#enabling-and-disabling-a-plugin-from-config)
 for the full semantics.
 
-## Requiring a plugin from a feature module
+## Feature modules and plugins
 
-A feature module can declare the plugins it depends on so a missing plugin is a
-clear compile error naming the plugin, instead of a confusing missing-bean error:
+A feature module either **requires** a plugin someone else installs, or
+**brings** the plugin itself.
+
+### Require
+
+Declaring the plugins a module depends on turns a missing plugin into a clear
+compile error naming the plugin, instead of a confusing missing-bean error:
 
 ```rust
 #[module(
@@ -96,21 +103,72 @@ clear compile error naming the plugin, instead of a confusing missing-bean error
 pub struct JobsModule;
 ```
 
-If `Scheduler` is not `.plugin(Scheduler)`-ed before `register_module::<JobsModule>()`,
-the build fails with a message pointing at `.plugin(Scheduler)`.
+If `Scheduler` is not installed before `register_module::<JobsModule>()` — by
+the app, by an earlier module, or by this module itself — the build fails with a
+message pointing at `.plugin(Scheduler)`.
+
+### Bring
+
+A module that owns a piece of infrastructure can ship the plugin with it, so the
+app only registers the module:
+
+```rust
+#[module(
+    providers(ItemRepo),
+    controllers(ItemController),
+    exports(ItemRepo),
+    plugins(SqlxDataSource<Sqlite> = SqlxDataSource::<Sqlite>::new()),
+)]
+pub struct DataModule;
+
+AppBuilder::new()
+    .register_module::<DataModule>()   // installs the datasource plugin too
+```
+
+Each entry is written `Type = expr`: the type grows the provision list at
+compile time, the expression is the instance to install. Installing happens
+exactly as a `.plugin(..)` at the `register_module` call site would — the
+plugin's beans become available to the whole app (they need **no** `exports(..)`
+entry, and must not be listed in one), its controllers are mounted, and its
+effects apply at that position in install order.
+
+### One owner per plugin
+
+A plugin is installed by exactly one owner: the app **or** one module. Every
+other module that merely needs it uses `requires_plugins`. Installing the same
+plugin twice is a startup error naming both owners:
+
+```text
+Plugin 'Scheduler' is installed by app and by module 'JobsModule'.
+A plugin has exactly one owner — the app or ONE module. Use
+`requires_plugins(Scheduler)` in every module that only needs it, and keep the
+single `.plugin(Scheduler)` / `plugins(Scheduler = ..)` install.
+```
 
 ## Plugin ordering
 
-Plugins are installed in registration order. Some have ordering requirements:
+Nothing has to be installed "last" any more. Every plugin registers its effects
+into one of three stages, and the stage — not the install position — decides
+when the effect is applied:
+
+| Stage | What goes there | Applied |
+|---|---|---|
+| **Graph** | Tower layers, plugin data, serve hooks | right after the bean graph resolves |
+| **Routes** | anything that needs the complete route table (OpenAPI) | after **every** controller is registered |
+| **Finalize** | transport-level wraps (a gRPC multiplexer) | outermost, after every HTTP layer |
+
+Within a stage, effects apply in install order, and a later layer ends up
+**outside** an earlier one. Practical consequences:
 
 - `NormalizePath` can be installed at any point: it is applied at build time as a pre-routing URI rewrite wrapping the whole router
-- `EmbeddedFrontend` should be installed last (plugins may use the `should_be_last()` hint — R2E warns if plugins are added after one that sets it)
-- `Tracing` should be early to capture all requests
-- `ErrorHandling` should be after `Tracing` but before route registration
+- `EmbeddedFrontend` and `OpenApiPlugin` can be installed anywhere — their routes are mounted from a Routes-stage effect
+- `Tracing` early keeps it inside (and therefore observing) later layers
+- `ErrorHandling`'s panic-to-JSON layer is installed by the framework as the outermost HTTP layer regardless
 
 ## Custom Tower layers
 
-For Tower middleware that doesn't need the full plugin API, use `.with_layer()`:
+For Tower middleware that doesn't need the full plugin API, use `.with_layer()`
+on the built app:
 
 ```rust
 use tower_http::timeout::TimeoutLayer;
@@ -124,42 +182,21 @@ AppBuilder::new()
 
 ## Writing custom plugins
 
-### Post-state plugins
-
-Implement the `Plugin` trait for plugins that install after `build_state()`:
-
-```rust
-use r2e::prelude::*; // Plugin, AppBuilder
-
-pub struct MyPlugin;
-
-impl Plugin for MyPlugin {
-    fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
-        // Add routes, layers, or middleware
-        app.register_routes(Router::new().route("/my-endpoint", get(|| async { "Hello from plugin" })))
-    }
-}
-```
-
-`should_be_last()` (default `false`) marks plugins that must be the outermost
-layer — the builder warns if anything is installed after one.
-
-### Pre-state plugins
-
-A pre-state plugin **is one async, fallible factory** for the beans it
+A plugin **is one async, fallible factory** for the beans it
 provides: `build` runs inside `build_state()` as a node of the bean graph.
 `Provided` is a **tuple** of beans — `(A,)` for one, `(A, B)` for several,
 `()` for none — and `build` returns it. No builder generics needed:
 
 ```rust
-use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
+use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
-pub struct MyPreStatePlugin;
+pub struct MyPlugin;
 
-impl PreStatePlugin for MyPreStatePlugin {
+impl Plugin for MyPlugin {
     type Provided = (MyConfig,);
     type Deps = ();          // no dependencies on other beans
     type Config = ();
+    type Controllers = ();   // no controllers shipped by this plugin
 
     async fn build(
         self,
@@ -187,14 +224,15 @@ list at `build_state()`, so the order between `.plugin()`, `.provide()`, and
 ("missing `.provide::<X>()` or `.register::<X>()`").
 
 ```rust
-use r2e::{PreStatePlugin, PluginBuildContext, PluginBuildError};
+use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
 pub struct MetricsExporter;
 
-impl PreStatePlugin for MetricsExporter {
+impl Plugin for MetricsExporter {
     type Provided = (ExporterHandle,);
     type Deps = (MetricsRegistry,);   // factory-built is fine
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -247,18 +285,47 @@ async fn build(
 - `enabled()` — the `<prefix>.enabled` config gate (default `true`)
 - `graph()` — a weak `GraphHandle` on the final resolved graph (fills at the end of a successful `build_state()`; stays readable for the app's whole life and for any tracked task that outlives it — the router, each tracked task and the serving scope own the graph independently, so reads only go `None` once the last owner is gone)
 - `config_raw()` — the loaded `R2eConfig`, if any
-- `add_layer()` / `wrap_router()` — router layers / outermost router transform
-- `store_data()` — type-keyed plugin data for post-state coordination
-- `on_serve()` / `on_shutdown()` / `on_shutdown_async()` — lifecycle hooks
-- `after_build()` — boot-time escape hatch with full-graph access
+- `add_layer()` — Tower layer (**Graph** stage)
+- `store_data()` — type-keyed plugin data for cross-plugin coordination (**Graph**)
+- `on_serve()` — serve-time hook (**Graph**)
+- `after_build()` — boot-time escape hatch with full-graph access (**Graph**)
+- `after_routes()` — runs once **every** controller is registered; read the route
+  registry (`routes.routes()`) and mount routers from it (**Routes** stage)
+- `wrap_router()` — replace the whole router, outside every HTTP layer (**Finalize**)
+- `on_shutdown()` / `on_shutdown_async()` — cleanup hooks (never gated)
 
-Effects are buffered and applied after the graph resolves, **in plugin install
-order** (builds themselves run in dependency order). Disabling the plugin via
-`<prefix>.enabled: false` drops the *surface* effects (layers, routes,
-`on_serve`, plugin data) but keeps the *cleanup* ones (`on_shutdown`,
-`on_shutdown_async`) — `build` still runs, so the beans exist and whatever they
-hold still has to be released; check `ctx.enabled()` and return a cheap, inert
-disabled variant.
+Effects are buffered and applied per stage, **in plugin install order** within a
+stage (builds themselves run in dependency order). Disabling the plugin via
+`<prefix>.enabled: false` drops **all three** surface stages but keeps the
+*cleanup* hooks (`on_shutdown`, `on_shutdown_async`) — `build` still runs, so the
+beans exist and whatever they hold still has to be released; check
+`ctx.enabled()` and return a cheap, inert disabled variant.
+
+### Shipping controllers from a plugin
+
+A plugin can declare `#[controller]` types instead of hand-assembling a
+`Router`, which gets it guards, `#[roles]`, OpenAPI metadata and extractors for
+free:
+
+```rust
+#[controller(path = "/metrics")]
+pub struct MetricsController {
+    #[inject] registry: MetricsRegistry,   // the plugin's own provided bean
+}
+
+impl Plugin for Metrics {
+    type Provided = (MetricsRegistry,);
+    type Deps = ();
+    type Config = ();
+    type Controllers = (MetricsController,);
+    // ...
+}
+```
+
+Plugin controllers are registered by `build_state()`, so their routes are part
+of the route registry every `after_routes` effect sees. Their `#[inject]` fields
+are checked against the final provision list at `build_state()` — a missing bean
+is a compile error naming the plugin.
 
 There is also a rare pre-graph hook, `fn setup(&mut self, &mut
 PluginSetupContext)` (default no-op), for the few things that must happen at
@@ -266,7 +333,7 @@ PluginSetupContext)` (default no-op), for the few things that must happen at
 plugin is disabled. It cannot register layers, routes or hooks: setup actions
 are ungated, so allowing them would let a disabled plugin serve traffic.
 
-The lower-level `RawPreStatePlugin` trait (`#[doc(hidden)]`, HList-based) still
+The lower-level `PluginInstall` trait (`#[doc(hidden)]`, HList-based) still
 backs `.plugin()` via a blanket impl, but you only need to implement it directly
 when a plugin must call arbitrary builder methods (`.register()`, `.provide()`,
 …) itself — a rare escape hatch.

@@ -24,12 +24,12 @@ use sqlx::{AssertSqlSafe, Connection};
 /// `DevPostgres::shared()` reuses one container across every test process in
 /// the suite, so tests must NOT assume an empty database. We isolate each test
 /// by creating a fresh database on that container and pointing the app at it
-/// via `override_config_value("database.url", ...)` — the same key the app
-/// reads in its `#[producer]`.
+/// via `override_config_value("datasource.url", ...)` — the same key the
+/// `SqlxDataSource` plugin reads.
 ///
-/// The app applies migrations in its `on_start` hook, but `on_start` runs only
-/// on the serve path, not under `TestApp` — so the schema is applied here,
-/// against the isolated database, reusing the app's own migration set.
+/// Migrations are the plugin's job now: it runs them inside `build_state()`,
+/// which `TestApp` does execute (unlike the old serve-only `on_start` hook),
+/// so the isolated database gets its schema without any help from the test.
 async fn boot() -> TestApp {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let pg = DevPostgres::shared().await;
@@ -61,17 +61,7 @@ async fn boot() -> TestApp {
 
     let url = format!("{base}/{db}");
 
-    // Same migration set the app runs in `on_start` (which TestApp doesn't fire).
-    let pool = sqlx::PgPool::connect(&url)
-        .await
-        .expect("connect to the isolated test database");
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("apply migrations");
-    pool.close().await;
-
-    TestApp::boot_with::<PostgresApp>(move |b| b.override_config_value("database.url", url)).await
+    TestApp::boot_with::<PostgresApp>(move |b| b.override_config_value("datasource.url", url)).await
 }
 
 #[r2e::test]

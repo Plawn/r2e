@@ -192,6 +192,23 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
         Box::pin(async { Ok(()) })
     }
 
+    /// Run this controller core's `#[on_start]` hooks.
+    ///
+    /// Returns `(order, hook)` pairs, in declaration order. `register_controller()`
+    /// merges them with every bean's `#[on_start]` hooks into a single list,
+    /// sorts it by `order` (ascending, ties in registration order) and awaits
+    /// the hooks at server startup — after the consumer registrations, before
+    /// the plugin serve hooks and the builder's
+    /// [`on_start`](crate::AppBuilder::on_start) closures. An `Err` aborts boot.
+    ///
+    /// Controller cores are not `Clone`, so they cannot impl the
+    /// [`OnStart`](crate::beans::OnStart) trait; the generated override binds
+    /// each hook to a clone of the core `Arc` instead. The default returns an
+    /// empty list.
+    fn on_start(_core: std::sync::Arc<Self>) -> Vec<(i32, crate::beans::OnStartHook)> {
+        Vec::new()
+    }
+
     /// Whether this controller declares any `#[pre_destroy]` hook.
     ///
     /// `false` by default; the generated impl sets it to `true` only when the

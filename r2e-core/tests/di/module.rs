@@ -89,6 +89,9 @@ impl FeatureModule for UserModule {
     type Exports = TCons<UserService, TNil>;
     type Imports = TCons<DbPool, TNil>;
     type RequiredPlugins = ();
+    type Plugins = ();
+
+    fn plugins() {}
 }
 
 // ── A second module importing the first module's export ────────────────────
@@ -332,17 +335,18 @@ async fn module_controller_with_bean_backed_extractor() {
 
 // ── Module-declared required plugins (Phase 6) ──────────────────────────────
 
-/// A bean provided by a pre-state plugin (not by any module).
+/// A bean provided by a plugin (not by any module).
 #[derive(Clone, Debug, PartialEq)]
 struct PluginBean(u32);
 
-/// Minimal pre-state plugin providing `PluginBean`.
+/// Minimal plugin providing `PluginBean`.
 struct MarkerPlugin;
 
-impl r2e_core::PreStatePlugin for MarkerPlugin {
+impl r2e_core::Plugin for MarkerPlugin {
     type Provided = (PluginBean,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -363,6 +367,9 @@ impl FeatureModule for NeedsPluginModule {
     type Exports = TNil;
     type Imports = TNil;
     type RequiredPlugins = (MarkerPlugin,);
+    type Plugins = ();
+
+    fn plugins() {}
 }
 
 // ── module(...) import form: compose on another module's exports ────────────
@@ -500,4 +507,179 @@ async fn module_required_plugin_present_compiles_and_builds() {
         .await;
 
     assert_eq!(app.state().get::<PluginBean>(), PluginBean(7));
+}
+
+// ── Modules bringing their own plugins (Plan 2) ─────────────────────────────
+
+/// Provided by a plugin a *module* brings — app-global like any plugin bean.
+#[derive(Clone, Debug, PartialEq)]
+struct BroughtBean(u32);
+
+/// Plugin installed by a module's `plugins(..)` declaration rather than by the
+/// app's `.plugin(..)`.
+struct BroughtPlugin(u32);
+
+impl r2e_core::Plugin for BroughtPlugin {
+    type Provided = (BroughtBean,);
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option<()>,
+        _ctx: &mut r2e_core::plugin::PluginBuildContext,
+    ) -> Result<(BroughtBean,), r2e_core::plugin::PluginBuildError> {
+        Ok((BroughtBean(self.0),))
+    }
+}
+
+/// A module-private provider depending on the brought plugin's bean: proves
+/// the plugin's provisions are inside the module's local resolution scope.
+#[derive(Clone)]
+struct BroughtConsumer {
+    bean: BroughtBean,
+}
+
+#[bean]
+impl BroughtConsumer {
+    fn new(bean: BroughtBean) -> Self {
+        Self { bean }
+    }
+}
+
+#[controller(path = "/brought")]
+struct BroughtController {
+    #[inject]
+    consumer: BroughtConsumer,
+    #[inject]
+    bean: BroughtBean,
+}
+
+#[routes]
+impl BroughtController {
+    #[get("/")]
+    async fn show(&self) -> String {
+        format!("{}+{}", self.bean.0, self.consumer.bean.0)
+    }
+}
+
+/// Brings `BroughtPlugin`: no `exports(..)` entry is needed (nor allowed) for
+/// the plugin's bean — plugin provisions are app-global by construction.
+#[module(
+    providers(BroughtConsumer),
+    controllers(BroughtController),
+    plugins(BroughtPlugin = BroughtPlugin(11))
+)]
+struct BringsPluginModule;
+
+/// An **app** controller reading the bean of a plugin a module brought.
+#[controller(path = "/app-sees-brought")]
+struct AppSeesBroughtController {
+    #[inject]
+    bean: BroughtBean,
+}
+
+#[routes]
+impl AppSeesBroughtController {
+    #[get("/")]
+    async fn show(&self) -> String {
+        format!("app:{}", self.bean.0)
+    }
+}
+
+/// Only *needs* the plugin — brought by another module registered before it.
+#[module(requires_plugins(BroughtPlugin))]
+struct RequiresBroughtModule;
+
+/// Brings the same plugin the app installs — the double-install error case.
+#[module(plugins(BroughtPlugin = BroughtPlugin(22)))]
+struct AlsoBringsPluginModule;
+
+/// A module brings a plugin: it is installed at `register_module`, its bean is
+/// in the module's local scope (a private provider depends on it), and the
+/// module's own controller can inject it.
+#[r2e_core::test]
+async fn module_brings_plugin_and_controller_uses_its_bean() {
+    let app = AppBuilder::new()
+        .register_module::<BringsPluginModule>()
+        .build_state()
+        .await;
+
+    let router = app.build();
+    let (status, body) = get(&router, "/brought").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "11+11");
+}
+
+/// A brought plugin's provisions join the **app-global** provision list, so an
+/// app-level controller (and the state itself) sees the bean without the module
+/// exporting anything.
+#[r2e_core::test]
+async fn module_brought_plugin_bean_is_visible_to_app_controllers() {
+    use r2e_core::type_list::BeanAccess;
+
+    let app = AppBuilder::new()
+        .register_module::<BringsPluginModule>()
+        .build_state()
+        .await
+        .register_controller::<AppSeesBroughtController>();
+
+    assert_eq!(app.state().get::<BroughtBean>(), BroughtBean(11));
+
+    let router = app.build();
+    let (status, body) = get(&router, "/app-sees-brought").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "app:11");
+}
+
+/// `requires_plugins(..)` is satisfied by a plugin **another module** brought,
+/// as long as that module is registered first — the check runs against the
+/// post-install provision list.
+#[r2e_core::test]
+async fn module_required_plugin_satisfied_by_earlier_module() {
+    use r2e_core::type_list::BeanAccess;
+
+    let app = AppBuilder::new()
+        .register_module::<BringsPluginModule>()
+        .register_module::<RequiresBroughtModule>()
+        .build_state()
+        .await;
+
+    assert_eq!(app.state().get::<BroughtBean>(), BroughtBean(11));
+}
+
+/// A plugin has exactly one owner: installing it from the app *and* from a
+/// module is a boot error naming both owners and pointing at
+/// `requires_plugins`.
+#[r2e_core::test]
+async fn plugin_installed_by_app_and_module_names_both_owners() {
+    use r2e_core::beans::BeanError;
+
+    let err = AppBuilder::new()
+        .plugin(BroughtPlugin(11))
+        .register_module::<AlsoBringsPluginModule>()
+        .try_build_state()
+        .await
+        .err()
+        .expect("double plugin install must fail");
+
+    match &err {
+        BeanError::DuplicatePlugin { plugin, owners } => {
+            assert_eq!(*plugin, "BroughtPlugin");
+            assert_eq!(
+                owners,
+                &vec![
+                    "app".to_string(),
+                    "module 'AlsoBringsPluginModule'".to_string()
+                ]
+            );
+        }
+        other => panic!("expected DuplicatePlugin, got {other:?}"),
+    }
+
+    let rendered = err.to_string();
+    assert!(rendered.contains("by app and by module 'AlsoBringsPluginModule'"), "{rendered}");
+    assert!(rendered.contains("requires_plugins(BroughtPlugin)"), "{rendered}");
 }

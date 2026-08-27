@@ -1,0 +1,5 @@
+error: #[on_start] method must take only `&self` — no additional parameters
+  --> cases/controller/fail/controller_on_start_params.rs:11:5
+   |
+11 |     async fn warm(&self, _extra: u32) {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

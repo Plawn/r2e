@@ -34,7 +34,8 @@ pub use serde_json;
 pub use r2e_http::json;
 
 pub use beans::{
-    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, PostConstruct, PreDestroy, Producer,
+    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, OnStart, OnStartHook, PostConstruct,
+    PreDestroy, Producer,
 };
 pub use builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
@@ -72,7 +73,7 @@ pub use di::scheduled_source::ScheduledSource;
 pub use error::{HttpError, HttpErrorExt};
 pub use plugin::{
     DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
-    PluginSetupContext, PreStatePlugin, RawPreStatePlugin,
+    PluginInstall, PluginSetupContext, RoutesContext,
 };
 pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
 pub use runtime::lifecycle::{LifecycleController, StopHandle};

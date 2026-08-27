@@ -235,6 +235,33 @@ shutdown. Plugins initialize their `Provided` beans inline (their `build` is
 async and fallible) and opt into disposal via `ctx.run_pre_destroy::<T>()` in
 `setup`.
 
+## Startup hooks — `#[on_start]`
+
+`#[post_construct]` runs *while the graph is still being assembled*, so it can
+only see the bean's own dependencies. When the work needs the **finished**
+application — every bean and every controller core — use `#[on_start]`:
+
+```rust
+#[bean]
+impl SearchIndex {
+    pub fn new(repo: DocRepo) -> Self { Self { repo } }
+
+    #[on_start(order = -10)]   // i32, default 0, ascending
+    async fn warm(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.repo.prime_index().await?;   // Err aborts boot
+        Ok(())
+    }
+}
+```
+
+Same signature rules as `#[post_construct]` (`&self` only, sync or async, `()`
+or `Result<…>`), and it works on `#[routes]` controller impls too. Hooks run at
+boot — after every `#[post_construct]`, before the server binds — sorted
+ascending by `order` (ties in registration order), and an `Err` aborts boot just
+like an `Err` from the builder's `.on_start(...)` closure. A pinned
+`override_bean` skips the hook. Unlike `#[pre_destroy]`, `#[on_start]` **does**
+run under `TestApp::boot` — booting a test app is a real startup.
+
 ## Reading beans from state
 
 Because the state is an inferred HList (not a struct with named fields), you read

@@ -123,12 +123,12 @@ async fn main() {
         .load_config::<()>()          // typed config from YAML+env — the sole config registration point
         .register::<UserService>();   // register a #[bean]/#[producer]/AsyncBean type
 
-    app.build_state()                 // no type args; async — resolves the bean graph
+    app.plugin(Health)                // GET /health
+        .plugin(Cors::permissive())
+        .plugin(Tracing)
+        .plugin(ErrorHandling)
+        .build_state()                // no type args; async — resolves the bean graph
         .await
-        .with(Health)                 // GET /health
-        .with(Cors::permissive())
-        .with(Tracing)
-        .with(ErrorHandling)
         .register_controller::<UserController>()   // after build_state
         .serve("0.0.0.0:3000")
         .await
@@ -166,9 +166,9 @@ impl App for MyApp {
     async fn setup() -> Self::Env {}
     async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
         b.register::<UserService>()
+            .plugin(Health)
             .build_state()
             .await
-            .with(Health)
             .register_controller::<UserController>()
     }
 }
@@ -425,13 +425,13 @@ use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
     .register::<UserService>()
-    .build_state()
-    .await
-    .with(OpenApiPlugin::new(
+    .plugin(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")
             .with_description("API description")
             .with_docs_ui(true),  // serves interactive UI at /docs
     ))
+    .build_state()
+    .await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000")
     .await
@@ -453,10 +453,10 @@ async fn test_list_users() {
         AppBuilder::new()
             .provide(std::sync::Arc::new(jwt.claims_validator()))  // Arc<JwtClaimsValidator> bean
             .register::<UserService>()
+            .plugin(Health)
+            .plugin(ErrorHandling)
             .build_state()
             .await
-            .with(Health)
-            .with(ErrorHandling)
             .register_controller::<UserController>(),
     );
 
@@ -480,7 +480,7 @@ async fn test_list_users() {
 
 ## Plugins
 
-R2E ships with built-in plugins that install with a single `.with(...)` call:
+R2E ships with built-in plugins. There is one plugin kind and one install call — `.plugin(..)`, always **before** `build_state()`:
 
 | Plugin | Description |
 |--------|-------------|
@@ -488,18 +488,18 @@ R2E ships with built-in plugins that install with a single `.with(...)` call:
 | `Cors::permissive()` | Permissive CORS headers (or `Cors::custom(layer)` for a custom `CorsLayer`) |
 | `Tracing` | Request tracing via `tracing` + `tower-http` |
 | `ErrorHandling` | Catches panics, returns JSON 500 |
-| `NormalizePath` | Trailing-slash normalization (install last) |
+| `NormalizePath` | Trailing-slash normalization (install order irrelevant) |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
 | `RequestIdPlugin` | X-Request-Id propagation |
 | `SecureHeaders` | Security headers (X-Content-Type-Options, etc.) |
 | `OpenApiPlugin` | OpenAPI spec + docs UI |
 | `Prometheus` | Prometheus metrics at `/metrics` |
 | `Observability` | OpenTelemetry distributed tracing (OTLP exporter) |
-| `GrpcServer` | gRPC server on a dedicated port (install via `.plugin()` before `build_state()`) |
+| `GrpcServer` | gRPC server on a dedicated port |
 | `OidcServer` | Embedded OIDC server (`/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
-| `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install last) |
-| `Scheduler` | Background task scheduling — requires `Executor`; ticks run on its pool (install via `.plugin()` before `build_state()`) |
+| `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install after other router plugins) |
+| `Scheduler` | Background task scheduling — requires `Executor`; ticks run on its pool |
 
 ## Crate map
 

@@ -12,9 +12,14 @@ Fluent two-phase API for assembling an application:
 
 ```rust
 AppBuilder::new()
-    // Phase 1: pre-state (bean registration)
+    // Phase 1 — builder: beans and plugins (there is one plugin kind, and every
+    // plugin installs here, before build_state())
     .plugin(Executor)                      // required by Scheduler (ticks run on the pool)
-    .plugin(Scheduler)                     // pre-state plugin
+    .plugin(Scheduler)
+    .plugin(Health)
+    .plugin(Cors::permissive())
+    .plugin(Tracing)
+    .plugin(ErrorHandling)
     .load_config::<AppConfig>()             // load yaml + type + provide (the sole config registration point)
     .provide(my_pool.clone())              // pre-built instance
     .register::<UserService>()            // sync bean
@@ -22,11 +27,7 @@ AppBuilder::new()
     .register::<CreatePool>()         // async producer
     .build_state().await    // resolve bean graph → phase 2 (no type args; inferred HList state)
 
-    // Phase 2: post-state (plugins, routes, lifecycle)
-    .with(Health)
-    .with(Cors::permissive())
-    .with(Tracing)
-    .with(ErrorHandling)
+    // Phase 2 — app: controllers, routes, lifecycle
     .on_start(|state| async move { Ok(()) })
     .on_stop(|state| async move { /* cleanup with state access */ })
     .register_controller::<UserController>()
@@ -70,8 +71,9 @@ mark public exceptions with `#[anonymous]` (fail-closed, @PermitAll-style).
 
 ## Plugin system
 
-- `Plugin` — post-state plugins installed via `.with(plugin)`
-- `PreStatePlugin` — pre-state plugins installed via `.plugin(plugin)`, can provide beans to the graph
+- `Plugin` — the one plugin trait, installed via `.plugin(plugin)` before `build_state()`. A plugin may provide beans (`Provided`), require beans (`Deps`), read typed config (`Config`), and ship controllers (`Controllers`).
+- `PluginInstall` — the `#[doc(hidden)]` HList escape hatch a blanket impl derives from every `Plugin`.
+- Effects land in one of three stages: **Graph** (`add_layer`, `after_build`, `on_serve`), **Routes** (`after_routes`, runs once every controller is registered), **Finalize** (`wrap_router`, outermost).
 - `DeferredAction` — closure-based setup that runs after state construction (add layers, serve/shutdown hooks)
 
 ### Built-in plugins
@@ -404,7 +406,7 @@ async fn handler(&self, req_id: RequestId) -> String {
 }
 ```
 
-Install with `.with(RequestIdPlugin)`.
+Install with `.plugin(RequestIdPlugin)`.
 
 ## Secure headers
 
@@ -412,10 +414,10 @@ Adds security-related HTTP response headers:
 
 ```rust
 // Default: X-Content-Type-Options, X-Frame-Options, HSTS, Referrer-Policy
-.with(SecureHeaders::default())
+.plugin(SecureHeaders::default())
 
 // Custom
-.with(SecureHeaders::builder()
+.plugin(SecureHeaders::builder()
     .hsts(true)
     .hsts_max_age(63072000)
     .frame_options("SAMEORIGIN")

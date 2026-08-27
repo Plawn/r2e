@@ -30,7 +30,7 @@ r2e = { features = ["tenant-diesel", "diesel-postgres"] }
 | `TenantSource<T>` | tenant → `T` | you (or `PoolSource` for databases) |
 | `Tenanted<T>` | the map holding every tenant's `T` | the framework |
 
-Wiring is two pre-state plugins:
+Wiring is two plugins:
 
 ```rust
 use r2e::tenant::{HeaderTenantResolver, PerTenant, Tenancy};

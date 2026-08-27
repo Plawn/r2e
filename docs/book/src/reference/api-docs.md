@@ -33,7 +33,7 @@ This generates and opens documentation for all R2E crates.
 | `ManagedResource<S>` | Managed resource lifecycle trait |
 | `ManagedErr<E>` | Error wrapper for managed resources |
 | `Plugin<S>` | Post-state plugin trait |
-| `PreStatePlugin` | Pre-state plugin trait |
+| `Plugin` | Pre-state plugin trait |
 | `DeferredAction` | Deferred setup action for plugins |
 | `ContextConstruct` | Construct a controller from the resolved bean graph by type (no HTTP context) — replaces the removed `StatefulConstruct` |
 | `Bean` | Sync bean trait |
@@ -85,7 +85,7 @@ This generates and opens documentation for all R2E crates.
 
 | Type | Description |
 |------|-------------|
-| `Scheduler` | PreStatePlugin for background tasks |
+| `Scheduler` | Plugin for background tasks |
 | `ScheduleConfig` | Interval/cron/delay configuration |
 | `ScheduledTaskDef<T>` | Task definition |
 

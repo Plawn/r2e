@@ -195,7 +195,7 @@ async fn malformed_config_section_panics_at_boot() {
 
 #[r2e_core::test]
 async fn disabled_via_config_skips_route_and_layer_but_keeps_registry() {
-    // `prometheus.enabled: false` gates the plugin's post-state effects: the
+    // `prometheus.enabled: false` gates the plugin's surface effects: the
     // `configure` step (which mounts the /metrics route and the tracking layer)
     // is skipped. The `PrometheusRegistry` bean is still provided, because the
     // type-level provision list is fixed at compile time.

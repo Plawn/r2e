@@ -28,10 +28,11 @@ async fn get_with_headers(
     (status, headers, String::from_utf8_lossy(&body).into_owned())
 }
 
-fn make_app(frontend: EmbeddedFrontend) -> Router {
+async fn make_app(frontend: EmbeddedFrontend) -> Router {
     r2e_core::AppBuilder::new()
-        .with_state(())
-        .with(frontend)
+        .plugin(frontend)
+        .build_state()
+        .await
         .build()
 }
 
@@ -39,7 +40,7 @@ fn make_app(frontend: EmbeddedFrontend) -> Router {
 
 #[r2e_core::test]
 async fn exact_file_match_returns_content_and_mime() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (status, headers, body) = get(app, "/style.css").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -49,7 +50,7 @@ async fn exact_file_match_returns_content_and_mime() {
 
 #[r2e_core::test]
 async fn root_serves_index_html() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (status, _, body) = get(app, "/").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -58,7 +59,7 @@ async fn root_serves_index_html() {
 
 #[r2e_core::test]
 async fn excluded_prefix_returns_404() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (status, _, _) = get(app, "/api/users").await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -66,7 +67,7 @@ async fn excluded_prefix_returns_404() {
 
 #[r2e_core::test]
 async fn spa_fallback_returns_index_html() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (status, _, body) = get(app, "/some/unknown/route").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -79,7 +80,8 @@ async fn spa_disabled_returns_404_for_unknown() {
         EmbeddedFrontend::builder::<TestAssets>()
             .spa_fallback(false)
             .build(),
-    );
+    )
+    .await;
     let (status, _, _) = get(app, "/some/unknown/route").await;
 
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -87,7 +89,7 @@ async fn spa_disabled_returns_404_for_unknown() {
 
 #[r2e_core::test]
 async fn immutable_prefix_sets_cache_control() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (status, headers, _) = get(app, "/assets/app.abc123.js").await;
 
     assert_eq!(status, StatusCode::OK);
@@ -98,7 +100,7 @@ async fn immutable_prefix_sets_cache_control() {
 
 #[r2e_core::test]
 async fn non_immutable_file_gets_default_cache_control() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (_, headers, _) = get(app, "/style.css").await;
 
     let cc = headers.get("cache-control").unwrap().to_str().unwrap();
@@ -108,7 +110,7 @@ async fn non_immutable_file_gets_default_cache_control() {
 
 #[r2e_core::test]
 async fn etag_header_present() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (_, headers, _) = get(app, "/style.css").await;
 
     let etag = headers.get("etag").unwrap().to_str().unwrap();
@@ -122,7 +124,8 @@ async fn base_path_routing() {
             .base_path("/docs")
             .spa_fallback(false)
             .build(),
-    );
+    )
+    .await;
 
     let (status, _, body) = get(app.clone(), "/docs/style.css").await;
     assert_eq!(status, StatusCode::OK);
@@ -142,7 +145,8 @@ async fn custom_excluded_prefix() {
         EmbeddedFrontend::builder::<TestAssets>()
             .exclude_prefix("graphql/")
             .build(),
-    );
+    )
+    .await;
 
     let (status, _, _) = get(app.clone(), "/api/test").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -153,7 +157,7 @@ async fn custom_excluded_prefix() {
 
 #[r2e_core::test]
 async fn js_file_has_correct_mime() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
     let (_, headers, _) = get(app, "/assets/app.abc123.js").await;
 
     let ct = headers.get("content-type").unwrap().to_str().unwrap();
@@ -164,7 +168,7 @@ async fn js_file_has_correct_mime() {
 
 #[r2e_core::test]
 async fn if_none_match_returns_304_on_matching_etag() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     // First request to get the ETag.
     let (_, headers, _) = get(app.clone(), "/style.css").await;
@@ -181,7 +185,7 @@ async fn if_none_match_returns_304_on_matching_etag() {
 
 #[r2e_core::test]
 async fn if_none_match_returns_200_on_mismatched_etag() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (status, _, body) =
         get_with_headers(app, "/style.css", &[("If-None-Match", "\"wrong-etag\"")]).await;
@@ -192,7 +196,7 @@ async fn if_none_match_returns_200_on_mismatched_etag() {
 
 #[r2e_core::test]
 async fn if_none_match_star_returns_304() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (status, _, body) = get_with_headers(app, "/style.css", &[("If-None-Match", "*")]).await;
 
@@ -202,7 +206,7 @@ async fn if_none_match_star_returns_304() {
 
 #[r2e_core::test]
 async fn if_none_match_multiple_etags() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (_, headers, _) = get(app.clone(), "/style.css").await;
     let etag = headers.get("etag").unwrap().to_str().unwrap();
@@ -217,7 +221,7 @@ async fn if_none_match_multiple_etags() {
 
 #[r2e_core::test]
 async fn brotli_served_when_accepted() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (status, headers, _) =
         get_with_headers(app, "/style.css", &[("Accept-Encoding", "br, gzip")]).await;
@@ -239,7 +243,7 @@ async fn brotli_served_when_accepted() {
 
 #[r2e_core::test]
 async fn gzip_served_when_br_not_accepted() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (status, headers, _) =
         get_with_headers(app, "/style.css", &[("Accept-Encoding", "gzip")]).await;
@@ -253,7 +257,7 @@ async fn gzip_served_when_br_not_accepted() {
 
 #[r2e_core::test]
 async fn uncompressed_when_no_compressed_variant_exists() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     // index.html has no .br/.gz variant
     let (status, headers, body) =
@@ -270,7 +274,8 @@ async fn compression_disabled_serves_uncompressed() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     let (status, headers, body) =
         get_with_headers(app, "/style.css", &[("Accept-Encoding", "br, gzip")]).await;
@@ -282,7 +287,7 @@ async fn compression_disabled_serves_uncompressed() {
 
 #[r2e_core::test]
 async fn quality_zero_encoding_rejected() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (_, headers, _) =
         get_with_headers(app, "/style.css", &[("Accept-Encoding", "br;q=0, gzip")]).await;
@@ -297,7 +302,7 @@ async fn quality_zero_encoding_rejected() {
 
 #[r2e_core::test]
 async fn spa_fallback_uses_no_cache() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (_, headers, _) = get(app, "/some/unknown/route").await;
     let cc = headers.get("cache-control").unwrap().to_str().unwrap();
@@ -307,7 +312,7 @@ async fn spa_fallback_uses_no_cache() {
 
 #[r2e_core::test]
 async fn direct_index_uses_default_cache() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (_, headers, _) = get(app, "/index.html").await;
     let cc = headers.get("cache-control").unwrap().to_str().unwrap();
@@ -321,7 +326,8 @@ async fn custom_fallback_cache_control() {
         EmbeddedFrontend::builder::<TestAssets>()
             .fallback_cache_control("no-store")
             .build(),
-    );
+    )
+    .await;
 
     let (_, headers, _) = get(app, "/some/route").await;
     let cc = headers.get("cache-control").unwrap().to_str().unwrap();
@@ -337,7 +343,8 @@ async fn content_length_present() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     let (_, headers, body) = get(app, "/style.css").await;
     let cl: usize = headers
@@ -354,7 +361,7 @@ async fn content_length_present() {
 
 #[r2e_core::test]
 async fn content_length_on_compressed_response() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (_, headers, _) = get_with_headers(app, "/style.css", &[("Accept-Encoding", "gzip")]).await;
 
@@ -371,7 +378,8 @@ async fn range_request_returns_206() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     let (status, headers, body) =
         get_with_headers(app, "/style.css", &[("Range", "bytes=0-3")]).await;
@@ -392,7 +400,8 @@ async fn range_suffix_request() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     // "body { margin: 0; }\n" — last 4 bytes = "}\n" ... let's request last 3
     let (status, headers, body) =
@@ -409,7 +418,8 @@ async fn range_open_end() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     // Request from byte 5 to end: "{ margin: 0; }\n"
     let (status, _, body) = get_with_headers(app, "/style.css", &[("Range", "bytes=5-")]).await;
@@ -424,7 +434,8 @@ async fn invalid_range_returns_416() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     let (status, headers, _) =
         get_with_headers(app, "/style.css", &[("Range", "bytes=9999-")]).await;
@@ -440,7 +451,8 @@ async fn accept_ranges_header_present() {
         EmbeddedFrontend::builder::<TestAssets>()
             .compression(false)
             .build(),
-    );
+    )
+    .await;
 
     let (_, headers, _) = get(app, "/style.css").await;
     assert_eq!(
@@ -451,7 +463,7 @@ async fn accept_ranges_header_present() {
 
 #[r2e_core::test]
 async fn no_accept_ranges_on_compressed() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (_, headers, _) = get_with_headers(app, "/style.css", &[("Accept-Encoding", "br")]).await;
 
@@ -460,7 +472,7 @@ async fn no_accept_ranges_on_compressed() {
 
 #[r2e_core::test]
 async fn range_ignored_for_compressed_response() {
-    let app = make_app(EmbeddedFrontend::new::<TestAssets>());
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
 
     let (status, headers, _) = get_with_headers(
         app,

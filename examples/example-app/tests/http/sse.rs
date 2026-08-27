@@ -49,9 +49,9 @@ impl SseTestController {
 async fn setup() -> TestApp {
     TestApp::from_builder(
         AppBuilder::new()
+            .plugin(ErrorHandling)
             .build_state()
             .await
-            .with(ErrorHandling)
             .register_controller::<SseTestController>(),
     )
 }

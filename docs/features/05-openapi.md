@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Generate an OpenAPI 3.1.0 spec from controller route metadata and serve a built-in docs UI. Enable the `openapi` feature (plus `schemars`), then after `build_state()` add `.with(OpenApiPlugin::new(OpenApiConfig::new("My API", "0.1.0").with_docs_ui(true)))`. The `#[routes]` macro emits a `RouteInfo` per route (path, method, params, roles, request/response schemas). Serves `GET /openapi.json` and `GET /docs`.
+Generate an OpenAPI 3.1.0 spec from controller route metadata and serve a built-in docs UI. Enable the `openapi` feature (plus `schemars`), then add `.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "0.1.0").with_docs_ui(true)))` before `build_state()`. The `#[routes]` macro emits a `RouteInfo` per route (path, method, params, roles, request/response schemas). Serves `GET /openapi.json` and `GET /docs`.
 
 
 ## Objective
@@ -13,7 +13,7 @@ Automatically generate an OpenAPI 3.1.0 specification from controller route meta
 
 ### Route metadata
 
-Each controller annotated with `#[controller]` + `#[routes]` implements `Controller::register_meta(&mut MetaRegistry)`, which pushes one `RouteInfo` per route — path, HTTP method, parameters, required roles, request/response schemas. The plugin drains these via `with_meta_consumer::<RouteInfo, _>`.
+Each controller annotated with `#[controller]` + `#[routes]` implements `Controller::register_meta(&mut MetaRegistry)`, which pushes one `RouteInfo` per route — path, HTTP method, parameters, required roles, request/response schemas. The plugin reads them from `RoutesContext::routes()` in a Routes-stage effect, which runs after every controller (and every plugin-shipped controller) has registered.
 
 ### OpenApiConfig
 
@@ -21,7 +21,7 @@ Configuration for the specification: title, version, description, documentation 
 
 ### OpenApiPlugin
 
-A post-state plugin that registers a meta consumer for `RouteInfo`, builds the spec, and serves `GET /openapi.json` and optionally `GET /docs`.
+A plugin that reads the collected `RouteInfo` set in a **Routes**-stage effect (so it sees every controller regardless of install order), builds the spec, and serves `GET /openapi.json` and optionally `GET /docs`.
 
 ## Usage
 
@@ -40,13 +40,13 @@ use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
     .register::<UserService>()      // register the beans your controllers inject
-    .build_state()                  // no type args — the state is the inferred HList
-    .await
-    .with(OpenApiPlugin::new(
+    .plugin(OpenApiPlugin::new(
         OpenApiConfig::new("Mon API", "0.1.0")
             .with_description("Description de mon API")
             .with_docs_ui(true),
     ))
+    .build_state()                  // no type args — the state is the inferred HList
+    .await
     .register_controllers::<(UserController, ConfigController)>()
     .serve("0.0.0.0:3000")
     .await

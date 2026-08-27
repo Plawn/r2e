@@ -37,10 +37,10 @@ impl App for MyApp {
             .provide(env.event_bus)
             .provide(env.pool)
             .register::<UserService>()
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(DevReload)
             .build_state().await
-            .with(Health)
-            .with(Cors::permissive())
-            .with(DevReload)
             .register_controller::<UserController>()
     }
 }
@@ -161,9 +161,9 @@ The `DevReload` plugin adds development-mode endpoints and response headers:
 
 ```rust
 AppBuilder::new()
+    .plugin(DevReload)
     .build_state()
     .await
-    .with(DevReload)
     // ...
 ```
 
@@ -185,7 +185,10 @@ When `DevReload` is active, R2E adds two headers to every response:
 
 Do **not** enable `DevReload` in production. The dev endpoints are informational only but expose internal details (boot time) that shouldn't be public.
 
+`.plugin()` changes the builder's compile-time provision list, so it cannot be
+applied behind a runtime flag. Gate it at compile time instead:
+
 ```rust
 #[cfg(debug_assertions)]
-builder = builder.with(DevReload);
+let builder = builder.plugin(DevReload);
 ```

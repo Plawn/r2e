@@ -5,7 +5,7 @@
 //! is re-exported here:
 //!
 //! - [`traits`] — [`Bean`], [`AsyncBean`], [`Producer`], [`PostConstruct`],
-//!   [`PreDestroy`], [`Registrable`].
+//!   [`PreDestroy`], [`OnStart`], [`Registrable`].
 //! - [`context`] — [`BeanContext`], the resolved read-only container.
 //! - [`error`] — [`BeanError`].
 //! - [`registry`] — the [`BeanRegistry`] struct, its registration records and
@@ -32,9 +32,11 @@ pub use registry::BeanRegistry;
 pub use reuse::ReusePlan;
 #[cfg(feature = "dev-reload")]
 pub use traits::BeanFingerprints;
-pub use traits::{AsyncBean, Bean, PostConstruct, PreDestroy, Producer, Registrable};
+pub use traits::{
+    AsyncBean, Bean, OnStart, OnStartHook, PostConstruct, PreDestroy, Producer, Registrable,
+};
 
-pub(crate) use registry::ServiceSourceHook;
+pub(crate) use registry::{OnStartSourceHook, ServiceSourceHook};
 
 use registry::{
     BeanRegistration, Factory, LazyBeanRegistration, PostConstructFn, RegMeta, ServiceConfigDecl,

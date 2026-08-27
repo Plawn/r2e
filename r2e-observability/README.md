@@ -21,13 +21,13 @@ r2e = { version = "0.1", features = ["observability"] }
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
 
 AppBuilder::new()
-    .build_state()
-    .await
-    .with(Observability::new(
+    .plugin(Observability::new(
         ObservabilityConfig::new("my-service")
             .with_service_version("1.0.0")
             .with_endpoint("http://otel-collector:4318/v1/traces"),
     ))
+    .build_state()
+    .await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000")
     .await;
@@ -98,7 +98,7 @@ This reads all `observability.*` keys including `observability.tracing.*`.
 ### Loading standard OpenTelemetry environment variables
 
 ```rust
-.with(Observability::from_env("my-service"))
+.plugin(Observability::from_env("my-service"))
 ```
 
 When no OTLP endpoint is configured, `from_env` installs ordinary R2E tracing

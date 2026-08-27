@@ -1,5 +1,6 @@
 #[allow(unused_imports)] // referenced by intra-doc links
-use super::{PluginBuildContext, PreStatePlugin};
+use super::{Plugin, PluginBuildContext};
+use super::{RoutesContext, RoutesEffect};
 use std::any::Any;
 
 // ── Deferred action system ─────────────────────────────────────────────────
@@ -13,14 +14,14 @@ use std::any::Any;
 /// Most plugins never construct one directly: the effect sugar on
 /// [`PluginBuildContext`] ([`add_layer`](PluginBuildContext::add_layer),
 /// [`on_shutdown`](PluginBuildContext::on_shutdown), …) covers the common
-/// cases from inside [`build`](PreStatePlugin::build). Reach for
+/// cases from inside [`build`](Plugin::build). Reach for
 /// `PluginSetupContext::add_deferred(DeferredAction::new(..))` only as a
 /// pre-graph escape hatch.
 ///
 /// # Example (preferred — build-time sugar)
 ///
 /// ```ignore
-/// impl PreStatePlugin for MyPlugin {
+/// impl Plugin for MyPlugin {
 ///     type Provided = (MyToken,);
 ///     type Deps = ();
 ///     type Config = ();
@@ -102,6 +103,18 @@ pub struct DeferredContext<'a> {
     /// was called.
     #[doc(hidden)]
     pub config: Option<&'a crate::config::R2eConfig>,
+    /// Routes-stage effects, queued here and drained in `build()` once every
+    /// controller has registered. See [`DeferredContext::after_routes`].
+    #[doc(hidden)]
+    pub routes_effects: &'a mut Vec<RoutesEffect>,
+    /// Whether to install the pre-routing trailing-slash normalization rewrite.
+    /// See [`DeferredContext::enable_normalize_path`].
+    #[doc(hidden)]
+    pub normalize_path: &'a mut bool,
+    /// Whether the dev-reload endpoints/layer have already been installed.
+    /// See [`DeferredContext::mark_dev_reload_applied`].
+    #[doc(hidden)]
+    pub dev_reload_applied: &'a mut bool,
 }
 
 impl DeferredContext<'_> {
@@ -130,7 +143,7 @@ impl DeferredContext<'_> {
     ///
     /// `Some` whenever `load_config` / `with_config` was called (the reliable
     /// point for config — it always precedes `build_state()`). This is the
-    /// low-level counterpart to a plugin's typed [`Config`](crate::PreStatePlugin::Config).
+    /// low-level counterpart to a plugin's typed [`Config`](crate::Plugin::Config).
     pub fn config(&self) -> Option<&crate::config::R2eConfig> {
         self.config
     }
@@ -185,6 +198,37 @@ impl DeferredContext<'_> {
             .remove(&std::any::TypeId::of::<D>())
             .and_then(|d| d.downcast::<D>().ok())
             .map(|b| *b)
+    }
+
+    /// Queue a **Routes-stage** effect: a closure run in `build()`, once every
+    /// controller has registered. See
+    /// [`PluginBuildContext::after_routes`], the sugar most plugins use.
+    pub fn after_routes<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut RoutesContext) + Send + 'static,
+    {
+        self.routes_effects.push(Box::new(f));
+    }
+
+    /// Install the pre-routing trailing-slash normalization rewrite
+    /// (`/users/` → `/users`), applied before routing so `MatchedPath` reaches
+    /// every layer. Idempotent.
+    pub fn enable_normalize_path(&mut self) {
+        *self.normalize_path = true;
+    }
+
+    /// Claim the one-shot dev-reload install slot.
+    ///
+    /// Returns `true` the first time it is called (the caller should install
+    /// the dev endpoints and the `Cache-Control: no-store` layer), `false`
+    /// afterwards — so an explicit `.plugin(DevReload)` and `prepare()`'s
+    /// automatic install cannot double-mount the routes.
+    pub fn mark_dev_reload_applied(&mut self) -> bool {
+        if *self.dev_reload_applied {
+            return false;
+        }
+        *self.dev_reload_applied = true;
+        true
     }
 
     /// Add a serve hook that runs when the server starts.

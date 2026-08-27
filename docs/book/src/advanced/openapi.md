@@ -50,13 +50,13 @@ pub struct User {
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 AppBuilder::new()
-    .build_state()
-    .await
-    .with(OpenApiPlugin::new(
+    .plugin(OpenApiPlugin::new(
         OpenApiConfig::new("My API", "1.0.0")
             .with_description("API description")
             .with_docs_ui(true),
     ))
+    .build_state()
+    .await
     .register_controller::<UserController>()
     .serve("0.0.0.0:3000")
     .await

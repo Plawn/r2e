@@ -7,12 +7,21 @@
 //!     controllers(UserController, AdminController),
 //!     exports(UserService),
 //!     imports(DbPool, module(BillingModule)),
+//!     plugins(Scheduler = Scheduler),
+//!     requires_plugins(Executor),
 //! )]
 //! pub struct UserModule;
 //! ```
 //!
 //! Every key is optional and defaults to empty. `providers`, `exports`, and
-//! `imports` become `TCons` type-level lists; `controllers` becomes a tuple.
+//! `imports` become `TCons` type-level lists; `controllers`,
+//! `requires_plugins`, and `plugins` become tuples.
+//!
+//! `plugins(...)` — the plugins the module **brings** — takes `Type = expr`
+//! entries: the type grows the module's provision list at compile time, the
+//! expression is the instance installed at `register_module`. A module that
+//! merely *needs* a plugin someone else installs uses
+//! `requires_plugins(Type)` instead.
 //!
 //! An `imports(...)` entry is either a bean type or `module(OtherModule)`: the
 //! latter appends the imported module's `Exports` to this module's import list
@@ -26,7 +35,7 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{parenthesized, token, Ident, ItemStruct, Token, Type};
+use syn::{parenthesized, token, Expr, Ident, ItemStruct, Token, Type};
 
 use crate::model::type_list_gen::build_tcons_type;
 use crate::util::crate_path::r2e_core_path;
@@ -42,6 +51,33 @@ struct ModuleArgs {
     /// appended to `Imports`.
     import_modules: Vec<Type>,
     requires_plugins: Vec<Type>,
+    /// `plugins(Type = expr, ...)` — the plugins this module brings.
+    plugins: Vec<PluginEntry>,
+}
+
+/// One `plugins(...)` entry: `Type = expr`.
+struct PluginEntry {
+    ty: Type,
+    value: Expr,
+}
+
+impl Parse for PluginEntry {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ty: Type = input.parse()?;
+        if !input.peek(Token![=]) {
+            return Err(syn::Error::new_spanned(
+                &ty,
+                "`plugins(...)` entries must be written `Type = expr` — e.g. \
+                 `plugins(Scheduler = Scheduler::default())`. The plugin type is needed at \
+                 compile time (it grows the provision list); the expression is the instance \
+                 to install. If the module only *needs* a plugin installed elsewhere, use \
+                 `requires_plugins(Scheduler)` instead",
+            ));
+        }
+        input.parse::<Token![=]>()?;
+        let value: Expr = input.parse()?;
+        Ok(Self { ty, value })
+    }
 }
 
 /// One entry in a declaration key's parenthesized list: either a plain bean
@@ -114,6 +150,20 @@ impl Parse for ModuleArgs {
 
             let content;
             parenthesized!(content in input);
+
+            // `plugins(...)` takes `Type = expr` entries, every other key takes
+            // a plain type list, so the content is parsed per key.
+            if key_name == "plugins" {
+                args.plugins = Punctuated::<PluginEntry, Token![,]>::parse_terminated(&content)?
+                    .into_iter()
+                    .collect();
+                seen.push(key_name);
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
+
             let entries: Vec<Entry> = Punctuated::<Entry, Token![,]>::parse_terminated(&content)?
                 .into_iter()
                 .collect();
@@ -138,7 +188,8 @@ impl Parse for ModuleArgs {
                         key.span(),
                         format!(
                             "unknown key `{other}` in #[module] — expected `providers`, \
-                             `controllers`, `exports`, `imports`, or `requires_plugins`"
+                             `controllers`, `exports`, `imports`, `plugins`, or \
+                             `requires_plugins`"
                         ),
                     ));
                 }
@@ -196,6 +247,19 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let required_plugin_types = &args.requires_plugins;
     let required_plugins = quote! { ( #(#required_plugin_types,)* ) };
 
+    // `Plugins` is a tuple of the brought plugins' types; `plugins()` builds
+    // the matching tuple of instances, in the same order.
+    let plugin_types: Vec<&Type> = args.plugins.iter().map(|p| &p.ty).collect();
+    let plugin_values: Vec<&Expr> = args.plugins.iter().map(|p| &p.value).collect();
+    let plugins_ty = quote! { ( #(#plugin_types,)* ) };
+    // Empty → an empty body (returns `()`), so the common no-plugin case does
+    // not emit a bare unit expression (`clippy::unused_unit`).
+    let plugins_fn = if plugin_values.is_empty() {
+        quote! {}
+    } else {
+        quote! { ( #(#plugin_values,)* ) }
+    };
+
     quote! {
         #item
 
@@ -205,6 +269,11 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             type Exports = #exports;
             type Imports = #imports;
             type RequiredPlugins = #required_plugins;
+            type Plugins = #plugins_ty;
+
+            fn plugins() -> Self::Plugins {
+                #plugins_fn
+            }
         }
     }
     .into()

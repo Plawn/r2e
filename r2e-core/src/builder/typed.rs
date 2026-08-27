@@ -100,6 +100,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             meta_consumers: Vec::new(),
             consumer_registrations: Vec::new(),
             post_construct_registrations: Vec::new(),
+            on_start_hooks: Vec::new(),
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
@@ -123,6 +124,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 async_shutdown_hooks: &mut builder.plugin_async_shutdown_hooks,
                 bean_context: &builder.bean_context,
                 config: deferred_config.as_ref(),
+                routes_effects: &mut builder.shared.routes_effects,
+                normalize_path: &mut builder.shared.normalize_path,
+                dev_reload_applied: &mut builder.shared.dev_reload_applied,
             };
             (action.action)(&mut ctx);
         }
@@ -139,27 +143,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
-    // ── Path normalization ──────────────────────────────────────────────
-
-    /// Enable trailing-slash normalization via a pre-routing URI rewrite.
-    ///
-    /// When enabled, the built router is wrapped in a `NormalizePath` service
-    /// that strips trailing slashes (e.g. `/users/` → `/users`) BEFORE
-    /// routing, so the request is routed once and `MatchedPath` is visible to
-    /// all layers. This can be installed at any point in the plugin chain.
-    pub(crate) fn enable_normalize_path(mut self) -> Self {
-        self.shared.normalize_path = true;
-        self
-    }
-
-    /// Returns a reference to the loaded [`R2eConfig`], if any.
-    ///
-    /// This is available after [`load_config()`](AppBuilder::load_config) or
-    /// [`with_config()`](AppBuilder::with_config) has been called.
-    pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
-        self.shared.config.as_ref()
-    }
-
     /// The application state.
     ///
     /// After [`build_state`](AppBuilder::build_state) this is the HList of
@@ -178,58 +161,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         &self.bean_context
     }
 
-    /// Whether the DevReload plugin has already been applied.
-    pub(crate) fn is_dev_reload_applied(&self) -> bool {
-        self.shared.dev_reload_applied
-    }
-
-    /// Mark the DevReload plugin as applied (prevents double-install).
-    pub(crate) fn mark_dev_reload_applied(&mut self) {
+    /// Install the dev-reload endpoints and the `Cache-Control: no-store`
+    /// layer, once. Used by `prepare()`'s automatic install; the
+    /// [`DevReload`](crate::builtins::DevReload) plugin claims the same
+    /// one-shot slot through
+    /// [`DeferredContext::mark_dev_reload_applied`](crate::plugin::DeferredContext::mark_dev_reload_applied).
+    #[cfg(feature = "dev-reload")]
+    pub(crate) fn apply_dev_reload(mut self) -> Self {
+        if self.shared.dev_reload_applied {
+            return self;
+        }
         self.shared.dev_reload_applied = true;
-    }
-
-    // ── Plugin system ───────────────────────────────────────────────────
-
-    /// Install a [`Plugin`] into this builder.
-    ///
-    /// Plugins are composable units of functionality (CORS, tracing, health
-    /// checks, etc.) that modify the builder. This replaces the old
-    /// `with_cors()`, `with_tracing()`, etc. methods with a single, uniform
-    /// entry point.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use r2e_core::builtins::{Cors, Tracing, Health, ErrorHandling, DevReload};
-    ///
-    /// AppBuilder::new()
-    ///     .build_state()
-    ///     .await
-    ///     .with(Health)
-    ///     .with(Cors::permissive())
-    ///     .with(Tracing)
-    ///     .with(ErrorHandling)
-    ///     .with(DevReload)
-    /// ```
-    pub fn with<Pl: Plugin>(mut self, plugin: Pl) -> Self {
-        // Check if a "should be last" plugin was already installed
-        if let Some(last_name) = self.shared.last_plugin_name {
-            tracing::warn!(
-                previous = last_name,
-                current = Pl::name(),
-                "Plugin {} should be installed last, but {} is being installed after it. \
-                 This may cause unexpected behavior.",
-                last_name,
-                Pl::name(),
-            );
-        }
-
-        // Track if this plugin should be last
-        if Pl::should_be_last() {
-            self.shared.last_plugin_name = Some(Pl::name());
-        }
-
-        plugin.install(self)
+        self.register_routes(crate::runtime::dev::dev_routes())
+            .with_layer_fn(|router| {
+                router.layer(crate::http::middleware::from_fn(
+                    crate::runtime::dev::dev_headers_middleware,
+                ))
+            })
     }
 
     // ── Layer primitives ────────────────────────────────────────────────
@@ -591,6 +539,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.post_construct_registrations
             .push(C::post_construct(Arc::clone(&core)));
 
+        // Queue this core's `#[on_start]` hooks — merged with the bean hooks
+        // into one order-sorted list and awaited at server startup, after the
+        // consumer registrations and before the builder's `on_start` closures.
+        // The default `Controller::on_start` returns an empty vec, so this is
+        // free for controllers without the attribute.
+        self.on_start_hooks.extend(C::on_start(Arc::clone(&core)));
+
         // Collect scheduled tasks (type-erased) and add to the task registry if present.
         // Tasks capture the state, so we need to pass it here.
         {
@@ -667,6 +622,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                     );
                 }
             }
+        }
+        self
+    }
+
+    /// Queue the bean `#[on_start]` hooks (registered by `#[bean]` via
+    /// `after_register` → `BeanRegistry::register_on_start`), read from the
+    /// resolved graph so pinned test overrides are honoured.
+    ///
+    /// Called by `build_state()` right after the typed builder exists —
+    /// i.e. before controllers register, so bean hooks precede controller
+    /// hooks at equal `order`.
+    pub(crate) fn collect_bean_on_start(
+        mut self,
+        sources: Vec<(&'static str, crate::beans::OnStartSourceHook)>,
+    ) -> Self {
+        for (_, hook) in sources {
+            self.on_start_hooks.extend(hook(&self.bean_context));
         }
         self
     }
@@ -775,10 +747,20 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         for reg in built.consumer_registrations {
             reg(built.state.clone()).await;
         }
+        // `#[on_start]` hooks DO run here (unlike `#[pre_destroy]`, which has no
+        // shutdown to fire on): the graph and every controller core exist, which
+        // is exactly the contract. `TestApp::boot` reaches this path, so tests
+        // observe production startup behaviour. An `Err` panics, like the
+        // controller `#[post_construct]` above.
+        for (_, hook) in sort_on_start(built.on_start_hooks) {
+            hook()
+                .await
+                .unwrap_or_else(|e| panic!("#[on_start] hook failed: {e}"));
+        }
         built.router
     }
 
-    fn build_inner(self) -> BuiltApp<T> {
+    fn build_inner(mut self) -> BuiltApp<T> {
         let state = self.state;
 
         let mut router = crate::http::Router::new();
@@ -797,6 +779,28 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Apply the application state.
         let mut app = router.with_state(state.clone());
+
+        // ── Routes stage ────────────────────────────────────────────────
+        // Every controller (app, module and plugin) has registered by now, so
+        // a plugin effect queued with `after_routes` sees the complete route
+        // metadata whatever the install order — this is what lets OpenAPI be a
+        // plain `.plugin()` instead of "install me last". Routers a Routes
+        // effect registers are merged BEFORE the custom layers below, so they
+        // pick up the same middleware stack controller routes do.
+        if !self.shared.routes_effects.is_empty() {
+            let mut rctx = crate::plugin::RoutesContext::new(
+                meta_registry.get_or_empty::<crate::di::meta::RouteInfo>(),
+                &mut self.shared.plugin_data,
+                &self.bean_context,
+                self.shared.config.as_ref(),
+            );
+            for effect in std::mem::take(&mut self.shared.routes_effects) {
+                effect(&mut rctx);
+            }
+            for r in rctx.into_routers() {
+                app = app.merge(r);
+            }
+        }
 
         // Apply layers (in registration order). Layers added via
         // `Router::layer` run after routing, so they observe `MatchedPath`
@@ -865,6 +869,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             drain_hooks: self.drain_hooks,
             consumer_registrations: self.consumer_registrations,
             post_construct_registrations: self.post_construct_registrations,
+            on_start_hooks: self.on_start_hooks,
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             async_shutdown_hooks,
@@ -885,11 +890,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// - The setup that produces beans/config stays outside
     pub fn prepare(self, addr: &str) -> PreparedApp<T> {
         #[cfg(feature = "dev-reload")]
-        let this = if !self.shared.dev_reload_applied {
-            self.with(crate::builtins::DevReload)
-        } else {
-            self
-        };
+        let this = self.apply_dev_reload();
         #[cfg(not(feature = "dev-reload"))]
         let this = self;
 
@@ -968,6 +969,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             drain_hooks,
             consumer_registrations,
             post_construct_registrations,
+            on_start_hooks,
             serve_hooks,
             plugin_shutdown_hooks,
             async_shutdown_hooks,
@@ -994,6 +996,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             stop_handle,
             consumer_registrations,
             post_construct_registrations,
+            on_start_hooks,
             serve_hooks,
             plugin_shutdown_hooks,
             async_shutdown_hooks,
@@ -1047,6 +1050,9 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     drain_hooks: Vec<DrainHook<T>>,
     consumer_registrations: Vec<ConsumerReg<T>>,
     post_construct_registrations: Vec<PostConstructReg>,
+    /// `#[on_start]` hooks from beans and controller cores, unsorted (sorted
+    /// once at run time by [`sort_on_start`]).
+    on_start_hooks: Vec<OnStartReg>,
     serve_hooks: Vec<ServeHook>,
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     /// Single ordered async-shutdown list: plugin async hooks ++ controller
@@ -1056,4 +1062,15 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     state: T,
     shutdown_grace_period: Option<Duration>,
+}
+
+/// Sort the collected `#[on_start]` hooks by their declared `order`, ascending.
+///
+/// `sort_by_key` is a **stable** sort, so hooks sharing an order keep
+/// registration order: bean hooks (collected at `build_state()`) before
+/// controller hooks (collected as controllers register), each group in
+/// declaration order.
+pub(super) fn sort_on_start(mut hooks: Vec<OnStartReg>) -> Vec<OnStartReg> {
+    hooks.sort_by_key(|(order, _)| *order);
+    hooks
 }

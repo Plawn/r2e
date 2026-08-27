@@ -16,9 +16,9 @@ struct Assets;
 
 ```rust
 AppBuilder::new()
+    .plugin(EmbeddedFrontend::new::<Assets>())
     .build_state()
     .await
-    .with(EmbeddedFrontend::new::<Assets>())
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -36,9 +36,7 @@ Use `EmbeddedFrontend::builder()` for full control:
 
 ```rust
 AppBuilder::new()
-    .build_state()
-    .await
-    .with(
+    .plugin(
         EmbeddedFrontend::builder::<Assets>()
             .spa_fallback(true)
             .fallback_file("index.html")
@@ -50,6 +48,8 @@ AppBuilder::new()
             .base_path("/app")
             .build()
     )
+    .build_state()
+    .await
     .serve("0.0.0.0:3000")
     .await;
 ```
@@ -150,11 +150,9 @@ struct Assets;
 #[r2e::main]
 async fn main() {
     AppBuilder::new()
-        .build_state()
-        .await
-        .with(Tracing)
-        .with(Health)
-        .with(
+        .plugin(Tracing)
+        .plugin(Health)
+        .plugin(
             EmbeddedFrontend::builder::<Assets>()
                 .exclude_prefix("api/")
                 .exclude_prefix("ws/")
@@ -162,9 +160,11 @@ async fn main() {
                 .spa_fallback(true)
                 .build()
         )
+        .build_state()
+        .await
         .serve("0.0.0.0:3000")
         .await;
 }
 ```
 
-> **Note:** `EmbeddedFrontend` marks itself with `should_be_last() = true`. R2E will warn if you install other plugins after it, since it registers a fallback handler that would shadow later fallbacks.
+> **Note:** `EmbeddedFrontend` installs its SPA fallback as a **Graph**-stage router effect, and Graph effects apply in install order. A fallback must be the last word on unmatched paths, so install `EmbeddedFrontend` *after* every other plugin that touches the router.

@@ -140,7 +140,7 @@ impl BeanRegistry {
         let lazy_type_ids: HashSet<TypeId> = self.lazy_beans.iter().map(|lr| lr.type_id).collect();
 
         // Check for duplicates before any construction.
-        Self::check_for_duplicates(&self.beans, &entries)?;
+        Self::check_for_duplicates(&self.beans, &entries, &self.plugin_owners)?;
         Self::check_for_lazy_duplicates(&self.lazy_beans, &entries, &self.beans)?;
 
         // ── Config validation, aggregated across every declaring host ────

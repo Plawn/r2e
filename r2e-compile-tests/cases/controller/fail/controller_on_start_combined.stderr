@@ -1,0 +1,5 @@
+error: #[on_start] cannot be combined with a route, #[scheduled], #[consumer], #[sse], #[ws], #[async_exec], #[post_construct], or #[pre_destroy] on the same method — it is a plain startup observer that runs once at boot
+  --> cases/controller/fail/controller_on_start_combined.rs:12:14
+   |
+12 |     async fn warm(&self) -> &'static str {
+   |              ^^^^

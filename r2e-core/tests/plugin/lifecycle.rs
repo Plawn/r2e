@@ -4,7 +4,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, PreStatePlugin};
+use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext};
 use r2e_core::{AppBuilder, BeanError, PreDestroy};
 
 use crate::fixtures::Alpha;
@@ -14,10 +14,11 @@ use crate::fixtures::Alpha;
 /// A plugin whose `build` fails — e.g. a backend it must connect to is down.
 struct FailingPlugin;
 
-impl PreStatePlugin for FailingPlugin {
+impl Plugin for FailingPlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,
@@ -85,10 +86,11 @@ struct DisposePlugin {
     log: LifecycleLog,
 }
 
-impl PreStatePlugin for DisposePlugin {
+impl Plugin for DisposePlugin {
     type Provided = (DisposeBean,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     fn setup(&mut self, ctx: &mut PluginSetupContext) {
         ctx.run_pre_destroy::<DisposeBean>();
@@ -159,10 +161,11 @@ struct PanickingShutdownHookPlugin {
     second: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl PreStatePlugin for PanickingShutdownHookPlugin {
+impl Plugin for PanickingShutdownHookPlugin {
     type Provided = (Alpha,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     async fn build(
         self,

@@ -258,7 +258,7 @@ drained gracefully on shutdown. `PoolExecutor` remains a hard `Deps`
 requirement even in dedicated mode (a type-level requirement cannot be
 config-conditional) — the shared pool is simply not used to run ticks. An
 unrecognized `executor` value panics at boot. Setting `scheduler.enabled = false`
-skips the plugin's post-state effects (starting tasks) while keeping its provided
+skips the plugin's router/lifecycle effects (starting tasks) while keeping its provided
 beans (`CancelToken`, `ScheduledJobRegistry`) in the graph.
 
 ## Runtime control and stats

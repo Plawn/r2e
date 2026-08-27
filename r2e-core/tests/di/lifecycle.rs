@@ -1,4 +1,4 @@
-//! `PostConstruct` / `PreDestroy` on beans.
+//! `PostConstruct` / `PreDestroy` / `OnStart` on beans.
 
 use std::any::{type_name, TypeId};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -271,4 +271,130 @@ async fn pre_destroy_disposers_run_in_reverse_registration_order() {
         hook().await;
     }
     assert_eq!(*log.lock().unwrap(), vec!["second", "first"]);
+}
+
+// ── OnStart (startup observers) ────────────────────────────────────────
+//
+// `#[on_start]` is later than `#[post_construct]`: it runs at server startup,
+// once the whole graph AND every controller core exist. Hooks are collected
+// across beans/controllers, sorted by their declared `order` (ascending, ties
+// in registration order) and awaited in sequence; an `Err` aborts boot.
+
+#[derive(Clone)]
+struct StartLate {
+    log: Log,
+}
+
+#[r2e_macros::bean]
+impl StartLate {
+    fn new(log: Log) -> Self {
+        Self { log }
+    }
+
+    #[on_start(order = 10)]
+    async fn late(&self) {
+        self.log.lock().unwrap().push("late");
+    }
+}
+
+#[derive(Clone)]
+struct StartEarly {
+    log: Log,
+}
+
+#[r2e_macros::bean]
+impl StartEarly {
+    fn new(log: Log) -> Self {
+        Self { log }
+    }
+
+    /// Negative orders run before the `order = 0` default.
+    #[on_start(order = -5)]
+    fn very_early(&self) {
+        self.log.lock().unwrap().push("very-early");
+    }
+
+    /// A second hook on the same bean: default order, declaration order kept.
+    #[on_start]
+    async fn default_order(&self) {
+        self.log.lock().unwrap().push("default");
+    }
+}
+
+#[r2e_core::test]
+async fn on_start_hooks_run_sorted_by_order_under_build_with_consumers() {
+    let log: Log = Arc::new(Mutex::new(Vec::new()));
+
+    // `build_with_consumers` is the `TestApp::boot` path — unlike
+    // `#[pre_destroy]` (no shutdown there), `#[on_start]` DOES run.
+    let _router = r2e_core::AppBuilder::new()
+        .provide(log.clone())
+        .register::<StartLate>()
+        .register::<StartEarly>()
+        .build_state()
+        .await
+        .build_with_consumers()
+        .await;
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec!["very-early", "default", "late"],
+        "hooks must be sorted by declared order, ties in registration order"
+    );
+}
+
+#[derive(Clone)]
+struct StartFails;
+
+#[r2e_macros::bean]
+impl StartFails {
+    fn new() -> Self {
+        Self
+    }
+
+    #[on_start]
+    async fn boom(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err("on-start boom".into())
+    }
+}
+
+#[r2e_core::test]
+async fn on_start_error_aborts_boot() {
+    let app = r2e_core::AppBuilder::new()
+        .register::<StartFails>()
+        .build_state()
+        .await;
+
+    let prepared = app.prepare("127.0.0.1:0");
+    let listener = r2e_core::rt::bind_tcp("127.0.0.1:0").await.unwrap();
+    let err = prepared
+        .run_with_listener(listener)
+        .await
+        .expect_err("an #[on_start] Err must abort boot");
+    assert!(
+        err.to_string().contains("on-start boom"),
+        "error must carry the hook's message, got: {err}"
+    );
+}
+
+#[r2e_core::test]
+async fn on_start_is_skipped_for_a_pinned_override() {
+    let log: Log = Arc::new(Mutex::new(Vec::new()));
+
+    // Pinning the observing bean itself skips its whole registration, so
+    // `after_register` never queues the hook — same rule as `#[post_construct]`
+    // and `#[scheduled]`.
+    let _router = r2e_core::AppBuilder::new()
+        .provide(log.clone())
+        .override_bean(StartLate { log: log.clone() })
+        .register::<StartLate>()
+        .build_state()
+        .await
+        .build_with_consumers()
+        .await;
+
+    assert!(
+        log.lock().unwrap().is_empty(),
+        "a pinned override must not run the bean's #[on_start] hooks"
+    );
 }

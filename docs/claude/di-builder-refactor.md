@@ -104,25 +104,46 @@ Spring/NestJS-style module bundles with **compile-time encapsulation** those
 frameworks cannot offer.
 
 - `FeatureModule` is declarative — `Providers` / `Controllers` / `Exports` /
-  `Imports`, no register body. `BeanList` folds provided types + aggregate deps +
+  `Imports` / `RequiredPlugins` / `Plugins`, no register body. `BeanList` folds provided types + aggregate deps +
   registration from `Registrable`; `ControllerDepsList` folds each controller's
   `EndpointDeps::Deps`; `ModuleControllers` / `ModuleList` carry the deferred
   controller folds.
 - `AppBuilder` carries a 4th phantom param `Mods` (default `TNil`).
   `register_module` (extension trait `RegisterModule`, witnesses inferred)
-  registers providers into the global graph, grows `P` by `Exports` **only** and
-  `R` by `Imports` **only**, and queues the module. `build_state()` folds `Mods`
+  installs the plugins the module **brings** (`Plugins`, below), registers
+  providers into the global graph, grows `P` by `Exports` (plus the brought
+  plugins' provisions) and `R` by `Imports` (plus their `Deps`), and queues the
+  module. `build_state()` folds `Mods`
   after materializing the state through an *unchecked* registration backend —
   module controllers may inject private beans, since cores construct from the
   retained `BeanContext`. `with_state` is restricted to `Mods = TNil`;
-  `RawPreStatePlugin::install` carries the `Mods` type param.
+  `PluginInstall::install` carries the `Mods` type param.
 - Encapsulation is enforced by dedicated check traits with module-targeted
   diagnostics: `InModuleScope` / `ModuleDepsSatisfied` (deps ⊆ Provides ∪
   Imports) and `ProvidedByModule` / `ExportsProvided` (exports must be
   provided). Trybuild covers: provider dep out of scope, export not provided,
   controller dep out of scope, private bean invisible to app controllers.
 - `#[module(providers(...), controllers(...), exports(...), imports(...),
-  requires_plugins(...))]` generates the `FeatureModule` impl; all keys optional.
+  plugins(...), requires_plugins(...))]` generates the `FeatureModule` impl; all
+  keys optional.
+- **Modules bring their plugins.** `plugins(Scheduler = Scheduler)` (macro) /
+  `type Plugins = (Scheduler,)` + `fn plugins()` installs the plugin at the
+  `register_module` call site; `requires_plugins(Scheduler)` only *needs* it
+  installed elsewhere. The `Type = expr` form is required (bare type / missing
+  `=` are targeted macro errors): the type grows the provision list at compile
+  time, the expression is the instance. `ModulePluginList` (P/R-independent,
+  feeds `ModuleScope`) + `ModulePlugins<P, R, Mods>` (the value fold whose
+  `OutP`/`OutR`/`OutMods` are exactly what a sequential `.plugin(a).plugin(b)`
+  chain yields) do the work, so brought provisions are app-global, brought
+  controllers are queued, and brought effects apply at that call's position in
+  install order. A brought plugin's bean must **not** be listed in `Exports`
+  (it is already in `P`; two slots for one type breaks `HasBean` inference), and
+  `requires_plugins` is checked against the **post-fold** `P` — so a module can
+  both bring and require, and a later module can be satisfied by an earlier
+  one's plugin. One owner per plugin: a double install (app + module, or two
+  modules) is `BeanError::DuplicatePlugin`, naming both owners and pointing at
+  `requires_plugins`. Stable Rust has no associated-type defaults, so
+  hand-written impls must write `type Plugins = (); fn plugins() {}`.
 - **Module-imports-module composition.** An `imports(...)` entry is either a bean
   type or `module(OtherModule)`, mixed freely (`imports(DbPool, module(Billing))`;
   `module(A, B)` and repeated `module(A), module(B)` are equivalent). The macro

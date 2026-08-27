@@ -155,7 +155,7 @@ src/
   http/
     mod.rs                  HTTP module — re-exports from r2e-http (Router, StatusCode, HeaderMap, ...)
     ws.rs                   WebSocket re-exports + IsWebSocket trait
-  plugin/                   Plugin machinery: Plugin, PreStatePlugin, DeferredAction, contexts, graph handle
+  plugin/                   Plugin machinery: Plugin, Plugin, DeferredAction, contexts, graph handle
   runtime/
     dev.rs                  Dev-reload statics + endpoints (feature = "dev-reload" consumers)
     layers.rs               Tower layer utilities: default_cors(), default_trace(), init_tracing()
@@ -228,7 +228,7 @@ Interval, cron, and delayed task scheduling with graceful shutdown.
 
 ```
 src/
-  lib.rs                    Scheduler PreStatePlugin, SchedulerHandle, task runner loop
+  lib.rs                    Scheduler Plugin, SchedulerHandle, task runner loop
   types.rs                  ScheduleConfig, ScheduledTaskDef<T>, ScheduledTask trait, ScheduledResult
 
 tests/
@@ -246,7 +246,7 @@ Bounded `PoolExecutor` (semaphore concurrency + mpsc-style queue cap), graceful 
 
 ```
 src/
-  lib.rs                    ExecutorConfig, PoolExecutor, ExecutorMetrics, RejectedError, Executor PreStatePlugin
+  lib.rs                    ExecutorConfig, PoolExecutor, ExecutorMetrics, RejectedError, Executor Plugin
 
 tests/
   executor.rs               submit/await, concurrency cap, queue rejection, graceful + abort shutdown

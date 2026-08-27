@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
@@ -7,6 +8,8 @@ use diesel::Connection;
 use r2e_core::config::LiveConfig;
 use r2e_core::rt::CancelToken;
 use r2e_core::{BeanContext, ServiceComponent};
+
+use crate::datasource::{DataSourceTag, DefaultDataSource};
 
 /// Error building or rotating a Diesel [`DbPool`].
 #[derive(Debug, Clone)]
@@ -22,7 +25,7 @@ impl std::error::Error for PoolError {}
 
 /// Builds a fresh r2d2 pool for a given database URL. Cloned into a blocking
 /// task on every rotation, since r2d2's pool builder itself is blocking.
-type PoolFactory<Conn> =
+pub type PoolFactory<Conn> =
     Arc<dyn Fn(String) -> Result<Pool<ConnectionManager<Conn>>, PoolError> + Send + Sync>;
 
 /// Diesel r2d2 pool facade that can rotate to a new underlying pool at runtime.
@@ -30,20 +33,29 @@ type PoolFactory<Conn> =
 /// The active pool is swapped atomically, so `current()` stays lock-free on the
 /// per-request path. Unlike SQLx's async pool, r2d2 builds pools on a blocking
 /// thread, so rotation rebuilds via a [`PoolFactory`] inside `spawn_blocking`.
-pub struct DbPool<Conn>
+/// `Tag` names the datasource the pool belongs to. It defaults to
+/// [`DefaultDataSource`] (config section `datasource`), so `DbPool<Conn>` is
+/// the app's single database; a named one — minted with
+/// [`datasource_tag!`](crate::datasource_tag) — is a *different* bean type, so
+/// several can be injected side by side.
+pub struct DbPool<Conn, Tag = DefaultDataSource>
 where
     Conn: Connection + R2D2Connection + 'static,
 {
     inner: Arc<Inner<Conn>>,
+    /// `fn() -> Tag` (not `Tag`): the marker must not make the pool's
+    /// auto-traits depend on it, and the pool never holds a `Tag` value.
+    tag: PhantomData<fn() -> Tag>,
 }
 
-impl<Conn> Clone for DbPool<Conn>
+impl<Conn, Tag> Clone for DbPool<Conn, Tag>
 where
     Conn: Connection + R2D2Connection + 'static,
 {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            tag: PhantomData,
         }
     }
 }
@@ -77,7 +89,7 @@ where
     last_error: Mutex<Option<String>>,
 }
 
-impl<Conn> DbPool<Conn>
+impl<Conn, Tag> DbPool<Conn, Tag>
 where
     Conn: Connection + R2D2Connection + Send + 'static,
 {
@@ -105,6 +117,7 @@ where
                 url,
                 last_error: Mutex::new(None),
             }),
+            tag: PhantomData,
         })
     }
 
@@ -179,7 +192,7 @@ where
     }
 }
 
-impl<Conn> fmt::Debug for DbPool<Conn>
+impl<Conn, Tag> fmt::Debug for DbPool<Conn, Tag>
 where
     Conn: Connection + R2D2Connection + 'static,
 {
@@ -191,9 +204,10 @@ where
     }
 }
 
-impl<Conn> ServiceComponent for DbPool<Conn>
+impl<Conn, Tag> ServiceComponent for DbPool<Conn, Tag>
 where
     Conn: Connection + R2D2Connection + Send + 'static,
+    Tag: DataSourceTag,
 {
     /// The pool is itself the bean: `from_context` reads it back by type.
     type Deps = r2e_core::type_list::TCons<Self, r2e_core::type_list::TNil>;

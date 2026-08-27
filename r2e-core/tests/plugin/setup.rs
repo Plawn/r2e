@@ -13,8 +13,8 @@ use std::time::Duration;
 use r2e_core::http::routing::get;
 use r2e_core::http::StatusCode;
 use r2e_core::plugin::{
-    plugin_action_name, DeferredAction, PluginBuildContext, PluginBuildError, PluginSetupContext,
-    PreStatePlugin,
+    plugin_action_name, DeferredAction, Plugin, PluginBuildContext, PluginBuildError,
+    PluginSetupContext,
 };
 use r2e_core::AppBuilder;
 
@@ -25,10 +25,11 @@ use crate::support::send_get as get_route;
 /// its routes from `build`, where the enabled gate applies.
 struct SugarSetupPlugin;
 
-impl PreStatePlugin for SugarSetupPlugin {
+impl Plugin for SugarSetupPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     fn setup(&mut self, ctx: &mut PluginSetupContext) {
         ctx.store_data(SetupData(42));
@@ -76,10 +77,11 @@ struct EveryHookPlugin {
     log: EventLog,
 }
 
-impl PreStatePlugin for EveryHookPlugin {
+impl Plugin for EveryHookPlugin {
     type Provided = (SugarMarker,);
     type Deps = ();
     type Config = ();
+    type Controllers = ();
 
     fn setup(&mut self, ctx: &mut PluginSetupContext) {
         let log = self.log.clone();

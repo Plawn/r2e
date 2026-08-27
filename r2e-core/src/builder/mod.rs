@@ -1,7 +1,7 @@
 //! Application builder: two-phase assembly of an R2E app.
 //!
 //! - [`nostate`]: the pre-state phase (`AppBuilder<NoState>`) — bean/producer
-//!   registration, config loading, pre-state plugins, `build_state`.
+//!   registration, config loading, plugin installation, `build_state`.
 //! - [`typed`]: the typed phase (`AppBuilder<T>`) — controllers, plugins,
 //!   layers, hooks, `build()` / `prepare()` / `serve()`.
 //! - [`prepared`]: [`PreparedApp`] + the serving lifecycle (`run()`).
@@ -25,10 +25,11 @@ use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
 use crate::di::meta::MetaRegistry;
 use crate::di::module::{
-    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModuleDepsSatisfied, ModuleList,
-    ModuleScope, RequiredPluginsInstalled,
+    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModEntry, ModuleDepsSatisfied,
+    ModuleList, ModulePluginProvisions, ModulePlugins, ModuleProvided, ModuleScope,
+    PushPluginCtrls, RequiredPluginsInstalled,
 };
-use crate::plugin::{DeferredAction, DeferredContext, Plugin, RawPreStatePlugin};
+use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect};
 use crate::rt::CancelToken;
 use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::runtime::service::ServiceComponent;
@@ -68,26 +69,43 @@ pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
 >;
 
 /// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
-/// `Provisions` join `P` and its `Required` (`Deps`) joins `R`. Nothing is
-/// checked at the call site; `Required` is verified against the final
-/// provision list at `build_state()`.
+/// `Provisions` join `P`, its `Required` (`Deps`) joins `R`, and — when it
+/// ships any — its `Controllers` are queued on `Mods` so `build_state()`
+/// registers them. Nothing is checked at the call site; `Required` is verified
+/// against the final provision list at `build_state()`.
 pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     NoState,
-    <P as TAppend<<Pl as RawPreStatePlugin>::Provisions>>::Output,
-    <R as TAppend<<Pl as RawPreStatePlugin>::Required>>::Output,
-    Mods,
+    <P as TAppend<<Pl as PluginInstall>::Provisions>>::Output,
+    <R as TAppend<<Pl as PluginInstall>::Required>>::Output,
+    <<Pl as PluginInstall>::Controllers as PushPluginCtrls<Pl, Mods>>::Output,
 >;
+
+/// Provision list after installing the plugins a module
+/// [brings](FeatureModule::Plugins) — the `P` every later step of
+/// `register_module` builds on.
+pub type ModulePluginsP<M, P, R, Mods> =
+    <<M as FeatureModule>::Plugins as ModulePlugins<P, R, Mods>>::OutP;
+
+/// Requirement list after installing a module's brought plugins.
+pub type ModulePluginsR<M, P, R, Mods> =
+    <<M as FeatureModule>::Plugins as ModulePlugins<P, R, Mods>>::OutR;
+
+/// Deferred-controller list after installing a module's brought plugins.
+pub type ModulePluginsMods<M, P, R, Mods> =
+    <<M as FeatureModule>::Plugins as ModulePlugins<P, R, Mods>>::OutMods;
 
 /// Builder returned by
 /// [`register_module`](registration::RegisterModule::register_module): the
-/// module's `Exports` join the provision list `P`, its `Imports` join the
-/// requirement list `R`, and the module is queued on `Mods` so
-/// `build_state()` registers its controllers.
+/// plugins the module [brings](FeatureModule::Plugins) are installed first
+/// (growing `P`/`R`/`Mods` exactly as `.plugin(..)` would), then the module's
+/// `Exports` join the provision list `P`, its `Imports` join the requirement
+/// list `R`, and the module is queued on `Mods` so `build_state()` registers
+/// its controllers.
 pub type ModuleRegistered<M, P, R, Mods> = AppBuilder<
     NoState,
-    <<M as FeatureModule>::Exports as TAppend<P>>::Output,
-    <R as TAppend<<M as FeatureModule>::Imports>>::Output,
-    TCons<M, Mods>,
+    <<M as FeatureModule>::Exports as TAppend<ModulePluginsP<M, P, R, Mods>>>::Output,
+    <ModulePluginsR<M, P, R, Mods> as TAppend<<M as FeatureModule>::Imports>>::Output,
+    TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>,
 >;
 
 type ConsumerReg<T> =
@@ -102,6 +120,13 @@ type PostConstructReg = std::pin::Pin<
             + Send,
     >,
 >;
+
+/// A queued `#[on_start]` hook with its declared `order`, collected from beans
+/// (via [`BeanRegistry::register_on_start`](crate::beans::BeanRegistry::register_on_start))
+/// and from controller cores (via [`Controller::on_start`](crate::Controller::on_start)).
+/// Sorted by `order` (ascending, ties in registration order) and awaited in
+/// sequence at startup, before the builder's [`StartupHook`] closures.
+type OnStartReg = (i32, crate::beans::OnStartHook);
 
 type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
 
@@ -305,8 +330,9 @@ struct BuilderConfig {
     deferred_actions: Vec<DeferredAction>,
     /// Plugin data storage (type-erased, keyed by TypeId).
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
-    /// Name of the last plugin that should be installed last (for ordering validation).
-    last_plugin_name: Option<&'static str>,
+    /// Routes-stage plugin effects: queued by the Graph-stage deferred action
+    /// and drained in `build()`, once every controller has registered.
+    routes_effects: Vec<RoutesEffect>,
     /// Whether to install the pre-routing trailing-slash normalization rewrite.
     normalize_path: bool,
     /// Whether the DevReload plugin has been applied (prevents double-install).
@@ -369,9 +395,10 @@ struct BuilderConfig {
 /// - [`.with_state(state)`](AppBuilder::<NoState>::with_state) — provide a pre-built state directly.
 /// - [`.build_state()`](AppBuilder::<NoState>::build_state) — resolve the bean graph and build state.
 ///
-/// Once in the typed phase (`AppBuilder<T>`), you can register controllers,
-/// install plugins via [`.with()`](Self::with), add hooks, and call `.build()`
-/// or `.serve()`.
+/// Plugins install with [`.plugin(p)`](AppBuilder::plugin) in the builder
+/// phase, *before* the transition: their `build` runs as a graph node inside
+/// `build_state()`. Once in the typed phase (`AppBuilder<T>`), you register
+/// controllers, add hooks, and call `.build()` or `.serve()`.
 pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil, Mods = TNil> {
     shared: BuilderConfig,
     state: T,
@@ -390,6 +417,10 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     /// Controller-core `#[post_construct]` futures, awaited at startup before
     /// `consumer_registrations`.
     post_construct_registrations: Vec<PostConstructReg>,
+    /// `#[on_start]` hooks from beans and controller cores, awaited at startup
+    /// (sorted by declared order) after the consumer registrations and before
+    /// the plugin serve hooks and the builder's `on_start` closures.
+    on_start_hooks: Vec<OnStartReg>,
     /// Serve hooks from plugins (called when server starts).
     /// Tasks already capture their state, so only the token is needed.
     serve_hooks: Vec<ServeHook>,
@@ -415,6 +446,22 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
 // ── Conditional assembly (any phase) ────────────────────────────────────────
 
 impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
+    /// Returns a reference to the loaded [`R2eConfig`](crate::config::R2eConfig),
+    /// if any.
+    ///
+    /// Available after `load_config` (or `with_config`). Plugins install **before**
+    /// `build_state()`, so this is the accessor a config-driven plugin
+    /// constructor reads from:
+    ///
+    /// ```ignore
+    /// let b = AppBuilder::new().load_config::<AppConfig>();
+    /// let tracing = Tracing::from_config(b.r2e_config().unwrap());
+    /// b.plugin(tracing).build_state().await
+    /// ```
+    pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
+        self.shared.config.as_ref()
+    }
+
     /// Conditionally apply a builder transformation.
     ///
     /// `f` must return the **same** builder type, so it may call `Self -> Self`
@@ -426,7 +473,7 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .when(cfg!(debug_assertions), |b| b.with(DevReload))
+    ///     .when(cfg!(debug_assertions), |b| b.with_layer_fn(no_store))
     /// ```
     pub fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
         if cond {

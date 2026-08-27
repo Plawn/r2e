@@ -633,15 +633,15 @@ impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
 
 // ── PluginConfig trait ───────────────────────────────────────────────────
 
-/// The typed-configuration surface of a [`PreStatePlugin`](crate::PreStatePlugin).
+/// The typed-configuration surface of a [`Plugin`](crate::Plugin).
 ///
-/// A plugin names a `Config` type (its [`PreStatePlugin::Config`](crate::PreStatePlugin::Config))
+/// A plugin names a `Config` type (its [`Plugin::Config`](crate::Plugin::Config))
 /// plus a section prefix
-/// ([`PreStatePlugin::CONFIG_PREFIX`](crate::PreStatePlugin::CONFIG_PREFIX)). At
-/// `configure` time — after `build_state()`, when [`R2eConfig`] is guaranteed
+/// ([`Plugin::CONFIG_PREFIX`](crate::Plugin::CONFIG_PREFIX)). At `build` time
+/// — inside `build_state()`, as a graph node, when [`R2eConfig`] is guaranteed
 /// loaded — the framework loads and validates that section and hands the plugin
 /// an `Option<Config>` (see the loading rules on
-/// [`PreStatePlugin::configure`](crate::PreStatePlugin::configure)).
+/// [`Plugin::build`](crate::Plugin::build)).
 ///
 /// This trait is implemented for two shapes, mirroring [`LoadableConfig`]:
 ///
