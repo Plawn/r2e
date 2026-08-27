@@ -571,3 +571,18 @@ async fn leeway_tolerates_a_slightly_expired_token() {
     let lenient = claims_validator_with(test_config().with_leeway(60));
     lenient.validate(&token).await.unwrap();
 }
+
+/// A mixed-family allow-list (e.g. the RS256+ES256+PS256 default of resource
+/// servers) must still validate a token whose algorithm is allowed:
+/// jsonwebtoken rejects a `Validation` mixing key families once the key is
+/// known, so the validator narrows the list to the token's algorithm.
+#[r2e_core::test]
+async fn mixed_family_allowed_algorithms_still_validate() {
+    let config = SecurityConfig::new("unused", TEST_ISSUER, TEST_AUDIENCE)
+        .with_allowed_algorithms([Algorithm::HS256, Algorithm::ES256]);
+    let validator =
+        JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), config);
+    let token = valid_token("user-1", &["admin"]);
+    let claims = validator.validate(&token).await.expect("token must validate");
+    assert_eq!(claims.sub, "user-1");
+}

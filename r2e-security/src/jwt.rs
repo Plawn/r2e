@@ -174,8 +174,13 @@ impl JwtClaimsValidator {
         };
 
         // Step 3: Decode and validate the token using the parameters prepared
-        // once when the validator was constructed.
-        let token_data = decode::<C>(token, &decoding_key, &self.validation).map_err(|e| {
+        // once when the validator was constructed. jsonwebtoken rejects any
+        // `Validation` whose algorithm list mixes key families (RSA + EC) once
+        // the key is known, so narrow the list to the token's algorithm — it
+        // already passed the allow-list check above.
+        let mut validation = self.validation.clone();
+        validation.algorithms = vec![algorithm];
+        let token_data = decode::<C>(token, &decoding_key, &validation).map_err(|e| {
             let err = match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => SecurityError::TokenExpired,
                 jsonwebtoken::errors::ErrorKind::InvalidIssuer => {
