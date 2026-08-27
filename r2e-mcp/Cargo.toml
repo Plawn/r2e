@@ -12,12 +12,17 @@ description = "MCP (Model Context Protocol) server support for R2E framework"
 
 [features]
 default = []
+# Test helpers (`r2e_mcp::testing`): pin a TestJwt-backed validator so an
+# authenticated MCP app boots with zero network I/O.
+testing = ["dep:r2e-test"]
 
 [dependencies]
 r2e-core = { workspace = true }
 # OAuth resource-server layer (mcp.auth.*): JWT validation, JWKS cache,
 # role extractors and the shared OAuth HTTP client all come from r2e-security.
 r2e-security = { workspace = true }
+# `testing` feature only — no cycle: r2e-test does not depend on r2e-mcp.
+r2e-test = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 url = { workspace = true }
 tower = { workspace = true }

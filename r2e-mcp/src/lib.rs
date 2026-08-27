@@ -48,6 +48,8 @@ pub mod registry;
 pub mod result;
 pub mod route;
 pub mod service;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;

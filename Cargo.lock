@@ -6091,6 +6091,7 @@ dependencies = [
  "r2e-core",
  "r2e-macros",
  "r2e-security",
+ "r2e-test",
  "reqwest 0.13.4",
  "rmcp",
  "schemars 1.2.1",

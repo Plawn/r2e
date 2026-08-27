@@ -144,3 +144,79 @@ fn test_issuer_override_on_builder() {
     assert_eq!(claims["aud"].as_str().unwrap(), "custom-aud");
     assert_eq!(claims["sub"].as_str().unwrap(), "user-1");
 }
+
+// --- OAuth/MCP-shaped claims (for_resource + scopes/roles/audiences) --------
+
+#[test]
+fn test_for_resource_sets_issuer_and_audience() {
+    let jwt = TestJwt::for_resource("http://localhost:3000/mcp");
+    assert_eq!(jwt.issuer(), "r2e-test");
+    assert_eq!(jwt.audience(), "http://localhost:3000/mcp");
+    let claims = decode_payload(&jwt.token("alice", &[]));
+    assert_eq!(claims["iss"], "r2e-test");
+    assert_eq!(claims["aud"], "http://localhost:3000/mcp");
+}
+
+#[test]
+fn test_scopes_claim_is_space_joined() {
+    let jwt = TestJwt::new();
+    let token = jwt
+        .token_builder("alice")
+        .scopes(&["mcp:read", "mcp:write"])
+        .build();
+    assert_eq!(decode_payload(&token)["scope"], "mcp:read mcp:write");
+}
+
+#[test]
+fn test_audiences_emits_array_aud() {
+    let jwt = TestJwt::new();
+    let token = jwt
+        .token_builder("alice")
+        .audiences(&["account", "http://localhost:3000/mcp"])
+        .build();
+    let claims = decode_payload(&token);
+    assert_eq!(
+        claims["aud"],
+        serde_json::json!(["account", "http://localhost:3000/mcp"])
+    );
+}
+
+#[test]
+fn test_realm_roles_keycloak_shape() {
+    let jwt = TestJwt::new();
+    let token = jwt
+        .token_builder("alice")
+        .realm_roles(&["admin", "user"])
+        .build();
+    let claims = decode_payload(&token);
+    assert_eq!(
+        claims["realm_access"],
+        serde_json::json!({ "roles": ["admin", "user"] })
+    );
+}
+
+#[test]
+fn test_client_roles_merge_across_clients() {
+    let jwt = TestJwt::new();
+    let token = jwt
+        .token_builder("alice")
+        .client_roles("mcp-public", &["writer"])
+        .client_roles("other-app", &["viewer"])
+        .build();
+    let claims = decode_payload(&token);
+    assert_eq!(
+        claims["resource_access"],
+        serde_json::json!({
+            "mcp-public": { "roles": ["writer"] },
+            "other-app": { "roles": ["viewer"] },
+        })
+    );
+}
+
+#[test]
+fn test_single_audience_still_string_shaped() {
+    // `audience()` keeps the historical string-`aud` shape.
+    let jwt = TestJwt::new();
+    let token = jwt.token_builder("alice").audience("custom-aud").build();
+    assert_eq!(decode_payload(&token)["aud"], "custom-aud");
+}

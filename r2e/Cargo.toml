@@ -49,6 +49,9 @@ openfga = ["dep:r2e-openfga"]
 observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc", "r2e-security?/grpc"]
 mcp = ["dep:r2e-mcp"]
+# MCP test helpers (`r2e::r2e_mcp::testing::pin_mcp_validator`). Dev-graph
+# only (pulls r2e-test) — enable it from [dev-dependencies], not [dependencies].
+mcp-testing = ["mcp", "r2e-mcp/testing"]
 grpc-reflection = ["grpc", "r2e-grpc/reflection"]
 static = ["dep:r2e-static"]
 tenant = ["dep:r2e-tenant"]
