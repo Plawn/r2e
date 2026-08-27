@@ -190,9 +190,16 @@ fn generate_invoke_method(
     };
 
     // --- params deserialization ---------------------------------------------
+    let has_call = tool.args.iter().any(|arg| matches!(arg, McpToolArg::Call));
+    let has_cancel = tool
+        .args
+        .iter()
+        .any(|arg| matches!(arg, McpToolArg::Cancel));
     let params_stmts = match tool.params_type() {
         Some(params_ty) => {
-            let arguments = if tool.args.iter().any(|arg| matches!(arg, McpToolArg::Call)) {
+            // Preserve the arguments inside a call passed to the method. This
+            // is the only clone needed for the Params + Call combination.
+            let arguments = if has_call {
                 quote! { __call.arguments.clone() }
             } else {
                 quote! { __call.arguments }
@@ -208,6 +215,21 @@ fn generate_invoke_method(
         None => quote! {},
     };
 
+    // A call is moved into the method. Save only fields that are also needed
+    // independently, instead of cloning the complete call context.
+    let saved_call_fields = {
+        let cancel = (has_call && has_cancel).then(|| {
+            quote! { let __cancel = __call.cancel.clone(); }
+        });
+        let resource_uri = (has_call && kind == McpMemberKind::Resource).then(|| {
+            quote! { let __resource_uri = __call.uri.clone(); }
+        });
+        quote! {
+            #cancel
+            #resource_uri
+        }
+    };
+
     // --- method call (original positional argument order) -------------------
     let call_args: Vec<TokenStream> = tool
         .args
@@ -215,7 +237,8 @@ fn generate_invoke_method(
         .map(|arg| match arg {
             McpToolArg::Identity(_) => quote! { __identity },
             McpToolArg::Params(_) => quote! { #mcp::__macro_support::Params(__params) },
-            McpToolArg::Call => quote! { __call.clone() },
+            McpToolArg::Call => quote! { __call },
+            McpToolArg::Cancel if has_call => quote! { __cancel },
             McpToolArg::Cancel => quote! { __call.cancel.clone() },
         })
         .collect();
@@ -266,10 +289,15 @@ fn generate_invoke_method(
                 Some(m) => quote! { ::core::option::Option::Some(#m) },
                 None => quote! { ::core::option::Option::None },
             };
+            let uri = if has_call {
+                quote! { &__resource_uri }
+            } else {
+                quote! { &__call.uri }
+            };
             quote! {
                 #mcp::__macro_support::IntoResourceResult::into_resource_result(
                     __result,
-                    &__call.uri,
+                    #uri,
                     #mime,
                 )
             }
@@ -295,6 +323,7 @@ fn generate_invoke_method(
             #identity_stmts
             #guard_stmts
             #params_stmts
+            #saved_call_fields
             let __core = &self.core;
             let __result = { #body };
             #convert

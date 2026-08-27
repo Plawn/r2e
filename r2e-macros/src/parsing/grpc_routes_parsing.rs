@@ -133,41 +133,39 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
     let mut other_methods = Vec::new();
 
     for impl_item in item.items {
-        match impl_item {
-            syn::ImplItem::Fn(mut method) => {
-                let all_attrs = std::mem::take(&mut method.attrs);
+        let syn::ImplItem::Fn(mut method) = impl_item else {
+            continue;
+        };
+        let all_attrs = std::mem::take(&mut method.attrs);
 
-                // Every async method in the impl block is considered a gRPC method
-                // (matching the tonic trait). Non-async or methods without &self are helpers.
-                let is_receiver = method
-                    .sig
-                    .inputs
-                    .first()
-                    .map_or(false, |arg| matches!(arg, syn::FnArg::Receiver(_)));
+        // Every async method in the impl block is considered a gRPC method
+        // (matching the tonic trait). Non-async or methods without &self are helpers.
+        let is_receiver = method
+            .sig
+            .inputs
+            .first()
+            .is_some_and(|arg| matches!(arg, syn::FnArg::Receiver(_)));
 
-                if method.sig.asyncness.is_some() && is_receiver {
-                    let decorators = parse_grpc_decorators(&all_attrs)?;
+        if method.sig.asyncness.is_some() && is_receiver {
+            let decorators = parse_grpc_decorators(&all_attrs)?;
 
-                    method.attrs = strip_known_attrs(all_attrs);
-                    let identity_param = extract_identity_param(&mut method)?;
-                    let name = method.sig.ident.clone();
+            method.attrs = strip_known_attrs(all_attrs);
+            let identity_param = extract_identity_param(&mut method)?;
+            let name = method.sig.ident.clone();
 
-                    methods.push(GrpcMethod {
-                        name,
-                        decorators,
-                        identity_param,
-                        fn_item: method,
-                    });
-                } else {
-                    // Pass-through helpers still can't carry gRPC-disallowed
-                    // markers: a sync `#[pre_destroy] fn close(&self)` would
-                    // otherwise be re-emitted verbatim and silently never run.
-                    validate_grpc_attrs(&all_attrs)?;
-                    method.attrs = all_attrs;
-                    other_methods.push(method);
-                }
-            }
-            _ => {} // skip non-method items
+            methods.push(GrpcMethod {
+                name,
+                decorators,
+                identity_param,
+                fn_item: method,
+            });
+        } else {
+            // Pass-through helpers still can't carry gRPC-disallowed
+            // markers: a sync `#[pre_destroy] fn close(&self)` would
+            // otherwise be re-emitted verbatim and silently never run.
+            validate_grpc_attrs(&all_attrs)?;
+            method.attrs = all_attrs;
+            other_methods.push(method);
         }
     }
 

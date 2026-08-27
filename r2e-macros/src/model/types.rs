@@ -93,7 +93,7 @@ pub enum ConsumerKind {
     Responder {
         /// The reply payload type (`Resp`). For a fallible responder this is
         /// the `Ok` type unwrapped from `Result<Resp, E>`.
-        resp_type: syn::Type,
+        resp_type: Box<syn::Type>,
         /// `true` when the method returns `Result<Resp, E>` (the `Err` is
         /// mapped to the responder error string → `EventBusError::Remote`).
         fallible: bool,

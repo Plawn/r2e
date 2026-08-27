@@ -10,6 +10,7 @@
 use crate::extract::*;
 use crate::model::types::{IdentityParam, MethodDecorators};
 use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
+use crate::util::type_utils::type_last_segment_is;
 
 /// Which MCP member family a marked method belongs to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -278,19 +279,6 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
     Ok(meta)
 }
 
-/// Return `true` when the type path's last segment matches `ident` (bare or
-/// fully qualified spelling).
-fn last_segment_is(ty: &syn::Type, ident: &str) -> bool {
-    match ty {
-        syn::Type::Path(tp) => tp
-            .path
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == ident),
-        _ => false,
-    }
-}
-
 /// If `ty` is `Params<T>` (by last path segment), return `T`.
 fn unwrap_params_type(ty: &syn::Type) -> Option<syn::Type> {
     let syn::Type::Path(tp) = ty else { return None };
@@ -385,7 +373,7 @@ fn classify_args(
             args.push(McpToolArg::Params(inner));
             continue;
         }
-        if last_segment_is(&pat_type.ty, call_type) {
+        if type_last_segment_is(&pat_type.ty, call_type) {
             if has_call {
                 return Err(syn::Error::new_spanned(
                     pat_type,
@@ -396,7 +384,7 @@ fn classify_args(
             args.push(McpToolArg::Call);
             continue;
         }
-        if last_segment_is(&pat_type.ty, "CancelToken") {
+        if type_last_segment_is(&pat_type.ty, "CancelToken") {
             if has_cancel {
                 return Err(syn::Error::new_spanned(
                     pat_type,
@@ -439,21 +427,23 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
         ));
     }
 
-    let controller_name = match &*item.self_ty {
-        syn::Type::Path(type_path)
-            if type_path.qself.is_none()
-                && type_path.path.segments.len() == 1
-                && matches!(
-                    type_path.path.segments[0].arguments,
-                    syn::PathArguments::None
-                ) => type_path.path.segments[0].ident.clone(),
-        _ => {
-            return Err(syn::Error::new_spanned(
+    let controller_name =
+        match &*item.self_ty {
+            syn::Type::Path(type_path)
+                if type_path.qself.is_none()
+                    && type_path.path.segments.len() == 1
+                    && matches!(
+                        type_path.path.segments[0].arguments,
+                        syn::PathArguments::None
+                    ) =>
+            {
+                type_path.path.segments[0].ident.clone()
+            }
+            _ => return Err(syn::Error::new_spanned(
                 &item.self_ty,
                 "#[mcp_routes] requires a concrete local adapter type without generic arguments",
-            ))
-        }
-    };
+            )),
+        };
 
     // Impl-level decorators are consumed by MCP codegen. Every other
     // attribute stays on the user's impl.

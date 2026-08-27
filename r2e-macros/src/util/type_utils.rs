@@ -50,6 +50,30 @@ pub fn result_ok_type(ty: &Type) -> Option<&Type> {
     })
 }
 
+/// Unwrap `Result<T, E>` / `ApiResult<T>` / `JsonResult<T>` to `T`, leaving
+/// every other type unchanged.
+pub fn unwrap_result_type(ty: &Type) -> &Type {
+    result_ok_type(ty).unwrap_or(ty)
+}
+
+/// Extract `T` from `Json<T>` (including fully-qualified paths).
+pub fn unwrap_json_type(ty: &Type) -> Option<&Type> {
+    if !type_last_segment_is(ty, "Json") {
+        return None;
+    }
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    let syn::PathArguments::AngleBracketed(args) = &type_path.path.segments.last()?.arguments
+    else {
+        return None;
+    };
+    match args.args.first() {
+        Some(syn::GenericArgument::Type(inner)) => Some(inner),
+        _ => None,
+    }
+}
+
 /// If `ty` is `Option<X>` (or `std::option::Option<X>`), return `Some(X)`.
 /// Otherwise, return `None`.
 pub fn unwrap_option_type(ty: &Type) -> Option<&Type> {

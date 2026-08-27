@@ -161,7 +161,7 @@ fn is_ws_type(ty: &syn::Type) -> bool {
             .path
             .segments
             .last()
-            .map_or(false, |s| s.ident == "WsStream" || s.ident == "WebSocket")
+            .is_some_and(|s| s.ident == "WsStream" || s.ident == "WebSocket")
     } else {
         false
     }
@@ -185,7 +185,7 @@ fn find_ws_param(method: &syn::ImplItemFn) -> syn::Result<Option<WsParam>> {
                         .path
                         .segments
                         .last()
-                        .map_or(false, |s| s.ident == "WsStream")
+                        .is_some_and(|s| s.ident == "WsStream")
                 } else {
                     false
                 };
@@ -423,6 +423,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let mut other_methods = Vec::new();
 
     for impl_item in item.items {
+        // Keeping this as a match avoids reindenting the large classification
+        // pipeline while making the intentionally ignored item kinds explicit.
+        #[allow(clippy::single_match)]
         match impl_item {
             syn::ImplItem::Fn(mut method) => {
                 let all_attrs = std::mem::take(&mut method.attrs);
@@ -672,18 +675,17 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     // registered via `Router::fallback(handler)`, which takes
                     // no layers. #[guard] and #[intercept] run inside the
                     // generated handler and work as usual.
-                    if route_kind.is_fallback {
-                        if !decorators.pre_auth_guard_fns.is_empty()
+                    if route_kind.is_fallback
+                        && (!decorators.pre_auth_guard_fns.is_empty()
                             || !decorators.middleware_fns.is_empty()
-                            || !decorators.layer_exprs.is_empty()
-                        {
-                            return Err(syn::Error::new(
-                                method.sig.ident.span(),
-                                "#[pre_guard], #[middleware], and #[layer] are not supported on \
+                            || !decorators.layer_exprs.is_empty())
+                    {
+                        return Err(syn::Error::new(
+                            method.sig.ident.span(),
+                            "#[pre_guard], #[middleware], and #[layer] are not supported on \
                                  #[fallback] routes — use #[guard]/#[intercept] (which run inside \
                                  the handler) or do the work in the handler body",
-                            ));
-                        }
+                        ));
                     }
 
                     method.attrs = strip_known_attrs(all_attrs);

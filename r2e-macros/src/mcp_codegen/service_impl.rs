@@ -6,6 +6,7 @@ use syn::spanned::Spanned;
 
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
+use crate::util::type_utils::{unwrap_json_type, unwrap_result_type};
 
 use super::McpDecoLayout;
 
@@ -280,41 +281,6 @@ fn opt_bool(value: Option<bool>) -> TokenStream {
         Some(b) => quote! { ::core::option::Option::Some(#b) },
         None => quote! { ::core::option::Option::None },
     }
-}
-
-/// Unwrap `Result<T, E>` / `ApiResult<T>` / `JsonResult<T>` → `T`, leaving
-/// other types unchanged. (Local copy of the private helper in
-/// `codegen::controller_impl`.)
-fn unwrap_result_type(ty: &syn::Type) -> &syn::Type {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident_str = segment.ident.to_string();
-            if ident_str == "Result" || ident_str == "ApiResult" || ident_str == "JsonResult" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return inner;
-                    }
-                }
-            }
-        }
-    }
-    ty
-}
-
-/// Extract the inner type from `Json<T>` → `T`.
-fn unwrap_json_type(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Json" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return Some(inner);
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 /// The JSON body type of a tool's return type, if any:

@@ -1146,9 +1146,11 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         let guard_ctx_ident = format_ident!("__guard_ctx");
         // Controller-level guards run FIRST, against the shared set and a
         // `"*"` context (one stateful-guard bucket per controller).
-        let ctrl_guard_context = has_ctrl_guards
-            .then(|| guard_ctx(&ctrl_ctx_ident, quote! { "*" }))
-            .unwrap_or_default();
+        let ctrl_guard_context = if has_ctrl_guards {
+            guard_ctx(&ctrl_ctx_ident, quote! { "*" })
+        } else {
+            TokenStream::new()
+        };
         let ctrl_guard_checks = generate_guard_checks(
             &quote! { __ctrl_deco },
             &ctrl_ctx_ident,
@@ -1162,9 +1164,11 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
             },
             &krate,
         );
-        let guard_context = has_guards
-            .then(|| guard_ctx(&guard_ctx_ident, quote! { #fn_name_str }))
-            .unwrap_or_default();
+        let guard_context = if has_guards {
+            guard_ctx(&guard_ctx_ident, quote! { #fn_name_str })
+        } else {
+            TokenStream::new()
+        };
         let guard_checks = generate_guard_checks(
             &quote! { __deco },
             &guard_ctx_ident,
@@ -1437,12 +1441,16 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         };
         // Controller-level guards run FIRST, against the shared set and a
         // `"*"` context (one stateful-guard bucket per controller).
-        let ctrl_guard_context = has_ctrl_guards
-            .then(|| ws_guard_ctx(&ctrl_ctx_ident, quote! { "*" }))
-            .unwrap_or_default();
-        let guard_context = has_guards
-            .then(|| ws_guard_ctx(&guard_ctx_ident, quote! { #fn_name_str }))
-            .unwrap_or_default();
+        let ctrl_guard_context = if has_ctrl_guards {
+            ws_guard_ctx(&ctrl_ctx_ident, quote! { "*" })
+        } else {
+            TokenStream::new()
+        };
+        let guard_context = if has_guards {
+            ws_guard_ctx(&guard_ctx_ident, quote! { #fn_name_str })
+        } else {
+            TokenStream::new()
+        };
         let ctrl_deco_call = has_ctrl_guards.then(|| quote! { &__ctrl_deco, });
         let deco_call = has_guards.then(|| quote! { &__deco, });
 

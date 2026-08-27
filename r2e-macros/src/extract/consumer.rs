@@ -23,12 +23,12 @@ pub fn classify_consumer_return(output: &syn::ReturnType) -> ConsumerKind {
             return ConsumerKind::Subscriber;
         }
         return ConsumerKind::Responder {
-            resp_type: ok.clone(),
+            resp_type: Box::new(ok.clone()),
             fallible: true,
         };
     }
     ConsumerKind::Responder {
-        resp_type: ty.clone(),
+        resp_type: Box::new(ty.clone()),
         fallible: false,
     }
 }
