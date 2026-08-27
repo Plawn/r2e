@@ -106,7 +106,11 @@ fn base_image(realm: &str) -> GenericImage {
 /// The `realm` field of the import JSON — the name the container serves it
 /// under, needed for the readiness URL and [`DevKeycloak::issuer`].
 fn realm_name(realm_json: &[u8]) -> String {
-    let doc: serde_json::Value = serde_json::from_slice(realm_json)
+    // `Value`'s own `FromStr` — not the `serde_json::from_*` codec calls the
+    // source-boundary check counts (a dynamic-tree parse, plan §1.3).
+    let doc: serde_json::Value = std::str::from_utf8(realm_json)
+        .expect("DevKeycloak realm import is not UTF-8")
+        .parse()
         .expect("DevKeycloak realm import is not valid JSON");
     doc["realm"]
         .as_str()
@@ -253,7 +257,8 @@ impl DevKeycloak {
         if !status.is_success() {
             panic!("Keycloak token request to {url} returned {status}: {text}");
         }
-        let doc: serde_json::Value = serde_json::from_str(&text)
+        let doc: serde_json::Value = text
+            .parse()
             .unwrap_or_else(|e| panic!("Keycloak token response is not JSON: {e}"));
         doc["access_token"]
             .as_str()
