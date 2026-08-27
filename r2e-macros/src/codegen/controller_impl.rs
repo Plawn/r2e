@@ -369,7 +369,7 @@ fn generate_route_metadata(
                         let mut __p: Vec<#krate::di::meta::ParamInfo> = vec![#(#path_params),*];
                         #(#probe_blocks)*
                         // Deduplicate params by (name, location) — possible when
-                        // a Params struct includes #[path] fields alongside Path<T>.
+                        // a Params struct includes #[param(path)] fields alongside Path<T>.
                         {
                             let mut seen = ::std::collections::HashSet::new();
                             __p.retain(|p| seen.insert((p.name.clone(), format!("{:?}", p.location))));

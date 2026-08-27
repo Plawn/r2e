@@ -23,6 +23,11 @@ struct ParamField {
     default_value: Option<DefaultValue>,
 }
 
+struct ParamOptions {
+    source: Option<ParamSource>,
+    default_value: Option<DefaultValue>,
+}
+
 enum NestedMode {
     Flatten,        // #[params] — pass through parent prefix
     Prefix(String), // #[params(prefix)] or #[params(prefix = "custom")]
@@ -83,11 +88,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
         let mut nested_mode = None;
 
         for attr in &field.attrs {
-            if attr.path().is_ident("path") {
-                let custom_name = parse_name_attr(attr)?;
-                let name = custom_name.unwrap_or_else(|| ident.to_string());
-                source = Some(ParamSource::Path { name });
-            } else if attr.path().is_ident("query") {
+            if attr.path().is_ident("query") {
                 let custom_name = parse_name_attr(attr)?;
                 let name = custom_name.unwrap_or_else(|| ident.to_string());
                 source = Some(ParamSource::Query { name });
@@ -97,17 +98,23 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
                     name: header_name.value(),
                 });
             } else if attr.path().is_ident("param") {
-                default_value = Some(parse_param_default(attr)?);
+                let options = parse_param_options(attr, &ident)?;
+                if let Some(param_source) = options.source {
+                    source = Some(param_source);
+                }
+                if let Some(param_default) = options.default_value {
+                    default_value = Some(param_default);
+                }
             } else if attr.path().is_ident("params") {
                 nested_mode = Some(parse_nested_mode(attr, &ident)?);
             }
         }
 
-        // Error if #[params] is combined with #[path], #[query], or #[header]
+        // Error if #[params] is combined with #[param(path)], #[query], or #[header]
         if nested_mode.is_some() && source.is_some() {
             return Err(syn::Error::new_spanned(
                 &ident,
-                "#[params] cannot be combined with #[path], #[query], or #[header]",
+                "#[params] cannot be combined with #[param(path)], #[query], or #[header]",
             ));
         }
 
@@ -287,7 +294,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
             if field.is_optional {
                 let inner_ty = unwrap_option_type(&field.ty).unwrap();
                 quote! {
-                    let #ident: Option<#inner_ty> = match __raw_path.iter().find(|(k, _)| k.as_str() == #name_str) {
+                    let #ident: Option<#inner_ty> = match __raw_path.iter().find(|(k, _)| *k == #name_str) {
                         Some((_, v)) => {
                             match v.parse() {
                                 Ok(val) => Some(val),
@@ -304,7 +311,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
             } else {
                 let fallback = missing_fallback(&format!("Missing path parameter '{}'", name_str));
                 quote! {
-                    let #ident = match __raw_path.iter().find(|(k, _)| k.as_str() == #name_str) {
+                    let #ident = match __raw_path.iter().find(|(k, _)| *k == #name_str) {
                         Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                             #krate::web::params::ParamError {
                                 message: format!("Invalid path parameter '{}': parse error", #name_str),
@@ -523,27 +530,55 @@ fn parse_nested_mode(attr: &syn::Attribute, field_ident: &Ident) -> syn::Result<
     }
 }
 
-fn parse_param_default(attr: &syn::Attribute) -> syn::Result<DefaultValue> {
-    let mut result = None;
+fn parse_param_options(attr: &syn::Attribute, field_ident: &Ident) -> syn::Result<ParamOptions> {
+    let mut is_path = false;
+    let mut path_name = None;
+    let mut default_value = None;
+
     attr.parse_nested_meta(|meta| {
-        if meta.path.is_ident("default") {
+        if meta.path.is_ident("path") {
+            is_path = true;
+            Ok(())
+        } else if meta.path.is_ident("name") {
+            let value = meta.value()?;
+            let lit: LitStr = value.parse()?;
+            path_name = Some(lit.value());
+            Ok(())
+        } else if meta.path.is_ident("default") {
             if meta.input.peek(syn::Token![=]) {
                 let value = meta.value()?;
                 let expr: Expr = value.parse()?;
-                result = Some(DefaultValue::Expr(expr));
+                default_value = Some(DefaultValue::Expr(expr));
             } else {
-                result = Some(DefaultValue::Trait);
+                default_value = Some(DefaultValue::Trait);
             }
             Ok(())
         } else {
-            Err(meta.error("expected `default` or `default = <expr>`"))
+            Err(meta.error("expected `path`, `name = \"...\"`, `default`, or `default = <expr>`"))
         }
     })?;
-    result.ok_or_else(|| {
-        syn::Error::new_spanned(
+
+    if path_name.is_some() && !is_path {
+        return Err(syn::Error::new_spanned(
             attr,
-            "expected #[param(default)] or #[param(default = <expr>)]",
-        )
+            "`name` requires `path`: use #[param(path, name = \"...\")]",
+        ));
+    }
+
+    if !is_path && default_value.is_none() {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "expected #[param(path)], #[param(default)], or a combination of both",
+        ));
+    }
+
+    let source = is_path.then(|| ParamSource::Path {
+        name: path_name.unwrap_or_else(|| field_ident.to_string()),
+    });
+
+    Ok(ParamOptions {
+        source,
+        default_value,
     })
 }
 

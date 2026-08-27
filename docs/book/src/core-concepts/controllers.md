@@ -97,7 +97,7 @@ You can also aggregate multiple parameter sources into a single struct using `#[
 ```rust
 #[derive(Params)]
 pub struct CommentParams {
-    #[path]
+    #[param(path)]
     pub id: u64,
     #[query]
     pub page: Option<u32>,

@@ -1485,16 +1485,17 @@ pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Derive macro for aggregating path, query, and header parameters into a
 /// single struct.
 ///
-/// Fields are annotated with `#[path]`, `#[query]`, or `#[header("Name")]`
-/// to indicate their extraction source. The generated `FromRequestParts`
-/// implementation extracts and parses each field automatically.
+/// Fields are annotated with `#[param(path)]`, `#[query]`, or
+/// `#[header("Name")]` to indicate their extraction source. The generated
+/// `FromRequestParts` implementation extracts and parses each field
+/// automatically.
 ///
 /// # Attributes
 ///
 /// | Attribute | Source | Default name |
 /// |---|---|---|
-/// | `#[path]` | URL path segments | field name |
-/// | `#[path(name = "userId")]` | URL path segments | custom name |
+/// | `#[param(path)]` | URL path segments | field name |
+/// | `#[param(path, name = "userId")]` | URL path segments | custom name |
 /// | `#[query]` | Query string | field name |
 /// | `#[query(name = "q")]` | Query string | custom name |
 /// | `#[header("X-Custom")]` | HTTP headers | explicit name |
@@ -1508,7 +1509,7 @@ pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```ignore
 /// #[derive(Params, garde::Validate)]
 /// struct GetUserParams {
-///     #[path]
+///     #[param(path)]
 ///     id: u64,
 ///
 ///     #[query]
@@ -1525,7 +1526,7 @@ pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
 ///     // params.id, params.page, params.tenant_id extracted and validated
 /// }
 /// ```
-#[proc_macro_derive(Params, attributes(path, query, header, param, params))]
+#[proc_macro_derive(Params, attributes(query, header, param, params))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     params_derive::expand(input)
 }
