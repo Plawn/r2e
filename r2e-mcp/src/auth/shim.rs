@@ -16,6 +16,14 @@
 //! break `token_endpoint` use and `iss` validation. That RFC 8414 §3.3
 //! tension (document served off-issuer) is tolerated by mainstream MCP
 //! clients; `mcp.auth.shim: false` is the escape hatch.
+//!
+//! With `mcp.auth.extra-authorize-params` set, the mirror additionally
+//! rewrites `authorization_endpoint` to the shim's own
+//! `{mcp.path}/oauth/authorize`, which merges those parameters into the
+//! client's query (server config wins over client-sent duplicates) and
+//! 302-redirects to the IdP's real endpoint — how Auth0 gets its
+//! `audience=` and Google its `access_type=offline` without client-side
+//! support.
 
 use std::sync::Arc;
 
@@ -23,6 +31,7 @@ use r2e_core::http::response::IntoResponse;
 use r2e_core::http::routing::{get, post};
 use r2e_core::http::{body::to_bytes, header, HeaderValue, Request, Response, Router, StatusCode};
 use serde_json::{json, Value};
+use url::Url;
 
 use super::discovery::DiscoveryClient;
 use super::wellknown::{preflight, public_json_response, put_public_headers};
@@ -41,6 +50,9 @@ pub(crate) const DEFAULT_REDIRECT_ALLOWLIST: &[&str] = &[
     "https://inspector.modelcontextprotocol.io/*",
 ];
 
+/// Path of the authorize-redirect endpoint, relative to `mcp.path`.
+pub(crate) const AUTHORIZE_PATH: &str = "/oauth/authorize";
+
 /// Everything the shim handlers need, prebuilt at plugin build time.
 pub(crate) struct ShimState {
     pub discovery: Arc<DiscoveryClient>,
@@ -53,6 +65,18 @@ pub(crate) struct ShimState {
     pub scopes_supported: Vec<String>,
     /// `mcp.auth.redirect-uri-allowlist`, or the default list.
     pub redirect_allowlist: Vec<String>,
+    /// The authorize-redirect endpoint (`extra-authorize-params` set).
+    pub authorize: Option<AuthorizeShim>,
+}
+
+/// State of the authorize-redirect endpoint.
+pub(crate) struct AuthorizeShim {
+    /// Absolute URL of the shim's authorize endpoint (rewritten into the
+    /// mirrored metadata's `authorization_endpoint`).
+    pub endpoint: String,
+    /// `mcp.auth.extra-authorize-params`, sorted by key so the redirect is
+    /// deterministic.
+    pub extra_params: Vec<(String, String)>,
 }
 
 /// Match one redirect URI against an allowlist entry: exact match, a
@@ -158,6 +182,9 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
 fn mirrored_metadata(state: &ShimState, raw: &Value) -> String {
     let mut doc = raw.clone();
     doc["registration_endpoint"] = json!(state.registration_endpoint);
+    if let Some(authorize) = &state.authorize {
+        doc["authorization_endpoint"] = json!(authorize.endpoint);
+    }
 
     // PKCE: MCP clients require S256; most IdPs support it but not all
     // advertise it.
@@ -215,7 +242,78 @@ async fn serve_metadata(state: Arc<ShimState>) -> Response {
     }
 }
 
-/// The shim router: mirrored metadata (4 paths) + the registration endpoint.
+/// `GET {mcp.path}/oauth/authorize` — merge `extra-authorize-params` into
+/// the client's query and 302-redirect to the IdP's real authorization
+/// endpoint. The extra params win over client-sent duplicates: they are
+/// server policy (an `audience` the client picked itself must not bypass
+/// the operator's).
+async fn authorize(state: Arc<ShimState>, req: Request) -> Response {
+    let authorize = state
+        .authorize
+        .as_ref()
+        .expect("authorize route mounted without authorize state");
+    let meta = match state.discovery.get().await {
+        Ok(meta) => meta,
+        Err(err) => {
+            tracing::warn!(error = %err.description(), "authorize shim: discovery failed");
+            return oauth_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "temporarily_unavailable",
+                "authorization server metadata is currently unavailable",
+            );
+        }
+    };
+    let Some(endpoint) = meta.authorization_endpoint.as_deref() else {
+        return oauth_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "the authorization server metadata advertises no authorization_endpoint \
+             (set `mcp.auth.authorization-endpoint`)",
+        );
+    };
+    let Ok(mut target) = Url::parse(endpoint) else {
+        tracing::error!(endpoint, "authorize shim: authorization_endpoint is not a valid URL");
+        return oauth_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "the advertised authorization_endpoint is not a valid URL",
+        );
+    };
+
+    {
+        // Appends to any query the endpoint URL already carries.
+        let mut pairs = target.query_pairs_mut();
+        let query = req.uri().query().unwrap_or("");
+        for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
+            if authorize.extra_params.iter().any(|(k, _)| *k == *key) {
+                tracing::debug!(param = %key, "authorize shim: extra-authorize-params overrides a client-sent parameter");
+                continue;
+            }
+            pairs.append_pair(&key, &value);
+        }
+        for (key, value) in &authorize.extra_params {
+            pairs.append_pair(key, value);
+        }
+    }
+
+    let mut response = Response::new(Default::default());
+    *response.status_mut() = StatusCode::FOUND;
+    let location = HeaderValue::from_str(target.as_str()).unwrap_or_else(|_| {
+        // Url output is always a valid header value; defensive only.
+        HeaderValue::from_static("/")
+    });
+    response.headers_mut().insert(header::LOCATION, location);
+    // An authorization request carries per-flow state (PKCE challenge,
+    // nonce) — never cacheable.
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// The shim router: mirrored metadata (4 paths) + the registration endpoint
+/// (+ the authorize redirect when `extra-authorize-params` is set).
 pub(crate) fn shim_routes(
     state: Arc<ShimState>,
     mcp_path: &str,
@@ -228,12 +326,20 @@ pub(crate) fn shim_routes(
             async move { serve_metadata(state).await.into_response() }
         }
     };
-    let reg = move |req: Request| {
+    let reg = {
         let state = state.clone();
-        async move { register(state, req).await.into_response() }
+        move |req: Request| {
+            let state = state.clone();
+            async move { register(state, req).await.into_response() }
+        }
+    };
+    let authorize_on = state.authorize.is_some();
+    let auth_handler = move |req: Request| {
+        let state = state.clone();
+        async move { authorize(state, req).await.into_response() }
     };
 
-    Router::new()
+    let mut router = Router::new()
         .route(
             "/.well-known/oauth-authorization-server",
             get(meta.clone()).options(preflight),
@@ -253,5 +359,12 @@ pub(crate) fn shim_routes(
         .route(
             &format!("{mcp_path}{registration_path}"),
             post(reg).options(preflight),
-        )
+        );
+    if authorize_on {
+        router = router.route(
+            &format!("{mcp_path}{AUTHORIZE_PATH}"),
+            get(auth_handler).options(preflight),
+        );
+    }
+    router
 }

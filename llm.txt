@@ -3193,7 +3193,12 @@ cached 5s, IdP outages never; `opaque-cache-max-entries` 1024),
 (default `scope` then `scp`; Auth0 RBAC → `permissions`), `roles-claim`
 (default `roles` + Keycloak `realm_access.roles`), `client-roles-for`
 (Keycloak `resource_access.<id>.roles`), `shim`, `registration-path`,
-`redirect-uri-allowlist`, `filter-tools` (true — `tools/list` hides tools the
+`redirect-uri-allowlist`, `extra-authorize-params` (map merged into every
+authorization request — Auth0 `audience`, Google `access_type=offline`;
+requires the shim: the mirrored metadata's `authorization_endpoint` is
+rewritten to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP
+with the params applied, server config winning over client duplicates),
+`filter-tools` (true — `tools/list` hides tools the
 caller cannot invoke), `allow-insecure` (http issuer, dev), `allowed-origins`.
 
 Per-tool authorization:

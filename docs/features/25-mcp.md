@@ -236,6 +236,13 @@ What you get, with zero additional code:
   configured on the IdP client; requested ones are filtered against
   `redirect-uri-allowlist` (default: localhost any-port, the Claude
   callbacks, the MCP Inspector).
+- **Authorize-redirect shim** (when `extra-authorize-params` is set): the
+  mirrored metadata's `authorization_endpoint` points at
+  `GET {mcp.path}/oauth/authorize`, which merges the configured params into
+  the client's query (server config wins over client-sent duplicates) and
+  302-redirects to the IdP's real endpoint. This is how Auth0 gets its
+  `audience=` and Google its `access_type=offline` from clients that don't
+  know to send them.
 - **IdP outages are 503, not 401** — clients aren't sent into a re-auth loop
   when JWKS/discovery are briefly unreachable (stale-if-error caches on
   both).
@@ -311,6 +318,7 @@ impl AdminTools {
 | `public-client-id`, `shim` | — / auto | shim on iff client id set; `shim: false` opts out |
 | `registration-path` | `/oauth/register` | mounted under `mcp.path` |
 | `redirect-uri-allowlist` | localhost/Claude/Inspector | custom list REPLACES defaults; `:*` = any port, trailing `*` = prefix |
+| `extra-authorize-params` | — | map of query params merged into every authorization request (server wins over client duplicates); needs the shim — the mirror rewrites `authorization_endpoint` to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP |
 | `filter-tools` | `true` | hide unlistable tools from `tools/list` |
 | `allow-insecure` | `false` | permit `http://` issuer/JWKS (dev only) |
 | `allowed-origins` | — | Origin allowlist on the MCP endpoint (DNS-rebinding guard) |
@@ -320,7 +328,7 @@ impl AdminTools {
 | | issuer | DCR | audience | scopes / roles |
 |---|---|---|---|---|
 | **Keycloak** | `{base}/realms/{realm}` | anonymous DCR blocked → **shim** | add an **Audience mapper** (client scope) = the resource URI, else tokens carry `aud: ["account"]` → 401 | `scope`; roles from `realm_access` / `resource_access` (`client-roles-for`) |
-| **Auth0** | `https://{tenant}.auth0.com/` (trailing slash!) | optional toggle | API identifier; the client must send `audience=` → `audience: any-of` + `extra-audiences` | `scope`, or RBAC `permissions` → `scope-claim: permissions` |
+| **Auth0** | `https://{tenant}.auth0.com/` (trailing slash!) | optional toggle | API identifier; inject `audience=` via `extra-authorize-params` (or `audience: any-of` + `extra-audiences` if the client sends it) | `scope`, or RBAC `permissions` → `scope-claim: permissions` |
 | **Google** | `https://accounts.google.com` | none → **shim** | opaque access tokens → `token-validation: userinfo` (no `aud` binding — `audience: skip` is forced) | n/a |
 | **Entra ID** | `…/{tenant}/v2.0` (path-insertion discovery handled) | none → **shim** | app-ID URI → `any-of` | `scp` claim (default ladder covers it); `roles-claim: roles` |
 | **Okta** | `https://{org}.okta.com/oauth2/{as}` | gated → shim | `any-of` | `scp` (array form covered) |

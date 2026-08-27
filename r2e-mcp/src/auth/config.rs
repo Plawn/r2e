@@ -187,6 +187,13 @@ pub struct McpAuthConfig {
     /// Inspector.
     #[config(key = "redirect-uri-allowlist")]
     pub redirect_uri_allowlist: Option<Vec<String>>,
+    /// Extra query parameters injected into every authorization request
+    /// (Auth0 `audience`, Google `access_type=offline`, …). Requires the
+    /// shim: the mirrored metadata's `authorization_endpoint` is rewritten
+    /// to `{mcp.path}/oauth/authorize`, which merges these params (they win
+    /// over client-sent duplicates) and 302-redirects to the IdP.
+    #[config(key = "extra-authorize-params")]
+    pub extra_authorize_params: Option<std::collections::HashMap<String, String>>,
 
     /// Allow an `http://` issuer / JWKS URL (local development only).
     #[config(key = "allow-insecure")]

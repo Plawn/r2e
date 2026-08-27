@@ -67,6 +67,22 @@ async fn offline_userinfo_requires_an_explicit_endpoint() {
 }
 
 #[tokio::test]
+#[should_panic(expected = "requires the DCR shim")]
+async fn extra_authorize_params_without_the_shim_is_a_boot_error() {
+    // Without the shim no mirrored metadata advertises the redirect
+    // endpoint — the params would silently do nothing.
+    let _ = secured_app_with(McpAuthConfig {
+        extra_authorize_params: Some(
+            [("audience".to_string(), "https://api.example".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[tokio::test]
 #[should_panic(expected = "cannot be enforced with")]
 async fn userinfo_with_an_audience_binding_is_a_boot_error() {
     let _ = secured_app_with(McpAuthConfig {

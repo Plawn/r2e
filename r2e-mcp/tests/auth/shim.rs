@@ -215,3 +215,99 @@ async fn mirror_answers_503_when_discovery_is_unavailable() {
         "authorization server metadata is currently unavailable"
     );
 }
+
+// ── Authorize-redirect shim ────────────────────────────────────────────────
+
+const AUTHORIZE: &str = "/mcp/oauth/authorize";
+
+fn authorize_auth() -> McpAuthConfig {
+    McpAuthConfig {
+        authorization_endpoint: Some("http://idp.test/protocol/auth?p=1".into()),
+        extra_authorize_params: Some(
+            [
+                ("audience".to_string(), "https://api.example".to_string()),
+                ("access_type".to_string(), "offline".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        ),
+        ..shim_auth()
+    }
+}
+
+#[tokio::test]
+async fn authorize_redirects_with_merged_params() {
+    let router = secured_app_with(authorize_auth()).await;
+    // `audience=evil` is client-sent and collides with server policy — the
+    // configured value must win.
+    let (status, headers, raw) = get(
+        &router,
+        "/mcp/oauth/authorize?client_id=mcp-public&state=xyz&audience=evil",
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::FOUND, "{raw}");
+    let location = headers["location"].to_str().unwrap();
+    // Endpoint's own query kept, client params appended (minus overridden
+    // keys), then the extra params sorted by key.
+    assert_eq!(
+        location,
+        "http://idp.test/protocol/auth?p=1&client_id=mcp-public&state=xyz\
+         &access_type=offline&audience=https%3A%2F%2Fapi.example",
+    );
+    assert_eq!(headers["cache-control"], "no-store");
+}
+
+#[tokio::test]
+async fn mirror_advertises_the_authorize_shim() {
+    let router = secured_app_with(authorize_auth()).await;
+    let (status, _, raw) = get(&router, "/.well-known/oauth-authorization-server", &[]).await;
+    assert_eq!(status, StatusCode::OK, "{raw}");
+    let doc: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(
+        doc["authorization_endpoint"],
+        "http://localhost:3000/mcp/oauth/authorize"
+    );
+}
+
+#[tokio::test]
+async fn mirror_keeps_the_idp_authorize_endpoint_without_extra_params() {
+    let router = secured_app_with(McpAuthConfig {
+        authorization_endpoint: Some("http://idp.test/protocol/auth".into()),
+        ..shim_auth()
+    })
+    .await;
+    let (status, _, raw) = get(&router, "/.well-known/oauth-authorization-server", &[]).await;
+    assert_eq!(status, StatusCode::OK, "{raw}");
+    let doc: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(doc["authorization_endpoint"], "http://idp.test/protocol/auth");
+    // And the redirect endpoint is not mounted at all.
+    let (status, _, _) = get(&router, AUTHORIZE, &[]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn authorize_answers_503_without_an_advertised_endpoint() {
+    // `discovery: off` with no authorization-endpoint configured: the fixed
+    // metadata has no authorization_endpoint to redirect to.
+    let router = secured_app_with(McpAuthConfig {
+        extra_authorize_params: Some(
+            [("audience".to_string(), "https://api.example".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        ..shim_auth()
+    })
+    .await;
+    let (status, _, raw) = get(&router, AUTHORIZE, &[]).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{raw}");
+    let doc: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(doc["error"], "temporarily_unavailable");
+    assert!(
+        doc["error_description"]
+            .as_str()
+            .unwrap()
+            .contains("mcp.auth.authorization-endpoint"),
+        "{doc}"
+    );
+}

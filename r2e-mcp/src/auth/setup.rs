@@ -24,7 +24,7 @@ use super::opaque::{
     IntrospectionBackend, UserinfoBackend, DEFAULT_OPAQUE_CACHE_MAX_ENTRIES,
     DEFAULT_OPAQUE_CACHE_TTL_SECS,
 };
-use super::shim::{shim_routes, ShimState, DEFAULT_REDIRECT_ALLOWLIST};
+use super::shim::{shim_routes, AuthorizeShim, ShimState, AUTHORIZE_PATH, DEFAULT_REDIRECT_ALLOWLIST};
 use super::validator::{McpTokenValidator, ScopePolicy};
 use super::wellknown::{prm_json, prm_routes};
 
@@ -377,6 +377,27 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
                 .into(),
         );
     }
+    let extra_authorize_params: Vec<(String, String)> = cfg
+        .extra_authorize_params
+        .as_ref()
+        .map(|params| {
+            let mut params: Vec<_> =
+                params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            params.sort();
+            params
+        })
+        .unwrap_or_default();
+    if !extra_authorize_params.is_empty() && !shim_on {
+        // The params only reach clients through the mirrored metadata's
+        // rewritten authorization_endpoint — without the shim they would
+        // silently do nothing.
+        return Err(
+            "mcp.auth.extra-authorize-params requires the DCR shim (set \
+             `mcp.auth.public-client-id`, or remove the key)"
+                .to_string()
+                .into(),
+        );
+    }
     let scopes_supported = cfg
         .scopes_supported
         .clone()
@@ -408,6 +429,17 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
             )
             .into());
         }
+        if !extra_authorize_params.is_empty() && registration_path == AUTHORIZE_PATH {
+            return Err(format!(
+                "mcp.auth.registration-path `{registration_path}` collides with the \
+                 authorize-redirect endpoint"
+            )
+            .into());
+        }
+        let authorize = (!extra_authorize_params.is_empty()).then(|| AuthorizeShim {
+            endpoint: format!("{resource_origin}{}{AUTHORIZE_PATH}", inputs.mcp_path),
+            extra_params: extra_authorize_params,
+        });
         let shim_state = Arc::new(ShimState {
             discovery: discovery.clone(),
             client_id: cfg.public_client_id.clone().expect("checked above"),
@@ -422,6 +454,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
                     .map(|s| s.to_string())
                     .collect()
             }),
+            authorize,
         });
         extra_routes = extra_routes.merge(shim_routes(shim_state, inputs.mcp_path, &registration_path));
     }
