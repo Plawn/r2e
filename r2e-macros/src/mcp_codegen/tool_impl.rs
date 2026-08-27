@@ -36,6 +36,7 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> Token
 }
 
 /// One tool's invocation method. Body order:
+/// scope check (`check_tool`, only when the tool declares scopes) →
 /// identity extraction (required identity absent → `Unauthorized`, before
 /// guards so `#[roles]` never sees a half-authenticated call) → guard checks
 /// → params deserialization → method call (interceptor-wrapped, arguments in
@@ -52,6 +53,24 @@ fn generate_invoke_method(
     let controller_name_str = def.controller_name.to_string();
     let fn_name_str = fn_name.to_string();
     let tool_name_str = tool.tool_name();
+
+    // --- scope requirements prologue ---------------------------------------
+    // Emitted only when the tool declares scopes: `check_tool` runs BEFORE
+    // identity extraction and guards (a caller without the scope gets the
+    // scope denial, not an identity/role error). Role requirements are
+    // enforced by the guard below; unrestricted tools pay nothing.
+    let scope_check = if !tool.meta.scopes.is_empty() || !tool.meta.any_scopes.is_empty() {
+        let req = super::requirements_expr(def, tool, mcp);
+        quote! {
+            #mcp::__macro_support::check_tool(
+                __call.parts.as_deref().map(|__p| &__p.extensions),
+                #tool_name_str,
+                &#req,
+            )?;
+        }
+    } else {
+        quote! {}
+    };
 
     // --- identity extraction ---------------------------------------------
     let identity_param = tool.identity_param();
@@ -187,6 +206,7 @@ fn generate_invoke_method(
             #mcp::__macro_support::CallToolResult,
             #mcp::__macro_support::McpError,
         > {
+            #scope_check
             #identity_stmts
             #guard_stmts
             #params_stmts

@@ -5,8 +5,8 @@
 //! - A wrapper struct `__R2eMcp<Name>` holding the shared core and the
 //!   prebuilt per-tool guard/interceptor sets
 //! - One hidden invocation method per tool on the wrapper
-//!   (`__r2e_tool_<fn>`): identity extraction → guards → params → method
-//!   call (interceptor-wrapped) → `IntoToolResult`
+//!   (`__r2e_tool_<fn>`): scope check → identity extraction → guards →
+//!   params → method call (interceptor-wrapped) → `IntoToolResult`
 //! - An impl of `McpService` for the controller (tool routes with schemas)
 //! - An impl of `EndpointDeps` for the controller (compile-time bean check
 //!   at `register_mcp_service()`)
@@ -77,6 +77,38 @@ pub(crate) fn wrapper_ident(controller_name: &syn::Ident) -> syn::Ident {
 /// The hidden per-tool invocation method ident on the wrapper.
 pub(crate) fn invoke_ident(fn_name: &syn::Ident) -> syn::Ident {
     format_ident!("__r2e_tool_{}", fn_name)
+}
+
+/// The `ToolRequirements` struct-literal expression for one tool:
+/// `#[tool(scopes/any_scopes)]` plus the recorded `#[roles]`/`#[all_roles]`
+/// literals (impl-level first, then method-level). Roles are ENFORCED by the
+/// generated guard; they are recorded here so `tools/list` can filter.
+/// All-`'static` literal slices, so the expression is const-compatible.
+pub(crate) fn requirements_expr(
+    def: &McpRoutesImplDef,
+    tool: &McpTool,
+    mcp: &TokenStream,
+) -> TokenStream {
+    let scopes = &tool.meta.scopes;
+    let any_scopes = &tool.meta.any_scopes;
+    let roles: Vec<&String> = def
+        .controller_roles
+        .iter()
+        .chain(tool.decorators.roles.iter())
+        .collect();
+    let all_roles: Vec<&String> = def
+        .controller_all_roles
+        .iter()
+        .chain(tool.decorators.all_roles.iter())
+        .collect();
+    quote! {
+        #mcp::__macro_support::ToolRequirements {
+            scopes: &[#(#scopes),*],
+            any_scopes: &[#(#any_scopes),*],
+            roles: &[#(#roles),*],
+            all_roles: &[#(#all_roles),*],
+        }
+    }
 }
 
 /// The guard expressions of one tool, controller-level first (impl-level

@@ -97,7 +97,7 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
             )
         }
     };
-    let request: Value = match serde_json::from_slice(&body) {
+    let request: Value = match r2e_core::json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
             return oauth_error(

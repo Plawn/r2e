@@ -168,6 +168,7 @@ where
 /// Re-exports for generated code.
 #[doc(hidden)]
 pub mod __macro_support {
+    pub use crate::auth::tools::{check_tool, ToolRequirements};
     pub use crate::error::McpError;
     pub use crate::guard::{guard_response_to_error, tool_guard_context};
     pub use crate::params::{empty_object_schema, schema_object_for, Params, ToolParams};

@@ -13,6 +13,7 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
 
+use crate::auth::tools::{tool_visible, ToolRequirements};
 use crate::registry::RegisteredMcpService;
 use crate::route::{ToolCall, ToolRoute};
 
@@ -30,6 +31,12 @@ pub(crate) struct McpRuntime {
     info: ServerInfo,
     tools: HashMap<String, ToolRoute>,
     tool_list: Vec<Tool>,
+    /// Requirements parallel to `tool_list`, for the visibility filter.
+    tool_reqs: Vec<ToolRequirements>,
+    /// Per-caller `tools/list` filtering (`mcp.auth.filter-tools`, default on
+    /// when auth is enabled). When off — or when no tool has requirements —
+    /// `list_tools` returns the precomputed list unfiltered.
+    filter_tools: bool,
 }
 
 impl McpRuntime {
@@ -40,10 +47,15 @@ impl McpRuntime {
     /// Panics when two services register the same tool name — the MCP
     /// equivalent of an HTTP route conflict, surfaced at boot with both
     /// service names.
-    pub(crate) fn build(services: Vec<RegisteredMcpService>, identity: ServerIdentity) -> Self {
+    pub(crate) fn build(
+        services: Vec<RegisteredMcpService>,
+        identity: ServerIdentity,
+        filter_tools: bool,
+    ) -> Self {
         let mut tools: HashMap<String, ToolRoute> = HashMap::new();
         let mut owners: HashMap<String, &'static str> = HashMap::new();
         let mut tool_list = Vec::new();
+        let mut tool_reqs = Vec::new();
         for service in services {
             for tool in service.tools {
                 let name = tool.name.to_string();
@@ -56,6 +68,7 @@ impl McpRuntime {
                 }
                 owners.insert(name.clone(), service.name);
                 tool_list.push(tool.to_rmcp_tool());
+                tool_reqs.push(tool.requirements);
                 tools.insert(name, tool);
             }
         }
@@ -65,10 +78,16 @@ impl McpRuntime {
         info.server_info = Implementation::new(identity.name, identity.version);
         info.instructions = identity.instructions;
 
+        // The filter only ever hides restricted tools; with none, skip the
+        // per-request pass entirely.
+        let filter_tools = filter_tools && tool_reqs.iter().any(|r| !r.is_empty());
+
         McpRuntime {
             info,
             tools,
             tool_list,
+            tool_reqs,
+            filter_tools,
         }
     }
 
@@ -98,9 +117,28 @@ impl ServerHandler for R2eMcpHandler {
     async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.rt.tool_list.clone()))
+        if !self.rt.filter_tools {
+            return Ok(ListToolsResult::with_all_items(self.rt.tool_list.clone()));
+        }
+        // Per-caller visibility: hide the tools whose scope/role
+        // requirements the caller does not satisfy (`mcp.auth.filter-tools`).
+        // The auth layer's principal travels in the HTTP request parts that
+        // the transport copies into the request extensions.
+        let extensions = context
+            .extensions
+            .get::<Parts>()
+            .map(|parts| &parts.extensions);
+        let visible = self
+            .rt
+            .tool_list
+            .iter()
+            .zip(self.rt.tool_reqs.iter())
+            .filter(|(_, req)| tool_visible(extensions, req))
+            .map(|(tool, _)| tool.clone())
+            .collect();
+        Ok(ListToolsResult::with_all_items(visible))
     }
 
     /// Returning the real `Tool` here opts into rmcp's input validation:

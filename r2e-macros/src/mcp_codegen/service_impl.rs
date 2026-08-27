@@ -85,7 +85,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> 
     let tool_pushes: Vec<TokenStream> = def
         .tools
         .iter()
-        .map(|tool| generate_tool_route(tool, &mcp))
+        .map(|tool| generate_tool_route(def, tool, &mcp))
         .collect();
 
     quote! {
@@ -121,7 +121,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> 
 }
 
 /// One `__tools.push(ToolRoute { ... })` statement for a tool.
-fn generate_tool_route(tool: &McpTool, mcp: &TokenStream) -> TokenStream {
+fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream) -> TokenStream {
     let invoke_name = super::invoke_ident(&tool.name);
     let tool_name_str = tool.tool_name();
 
@@ -150,6 +150,7 @@ fn generate_tool_route(tool: &McpTool, mcp: &TokenStream) -> TokenStream {
         None => quote! { ::core::option::Option::None },
     };
 
+    let requirements = super::requirements_expr(def, tool, mcp);
     let read_only = opt_bool(tool.meta.read_only);
     let destructive = opt_bool(tool.meta.destructive);
     let idempotent = opt_bool(tool.meta.idempotent);
@@ -171,6 +172,7 @@ fn generate_tool_route(tool: &McpTool, mcp: &TokenStream) -> TokenStream {
                     idempotent: #idempotent,
                     open_world: #open_world,
                 },
+                requirements: #requirements,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ToolCall|
                         -> #mcp::__macro_support::ToolFuture {

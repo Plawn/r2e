@@ -288,6 +288,12 @@ impl Plugin for McpServer {
             Some(auth) if auth.enabled != Some(false) => Some(auth),
             _ => None,
         };
+        // `tools/list` visibility filtering: on by default when auth is
+        // enabled (`mcp.auth.filter-tools: false` opts out); meaningless —
+        // and off — without auth (no principal to filter against).
+        let filter_tools = auth_cfg
+            .as_ref()
+            .is_some_and(|auth| auth.filter_tools.unwrap_or(true));
         let (auth_layer, provided_validator, auth_slot, auth_routes) = match auth_cfg {
             Some(auth) => {
                 let artifacts = build_auth(AuthInputs {
@@ -367,7 +373,7 @@ impl Plugin for McpServer {
                 );
                 return router;
             };
-            let runtime = Arc::new(McpRuntime::build(services, identity));
+            let runtime = Arc::new(McpRuntime::build(services, identity, filter_tools));
             tracing::info!(
                 path = %path,
                 tools = ?runtime.tool_names(),

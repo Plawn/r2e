@@ -29,6 +29,12 @@ pub struct McpToolMeta {
     pub idempotent: Option<bool>,
     /// `open_world` / `open_world = <bool>` annotation hint.
     pub open_world: Option<bool>,
+    /// Scopes the caller must ALL hold (`scopes = "a,b"` or
+    /// `scopes = ["a", "b"]`).
+    pub scopes: Vec<String>,
+    /// Scopes of which the caller must hold at least one (`any_scopes = ...`,
+    /// same forms as `scopes`).
+    pub any_scopes: Vec<String>,
 }
 
 /// One (typed, non-receiver) parameter of a tool method, in declaration
@@ -97,6 +103,11 @@ pub struct McpRoutesImplDef {
     pub controller_guards: Vec<syn::Expr>,
     /// Controller-level interceptors, applied outermost on every tool.
     pub controller_intercepts: Vec<syn::Expr>,
+    /// Impl-level `#[roles(...)]` literals, recorded into every tool's
+    /// `ToolRequirements` (enforcement stays with the generated guard).
+    pub controller_roles: Vec<String>,
+    /// Impl-level `#[all_roles(...)]` literals, recorded likewise.
+    pub controller_all_roles: Vec<String>,
     /// `#[tool]` methods.
     pub tools: Vec<McpTool>,
     /// Non-tool methods (helpers), passed through unchanged.
@@ -129,6 +140,33 @@ fn parse_tool_meta(attr: &syn::Attribute) -> syn::Result<McpToolMeta> {
                 Ok(true)
             }
         };
+        // Scope lists: `= "a,b"` (comma/whitespace separated, the OAuth
+        // `scope` parameter shape) or `= ["a", "b"]`.
+        let parse_scope_list = |nested: &syn::meta::ParseNestedMeta| -> syn::Result<Vec<String>> {
+            let value = nested.value()?;
+            let scopes: Vec<String> = if value.peek(syn::token::Bracket) {
+                let content;
+                syn::bracketed!(content in value);
+                content
+                    .parse_terminated(<syn::LitStr as syn::parse::Parse>::parse, syn::Token![,])?
+                    .iter()
+                    .map(|lit| lit.value().trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            } else {
+                let lit: syn::LitStr = value.parse()?;
+                lit.value()
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            };
+            if scopes.is_empty() {
+                return Err(nested.error("expected at least one scope"));
+            }
+            Ok(scopes)
+        };
         match ident.as_str() {
             "name" => meta.name = Some(parse_str(&nested)?),
             "title" => meta.title = Some(parse_str(&nested)?),
@@ -137,11 +175,13 @@ fn parse_tool_meta(attr: &syn::Attribute) -> syn::Result<McpToolMeta> {
             "destructive" => meta.destructive = Some(parse_flag(&nested)?),
             "idempotent" => meta.idempotent = Some(parse_flag(&nested)?),
             "open_world" => meta.open_world = Some(parse_flag(&nested)?),
+            "scopes" => meta.scopes = parse_scope_list(&nested)?,
+            "any_scopes" => meta.any_scopes = parse_scope_list(&nested)?,
             other => {
                 return Err(nested.error(format!(
                     "unknown #[tool] argument `{other}`; expected `name`, `title`, \
-                     `description`, `read_only`, `destructive`, `idempotent` or \
-                     `open_world`"
+                     `description`, `read_only`, `destructive`, `idempotent`, \
+                     `open_world`, `scopes` or `any_scopes`"
                 )))
             }
         }
@@ -316,6 +356,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
     let controller_decorators = parse_mcp_decorators(&item.attrs)?;
     let controller_guards = controller_decorators.guard_fns;
     let controller_intercepts = controller_decorators.intercept_fns;
+    let controller_roles = controller_decorators.roles;
+    let controller_all_roles = controller_decorators.all_roles;
 
     let mut tools = Vec::new();
     let mut other_methods = Vec::new();
@@ -403,6 +445,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
         controller_name,
         controller_guards,
         controller_intercepts,
+        controller_roles,
+        controller_all_roles,
         tools,
         other_methods,
     })

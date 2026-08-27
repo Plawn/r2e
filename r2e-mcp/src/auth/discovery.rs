@@ -295,7 +295,7 @@ impl DiscoveryClient {
             let body = read_limited(response).await.map_err(|e| {
                 McpAuthError::Upstream(format!("discovery response from {candidate}: {e}"))
             })?;
-            let raw: Value = serde_json::from_slice(&body).map_err(|e| {
+            let raw: Value = r2e_core::json::from_slice(&body).map_err(|e| {
                 McpAuthError::Upstream(format!("discovery document at {candidate} is not JSON: {e}"))
             })?;
             let meta = OAuthServerMetadata::from_raw(raw)?;

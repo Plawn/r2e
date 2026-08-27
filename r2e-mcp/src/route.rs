@@ -16,6 +16,7 @@ use r2e_core::rt::CancelToken;
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
+use crate::auth::ToolRequirements;
 use crate::error::McpError;
 
 /// A JSON Schema object body (the map under `inputSchema`).
@@ -133,6 +134,11 @@ pub struct ToolRoute {
     pub output_schema: Option<Arc<SchemaObject>>,
     /// Advisory behavior hints.
     pub annotations: ToolAnnotations,
+    /// Authorization requirements (`#[tool(scopes/any_scopes)]` +
+    /// `#[roles]`/`#[all_roles]`), checked in the invoke prologue and used
+    /// by the `tools/list` visibility filter. [`ToolRequirements::NONE`] for
+    /// unrestricted tools.
+    pub requirements: ToolRequirements,
     /// The dispatch closure.
     pub invoke: ToolInvoke,
 }

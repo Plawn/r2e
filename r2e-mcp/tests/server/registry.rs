@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use r2e_mcp::{IntoToolResult, McpServiceRegistry, ToolRoute};
+use r2e_mcp::{IntoToolResult, McpServiceRegistry, ToolRequirements, ToolRoute};
 
 use crate::fixtures::{fixture_app, FixtureTools};
 use r2e_core::AppBuilder;
@@ -17,6 +17,7 @@ fn stub_tool(name: &'static str) -> ToolRoute {
         input_schema: Arc::new(serde_json::Map::new()),
         output_schema: None,
         annotations: Default::default(),
+        requirements: ToolRequirements::NONE,
         invoke: Arc::new(|_call| Box::pin(async { ().into_tool_result() })),
     }
 }
