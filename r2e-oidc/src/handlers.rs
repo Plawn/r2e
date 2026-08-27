@@ -30,6 +30,24 @@ pub(crate) struct TokenRequest {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,
     pub scope: Option<String>,
+    /// RFC 8707 `resource` indicator: when present, becomes the token's
+    /// `aud` (instead of the configured audience). One value only.
+    pub resource: Option<String>,
+}
+
+/// Validate an RFC 8707 `resource` parameter: an absolute URI without a
+/// fragment. Loose on purpose — this is a dev/test issuer.
+fn validate_resource(resource: Option<&str>) -> Result<Option<&str>, OidcError> {
+    let Some(resource) = resource else {
+        return Ok(None);
+    };
+    let valid = url::Url::parse(resource).is_ok_and(|u| u.fragment().is_none());
+    if !valid {
+        return Err(OidcError::InvalidTarget(format!(
+            "'resource' must be an absolute URI without a fragment: got `{resource}`"
+        )));
+    }
+    Ok(Some(resource))
 }
 
 /// Token response.
@@ -106,7 +124,8 @@ async fn handle_password_grant(
     };
 
     let scope = normalize_scope(req.scope.as_deref(), DEFAULT_USER_SCOPE);
-    let token = state.token_service.issue_user_token(&user, &scope)?;
+    let resource = validate_resource(req.resource.as_deref())?;
+    let token = state.token_service.issue_user_token(&user, &scope, resource)?;
 
     Ok(Json(TokenResponse {
         access_token: token,
@@ -172,7 +191,10 @@ async fn handle_client_credentials_grant(
     }
 
     let scope = normalize_scope(req.scope.as_deref(), "");
-    let token = state.token_service.issue_client_token(&client_id, &scope)?;
+    let resource = validate_resource(req.resource.as_deref())?;
+    let token = state
+        .token_service
+        .issue_client_token(&client_id, &scope, resource)?;
 
     Ok(Json(TokenResponse {
         access_token: token,

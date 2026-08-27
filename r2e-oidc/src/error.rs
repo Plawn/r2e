@@ -17,6 +17,8 @@ pub enum OidcError {
     InvalidRequest(String),
     /// Invalid username/password or client credentials.
     InvalidGrant(String),
+    /// RFC 8707: the requested `resource` is invalid (`invalid_target`).
+    InvalidTarget(String),
     /// Unsupported grant type.
     UnsupportedGrantType(String),
     /// Invalid client credentials.
@@ -38,6 +40,7 @@ impl OidcError {
         match self {
             OidcError::InvalidRequest(_) => "invalid_request",
             OidcError::InvalidGrant(_) => "invalid_grant",
+            OidcError::InvalidTarget(_) => "invalid_target",
             OidcError::UnsupportedGrantType(_) => "unsupported_grant_type",
             OidcError::InvalidClient(_) => "invalid_client",
             OidcError::Unauthorized(_) => "invalid_token",
@@ -52,6 +55,7 @@ impl OidcError {
         match self {
             OidcError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             OidcError::InvalidGrant(_) => StatusCode::BAD_REQUEST,
+            OidcError::InvalidTarget(_) => StatusCode::BAD_REQUEST,
             OidcError::UnsupportedGrantType(_) => StatusCode::BAD_REQUEST,
             OidcError::InvalidClient(_) => StatusCode::UNAUTHORIZED,
             OidcError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
@@ -66,6 +70,7 @@ impl OidcError {
         match self {
             OidcError::InvalidRequest(s)
             | OidcError::InvalidGrant(s)
+            | OidcError::InvalidTarget(s)
             | OidcError::UnsupportedGrantType(s)
             | OidcError::InvalidClient(s)
             | OidcError::Unauthorized(s)
@@ -112,6 +117,7 @@ impl std::fmt::Display for OidcError {
         let description = match self {
             OidcError::InvalidRequest(s)
             | OidcError::InvalidGrant(s)
+            | OidcError::InvalidTarget(s)
             | OidcError::UnsupportedGrantType(s)
             | OidcError::InvalidClient(s)
             | OidcError::Unauthorized(s)

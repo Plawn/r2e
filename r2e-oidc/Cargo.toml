@@ -26,6 +26,7 @@ url = {workspace = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["full"]}
+base64 = {workspace = true}
 r2e-test = {workspace = true}
 tower = {workspace = true}
 http-body-util = {workspace = true}

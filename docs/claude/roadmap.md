@@ -427,15 +427,17 @@ tests) + example-mcp auth e2e; provider matrix + Keycloak walkthrough in
 
 Open, in order:
 
-- **P3 — providers & dev**: `DevKeycloak` dev service, r2e-oidc
-  `scope`/RFC 8707 `resource` pass-through, MCP resources + prompts.
+- **P3 — providers & dev**: `DevKeycloak` dev service, MCP resources +
+  prompts.
   SHIPPED 2026-08-27: the `introspection` (RFC 7662) + `userinfo` (Google)
   validation backends (`token-validation: introspection|userinfo`,
   opaque-token cache `opaque-cache-ttl-secs`/`opaque-cache-max-entries`,
   `r2e_mcp::auth::{IntrospectionBackend, UserinfoBackend}`) and the
   authorize-redirect shim (`extra-authorize-params` → mirror rewrites
   `authorization_endpoint` to `{mcp.path}/oauth/authorize`, 302 to the IdP,
-  server params win; requires the DCR shim, boot error otherwise).
+  server params win; requires the DCR shim, boot error otherwise); r2e-oidc
+  RFC 8707 `resource` pass-through (`resource` form param → token `aud`,
+  invalid URI = 400 `invalid_target`; `scope` pass-through already existed).
 - **Follow-ups (any phase)**: targeted error for struct-level
   `#[inject(identity)]` on `#[mcp_routes]` types (points at the method-param
   form); bean-level `#[tool]` auto-collection (`after_register`, like

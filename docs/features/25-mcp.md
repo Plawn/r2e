@@ -378,3 +378,9 @@ per-tool checks stay active. `TokenBuilder` mints every real-world token
 shape: `.scopes()`, `.audiences()` (array `aud`), `.realm_roles()` /
 `.client_roles()` (Keycloak), `.claim("scp", …)` (Entra/Okta), `.expired()`.
 See `examples/example-mcp/tests/mcp_auth.rs` for the full pattern.
+
+For a real RS256/JWKS path without Docker, run the embedded `r2e-oidc` plugin
+as the issuer: its `POST /oauth/token` honors `scope` and the RFC 8707
+`resource` indicator (`resource=http://localhost:3000/mcp` → token `aud` =
+the MCP resource), so a password-grant token validates against
+`mcp.auth.issuer: http://localhost:<port>` end to end.

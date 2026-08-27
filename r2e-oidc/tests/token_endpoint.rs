@@ -1,6 +1,6 @@
 use r2e_core::http::body::to_bytes;
 use r2e_core::http::{Body, Request, Response, Router, StatusCode};
-use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
+use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
 async fn build_app() -> Router {
@@ -178,4 +178,109 @@ async fn password_grant_disabled_by_default() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
     assert_eq!(json["error"], "unsupported_grant_type");
+}
+
+// ── RFC 8707 `resource` indicator ──────────────────────────────────────────
+
+/// Decode the (unverified) JWT payload — enough to observe issued claims.
+fn jwt_payload(token: &str) -> serde_json::Value {
+    use base64::Engine;
+    let part = token.split('.').nth(1).unwrap();
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(part)
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[r2e_core::test]
+async fn resource_indicator_becomes_the_audience() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123\
+             &resource=http%3A%2F%2Flocalhost%3A3000%2Fmcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["aud"], "http://localhost:3000/mcp");
+}
+
+#[r2e_core::test]
+async fn no_resource_keeps_the_configured_audience() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["aud"], "test-app");
+}
+
+#[r2e_core::test]
+async fn relative_resource_is_invalid_target() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123&resource=mcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_target");
+}
+
+#[r2e_core::test]
+async fn fragment_bearing_resource_is_invalid_target() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123\
+             &resource=http%3A%2F%2Flocalhost%2Fmcp%23frag",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_target");
+}
+
+#[r2e_core::test]
+async fn client_credentials_honors_the_resource_indicator() {
+    let clients = ClientRegistry::new().add_client("svc", "secret");
+    let app = r2e_core::AppBuilder::new()
+        .plugin(
+            OidcServer::new()
+                .issuer("http://localhost:3000")
+                .audience("test-app")
+                .with_user_store(InMemoryUserStore::new())
+                .with_client_registry(clients),
+        )
+        .build_state()
+        .await
+        .build();
+
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret\
+             &resource=https%3A%2F%2Fapi.example.com%2Fmcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["aud"], "https://api.example.com/mcp");
 }

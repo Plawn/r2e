@@ -2996,6 +2996,13 @@ b.plugin(OidcServer::new()
 Endpoints: `POST /oauth/token`, `/.well-known/openid-configuration`,
 `/.well-known/jwks.json`, `GET /userinfo`.
 
+`POST /oauth/token` honors `scope` (space-separated, normalized into the
+token's `scope` claim) and the RFC 8707 `resource` indicator: when present it
+becomes the token's `aud` (instead of the configured audience) — handy for
+minting MCP resource-server tokens (`resource=http://localhost:3000/mcp`). An
+invalid `resource` (relative URI, or one carrying a fragment) is a 400
+`invalid_target`.
+
 ---
 
 ## gRPC
