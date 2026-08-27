@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static", "tenant"]
+full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static", "tenant", "mcp"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -48,6 +48,7 @@ prometheus = ["dep:r2e-prometheus"]
 openfga = ["dep:r2e-openfga"]
 observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc", "r2e-security?/grpc"]
+mcp = ["dep:r2e-mcp"]
 grpc-reflection = ["grpc", "r2e-grpc/reflection"]
 static = ["dep:r2e-static"]
 tenant = ["dep:r2e-tenant"]
@@ -81,6 +82,7 @@ r2e-openapi = {workspace = true, optional = true}
 r2e-prometheus = {workspace = true, optional = true}
 r2e-openfga = {workspace = true, optional = true}
 r2e-grpc = {workspace = true, optional = true}
+r2e-mcp = {workspace = true, optional = true}
 r2e-static = {workspace = true, optional = true}
 r2e-tenant = {workspace = true, optional = true}
 r2e-observability = {workspace = true, optional = true}

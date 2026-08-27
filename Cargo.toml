@@ -23,6 +23,7 @@ members = [
     "r2e-openfga/macros",
     "r2e-grpc",
     "r2e-grpc/build",
+    "r2e-mcp",
     "r2e-oidc",
     "r2e-devtools",
     "r2e-static",
@@ -39,6 +40,7 @@ members = [
     "examples/example-multi-tenant-db",
     "examples/example-websocket-chat",
     "examples/example-grpc",
+    "examples/example-mcp",
     "examples/example-microservice",
     "examples/example-oidc",
     "examples/example-openfga",
@@ -89,6 +91,7 @@ r2e-openfga-model = { path = "r2e-openfga/model", version = "0.3.0" }
 r2e-openfga-macros = { path = "r2e-openfga/macros", version = "0.3.0" }
 r2e-grpc = { path = "r2e-grpc", version = "0.3.0" }
 r2e-grpc-build = { path = "r2e-grpc/build", version = "0.3.0" }
+r2e-mcp = { path = "r2e-mcp", version = "0.3.0" }
 r2e-oidc = { path = "r2e-oidc", version = "0.3.0" }
 r2e-devtools = { path = "r2e-devtools", version = "0.3.0" }
 r2e-static = { path = "r2e-static", version = "0.3.0" }
@@ -131,6 +134,11 @@ dotenvy = "0.15"
 # Dev services (test containers)
 testcontainers = "0.27"
 testcontainers-modules = "0.15"
+
+# MCP
+# `default-features = false`: rmcp's default `macros` feature is deliberately unused —
+# R2E dispatches tools itself (#[mcp_routes]), rmcp is the wire only.
+rmcp = { version = "3.1", default-features = false, features = ["server", "transport-streamable-http-server"] }
 
 # Security
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
