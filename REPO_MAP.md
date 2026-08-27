@@ -343,6 +343,33 @@ tests/
 
 ---
 
+## r2e-mcp — MCP server
+
+MCP (Model Context Protocol) tools over rmcp's streamable-HTTP transport,
+dispatched by R2E (`#[mcp_routes]` + `#[tool]`; guards/interceptors shared
+with HTTP).
+
+```
+src/
+  lib.rs                    AppBuilderMcpExt (register_mcp_service + compile-time dep check), prelude, __macro_support
+  plugin.rs                 McpServer plugin: path validation, shared session map, shutdown-token relay, endpoint mount
+  config.rs                 McpConfig (`mcp.*`)
+  handler.rs                McpRuntime (dispatch table, duplicate-name boot panic) + rmcp ServerHandler impl
+  registry.rs               McpServiceRegistry (filled at registration, drained once at router build)
+  service.rs                McpService trait (what #[mcp_routes] implements)
+  route.rs                  ToolRoute/ToolCall/ToolAnnotations/ToolInvoke
+  params.rs                 Params<T> + ToolParams (schemars → inputSchema)
+  result.rs                 IntoToolResult (String/()/Json<T> dual encoding/CallToolResult/Result)
+  error.rs                  McpError → CallToolResult{isError} or JSON-RPC ErrorData
+  guard.rs                  GuardContext bridge: HTTP Guard<I> over transport request parts
+
+tests/
+  support/mod.rs            oneshot-driven MCP protocol harness (initialize/session/SSE parsing)
+  server/                   plugin, registry, dispatch, schema, interceptors, lifecycle (sharded + stop)
+```
+
+---
+
 ## r2e-utils — Built-in interceptors
 
 ```
@@ -486,6 +513,12 @@ tests/
   scheduling/               Scheduled tasks (controllers + beans)
   transverse/               Interceptors, lifecycle hooks
 ```
+
+### example-mcp — MCP server demo
+
+One `CalcService` bean behind two transports: `#[mcp_routes] MathTools` (tools
+with guards + interceptors) and an HTTP `CalcController`. `tests/mcp_e2e.rs`
+drives the full MCP session dance through `TestApp`.
 
 ### example-postgres — Database integration
 

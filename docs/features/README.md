@@ -2,7 +2,7 @@
 
 ## Overview
 
-R2E provides 24 main features, each documented in a dedicated file.
+R2E provides 25 main features, each documented in a dedicated file.
 
 | # | Feature | File | Crate |
 |---|---------|------|-------|
@@ -30,6 +30,7 @@ R2E provides 24 main features, each documented in a dedicated file.
 | 22 | Serve Lifecycle (Stop & Drain) | [22-serve-lifecycle.md](./22-serve-lifecycle.md) | `r2e-core` / `r2e-grpc` |
 | 23 | OpenFGA Authorization (ReBAC, schema-first) | [23-openfga.md](./23-openfga.md) | `r2e-openfga` |
 | 24 | Multi-Tenancy (per-tenant beans) | [24-tenancy.md](./24-tenancy.md) | `r2e-tenant` |
+| 25 | MCP Server | [25-mcp.md](./25-mcp.md) | `r2e-mcp` |
 
 ## Crate Architecture
 

@@ -400,6 +400,36 @@ Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
 existing store's model into a local `.fga`), plus tuple seed fixtures for
 dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
 
+## W16 — MCP server (r2e-mcp) — P1 SHIPPED 2026-08-27, P2/P3 OPEN
+
+P1 (server core) shipped on `feat/mcp-server`: `r2e-mcp` crate + `McpServer`
+plugin (streamable HTTP, shared sessions across SO_REUSEPORT workers,
+shutdown-token relay), `#[mcp_routes]` + `#[tool]` (schemars schemas, guards
+SHARED with HTTP via `Guard<I>`, prebuilt interceptors, `EndpointDeps` compile
+check), example-mcp, full test target + compile-fail cases. References:
+`docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
+(guards rule-of-three reversal), plan
+`~/.claude/plans/j-aimerai-tudier-l-id-e-d-avoir-typed-tower.md`.
+
+Open, in order:
+
+- **P2 — auth**: IdP-agnostic OAuth 2.1 resource server (`mcp.auth.*`): jwt
+  backend over discovery, `McpAuthLayer`, RFC 9728 protected-resource
+  metadata, static DCR shim (`public-client-id`), per-tool
+  `#[tool(scopes/any_scopes)]` + `#[roles]`, `TestJwt` helpers,
+  `server.public-url` convention key, r2e-security breaking changes
+  (`audiences: Vec<String>`, `skip_audience_validation`, `with_leeway`).
+- **P3 — providers & dev**: `introspection` (RFC 7662) + `userinfo` (Google)
+  validation backends, `DevKeycloak` dev service, authorize-redirect shim
+  (`extra-authorize-params`), r2e-oidc `scope`/RFC 8707 `resource`
+  pass-through, MCP resources + prompts.
+- **Follow-ups (any phase)**: targeted error for struct-level
+  `#[inject(identity)]` on `#[mcp_routes]` types (points at the method-param
+  form); bean-level `#[tool]` auto-collection (`after_register`, like
+  `ScheduledSource`); r2e-oidc authorization-code + PKCE flow (Docker-free
+  end-to-end MCP OAuth in `r2e dev`); `r2e add mcp` CLI scaffold; sealed
+  `ObjectParams` marker making a non-object root schema a compile error.
+
 ## Open items tracked in their own docs
 
 Kept where the context lives rather than duplicated here:

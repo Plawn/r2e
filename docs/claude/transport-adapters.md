@@ -1,10 +1,10 @@
 # Transport Adapters — Adding a Wire Format to R2E
 
 Status: **REFERENCE** — recorded 2026-07-09, verified against the code
-2026-07-23. Read this before wiring a new entry point (a wire protocol, a
-message-driven dispatcher, anything that invokes endpoint methods from
-outside). Nothing here is pending work: every mechanism described is
-implemented.
+2026-07-23; MCP added as the third wire adapter 2026-08-27. Read this before
+wiring a new entry point (a wire protocol, a message-driven dispatcher,
+anything that invokes endpoint methods from outside). Nothing here is pending
+work: every mechanism described is implemented.
 
 ## The architecture in one paragraph
 
@@ -15,8 +15,9 @@ the decorator machinery (`DecoratorSpec`, `Interceptor<R>`,
 `AllSatisfied`). A transport adapter supplies only what is genuinely
 wire-specific: request extraction, error mapping to the wire's failure
 type, routing syntax, and the serve loop. HTTP (`#[routes]`), gRPC
-(`#[grpc_routes]`), and scheduled tasks (`#[scheduled]`, timer-driven) are
-the three existing adapters — use them as references.
+(`#[grpc_routes]`), MCP (`#[mcp_routes]`, `r2e-mcp`), and scheduled tasks
+(`#[scheduled]`, timer-driven) are the existing adapters — use them as
+references.
 
 ## What a new transport must provide
 
@@ -33,7 +34,7 @@ the three existing adapters — use them as references.
 3. **Prebuilt interceptor sets** — reuse
    `codegen::decorators::generate_named_deco_items(controller, kind, fn, …)`
    with a distinct `kind` string (HTTP uses `"Deco"`, scheduled `"Sched"`,
-   gRPC `"GrpcDeco"`) and wrap method bodies with
+   gRPC `"GrpcDeco"`, MCP `"McpDeco"`) and wrap method bodies with
    `wrap_with_deco_interceptors`. Sets are built from the `BeanContext` at
    registration, stored behind one `Arc` on the wrapper.
 
@@ -89,6 +90,14 @@ the three existing adapters — use them as references.
 - Decorators are built at registration, never per request/call.
 - Every registration path compile-checks `EndpointDeps` via `AllSatisfied`
   (or `ModuleDepsSatisfied` for module scope).
-- Guards stay per-transport until a third wire transport makes the shared
-  abstraction pay for itself (rule of three; `GrpcRolesGuard` duplicating
-  `RolesGuard` ~30 lines is the accepted cost).
+- Guards: the rule of three was met by MCP (third wire transport,
+  2026-08-27) and resolved the OTHER way — **new adapters with HTTP request
+  context reuse `Guard<I>`/`GuardContext` directly** instead of minting a
+  per-transport guard trait. MCP builds a `GuardContext` from the transport
+  request's `http::request::Parts` and maps the rejection `Response` back to
+  a JSON-RPC error by status (`r2e-mcp/src/guard.rs::guard_response_to_error`)
+  — so `#[guard]`, `#[roles]`-style specs, `RateLimitGuard` and every user
+  `#[derive(DecoratorBean)]` guard work on tools with zero new impls.
+  `GrpcGuard`/`GrpcRolesGuard` remain the outlier (tonic metadata is not
+  HTTP parts); a transport with no HTTP-shaped request may still need its
+  own guard trait, but that is now the exception to justify, not the rule.

@@ -22,7 +22,7 @@ No `tokio` entry: `r2e::main` / `r2e::app_main!` build the runtime through
 `select!`, `sync::*`, `CancelToken`, …) is re-exported there. See "Runtime
 facade" below.
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `mcp` (MCP server), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application — the `App` trait
 
@@ -3063,6 +3063,97 @@ on the service, then `GrpcIdentityExtractor::extract_claims(request.metadata(),
 HTTP; `Status::unauthenticated` on failure). `JwtClaimsValidator` implements
 `JwtClaimsValidatorLike` under `r2e-security/grpc`, enabled by `r2e`'s `grpc` +
 `security` features.
+
+---
+
+## MCP Server (Model Context Protocol)
+
+Requires feature: `mcp`. Exposes tools to MCP clients (Claude, MCP Inspector,
+agents) over MCP's streamable-HTTP transport, with the same DX as HTTP
+controllers: `#[inject]`, `#[config]`, guards (the SAME `Guard<I>` machinery
+HTTP uses — `#[guard(...)]` works on tools), interceptors, typed config,
+graceful shutdown, sharded serving. rmcp is the wire only — R2E dispatches
+tools itself; no rmcp type appears in user code.
+
+```rust
+use r2e::prelude::*;                       // Params, ToolCall, McpError, McpServer, AppBuilderMcpExt (feature `mcp`)
+use schemars::JsonSchema;
+
+#[derive(serde::Deserialize, JsonSchema)]
+pub struct AddIn {
+    /// Left operand.                      // doc comments → JSON-Schema property descriptions
+    pub a: f64,
+    pub b: f64,
+}
+
+#[derive(serde::Serialize, JsonSchema)]
+pub struct AddOut { pub value: f64 }
+
+#[controller]                              // same attribute as HTTP: #[inject]/#[config] fields
+pub struct MathTools {
+    #[inject] calc: CalcService,
+}
+
+#[mcp_routes]
+#[intercept(Logged::info())]               // impl-level interceptor wraps every tool
+impl MathTools {
+    /// Add two numbers.                   // doc comment → tool description shown to the agent
+    #[tool(read_only, idempotent)]         // annotations: read_only/destructive/idempotent/open_world/name/title
+    async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
+        Json(AddOut { value: self.calc.add(p.a, p.b) })
+    }
+
+    /// Divide `a` by `b`.
+    #[tool(name = "divide")]               // wire name override
+    async fn div(&self, Params(p): Params<AddIn>) -> Result<Json<AddOut>, McpError> {
+        self.calc.divide(p.a, p.b).map(|value| Json(AddOut { value }))
+            .ok_or_else(|| McpError::tool("division by zero"))   // agent-readable isError result
+    }
+
+    /// Clear state. Requires the `x-api-key` header.
+    #[tool(destructive)]
+    #[guard(ApiKeyGuard)]                  // real Guard<I> — reads transport request headers
+    async fn clear(&self, call: ToolCall) -> String {            // ToolCall: raw args, HTTP parts, request id, CancelToken
+        format!("cleared (request {})", call.request_id)
+    }
+}
+```
+
+```rust
+use r2e::prelude::*;                       // McpServer + AppBuilderMcpExt are in the prelude (feature `mcp`)
+
+b.plugin(McpServer::new()                  // endpoint at `/mcp` by default
+        .with_name("my-server")            // advertised serverInfo (defaults: CARGO_PKG_NAME/VERSION)
+        .with_instructions("..."))
+ .build_state().await
+ .register_mcp_service::<MathTools>()      // deps + config keys checked at compile time here
+```
+
+Tool signatures — `&self` plus at most one of each: `Params<T>` (typed
+arguments; `T: Deserialize + JsonSchema` becomes the `inputSchema`), `ToolCall`
+(raw arguments, HTTP request parts, JSON-RPC id, cancellation token),
+`CancelToken`. Returns: `String`/`&str`/`()`, `Json<T: Serialize + JsonSchema>`
+(dual-encoded: `structuredContent` + JSON text, advertises `outputSchema`),
+`CallToolResult`, or `Result<_, E: Into<McpError>>`. `McpError::tool(...)` →
+`isError: true` result the agent can read; other variants map to JSON-RPC
+errors (bad args → -32602, unknown tool → -32601, guard rejection → -32600 with
+the HTTP status text). Beans/config go on the struct, never as parameters.
+
+One type cannot be both `#[routes]` and `#[mcp_routes]` — share a bean between
+a thin HTTP controller and a thin MCP service instead (see
+`examples/example-mcp`).
+
+Config under `mcp.*` (all optional; builder methods override config):
+`path` (default `/mcp`), `enabled` (true), `name`/`version`/`instructions`,
+`sse-keep-alive-secs` (15; 0 disables), `stateless` (false),
+`json-response` (false; stateless only), `allowed-hosts` (DNS-rebinding
+protection — REQUIRED behind a proxy/public hostname; default accepts loopback
+`Host` headers only), `allowed-origins`, `max-request-body-bytes`.
+
+Sharded serving (`server.workers`) shares one session map across workers;
+graceful shutdown terminates live SSE streams. Test over `TestApp`: POST the
+JSON-RPC envelope to `/mcp` with `accept: application/json, text/event-stream`
+(responses are SSE `data:` events; see `examples/example-mcp/tests/mcp_e2e.rs`).
 
 ---
 

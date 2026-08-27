@@ -17,6 +17,7 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("utils", "r2e-utils"),
     ("prometheus", "r2e-prometheus"),
     ("grpc", "r2e-grpc"),
+    ("mcp", "r2e-mcp"),
     ("test", "r2e-test"),
 ];
 
@@ -76,7 +77,7 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     deps.insert(crate_name, toml_edit::value(R2E_DEP_VERSION));
 
     // Add companion dependencies for extensions that require them
-    if extension == "openapi" && !deps.contains_key("schemars") {
+    if matches!(extension, "openapi" | "mcp") && !deps.contains_key("schemars") {
         deps.insert("schemars", toml_edit::value("1"));
     }
 
@@ -87,7 +88,7 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
         "✓".green(),
         crate_name.cyan()
     );
-    if extension == "openapi" {
+    if matches!(extension, "openapi" | "mcp") {
         println!(
             "{} Also added {} (required for #[derive(JsonSchema)])",
             "✓".green(),
