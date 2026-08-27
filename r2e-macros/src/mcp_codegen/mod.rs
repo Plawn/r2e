@@ -19,9 +19,8 @@ mod tool_impl;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::codegen::decorators::spec_type_of;
+use crate::codegen::decorators::{decorator_product_field, spec_type_of};
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
-use crate::util::crate_path::r2e_core_path;
 
 #[derive(Default)]
 pub(crate) struct McpMemberDecos {
@@ -125,17 +124,13 @@ fn build_deco_layout(def: &McpRoutesImplDef) -> McpDecoLayout {
         };
     }
 
-    let krate = r2e_core_path();
     let mut field_decls = Vec::new();
     let mut field_inits = Vec::new();
     let mut add_site = |field: syn::Ident, expr: &syn::Expr| {
-        let (spec, value) = spec_type_of(expr).expect("decorator specs prevalidated");
-        field_decls.push(quote! {
-            #field: <#spec as #krate::DecoratorSpec>::Product
-        });
-        field_inits.push(quote! {
-            #field: #krate::decorators::decorator::build_decorator::<_, #spec>(#value, __ctx)
-        });
+        let (field_decl, field_init) =
+            decorator_product_field(&field, expr).expect("decorator specs prevalidated");
+        field_decls.push(field_decl);
+        field_inits.push(field_init);
         field
     };
 

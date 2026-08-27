@@ -9,8 +9,7 @@
 
 use crate::extract::*;
 use crate::model::types::{IdentityParam, MethodDecorators};
-use crate::parsing::controller_parsing::has_identity_qualifier;
-use crate::util::type_utils::unwrap_option_type;
+use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
 
 /// Which MCP member family a marked method belongs to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -354,11 +353,7 @@ fn classify_args(
         let syn::FnArg::Typed(pat_type) = arg else {
             continue;
         };
-        let is_identity = pat_type.attrs.iter().any(|a| {
-            (a.path().is_ident("inject") && has_identity_qualifier(a))
-                || a.path().is_ident("identity")
-        });
-        if is_identity {
+        if let Some(identity) = parse_identity_param(pat_type, args.len(), true)? {
             if has_identity {
                 return Err(syn::Error::new_spanned(
                     pat_type,
@@ -368,20 +363,8 @@ fn classify_args(
                 ));
             }
             has_identity = true;
-            let declared_ty = (*pat_type.ty).clone();
-            let (inner_ty, is_optional) = match unwrap_option_type(&declared_ty) {
-                Some(inner) => (inner.clone(), true),
-                None => (declared_ty, false),
-            };
-            pat_type.attrs.retain(|a| {
-                !((a.path().is_ident("inject") && has_identity_qualifier(a))
-                    || a.path().is_ident("identity"))
-            });
-            args.push(McpToolArg::Identity(IdentityParam {
-                index: args.len(),
-                ty: inner_ty,
-                is_optional,
-            }));
+            strip_identity_param_attrs(pat_type, true);
+            args.push(McpToolArg::Identity(identity));
             continue;
         }
         if let Some(inner) = unwrap_params_type(&pat_type.ty) {

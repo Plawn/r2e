@@ -1,6 +1,6 @@
 use crate::extract::*;
 use crate::model::types::*;
-use crate::parsing::controller_parsing::has_identity_qualifier;
+use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {
@@ -42,8 +42,6 @@ pub struct RoutesImplDef {
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
-use crate::util::type_utils::unwrap_option_type;
-
 /// Detect `#[inject(identity)]` on handler parameters.
 /// Returns the parameter index (among typed params, excluding `&self`) and the
 /// parameter type if found. Strips the attribute from the parameter.
@@ -53,22 +51,7 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
 
     for arg in method.sig.inputs.iter_mut() {
         if let syn::FnArg::Typed(pat_type) = arg {
-            if let Some(attr) = pat_type
-                .attrs
-                .iter()
-                .find(|a| a.path().is_ident("identity"))
-            {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    "`#[identity]` was removed; use `#[inject(identity)]`",
-                ));
-            }
-            let is_identity = pat_type
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("inject") && has_identity_qualifier(a));
-
-            if is_identity {
+            if let Some(identity) = parse_identity_param(pat_type, param_idx, false)? {
                 if identity_param.is_some() {
                     return Err(syn::Error::new_spanned(
                         pat_type,
@@ -78,20 +61,8 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
                          \n      let email = user.email();\n      let roles = user.roles();\n  }",
                     ));
                 }
-                let declared_ty = (*pat_type.ty).clone();
-                let (inner_ty, is_optional) = match unwrap_option_type(&declared_ty) {
-                    Some(inner) => (inner.clone(), true),
-                    None => (declared_ty, false),
-                };
-                identity_param = Some(IdentityParam {
-                    index: param_idx,
-                    ty: inner_ty,
-                    is_optional,
-                });
-                // Strip the identity attribute
-                pat_type
-                    .attrs
-                    .retain(|a| !(a.path().is_ident("inject") && has_identity_qualifier(a)));
+                strip_identity_param_attrs(pat_type, false);
+                identity_param = Some(identity);
             }
             param_idx += 1;
         }

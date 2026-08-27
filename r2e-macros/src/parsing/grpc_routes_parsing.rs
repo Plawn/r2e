@@ -2,7 +2,7 @@
 
 use crate::extract::*;
 use crate::model::types::{IdentityParam, MethodDecorators};
-use crate::parsing::controller_parsing::has_identity_qualifier;
+use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
 
 /// Parsed arguments of the `#[grpc_routes(...)]` attribute:
 /// `TraitPath` optionally followed by `, descriptor = <expr>`.
@@ -77,8 +77,6 @@ pub struct GrpcMethod {
     pub fn_item: syn::ImplItemFn,
 }
 
-use crate::util::type_utils::unwrap_option_type;
-
 /// Detect `#[inject(identity)]` on handler parameters.
 fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<IdentityParam>> {
     let mut identity_param = None;
@@ -86,33 +84,15 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
 
     for arg in method.sig.inputs.iter_mut() {
         if let syn::FnArg::Typed(pat_type) = arg {
-            let is_identity = pat_type.attrs.iter().any(|a| {
-                (a.path().is_ident("inject") && has_identity_qualifier(a))
-                    || a.path().is_ident("identity")
-            });
-
-            if is_identity {
+            if let Some(identity) = parse_identity_param(pat_type, param_idx, true)? {
                 if identity_param.is_some() {
                     return Err(syn::Error::new_spanned(
                         pat_type,
                         "only one #[inject(identity)] parameter is allowed per gRPC handler",
                     ));
                 }
-                let declared_ty = (*pat_type.ty).clone();
-                let (inner_ty, is_optional) = match unwrap_option_type(&declared_ty) {
-                    Some(inner) => (inner.clone(), true),
-                    None => (declared_ty, false),
-                };
-                identity_param = Some(IdentityParam {
-                    index: param_idx,
-                    ty: inner_ty,
-                    is_optional,
-                });
-                // Strip the identity attribute
-                pat_type.attrs.retain(|a| {
-                    !((a.path().is_ident("inject") && has_identity_qualifier(a))
-                        || a.path().is_ident("identity"))
-                });
+                strip_identity_param_attrs(pat_type, true);
+                identity_param = Some(identity);
             }
             param_idx += 1;
         }

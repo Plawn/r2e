@@ -10,12 +10,15 @@ error[E0277]: `Tenant<Pool>` cannot be extracted from a request against this app
    = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
    = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
-help: the trait `FromRequestPartsVia<S, ViaBean<(I, J)>>` is implemented for `Tenant<T>`
+help: the trait `FromRequestPartsVia<S, ViaBean<(I, J)>>` is conditionally implemented for `Tenant<T>`
   --> $WORKSPACE/r2e-tenant/src/extract.rs
    |
    | / impl<S, T, I, J> FromRequestPartsVia<S, ViaBean<(I, J)>> for Tenant<T>
    | | where
    | |     S: HasBean<TenantRouter, I> + HasBean<Tenanted<T>, J> + Send + Sync,
+   | |        ------------------------   ----------------------- unsatisfied requirement introduced here: `HNil: HasBean<Tenanted<Pool>, _>`
+   | |        |
+   | |        unsatisfied requirement introduced here: `HNil: HasBean<TenantRouter, _>`
    | |     T: Clone + Send + Sync + 'static,
    | |     I: Send + Sync,
    | |     J: Send + Sync,
@@ -45,12 +48,15 @@ error[E0277]: `Tenant<Pool>` cannot be extracted from a request against this app
    = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
    = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
-help: the trait `FromRequestPartsVia<S, ViaBean<(I, J)>>` is implemented for `Tenant<T>`
+help: the trait `FromRequestPartsVia<S, ViaBean<(I, J)>>` is conditionally implemented for `Tenant<T>`
   --> $WORKSPACE/r2e-tenant/src/extract.rs
    |
    | / impl<S, T, I, J> FromRequestPartsVia<S, ViaBean<(I, J)>> for Tenant<T>
    | | where
    | |     S: HasBean<TenantRouter, I> + HasBean<Tenanted<T>, J> + Send + Sync,
+   | |        ------------------------   ----------------------- unsatisfied requirement introduced here: `HNil: HasBean<Tenanted<Pool>, _>`
+   | |        |
+   | |        unsatisfied requirement introduced here: `HNil: HasBean<TenantRouter, _>`
    | |     T: Clone + Send + Sync + 'static,
    | |     I: Send + Sync,
    | |     J: Send + Sync,

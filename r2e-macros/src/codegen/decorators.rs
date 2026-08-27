@@ -104,6 +104,28 @@ pub(crate) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
     }
 }
 
+/// Emit the field declaration and initializer for one prebuilt decorator
+/// product site.
+///
+/// Storage stays host-specific: HTTP/bean use named sets while MCP embeds the
+/// fields in one flat wrapper. Only the `DecoratorSpec`/`build_decorator`
+/// contract is shared here.
+pub(crate) fn decorator_product_field(
+    field: &syn::Ident,
+    expr: &syn::Expr,
+) -> syn::Result<(TokenStream, TokenStream)> {
+    let krate = r2e_core_path();
+    let (spec_ty, value_expr) = spec_type_of(expr)?;
+    Ok((
+        quote! {
+            #field: <#spec_ty as #krate::DecoratorSpec>::Product
+        },
+        quote! {
+            #field: #krate::decorators::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
+        },
+    ))
+}
+
 /// Whether every decorator expression's spec type is inferable. Closure
 /// generation uses this to degrade to the same no-decorator shape as the
 /// invocation function when extraction fails, so the only error the user
@@ -212,20 +234,16 @@ fn emit_deco_struct<'a, 'b>(
     sites: impl Iterator<Item = (&'a syn::Ident, &'b syn::Expr)>,
     path_param_module: TokenStream,
 ) -> Result<TokenStream, TokenStream> {
+    let krate = r2e_core_path();
     let mut field_decls: Vec<TokenStream> = Vec::new();
     let mut field_inits: Vec<TokenStream> = Vec::new();
-    let krate = r2e_core_path();
     for (field, expr) in sites {
-        let (spec_ty, value_expr) = match spec_type_of(expr) {
-            Ok(split) => split,
+        let (field_decl, field_init) = match decorator_product_field(field, expr) {
+            Ok(tokens) => tokens,
             Err(err) => return Err(err.to_compile_error()),
         };
-        field_decls.push(quote! {
-            #field: <#spec_ty as #krate::DecoratorSpec>::Product
-        });
-        field_inits.push(quote! {
-            #field: #krate::decorators::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
-        });
+        field_decls.push(field_decl);
+        field_inits.push(field_init);
     }
 
     Ok(quote! {
@@ -276,16 +294,12 @@ pub(super) fn generate_predeco_items(
         .iter()
         .zip(decorators.pre_auth_guard_fns.iter())
     {
-        let (spec_ty, value_expr) = match spec_type_of(expr) {
-            Ok(split) => split,
+        let (field_decl, field_init) = match decorator_product_field(field, expr) {
+            Ok(tokens) => tokens,
             Err(err) => return (err.to_compile_error(), None),
         };
-        field_decls.push(quote! {
-            #field: <#spec_ty as #krate::DecoratorSpec>::Product
-        });
-        field_inits.push(quote! {
-            #field: #krate::decorators::decorator::build_decorator::<_, #spec_ty>(#value_expr, __ctx)
-        });
+        field_decls.push(field_decl);
+        field_inits.push(field_init);
     }
 
     let struct_ident = &set.struct_ident;
