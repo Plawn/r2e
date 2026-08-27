@@ -293,10 +293,14 @@ impl AdminTools {
 |---|---|---|
 | `issuer` | — (required) | must be `https://` unless `allow-insecure: true` |
 | `resource`, `resource-name` | derived | canonical resource URI + display name |
-| `discovery` | `eager` (`lazy` under `dev` profile) | `eager` = fetch at boot, fail fast; `lazy` = first use; `off` = explicit endpoints only (requires `jwks-url`) |
+| `discovery` | `eager` (`lazy` under `dev` profile) | `eager` = fetch at boot, fail fast; `lazy` = first use; `off` = explicit endpoints only (requires `jwks-url` / `introspection-endpoint` / `userinfo-endpoint`, per validation mode) |
 | `discovery-ttl-secs` | 3600 | metadata cache TTL (stale-if-error) |
 | `jwks-url`, `authorization-endpoint`, `token-endpoint`, … | discovered | explicit overrides |
-| `token-validation` | `jwt` | `introspection` / `userinfo` are P3 |
+| `token-validation` | `jwt` | `jwt` = local JWKS validation (zero network per request); `introspection` = RFC 7662 (opaque tokens; requires `client-id` + `client-secret`); `userinfo` = OIDC userinfo probe (Google-style opaque tokens; forces `audience: skip`) |
+| `client-id`, `client-secret` | — | confidential client the introspection backend authenticates as (Basic) |
+| `introspection-endpoint`, `userinfo-endpoint` | discovered | explicit overrides for the opaque backends |
+| `opaque-cache-ttl-secs` | 60 | positive validation cache for opaque tokens (capped by the token's `exp`; rejections cached 5s, outages never) |
+| `opaque-cache-max-entries` | 1024 | opaque-token cache size cap |
 | `allowed-algorithms` | RS256, ES256, PS256 | JWT signature algorithms |
 | `clock-skew-secs` | 60 | leeway for `exp`/`nbf` |
 | `audience` | `resource` | `any-of` (+ `extra-audiences`), `client-id`, `skip` |
@@ -317,7 +321,7 @@ impl AdminTools {
 |---|---|---|---|---|
 | **Keycloak** | `{base}/realms/{realm}` | anonymous DCR blocked → **shim** | add an **Audience mapper** (client scope) = the resource URI, else tokens carry `aud: ["account"]` → 401 | `scope`; roles from `realm_access` / `resource_access` (`client-roles-for`) |
 | **Auth0** | `https://{tenant}.auth0.com/` (trailing slash!) | optional toggle | API identifier; the client must send `audience=` → `audience: any-of` + `extra-audiences` | `scope`, or RBAC `permissions` → `scope-claim: permissions` |
-| **Google** | `https://accounts.google.com` | none → **shim** | opaque access tokens → needs `token-validation: userinfo` (P3) | n/a |
+| **Google** | `https://accounts.google.com` | none → **shim** | opaque access tokens → `token-validation: userinfo` (no `aud` binding — `audience: skip` is forced) | n/a |
 | **Entra ID** | `…/{tenant}/v2.0` (path-insertion discovery handled) | none → **shim** | app-ID URI → `any-of` | `scp` claim (default ladder covers it); `roles-claim: roles` |
 | **Okta** | `https://{org}.okta.com/oauth2/{as}` | gated → shim | `any-of` | `scp` (array form covered) |
 

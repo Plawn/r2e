@@ -6,6 +6,7 @@ mod support;
 
 mod fixtures;
 
+mod backends;
 mod config;
 mod discovery;
 mod layer;

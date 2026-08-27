@@ -3180,6 +3180,13 @@ already be configured on the IdP client). IdP outages → 503, not 401. No
 
 Other `mcp.auth.*` keys (all optional): `resource`/`resource-name`, `discovery`
 (`eager`|`lazy`|`off`) + `discovery-ttl-secs`/`jwks-url`/explicit endpoints,
+`token-validation` (`jwt` default — local JWKS, zero network per request;
+`introspection` — RFC 7662 for opaque tokens, requires the confidential
+`client-id` + `client-secret`; `userinfo` — OIDC userinfo probe for
+Google-style opaque tokens, forces `audience: skip`) with
+`introspection-endpoint`/`userinfo-endpoint` overrides and an opaque-token
+cache (`opaque-cache-ttl-secs` 60 — capped by the token's `exp`, rejections
+cached 5s, IdP outages never; `opaque-cache-max-entries` 1024),
 `allowed-algorithms`, `clock-skew-secs`, `audience`
 (`resource`|`any-of`|`client-id`|`skip`) + `extra-audiences` (Auth0/Entra),
 `required-scopes` (server-wide floor → 403), `scopes-supported`, `scope-claim`

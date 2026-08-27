@@ -427,10 +427,13 @@ tests) + example-mcp auth e2e; provider matrix + Keycloak walkthrough in
 
 Open, in order:
 
-- **P3 — providers & dev**: `introspection` (RFC 7662) + `userinfo` (Google)
-  validation backends, `DevKeycloak` dev service, authorize-redirect shim
-  (`extra-authorize-params`), r2e-oidc `scope`/RFC 8707 `resource`
-  pass-through, MCP resources + prompts.
+- **P3 — providers & dev**: `DevKeycloak` dev service, authorize-redirect
+  shim (`extra-authorize-params`), r2e-oidc `scope`/RFC 8707 `resource`
+  pass-through, MCP resources + prompts. The `introspection` (RFC 7662) +
+  `userinfo` (Google) validation backends SHIPPED 2026-08-27
+  (`token-validation: introspection|userinfo`, opaque-token cache
+  `opaque-cache-ttl-secs`/`opaque-cache-max-entries`,
+  `r2e_mcp::auth::{IntrospectionBackend, UserinfoBackend}`).
 - **Follow-ups (any phase)**: targeted error for struct-level
   `#[inject(identity)]` on `#[mcp_routes]` types (points at the method-param
   form); bean-level `#[tool]` auto-collection (`after_register`, like

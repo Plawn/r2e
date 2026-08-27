@@ -20,6 +20,10 @@ use r2e_security::{Algorithm, SecurityConfig};
 use super::config::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
 use super::discovery::{DiscoveryClient, OAuthServerMetadata};
 use super::layer::{origin_allowed, AuthState, McpAuthLayer};
+use super::opaque::{
+    IntrospectionBackend, UserinfoBackend, DEFAULT_OPAQUE_CACHE_MAX_ENTRIES,
+    DEFAULT_OPAQUE_CACHE_TTL_SECS,
+};
 use super::shim::{shim_routes, ShimState, DEFAULT_REDIRECT_ALLOWLIST};
 use super::validator::{McpTokenValidator, ScopePolicy};
 use super::wellknown::{prm_json, prm_routes};
@@ -128,15 +132,33 @@ fn split_resource(resource: &str) -> Result<(String, String), PluginBuildError> 
 pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, PluginBuildError> {
     let cfg = &inputs.cfg;
 
-    // P3 backends fail loud, not silently-unauthenticated.
-    match cfg.token_validation.unwrap_or_default() {
-        TokenValidationMode::Jwt => {}
-        other => {
-            return Err(format!(
-                "mcp.auth.token-validation: `{other:?}` is not implemented yet (P3) — \
-                 only `jwt` is supported"
-            )
-            .into());
+    let validation_mode = cfg.token_validation.unwrap_or_default();
+    if validation_mode == TokenValidationMode::Introspection
+        && (cfg.client_id.is_none() || cfg.client_secret.is_none())
+    {
+        return Err(
+            "mcp.auth.token-validation: introspection requires a confidential client — \
+             set `mcp.auth.client-id` and `mcp.auth.client-secret`"
+                .to_string()
+                .into(),
+        );
+    }
+    if validation_mode == TokenValidationMode::Userinfo {
+        match cfg.audience {
+            // Forced skip: the userinfo response carries no `aud` to check.
+            None | Some(AudienceMode::Skip) => tracing::warn!(
+                "mcp.auth.token-validation: userinfo — the userinfo endpoint cannot bind \
+                 a token to an audience, so `aud` is NOT validated; any live token minted \
+                 by the issuer authenticates here"
+            ),
+            Some(other) => {
+                return Err(format!(
+                    "mcp.auth.audience: `{other:?}` cannot be enforced with \
+                     `token-validation: userinfo` (the userinfo endpoint returns no \
+                     audience) — remove the key or set `audience: skip` explicitly"
+                )
+                .into());
+            }
         }
     }
 
@@ -170,12 +192,19 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         resource.clone(),
     )
     .with_leeway(cfg.clock_skew_secs.unwrap_or(60));
-    match cfg.audience.unwrap_or_default() {
-        AudienceMode::Resource => {}
+    // The accepted `aud` values (`None` = skip): applied to the JWT
+    // validator here, and to the introspection backend further down.
+    let audience_mode = if validation_mode == TokenValidationMode::Userinfo {
+        AudienceMode::Skip // forced (warned above)
+    } else {
+        cfg.audience.unwrap_or_default()
+    };
+    let accepted_audiences: Option<Vec<String>> = match audience_mode {
+        AudienceMode::Resource => Some(vec![resource.clone()]),
         AudienceMode::AnyOf => {
             let mut audiences = vec![resource.clone()];
             audiences.extend(cfg.extra_audiences.clone().unwrap_or_default());
-            sec = sec.with_audiences(audiences);
+            Some(audiences)
         }
         AudienceMode::ClientId => {
             let client_id = cfg.public_client_id.clone().ok_or_else(|| {
@@ -184,16 +213,22 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
                         .to_string(),
                 )
             })?;
-            sec = sec.with_audiences([client_id]);
+            Some(vec![client_id])
         }
         AudienceMode::Skip => {
-            tracing::warn!(
-                "mcp.auth.audience: skip — the `aud` claim is NOT validated; any token \
-                 minted by the issuer for any service will authenticate here"
-            );
-            sec = sec.skip_audience_validation();
+            if validation_mode != TokenValidationMode::Userinfo {
+                tracing::warn!(
+                    "mcp.auth.audience: skip — the `aud` claim is NOT validated; any token \
+                     minted by the issuer for any service will authenticate here"
+                );
+            }
+            None
         }
-    }
+    };
+    sec = match &accepted_audiences {
+        Some(audiences) => sec.with_audiences(audiences.clone()),
+        None => sec.skip_audience_validation(),
+    };
     let algorithms: Vec<Algorithm> = match &cfg.allowed_algorithms {
         Some(names) => names
             .iter()
@@ -221,13 +256,22 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         DiscoveryMode::Eager
     });
     let discovery = if discovery_mode == DiscoveryMode::Off {
-        if cfg.jwks_url.is_none() {
-            return Err(
-                "mcp.auth: `discovery: off` with JWT validation requires an explicit \
-                 `mcp.auth.jwks-url`"
-                    .to_string()
-                    .into(),
-            );
+        let missing = match validation_mode {
+            TokenValidationMode::Jwt if cfg.jwks_url.is_none() => Some("mcp.auth.jwks-url"),
+            TokenValidationMode::Introspection if cfg.introspection_endpoint.is_none() => {
+                Some("mcp.auth.introspection-endpoint")
+            }
+            TokenValidationMode::Userinfo if cfg.userinfo_endpoint.is_none() => {
+                Some("mcp.auth.userinfo-endpoint")
+            }
+            _ => None,
+        };
+        if let Some(key) = missing {
+            return Err(format!(
+                "mcp.auth: `discovery: off` with `{validation_mode:?}` validation requires \
+                 an explicit `{key}`"
+            )
+            .into());
         }
         Arc::new(DiscoveryClient::fixed(OAuthServerMetadata::from_endpoints(
             issuer.clone(),
@@ -259,17 +303,55 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     }
 
     // ── Validator (the provided bean) ───────────────────────────────────────
-    let validator = inputs.validator_override.clone().unwrap_or_else(|| {
-        McpTokenValidator::lazy_jwt(
-            sec,
-            Some(discovery.clone()),
-            ScopePolicy {
-                scope_claim: cfg.scope_claim.clone(),
-                roles_claim: cfg.roles_claim.clone(),
-                client_roles_for: cfg.client_roles_for.clone(),
-            },
-        )
-    });
+    let scope_policy = ScopePolicy {
+        scope_claim: cfg.scope_claim.clone(),
+        roles_claim: cfg.roles_claim.clone(),
+        client_roles_for: cfg.client_roles_for.clone(),
+    };
+    let opaque_cache_ttl =
+        std::time::Duration::from_secs(cfg.opaque_cache_ttl_secs.unwrap_or(DEFAULT_OPAQUE_CACHE_TTL_SECS));
+    let opaque_cache_max = cfg
+        .opaque_cache_max_entries
+        .unwrap_or(DEFAULT_OPAQUE_CACHE_MAX_ENTRIES);
+    let validator = match inputs.validator_override.clone() {
+        Some(validator) => validator,
+        None => match validation_mode {
+            TokenValidationMode::Jwt => {
+                McpTokenValidator::lazy_jwt(sec, Some(discovery.clone()), scope_policy)
+            }
+            TokenValidationMode::Introspection => {
+                let client = r2e_security::build_oauth_http_client(&sec)
+                    .map_err(|e| format!("mcp.auth: failed to build the OAuth HTTP client: {e}"))?;
+                let mut backend = IntrospectionBackend::new(
+                    client,
+                    discovery.clone(),
+                    cfg.client_id.clone().expect("checked above"),
+                    cfg.client_secret.clone().expect("checked above"),
+                )
+                .with_leeway(cfg.clock_skew_secs.unwrap_or(60))
+                .with_scope_policy(scope_policy)
+                .with_cache(opaque_cache_ttl, opaque_cache_max);
+                if let Some(endpoint) = cfg.introspection_endpoint.clone() {
+                    backend = backend.with_endpoint(endpoint);
+                }
+                if let Some(audiences) = accepted_audiences.clone() {
+                    backend = backend.with_audiences(audiences);
+                }
+                McpTokenValidator::custom(backend)
+            }
+            TokenValidationMode::Userinfo => {
+                let client = r2e_security::build_oauth_http_client(&sec)
+                    .map_err(|e| format!("mcp.auth: failed to build the OAuth HTTP client: {e}"))?;
+                let mut backend = UserinfoBackend::new(client, discovery.clone())
+                    .with_scope_policy(scope_policy)
+                    .with_cache(opaque_cache_ttl, opaque_cache_max);
+                if let Some(endpoint) = cfg.userinfo_endpoint.clone() {
+                    backend = backend.with_endpoint(endpoint);
+                }
+                McpTokenValidator::custom(backend)
+            }
+        },
+    };
 
     // ── Layer state ─────────────────────────────────────────────────────────
     let slot: Arc<OnceLock<McpTokenValidator>> = Arc::new(OnceLock::new());

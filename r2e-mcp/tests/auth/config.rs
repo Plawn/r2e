@@ -35,13 +35,72 @@ async fn plaintext_issuer_without_allow_insecure_is_a_boot_error() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "is not implemented yet (P3)")]
-async fn p3_validation_backends_fail_loud() {
+#[should_panic(expected = "introspection requires a confidential client")]
+async fn introspection_without_client_credentials_is_a_boot_error() {
     let _ = secured_app_with(McpAuthConfig {
         token_validation: Some(TokenValidationMode::Introspection),
         ..offline_auth()
     })
     .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "an explicit `mcp.auth.introspection-endpoint`")]
+async fn offline_introspection_requires_an_explicit_endpoint() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_validation: Some(TokenValidationMode::Introspection),
+        client_id: Some("rs-client".to_string()),
+        client_secret: Some("rs-secret".to_string()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "an explicit `mcp.auth.userinfo-endpoint`")]
+async fn offline_userinfo_requires_an_explicit_endpoint() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_validation: Some(TokenValidationMode::Userinfo),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[tokio::test]
+#[should_panic(expected = "cannot be enforced with")]
+async fn userinfo_with_an_audience_binding_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_validation: Some(TokenValidationMode::Userinfo),
+        audience: Some(AudienceMode::Resource),
+        userinfo_endpoint: Some("http://127.0.0.1:1/userinfo".to_string()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn opaque_validation_modes_boot_with_their_endpoints_configured() {
+    use crate::fixtures::get;
+    for auth in [
+        McpAuthConfig {
+            token_validation: Some(TokenValidationMode::Introspection),
+            client_id: Some("rs-client".to_string()),
+            client_secret: Some("rs-secret".to_string()),
+            introspection_endpoint: Some("http://127.0.0.1:1/introspect".to_string()),
+            ..offline_auth()
+        },
+        // Userinfo with `audience` unset: skip is forced, boot succeeds.
+        McpAuthConfig {
+            token_validation: Some(TokenValidationMode::Userinfo),
+            userinfo_endpoint: Some("http://127.0.0.1:1/userinfo".to_string()),
+            ..offline_auth()
+        },
+    ] {
+        let app = secured_app_with(auth).await;
+        // The auth layer is live: an unauthenticated MCP request is a 401.
+        let (status, _, _) = get(&app, "/mcp", &[]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
 }
 
 #[tokio::test]

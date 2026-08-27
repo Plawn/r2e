@@ -28,10 +28,12 @@ pub enum TokenValidationMode {
     #[default]
     Jwt,
     /// RFC 7662 token introspection (opaque tokens; needs a confidential
-    /// `client-id`/`client-secret`). Not implemented yet (P3).
+    /// `client-id`/`client-secret`). Results cached per token
+    /// (`opaque-cache-ttl-secs`, capped by the token's `exp`).
     Introspection,
-    /// OIDC `userinfo` probe (Google-style opaque access tokens; forces
-    /// `audience: skip`). Not implemented yet (P3).
+    /// OIDC `userinfo` probe (Google-style opaque access tokens). The
+    /// userinfo endpoint cannot bind a token to an audience, so this mode
+    /// forces `audience: skip`. Results cached per token.
     Userinfo,
 }
 
@@ -107,10 +109,10 @@ pub struct McpAuthConfig {
     /// the shim replaces it).
     #[config(key = "registration-endpoint")]
     pub registration_endpoint: Option<String>,
-    /// Explicit `userinfo` endpoint (P3: `token-validation: userinfo`).
+    /// Explicit `userinfo` endpoint (`token-validation: userinfo`).
     #[config(key = "userinfo-endpoint")]
     pub userinfo_endpoint: Option<String>,
-    /// Explicit introspection endpoint (P3: `token-validation:
+    /// Explicit introspection endpoint (`token-validation:
     /// introspection`).
     #[config(key = "introspection-endpoint")]
     pub introspection_endpoint: Option<String>,
@@ -118,12 +120,21 @@ pub struct McpAuthConfig {
     /// Token validation strategy (default `jwt`).
     #[config(key = "token-validation")]
     pub token_validation: Option<TokenValidationMode>,
-    /// Confidential client id for introspection (P3).
+    /// Confidential client id for introspection (required for
+    /// `token-validation: introspection`).
     #[config(key = "client-id")]
     pub client_id: Option<String>,
-    /// Confidential client secret for introspection (P3).
+    /// Confidential client secret for introspection.
     #[config(key = "client-secret")]
     pub client_secret: Option<String>,
+    /// How long a positively validated opaque token is cached, in seconds
+    /// (default 60; the token's own `exp` always caps it). Applies to the
+    /// `introspection` and `userinfo` backends only.
+    #[config(key = "opaque-cache-ttl-secs")]
+    pub opaque_cache_ttl_secs: Option<u64>,
+    /// Maximum cached opaque-token validations (default 1024).
+    #[config(key = "opaque-cache-max-entries")]
+    pub opaque_cache_max_entries: Option<usize>,
     /// Accepted JWT signature algorithms (default RS256, ES256, PS256).
     #[config(key = "allowed-algorithms")]
     pub allowed_algorithms: Option<Vec<String>>,

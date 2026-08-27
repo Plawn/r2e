@@ -26,7 +26,8 @@
 //!
 //! Module map: [`config`] (the `mcp.auth.*` section), [`discovery`] (OIDC
 //! metadata probe + cache), [`validator`] ([`McpPrincipal`],
-//! [`McpTokenValidator`] — an overridable bean), [`layer`] (the tower layer),
+//! [`McpTokenValidator`] — an overridable bean), [`opaque`] (introspection /
+//! userinfo backends for opaque tokens), [`layer`] (the tower layer),
 //! [`wellknown`] (PRM), [`shim`] (DCR), [`tools`] (per-tool checks),
 //! [`error`] (challenge building).
 
@@ -34,6 +35,7 @@ pub mod config;
 pub mod discovery;
 pub mod error;
 pub mod layer;
+pub mod opaque;
 pub(crate) mod setup;
 pub mod shim;
 pub mod tools;
@@ -44,5 +46,6 @@ pub use config::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode
 pub use discovery::{DiscoveryClient, OAuthServerMetadata};
 pub use error::McpAuthError;
 pub use layer::McpAuthLayer;
+pub use opaque::{IntrospectionBackend, UserinfoBackend};
 pub use tools::{check_tool, AuthDisabled, ToolRequirements};
 pub use validator::{McpPrincipal, McpTokenValidator, ScopePolicy, TokenValidatorBackend};
