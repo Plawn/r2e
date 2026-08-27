@@ -24,7 +24,9 @@ use super::opaque::{
     IntrospectionBackend, UserinfoBackend, DEFAULT_OPAQUE_CACHE_MAX_ENTRIES,
     DEFAULT_OPAQUE_CACHE_TTL_SECS,
 };
-use super::shim::{shim_routes, AuthorizeShim, ShimState, AUTHORIZE_PATH, DEFAULT_REDIRECT_ALLOWLIST};
+use super::shim::{
+    shim_routes, AuthorizeShim, ShimState, AUTHORIZE_PATH, DEFAULT_REDIRECT_ALLOWLIST,
+};
 use super::validator::{McpTokenValidator, ScopePolicy};
 use super::wellknown::{prm_json, prm_routes};
 
@@ -255,6 +257,19 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     } else {
         DiscoveryMode::Eager
     });
+    let needs_opaque_client = inputs.validator_override.is_none()
+        && matches!(
+            validation_mode,
+            TokenValidationMode::Introspection | TokenValidationMode::Userinfo
+        );
+    let oauth_client = if discovery_mode != DiscoveryMode::Off || needs_opaque_client {
+        Some(
+            r2e_security::build_oauth_http_client(&sec)
+                .map_err(|e| format!("mcp.auth: failed to build the OAuth HTTP client: {e}"))?,
+        )
+    } else {
+        None
+    };
     let discovery = if discovery_mode == DiscoveryMode::Off {
         let missing = match validation_mode {
             TokenValidationMode::Jwt if cfg.jwks_url.is_none() => Some("mcp.auth.jwks-url"),
@@ -278,15 +293,12 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
             cfg.jwks_url.clone(),
             cfg.authorization_endpoint.clone(),
             cfg.token_endpoint.clone(),
-            cfg.registration_endpoint.clone(),
             cfg.userinfo_endpoint.clone(),
             cfg.introspection_endpoint.clone(),
         )))
     } else {
-        let client = r2e_security::build_oauth_http_client(&sec)
-            .map_err(|e| format!("mcp.auth: failed to build the OAuth HTTP client: {e}"))?;
         Arc::new(DiscoveryClient::new(
-            client,
+            oauth_client.clone().expect("client built for discovery"),
             issuer.clone(),
             cfg.discovery_ttl_secs.unwrap_or(3600),
         ))
@@ -308,8 +320,10 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         roles_claim: cfg.roles_claim.clone(),
         client_roles_for: cfg.client_roles_for.clone(),
     };
-    let opaque_cache_ttl =
-        std::time::Duration::from_secs(cfg.opaque_cache_ttl_secs.unwrap_or(DEFAULT_OPAQUE_CACHE_TTL_SECS));
+    let opaque_cache_ttl = std::time::Duration::from_secs(
+        cfg.opaque_cache_ttl_secs
+            .unwrap_or(DEFAULT_OPAQUE_CACHE_TTL_SECS),
+    );
     let opaque_cache_max = cfg
         .opaque_cache_max_entries
         .unwrap_or(DEFAULT_OPAQUE_CACHE_MAX_ENTRIES);
@@ -320,10 +334,10 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
                 McpTokenValidator::lazy_jwt(sec, Some(discovery.clone()), scope_policy)
             }
             TokenValidationMode::Introspection => {
-                let client = r2e_security::build_oauth_http_client(&sec)
-                    .map_err(|e| format!("mcp.auth: failed to build the OAuth HTTP client: {e}"))?;
                 let mut backend = IntrospectionBackend::new(
-                    client,
+                    oauth_client
+                        .clone()
+                        .expect("client built for opaque validation"),
                     discovery.clone(),
                     cfg.client_id.clone().expect("checked above"),
                     cfg.client_secret.clone().expect("checked above"),
@@ -340,11 +354,12 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
                 McpTokenValidator::custom(backend)
             }
             TokenValidationMode::Userinfo => {
-                let client = r2e_security::build_oauth_http_client(&sec)
-                    .map_err(|e| format!("mcp.auth: failed to build the OAuth HTTP client: {e}"))?;
-                let mut backend = UserinfoBackend::new(client, discovery.clone())
-                    .with_scope_policy(scope_policy)
-                    .with_cache(opaque_cache_ttl, opaque_cache_max);
+                let mut backend = UserinfoBackend::new(
+                    oauth_client.expect("client built for opaque validation"),
+                    discovery.clone(),
+                )
+                .with_scope_policy(scope_policy)
+                .with_cache(opaque_cache_ttl, opaque_cache_max);
                 if let Some(endpoint) = cfg.userinfo_endpoint.clone() {
                     backend = backend.with_endpoint(endpoint);
                 }
@@ -356,7 +371,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     // ── Layer state ─────────────────────────────────────────────────────────
     let slot: Arc<OnceLock<McpTokenValidator>> = Arc::new(OnceLock::new());
     let required_scopes: Arc<[String]> = cfg.required_scopes.clone().unwrap_or_default().into();
-    let layer = McpAuthLayer::enabled(AuthState {
+    let layer = McpAuthLayer::new(AuthState {
         validator: slot.clone(),
         resource_metadata_url: resource_metadata_url.clone().into(),
         required_scopes,
@@ -381,8 +396,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         .extra_authorize_params
         .as_ref()
         .map(|params| {
-            let mut params: Vec<_> =
-                params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut params: Vec<_> = params.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             params.sort();
             params
         })
@@ -456,7 +470,8 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
             }),
             authorize,
         });
-        extra_routes = extra_routes.merge(shim_routes(shim_state, inputs.mcp_path, &registration_path));
+        extra_routes =
+            extra_routes.merge(shim_routes(shim_state, inputs.mcp_path, &registration_path));
     }
 
     tracing::info!(

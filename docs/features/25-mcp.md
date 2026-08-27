@@ -8,12 +8,14 @@ runtime behind them: `#[inject]` beans, `#[config]`, guards, interceptors,
 typed config, graceful shutdown, sharded serving, `TestApp`.
 
 rmcp is used for the wire protocol only — **R2E dispatches tools itself**.
-No rmcp type appears in user code (the one deliberate re-export is
-`CallToolResult` for hand-built results).
+User code never imports rmcp directly; the raw wire escape hatches
+(`CallToolResult`, `GetPromptResult`, `PromptMessage`, `PromptMessageRole`,
+`ResourceContents`) are deliberately re-exported by `r2e-mcp` for hand-built
+results.
 
 ## TL;DR
 
-Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[mcp_routes]` on a dedicated type turn plain async methods into tools: `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — no rmcp type appears in user code. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
+Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[mcp_routes]` on a dedicated type turn plain async methods into tools: `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — raw wire escape hatches are re-exported by R2E, so user code never imports rmcp directly. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
 
 ## Quick start
 
@@ -168,7 +170,7 @@ URI is `-32002` (`RESOURCE_NOT_FOUND`); an unknown prompt name is `-32602`
 Auth is uniform across families: `scopes`/`any_scopes` on the marker,
 `#[roles]`/`#[all_roles]`/`#[guard]` via the shared guard machinery, and
 `resources/list` / `prompts/list` filtered to what the caller may access
-(same `mcp.auth.filter-tools` switch); denials are JSON-RPC `-32600` errors
+(same `mcp.auth.filter-members` switch); denials are JSON-RPC `-32600` errors
 with `data: "forbidden"` instead of `isError` results.
 
 ## Guards and interceptors
@@ -237,9 +239,17 @@ mcp:
   stateless: false            # true → no MCP sessions
   json-response: false        # true (stateless only) → plain application/json responses
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
-  allowed-origins: []         # browser Origin allowlist
+  allowed-origins: []         # reject browser requests from other Origins
+  cors:
+    allowed-origins: [https://claude.ai] # origins granted browser CORS access
   max-request-body-bytes: 4194304
 ```
+
+The two origin lists have different jobs. `mcp.allowed-origins` is the
+transport-level request rejection list (empty disables that check), while
+`mcp.cors.allowed-origins` controls the CORS response headers. CORS defaults
+to `https://claude.ai` and `https://claude.com`, plus localhost origins under
+the `dev` profile.
 
 **`allowed-hosts` matters in deployment**: rmcp's default `Host` allowlist is
 loopback-only, so an MCP endpoint behind a proxy or public hostname silently
@@ -282,7 +292,7 @@ mcp:
 
 Everything else derives from `{issuer}/.well-known/openid-configuration`:
 JWKS URL, endpoints, algorithms. No `mcp.auth` section ⇒ unauthenticated
-server (local dev); `mcp.auth.enabled: false` ⇒ parsed but inert.
+server (local dev). Remove the `mcp.auth` section to disable authentication.
 
 What you get, with zero additional code:
 
@@ -358,7 +368,7 @@ impl AdminTools {
 - `#[roles]` / `#[all_roles]` → the shared `RolesGuard` over the validated
   principal's roles — identical semantics to HTTP routes.
 - `tools/list` is filtered by the caller's scopes/roles by default
-  (`mcp.auth.filter-tools: false` lists everything; invocation checks still
+  (`mcp.auth.filter-members: false` lists everything; invocation checks still
   apply).
 - `#[inject(identity)] user: AuthenticatedUser` (or `Option<…>`) on a tool
   parameter reads the authenticated principal; a required identity with no
@@ -389,9 +399,10 @@ impl AdminTools {
 | `registration-path` | `/oauth/register` | mounted under `mcp.path` |
 | `redirect-uri-allowlist` | localhost/Claude/Inspector | custom list REPLACES defaults; `:*` = any port, trailing `*` = prefix |
 | `extra-authorize-params` | — | map of query params merged into every authorization request (server wins over client duplicates); needs the shim — the mirror rewrites `authorization_endpoint` to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP |
-| `filter-tools` | `true` | hide unlistable tools from `tools/list` |
+| `filter-members` | `true` | hide unauthorized tools, resources and prompts from their list methods |
 | `allow-insecure` | `false` | permit `http://` issuer/JWKS (dev only) |
-| `allowed-origins` | — | Origin allowlist on the MCP endpoint (DNS-rebinding guard) |
+| `mcp.allowed-origins` | — | transport-level Origin rejection list (DNS-rebinding guard) |
+| `mcp.cors.allowed-origins` | Claude origins (+ localhost under `dev`) | origins granted browser CORS access |
 
 ### Provider matrix
 
@@ -447,7 +458,9 @@ network I/O at boot** while the real auth layer, well-known routes and
 per-tool checks stay active. `TokenBuilder` mints every real-world token
 shape: `.scopes()`, `.audiences()` (array `aud`), `.realm_roles()` /
 `.client_roles()` (Keycloak), `.claim("scp", …)` (Entra/Okta), `.expired()`.
-See `examples/example-mcp/tests/mcp_auth.rs` for the full pattern.
+See the authenticated smoke in `examples/example-mcp/tests/mcp_e2e.rs` for
+the complete wiring pattern; protocol and auth edge cases live in
+`r2e-mcp/tests`.
 
 For a real RS256/JWKS path without Docker, run the embedded `r2e-oidc` plugin
 as the issuer: configure its audience to the MCP resource, then its

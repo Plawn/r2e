@@ -1,47 +1,83 @@
-//! End-to-end tests booting the REAL example-mcp blueprint (`McpApp`) via
-//! `#[r2e::test(app = ...)]` and driving the MCP endpoint plus the HTTP
-//! adapter over the same shared bean.
+//! Smoke tests for the example blueprint itself. Protocol behavior, schemas,
+//! decorators and auth edge cases live in `r2e-mcp/tests`; this target only
+//! proves the facade wiring shown to users.
 
-use example_mcp::McpApp;
-use r2e_test::TestApp;
+use example_mcp::{CalcService, CallLog, MathTools, McpApp};
+use r2e::prelude::*;
+use r2e::r2e_mcp::testing::pin_mcp_validator;
+use r2e_test::{TestApp, TestJwt};
 use serde_json::{json, Value};
 
-// ── Minimal MCP client over TestApp ─────────────────────────────────────
+const RESOURCE: &str = "http://localhost:3000/mcp";
 
-/// Extract the JSON-RPC messages from an MCP endpoint response body
-/// (SSE `data:` events, skipping rmcp's empty priming event).
-fn sse_messages(body: &str) -> Vec<Value> {
-    body.lines()
+fn jwt() -> TestJwt {
+    TestJwt::for_resource(RESOURCE)
+}
+
+/// The documented no-Docker authenticated variant of the example.
+struct SecureMcpApp;
+
+impl App for SecureMcpApp {
+    type Env = ();
+
+    async fn setup() {}
+
+    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+        pin_mcp_validator(b, &jwt(), RESOURCE)
+            .load_config::<()>()
+            .plugin(McpServer::new().with_name("example-mcp-secure"))
+            .provide(CalcService)
+            .provide(CallLog::default())
+            .build_state()
+            .await
+            .register_mcp_service::<MathTools>()
+    }
+}
+
+fn response_message(response: r2e_test::TestResponse) -> Value {
+    let messages: Vec<Value> = response
+        .text()
+        .lines()
         .filter_map(|line| line.strip_prefix("data:"))
         .map(str::trim)
         .filter(|data| !data.is_empty())
         .map(|data| serde_json::from_str(data).expect("SSE data event is not JSON"))
-        .collect()
+        .collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    messages.into_iter().next().unwrap()
 }
 
-async fn mcp_post(app: &TestApp, session: Option<&str>, body: &Value) -> r2e_test::TestResponse {
+async fn mcp_post(
+    app: &TestApp,
+    session: Option<&str>,
+    token: Option<&str>,
+    body: &Value,
+) -> r2e_test::TestResponse {
     let mut request = app
         .post("/mcp")
         .header("host", "localhost")
         .header("accept", "application/json, text/event-stream")
         .json(body);
-    if let Some(sid) = session {
-        request = request.header("mcp-session-id", sid);
+    if let Some(session) = session {
+        request = request.header("mcp-session-id", session);
+    }
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
     }
     request.send().await
 }
 
-/// initialize → capture `Mcp-Session-Id` → notifications/initialized.
-async fn initialize(app: &TestApp) -> String {
+async fn initialize(app: &TestApp, token: Option<&str>) -> (String, Value) {
     let response = mcp_post(
         app,
         None,
+        token,
         &json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
-                "clientInfo": { "name": "example-mcp-e2e", "version": "0.0.0" }
+                "clientInfo": { "name": "example-mcp-smoke", "version": "0.0.0" }
             }
         }),
     )
@@ -51,166 +87,65 @@ async fn initialize(app: &TestApp) -> String {
         .header("mcp-session-id")
         .expect("no Mcp-Session-Id header")
         .to_string();
+    let initialized = response_message(response);
     mcp_post(
         app,
         Some(&session),
+        token,
         &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
     )
     .await;
-    session
+    (session, initialized)
 }
 
-async fn tools_call(app: &TestApp, session: &str, name: &str, arguments: Value) -> Value {
-    tools_call_with(app, session, &[], name, arguments).await
-}
-
-async fn tools_call_with(
-    app: &TestApp,
-    session: &str,
-    headers: &[(&'static str, &'static str)],
-    name: &str,
-    arguments: Value,
-) -> Value {
-    let mut request = app
-        .post("/mcp")
-        .header("host", "localhost")
-        .header("accept", "application/json, text/event-stream")
-        .header("mcp-session-id", session)
-        .json(&json!({
-            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-            "params": { "name": name, "arguments": arguments }
-        }));
-    for (header, value) in headers {
-        request = request.header(*header, *value);
-    }
-    let response = request.send().await;
-    response.assert_ok();
-    let messages = sse_messages(&response.text());
-    assert_eq!(messages.len(), 1, "{messages:?}");
-    messages.into_iter().next().unwrap()
-}
-
-// ── Tests ───────────────────────────────────────────────────────────────
-
-#[r2e::test(app = McpApp)]
-async fn tools_are_listed_with_schemas(app: TestApp) {
-    let session = initialize(&app).await;
+async fn call_add(app: &TestApp, session: &str, token: Option<&str>) -> Value {
     let response = mcp_post(
-        &app,
-        Some(&session),
-        &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        app,
+        Some(session),
+        token,
+        &json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "add", "arguments": { "a": 2.0, "b": 3.0 } }
+        }),
     )
     .await;
     response.assert_ok();
-    let messages = sse_messages(&response.text());
-    let tools = messages[0]["result"]["tools"].as_array().unwrap();
-
-    let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    names.sort_unstable();
-    assert_eq!(names, vec!["add", "call_log", "clear_log", "divide"]);
-
-    let add = tools.iter().find(|t| t["name"] == "add").unwrap();
-    assert_eq!(add["description"], "Add two numbers and return their sum.");
-    assert_eq!(add["inputSchema"]["properties"]["a"]["description"], "Left operand.");
-    assert_eq!(add["annotations"]["readOnlyHint"], true);
-    assert!(add["outputSchema"]["properties"]["value"].is_object());
+    response_message(response)
 }
 
 #[r2e::test(app = McpApp)]
-async fn tool_call_returns_structured_content(app: TestApp) {
-    let session = initialize(&app).await;
-    let msg = tools_call(&app, &session, "add", json!({"a": 2.0, "b": 3.0})).await;
-    assert_eq!(msg["result"]["structuredContent"]["value"], 5.0, "{msg}");
-}
+async fn facade_blueprint_serves_http_and_all_mcp_families(app: TestApp) {
+    let (session, initialized) = initialize(&app, None).await;
+    let capabilities = &initialized["result"]["capabilities"];
+    assert!(capabilities.get("tools").is_some(), "{capabilities}");
+    assert!(capabilities.get("resources").is_some(), "{capabilities}");
+    assert!(capabilities.get("prompts").is_some(), "{capabilities}");
 
-#[r2e::test(app = McpApp)]
-async fn domain_error_is_agent_readable(app: TestApp) {
-    let session = initialize(&app).await;
-    let msg = tools_call(&app, &session, "divide", json!({"a": 1.0, "b": 0.0})).await;
-    assert_eq!(msg["result"]["isError"], true, "{msg}");
-    let text = msg["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("division by zero"), "{text}");
-}
+    let message = call_add(&app, &session, None).await;
+    assert_eq!(message["result"]["structuredContent"]["value"], 5.0);
 
-#[r2e::test(app = McpApp)]
-async fn guarded_tool_requires_the_api_key(app: TestApp) {
-    let session = initialize(&app).await;
-
-    let denied = tools_call(&app, &session, "clear_log", json!({})).await;
-    assert_eq!(denied["error"]["code"], -32600, "{denied}");
-    assert_eq!(denied["error"]["data"], "forbidden", "{denied}");
-
-    let allowed = tools_call_with(
-        &app,
-        &session,
-        &[("x-api-key", "letmein")],
-        "clear_log",
-        json!({}),
-    )
-    .await;
-    let text = allowed["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(text.starts_with("cleared "), "{text}");
-}
-
-#[r2e::test(app = McpApp)]
-async fn interceptor_logs_are_visible_through_the_call_log_tool(app: TestApp) {
-    let session = initialize(&app).await;
-    tools_call(&app, &session, "divide", json!({"a": 6.0, "b": 2.0})).await;
-
-    let msg = tools_call(&app, &session, "call_log", json!({})).await;
-    assert_eq!(
-        msg["result"]["content"][0]["text"], "tool:divide",
-        "the graph-built LogCalls interceptor writes to the same CallLog bean: {msg}"
-    );
-}
-
-#[r2e::test(app = McpApp)]
-async fn http_adapter_shares_the_same_service(app: TestApp) {
-    // The HTTP controller and the MCP service are thin adapters over ONE
-    // CalcService bean.
     let response = app.get("/api/calc/add/2/3").send().await;
     response.assert_ok();
     let body: Value = response.json();
     assert_eq!(body["value"], 5.0);
 }
 
-#[r2e::test(app = McpApp)]
-async fn resources_and_prompts_ride_the_same_endpoint(app: TestApp) {
-    let session = initialize(&app).await;
-    // Populate the call log via the intercepted `divide` tool.
-    tools_call(&app, &session, "divide", json!({"a": 6.0, "b": 2.0})).await;
-
-    // The same log, as a fixed-URI resource with its declared MIME type.
+#[r2e::test(app = SecureMcpApp)]
+async fn facade_testing_wiring_challenges_then_authenticates(app: TestApp) {
     let response = mcp_post(
         &app,
-        Some(&session),
-        &json!({
-            "jsonrpc": "2.0", "id": 4, "method": "resources/read",
-            "params": { "uri": "r2e://calc/call-log" }
-        }),
+        None,
+        None,
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
     )
     .await;
-    response.assert_ok();
-    let msg = sse_messages(&response.text()).pop().unwrap();
-    let contents = &msg["result"]["contents"][0];
-    assert_eq!(contents["uri"], "r2e://calc/call-log");
-    assert_eq!(contents["mimeType"], "text/plain");
-    assert_eq!(contents["text"], "tool:divide");
+    response.assert_unauthorized();
+    assert!(response
+        .header("www-authenticate")
+        .is_some_and(|value| value.contains("resource_metadata=")));
 
-    // The prompt expands with arguments validated by the Params schema.
-    let response = mcp_post(
-        &app,
-        Some(&session),
-        &json!({
-            "jsonrpc": "2.0", "id": 5, "method": "prompts/get",
-            "params": { "name": "explain_division", "arguments": { "a": 10.0, "b": 2.0 } }
-        }),
-    )
-    .await;
-    response.assert_ok();
-    let msg = sse_messages(&response.text()).pop().unwrap();
-    let message = &msg["result"]["messages"][0];
-    assert_eq!(message["role"], "user");
-    let text = message["content"]["text"].as_str().unwrap();
-    assert!(text.starts_with("Divide 10 by 2"), "{text}");
+    let token = jwt().token("alice", &[]);
+    let (session, _) = initialize(&app, Some(&token)).await;
+    let message = call_add(&app, &session, Some(&token)).await;
+    assert_eq!(message["result"]["structuredContent"]["value"], 5.0);
 }

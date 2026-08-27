@@ -7,7 +7,6 @@
 use r2e_core::http::response::Response;
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, TCons, TNil};
-use r2e_macros::mcp_routes;
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -133,16 +132,37 @@ async fn method_level_interceptor_reads_graph_beans() {
     let (router, log) = fixture_app().await;
     let session = initialize(&router, "/mcp").await;
 
-    tools_call(&router, "/mcp", &session, "div", json!({"a": 6.0, "b": 2.0})).await;
+    tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "div",
+        json!({"a": 6.0, "b": 2.0}),
+    )
+    .await;
     assert_eq!(log.entries(), vec!["tool:divide"]);
 
     // Un-intercepted tools do not log.
-    tools_call(&router, "/mcp", &session, "add", json!({"a": 1.0, "b": 1.0})).await;
+    tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "add",
+        json!({"a": 1.0, "b": 1.0}),
+    )
+    .await;
     assert_eq!(log.entries(), vec!["tool:divide"]);
 
     // The wrapper is reused across calls (entries accumulate on the same
     // instance).
-    tools_call(&router, "/mcp", &session, "div", json!({"a": 1.0, "b": 1.0})).await;
+    tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "div",
+        json!({"a": 1.0, "b": 1.0}),
+    )
+    .await;
     assert_eq!(log.entries(), vec!["tool:divide", "tool:divide"]);
 }
 
@@ -203,7 +223,14 @@ async fn interceptor_wraps_the_error_path_too() {
     let (router, log) = fixture_app().await;
     let session = initialize(&router, "/mcp").await;
 
-    let msg = tools_call(&router, "/mcp", &session, "div", json!({"a": 1.0, "b": 0.0})).await;
+    let msg = tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "div",
+        json!({"a": 1.0, "b": 0.0}),
+    )
+    .await;
     assert_eq!(msg["result"]["isError"], true);
     assert_eq!(log.entries(), vec!["tool:divide"]);
 }

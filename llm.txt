@@ -3241,7 +3241,7 @@ authorization request — Auth0 `audience`, Google `access_type=offline`;
 requires the shim: the mirrored metadata's `authorization_endpoint` is
 rewritten to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP
 with the params applied, server config winning over client duplicates),
-`filter-tools` (true — `tools/list` hides tools the
+`filter-members` (true — list operations hide members the
 caller cannot invoke), `allow-insecure` (http issuer, dev), `allowed-origins`.
 
 Per-tool authorization:
@@ -3268,7 +3268,8 @@ let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
 // .claim("scp", ...) (Entra/Okta), .expired()
 ```
 
-See `examples/example-mcp/tests/mcp_auth.rs`.
+See the authenticated smoke in `examples/example-mcp/tests/mcp_e2e.rs`;
+exhaustive protocol and auth cases live in `r2e-mcp/tests`.
 
 ---
 

@@ -23,8 +23,9 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
 
 /// Add an R2E extension crate to the project's `Cargo.toml`.
 ///
-/// Looks up `extension` in the known extensions map, parses `Cargo.toml`
-/// with `toml_edit`, and inserts the dependency with version [`R2E_DEP_VERSION`].
+/// Looks up `extension` in the known extensions map and updates `Cargo.toml`
+/// with `toml_edit`. Most extensions insert a dependency with version
+/// [`R2E_DEP_VERSION`]; MCP and gRPC have facade-aware setup paths.
 ///
 /// Returns an error if:
 /// - `Cargo.toml` does not exist
@@ -41,6 +42,9 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     // not just a dependency insert.
     if extension == "grpc" {
         return scaffold_grpc(cargo_path);
+    }
+    if extension == "mcp" {
+        return add_mcp(cargo_path);
     }
 
     let (_, crate_name) = KNOWN_EXTENSIONS
@@ -97,6 +101,65 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("  Run `cargo build` to fetch the new dependency.");
 
+    Ok(())
+}
+
+/// `r2e add mcp` — enable the facade feature used by the documented MCP
+/// quick start, or fall back to a direct `r2e-mcp` dependency when the
+/// project does not use the facade. `schemars` is always ensured because MCP
+/// parameter and result types derive `JsonSchema` in user code.
+fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(cargo_path)?;
+    let mut doc = content.parse::<toml_edit::DocumentMut>()?;
+
+    let deps = doc
+        .entry("dependencies")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or("dependencies is not a table")?;
+
+    if let Some(r2e_dep) = deps.get_mut("r2e") {
+        if add_dep_feature(r2e_dep, "mcp")? {
+            println!(
+                "{} Enabled feature {} on the {} dependency",
+                "✓".green(),
+                "mcp".cyan(),
+                "r2e".cyan()
+            );
+        } else {
+            println!(
+                "{} Feature {} is already enabled on the {} dependency",
+                "!".yellow(),
+                "mcp".cyan(),
+                "r2e".cyan()
+            );
+        }
+    } else if !deps.contains_key("r2e-mcp") {
+        deps.insert("r2e-mcp", toml_edit::value(R2E_DEP_VERSION));
+        println!(
+            "{} Added {} to Cargo.toml dependencies",
+            "✓".green(),
+            "r2e-mcp".cyan()
+        );
+    } else {
+        println!(
+            "{} Extension '{}' is already in Cargo.toml",
+            "!".yellow(),
+            "mcp".cyan()
+        );
+    }
+
+    if !deps.contains_key("schemars") {
+        deps.insert("schemars", toml_edit::value("1"));
+        println!(
+            "{} Also added {} (required for #[derive(JsonSchema)])",
+            "✓".green(),
+            "schemars".cyan()
+        );
+    }
+
+    std::fs::write(cargo_path, doc.to_string())?;
+    println!("  Run `cargo build` to fetch the new dependency.");
     Ok(())
 }
 

@@ -6,7 +6,6 @@
 use r2e_core::http::{Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
-use r2e_macros::mcp_routes;
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::Value;
 
@@ -64,7 +63,10 @@ async fn resources_are_listed_with_their_metadata() {
     // Name defaults to the method name; description is the doc comment.
     let log = support::resource(&list, "r2e://fixture/log");
     assert_eq!(log["name"], "call_log");
-    assert_eq!(log["description"], "The interceptor call log, one entry per line.");
+    assert_eq!(
+        log["description"],
+        "The interceptor call log, one entry per line."
+    );
     assert_eq!(log["mimeType"], "text/plain");
 
     // Explicit name/title override; no declared MIME type.
@@ -93,8 +95,7 @@ async fn read_returns_text_contents_with_the_declared_mime_type() {
 async fn unknown_resource_uri_is_resource_not_found() {
     let (router, _log) = fixture_app().await;
     let session = support::initialize(&router, "/mcp").await;
-    let message =
-        support::resources_read(&router, "/mcp", &session, "r2e://fixture/missing").await;
+    let message = support::resources_read(&router, "/mcp", &session, "r2e://fixture/missing").await;
     assert_eq!(message["error"]["code"], -32002, "{message}");
     assert_eq!(
         message["error"]["message"],

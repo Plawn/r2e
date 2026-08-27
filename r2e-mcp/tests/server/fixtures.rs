@@ -8,7 +8,6 @@ use r2e_core::http::response::Response;
 use r2e_core::http::Router;
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, Guard, GuardContext, Identity};
-use r2e_macros::mcp_routes;
 use r2e_mcp::{AppBuilderMcpExt, McpError, McpServer, Params, ToolCall};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -155,7 +154,10 @@ impl FixtureTools {
     /// Fails with a domain error when `b` is zero.
     #[tool(name = "div", read_only)]
     #[intercept(LogCalls::spec("tool"))]
-    async fn divide(&self, Params(p): Params<BinaryOperands>) -> Result<Json<CalcResult>, McpError> {
+    async fn divide(
+        &self,
+        Params(p): Params<BinaryOperands>,
+    ) -> Result<Json<CalcResult>, McpError> {
         self.calc
             .divide(p.a, p.b)
             .map(|value| Json(CalcResult { value }))
@@ -189,7 +191,13 @@ impl FixtureTools {
             Mode::Fast => "fast",
             Mode::Thorough => "thorough",
         };
-        format!("{}:{}:{}:{}", p.name, p.count.unwrap_or(0), mode, p.inner.label)
+        format!(
+            "{}:{}:{}:{}",
+            p.name,
+            p.count.unwrap_or(0),
+            mode,
+            p.inner.label
+        )
     }
 
     /// The interceptor call log, one entry per line.
@@ -200,7 +208,11 @@ impl FixtureTools {
     }
 
     /// Always fails with a domain error.
-    #[resource(uri = "r2e://fixture/fail", name = "failing", title = "Failing resource")]
+    #[resource(
+        uri = "r2e://fixture/fail",
+        name = "failing",
+        title = "Failing resource"
+    )]
     async fn failing_resource(&self) -> Result<String, McpError> {
         Err(McpError::tool("resource exploded"))
     }

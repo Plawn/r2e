@@ -8,24 +8,14 @@ use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext}
 use r2e_core::rt::CancelToken;
 use r2e_core::Plugin;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService,
-};
+use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
 use crate::auth::config::McpAuthConfig;
-use crate::auth::layer::McpAuthLayer;
 use crate::auth::setup::{build_auth, cors_layer, default_cors_origins, AuthInputs};
 use crate::auth::validator::McpTokenValidator;
 use crate::config::McpConfig;
 use crate::handler::{McpRuntime, R2eMcpHandler, ServerIdentity};
 use crate::registry::McpServiceRegistry;
-
-/// Marker type provided by the [`McpServer`] plugin.
-///
-/// Exists so the plugin can participate in the type-level provision list;
-/// users don't reference it directly.
-#[derive(Clone)]
-pub struct McpMarker;
 
 /// MCP server plugin for R2E.
 ///
@@ -128,7 +118,10 @@ impl McpServer {
 
     /// Hostnames accepted in the `Host` header (DNS-rebinding protection;
     /// defaults to loopback only).
-    pub fn with_allowed_hosts(mut self, hosts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn with_allowed_hosts(
+        mut self,
+        hosts: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         self.allowed_hosts = Some(hosts.into_iter().map(Into::into).collect());
         self
     }
@@ -198,10 +191,10 @@ fn validate_path(path: &str) -> Result<(), PluginBuildError> {
 
 impl Plugin for McpServer {
     /// The real coordination happens via [`McpServiceRegistry`] in plugin
-    /// data; `McpMarker` is the type-level placeholder. [`McpTokenValidator`]
-    /// is a real bean so tests can pin it (`override_bean`) — auth off
-    /// provides the inert [`McpTokenValidator::disabled`].
-    type Provided = (McpMarker, McpTokenValidator);
+    /// data. [`McpTokenValidator`] is a real bean so tests can pin it
+    /// (`override_bean`) — auth off provides the inert
+    /// [`McpTokenValidator::disabled`].
+    type Provided = (McpTokenValidator,);
     type Deps = ();
     type Config = McpConfig;
     type Controllers = ();
@@ -223,7 +216,7 @@ impl Plugin for McpServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         if !ctx.enabled() {
             tracing::info!("MCP server disabled (mcp.enabled = false); endpoint not mounted");
-            return Ok((McpMarker, McpTokenValidator::disabled()));
+            return Ok((McpTokenValidator::disabled(),));
         }
         let cfg = config.unwrap_or_default();
 
@@ -284,16 +277,13 @@ impl Plugin for McpServer {
             .config_raw()
             .and_then(|c| c.try_get::<String>("r2e.profile"))
             .unwrap_or_default();
-        let auth_cfg = match self.auth.or(cfg.auth) {
-            Some(auth) if auth.enabled != Some(false) => Some(auth),
-            _ => None,
-        };
-        // `tools/list` visibility filtering: on by default when auth is
-        // enabled (`mcp.auth.filter-tools: false` opts out); meaningless —
+        let auth_cfg = self.auth.or(cfg.auth);
+        // Member-list visibility filtering: on by default when auth is
+        // enabled (`mcp.auth.filter-members: false` opts out); meaningless —
         // and off — without auth (no principal to filter against).
-        let filter_tools = auth_cfg
+        let filter_members = auth_cfg
             .as_ref()
-            .is_some_and(|auth| auth.filter_tools.unwrap_or(true));
+            .is_some_and(|auth| auth.filter_members.unwrap_or(true));
         let auth_enabled = auth_cfg.is_some();
         let (auth_layer, provided_validator, auth_slot, auth_routes) = match auth_cfg {
             Some(auth) => {
@@ -307,19 +297,21 @@ impl Plugin for McpServer {
                     server_host: ctx
                         .config_raw()
                         .and_then(|c| c.try_get::<String>("server.host")),
-                    server_port: ctx.config_raw().and_then(|c| c.try_get::<u16>("server.port")),
+                    server_port: ctx
+                        .config_raw()
+                        .and_then(|c| c.try_get::<u16>("server.port")),
                     allowed_origins: &allowed_origins,
                     validator_override: self.token_validator,
                 })
                 .await?;
                 (
-                    artifacts.layer,
+                    Some(artifacts.layer),
                     artifacts.validator,
                     Some(artifacts.slot),
                     Some(artifacts.extra_routes),
                 )
             }
-            None => (McpAuthLayer::disabled(), McpTokenValidator::disabled(), None, None),
+            None => (None, McpTokenValidator::disabled(), None, None),
         };
         // The layer reads the validator through the slot, filled from the
         // BEAN CONTEXT after the graph resolves: a test-pinned validator
@@ -377,7 +369,7 @@ impl Plugin for McpServer {
             let runtime = Arc::new(McpRuntime::build(
                 services,
                 identity,
-                filter_tools,
+                filter_members,
                 auth_enabled,
             ));
             tracing::info!(
@@ -419,7 +411,8 @@ impl Plugin for McpServer {
             // the auth layer (they answer unauthenticated discovery).
             let service = tower::ServiceBuilder::new()
                 .layer(cors)
-                .layer(auth_layer)
+                .option_layer(auth_layer)
+                .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);
             let router = router.route_service(&path, service);
             match auth_routes {
@@ -428,6 +421,6 @@ impl Plugin for McpServer {
             }
         });
 
-        Ok((McpMarker, provided_validator))
+        Ok((provided_validator,))
     }
 }

@@ -62,11 +62,6 @@ impl McpError {
         }
     }
 
-    /// Build a [`McpError::Tool`] from any displayable error.
-    pub fn tool_from(err: impl fmt::Display) -> Self {
-        McpError::tool(err.to_string())
-    }
-
     /// Map this error onto the wire: domain failures become an
     /// `is_error` tool result (`Ok`), protocol failures a JSON-RPC error
     /// (`Err`). See the module docs for why the split matters.
@@ -174,7 +169,7 @@ impl From<HttpError> for McpError {
     }
 }
 
-fn from_status(status: u16, message: String) -> McpError {
+pub(crate) fn from_status(status: u16, message: String) -> McpError {
     match status {
         401 => McpError::Unauthorized(message),
         403 => McpError::Forbidden(message),

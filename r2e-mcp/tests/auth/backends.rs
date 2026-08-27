@@ -81,9 +81,17 @@ async fn mini_endpoint(
 
 /// Fixed (`discovery: off`-style) metadata carrying only the given opaque
 /// endpoints.
-fn fixed_discovery(introspection: Option<String>, userinfo: Option<String>) -> Arc<DiscoveryClient> {
+fn fixed_discovery(
+    introspection: Option<String>,
+    userinfo: Option<String>,
+) -> Arc<DiscoveryClient> {
     Arc::new(DiscoveryClient::fixed(OAuthServerMetadata::from_endpoints(
-        ISSUER, None, None, None, None, userinfo, introspection,
+        ISSUER,
+        None,
+        None,
+        None,
+        userinfo,
+        introspection,
     )))
 }
 
@@ -114,8 +122,8 @@ fn active_response() -> Value {
 #[tokio::test]
 async fn introspection_accepts_an_active_token() {
     let (base, log) = mini_endpoint(|_| (200, active_response())).await;
-    let backend = introspection_backend(&format!("{base}/introspect"))
-        .with_audiences([RESOURCE.to_string()]);
+    let backend =
+        introspection_backend(&format!("{base}/introspect")).with_audiences([RESOURCE.to_string()]);
 
     let principal = backend
         .validate("opaque-token-1")
@@ -129,13 +137,22 @@ async fn introspection_accepts_an_active_token() {
     // RFC 7662 shape: POST, Basic client credentials, form-encoded token.
     let requests = log.lock().unwrap();
     let request = requests[0].to_ascii_lowercase();
-    assert!(request.starts_with("post /introspect"), "request: {request}");
+    assert!(
+        request.starts_with("post /introspect"),
+        "request: {request}"
+    );
     assert!(
         request.contains("authorization: basic cnmty2xpzw50onjzlxnly3jlda=="),
         "missing Basic credentials: {request}"
     );
-    assert!(request.contains("token=opaque-token-1"), "request: {request}");
-    assert!(request.contains("token_type_hint=access_token"), "request: {request}");
+    assert!(
+        request.contains("token=opaque-token-1"),
+        "request: {request}"
+    );
+    assert!(
+        request.contains("token_type_hint=access_token"),
+        "request: {request}"
+    );
 }
 
 #[tokio::test]
@@ -145,10 +162,18 @@ async fn introspection_caches_positive_results_per_token() {
 
     backend.validate("token-a").await.unwrap();
     backend.validate("token-a").await.unwrap();
-    assert_eq!(log.lock().unwrap().len(), 1, "second call must hit the cache");
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "second call must hit the cache"
+    );
 
     backend.validate("token-b").await.unwrap();
-    assert_eq!(log.lock().unwrap().len(), 2, "a different token is a cache miss");
+    assert_eq!(
+        log.lock().unwrap().len(),
+        2,
+        "a different token is a cache miss"
+    );
 }
 
 #[tokio::test]
@@ -193,12 +218,15 @@ async fn introspection_rejects_a_wrong_audience() {
         (200, body)
     })
     .await;
-    let backend = introspection_backend(&format!("{base}/introspect"))
-        .with_audiences([RESOURCE.to_string()]);
+    let backend =
+        introspection_backend(&format!("{base}/introspect")).with_audiences([RESOURCE.to_string()]);
 
     let err = backend.validate("foreign").await.unwrap_err();
     assert!(
-        matches!(err, McpAuthError::InvalidToken("token audience does not include this resource")),
+        matches!(
+            err,
+            McpAuthError::InvalidToken("token audience does not include this resource")
+        ),
         "got {err:?}"
     );
 }
@@ -214,7 +242,10 @@ async fn introspection_rejects_an_expired_token() {
     let backend = introspection_backend(&format!("{base}/introspect"));
 
     let err = backend.validate("stale").await.unwrap_err();
-    assert!(matches!(err, McpAuthError::InvalidToken("token expired")), "got {err:?}");
+    assert!(
+        matches!(err, McpAuthError::InvalidToken("token expired")),
+        "got {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -261,7 +292,11 @@ async fn concurrent_introspection_outage_is_coalesced_but_not_cached() {
     );
     assert!(matches!(a, Err(McpAuthError::Upstream(_))));
     assert!(matches!(b, Err(McpAuthError::Upstream(_))));
-    assert_eq!(log.lock().unwrap().len(), 1, "current waiters share the outage");
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "current waiters share the outage"
+    );
 
     assert!(matches!(
         backend.validate("same-token").await,
@@ -285,7 +320,10 @@ async fn introspection_without_any_endpoint_names_the_config_key() {
     let err = backend.validate("t").await.unwrap_err();
     match err {
         McpAuthError::Upstream(msg) => {
-            assert!(msg.contains("mcp.auth.introspection-endpoint"), "got: {msg}")
+            assert!(
+                msg.contains("mcp.auth.introspection-endpoint"),
+                "got: {msg}"
+            )
         }
         other => panic!("expected Upstream, got {other:?}"),
     }
@@ -367,18 +405,29 @@ fn userinfo_backend(endpoint: &str) -> UserinfoBackend {
 
 #[tokio::test]
 async fn userinfo_accepts_a_token_the_endpoint_accepts() {
-    let (base, log) =
-        mini_endpoint(|_| (200, json!({ "sub": "google-user", "email": "a@example.com" }))).await;
+    let (base, log) = mini_endpoint(|_| {
+        (
+            200,
+            json!({ "sub": "google-user", "email": "a@example.com" }),
+        )
+    })
+    .await;
     let backend = userinfo_backend(&format!("{base}/userinfo"));
 
-    let principal = backend.validate("ya29.opaque").await.expect("accepted token");
+    let principal = backend
+        .validate("ya29.opaque")
+        .await
+        .expect("accepted token");
     assert_eq!(principal.user.sub, "google-user");
     assert_eq!(principal.user.email.as_deref(), Some("a@example.com"));
 
     let requests = log.lock().unwrap();
     let request = requests[0].to_ascii_lowercase();
     assert!(request.starts_with("get /userinfo"), "request: {request}");
-    assert!(request.contains("authorization: bearer ya29.opaque"), "request: {request}");
+    assert!(
+        request.contains("authorization: bearer ya29.opaque"),
+        "request: {request}"
+    );
 }
 
 #[tokio::test]
@@ -389,7 +438,10 @@ async fn userinfo_rejects_a_token_the_endpoint_rejects() {
     for _ in 0..2 {
         let err = backend.validate("expired").await.unwrap_err();
         assert!(
-            matches!(err, McpAuthError::InvalidToken("token rejected by the userinfo endpoint")),
+            matches!(
+                err,
+                McpAuthError::InvalidToken("token rejected by the userinfo endpoint")
+            ),
             "got {err:?}"
         );
     }
@@ -431,7 +483,10 @@ async fn userinfo_rejects_a_response_without_a_subject() {
 
     let err = backend.validate("odd").await.unwrap_err();
     assert!(
-        matches!(err, McpAuthError::InvalidToken("userinfo response has no subject")),
+        matches!(
+            err,
+            McpAuthError::InvalidToken("userinfo response has no subject")
+        ),
         "got {err:?}"
     );
 }

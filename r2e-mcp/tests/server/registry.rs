@@ -4,7 +4,6 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use r2e_core::prelude::*;
-use r2e_macros::mcp_routes;
 use r2e_mcp::{IntoToolResult, McpRoutes, McpServiceRegistry, ToolRequirements, ToolRoute};
 
 use crate::fixtures::{fixture_app, FixtureTools};
@@ -45,7 +44,10 @@ fn take_on_empty_registry_is_none() {
 fn add_service_then_take_drains_once() {
     let registry = McpServiceRegistry::new();
     registry.add_service("svc-a", McpRoutes::from_tools(vec![stub_tool("a")]));
-    registry.add_service("svc-b", McpRoutes::from_tools(vec![stub_tool("b"), stub_tool("c")]));
+    registry.add_service(
+        "svc-b",
+        McpRoutes::from_tools(vec![stub_tool("b"), stub_tool("c")]),
+    );
     assert_eq!(registry.service_names(), vec!["svc-a", "svc-b"]);
 
     let drained = registry.take().expect("filled registry drains Some");

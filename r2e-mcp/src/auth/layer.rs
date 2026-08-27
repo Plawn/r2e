@@ -33,7 +33,7 @@ pub(crate) struct AuthState {
     pub resource_metadata_url: Arc<str>,
     /// Server-wide `mcp.auth.required-scopes` — enforced at HTTP level.
     pub required_scopes: Arc<[String]>,
-    /// `mcp.auth.allowed-origins` — when set, a present `Origin` header must
+    /// `mcp.allowed-origins` — when set, a present `Origin` header must
     /// match (DNS-rebinding guard); requests without `Origin` (non-browser
     /// clients) pass.
     pub allowed_origins: Option<Arc<[String]>>,
@@ -42,19 +42,13 @@ pub(crate) struct AuthState {
 /// Tower layer enforcing `mcp.auth.*` on the MCP endpoint.
 #[derive(Clone)]
 pub struct McpAuthLayer {
-    /// `None` = auth disabled (no `mcp.auth` section): plain pass-through.
-    state: Option<Arc<AuthState>>,
+    state: Arc<AuthState>,
 }
 
 impl McpAuthLayer {
-    /// The pass-through layer used when `mcp.auth` is absent or disabled.
-    pub fn disabled() -> Self {
-        Self { state: None }
-    }
-
-    pub(crate) fn enabled(state: AuthState) -> Self {
+    pub(crate) fn new(state: AuthState) -> Self {
         Self {
-            state: Some(Arc::new(state)),
+            state: Arc::new(state),
         }
     }
 }
@@ -74,7 +68,7 @@ impl<S> Layer<S> for McpAuthLayer {
 #[derive(Clone)]
 pub struct McpAuthService<S> {
     inner: S,
-    state: Option<Arc<AuthState>>,
+    state: Arc<AuthState>,
 }
 
 /// Origin matching: exact match, or a `:*` suffix wildcard matching any port
@@ -82,9 +76,9 @@ pub struct McpAuthService<S> {
 pub(crate) fn origin_allowed(allowed: &[String], origin: &str) -> bool {
     allowed.iter().any(|entry| {
         if let Some(prefix) = entry.strip_suffix(":*") {
-            origin
-                .strip_prefix(prefix)
-                .is_some_and(|rest| rest.starts_with(':') && rest[1..].chars().all(|c| c.is_ascii_digit()))
+            origin.strip_prefix(prefix).is_some_and(|rest| {
+                rest.starts_with(':') && rest[1..].chars().all(|c| c.is_ascii_digit())
+            })
         } else {
             entry == origin
         }
@@ -92,10 +86,7 @@ pub(crate) fn origin_allowed(allowed: &[String], origin: &str) -> bool {
 }
 
 /// Run the pre-call checks; `Ok` carries what to insert into extensions.
-async fn authorize(
-    state: &AuthState,
-    headers: &HeaderMap,
-) -> Result<McpPrincipal, McpAuthError> {
+async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipal, McpAuthError> {
     // Origin allowlist (browser clients only — no header, no check).
     if let Some(allowed) = &state.allowed_origins {
         if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
@@ -157,9 +148,7 @@ where
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
 
-        let Some(state) = self.state.clone() else {
-            return Box::pin(async move { inner.call(req).await.map(IntoResponse::into_response) });
-        };
+        let state = self.state.clone();
 
         // CORS preflight carries no Authorization header by design.
         if req.method() == Method::OPTIONS {

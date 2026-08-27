@@ -72,10 +72,6 @@ pub enum AudienceMode {
 /// config > default** (same rule as [`McpConfig`](crate::McpConfig)).
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct McpAuthConfig {
-    /// Master switch for the section (default `true`); `false` parses the
-    /// section but mounts nothing.
-    pub enabled: Option<bool>,
-
     /// The OAuth issuer URL (the ONE required key). Discovery, JWKS and the
     /// `iss` claim check all derive from it.
     pub issuer: String,
@@ -105,10 +101,6 @@ pub struct McpAuthConfig {
     /// Explicit token endpoint (overrides discovery).
     #[config(key = "token-endpoint")]
     pub token_endpoint: Option<String>,
-    /// Explicit registration endpoint (overrides discovery; rarely needed —
-    /// the shim replaces it).
-    #[config(key = "registration-endpoint")]
-    pub registration_endpoint: Option<String>,
     /// Explicit `userinfo` endpoint (`token-validation: userinfo`).
     #[config(key = "userinfo-endpoint")]
     pub userinfo_endpoint: Option<String>,
@@ -198,8 +190,8 @@ pub struct McpAuthConfig {
     /// Allow an `http://` issuer / JWKS URL (local development only).
     #[config(key = "allow-insecure")]
     pub allow_insecure: Option<bool>,
-    /// Filter `tools/list` down to the tools the caller's scopes/roles can
-    /// actually call (default `true`).
-    #[config(key = "filter-tools")]
-    pub filter_tools: Option<bool>,
+    /// Filter every member list down to the tools, resources and prompts the
+    /// caller's scopes/roles allow (default `true`).
+    #[config(key = "filter-members")]
+    pub filter_members: Option<bool>,
 }

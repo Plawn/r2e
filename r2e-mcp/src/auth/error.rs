@@ -23,7 +23,7 @@ pub enum McpAuthError {
         /// The scopes that were required and missing.
         missing: Vec<String>,
     },
-    /// The `Origin` header is not in `mcp.auth.allowed-origins` (403).
+    /// The `Origin` header is not in `mcp.allowed-origins` (403).
     InvalidOrigin,
     /// The validator could not reach the IdP (JWKS/discovery/introspection
     /// outage) — 503, no challenge.
@@ -94,8 +94,7 @@ pub fn www_authenticate(params: &[(&str, &str)]) -> HeaderValue {
         value.push('=');
         value.push_str(&quote(v));
     }
-    HeaderValue::from_str(&value)
-        .unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
+    HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
 }
 
 /// Render an auth failure as the OAuth-shaped HTTP response.
@@ -103,10 +102,7 @@ pub fn www_authenticate(params: &[(&str, &str)]) -> HeaderValue {
 /// `challenge` is the prebuilt base challenge (carrying `resource_metadata`
 /// and advertised scopes); scope/description parameters are appended per
 /// error.
-pub(crate) fn auth_error_response(
-    error: &McpAuthError,
-    resource_metadata_url: &str,
-) -> Response {
+pub(crate) fn auth_error_response(error: &McpAuthError, resource_metadata_url: &str) -> Response {
     let (status, oauth_code) = match error {
         McpAuthError::MissingToken => (StatusCode::UNAUTHORIZED, None),
         McpAuthError::InvalidToken(_) => (StatusCode::UNAUTHORIZED, Some("invalid_token")),
@@ -126,9 +122,10 @@ pub(crate) fn auth_error_response(
 
     let mut response = Response::new(body.into());
     *response.status_mut() = status;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
 
     // 503 carries no challenge: the client should retry, not re-authorize.
     if status != StatusCode::SERVICE_UNAVAILABLE {

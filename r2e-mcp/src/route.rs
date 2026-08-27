@@ -47,17 +47,6 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    /// Build a bare call for tests: `arguments` only, no HTTP parts, a fresh
-    /// cancellation token.
-    pub fn for_test(arguments: Value) -> Self {
-        ToolCall {
-            arguments,
-            parts: None,
-            request_id: "test".to_string(),
-            cancel: CancelToken::new(),
-        }
-    }
-
     /// Read a request-scoped value of type `T` from the HTTP request
     /// extensions (where auth layers deposit the caller's identity).
     ///
@@ -196,17 +185,6 @@ pub struct ResourceCall {
 }
 
 impl ResourceCall {
-    /// Build a bare call for tests: `uri` only, no HTTP parts, a fresh
-    /// cancellation token.
-    pub fn for_test(uri: impl Into<String>) -> Self {
-        ResourceCall {
-            uri: uri.into(),
-            parts: None,
-            request_id: "test".to_string(),
-            cancel: CancelToken::new(),
-        }
-    }
-
     /// Read a request-scoped value of type `T` from the HTTP request
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
@@ -293,17 +271,6 @@ pub struct PromptCall {
 }
 
 impl PromptCall {
-    /// Build a bare call for tests: `arguments` only, no HTTP parts, a fresh
-    /// cancellation token.
-    pub fn for_test(arguments: Value) -> Self {
-        PromptCall {
-            arguments,
-            parts: None,
-            request_id: "test".to_string(),
-            cancel: CancelToken::new(),
-        }
-    }
-
     /// Read a request-scoped value of type `T` from the HTTP request
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {

@@ -7,7 +7,6 @@ use std::sync::Arc;
 use r2e_core::http::{Body, HeaderMap, Request, Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
-use r2e_macros::mcp_routes;
 use r2e_mcp::auth::{DiscoveryMode, McpAuthConfig, ScopePolicy};
 use r2e_mcp::{AppBuilderMcpExt, McpServer, McpTokenValidator};
 use r2e_security::AuthenticatedUser;
@@ -154,7 +153,11 @@ pub async fn secured_plugin_app(plugin: McpServer) -> Router {
 // ── HTTP helpers ───────────────────────────────────────────────────────────
 
 /// Plain GET (well-known documents, shim metadata).
-pub async fn get(router: &Router, path: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, String) {
+pub async fn get(
+    router: &Router,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, String) {
     send(router, "GET", path, headers, Body::empty()).await
 }
 
@@ -197,8 +200,14 @@ pub async fn post_auth(
     body: &Value,
 ) -> support::McpResponse {
     let bearer = format!("Bearer {token}");
-    support::post_with_headers(router, path, session, &[("authorization", bearer.as_str())], body)
-        .await
+    support::post_with_headers(
+        router,
+        path,
+        session,
+        &[("authorization", bearer.as_str())],
+        body,
+    )
+    .await
 }
 
 /// Authenticated session handshake (initialize → session id →

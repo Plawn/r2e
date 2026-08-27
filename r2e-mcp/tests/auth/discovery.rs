@@ -26,11 +26,7 @@ async fn mini_idp(
             let mut buf = vec![0u8; 4096];
             let n = stream.read(&mut buf).await.unwrap_or(0);
             let request = String::from_utf8_lossy(&buf[..n]).into_owned();
-            let path = request
-                .split_whitespace()
-                .nth(1)
-                .unwrap_or("/")
-                .to_string();
+            let path = request.split_whitespace().nth(1).unwrap_or("/").to_string();
             paths.lock().unwrap().push(path.clone());
             let (status, body) = respond(&path);
             let body = body.to_string();
@@ -55,7 +51,10 @@ async fn probes_openid_configuration_first_then_oauth_metadata() {
     let issuer_in = Arc::clone(&issuer_slot);
     let (base, log) = mini_idp(move |path| {
         if path == "/.well-known/oauth-authorization-server" {
-            (200, json!({ "issuer": *issuer_in.lock().unwrap(), "jwks_uri": "http://j/x" }))
+            (
+                200,
+                json!({ "issuer": *issuer_in.lock().unwrap(), "jwks_uri": "http://j/x" }),
+            )
         } else {
             (404, json!({}))
         }
@@ -126,11 +125,13 @@ async fn fixed_metadata_never_fetches() {
         None,
         None,
         None,
-        None,
     );
     let client = DiscoveryClient::fixed(meta);
     assert_eq!(client.issuer(), "http://127.0.0.1:1");
-    let got = client.get().await.expect("fixed metadata is always available");
+    let got = client
+        .get()
+        .await
+        .expect("fixed metadata is always available");
     assert_eq!(got.jwks_uri.as_deref(), Some("http://127.0.0.1:1/jwks"));
 }
 
@@ -143,7 +144,6 @@ async fn stale_cache_survives_an_idp_outage() {
         .prime(OAuthServerMetadata::from_endpoints(
             "http://127.0.0.1:1",
             Some("http://127.0.0.1:1/jwks".into()),
-            None,
             None,
             None,
             None,

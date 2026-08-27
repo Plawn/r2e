@@ -72,31 +72,9 @@ impl ToolRequirements {
     }
 }
 
-/// Check a tool's SCOPE requirements against the caller.
-///
-/// Emitted as the invoke prologue by `#[mcp_routes]` (before guards). Role
-/// requirements are NOT checked here — the guard does that with the exact
-/// HTTP semantics. Rules:
-///
-/// - no scope requirements → allow;
-/// - no principal (call bypassed the auth layer, or hand-built) → deny —
-///   requirements without active authentication always fail closed;
-/// - otherwise: every `scopes` entry AND at least one `any_scopes` entry.
-///
-/// A denial is a domain-level tool failure (`is_error: true` with
-/// agent-actionable text), not a JSON-RPC error: the agent can read it and
-/// re-authorize with the right scopes.
-pub fn check_tool(
-    extensions: Option<&Extensions>,
-    tool_name: &str,
-    req: &ToolRequirements,
-) -> Result<(), McpError> {
-    check_access(extensions, "tool", tool_name, req)
-}
-
-/// The generic form of [`check_tool`]: `kind` names the member family in the
-/// denial messages (`"tool"` / `"resource"` / `"prompt"`); the rules are
-/// identical.
+/// Check a member's scope requirements against the caller. `kind` names the
+/// member family in denial messages (`"tool"` / `"resource"` / `"prompt"`).
+/// Role requirements are enforced separately by the shared guard machinery.
 pub fn check_access(
     extensions: Option<&Extensions>,
     kind: &'static str,
@@ -134,16 +112,6 @@ pub fn check_access(
         )));
     }
     Ok(())
-}
-
-/// Whether a tool should appear in `tools/list` for this caller
-/// (`mcp.auth.filter-tools`, default on).
-///
-/// No requirements → visible; principal present → visible iff every
-/// requirement (scopes AND recorded roles) is satisfied; no principal → only
-/// requirement-free tools.
-pub fn tool_visible(extensions: Option<&Extensions>, req: &ToolRequirements) -> bool {
-    requirements_visible(extensions.and_then(|ext| ext.get::<McpPrincipal>()), req)
 }
 
 /// Visibility check when the caller principal has already been extracted.

@@ -145,11 +145,10 @@ impl<T: Serialize> IntoResourceResult for Json<T> {
         uri: &str,
         mime_type: Option<&str>,
     ) -> Result<Vec<ResourceContents>, McpError> {
-        let text = serde_json::to_value(&self.0)
-            .map_err(|e| McpError::Internal(format!("failed to serialize resource: {e}")))?
-            .to_string();
-        let contents =
-            ResourceContents::text(text, uri).with_mime_type(mime_type.unwrap_or("application/json"));
+        let text = r2e_core::json::to_string(&self.0)
+            .map_err(|e| McpError::Internal(format!("failed to serialize resource: {e}")))?;
+        let contents = ResourceContents::text(text, uri)
+            .with_mime_type(mime_type.unwrap_or("application/json"));
         Ok(vec![contents])
     }
 }

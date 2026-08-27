@@ -79,7 +79,9 @@ Uses Dioxus Subsecond for instant hot-patching — recompiles only changed code 
 
 ## `r2e add <extension>` — Extension management
 
-Adds an R2E sub-crate dependency to `Cargo.toml`. Known extensions: `security`, `data-sqlx`, `data-diesel`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `grpc`, `test`. (`r2e add openapi` also pulls in `schemars`.)
+Adds an R2E extension to `Cargo.toml`. Known extensions: `security`, `data-sqlx`, `data-diesel`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `grpc`, `mcp`, `test`. (`r2e add openapi` also pulls in `schemars`.)
+
+**`r2e add mcp` follows the facade-first setup shown in the MCP guide**: when an `r2e` dependency exists, it enables its `mcp` feature and adds `schemars`; without the facade it falls back to direct `r2e-mcp` + `schemars` dependencies. It does not generate a service source file.
 
 **`r2e add grpc` is a full scaffold**, not just a dependency insert (`scaffold_grpc` in `commands/add.rs`): enables the `grpc`/`grpc-reflection` features on the `r2e` facade dep (converting a bare version string to an inline table if needed; falls back to a direct `r2e-grpc` dep when there is no `r2e` dep), adds `tonic`/`tonic-prost`/`prost` (~0.14) and the `r2e-grpc-build` build-dependency (mirroring the `r2e` dep's git source incl. branch/rev/tag), writes the one-line `build.rs` (never overwrites an existing one), and — only when the project has no `.proto` yet — drops `proto/greeter.proto` plus a `src/grpc/` module skeleton, then prints the `App::build` wiring snippet. All three scaffolding paths (`r2e new --grpc`, `r2e add grpc`, `r2e generate grpc-service`) share one layout: `src/grpc/mod.rs` owns the single `pub mod proto { include_protos!() }`, service files live next to it and use `super::proto`.
 

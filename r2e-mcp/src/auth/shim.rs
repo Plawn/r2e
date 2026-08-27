@@ -102,9 +102,10 @@ fn oauth_error(status: StatusCode, code: &str, description: &str) -> Response {
     let body = json!({ "error": code, "error_description": description }).to_string();
     let mut response = Response::new(body.into());
     *response.status_mut() = status;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     put_public_headers(&mut response);
     response
 }
@@ -171,9 +172,10 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
 
     let mut response = Response::new(doc.to_string().into());
     *response.status_mut() = StatusCode::CREATED;
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     put_public_headers(&mut response);
     response
 }
@@ -272,7 +274,10 @@ async fn authorize(state: Arc<ShimState>, req: Request) -> Response {
         );
     };
     let Ok(mut target) = Url::parse(endpoint) else {
-        tracing::error!(endpoint, "authorize shim: authorization_endpoint is not a valid URL");
+        tracing::error!(
+            endpoint,
+            "authorize shim: authorization_endpoint is not a valid URL"
+        );
         return oauth_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",
@@ -305,10 +310,9 @@ async fn authorize(state: Arc<ShimState>, req: Request) -> Response {
     response.headers_mut().insert(header::LOCATION, location);
     // An authorization request carries per-flow state (PKCE challenge,
     // nonce) — never cacheable.
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store"),
-    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 

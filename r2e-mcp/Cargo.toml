@@ -39,10 +39,6 @@ tracing = { workspace = true }
 # TestJwt: offline HS256 tokens for the auth target (the `testing` feature's
 # `pin_mcp_validator` additionally needs `--features testing`).
 r2e-test = { workspace = true }
-# The attribute macros under test (`#[controller]` + `#[mcp_routes]`/`#[tool]`);
-# the macro's default crate path `::r2e_mcp` resolves correctly inside this
-# crate's own integration tests.
-r2e-macros = { workspace = true }
 # Test-harness runtime deps — dev-deps are exempt from the tokio dep-boundary
 # check (r2e-grpc/r2e-prometheus precedent).
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -408,8 +408,7 @@ shutdown-token relay), `#[mcp_routes]` + `#[tool]` (schemars schemas, guards
 SHARED with HTTP via `Guard<I>`, prebuilt interceptors, `EndpointDeps` compile
 check), example-mcp, full test target + compile-fail cases. References:
 `docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
-(guards rule-of-three reversal), plan
-`~/.claude/plans/j-aimerai-tudier-l-id-e-d-avoir-typed-tower.md`.
+(guards rule-of-three reversal).
 
 P2 (auth) shipped on the same branch: IdP-agnostic OAuth 2.1 resource server
 (`mcp.auth.*`) — jwt backend over discovery (RFC 8414 incl. path-insertion,
@@ -421,9 +420,9 @@ filtering, `ScopePolicy` (scope/scp/permissions ladder, Keycloak realm/client
 roles), `server.public-url` convention key, `TestJwt::for_resource` +
 `TokenBuilder::{scopes,audiences,realm_roles,client_roles}` +
 `pin_mcp_validator` (feature `testing` / facade `mcp-testing`), r2e-security
-`audiences`/`skip_audience_validation`/`with_leeway`. Auth test target (64
-tests) + example-mcp auth e2e; provider matrix + Keycloak walkthrough in
-`docs/features/25-mcp.md`.
+`audiences`/`skip_audience_validation`/`with_leeway`. Auth test target (96
+tests: 94 normal + 2 Docker-gated) + example-mcp auth e2e; provider matrix +
+Keycloak walkthrough in `docs/features/25-mcp.md`.
 
 P3 (providers & dev) shipped on the same branch, in chunks:
 
@@ -468,7 +467,8 @@ Open follow-ups: targeted error for struct-level `#[inject(identity)]` on
 `#[mcp_routes]` types (points at the method-param form); bean-level `#[tool]`
 auto-collection (`after_register`, like `ScheduledSource`); r2e-oidc
 authorization-code + PKCE flow (Docker-free end-to-end MCP OAuth in `r2e
-dev`); `r2e add mcp` CLI scaffold; sealed `ObjectParams` marker making a
+dev`); full MCP service/config source scaffold beyond the shipped
+`r2e add mcp` facade-feature wiring; sealed `ObjectParams` marker making a
 non-object root schema a compile error; MCP resource URI templates (RFC 6570)
 + `resources/subscribe`.
 

@@ -218,6 +218,7 @@ If the dependency is already present, prints a warning and does nothing.
 | `utils` | `r2e-utils` | Built-in interceptors: Logged, Timed, Cache |
 | `prometheus` | `r2e-prometheus` | Prometheus metrics |
 | `grpc` | `r2e-grpc` | gRPC server support |
+| `mcp` | `r2e` feature `mcp` | MCP streamable-HTTP server support |
 | `test` | `r2e-test` | Test helpers: TestApp, TestJwt |
 
 > `r2e add grpc` is a **full scaffold**, not just a dependency insert: it enables
@@ -226,7 +227,10 @@ If the dependency is already present, prints a warning and does nothing.
 > build-dependency, writes a one-line `build.rs`, and (on a blank slate) drops
 > `proto/greeter.proto` + a `src/grpc/` skeleton.
 >
-> `r2e add openapi` also adds `schemars` (needed for `#[derive(JsonSchema)]`).
+> `r2e add mcp` enables the `mcp` feature on an existing `r2e` facade
+> dependency (or adds `r2e-mcp` directly when there is no facade) and also
+> adds `schemars`. `r2e add openapi` also adds `schemars` (needed for
+> `#[derive(JsonSchema)]`).
 
 ---
 

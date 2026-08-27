@@ -52,9 +52,10 @@ pub(crate) fn prm_json(
 pub(crate) fn public_json_response(json: &Arc<str>) -> Response {
     let mut response = Response::new(json.to_string().into());
     put_public_headers(&mut response);
-    response
-        .headers_mut()
-        .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
     response.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=300"),

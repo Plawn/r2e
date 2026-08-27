@@ -134,6 +134,77 @@ fn add_openapi_includes_schemars() {
 
 #[test]
 #[serial]
+fn add_mcp_enables_facade_feature_and_schemars() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert!(cargo.contains("r2e = { version = \"0.1\", features = [\"mcp\"] }"));
+    assert!(cargo.contains("schemars = \"1\""));
+    assert!(!cargo.contains("r2e-mcp"));
+}
+
+#[test]
+#[serial]
+fn add_mcp_preserves_facade_features_and_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e = { version = \"0.1\", features = [\"security\"] }\n",
+    )
+    .unwrap();
+
+    add::run("mcp").unwrap();
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert_eq!(cargo.matches("\"mcp\"").count(), 1);
+    assert!(cargo.contains("\"security\""));
+    assert_eq!(cargo.matches("schemars").count(), 1);
+}
+
+#[test]
+#[serial]
+fn add_mcp_repairs_missing_schemars_for_direct_dependency() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e-mcp = \"0.3\"\n",
+    )
+    .unwrap();
+
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert_eq!(cargo.matches("r2e-mcp").count(), 1);
+    assert!(cargo.contains("schemars = \"1\""));
+}
+
+#[test]
+#[serial]
+fn add_mcp_adds_direct_dependency_without_facade() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert!(cargo.contains("r2e-mcp = \"0.3\""));
+    assert!(cargo.contains("schemars = \"1\""));
+}
+
+#[test]
+#[serial]
 fn add_all_known_extensions() {
     let known = [
         "security",

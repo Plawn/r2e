@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use r2e_mcp::prelude::*;
+//! use r2e::prelude::*; // enable the `mcp` feature on the facade
 //!
 //! #[controller]
 //! pub struct MathTools {
@@ -58,7 +58,7 @@ pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements}
 pub use config::McpConfig;
 pub use error::McpError;
 pub use params::{Params, ToolParams};
-pub use plugin::{McpMarker, McpServer};
+pub use plugin::McpServer;
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 pub use route::{
@@ -68,11 +68,11 @@ pub use route::{
 };
 pub use service::McpService;
 
-/// The wire result type of a tool call (rmcp's `CallToolResult`), re-exported
-/// for tools that build results by hand.
-pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
 pub use rmcp::model::Role as PromptMessageRole;
+/// Raw wire result/content types, re-exported for tools, resources and
+/// prompts that build results by hand without importing rmcp directly.
+pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
 
 /// Re-export of `schemars` for generated code (input/output schema probes)
 /// and for deriving `JsonSchema` on tool parameter types without a direct
@@ -176,29 +176,27 @@ where
 /// Re-exports for generated code.
 #[doc(hidden)]
 pub mod __macro_support {
-    pub use crate::auth::tools::{check_access, check_tool, ToolRequirements};
+    pub use crate::auth::tools::{check_access, ToolRequirements};
     pub use crate::error::McpError;
-    pub use crate::guard::{guard_response_to_error, member_guard_context, tool_guard_context};
+    pub use crate::guard::{guard_response_to_error, member_guard_context};
     pub use crate::params::{
         empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,
     };
     pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
     pub use crate::route::{
-        McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptRoute, ResourceCall,
-        ResourceFuture, ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture,
-        ToolInvoke, ToolRoute,
+        McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
+        ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolRoute,
     };
     pub use crate::service::McpService;
-    pub use r2e_core::{ContextConstruct, Guard, Identity, NoIdentity};
-    pub use crate::PromptMessageRole;
-    pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
+    pub use r2e_core::NoIdentity;
+    pub use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
 }
 
 pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
+    pub use crate::auth::{McpAuthConfig, McpTokenValidator};
     pub use crate::error::McpError;
     pub use crate::params::Params;
-    pub use crate::auth::{McpAuthConfig, McpTokenValidator};
     pub use crate::plugin::McpServer;
     pub use crate::route::{PromptCall, ResourceCall, ToolCall};
     pub use crate::service::McpService;

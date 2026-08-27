@@ -17,8 +17,7 @@ use r2e_core::http::body::to_bytes;
 use r2e_core::http::{ConnectInfo, Response, Uri};
 use r2e_core::{default_method, no_extensions, GuardContext, Identity, PathParams};
 
-use crate::error::McpError;
-use crate::route::ToolCall;
+use crate::error::{from_status, McpError};
 
 /// Cap on how much of a guard rejection body is read back into the JSON-RPC
 /// error message.
@@ -29,25 +28,9 @@ fn default_uri() -> &'static Uri {
     &URI
 }
 
-/// Build a [`GuardContext`] for a tool invocation.
-///
-/// With transport parts present, the guard sees the real request method,
-/// headers, URI, extensions and peer address (`ConnectInfo`, when the server
-/// records it). Without parts, neutral defaults (`GET /`, empty headers and
-/// extensions). `path_params` is always empty — MCP tools have no route
-/// captures.
-pub fn tool_guard_context<'a, I: Identity>(
-    call: &'a ToolCall,
-    method_name: &'static str,
-    controller_name: &'static str,
-    identity: Option<&'a I>,
-) -> GuardContext<'a, I> {
-    member_guard_context(call.parts.as_deref(), method_name, controller_name, identity)
-}
-
 /// Build a [`GuardContext`] from optional transport parts — the shared form
-/// behind [`tool_guard_context`], used directly by the generated resource
-/// and prompt dispatch (their calls carry the same `parts` field).
+/// used by the generated tool, resource and prompt dispatch (their calls all
+/// carry the same `parts` field).
 pub fn member_guard_context<'a, I: Identity>(
     parts: Option<&'a r2e_core::http::Parts>,
     method_name: &'static str,
@@ -96,17 +79,8 @@ pub async fn guard_response_to_error(response: Response) -> McpError {
     let (parts, body) = response.into_parts();
     let status = parts.status.as_u16();
     let message = match to_bytes(body, REJECTION_BODY_LIMIT).await {
-        Ok(bytes) if !bytes.is_empty() => {
-            String::from_utf8_lossy(&bytes).into_owned()
-        }
+        Ok(bytes) if !bytes.is_empty() => String::from_utf8_lossy(&bytes).into_owned(),
         _ => format!("request rejected with status {status}"),
     };
-    match status {
-        401 => McpError::Unauthorized(message),
-        403 => McpError::Forbidden(message),
-        404 => McpError::NotFound(message),
-        400 | 422 => McpError::InvalidParams(message),
-        500..=599 => McpError::Internal(message),
-        _ => McpError::tool(message),
-    }
+    from_status(status, message)
 }

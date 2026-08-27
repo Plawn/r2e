@@ -37,7 +37,6 @@ pub struct OAuthServerMetadata {
     pub jwks_uri: Option<String>,
     pub authorization_endpoint: Option<String>,
     pub token_endpoint: Option<String>,
-    pub registration_endpoint: Option<String>,
     pub userinfo_endpoint: Option<String>,
     pub introspection_endpoint: Option<String>,
     pub scopes_supported: Vec<String>,
@@ -60,7 +59,6 @@ impl OAuthServerMetadata {
             jwks_uri: s("jwks_uri"),
             authorization_endpoint: s("authorization_endpoint"),
             token_endpoint: s("token_endpoint"),
-            registration_endpoint: s("registration_endpoint"),
             userinfo_endpoint: s("userinfo_endpoint"),
             introspection_endpoint: s("introspection_endpoint"),
             scopes_supported: raw
@@ -84,7 +82,6 @@ impl OAuthServerMetadata {
         jwks_uri: Option<String>,
         authorization_endpoint: Option<String>,
         token_endpoint: Option<String>,
-        registration_endpoint: Option<String>,
         userinfo_endpoint: Option<String>,
         introspection_endpoint: Option<String>,
     ) -> Self {
@@ -99,7 +96,6 @@ impl OAuthServerMetadata {
         put("jwks_uri", &jwks_uri);
         put("authorization_endpoint", &authorization_endpoint);
         put("token_endpoint", &token_endpoint);
-        put("registration_endpoint", &registration_endpoint);
         put("userinfo_endpoint", &userinfo_endpoint);
         put("introspection_endpoint", &introspection_endpoint);
         Self {
@@ -108,7 +104,6 @@ impl OAuthServerMetadata {
             jwks_uri,
             authorization_endpoint,
             token_endpoint,
-            registration_endpoint,
             userinfo_endpoint,
             introspection_endpoint,
             scopes_supported: Vec::new(),
@@ -296,7 +291,9 @@ impl DiscoveryClient {
                 McpAuthError::Upstream(format!("discovery response from {candidate}: {e}"))
             })?;
             let raw: Value = r2e_core::json::from_slice(&body).map_err(|e| {
-                McpAuthError::Upstream(format!("discovery document at {candidate} is not JSON: {e}"))
+                McpAuthError::Upstream(format!(
+                    "discovery document at {candidate} is not JSON: {e}"
+                ))
             })?;
             let meta = OAuthServerMetadata::from_raw(raw)?;
             if normalize_issuer(&meta.issuer) != normalize_issuer(&self.issuer) {

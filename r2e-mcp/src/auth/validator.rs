@@ -124,11 +124,6 @@ impl McpTokenValidator {
         Self { inner: None }
     }
 
-    /// Whether this is the inert [`disabled`](Self::disabled) validator.
-    pub fn is_disabled(&self) -> bool {
-        self.inner.is_none()
-    }
-
     /// Validate a bearer token.
     pub async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
         match &self.inner {

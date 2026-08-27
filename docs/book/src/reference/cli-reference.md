@@ -574,12 +574,13 @@ Add an R2E sub-crate dependency to `Cargo.toml`.
 r2e add <extension>
 ```
 
-Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.1` to `[dependencies]`. Errors if the extension is unknown or `Cargo.toml` is missing. Prints a warning (no error) if already present.
+Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.3` to `[dependencies]`. Errors if the extension is unknown or `Cargo.toml` is missing. Prints a warning (no error) if already present.
 
-Two extensions do more than a plain dependency insert:
+Three extensions do more than a plain dependency insert:
 
 - `openapi` also adds the `schemars` dependency (required for `#[derive(JsonSchema)]`).
 - `grpc` is a full scaffold: it enables the `grpc`/`grpc-reflection` features on the `r2e` dependency (or falls back to a direct `r2e-grpc` dep), adds the `tonic`/`tonic-prost`/`prost` dependencies, adds `r2e-grpc-build` as a **build-dependency**, and drops a one-line `build.rs` (`r2e_grpc_build::compile()`), a sample `proto/greeter.proto`, and a `src/grpc/` module (`mod.rs` + `greeter.rs`).
+- `mcp` enables the `mcp` feature on an existing `r2e` facade dependency and adds `schemars`; without a facade dependency it falls back to direct `r2e-mcp` + `schemars` dependencies. It does not generate service source files.
 
 **Available extensions:**
 
@@ -596,6 +597,7 @@ Two extensions do more than a plain dependency insert:
 | `utils` | `r2e-utils` | Built-in interceptors: Logged, Timed, Cache, CacheInvalidate |
 | `prometheus` | `r2e-prometheus` | Prometheus metrics |
 | `grpc` | `r2e-grpc` | gRPC server support (tonic-based) |
+| `mcp` | `r2e` feature `mcp` | MCP streamable-HTTP server support |
 | `test` | `r2e-test` | Test helpers: TestApp (HTTP client), TestJwt (JWT gen) |
 
 **Example:**

@@ -34,7 +34,7 @@ struct Family<R, W> {
     routes: HashMap<String, FamilyRoute<R>>,
     list: Vec<W>,
     reqs: Vec<ToolRequirements>,
-    /// Per-caller list filtering (`mcp.auth.filter-tools`). Off — or no
+    /// Per-caller list filtering (`mcp.auth.filter-members`). Off — or no
     /// member has requirements — means the precomputed list goes out as-is.
     filter: bool,
 }
@@ -132,7 +132,7 @@ impl McpRuntime {
     pub(crate) fn build(
         services: Vec<RegisteredMcpService>,
         identity: ServerIdentity,
-        filter_tools: bool,
+        filter_members: bool,
         auth_enabled: bool,
     ) -> Self {
         let mut tool_members = Vec::new();
@@ -176,9 +176,9 @@ impl McpRuntime {
                 ));
             }
         }
-        let tools = Family::build("tool name", filter_tools, tool_members);
-        let resources = Family::build("resource URI", filter_tools, resource_members);
-        let prompts = Family::build("prompt name", filter_tools, prompt_members);
+        let tools = Family::build("tool name", filter_members, tool_members);
+        let resources = Family::build("resource URI", filter_members, resource_members);
+        let prompts = Family::build("prompt name", filter_members, prompt_members);
 
         let mut info = ServerInfo::default();
         // Tools are always advertised (the endpoint's primary purpose);
