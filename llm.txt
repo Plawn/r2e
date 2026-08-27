@@ -3155,6 +3155,66 @@ graceful shutdown terminates live SSE streams. Test over `TestApp`: POST the
 JSON-RPC envelope to `/mcp` with `accept: application/json, text/event-stream`
 (responses are SSE `data:` events; see `examples/example-mcp/tests/mcp_e2e.rs`).
 
+### MCP auth — OAuth 2.1 resource server (`mcp.auth.*`)
+
+Works with ANY OIDC IdP (Keycloak, Auth0, Entra, Okta). Three YAML keys:
+
+```yaml
+server:
+  public-url: https://api.example.com     # the app's external origin (framework-wide key)
+mcp:
+  auth:
+    issuer: https://id.example.com/realms/acme
+    public-client-id: mcp-public          # optional; enables the static DCR shim
+```
+
+Everything else is discovered from the issuer. You get: local JWT validation
+(JWKS, zero network per request), audience = canonical resource URI
+(`mcp.auth.resource`, default `{server.public-url}{mcp.path}`), 401 challenges
+with `WWW-Authenticate: Bearer resource_metadata="…"` (RFC 9728), public
+protected-resource metadata at `/.well-known/oauth-protected-resource{path}`,
+and — when `public-client-id` is set — a DCR shim (`POST {path}/oauth/register`
+hands every client that pre-created public client id; redirect URIs must
+already be configured on the IdP client). IdP outages → 503, not 401. No
+`mcp.auth` section → unauthenticated server.
+
+Other `mcp.auth.*` keys (all optional): `resource`/`resource-name`, `discovery`
+(`eager`|`lazy`|`off`) + `discovery-ttl-secs`/`jwks-url`/explicit endpoints,
+`allowed-algorithms`, `clock-skew-secs`, `audience`
+(`resource`|`any-of`|`client-id`|`skip`) + `extra-audiences` (Auth0/Entra),
+`required-scopes` (server-wide floor → 403), `scopes-supported`, `scope-claim`
+(default `scope` then `scp`; Auth0 RBAC → `permissions`), `roles-claim`
+(default `roles` + Keycloak `realm_access.roles`), `client-roles-for`
+(Keycloak `resource_access.<id>.roles`), `shim`, `registration-path`,
+`redirect-uri-allowlist`, `filter-tools` (true — `tools/list` hides tools the
+caller cannot invoke), `allow-insecure` (http issuer, dev), `allowed-origins`.
+
+Per-tool authorization:
+
+```rust
+#[tool(scopes = "mcp:read")]                       // caller must hold ALL listed scopes
+#[tool(any_scopes = ["mcp:admin", "mcp:write"])]   // at least ONE
+#[roles("admin")]                                  // same RolesGuard as HTTP routes
+async fn secure(&self, #[inject(identity)] user: AuthenticatedUser) -> String { … }
+```
+
+Scope denials are JSON-RPC errors with agent-actionable text ("re-authorize
+requesting them"). `#[inject(identity)]` on a tool parameter (or `Option<…>`)
+reads the validated principal.
+
+Testing (feature `mcp-testing` on the `r2e` facade): boot with zero network I/O —
+
+```rust
+use r2e::r2e_mcp::testing::pin_mcp_validator;
+let jwt = TestJwt::for_resource("http://localhost:3000/mcp");   // aud = resource
+let b = pin_mcp_validator(AppBuilder::new(), &jwt, "http://localhost:3000/mcp"); // BEFORE load_config
+let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
+// TokenBuilder also: .audiences(&[...]) (array aud), .realm_roles/.client_roles (Keycloak),
+// .claim("scp", ...) (Entra/Okta), .expired()
+```
+
+See `examples/example-mcp/tests/mcp_auth.rs`.
+
 ---
 
 ## Static Files / SPA

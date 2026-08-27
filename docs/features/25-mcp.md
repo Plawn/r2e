@@ -13,7 +13,7 @@ No rmcp type appears in user code (the one deliberate re-export is
 
 ## TL;DR
 
-Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[mcp_routes]` on a dedicated type turn plain async methods into tools: `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — no rmcp type appears in user code. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default).
+Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[mcp_routes]` on a dedicated type turn plain async methods into tools: `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — no rmcp type appears in user code. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
 
 ## Quick start
 
@@ -198,11 +198,171 @@ empty priming event when parsing. Stateful mode requires the `initialize` →
 plain JSON. See `examples/example-mcp/tests/mcp_e2e.rs` for a complete
 harness.
 
-## Auth (upcoming)
+## Auth — OAuth 2.1 resource server (`mcp.auth.*`)
 
-The OAuth 2.1 resource-server layer (`mcp.auth.*`: issuer discovery, JWT
-validation, RFC 9728 protected-resource metadata, static DCR shim for IdPs
-without dynamic client registration — Keycloak, Google, Auth0, Entra, Okta)
-is the next phase of this feature. `#[inject(identity)]` on tool parameters
-is already wired to read the principal the auth layer deposits in request
-extensions.
+Two YAML keys turn the endpoint into a spec-compliant OAuth 2.1 resource
+server for **any** OIDC IdP:
+
+```yaml
+server:
+  public-url: https://api.example.com      # the app's external origin
+mcp:
+  auth:
+    issuer: https://id.example.com/realms/acme
+    public-client-id: mcp-public           # optional; presence enables the DCR shim
+```
+
+Everything else derives from `{issuer}/.well-known/openid-configuration`:
+JWKS URL, endpoints, algorithms. No `mcp.auth` section ⇒ unauthenticated
+server (local dev); `mcp.auth.enabled: false` ⇒ parsed but inert.
+
+What you get, with zero additional code:
+
+- **Bearer validation** on every MCP request: local JWT verification against
+  the IdP's JWKS (zero network per request), audience bound to the canonical
+  resource URI (RFC 8707), issuer + expiry + algorithm checks.
+- **401 challenges** with `WWW-Authenticate: Bearer resource_metadata="…"`
+  (RFC 9728) — MCP clients (Claude, Inspector) bootstrap the whole OAuth
+  flow from this header.
+- **Protected-resource metadata** at
+  `/.well-known/oauth-protected-resource[{mcp.path}]` (public, CORS-open,
+  cached).
+- **Static DCR shim** (when `public-client-id` is set): the server mirrors
+  the IdP's authorization-server metadata and serves a
+  `POST {mcp.path}/oauth/register` endpoint that hands every client the same
+  pre-created public client id. This is what makes Keycloak (anonymous DCR
+  blocked), Google, Entra and Okta (no DCR) work with clients that expect
+  RFC 7591. **The shim registers nothing** — redirect URIs must already be
+  configured on the IdP client; requested ones are filtered against
+  `redirect-uri-allowlist` (default: localhost any-port, the Claude
+  callbacks, the MCP Inspector).
+- **IdP outages are 503, not 401** — clients aren't sent into a re-auth loop
+  when JWKS/discovery are briefly unreachable (stale-if-error caches on
+  both).
+
+### The canonical resource URI
+
+The token audience, the PRM `resource` and the challenge URL all use one
+canonical URI, resolved in order:
+
+1. `mcp.auth.resource` (explicit),
+2. `{server.public-url}{mcp.path}` (recommended),
+3. dev/test fallback `http://{host}:{port}{mcp.path}` — only under the
+   `dev`/`test` profile or a loopback bind, with a boot `warn!`,
+4. otherwise a boot error naming the keys to set.
+
+It is canonicalized once (lowercased scheme/host, default port dropped, no
+trailing slash/query/fragment) and never derived from `Host` /
+`X-Forwarded-*` headers (attacker-controlled).
+
+### Per-tool authorization
+
+```rust
+#[mcp_routes]
+impl AdminTools {
+    #[tool(scopes = "mcp:read")]                      // must hold ALL listed scopes
+    async fn read_data(&self) -> &'static str { "data" }
+
+    #[tool(any_scopes = ["mcp:admin", "mcp:write"])]  // at least ONE
+    async fn flexible(&self) -> &'static str { "ok" }
+
+    #[tool]
+    #[roles("admin")]                                 // same guard as HTTP routes
+    async fn admin_only(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
+        format!("admin:{}", user.sub)
+    }
+}
+```
+
+- Server-wide `mcp.auth.required-scopes` → HTTP 403 + `insufficient_scope`
+  challenge naming the missing scopes.
+- `#[tool(scopes/any_scopes)]` → JSON-RPC-level denial with agent-actionable
+  text ("re-authorize requesting them"), checked before identity/guards.
+- `#[roles]` / `#[all_roles]` → the shared `RolesGuard` over the validated
+  principal's roles — identical semantics to HTTP routes.
+- `tools/list` is filtered by the caller's scopes/roles by default
+  (`mcp.auth.filter-tools: false` lists everything; invocation checks still
+  apply).
+- `#[inject(identity)] user: AuthenticatedUser` (or `Option<…>`) on a tool
+  parameter reads the authenticated principal; a required identity with no
+  authenticated caller is a JSON-RPC `unauthorized` error.
+
+### Configuration reference
+
+| key | default | notes |
+|---|---|---|
+| `issuer` | — (required) | must be `https://` unless `allow-insecure: true` |
+| `resource`, `resource-name` | derived | canonical resource URI + display name |
+| `discovery` | `eager` (`lazy` under `dev` profile) | `eager` = fetch at boot, fail fast; `lazy` = first use; `off` = explicit endpoints only (requires `jwks-url`) |
+| `discovery-ttl-secs` | 3600 | metadata cache TTL (stale-if-error) |
+| `jwks-url`, `authorization-endpoint`, `token-endpoint`, … | discovered | explicit overrides |
+| `token-validation` | `jwt` | `introspection` / `userinfo` are P3 |
+| `allowed-algorithms` | RS256, ES256, PS256 | JWT signature algorithms |
+| `clock-skew-secs` | 60 | leeway for `exp`/`nbf` |
+| `audience` | `resource` | `any-of` (+ `extra-audiences`), `client-id`, `skip` |
+| `required-scopes` | — | server-wide scope floor (403 below it) |
+| `scope-claim` | `scope`, then `scp` | set `permissions` for Auth0 RBAC |
+| `roles-claim` | `roles` + `realm_access.roles` | custom claim REPLACES defaults |
+| `client-roles-for` | — | merge Keycloak `resource_access.<id>.roles` |
+| `public-client-id`, `shim` | — / auto | shim on iff client id set; `shim: false` opts out |
+| `registration-path` | `/oauth/register` | mounted under `mcp.path` |
+| `redirect-uri-allowlist` | localhost/Claude/Inspector | custom list REPLACES defaults; `:*` = any port, trailing `*` = prefix |
+| `filter-tools` | `true` | hide unlistable tools from `tools/list` |
+| `allow-insecure` | `false` | permit `http://` issuer/JWKS (dev only) |
+| `allowed-origins` | — | Origin allowlist on the MCP endpoint (DNS-rebinding guard) |
+
+### Provider matrix
+
+| | issuer | DCR | audience | scopes / roles |
+|---|---|---|---|---|
+| **Keycloak** | `{base}/realms/{realm}` | anonymous DCR blocked → **shim** | add an **Audience mapper** (client scope) = the resource URI, else tokens carry `aud: ["account"]` → 401 | `scope`; roles from `realm_access` / `resource_access` (`client-roles-for`) |
+| **Auth0** | `https://{tenant}.auth0.com/` (trailing slash!) | optional toggle | API identifier; the client must send `audience=` → `audience: any-of` + `extra-audiences` | `scope`, or RBAC `permissions` → `scope-claim: permissions` |
+| **Google** | `https://accounts.google.com` | none → **shim** | opaque access tokens → needs `token-validation: userinfo` (P3) | n/a |
+| **Entra ID** | `…/{tenant}/v2.0` (path-insertion discovery handled) | none → **shim** | app-ID URI → `any-of` | `scp` claim (default ladder covers it); `roles-claim: roles` |
+| **Okta** | `https://{org}.okta.com/oauth2/{as}` | gated → shim | `any-of` | `scp` (array form covered) |
+
+### Keycloak walkthrough
+
+1. Create a **public client** `mcp-public` in your realm: Standard flow on,
+   PKCE `S256`, no client secret.
+2. Redirect URIs on that client: `https://claude.ai/api/mcp/auth_callback`,
+   `https://claude.com/api/mcp/auth_callback`, plus
+   `http://localhost:*` for the Inspector.
+3. Create a **client scope** `mcp` (default) with an **Audience mapper**
+   whose included audience is your resource URI (e.g.
+   `https://api.example.com/mcp`). Without it Keycloak issues
+   `aud: ["account"]` and every token is rejected.
+4. Optionally add scopes `mcp:read` / `mcp:write` (optional client scopes)
+   and realm roles for `#[roles]`.
+5. Configure R2E (the three keys at the top of this section).
+6. `curl -i https://api.example.com/mcp` → `401` with
+   `WWW-Authenticate: Bearer resource_metadata="…"` — the flow is live.
+7. `npx @modelcontextprotocol/inspector`, or add the URL as a Claude custom
+   connector: the client discovers the PRM, "registers" through the shim,
+   runs authorization-code + PKCE against Keycloak, and calls tools.
+
+### Testing authenticated servers (no Docker)
+
+`r2e` feature `mcp-testing` (or `r2e-mcp` feature `testing`):
+
+```rust
+use r2e::r2e_mcp::testing::pin_mcp_validator;
+use r2e_test::TestJwt;
+
+const RESOURCE: &str = "http://localhost:3000/mcp";
+let jwt = TestJwt::for_resource(RESOURCE);      // aud = resource (RFC 8707)
+let app = pin_mcp_validator(AppBuilder::new(), &jwt, RESOURCE)  // BEFORE load_config
+    .load_config::<()>()
+    .plugin(McpServer::new())
+    .build_state().await
+    .register_mcp_service::<MathTools>();
+let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
+```
+
+The pinned validator (HS256, in-process) replaces the JWKS path via
+`override_bean`, and the config overrides set `discovery: off` — **zero
+network I/O at boot** while the real auth layer, well-known routes and
+per-tool checks stay active. `TokenBuilder` mints every real-world token
+shape: `.scopes()`, `.audiences()` (array `aud`), `.realm_roles()` /
+`.client_roles()` (Keycloak), `.claim("scp", …)` (Entra/Okta), `.expired()`.
+See `examples/example-mcp/tests/mcp_auth.rs` for the full pattern.

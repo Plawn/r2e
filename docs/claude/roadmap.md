@@ -400,7 +400,7 @@ Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
 existing store's model into a local `.fga`), plus tuple seed fixtures for
 dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
 
-## W16 — MCP server (r2e-mcp) — P1 SHIPPED 2026-08-27, P2/P3 OPEN
+## W16 — MCP server (r2e-mcp) — P1+P2 SHIPPED 2026-08-27, P3 OPEN
 
 P1 (server core) shipped on `feat/mcp-server`: `r2e-mcp` crate + `McpServer`
 plugin (streamable HTTP, shared sessions across SO_REUSEPORT workers,
@@ -411,14 +411,22 @@ check), example-mcp, full test target + compile-fail cases. References:
 (guards rule-of-three reversal), plan
 `~/.claude/plans/j-aimerai-tudier-l-id-e-d-avoir-typed-tower.md`.
 
+P2 (auth) shipped on the same branch: IdP-agnostic OAuth 2.1 resource server
+(`mcp.auth.*`) — jwt backend over discovery (RFC 8414 incl. path-insertion,
+TTL + stale-if-error), `McpAuthLayer` (401/403/503 + exact `WWW-Authenticate`
+challenges), RFC 9728 protected-resource metadata, static DCR shim
+(`public-client-id` + redirect allowlist + mirrored AS metadata), per-tool
+`#[tool(scopes/any_scopes)]` + shared `#[roles]` guards + `tools/list`
+filtering, `ScopePolicy` (scope/scp/permissions ladder, Keycloak realm/client
+roles), `server.public-url` convention key, `TestJwt::for_resource` +
+`TokenBuilder::{scopes,audiences,realm_roles,client_roles}` +
+`pin_mcp_validator` (feature `testing` / facade `mcp-testing`), r2e-security
+`audiences`/`skip_audience_validation`/`with_leeway`. Auth test target (64
+tests) + example-mcp auth e2e; provider matrix + Keycloak walkthrough in
+`docs/features/25-mcp.md`.
+
 Open, in order:
 
-- **P2 — auth**: IdP-agnostic OAuth 2.1 resource server (`mcp.auth.*`): jwt
-  backend over discovery, `McpAuthLayer`, RFC 9728 protected-resource
-  metadata, static DCR shim (`public-client-id`), per-tool
-  `#[tool(scopes/any_scopes)]` + `#[roles]`, `TestJwt` helpers,
-  `server.public-url` convention key, r2e-security breaking changes
-  (`audiences: Vec<String>`, `skip_audience_validation`, `with_leeway`).
 - **P3 — providers & dev**: `introspection` (RFC 7662) + `userinfo` (Google)
   validation backends, `DevKeycloak` dev service, authorize-redirect shim
   (`extra-authorize-params`), r2e-oidc `scope`/RFC 8707 `resource`

@@ -14,5 +14,8 @@ serde = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# `mcp-testing` unlocks `r2e::r2e_mcp::testing::pin_mcp_validator` for the
+# auth e2e test (feature unification: tests see the union of dep features).
+r2e = { path = "../../r2e", features = ["mcp", "mcp-testing"] }
 r2e-test = { workspace = true }
 serde_json = { workspace = true }

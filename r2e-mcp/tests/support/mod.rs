@@ -7,6 +7,9 @@
 //! real client sends; responses arrive as SSE (`data:` lines) or plain JSON
 //! (`mcp.json-response` mode) and both are parsed here.
 
+// Each test target uses a subset of these helpers.
+#![allow(dead_code)]
+
 use http_body_util::BodyExt;
 use r2e_core::http::{Body, Request, Router, StatusCode};
 use serde_json::{json, Value};

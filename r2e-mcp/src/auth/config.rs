@@ -68,7 +68,7 @@ pub enum AudienceMode {
 ///
 /// Precedence for each knob: **programmatic builder setting > this file
 /// config > default** (same rule as [`McpConfig`](crate::McpConfig)).
-#[derive(ConfigProperties, Clone, Debug)]
+#[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct McpAuthConfig {
     /// Master switch for the section (default `true`); `false` parses the
     /// section but mounts nothing.

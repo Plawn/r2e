@@ -334,6 +334,9 @@ pub fn application_yaml(opts: &ProjectOptions) -> String {
 # Read by serve_auto()
 server:
   port: 3000
+  # The app's external origin — used to derive OAuth resource URIs (e.g. by
+  # the MCP auth layer). Uncomment when deployed behind a public hostname.
+  # public-url: https://api.example.com
 "#
     );
 

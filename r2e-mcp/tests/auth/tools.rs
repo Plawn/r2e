@@ -1,0 +1,221 @@
+//! Per-tool authorization: `check_tool`/`tool_visible` unit matrix, then the
+//! end-to-end story — `tools/list` filtering and denial shapes over the wire.
+
+use r2e_core::http::Extensions;
+use r2e_mcp::auth::tools::tool_visible;
+use r2e_mcp::auth::{check_tool, AuthDisabled, McpAuthConfig};
+use r2e_mcp::{McpPrincipal, ToolRequirements};
+use serde_json::json;
+
+use crate::fixtures::{
+    initialize_auth, offline_auth, pinned, secured_app, secured_app_with, test_jwt, tool_names,
+    tools_call_auth, tools_list_auth,
+};
+
+// ── Unit matrix ────────────────────────────────────────────────────────────
+
+/// A real principal (AuthenticatedUser is not literal-constructible): mint a
+/// token and run it through the pinned validator.
+async fn principal(scopes: &[&str], roles: &[&str]) -> McpPrincipal {
+    let jwt = test_jwt();
+    let token = jwt.token_builder("alice").scopes(scopes).roles(roles).build();
+    pinned(&jwt).validate(&token).await.expect("valid fixture token")
+}
+
+fn ext_with<T: Clone + Send + Sync + 'static>(value: T) -> Extensions {
+    let mut ext = Extensions::new();
+    ext.insert(value);
+    ext
+}
+
+const READ: ToolRequirements = ToolRequirements {
+    scopes: &["mcp:read"],
+    ..ToolRequirements::NONE
+};
+
+#[tokio::test]
+async fn check_tool_unit_matrix() {
+    let ext = ext_with(principal(&["mcp:read"], &[]).await);
+
+    // No requirements → allowed with or without any extensions.
+    assert!(check_tool(None, "t", &ToolRequirements::NONE).is_ok());
+    // AuthDisabled marker → allowed even with requirements.
+    assert!(check_tool(Some(&ext_with(AuthDisabled)), "t", &READ).is_ok());
+    // Requirements but no principal (layer bypassed) → fail closed.
+    match check_tool(Some(&Extensions::new()), "t", &READ) {
+        Err(r2e_mcp::McpError::Unauthorized(msg)) => {
+            assert_eq!(msg, "tool `t` requires an authenticated caller")
+        }
+        other => panic!("expected Unauthorized, got {other:?}"),
+    }
+    // Held scope → ok.
+    assert!(check_tool(Some(&ext), "t", &READ).is_ok());
+    // Missing scopes are named, joined, with re-authorize guidance.
+    let all = ToolRequirements {
+        scopes: &["mcp:read", "mcp:write", "mcp:admin"],
+        ..ToolRequirements::NONE
+    };
+    match check_tool(Some(&ext), "t", &all) {
+        Err(r2e_mcp::McpError::Forbidden(msg)) => assert_eq!(
+            msg,
+            "tool `t` requires scope(s) `mcp:write, mcp:admin` that the token does not \
+             carry; re-authorize requesting them"
+        ),
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+    // any_scopes: one match suffices; none → denial names the alternatives.
+    let any = ToolRequirements {
+        any_scopes: &["mcp:admin", "mcp:read"],
+        ..ToolRequirements::NONE
+    };
+    assert!(check_tool(Some(&ext), "t", &any).is_ok());
+    let any_miss = ToolRequirements {
+        any_scopes: &["mcp:admin", "mcp:write"],
+        ..ToolRequirements::NONE
+    };
+    match check_tool(Some(&ext), "t", &any_miss) {
+        Err(r2e_mcp::McpError::Forbidden(msg)) => assert_eq!(
+            msg,
+            "tool `t` requires at least one of the scopes `mcp:admin, mcp:write`; \
+             re-authorize requesting one"
+        ),
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tool_visible_covers_scopes_and_roles() {
+    let admin_req = ToolRequirements {
+        roles: &["admin"],
+        ..ToolRequirements::NONE
+    };
+    // Roles ARE part of visibility (unlike check_tool, which leaves role
+    // enforcement to the guard).
+    let admin = ext_with(principal(&[], &["admin"]).await);
+    let plain = ext_with(principal(&["mcp:read"], &[]).await);
+    assert!(tool_visible(Some(&admin), &admin_req));
+    assert!(!tool_visible(Some(&plain), &admin_req));
+    assert!(tool_visible(Some(&plain), &READ));
+    assert!(!tool_visible(Some(&admin), &READ));
+    // Unrestricted → always visible; AuthDisabled → all visible; no
+    // principal → restricted tools hidden.
+    assert!(tool_visible(None, &ToolRequirements::NONE));
+    assert!(tool_visible(Some(&ext_with(AuthDisabled)), &admin_req));
+    assert!(!tool_visible(Some(&Extensions::new()), &READ));
+    // all_roles: every entry required.
+    let all_roles = ToolRequirements {
+        all_roles: &["admin", "auditor"],
+        ..ToolRequirements::NONE
+    };
+    assert!(!tool_visible(Some(&admin), &all_roles));
+    let both = ext_with(principal(&[], &["admin", "auditor"]).await);
+    assert!(tool_visible(Some(&both), &all_roles));
+}
+
+// ── End-to-end over the wire ───────────────────────────────────────────────
+
+fn alice_token() -> String {
+    test_jwt()
+        .token_builder("alice")
+        .scopes(&["mcp:read", "mcp:write"])
+        .roles(&["admin"])
+        .build()
+}
+
+fn bob_token() -> String {
+    test_jwt().token_builder("bob").scopes(&["mcp:read"]).build()
+}
+
+#[tokio::test]
+async fn fully_scoped_caller_sees_and_calls_everything() {
+    let router = secured_app().await;
+    let token = alice_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+
+    let list = tools_list_auth(&router, "/mcp", &session, &token).await;
+    assert_eq!(
+        tool_names(&list),
+        ["admin_only", "flexible", "ping", "read_data", "whoami", "write_data"]
+    );
+
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "read_data", json!({})).await;
+    assert_eq!(call["result"]["content"][0]["text"], "data");
+    // The principal inserted by the layer reaches identity params…
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "whoami", json!({})).await;
+    assert_eq!(call["result"]["content"][0]["text"], "alice");
+    // …and satisfies the shared #[roles] guard.
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "admin_only", json!({})).await;
+    assert_eq!(call["result"]["content"][0]["text"], "admin:alice");
+}
+
+#[tokio::test]
+async fn tools_list_hides_what_the_caller_cannot_invoke() {
+    let router = secured_app().await;
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let list = tools_list_auth(&router, "/mcp", &session, &token).await;
+    // write_data (needs mcp:write), flexible (admin|write) and admin_only
+    // (role) are filtered out for bob.
+    assert_eq!(tool_names(&list), ["ping", "read_data", "whoami"]);
+}
+
+#[tokio::test]
+async fn scope_denials_carry_agent_actionable_messages() {
+    let router = secured_app().await;
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "write_data", json!({})).await;
+    let error = &call["error"];
+    assert_eq!(error["code"], -32600, "{call}");
+    assert_eq!(error["data"], "forbidden");
+    let msg = error["message"].as_str().unwrap();
+    assert!(msg.contains("requires scope(s) `mcp:write`"), "{msg}");
+
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "flexible", json!({})).await;
+    let msg = call["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("requires at least one of the scopes `mcp:admin, mcp:write`"),
+        "{msg}"
+    );
+}
+
+#[tokio::test]
+async fn role_guard_denial_maps_to_forbidden() {
+    let router = secured_app().await;
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    // admin_only has no scope requirement — the denial comes from the shared
+    // #[roles("admin")] guard (403 → Forbidden), proving guard reuse on MCP.
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "admin_only", json!({})).await;
+    assert_eq!(call["error"]["code"], -32600, "{call}");
+    assert_eq!(call["error"]["data"], "forbidden");
+}
+
+#[tokio::test]
+async fn filter_tools_false_lists_everything() {
+    let router = secured_app_with(McpAuthConfig {
+        filter_tools: Some(false),
+        ..offline_auth()
+    })
+    .await;
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let list = tools_list_auth(&router, "/mcp", &session, &token).await;
+    assert_eq!(
+        tool_names(&list),
+        ["admin_only", "flexible", "ping", "read_data", "whoami", "write_data"]
+    );
+    // Listing is not calling: invocation checks still apply.
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "write_data", json!({})).await;
+    assert_eq!(call["error"]["data"], "forbidden");
+}
+
+#[tokio::test]
+async fn unrestricted_tool_needs_no_scopes() {
+    let router = secured_app().await;
+    let token = test_jwt().token("carol", &[]);
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let call = tools_call_auth(&router, "/mcp", &session, &token, "ping", json!({})).await;
+    assert_eq!(call["result"]["content"][0]["text"], "pong");
+}
