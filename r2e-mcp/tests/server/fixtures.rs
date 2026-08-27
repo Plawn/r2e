@@ -185,6 +185,34 @@ impl FixtureTools {
         };
         format!("{}:{}:{}:{}", p.name, p.count.unwrap_or(0), mode, p.inner.label)
     }
+
+    /// The interceptor call log, one entry per line.
+    #[resource(uri = "r2e://fixture/log", mime_type = "text/plain")]
+    #[intercept(LogCalls::spec("res"))]
+    async fn call_log(&self) -> String {
+        self.log.entries().join("\n")
+    }
+
+    /// Always fails with a domain error.
+    #[resource(uri = "r2e://fixture/fail", name = "failing", title = "Failing resource")]
+    async fn failing_resource(&self) -> Result<String, McpError> {
+        Err(McpError::tool("resource exploded"))
+    }
+
+    /// Explain a division.
+    ///
+    /// Walks the agent through dividing `a` by `b`.
+    #[prompt(name = "explain_div")]
+    #[intercept(LogCalls::spec("prompt"))]
+    async fn explain_division(&self, Params(p): Params<BinaryOperands>) -> String {
+        format!("Divide {} by {} using the `div` tool.", p.a, p.b)
+    }
+
+    /// Static usage guidance.
+    #[prompt]
+    async fn usage(&self) -> String {
+        "Use the calculator tools for arithmetic.".to_string()
+    }
 }
 
 // ── Boot helpers ────────────────────────────────────────────────────────────

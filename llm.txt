@@ -3075,7 +3075,7 @@ HTTP; `Status::unauthenticated` on failure). `JwtClaimsValidator` implements
 
 ## MCP Server (Model Context Protocol)
 
-Requires feature: `mcp`. Exposes tools to MCP clients (Claude, MCP Inspector,
+Requires feature: `mcp`. Exposes tools, resources and prompts to MCP clients (Claude, MCP Inspector,
 agents) over MCP's streamable-HTTP transport, with the same DX as HTTP
 controllers: `#[inject]`, `#[config]`, guards (the SAME `Guard<I>` machinery
 HTTP uses — `#[guard(...)]` works on tools), interceptors, typed config,
@@ -3145,6 +3145,42 @@ arguments; `T: Deserialize + JsonSchema` becomes the `inputSchema`), `ToolCall`
 `isError: true` result the agent can read; other variants map to JSON-RPC
 errors (bad args → -32602, unknown tool → -32601, guard rejection → -32600 with
 the HTTP status text). Beans/config go on the struct, never as parameters.
+
+Resources and prompts — the same impl block can carry the two other MCP
+member families (one marker per method):
+
+```rust
+#[mcp_routes]
+impl MathTools {
+    /// The call log, one entry per line.  // doc comment → description
+    #[resource(uri = "r2e://calc/call-log", mime_type = "text/plain")]   // uri REQUIRED, fixed (no templates)
+    async fn call_log(&self) -> String { self.log.entries().join("\n") }
+
+    /// Walk the agent through a division.
+    #[prompt(name = "explain_division")]   // Params<T> schema → advertised prompt arguments
+    async fn explain(&self, Params(p): Params<AddIn>) -> String {
+        format!("Divide {} by {} using the `divide` tool.", p.a, p.b)
+    }
+}
+```
+
+`#[resource(uri, name, title, description, mime_type, scopes, any_scopes)]`:
+no `Params<T>` (`resources/read` carries no arguments); `ResourceCall` instead
+of `ToolCall`; returns `String`/`&str` (text with the declared MIME type),
+`Json<T>` (`application/json`), `ResourceContents`/`Vec<ResourceContents>`, or
+`Result<_, E: Into<McpError>>`. `#[prompt(name, title, description, scopes,
+any_scopes)]`: `Params<T>` drives deserialization AND the advertised
+`arguments` (requiredness + doc-comment descriptions; MCP argument values are
+strings — prefer string-typed fields); `PromptCall` instead of `ToolCall`;
+returns `String`/`&str` (one `user` message), `PromptMessage`/`Vec<PromptMessage>`,
+`GetPromptResult`, or `Result`. Resource URIs and prompt names are global
+across services (duplicate = boot panic, like tool names). Capabilities are
+advertised only for non-empty families. Resources/prompts have NO in-result
+error plane: `McpError::tool(...)` degrades to JSON-RPC -32603 (message
+preserved); unknown resource URI → -32002, unknown prompt name → -32602.
+Guards/interceptors/scopes/roles work identically on all three families, and
+`resources/list`/`prompts/list` are filtered by caller access like
+`tools/list`.
 
 One type cannot be both `#[routes]` and `#[mcp_routes]` — share a bean between
 a thin HTTP controller and a thin MCP service instead (see

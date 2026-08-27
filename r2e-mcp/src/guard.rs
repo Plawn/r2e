@@ -42,9 +42,21 @@ pub fn tool_guard_context<'a, I: Identity>(
     controller_name: &'static str,
     identity: Option<&'a I>,
 ) -> GuardContext<'a, I> {
+    member_guard_context(call.parts.as_deref(), method_name, controller_name, identity)
+}
+
+/// Build a [`GuardContext`] from optional transport parts — the shared form
+/// behind [`tool_guard_context`], used directly by the generated resource
+/// and prompt dispatch (their calls carry the same `parts` field).
+pub fn member_guard_context<'a, I: Identity>(
+    parts: Option<&'a r2e_core::http::Parts>,
+    method_name: &'static str,
+    controller_name: &'static str,
+    identity: Option<&'a I>,
+) -> GuardContext<'a, I> {
     static EMPTY_HEADERS: std::sync::LazyLock<r2e_core::http::HeaderMap> =
         std::sync::LazyLock::new(r2e_core::http::HeaderMap::new);
-    match call.parts.as_deref() {
+    match parts {
         Some(parts) => GuardContext {
             method_name,
             controller_name,

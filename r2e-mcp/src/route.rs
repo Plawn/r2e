@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use r2e_core::http::Parts;
 use r2e_core::rt::CancelToken;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
 use serde_json::Value;
 
 use crate::auth::ToolRequirements;
@@ -171,5 +171,247 @@ impl std::fmt::Debug for ToolRoute {
             .field("title", &self.title)
             .field("description", &self.description)
             .finish_non_exhaustive()
+    }
+}
+
+// ── Resources ──────────────────────────────────────────────────────────────
+
+/// Everything a resource read can observe about its call.
+///
+/// The resource counterpart of [`ToolCall`]: handed to the generated dispatch
+/// closure; resource methods can also take it as a parameter to read the
+/// requested URI, HTTP request parts, or the cancellation token.
+#[derive(Clone)]
+pub struct ResourceCall {
+    /// The URI of the `resources/read` request.
+    pub uri: String,
+    /// The HTTP request parts of the transport request carrying this call —
+    /// same semantics as [`ToolCall::parts`].
+    pub parts: Option<Arc<Parts>>,
+    /// The JSON-RPC request id, stringified (for logging/correlation).
+    pub request_id: String,
+    /// Cancelled when the client aborts the request or the server shuts
+    /// down.
+    pub cancel: CancelToken,
+}
+
+impl ResourceCall {
+    /// Build a bare call for tests: `uri` only, no HTTP parts, a fresh
+    /// cancellation token.
+    pub fn for_test(uri: impl Into<String>) -> Self {
+        ResourceCall {
+            uri: uri.into(),
+            parts: None,
+            request_id: "test".to_string(),
+            cancel: CancelToken::new(),
+        }
+    }
+
+    /// Read a request-scoped value of type `T` from the HTTP request
+    /// extensions — same semantics as [`ToolCall::extension`].
+    pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+}
+
+/// Boxed future returned by a resource read.
+pub type ResourceFuture =
+    Pin<Box<dyn Future<Output = Result<Vec<ResourceContents>, McpError>> + Send>>;
+
+/// Type-erased resource read closure. Owns (an `Arc` of) the service
+/// wrapper; called once per `resources/read`.
+pub type ResourceInvoke = Arc<dyn Fn(ResourceCall) -> ResourceFuture + Send + Sync>;
+
+/// One registered MCP resource: wire metadata plus its read closure.
+///
+/// Produced by the `#[mcp_routes]` macro (one per `#[resource]` method); can
+/// also be built by hand for dynamic resources.
+#[derive(Clone)]
+pub struct ResourceRoute {
+    /// The resource URI (unique across ALL registered services — a duplicate
+    /// is a boot panic). Fixed — URI templates are not supported yet.
+    pub uri: Cow<'static, str>,
+    /// The programmatic resource name (defaults to the method name).
+    pub name: Cow<'static, str>,
+    /// Optional human-readable title.
+    pub title: Option<String>,
+    /// Description shown to the agent (from the method's doc comment).
+    pub description: Option<String>,
+    /// The MIME type of the contents, advertised in `resources/list` and
+    /// applied to text-shaped return values.
+    pub mime_type: Option<String>,
+    /// Authorization requirements (`#[resource(scopes/any_scopes)]` +
+    /// `#[roles]`/`#[all_roles]`) — checked in the read prologue and used by
+    /// the `resources/list` visibility filter.
+    pub requirements: ToolRequirements,
+    /// The read closure.
+    pub invoke: ResourceInvoke,
+}
+
+impl ResourceRoute {
+    /// Convert the metadata into the rmcp wire `Resource` (read closure
+    /// excluded).
+    pub(crate) fn to_rmcp_resource(&self) -> rmcp::model::Resource {
+        let mut resource = rmcp::model::Resource::new(self.uri.clone(), self.name.clone());
+        resource.title = self.title.clone();
+        resource.description = self.description.clone();
+        resource.mime_type = self.mime_type.clone();
+        resource
+    }
+}
+
+impl std::fmt::Debug for ResourceRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResourceRoute")
+            .field("uri", &self.uri)
+            .field("name", &self.name)
+            .field("mime_type", &self.mime_type)
+            .finish_non_exhaustive()
+    }
+}
+
+// ── Prompts ────────────────────────────────────────────────────────────────
+
+/// Everything a prompt expansion can observe about its call.
+///
+/// The prompt counterpart of [`ToolCall`] (same shape: prompt arguments are
+/// a JSON object, though the MCP spec constrains the values to strings).
+#[derive(Clone)]
+pub struct PromptCall {
+    /// The raw `arguments` object of the `prompts/get` request (an empty
+    /// JSON object when the client sent none). Per the MCP spec, values are
+    /// strings.
+    pub arguments: Value,
+    /// The HTTP request parts of the transport request carrying this call —
+    /// same semantics as [`ToolCall::parts`].
+    pub parts: Option<Arc<Parts>>,
+    /// The JSON-RPC request id, stringified (for logging/correlation).
+    pub request_id: String,
+    /// Cancelled when the client aborts the request or the server shuts
+    /// down.
+    pub cancel: CancelToken,
+}
+
+impl PromptCall {
+    /// Build a bare call for tests: `arguments` only, no HTTP parts, a fresh
+    /// cancellation token.
+    pub fn for_test(arguments: Value) -> Self {
+        PromptCall {
+            arguments,
+            parts: None,
+            request_id: "test".to_string(),
+            cancel: CancelToken::new(),
+        }
+    }
+
+    /// Read a request-scoped value of type `T` from the HTTP request
+    /// extensions — same semantics as [`ToolCall::extension`].
+    pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+}
+
+/// Boxed future returned by a prompt expansion.
+pub type PromptFuture = Pin<Box<dyn Future<Output = Result<GetPromptResult, McpError>> + Send>>;
+
+/// Type-erased prompt expansion closure. Owns (an `Arc` of) the service
+/// wrapper; called once per `prompts/get`.
+pub type PromptInvoke = Arc<dyn Fn(PromptCall) -> PromptFuture + Send + Sync>;
+
+/// One declared argument of a prompt (MCP `PromptArgument`).
+///
+/// Derived by the macro from the `Params<T>` schema: one entry per property,
+/// `required` from the schema's `required` array, descriptions from
+/// `#[doc]`/`schemars` descriptions.
+#[derive(Debug, Clone, Default)]
+pub struct PromptArgumentDef {
+    /// The argument name.
+    pub name: String,
+    /// Optional human-readable title.
+    pub title: Option<String>,
+    /// Optional description.
+    pub description: Option<String>,
+    /// Whether the argument must be provided.
+    pub required: bool,
+}
+
+/// One registered MCP prompt: wire metadata plus its expansion closure.
+///
+/// Produced by the `#[mcp_routes]` macro (one per `#[prompt]` method); can
+/// also be built by hand for dynamic prompts.
+#[derive(Clone)]
+pub struct PromptRoute {
+    /// Unique prompt name (unique across ALL registered services — a
+    /// duplicate is a boot panic).
+    pub name: Cow<'static, str>,
+    /// Optional human-readable title.
+    pub title: Option<String>,
+    /// Description shown to the agent (from the method's doc comment).
+    pub description: Option<String>,
+    /// The declared arguments, advertised in `prompts/list`.
+    pub arguments: Vec<PromptArgumentDef>,
+    /// Authorization requirements (`#[prompt(scopes/any_scopes)]` +
+    /// `#[roles]`/`#[all_roles]`) — checked in the expansion prologue and
+    /// used by the `prompts/list` visibility filter.
+    pub requirements: ToolRequirements,
+    /// The expansion closure.
+    pub invoke: PromptInvoke,
+}
+
+impl PromptRoute {
+    /// Convert the metadata into the rmcp wire `Prompt` (expansion closure
+    /// excluded).
+    pub(crate) fn to_rmcp_prompt(&self) -> rmcp::model::Prompt {
+        let arguments = (!self.arguments.is_empty()).then(|| {
+            self.arguments
+                .iter()
+                .map(|arg| {
+                    let mut out = rmcp::model::PromptArgument::new(arg.name.clone());
+                    out.title = arg.title.clone();
+                    out.description = arg.description.clone();
+                    out.required = Some(arg.required);
+                    out
+                })
+                .collect()
+        });
+        let mut prompt =
+            rmcp::model::Prompt::new(self.name.clone(), self.description.clone(), arguments);
+        prompt.title = self.title.clone();
+        prompt
+    }
+}
+
+impl std::fmt::Debug for PromptRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptRoute")
+            .field("name", &self.name)
+            .field("arguments", &self.arguments)
+            .finish_non_exhaustive()
+    }
+}
+
+// ── Route bundle ───────────────────────────────────────────────────────────
+
+/// Everything one MCP service contributes to the endpoint: its tool,
+/// resource and prompt routes, built together from the bean graph (one
+/// service core, one set of prebuilt decorators) by
+/// [`McpService::routes`](crate::McpService::routes).
+#[derive(Clone, Default)]
+pub struct McpRoutes {
+    /// `#[tool]` routes.
+    pub tools: Vec<ToolRoute>,
+    /// `#[resource]` routes.
+    pub resources: Vec<ResourceRoute>,
+    /// `#[prompt]` routes.
+    pub prompts: Vec<PromptRoute>,
+}
+
+impl McpRoutes {
+    /// A bundle containing only tool routes (the common hand-built case).
+    pub fn from_tools(tools: Vec<ToolRoute>) -> Self {
+        McpRoutes {
+            tools,
+            ..Default::default()
+        }
     }
 }

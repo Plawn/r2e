@@ -1457,6 +1457,27 @@ pub fn tool(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Marker attribute declaring an MCP resource method inside `#[mcp_routes]`.
+///
+/// Arguments: `uri = "..."` (required), `name = "..."`, `title = "..."`,
+/// `description = "..."`, `mime_type = "..."`, plus `scopes`/`any_scopes`.
+/// This is a no-op on its own — it is consumed by `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn resource(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marker attribute declaring an MCP prompt method inside `#[mcp_routes]`.
+///
+/// Arguments: `name = "..."`, `title = "..."`, `description = "..."`, plus
+/// `scopes`/`any_scopes`. Prompt arguments are derived from the method's
+/// `Params<T>` schema. This is a no-op on its own — it is consumed by
+/// `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 // ---------------------------------------------------------------------------
 // Params derive
 // ---------------------------------------------------------------------------

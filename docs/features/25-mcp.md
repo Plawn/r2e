@@ -112,9 +112,69 @@ retry with better arguments. Everything else maps to JSON-RPC errors:
 | guard rejection | `-32600` with the HTTP status text (`data: "forbidden"`, message carries the rejection body) |
 | `McpError::Internal` / panics | `-32603 internal_error` |
 
+## Resources and prompts
+
+The same impl block can expose the two other MCP member families —
+`#[resource]` (fixed-URI readable data) and `#[prompt]` (reusable message
+templates). One method = one member; a method carries exactly one of the
+three markers. All members of a service share ONE core (built once from the
+bean graph) and the same prebuilt guard/interceptor sets.
+
+```rust
+#[mcp_routes]
+impl MathTools {
+    /// The call log, one entry per line.
+    #[resource(uri = "r2e://calc/call-log", mime_type = "text/plain")]
+    async fn call_log(&self) -> String { self.log.entries().join("\n") }
+
+    /// Walk the agent through a division.
+    #[prompt(name = "explain_division")]
+    async fn explain(&self, Params(p): Params<BinaryOperands>) -> String {
+        format!("Divide {} by {} using the `divide` tool.", p.a, p.b)
+    }
+}
+```
+
+- `#[resource(uri = "…")]` — the URI is **required** and fixed (URI templates
+  are not supported yet) and, like tool names, **global across services** (a
+  duplicate is a boot panic naming both). Optional keys: `name` (defaults to
+  the method name), `title`, `description`, `mime_type` (advertised in
+  `resources/list` and applied to text-shaped returns), `scopes`/`any_scopes`.
+  Resource methods take **no `Params<T>`** (`resources/read` carries no
+  arguments); `ResourceCall` replaces `ToolCall` (it adds the requested
+  `uri`). Return types (`IntoResourceResult`): `String`/`&str` (text contents
+  with the declared MIME type), `Json<T>` (`application/json` unless
+  overridden), `ResourceContents` / `Vec<ResourceContents>`, and `Result<_,
+  E: Into<McpError>>`.
+- `#[prompt]` — optional `name` (unique across services), `title`,
+  `description`, `scopes`/`any_scopes`. A `Params<T>` parameter drives BOTH
+  deserialization and the advertised `arguments` list (one entry per schema
+  property: requiredness from `required`, descriptions from field doc
+  comments — per the MCP spec argument *values* arrive as strings, so prefer
+  string-typed fields for maximum client compatibility). `PromptCall`
+  replaces `ToolCall`. Return types (`IntoPromptResult`): `String`/`&str`
+  (one `user` message), `PromptMessage` / `Vec<PromptMessage>`,
+  `GetPromptResult`, and `Result<_, E: Into<McpError>>`; the doc-comment
+  description is attached to the result unless it already carries one.
+
+`resources` / `prompts` capabilities are only advertised when at least one
+member of that family exists. **Error mapping differs from tools**: resources
+and prompts have no in-result error plane, so `McpError::Tool` degrades to a
+JSON-RPC `-32603` internal error (message preserved, structured data
+attached); everything else maps as in the table above. An unknown resource
+URI is `-32002` (`RESOURCE_NOT_FOUND`); an unknown prompt name is `-32602`
+(`invalid_params`, per the MCP spec).
+
+Auth is uniform across families: `scopes`/`any_scopes` on the marker,
+`#[roles]`/`#[all_roles]`/`#[guard]` via the shared guard machinery, and
+`resources/list` / `prompts/list` filtered to what the caller may access
+(same `mcp.auth.filter-tools` switch); denials are JSON-RPC `-32600` errors
+with `data: "forbidden"` instead of `isError` results.
+
 ## Guards and interceptors
 
-Tools use the **same** `Guard<I>` / `Interceptor<R>` machinery as HTTP routes
+All members (tools, resources, prompts) use the **same** `Guard<I>` /
+`Interceptor<R>` machinery as HTTP routes
 — any `#[derive(DecoratorBean)]` guard or interceptor works unchanged, built
 once at registration from the bean graph:
 

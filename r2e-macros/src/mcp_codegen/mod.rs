@@ -3,11 +3,13 @@
 //! Generates:
 //! - The user's impl block (methods with stripped attributes)
 //! - A wrapper struct `__R2eMcp<Name>` holding the shared core and the
-//!   prebuilt per-tool guard/interceptor sets
-//! - One hidden invocation method per tool on the wrapper
-//!   (`__r2e_tool_<fn>`): scope check → identity extraction → guards →
-//!   params → method call (interceptor-wrapped) → `IntoToolResult`
-//! - An impl of `McpService` for the controller (tool routes with schemas)
+//!   prebuilt per-member guard/interceptor sets
+//! - One hidden invocation method per member on the wrapper
+//!   (`__r2e_tool_<fn>` / `__r2e_resource_<fn>` / `__r2e_prompt_<fn>`):
+//!   scope check → identity extraction → guards → params → method call
+//!   (interceptor-wrapped) → family-specific result conversion
+//! - An impl of `McpService` for the controller (`routes()` bundling tool,
+//!   resource and prompt routes with schemas)
 //! - An impl of `EndpointDeps` for the controller (compile-time bean check
 //!   at `register_mcp_service()`)
 
@@ -18,13 +20,13 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::decorators::{generate_named_deco_items, DecoSet};
-use crate::parsing::mcp_routes_parsing::{McpRoutesImplDef, McpTool};
+use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
 
-/// Per-tool prebuilt decorator sets for an MCP impl block.
+/// Per-member prebuilt decorator sets for an MCP impl block.
 ///
-/// `sets` is parallel to `def.tools`: `None` when the tool has no
+/// `sets` is parallel to `def.members`: `None` when the member has no
 /// guard/interceptor sites (or when spec inference failed — the
-/// `compile_error!` then lives in `items` and the tool degrades to the
+/// `compile_error!` then lives in `items` and the member degrades to the
 /// unwrapped shape).
 ///
 /// All sets live in one hidden container struct behind a single `Arc` on the
@@ -36,33 +38,33 @@ pub(crate) struct McpDecoSets {
 }
 
 impl McpDecoSets {
-    /// The hidden container struct holding every tool's prebuilt set.
+    /// The hidden container struct holding every member's prebuilt set.
     pub fn container_ident(controller_name: &syn::Ident) -> syn::Ident {
         format_ident!("__R2eMcpDecos_{}", controller_name)
     }
 
-    /// The container field holding one tool's prebuilt set.
+    /// The container field holding one member's prebuilt set.
     pub fn field_ident(fn_name: &syn::Ident) -> syn::Ident {
         format_ident!("__deco_{}", fn_name)
     }
 
-    /// Whether any tool has a prebuilt set (i.e. the container exists).
+    /// Whether any member has a prebuilt set (i.e. the container exists).
     pub fn has_any(&self) -> bool {
         self.sets.iter().any(Option::is_some)
     }
 
-    /// The set for one tool, positionally paired with `def.tools`.
+    /// The set for one member, positionally paired with `def.members`.
     pub fn set_for(&self, index: usize) -> Option<&DecoSet> {
         self.sets[index].as_ref()
     }
 
-    /// `(container field, set)` for every decorated tool, in `def.tools`
+    /// `(container field, set)` for every decorated member, in `def.members`
     /// order.
     pub fn fields<'a>(
         &'a self,
         def: &'a McpRoutesImplDef,
     ) -> impl Iterator<Item = (syn::Ident, &'a DecoSet)> {
-        def.tools
+        def.members
             .iter()
             .zip(self.sets.iter())
             .filter_map(|(t, set)| set.as_ref().map(|s| (Self::field_ident(&t.name), s)))
@@ -74,16 +76,18 @@ pub(crate) fn wrapper_ident(controller_name: &syn::Ident) -> syn::Ident {
     format_ident!("__R2eMcp{}", controller_name)
 }
 
-/// The hidden per-tool invocation method ident on the wrapper.
-pub(crate) fn invoke_ident(fn_name: &syn::Ident) -> syn::Ident {
-    format_ident!("__r2e_tool_{}", fn_name)
+/// The hidden per-member invocation method ident on the wrapper, prefixed by
+/// family so a method name can never collide across kinds.
+pub(crate) fn invoke_ident(kind: McpMemberKind, fn_name: &syn::Ident) -> syn::Ident {
+    format_ident!("__r2e_{}_{}", kind.attr_name(), fn_name)
 }
 
-/// The `ToolRequirements` struct-literal expression for one tool:
-/// `#[tool(scopes/any_scopes)]` plus the recorded `#[roles]`/`#[all_roles]`
-/// literals (impl-level first, then method-level). Roles are ENFORCED by the
-/// generated guard; they are recorded here so `tools/list` can filter.
-/// All-`'static` literal slices, so the expression is const-compatible.
+/// The `ToolRequirements` struct-literal expression for one member:
+/// marker-level `scopes`/`any_scopes` plus the recorded `#[roles]`/
+/// `#[all_roles]` literals (impl-level first, then method-level). Roles are
+/// ENFORCED by the generated guard; they are recorded here so the list
+/// endpoints can filter. All-`'static` literal slices, so the expression is
+/// const-compatible.
 pub(crate) fn requirements_expr(
     def: &McpRoutesImplDef,
     tool: &McpTool,
@@ -111,10 +115,10 @@ pub(crate) fn requirements_expr(
     }
 }
 
-/// The guard expressions of one tool, controller-level first (impl-level
+/// The guard expressions of one member, controller-level first (impl-level
 /// `#[roles]`/`#[all_roles]`/`#[guard]` run before method-level ones) —
 /// mirroring HTTP route ordering. Controller-level guard products are
-/// duplicated per tool in P1 (each tool's set builds its own instance),
+/// duplicated per member (each member's set builds its own instance),
 /// unlike HTTP's shared controller set; acceptable because MCP impl-level
 /// guards are rare and stateless-by-convention. Documented in the feature
 /// guide.
@@ -126,13 +130,13 @@ fn tool_guard_exprs(def: &McpRoutesImplDef, tool: &McpTool) -> Vec<syn::Expr> {
         .collect()
 }
 
-/// Build the decorator sets (hidden struct + ctor per tool) from the guard
+/// Build the decorator sets (hidden struct + ctor per member) from the guard
 /// and interceptor sites. Controller-level interceptors first, then
 /// method-level — same execution order as HTTP routes / gRPC methods.
 fn build_deco_sets(def: &McpRoutesImplDef) -> McpDecoSets {
     let mut items = quote! {};
-    let mut sets = Vec::with_capacity(def.tools.len());
-    for tool in &def.tools {
+    let mut sets = Vec::with_capacity(def.members.len());
+    for tool in &def.members {
         let guard_exprs = tool_guard_exprs(def, tool);
         let intercept_exprs: Vec<&syn::Expr> = def
             .controller_intercepts
@@ -173,12 +177,12 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate the user's impl block with tool attributes stripped.
+/// Generate the user's impl block with member attributes stripped.
 fn generate_impl_block(def: &McpRoutesImplDef) -> TokenStream {
     let controller_name = &def.controller_name;
 
     let methods: Vec<&syn::ImplItemFn> = def
-        .tools
+        .members
         .iter()
         .map(|t| &t.fn_item)
         .chain(def.other_methods.iter())

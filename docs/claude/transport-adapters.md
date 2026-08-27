@@ -97,7 +97,7 @@ references.
   request's `http::request::Parts` and maps the rejection `Response` back to
   a JSON-RPC error by status (`r2e-mcp/src/guard.rs::guard_response_to_error`)
   — so `#[guard]`, `#[roles]`-style specs, `RateLimitGuard` and every user
-  `#[derive(DecoratorBean)]` guard work on tools with zero new impls.
+  `#[derive(DecoratorBean)]` guard work on MCP members (tools, resources, prompts) with zero new impls.
   `GrpcGuard`/`GrpcRolesGuard` remain the outlier (tonic metadata is not
   HTTP parts); a transport with no HTTP-shaped request may still need its
   own guard trait, but that is now the exception to justify, not the rule.

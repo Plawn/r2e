@@ -8,7 +8,7 @@ use r2e_mcp::{McpPrincipal, ToolRequirements};
 use serde_json::json;
 
 use crate::fixtures::{
-    initialize_auth, offline_auth, pinned, secured_app, secured_app_with, test_jwt, tool_names,
+    initialize_auth, offline_auth, pinned, secured_app, rpc_auth, secured_app_with, test_jwt, tool_names,
     tools_call_auth, tools_list_auth,
 };
 
@@ -218,4 +218,118 @@ async fn unrestricted_tool_needs_no_scopes() {
     let session = initialize_auth(&router, "/mcp", &token).await;
     let call = tools_call_auth(&router, "/mcp", &session, &token, "ping", json!({})).await;
     assert_eq!(call["result"]["content"][0]["text"], "pong");
+}
+
+// ── Resources and prompts share the same authorization machinery ───────────
+
+fn sorted_values(list: &serde_json::Value, array: &str, key: &str) -> Vec<String> {
+    let mut out: Vec<String> = list[array]
+        .as_array()
+        .unwrap_or_else(|| panic!("no `{array}` array in {list}"))
+        .iter()
+        .map(|entry| entry[key].as_str().unwrap().to_string())
+        .collect();
+    out.sort();
+    out
+}
+
+#[tokio::test]
+async fn resource_and_prompt_lists_filter_by_scope() {
+    let router = secured_app().await;
+
+    // Alice holds mcp:write → sees everything.
+    let token = alice_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let resources = rpc_auth(&router, "/mcp", &session, &token, "resources/list", json!({})).await;
+    assert_eq!(
+        sorted_values(&resources["result"], "resources", "uri"),
+        ["r2e://secured/info", "r2e://secured/report"]
+    );
+    let prompts = rpc_auth(&router, "/mcp", &session, &token, "prompts/list", json!({})).await;
+    assert_eq!(
+        sorted_values(&prompts["result"], "prompts", "name"),
+        ["howto", "write_recipe"]
+    );
+
+    // Bob (mcp:read only) → the write-gated members are hidden.
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let resources = rpc_auth(&router, "/mcp", &session, &token, "resources/list", json!({})).await;
+    assert_eq!(
+        sorted_values(&resources["result"], "resources", "uri"),
+        ["r2e://secured/info"]
+    );
+    let prompts = rpc_auth(&router, "/mcp", &session, &token, "prompts/list", json!({})).await;
+    assert_eq!(sorted_values(&prompts["result"], "prompts", "name"), ["howto"]);
+}
+
+#[tokio::test]
+async fn scoped_resource_and_prompt_denials_are_json_rpc_errors() {
+    let router = secured_app().await;
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+
+    // Unlike tools, resources/prompts have no in-result error plane: the
+    // scope denial arrives as a JSON-RPC error with the same `forbidden`
+    // marker, naming the member by its family.
+    let read = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "resources/read",
+        json!({ "uri": "r2e://secured/report" }),
+    )
+    .await;
+    assert_eq!(read["error"]["code"], -32600, "{read}");
+    assert_eq!(read["error"]["data"], "forbidden");
+    let msg = read["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("resource `report` requires scope(s) `mcp:write`"),
+        "{msg}"
+    );
+
+    let get = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "prompts/get",
+        json!({ "name": "write_recipe", "arguments": {} }),
+    )
+    .await;
+    assert_eq!(get["error"]["code"], -32600, "{get}");
+    assert_eq!(get["error"]["data"], "forbidden");
+    let msg = get["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("prompt `write_recipe` requires scope(s) `mcp:write`"),
+        "{msg}"
+    );
+
+    // With the right scope both go through.
+    let token = alice_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let read = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "resources/read",
+        json!({ "uri": "r2e://secured/report" }),
+    )
+    .await;
+    assert_eq!(read["result"]["contents"][0]["text"], "confidential report");
+    let get = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "prompts/get",
+        json!({ "name": "write_recipe", "arguments": {} }),
+    )
+    .await;
+    assert_eq!(
+        get["result"]["messages"][0]["content"]["text"],
+        "Call `write_data` with the payload."
+    );
 }

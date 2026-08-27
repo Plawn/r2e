@@ -2,15 +2,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::route::ToolRoute;
+use crate::route::McpRoutes;
 
-/// One registered MCP service: its name and built tool routes.
+/// One registered MCP service: its name and built routes.
 pub struct RegisteredMcpService {
     /// The service name ([`McpService::service_name`](crate::McpService::service_name)).
     pub name: &'static str,
-    /// The service's tool routes, built once from the bean graph at
-    /// registration.
-    pub tools: Vec<ToolRoute>,
+    /// The service's routes (tools, resources, prompts), built once from the
+    /// bean graph at registration.
+    pub routes: McpRoutes,
 }
 
 /// Registry that accumulates MCP services during registration.
@@ -32,12 +32,12 @@ impl McpServiceRegistry {
         Self::default()
     }
 
-    /// Add a service's built tool routes.
-    pub fn add_service(&self, name: &'static str, tools: Vec<ToolRoute>) {
+    /// Add a service's built routes.
+    pub fn add_service(&self, name: &'static str, routes: McpRoutes) {
         self.inner
             .lock()
             .unwrap()
-            .push(RegisteredMcpService { name, tools });
+            .push(RegisteredMcpService { name, routes });
     }
 
     /// Drain the registry — or `None` when no service was registered. The

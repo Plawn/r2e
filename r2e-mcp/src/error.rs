@@ -96,6 +96,24 @@ impl McpError {
             McpError::Internal(msg) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, msg, None)),
         }
     }
+
+    /// Map this error onto a plain JSON-RPC error — the resource/prompt
+    /// paths, where MCP has no in-result error plane: [`McpError::Tool`]
+    /// degrades to `INTERNAL_ERROR` (its message preserved, structured data
+    /// attached), every other variant maps exactly as
+    /// [`into_call_result`](Self::into_call_result) does.
+    pub fn into_error_data(self) -> ErrorData {
+        match self {
+            McpError::Tool { message, data } => {
+                ErrorData::new(ErrorCode::INTERNAL_ERROR, message, data)
+            }
+            other => match other.into_call_result() {
+                Err(data) => data,
+                // Unreachable: only `Tool` maps to `Ok`, handled above.
+                Ok(_) => ErrorData::new(ErrorCode::INTERNAL_ERROR, "tool error", None),
+            },
+        }
+    }
 }
 
 impl fmt::Display for McpError {

@@ -377,6 +377,8 @@ impl Plugin for McpServer {
             tracing::info!(
                 path = %path,
                 tools = ?runtime.tool_names(),
+                resources = runtime.resource_count(),
+                prompts = runtime.prompt_count(),
                 "Mounting MCP endpoint"
             );
             let handler = R2eMcpHandler::new(runtime);

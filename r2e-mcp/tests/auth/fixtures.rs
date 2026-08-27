@@ -73,6 +73,30 @@ impl SecuredTools {
     async fn admin_only(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
         format!("admin:{}", user.sub)
     }
+
+    /// Open resource: visible/readable by anyone the layer lets through.
+    #[resource(uri = "r2e://secured/info")]
+    async fn info(&self) -> &'static str {
+        "public info"
+    }
+
+    /// Scope-gated resource.
+    #[resource(uri = "r2e://secured/report", scopes = "mcp:write")]
+    async fn report(&self) -> &'static str {
+        "confidential report"
+    }
+
+    /// Open prompt.
+    #[prompt]
+    async fn howto(&self) -> &'static str {
+        "Call `ping` first."
+    }
+
+    /// Scope-gated prompt.
+    #[prompt(scopes = "mcp:write")]
+    async fn write_recipe(&self) -> &'static str {
+        "Call `write_data` with the payload."
+    }
 }
 
 // ── Boot helpers ───────────────────────────────────────────────────────────
@@ -234,6 +258,28 @@ pub async fn tools_call_auth(
             "method": "tools/call",
             "params": { "name": name, "arguments": arguments }
         }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
+    response.message().clone()
+}
+
+/// Authenticated JSON-RPC request with arbitrary method/params; returns the
+/// full JSON-RPC message.
+pub async fn rpc_auth(
+    router: &Router,
+    path: &str,
+    session: &str,
+    token: &str,
+    method: &str,
+    params: Value,
+) -> Value {
+    let response = post_auth(
+        router,
+        path,
+        Some(session),
+        token,
+        &serde_json::json!({ "jsonrpc": "2.0", "id": 9, "method": method, "params": params }),
     )
     .await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);

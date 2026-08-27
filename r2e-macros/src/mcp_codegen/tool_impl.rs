@@ -1,19 +1,19 @@
-//! Generate the hidden per-tool invocation methods on the wrapper struct.
+//! Generate the hidden per-member invocation methods on the wrapper struct.
 
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::codegen::decorators::wrap_with_deco_interceptors;
-use crate::parsing::mcp_routes_parsing::{McpRoutesImplDef, McpTool, McpToolArg};
+use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool, McpToolArg};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
 use super::{invoke_ident, McpDecoSets};
 
-/// Generate `impl __R2eMcp<Name> { async fn __r2e_tool_<fn>(...) ... }` — one
-/// invocation method per tool.
+/// Generate `impl __R2eMcp<Name> { async fn __r2e_<kind>_<fn>(...) ... }` —
+/// one invocation method per member.
 pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> TokenStream {
-    if def.tools.is_empty() {
+    if def.members.is_empty() {
         return quote! {};
     }
     let krate = r2e_core_path();
@@ -21,7 +21,7 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> Token
     let wrapper_name = super::wrapper_ident(&def.controller_name);
 
     let methods: Vec<TokenStream> = def
-        .tools
+        .members
         .iter()
         .enumerate()
         .map(|(i, tool)| generate_invoke_method(def, tool, deco.set_for(i), &krate, &mcp))
@@ -35,12 +35,14 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> Token
     }
 }
 
-/// One tool's invocation method. Body order:
-/// scope check (`check_tool`, only when the tool declares scopes) →
+/// One member's invocation method. Body order:
+/// scope check (`check_access`, only when the member declares scopes) →
 /// identity extraction (required identity absent → `Unauthorized`, before
 /// guards so `#[roles]` never sees a half-authenticated call) → guard checks
-/// → params deserialization → method call (interceptor-wrapped, arguments in
-/// original positional order) → `IntoToolResult`.
+/// → params deserialization (tools/prompts) → method call
+/// (interceptor-wrapped, arguments in original positional order) → the
+/// family's result conversion (`IntoToolResult` / `IntoResourceResult` /
+/// `IntoPromptResult`).
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
@@ -49,21 +51,24 @@ fn generate_invoke_method(
     mcp: &TokenStream,
 ) -> TokenStream {
     let fn_name = &tool.name;
-    let invoke_name = invoke_ident(fn_name);
+    let kind = tool.kind;
+    let kind_str = kind.attr_name();
+    let invoke_name = invoke_ident(kind, fn_name);
     let controller_name_str = def.controller_name.to_string();
     let fn_name_str = fn_name.to_string();
     let tool_name_str = tool.tool_name();
 
     // --- scope requirements prologue ---------------------------------------
-    // Emitted only when the tool declares scopes: `check_tool` runs BEFORE
-    // identity extraction and guards (a caller without the scope gets the
-    // scope denial, not an identity/role error). Role requirements are
-    // enforced by the guard below; unrestricted tools pay nothing.
+    // Emitted only when the member declares scopes: `check_access` runs
+    // BEFORE identity extraction and guards (a caller without the scope gets
+    // the scope denial, not an identity/role error). Role requirements are
+    // enforced by the guard below; unrestricted members pay nothing.
     let scope_check = if !tool.meta.scopes.is_empty() || !tool.meta.any_scopes.is_empty() {
         let req = super::requirements_expr(def, tool, mcp);
         quote! {
-            #mcp::__macro_support::check_tool(
+            #mcp::__macro_support::check_access(
                 __call.parts.as_deref().map(|__p| &__p.extensions),
+                #kind_str,
                 #tool_name_str,
                 &#req,
             )?;
@@ -90,7 +95,8 @@ fn generate_invoke_method(
                             return ::core::result::Result::Err(
                                 #mcp::__macro_support::McpError::Unauthorized(
                                     ::std::format!(
-                                        "tool `{}` requires an authenticated caller",
+                                        "{} `{}` requires an authenticated caller",
+                                        #kind_str,
                                         #tool_name_str
                                     ),
                                 ),
@@ -133,8 +139,8 @@ fn generate_invoke_method(
         quote! {
             {
                 let __gdeco = &self.__decos.#deco_field;
-                let __gctx = #mcp::__macro_support::tool_guard_context(
-                    &__call,
+                let __gctx = #mcp::__macro_support::member_guard_context(
+                    __call.parts.as_deref(),
                     #fn_name_str,
                     #controller_name_str,
                     #identity_ref,
@@ -174,8 +180,8 @@ fn generate_invoke_method(
 
     let method_call = quote! { __core.#fn_name(#(#call_args),*).await };
 
-    // Interceptors are prebuilt wrapper fields (one set per tool, built once
-    // from the bean graph in `tools()`); when the tool has none (or spec
+    // Interceptors are prebuilt wrapper fields (one set per member, built
+    // once from the bean graph in `routes()`); when the member has none (or spec
     // inference failed — the `compile_error!` is already emitted) the call is
     // unwrapped.
     let has_intercepts = deco_set.is_some_and(|s| !s.intercept_fields.is_empty());
@@ -197,22 +203,65 @@ fn generate_invoke_method(
         method_call
     };
 
+    // --- family-specific call type, return type and result conversion ------
+    let call_ty = match kind {
+        McpMemberKind::Tool => quote! { #mcp::__macro_support::ToolCall },
+        McpMemberKind::Resource => quote! { #mcp::__macro_support::ResourceCall },
+        McpMemberKind::Prompt => quote! { #mcp::__macro_support::PromptCall },
+    };
+    let ok_ty = match kind {
+        McpMemberKind::Tool => quote! { #mcp::__macro_support::CallToolResult },
+        McpMemberKind::Resource => quote! {
+            ::std::vec::Vec<#mcp::__macro_support::ResourceContents>
+        },
+        McpMemberKind::Prompt => quote! { #mcp::__macro_support::GetPromptResult },
+    };
+    let convert = match kind {
+        McpMemberKind::Tool => quote! {
+            #mcp::__macro_support::IntoToolResult::into_tool_result(__result)
+        },
+        McpMemberKind::Resource => {
+            let mime = match &tool.meta.mime_type {
+                Some(m) => quote! { ::core::option::Option::Some(#m) },
+                None => quote! { ::core::option::Option::None },
+            };
+            quote! {
+                #mcp::__macro_support::IntoResourceResult::into_resource_result(
+                    __result,
+                    &__call.uri,
+                    #mime,
+                )
+            }
+        }
+        McpMemberKind::Prompt => {
+            let desc = match tool
+                .meta
+                .description
+                .as_ref()
+                .or(tool.doc_text.as_ref())
+            {
+                Some(d) => quote! { ::core::option::Option::Some(#d) },
+                None => quote! { ::core::option::Option::None },
+            };
+            quote! {
+                #mcp::__macro_support::IntoPromptResult::into_prompt_result(__result, #desc)
+            }
+        }
+    };
+
     quote! {
         #[allow(non_snake_case)]
         async fn #invoke_name(
             &self,
-            __call: #mcp::__macro_support::ToolCall,
-        ) -> ::core::result::Result<
-            #mcp::__macro_support::CallToolResult,
-            #mcp::__macro_support::McpError,
-        > {
+            __call: #call_ty,
+        ) -> ::core::result::Result<#ok_ty, #mcp::__macro_support::McpError> {
             #scope_check
             #identity_stmts
             #guard_stmts
             #params_stmts
             let __core = ::std::sync::Arc::clone(&self.core);
             let __result = { #body };
-            #mcp::__macro_support::IntoToolResult::into_tool_result(__result)
+            #convert
         }
     }
 }

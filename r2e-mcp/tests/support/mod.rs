@@ -229,3 +229,93 @@ pub fn tool<'a>(list_result: &'a Value, name: &str) -> &'a Value {
         .find(|t| t["name"] == name)
         .unwrap_or_else(|| panic!("tool `{name}` not listed in {list_result}"))
 }
+
+/// `resources/list` on an initialized session; returns the `result` object.
+pub async fn resources_list(router: &Router, path: &str, session: &str) -> Value {
+    let response = post(
+        router,
+        path,
+        Some(session),
+        &json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/list" }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
+    response.result().clone()
+}
+
+/// `resources/read` on an initialized session; returns the full JSON-RPC
+/// message (so callers can assert on either `result` or `error`).
+pub async fn resources_read(router: &Router, path: &str, session: &str, uri: &str) -> Value {
+    let response = post(
+        router,
+        path,
+        Some(session),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "resources/read",
+            "params": { "uri": uri }
+        }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
+    response.message().clone()
+}
+
+/// `prompts/list` on an initialized session; returns the `result` object.
+pub async fn prompts_list(router: &Router, path: &str, session: &str) -> Value {
+    let response = post(
+        router,
+        path,
+        Some(session),
+        &json!({ "jsonrpc": "2.0", "id": 6, "method": "prompts/list" }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
+    response.result().clone()
+}
+
+/// `prompts/get` on an initialized session; returns the full JSON-RPC
+/// message (so callers can assert on either `result` or `error`).
+pub async fn prompts_get(
+    router: &Router,
+    path: &str,
+    session: &str,
+    name: &str,
+    arguments: Value,
+) -> Value {
+    let response = post(
+        router,
+        path,
+        Some(session),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "prompts/get",
+            "params": { "name": name, "arguments": arguments }
+        }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
+    response.message().clone()
+}
+
+/// Find one resource by URI in a `resources/list` result.
+pub fn resource<'a>(list_result: &'a Value, uri: &str) -> &'a Value {
+    list_result["resources"]
+        .as_array()
+        .expect("resources/list result has no resources array")
+        .iter()
+        .find(|r| r["uri"] == uri)
+        .unwrap_or_else(|| panic!("resource `{uri}` not listed in {list_result}"))
+}
+
+/// Find one prompt by name in a `prompts/list` result.
+pub fn prompt<'a>(list_result: &'a Value, name: &str) -> &'a Value {
+    list_result["prompts"]
+        .as_array()
+        .expect("prompts/list result has no prompts array")
+        .iter()
+        .find(|p| p["name"] == name)
+        .unwrap_or_else(|| panic!("prompt `{name}` not listed in {list_result}"))
+}

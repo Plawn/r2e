@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use r2e_mcp::{IntoToolResult, McpServiceRegistry, ToolRequirements, ToolRoute};
+use r2e_mcp::{IntoToolResult, McpRoutes, McpServiceRegistry, ToolRequirements, ToolRoute};
 
 use crate::fixtures::{fixture_app, FixtureTools};
 use r2e_core::AppBuilder;
@@ -31,14 +31,14 @@ fn take_on_empty_registry_is_none() {
 #[test]
 fn add_service_then_take_drains_once() {
     let registry = McpServiceRegistry::new();
-    registry.add_service("svc-a", vec![stub_tool("a")]);
-    registry.add_service("svc-b", vec![stub_tool("b"), stub_tool("c")]);
+    registry.add_service("svc-a", McpRoutes::from_tools(vec![stub_tool("a")]));
+    registry.add_service("svc-b", McpRoutes::from_tools(vec![stub_tool("b"), stub_tool("c")]));
     assert_eq!(registry.service_names(), vec!["svc-a", "svc-b"]);
 
     let drained = registry.take().expect("filled registry drains Some");
     assert_eq!(drained.len(), 2);
     assert_eq!(drained[0].name, "svc-a");
-    assert_eq!(drained[1].tools.len(), 2);
+    assert_eq!(drained[1].routes.tools.len(), 2);
 
     // Drained means drained: the second take is None again.
     assert!(registry.take().is_none());
@@ -51,7 +51,7 @@ fn clones_share_the_same_registry() {
     // through that clone and `wrap_router` drains through the original.
     let registry = McpServiceRegistry::new();
     let clone = registry.clone();
-    clone.add_service("svc", vec![stub_tool("t")]);
+    clone.add_service("svc", McpRoutes::from_tools(vec![stub_tool("t")]));
     assert_eq!(registry.service_names(), vec!["svc"]);
 }
 

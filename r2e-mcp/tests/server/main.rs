@@ -11,5 +11,7 @@ mod dispatch;
 mod interceptors;
 mod lifecycle;
 mod plugin;
+mod prompts;
 mod registry;
+mod resources;
 mod schema;

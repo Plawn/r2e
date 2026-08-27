@@ -4,21 +4,21 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::parsing::mcp_routes_parsing::{McpRoutesImplDef, McpTool};
+use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
 use super::McpDecoSets;
 
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
-/// one tool exists), then per-tool guards and interceptors.
+/// one member exists), then per-member guards and interceptors.
 fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
-    if !def.tools.is_empty() {
+    if !def.members.is_empty() {
         exprs.extend(&def.controller_intercepts);
         exprs.extend(&def.controller_guards);
     }
-    for t in &def.tools {
+    for t in &def.members {
         exprs.extend(&t.decorators.guard_fns);
         exprs.extend(&t.decorators.intercept_fns);
     }
@@ -52,7 +52,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> 
     let controller_name_str = controller_name.to_string();
     let wrapper_name = super::wrapper_ident(controller_name);
 
-    // Prebuild every tool's guard/interceptor set from the resolved graph —
+    // Prebuild every member's guard/interceptor set from the resolved graph —
     // once, at registration, exactly like route decorator sets — into the
     // single Arc'd container.
     let decos_init = if deco.has_any() {
@@ -81,11 +81,14 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> 
     let decorator_config_stmts =
         crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
 
-    let tool_count = def.tools.len();
-    let tool_pushes: Vec<TokenStream> = def
-        .tools
+    let member_pushes: Vec<TokenStream> = def
+        .members
         .iter()
-        .map(|tool| generate_tool_route(def, tool, &mcp))
+        .map(|member| match member.kind {
+            McpMemberKind::Tool => generate_tool_route(def, member, &mcp),
+            McpMemberKind::Resource => generate_resource_route(def, member, &mcp),
+            McpMemberKind::Prompt => generate_prompt_route(def, member, &mcp),
+        })
         .collect();
 
     quote! {
@@ -103,26 +106,26 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoSets) -> 
                 __errors
             }
 
-            fn tools(
+            fn routes(
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
-            ) -> ::std::vec::Vec<#mcp::__macro_support::ToolRoute> {
+            ) -> #mcp::__macro_support::McpRoutes {
                 let __wrapper = #wrapper_name {
                     core: ::std::sync::Arc::new(
                         <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
                     ),
                     #decos_init
                 };
-                let mut __tools = ::std::vec::Vec::with_capacity(#tool_count);
-                #(#tool_pushes)*
-                __tools
+                let mut __routes = #mcp::__macro_support::McpRoutes::default();
+                #(#member_pushes)*
+                __routes
             }
         }
     }
 }
 
-/// One `__tools.push(ToolRoute { ... })` statement for a tool.
+/// One `__routes.tools.push(ToolRoute { ... })` statement for a tool.
 fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream) -> TokenStream {
-    let invoke_name = super::invoke_ident(&tool.name);
+    let invoke_name = super::invoke_ident(McpMemberKind::Tool, &tool.name);
     let tool_name_str = tool.tool_name();
 
     let title = opt_string(&tool.meta.title);
@@ -159,7 +162,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     quote! {
         {
             let __w = __wrapper.clone();
-            __tools.push(#mcp::__macro_support::ToolRoute {
+            __routes.tools.push(#mcp::__macro_support::ToolRoute {
                 name: #tool_name_str.into(),
                 title: #title,
                 description: #description,
@@ -187,8 +190,95 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     }
 }
 
-/// The tool description: explicit `#[tool(description = ...)]` override, or
-/// the full doc comment (summary + body).
+/// One `__routes.resources.push(ResourceRoute { ... })` statement for a
+/// resource. The URI is fixed (`#[resource(uri = "...")]`, validated at
+/// parse time); no input schema — `resources/read` carries no arguments.
+fn generate_resource_route(
+    def: &McpRoutesImplDef,
+    resource: &McpTool,
+    mcp: &TokenStream,
+) -> TokenStream {
+    let invoke_name = super::invoke_ident(McpMemberKind::Resource, &resource.name);
+    let uri = resource.meta.uri.as_deref().expect("parse() validated uri");
+    let name_str = resource.tool_name();
+    let title = opt_string(&resource.meta.title);
+    let description = opt_string(&tool_description(resource));
+    let mime_type = opt_string(&resource.meta.mime_type);
+    let requirements = super::requirements_expr(def, resource, mcp);
+
+    quote! {
+        {
+            let __w = __wrapper.clone();
+            __routes.resources.push(#mcp::__macro_support::ResourceRoute {
+                uri: #uri.into(),
+                name: #name_str.into(),
+                title: #title,
+                description: #description,
+                mime_type: #mime_type,
+                requirements: #requirements,
+                invoke: ::std::sync::Arc::new(
+                    move |__call: #mcp::__macro_support::ResourceCall|
+                        -> #mcp::__macro_support::ResourceFuture {
+                        let __w = __w.clone();
+                        ::std::boxed::Box::pin(async move {
+                            __w.#invoke_name(__call).await
+                        })
+                    },
+                ),
+            });
+        }
+    }
+}
+
+/// One `__routes.prompts.push(PromptRoute { ... })` statement for a prompt.
+/// The advertised arguments are derived from the `Params<T>` input schema
+/// (names, requiredness, per-property title/description); a prompt without
+/// `Params<T>` advertises none.
+fn generate_prompt_route(
+    def: &McpRoutesImplDef,
+    prompt: &McpTool,
+    mcp: &TokenStream,
+) -> TokenStream {
+    let invoke_name = super::invoke_ident(McpMemberKind::Prompt, &prompt.name);
+    let name_str = prompt.tool_name();
+    let title = opt_string(&prompt.meta.title);
+    let description = opt_string(&tool_description(prompt));
+    let requirements = super::requirements_expr(def, prompt, mcp);
+
+    let arguments = match prompt.params_type() {
+        Some(params_ty) => quote_spanned! {params_ty.span()=>
+            #mcp::__macro_support::prompt_arguments_from_schema(
+                &<#params_ty as #mcp::__macro_support::ToolParams>::input_schema(),
+            )
+        },
+        None => quote! { ::std::vec::Vec::new() },
+    };
+
+    quote! {
+        {
+            let __w = __wrapper.clone();
+            __routes.prompts.push(#mcp::__macro_support::PromptRoute {
+                name: #name_str.into(),
+                title: #title,
+                description: #description,
+                arguments: #arguments,
+                requirements: #requirements,
+                invoke: ::std::sync::Arc::new(
+                    move |__call: #mcp::__macro_support::PromptCall|
+                        -> #mcp::__macro_support::PromptFuture {
+                        let __w = __w.clone();
+                        ::std::boxed::Box::pin(async move {
+                            __w.#invoke_name(__call).await
+                        })
+                    },
+                ),
+            });
+        }
+    }
+}
+
+/// The member description: explicit `description = "..."` override, or the
+/// full doc comment (summary + body).
 fn tool_description(tool: &McpTool) -> Option<String> {
     if tool.meta.description.is_some() {
         return tool.meta.description.clone();

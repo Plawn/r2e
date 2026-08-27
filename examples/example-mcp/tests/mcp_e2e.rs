@@ -173,3 +173,44 @@ async fn http_adapter_shares_the_same_service(app: TestApp) {
     let body: Value = response.json();
     assert_eq!(body["value"], 5.0);
 }
+
+#[r2e::test(app = McpApp)]
+async fn resources_and_prompts_ride_the_same_endpoint(app: TestApp) {
+    let session = initialize(&app).await;
+    // Populate the call log via the intercepted `divide` tool.
+    tools_call(&app, &session, "divide", json!({"a": 6.0, "b": 2.0})).await;
+
+    // The same log, as a fixed-URI resource with its declared MIME type.
+    let response = mcp_post(
+        &app,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 4, "method": "resources/read",
+            "params": { "uri": "r2e://calc/call-log" }
+        }),
+    )
+    .await;
+    response.assert_ok();
+    let msg = sse_messages(&response.text()).pop().unwrap();
+    let contents = &msg["result"]["contents"][0];
+    assert_eq!(contents["uri"], "r2e://calc/call-log");
+    assert_eq!(contents["mimeType"], "text/plain");
+    assert_eq!(contents["text"], "tool:divide");
+
+    // The prompt expands with arguments validated by the Params schema.
+    let response = mcp_post(
+        &app,
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0", "id": 5, "method": "prompts/get",
+            "params": { "name": "explain_division", "arguments": { "a": 10.0, "b": 2.0 } }
+        }),
+    )
+    .await;
+    response.assert_ok();
+    let msg = sse_messages(&response.text()).pop().unwrap();
+    let message = &msg["result"]["messages"][0];
+    assert_eq!(message["role"], "user");
+    let text = message["content"]["text"].as_str().unwrap();
+    assert!(text.starts_with("Divide 10 by 2"), "{text}");
+}

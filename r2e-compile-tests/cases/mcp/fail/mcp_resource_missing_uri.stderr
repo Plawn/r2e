@@ -1,0 +1,5 @@
+error: #[resource] requires a URI: #[resource(uri = "…")]
+  --> cases/mcp/fail/mcp_resource_missing_uri.rs:12:5
+   |
+12 |     #[resource]
+   |     ^^^^^^^^^^^

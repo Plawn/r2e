@@ -103,3 +103,39 @@ fn ensure_object_type(mut map: SchemaObject) -> SchemaObject {
         .or_insert_with(|| Value::String("object".to_string()));
     map
 }
+
+/// Derive a prompt's declared arguments from its `Params<T>` object schema:
+/// one entry per `properties` key, `required` from the schema's `required`
+/// array, `title`/`description` carried over from the property schema
+/// (schemars emits doc comments as `description`).
+///
+/// Prompt argument values are strings per the MCP spec — the schema still
+/// drives deserialization, but only the property names, requiredness and
+/// descriptions are advertised.
+pub fn prompt_arguments_from_schema(schema: &SchemaObject) -> Vec<crate::route::PromptArgumentDef> {
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    properties
+        .iter()
+        .map(|(name, prop)| {
+            let field = |key: &str| {
+                prop.as_object()
+                    .and_then(|o| o.get(key))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            };
+            crate::route::PromptArgumentDef {
+                name: name.clone(),
+                title: field("title"),
+                description: field("description"),
+                required: required.contains(&name.as_str()),
+            }
+        })
+        .collect()
+}

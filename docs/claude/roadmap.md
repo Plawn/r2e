@@ -400,7 +400,7 @@ Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
 existing store's model into a local `.fga`), plus tuple seed fixtures for
 dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
 
-## W16 — MCP server (r2e-mcp) — P1+P2 SHIPPED 2026-08-27, P3 OPEN
+## W16 — MCP server (r2e-mcp) — P1+P2+P3 SHIPPED 2026-08-27
 
 P1 (server core) shipped on `feat/mcp-server`: `r2e-mcp` crate + `McpServer`
 plugin (streamable HTTP, shared sessions across SO_REUSEPORT workers,
@@ -425,10 +425,23 @@ roles), `server.public-url` convention key, `TestJwt::for_resource` +
 tests) + example-mcp auth e2e; provider matrix + Keycloak walkthrough in
 `docs/features/25-mcp.md`.
 
-Open, in order:
+P3 (providers & dev) shipped on the same branch, in chunks:
 
-- **P3 — providers & dev**: MCP resources + prompts.
-  SHIPPED 2026-08-27: the `introspection` (RFC 7662) + `userinfo` (Google)
+- SHIPPED 2026-08-27 (chunk 5): MCP **resources + prompts** — `#[resource]` /
+  `#[prompt]` markers on `#[mcp_routes]` methods, `McpService::routes(ctx)
+  -> McpRoutes { tools, resources, prompts }` (breaking, replaces `tools()`;
+  `McpRoutes::from_tools` for hand-built services), one wrapper/deco-set
+  build per service, duplicate resource URI / prompt name across services =
+  boot panic. v1 = fixed URIs (no templates); resources take no `Params<T>`
+  (compile error); prompt arguments derived from the Params schema.
+  `IntoResourceResult` (String/&str/Json honoring the declared MIME) +
+  `IntoPromptResult` (String → one `user` message; doc text as description).
+  Errors stay JSON-RPC on these families: `Tool` degrades to `-32603`,
+  unknown URI = `-32002` RESOURCE_NOT_FOUND, unknown prompt = `-32602`;
+  scope/guard filtering + denials uniform with tools. Capabilities advertised
+  only when a family is non-empty. Tests: server target (resources/prompts
+  modules), auth filtering/denials, 3 compile-fail cases, example-mcp e2e.
+- SHIPPED 2026-08-27: the `introspection` (RFC 7662) + `userinfo` (Google)
   validation backends (`token-validation: introspection|userinfo`,
   opaque-token cache `opaque-cache-ttl-secs`/`opaque-cache-max-entries`,
   `r2e_mcp::auth::{IntrospectionBackend, UserinfoBackend}`) and the
@@ -449,12 +462,14 @@ Open, in order:
   algorithm at decode — jsonwebtoken 10 rejects any list mixing key families
   (RS256+ES256 default) once the key is known (`InvalidAlgorithm` on every
   token).
-- **Follow-ups (any phase)**: targeted error for struct-level
-  `#[inject(identity)]` on `#[mcp_routes]` types (points at the method-param
-  form); bean-level `#[tool]` auto-collection (`after_register`, like
-  `ScheduledSource`); r2e-oidc authorization-code + PKCE flow (Docker-free
-  end-to-end MCP OAuth in `r2e dev`); `r2e add mcp` CLI scaffold; sealed
-  `ObjectParams` marker making a non-object root schema a compile error.
+
+Open follow-ups: targeted error for struct-level `#[inject(identity)]` on
+`#[mcp_routes]` types (points at the method-param form); bean-level `#[tool]`
+auto-collection (`after_register`, like `ScheduledSource`); r2e-oidc
+authorization-code + PKCE flow (Docker-free end-to-end MCP OAuth in `r2e
+dev`); `r2e add mcp` CLI scaffold; sealed `ObjectParams` marker making a
+non-object root schema a compile error; MCP resource URI templates (RFC 6570)
++ `resources/subscribe`.
 
 ## Open items tracked in their own docs
 

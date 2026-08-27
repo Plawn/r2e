@@ -173,6 +173,26 @@ impl MathTools {
         log.clear();
         format!("cleared {cleared} entries (request {})", call.request_id)
     }
+
+    /// The call log as a fixed-URI MCP resource — same data as the
+    /// `call_log` tool, but readable via `resources/read` (agents can
+    /// subscribe it into context instead of calling a tool).
+    #[resource(uri = "r2e://calc/call-log", mime_type = "text/plain")]
+    async fn call_log_resource(&self) -> String {
+        self.log.0.lock().unwrap().join("\n")
+    }
+
+    /// Reusable prompt template guiding an agent through a division,
+    /// including the division-by-zero contract. Arguments are derived from
+    /// the `Params` schema and advertised in `prompts/list`.
+    #[prompt(name = "explain_division")]
+    async fn explain_division(&self, Params(p): Params<BinaryOperands>) -> String {
+        format!(
+            "Divide {} by {} using the `divide` tool. If the divisor is zero, \
+             report the tool's domain error to the user instead of retrying.",
+            p.a, p.b
+        )
+    }
 }
 
 // ── HTTP controller over the same bean ─────────────────────────────────

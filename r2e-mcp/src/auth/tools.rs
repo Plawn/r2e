@@ -100,6 +100,18 @@ pub fn check_tool(
     tool_name: &str,
     req: &ToolRequirements,
 ) -> Result<(), McpError> {
+    check_access(extensions, "tool", tool_name, req)
+}
+
+/// The generic form of [`check_tool`]: `kind` names the member family in the
+/// denial messages (`"tool"` / `"resource"` / `"prompt"`); the rules are
+/// identical.
+pub fn check_access(
+    extensions: Option<&Extensions>,
+    kind: &'static str,
+    name: &str,
+    req: &ToolRequirements,
+) -> Result<(), McpError> {
     if req.scopes.is_empty() && req.any_scopes.is_empty() {
         return Ok(());
     }
@@ -108,26 +120,27 @@ pub fn check_tool(
     }
     let Some(principal) = extensions.and_then(|ext| ext.get::<McpPrincipal>()) else {
         tracing::error!(
-            tool = tool_name,
-            "tool has scope requirements but no authenticated principal reached it \
+            kind,
+            name,
+            "member has scope requirements but no authenticated principal reached it \
              (auth layer bypassed?); denying"
         );
         return Err(McpError::Unauthorized(format!(
-            "tool `{tool_name}` requires an authenticated caller"
+            "{kind} `{name}` requires an authenticated caller"
         )));
     };
 
     let missing = req.missing_scopes(principal);
     if !missing.is_empty() {
         return Err(McpError::Forbidden(format!(
-            "tool `{tool_name}` requires scope(s) `{}` that the token does not carry; \
+            "{kind} `{name}` requires scope(s) `{}` that the token does not carry; \
              re-authorize requesting them",
             missing.join(", ")
         )));
     }
     if !req.any_scope_ok(principal) {
         return Err(McpError::Forbidden(format!(
-            "tool `{tool_name}` requires at least one of the scopes `{}`; \
+            "{kind} `{name}` requires at least one of the scopes `{}`; \
              re-authorize requesting one",
             req.any_scopes.join(", ")
         )));

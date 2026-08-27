@@ -60,13 +60,19 @@ pub use error::McpError;
 pub use params::{Params, ToolParams};
 pub use plugin::{McpMarker, McpServer};
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
-pub use result::IntoToolResult;
-pub use route::{SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolInvoke, ToolRoute};
+pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
+pub use route::{
+    McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
+    ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
+    ToolCall, ToolFuture, ToolInvoke, ToolRoute,
+};
 pub use service::McpService;
 
 /// The wire result type of a tool call (rmcp's `CallToolResult`), re-exported
 /// for tools that build results by hand.
-pub use rmcp::model::CallToolResult;
+pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
+/// The author of a [`PromptMessage`] (`user` / `assistant`).
+pub use rmcp::model::Role as PromptMessageRole;
 
 /// Re-export of `schemars` for generated code (input/output schema probes)
 /// and for deriving `JsonSchema` on tool parameter types without a direct
@@ -159,7 +165,7 @@ where
             )
             .clone();
 
-        registry.add_service(S::service_name(), S::tools(self.bean_context()));
+        registry.add_service(S::service_name(), S::routes(self.bean_context()));
 
         tracing::debug!(service = S::service_name(), "Registered MCP service");
 
@@ -170,17 +176,22 @@ where
 /// Re-exports for generated code.
 #[doc(hidden)]
 pub mod __macro_support {
-    pub use crate::auth::tools::{check_tool, ToolRequirements};
+    pub use crate::auth::tools::{check_access, check_tool, ToolRequirements};
     pub use crate::error::McpError;
-    pub use crate::guard::{guard_response_to_error, tool_guard_context};
-    pub use crate::params::{empty_object_schema, schema_object_for, Params, ToolParams};
-    pub use crate::result::IntoToolResult;
+    pub use crate::guard::{guard_response_to_error, member_guard_context, tool_guard_context};
+    pub use crate::params::{
+        empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,
+    };
+    pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
     pub use crate::route::{
-        SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolInvoke, ToolRoute,
+        McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptRoute, ResourceCall,
+        ResourceFuture, ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture,
+        ToolInvoke, ToolRoute,
     };
     pub use crate::service::McpService;
     pub use r2e_core::{ContextConstruct, Guard, Identity, NoIdentity};
-    pub use rmcp::model::CallToolResult;
+    pub use crate::PromptMessageRole;
+    pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
 }
 
 pub mod prelude {
@@ -189,7 +200,7 @@ pub mod prelude {
     pub use crate::params::Params;
     pub use crate::auth::{McpAuthConfig, McpTokenValidator};
     pub use crate::plugin::McpServer;
-    pub use crate::route::ToolCall;
+    pub use crate::route::{PromptCall, ResourceCall, ToolCall};
     pub use crate::service::McpService;
     pub use crate::AppBuilderMcpExt;
 }
