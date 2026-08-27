@@ -725,24 +725,39 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> ModuleRegistered<M, P, R, Mods>
     where
         M: FeatureModule,
+        M::Plugins: ModulePlugins<P, R, Mods>,
         M::Providers: BeanList,
-        <M::Providers as BeanList>::Provided: TAppend<M::Imports>,
+        <M::Providers as BeanList>::Provided: TAppend<ModulePluginProvisions<M>>,
+        ModuleProvided<M>: TAppend<M::Imports>,
         M::Controllers: ControllerDepsList,
         // Encapsulation: provider deps, exports, and controller deps must
-        // resolve inside the module scope (Provided ∪ Imports).
+        // resolve inside the module scope (Provided ∪ brought-plugin beans ∪
+        // Imports).
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
-        // Every required plugin must already be installed (its provisions in P).
-        M::RequiredPlugins: RequiredPluginsInstalled<P, PlugIdx>,
-        M::Exports: TAppend<P>,
-        R: TAppend<M::Imports>,
+        // Every required plugin must already be installed — in the *post-fold*
+        // provision list, so a module may both bring and require a plugin.
+        M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
+        M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
+        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     {
-        <M::Providers as BeanList>::register_into(&mut self.shared.bean_registry);
+        // The plugins the module brings are installed FIRST, exactly as
+        // `.plugin(..)` would install them (their provisions join the
+        // app-global P, so the module's own providers can be scope-checked
+        // against them), attributed to this module so a double install names
+        // both owners.
+        self.shared
+            .bean_registry
+            .set_plugin_owner(Some(crate::plugin::plugin_action_name::<M>()));
+        let mut app = <M::Plugins as ModulePlugins<P, R, Mods>>::install_all(M::plugins(), self);
+        app.bean_registry_mut().set_plugin_owner(None);
+
+        <M::Providers as BeanList>::register_into(app.bean_registry_mut());
         // Exports join P, imports join R, and M is queued on Mods. Provider
         // -internal deps are consumed by the module-local check above — they
         // must NOT join the global R (private providers are absent from P).
-        self.with_updated_types_full()
+        app.with_updated_types_full()
     }
 
     /// Resolve the bean dependency graph and build the application state.

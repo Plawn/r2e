@@ -26,7 +26,8 @@ use crate::controller::Controller;
 use crate::di::meta::MetaRegistry;
 use crate::di::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModEntry, ModuleDepsSatisfied,
-    ModuleList, ModuleScope, PushPluginCtrls, RequiredPluginsInstalled,
+    ModuleList, ModulePluginProvisions, ModulePlugins, ModuleProvided, ModuleScope,
+    PushPluginCtrls, RequiredPluginsInstalled,
 };
 use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect};
 use crate::rt::CancelToken;
@@ -79,16 +80,32 @@ pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     <<Pl as PluginInstall>::Controllers as PushPluginCtrls<Pl, Mods>>::Output,
 >;
 
+/// Provision list after installing the plugins a module
+/// [brings](FeatureModule::Plugins) — the `P` every later step of
+/// `register_module` builds on.
+pub type ModulePluginsP<M, P, R, Mods> =
+    <<M as FeatureModule>::Plugins as ModulePlugins<P, R, Mods>>::OutP;
+
+/// Requirement list after installing a module's brought plugins.
+pub type ModulePluginsR<M, P, R, Mods> =
+    <<M as FeatureModule>::Plugins as ModulePlugins<P, R, Mods>>::OutR;
+
+/// Deferred-controller list after installing a module's brought plugins.
+pub type ModulePluginsMods<M, P, R, Mods> =
+    <<M as FeatureModule>::Plugins as ModulePlugins<P, R, Mods>>::OutMods;
+
 /// Builder returned by
 /// [`register_module`](registration::RegisterModule::register_module): the
-/// module's `Exports` join the provision list `P`, its `Imports` join the
-/// requirement list `R`, and the module is queued on `Mods` so
-/// `build_state()` registers its controllers.
+/// plugins the module [brings](FeatureModule::Plugins) are installed first
+/// (growing `P`/`R`/`Mods` exactly as `.plugin(..)` would), then the module's
+/// `Exports` join the provision list `P`, its `Imports` join the requirement
+/// list `R`, and the module is queued on `Mods` so `build_state()` registers
+/// its controllers.
 pub type ModuleRegistered<M, P, R, Mods> = AppBuilder<
     NoState,
-    <<M as FeatureModule>::Exports as TAppend<P>>::Output,
-    <R as TAppend<<M as FeatureModule>::Imports>>::Output,
-    TCons<ModEntry<M>, Mods>,
+    <<M as FeatureModule>::Exports as TAppend<ModulePluginsP<M, P, R, Mods>>>::Output,
+    <ModulePluginsR<M, P, R, Mods> as TAppend<<M as FeatureModule>::Imports>>::Output,
+    TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>,
 >;
 
 type ConsumerReg<T> =

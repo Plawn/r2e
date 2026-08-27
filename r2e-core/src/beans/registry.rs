@@ -199,6 +199,19 @@ pub struct BeanRegistry {
     /// Whether `provide` calls should currently be recorded as config-derived.
     /// Set only for the duration of a [`config_derived_scope`](Self::config_derived_scope).
     pub(super) in_config_derived_scope: bool,
+    /// The module currently registering plugins, if any: `Some("Billing")`
+    /// while [`register_module`](crate::builder::RegisterModule::register_module)
+    /// folds a module's brought plugins, `None` for app-level `.plugin(..)`
+    /// installs. Read by
+    /// [`register_plugin_group`](Self::register_plugin_group) to attribute each
+    /// install to its owner.
+    pub(super) plugin_owner: Option<&'static str>,
+    /// Owners of every installed plugin, keyed by its hidden group-node
+    /// `TypeId`: `(plugin short name, one owner entry per install)`. More than
+    /// one entry means the plugin was installed twice — reported as
+    /// [`BeanError::DuplicatePlugin`] naming both owners instead of an opaque
+    /// duplicate on the internal `PluginOut<..>` type.
+    pub(super) plugin_owners: HashMap<TypeId, (&'static str, Vec<Option<&'static str>>)>,
     /// The deferred-fill handle on the graph this registry will resolve.
     /// Plugin group factories capture clones of it
     /// ([`PluginBuildContext::graph`](crate::plugin::PluginBuildContext::graph));

@@ -34,6 +34,8 @@ impl BeanRegistry {
                 TypeId::of::<crate::config::LiveConfigRegistry>(),
             ]),
             in_config_derived_scope: false,
+            plugin_owner: None,
+            plugin_owners: HashMap::new(),
             graph_handle: crate::plugin::GraphHandle::new(),
         }
     }
@@ -49,6 +51,17 @@ impl BeanRegistry {
     /// (see [`pin_provide`](Self::pin_provide)).
     pub fn is_pinned(&self, type_id: &TypeId) -> bool {
         self.pinned.contains(type_id)
+    }
+
+    /// Set the module that owns the plugins installed from now on, or `None`
+    /// for app-level installs.
+    ///
+    /// `register_module` brackets its brought-plugin fold with this so a double
+    /// install can be reported as
+    /// [`DuplicatePlugin`](crate::beans::BeanError::DuplicatePlugin) naming both
+    /// owners.
+    pub(crate) fn set_plugin_owner(&mut self, owner: Option<&'static str>) {
+        self.plugin_owner = owner;
     }
 
     /// Run `f` with every `provide` inside it recorded as **config-derived**.

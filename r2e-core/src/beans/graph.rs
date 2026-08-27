@@ -80,21 +80,45 @@ impl BeanRegistry {
     pub(super) fn check_for_duplicates(
         beans: &[BeanRegistration],
         entries: &HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+        plugin_owners: &HashMap<TypeId, (&'static str, Vec<Option<&'static str>>)>,
     ) -> Result<(), BeanError> {
         let mut seen: HashMap<TypeId, &str> = HashMap::new();
         for reg in beans {
             if entries.contains_key(&reg.type_id) {
-                return Err(BeanError::DuplicateBean {
-                    type_name: reg.type_name.to_string(),
-                });
+                return Err(Self::duplicate_error(reg, plugin_owners));
             }
             if seen.insert(reg.type_id, reg.type_name).is_some() {
-                return Err(BeanError::DuplicateBean {
-                    type_name: reg.type_name.to_string(),
-                });
+                return Err(Self::duplicate_error(reg, plugin_owners));
             }
         }
         Ok(())
+    }
+
+    /// Turn a duplicate registration into the most specific diagnostic: a
+    /// plugin **group** node duplicate means the same plugin was installed
+    /// twice, so name the plugin and both owners rather than the internal
+    /// `PluginOut<..>` type.
+    fn duplicate_error(
+        reg: &BeanRegistration,
+        plugin_owners: &HashMap<TypeId, (&'static str, Vec<Option<&'static str>>)>,
+    ) -> BeanError {
+        if let Some(&(plugin, ref owners)) = plugin_owners.get(&reg.type_id) {
+            if owners.len() > 1 {
+                return BeanError::DuplicatePlugin {
+                    plugin,
+                    owners: owners
+                        .iter()
+                        .map(|owner| match owner {
+                            Some(module) => format!("module '{module}'"),
+                            None => "app".to_string(),
+                        })
+                        .collect(),
+                };
+            }
+        }
+        BeanError::DuplicateBean {
+            type_name: reg.type_name.to_string(),
+        }
     }
 
     /// Check for duplicate lazy registrations, or conflicts with eager beans or provided entries.

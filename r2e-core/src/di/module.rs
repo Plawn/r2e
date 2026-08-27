@@ -1,7 +1,8 @@
 //! Feature modules — closed subgraphs with compile-time encapsulation.
 //!
 //! A [`FeatureModule`] bundles **providers (beans/producers) + controllers +
-//! imports/exports** into one unit registered with a single call:
+//! imports/exports + the plugins it brings** into one unit registered with a
+//! single call:
 //! [`AppBuilder::register_module::<M>()`](crate::AppBuilder::register_module).
 //!
 //! Unlike Spring/NestJS modules, encapsulation is enforced **at compile
@@ -32,10 +33,30 @@
 //! is materialized (their dependency check already happened module-locally at
 //! `register_module`), constructing their cores from the retained
 //! [`BeanContext`](crate::beans::BeanContext) — where private beans exist.
+//!
+//! # Modules and plugins
+//!
+//! A module may **require** a plugin ([`RequiredPlugins`](FeatureModule::RequiredPlugins)
+//! — "the app must install it before me") or **bring** it
+//! ([`Plugins`](FeatureModule::Plugins) — "registering me installs it"). A
+//! plugin has exactly **one owner**: the app or one module. Installing the same
+//! plugin twice (app + module, or two modules) is a
+//! [`DuplicatePlugin`](crate::beans::BeanError::DuplicatePlugin) boot error
+//! naming both owners; the fix is `requires_plugins` in every module but the
+//! owner.
+//!
+//! Unlike providers, a brought plugin's beans are **not** module-private: the
+//! plugin is installed on the app builder exactly as `.plugin(..)` would (its
+//! provisions join the app-global `P`, its `Deps` join `R`, its controllers
+//! join the deferred-controller list, its effects apply at the
+//! `register_module` position in install order). They therefore need no
+//! `exports(..)` entry — and must not appear in one, since `Exports` is
+//! checked against the module's own providers.
 
 use crate::beans::{BeanRegistry, Registrable};
-use crate::builder::AppBuilder;
+use crate::builder::{AppBuilder, NoState};
 use crate::controller::{Controller, EndpointDeps};
+use crate::plugin::PluginInstall;
 use crate::type_list::{Here, TAppend, TCons, TNil, There};
 
 /// A feature module: a closed subgraph of providers + controllers with
@@ -55,6 +76,8 @@ use crate::type_list::{Here, TAppend, TCons, TNil, There};
 ///     type Exports = TCons<UserService, TNil>;   // UserRepo stays private
 ///     type Imports = TCons<DbPool, TNil>;        // supplied by the app
 ///     type RequiredPlugins = ();                 // no plugin required
+///     type Plugins = ();                         // no plugin brought
+///     fn plugins() {}
 /// }
 ///
 /// AppBuilder::new()
@@ -115,8 +138,204 @@ pub trait FeatureModule {
     ///
     /// Set to `()` when the module needs no plugin. `#[module(requires_plugins(
     /// Scheduler))]` generates this.
+    ///
+    /// See also [`Plugins`](Self::Plugins) — *bringing* a plugin instead of
+    /// requiring one.
     type RequiredPlugins;
+
+    /// **Tuple** of plugin types this module **brings** (installs itself), or
+    /// `()` for none — e.g. `(Scheduler,)`.
+    ///
+    /// The instances come from [`plugins()`](Self::plugins). At
+    /// `register_module` each is installed exactly as `.plugin(..)` would
+    /// install it, **before** the module's own providers are registered: its
+    /// provisions join the app-global provision list `P`, its `Deps` join the
+    /// requirement list `R`, its `Controllers` join the deferred-controller
+    /// list, and its effects apply at this module's position in plugin install
+    /// order.
+    ///
+    /// A plugin has exactly **one owner**. A module that merely *needs* a
+    /// plugin someone else installs declares it in
+    /// [`RequiredPlugins`](Self::RequiredPlugins) instead; installing the same
+    /// plugin twice is a
+    /// [`DuplicatePlugin`](crate::beans::BeanError::DuplicatePlugin) boot error
+    /// naming both owners.
+    ///
+    /// The brought plugins' provided beans are in the module's local resolution
+    /// scope ([`ModuleScope`]), so the module's providers and controllers may
+    /// depend on them without declaring an import. They are **not** module-
+    /// private (they are app-global, like any plugin bean), so they must not be
+    /// listed in [`Exports`](Self::Exports).
+    ///
+    /// `#[module(plugins(Scheduler = Scheduler, Executor = Executor::builder()
+    /// .max_concurrent(8).build()))]` generates this and `plugins()`.
+    type Plugins: ModulePluginList;
+
+    /// The configured plugin **instances** matching [`Plugins`](Self::Plugins),
+    /// in the same order. `fn plugins() {}` for `type Plugins = ()`.
+    fn plugins() -> Self::Plugins;
 }
+
+// ── Module-brought plugins ─────────────────────────────────────────────────
+
+/// Type-level fold over a module's [`Plugins`](FeatureModule::Plugins) tuple:
+/// the concatenation of every plugin's
+/// [`Provisions`](crate::plugin::PluginInstall::Provisions).
+///
+/// Independent of the builder's `P`/`R`/`Mods` (unlike [`ModulePlugins`]), so
+/// it can be used in the module-scope and export checks. Implemented for `()`
+/// and tuples of arity 1..=8.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a valid `Plugins` tuple for a feature module",
+    label = "not a tuple of plugins",
+    note = "`FeatureModule::Plugins` must be `()` or a tuple of at most 8 plugin types, e.g. `(Scheduler,)`",
+    note = "`#[module(plugins(Scheduler = Scheduler))]` generates it"
+)]
+pub trait ModulePluginList {
+    /// Concatenation of every listed plugin's provision list.
+    type Provisions;
+}
+
+impl ModulePluginList for () {
+    type Provisions = TNil;
+}
+
+macro_rules! impl_module_plugin_list {
+    ($P0:ident) => {
+        impl<$P0> ModulePluginList for ($P0,)
+        where
+            $P0: PluginInstall,
+            <$P0 as PluginInstall>::Provisions: TAppend<TNil>,
+        {
+            type Provisions = <<$P0 as PluginInstall>::Provisions as TAppend<TNil>>::Output;
+        }
+    };
+    ($P0:ident, $($Ps:ident),+) => {
+        impl<$P0, $($Ps),+> ModulePluginList for ($P0, $($Ps),+)
+        where
+            $P0: PluginInstall,
+            ($($Ps,)+): ModulePluginList,
+            <$P0 as PluginInstall>::Provisions:
+                TAppend<<($($Ps,)+) as ModulePluginList>::Provisions>,
+        {
+            type Provisions = <<$P0 as PluginInstall>::Provisions as TAppend<
+                <($($Ps,)+) as ModulePluginList>::Provisions,
+            >>::Output;
+        }
+        impl_module_plugin_list!($($Ps),+);
+    };
+}
+
+impl_module_plugin_list!(P0, P1, P2, P3, P4, P5, P6, P7);
+
+/// Value-level fold that installs a module's
+/// [`Plugins`](FeatureModule::Plugins) tuple onto the builder, one
+/// [`AppBuilder::plugin`] call per element, in tuple order.
+///
+/// Parameterised by the builder's current `P`/`R`/`Mods` so the output types
+/// are *exactly* the sequential fold `.plugin(a).plugin(b)…` produces — no
+/// associativity reasoning the compiler cannot do. Implemented for `()` and
+/// tuples of arity 1..=8.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be installed as a feature module's `Plugins`",
+    label = "not an installable tuple of plugins",
+    note = "every type in `FeatureModule::Plugins` must implement `r2e::Plugin` (tuple arity at most 8)"
+)]
+pub trait ModulePlugins<P, R, Mods> {
+    /// The provision list after installing every plugin in the tuple.
+    type OutP;
+    /// The requirement list after installing every plugin in the tuple.
+    type OutR;
+    /// The deferred-controller list after installing every plugin in the tuple.
+    type OutMods;
+
+    /// Install every plugin in the tuple, in tuple order.
+    fn install_all(
+        self,
+        app: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods>;
+}
+
+impl<P, R, Mods> ModulePlugins<P, R, Mods> for () {
+    type OutP = P;
+    type OutR = R;
+    type OutMods = Mods;
+
+    fn install_all(
+        self,
+        app: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, P, R, Mods> {
+        app
+    }
+}
+
+macro_rules! impl_module_plugins {
+    ($P0:ident $p0:ident) => {
+        impl<P, R, Mods, $P0> ModulePlugins<P, R, Mods> for ($P0,)
+        where
+            $P0: PluginInstall,
+            P: TAppend<<$P0 as PluginInstall>::Provisions>,
+            R: TAppend<<$P0 as PluginInstall>::Required>,
+            <$P0 as PluginInstall>::Controllers: PushPluginCtrls<$P0, Mods>,
+        {
+            type OutP = <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output;
+            type OutR = <R as TAppend<<$P0 as PluginInstall>::Required>>::Output;
+            type OutMods =
+                <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output;
+
+            fn install_all(
+                self,
+                app: AppBuilder<NoState, P, R, Mods>,
+            ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods> {
+                app.plugin(self.0)
+            }
+        }
+    };
+    ($P0:ident $p0:ident, $($Ps:ident $ps:ident),+) => {
+        impl<P, R, Mods, $P0, $($Ps),+> ModulePlugins<P, R, Mods> for ($P0, $($Ps),+)
+        where
+            $P0: PluginInstall,
+            P: TAppend<<$P0 as PluginInstall>::Provisions>,
+            R: TAppend<<$P0 as PluginInstall>::Required>,
+            <$P0 as PluginInstall>::Controllers: PushPluginCtrls<$P0, Mods>,
+            ($($Ps,)+): ModulePlugins<
+                <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
+                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
+            >,
+        {
+            type OutP = <($($Ps,)+) as ModulePlugins<
+                <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
+                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
+            >>::OutP;
+            type OutR = <($($Ps,)+) as ModulePlugins<
+                <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
+                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
+            >>::OutR;
+            type OutMods = <($($Ps,)+) as ModulePlugins<
+                <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
+                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
+            >>::OutMods;
+
+            fn install_all(
+                self,
+                app: AppBuilder<NoState, P, R, Mods>,
+            ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods> {
+                let ($p0, $($ps,)+) = self;
+                <($($Ps,)+) as ModulePlugins<_, _, _>>::install_all(
+                    ($($ps,)+),
+                    app.plugin($p0),
+                )
+            }
+        }
+        impl_module_plugins!($($Ps $ps),+);
+    };
+}
+
+impl_module_plugins!(P0 p0, P1 p1, P2 p2, P3 p3, P4 p4, P5 p5, P6 p6, P7 p7);
 
 /// Fold over a type-level list of [`Registrable`] provider types.
 ///
@@ -155,11 +374,21 @@ where
     }
 }
 
-/// The module's local resolution scope: everything its providers provide,
-/// plus its imports. Provider and controller dependencies must resolve here.
-pub type ModuleScope<M> = <<<M as FeatureModule>::Providers as BeanList>::Provided as TAppend<
-    <M as FeatureModule>::Imports,
+/// The provisions of the plugins a module [brings](FeatureModule::Plugins).
+pub type ModulePluginProvisions<M> =
+    <<M as FeatureModule>::Plugins as ModulePluginList>::Provisions;
+
+/// Everything a module makes available on its own: its providers' outputs plus
+/// the beans of the plugins it brings.
+pub type ModuleProvided<M> = <<<M as FeatureModule>::Providers as BeanList>::Provided as TAppend<
+    ModulePluginProvisions<M>,
 >>::Output;
+
+/// The module's local resolution scope: everything its providers provide, the
+/// beans of the plugins it brings, plus its imports. Provider and controller
+/// dependencies must resolve here.
+pub type ModuleScope<M> =
+    <ModuleProvided<M> as TAppend<<M as FeatureModule>::Imports>>::Output;
 
 // ── Encapsulation checks ────────────────────────────────────────────────────
 //
@@ -205,7 +434,8 @@ where
 #[diagnostic::on_unimplemented(
     message = "`{H}` is exported but not provided by this feature module",
     label = "no provider in the module's `Providers` outputs `{H}`",
-    note = "`Exports` must be a subset of the providers' provided types — add a provider for `{H}` or remove it from the module's `Exports`"
+    note = "`Exports` must be a subset of the providers' provided types — add a provider for `{H}` or remove it from the module's `Exports`",
+    note = "beans of a plugin the module brings via `plugins(..)` are already app-global: drop them from `Exports`"
 )]
 pub trait ProvidedByModule<H, Idx> {}
 

@@ -26,6 +26,14 @@ impl BeanRegistry {
         use crate::type_list::{PluginDeps, PluginProvisions};
 
         let name = plugin_action_name::<Pl>();
+        // Attribute this install to its owner (the app, or the module whose
+        // `plugins(..)` fold is running) so a double install is reported as
+        // `DuplicatePlugin` naming both owners.
+        self.plugin_owners
+            .entry(TypeId::of::<PluginOut<Pl>>())
+            .or_insert_with(|| (name, Vec::new()))
+            .1
+            .push(self.plugin_owner);
         let graph_handle = self.graph_handle.clone();
         let base_version = {
             use std::collections::hash_map::DefaultHasher;
