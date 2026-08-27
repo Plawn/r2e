@@ -3623,7 +3623,7 @@ CLI test runner:
 
 ### Dev services (containers)
 
-`r2e-devservices` (features `postgres`, `redis`, `openfga`):
+`r2e-devservices` (features `postgres`, `redis`, `openfga`, `keycloak`):
 `DevPostgres::shared().await` = one stable container shared by every test
 process in the workspace session; wire via
 `b.override_config_value("app.database.url", pg.url())` in the boot hook. A
@@ -3728,6 +3728,28 @@ For non-plugin wiring, the HTTP bootstrap helpers remain:
 `create_store(name) -> store_id`, `write_model(store_id, &json) -> model_id`,
 `write_tuples(store_id, model_id, &[(user, relation, object)])`
 (`http_endpoint()` backs them). See `examples/example-openfga`.
+
+`DevKeycloak` (feature `keycloak`) runs `quay.io/keycloak/keycloak` in
+`start-dev --import-realm` mode. The default import (`DEFAULT_REALM_JSON`)
+is realm `r2e-mcp`, built for MCP OAuth tests: public client `mcp-public`
+(authorization code + PKCE, localhost/claude.ai redirect URIs, default scope
+`mcp` whose audience mapper stamps `http://localhost:3000/mcp` into the token
+`aud`, optional scopes `mcp:read`/`mcp:write`), direct-grant client
+`test-cli`, confidential `mcp-introspect`/`introspect-secret` (RFC 7662),
+users `alice`/`alice-password` (roles admin, user) and `bob`/`bob-password`
+(user). `start_with(json)` / `shared_with(json)` import a custom realm —
+the JSON is part of the shared-container identity.
+
+```rust
+let kc = DevKeycloak::shared().await;
+let app = builder
+    .override_config_value("mcp.auth.issuer", kc.issuer())
+    .override_config_value("mcp.auth.allow-insecure", true)
+    // must match the realm's audience mapper:
+    .override_config_value("mcp.auth.resource", "http://localhost:3000/mcp");
+let token = kc.password_token("alice", "alice-password", "test-cli", "mcp:read").await;
+// also: kc.client_token(id, secret), kc.admin_token(), kc.base_url(), kc.realm()
+```
 
 Ryuk requires a local Docker Unix socket. Configuration:
 `R2E_DEVSERVICES_DOCKER_SOCKET` overrides its host path,

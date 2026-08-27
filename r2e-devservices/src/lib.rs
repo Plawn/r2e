@@ -60,7 +60,7 @@
 //! declared for a different image or different credentials to get a container
 //! of their own.
 //!
-//! Feature flags: `postgres`, `redis`, `openfga`.
+//! Feature flags: `postgres`, `redis`, `openfga`, `keycloak`.
 
 mod common;
 mod ryuk;
@@ -93,3 +93,8 @@ pub use redis::{DevRedis, RedisImage};
 mod openfga;
 #[cfg(feature = "openfga")]
 pub use openfga::DevOpenFga;
+
+#[cfg(feature = "keycloak")]
+mod keycloak;
+#[cfg(feature = "keycloak")]
+pub use keycloak::{DevKeycloak, DEFAULT_REALM_JSON};

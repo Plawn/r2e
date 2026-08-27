@@ -427,8 +427,7 @@ tests) + example-mcp auth e2e; provider matrix + Keycloak walkthrough in
 
 Open, in order:
 
-- **P3 — providers & dev**: `DevKeycloak` dev service, MCP resources +
-  prompts.
+- **P3 — providers & dev**: MCP resources + prompts.
   SHIPPED 2026-08-27: the `introspection` (RFC 7662) + `userinfo` (Google)
   validation backends (`token-validation: introspection|userinfo`,
   opaque-token cache `opaque-cache-ttl-secs`/`opaque-cache-max-entries`,
@@ -437,7 +436,19 @@ Open, in order:
   `authorization_endpoint` to `{mcp.path}/oauth/authorize`, 302 to the IdP,
   server params win; requires the DCR shim, boot error otherwise); r2e-oidc
   RFC 8707 `resource` pass-through (`resource` form param → token `aud`,
-  invalid URI = 400 `invalid_target`; `scope` pass-through already existed).
+  invalid URI = 400 `invalid_target`; `scope` pass-through already existed);
+  `DevKeycloak` (r2e-devservices feature `keycloak`: `start-dev
+  --import-realm`, bundled `r2e-mcp` realm with audience-mapped `mcp` scope,
+  `password_token`/`client_token`/`admin_token`; realm JSON is part of the
+  shared-container identity — copy sources are digested, no discriminator
+  needed) + Docker-gated e2e in `r2e-mcp/tests/auth/keycloak.rs`. Two fixes
+  the real container surfaced: a full realm import creates ONLY the client
+  scopes listed in the JSON (Keycloak's built-ins `basic` → `sub` and
+  `roles` → `realm_access` must be defined explicitly or tokens carry
+  neither), and r2e-security narrowed `Validation.algorithms` to the token's
+  algorithm at decode — jsonwebtoken 10 rejects any list mixing key families
+  (RS256+ES256 default) once the key is known (`InvalidAlgorithm` on every
+  token).
 - **Follow-ups (any phase)**: targeted error for struct-level
   `#[inject(identity)]` on `#[mcp_routes]` types (points at the method-param
   form); bean-level `#[tool]` auto-collection (`after_register`, like

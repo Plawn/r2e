@@ -384,3 +384,27 @@ as the issuer: its `POST /oauth/token` honors `scope` and the RFC 8707
 `resource` indicator (`resource=http://localhost:3000/mcp` → token `aud` =
 the MCP resource), so a password-grant token validates against
 `mcp.auth.issuer: http://localhost:<port>` end to end.
+
+### Testing against a real Keycloak (Docker)
+
+`r2e-devservices` feature `keycloak` ships `DevKeycloak`: a containerized
+Keycloak importing a bundled MCP realm (`r2e-mcp`) — public client
+`mcp-public` (PKCE S256, localhost + claude.ai redirect URIs) whose default
+scope `mcp` stamps `http://localhost:3000/mcp` into the token `aud`, optional
+scopes `mcp:read`/`mcp:write`, direct-grant client `test-cli`, confidential
+`mcp-introspect` for RFC 7662, and users `alice` (admin) / `bob` (user).
+
+```rust
+let kc = DevKeycloak::shared().await;   // one container for the whole suite
+let app = secured_plugin_app(McpServer::new().with_auth(McpAuthConfig {
+    issuer: kc.issuer(),
+    resource: Some("http://localhost:3000/mcp".into()), // = the realm's audience mapper
+    allow_insecure: Some(true),
+    ..Default::default()
+})).await;
+let token = kc.password_token("alice", "alice-password", "test-cli", "mcp:read").await;
+```
+
+This exercises the whole production path — discovery against the container,
+RS256/JWKS, audience binding, scope checks, `tools/list` filtering. See
+`r2e-mcp/tests/auth/keycloak.rs` (Docker-gated, `-- --ignored`).

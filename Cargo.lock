@@ -6089,6 +6089,7 @@ version = "0.3.0"
 dependencies = [
  "http-body-util",
  "r2e-core",
+ "r2e-devservices",
  "r2e-macros",
  "r2e-security",
  "r2e-test",

@@ -9,6 +9,7 @@ mod fixtures;
 mod backends;
 mod config;
 mod discovery;
+mod keycloak;
 mod layer;
 mod scopes;
 mod shim;
