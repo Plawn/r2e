@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,52 +178,53 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="configuration"><a class="header" href="#configuration">Configuration</a></h1>
-<p>R2E uses YAML-based configuration with profile support and environment variable overlay.</p>
-<h2 id="configuration-files"><a class="header" href="#configuration-files">Configuration files</a></h2>
-<p>Create <code>application.yaml</code> in your project root:</p>
+<p>R2E uses YAML-based configuration with environment variable overlay, secret resolution, and strongly-typed config sections.</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
+<p>Create <code>application.yaml</code> at your project root and wire it into <code>AppBuilder</code>:</p>
 <pre><code class="language-yaml">app:
   name: "my-app"
   greeting: "Hello"
-  max-retries: 3
-
-database:
-  url: "sqlite:data.db"
 
 server:
   port: 8080
 </code></pre>
-<h3 id="profile-overrides"><a class="header" href="#profile-overrides">Profile overrides</a></h3>
-<p>Create profile-specific files that override the base config:</p>
-<pre><code class="language-yaml"># application-dev.yaml
-database:
-  url: "sqlite::memory:"
+<pre class="playground"><code class="language-rust">use r2e::prelude::*;
 
-# application-prod.yaml
-database:
-  url: "${DATABASE_URL}"
-server:
-  port: 80
-</code></pre>
-<h3 id="loading-configuration"><a class="header" href="#loading-configuration">Loading configuration</a></h3>
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+    #[config(default = "Hello!")]
+    pub greeting: String,
+}
+
+#[r2e::main]
+async fn main() {
+    AppBuilder::new()
+        .load_config::&lt;AppConfig&gt;()    // loads YAML + env, provides AppConfig as a bean
+        // ... register controllers, build state ...
+        .serve_auto()
+        .await
+        .unwrap();
+}</code></pre>
+<p>That’s it — your config is loaded and available for injection everywhere.</p>
+<h2 id="configuration-files--resolution-order"><a class="header" href="#configuration-files--resolution-order">Configuration files &amp; resolution order</a></h2>
+<p>Values are resolved in order of increasing priority — later sources override earlier ones:</p>
+<ol>
+<li><strong><code>application.yaml</code></strong> — base configuration, hierarchies flattened to dot-separated keys (<code>app.database.url</code>)</li>
+<li><strong><code>.env</code> file</strong> — loaded into process environment via dotenvy (does <strong>not</strong> overwrite already-set env vars)</li>
+<li><strong><code>${...}</code> placeholders</strong> — resolved in string values (see <a href="#secrets">Secrets</a>)</li>
+<li><strong>Environment variables</strong> — highest priority</li>
+</ol>
+<h3 id="loading"><a class="header" href="#loading">Loading</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Load base + profile overrides
-let config = R2eConfig::load("dev").unwrap();
-
-// Profile can be set via R2E_PROFILE env var
-let config = R2eConfig::load("dev").unwrap(); // R2E_PROFILE=prod overrides
-
-// Empty config for testing
-let config = R2eConfig::empty();
+</span>R2eConfig::load()                          // application.yaml + .env + env vars
+R2eConfig::load_with_resolver(&amp;resolver)   // custom SecretResolver
+R2eConfig::from_yaml_str(yaml)             // from a YAML string (testing)
+R2eConfig::empty()                         // empty config (testing)
 <span class="boring">}</span></code></pre>
-<p>Resolution order (later wins):</p>
-<ol>
-<li><code>application.yaml</code></li>
-<li><code>application-{profile}.yaml</code></li>
-<li>Environment variables</li>
-</ol>
 <h2 id="environment-variable-overlay"><a class="header" href="#environment-variable-overlay">Environment variable overlay</a></h2>
-<p>Environment variables override any YAML key using the convention: dots become underscores, hyphens become underscores, all uppercase.</p>
+<p>Environment variables override any YAML key. Convention: dots become underscores, all uppercase.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -237,31 +238,307 @@ let config = R2eConfig::empty();
 </tbody>
 </table>
 </div>
-<h2 id="using-configuration"><a class="header" href="#using-configuration">Using configuration</a></h2>
-<h3 id="in-controllers"><a class="header" href="#in-controllers">In controllers</a></h3>
+<h2 id="secrets"><a class="header" href="#secrets">Secrets</a></h2>
+<p>String values in YAML can contain <code>${...}</code> placeholders resolved before the env var overlay:</p>
+<pre><code class="language-yaml">database:
+  url: "${DATABASE_URL}"              # env var (default)
+  password: "${env:DB_PASSWORD}"      # explicit env var
+  api_key: "${file:/run/secrets/key}" # read from file (trimmed)
+  kind: "${DB_KIND:postgres}"         # env var with default value
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Syntax</th><th>Resolution</th></tr>
+</thead>
+<tbody>
+<tr><td><code>${VAR}</code></td><td><code>std::env::var("VAR")</code></td></tr>
+<tr><td><code>${VAR:default}</code></td><td>Env var, falls back to <code>default</code> if unset</td></tr>
+<tr><td><code>${env:VAR}</code></td><td>Explicit env var lookup</td></tr>
+<tr><td><code>${env:VAR:default}</code></td><td>Explicit env var with fallback</td></tr>
+<tr><td><code>${file:/path}</code></td><td>Read file contents, trimmed</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="custom-secret-resolver"><a class="header" href="#custom-secret-resolver">Custom secret resolver</a></h3>
+<p>Implement <code>SecretResolver</code> to add custom backends (e.g., Vault, AWS Secrets Manager):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>use r2e::prelude::*;
+
+struct VaultResolver { /* ... */ }
+
+impl SecretResolver for VaultResolver {
+    fn resolve(&amp;self, reference: &amp;str) -&gt; Result&lt;String, ConfigError&gt; {
+        if let Some(path) = reference.strip_prefix("vault:") {
+            // fetch from Vault...
+            Ok(secret)
+        } else {
+            DefaultSecretResolver.resolve(reference)
+        }
+    }
+}
+
+let config = R2eConfig::load_with_resolver(&amp;VaultResolver { /* ... */ }).unwrap();
+<span class="boring">}</span></code></pre>
+<h2 id="reading-values"><a class="header" href="#reading-values">Reading values</a></h2>
+<h3 id="configkey--single-value-injection"><a class="header" href="#configkey--single-value-injection"><code>#[config("key")]</code> — single value injection</a></h3>
+<p>Inject individual values by their full dot-separated key. The field type must implement <code>FromConfigValue</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[config("app.greeting")] greeting: String,
     #[config("app.max-retries")] max_retries: i64,
     #[config("feature.enabled")] enabled: bool,
-    #[config("optional.key")] maybe: Option&lt;String&gt;,
+    #[config("optional.key")] maybe: Option&lt;String&gt;,  // None if missing
 }
 <span class="boring">}</span></code></pre>
-<p>Supported types: <code>String</code>, <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>Option&lt;T&gt;</code>.</p>
-<p>Missing required keys (non-<code>Option</code>) panic at request time with a descriptive message including the env var name.</p>
+<p>Missing required keys (non-<code>Option</code>) cause a panic at startup with a descriptive message including the expected env var name.</p>
+<h3 id="programmatic-access"><a class="header" href="#programmatic-access">Programmatic access</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let config = R2eConfig::load().unwrap();
+
+// Typed retrieval
+let name: String = config.get("app.name").unwrap();
+let retries: i64 = config.get("app.max-retries").unwrap();
+
+// With default
+let port: i64 = config.get_or("server.port", 3000);
+
+// Check existence
+if config.contains_key("feature.flag") {
+    // ...
+}
+
+// Manual set
+let mut config = config;
+config.set("app.key", ConfigValue::String("value".into()));
+<span class="boring">}</span></code></pre>
+<h3 id="supported-types"><a class="header" href="#supported-types">Supported types</a></h3>
+<p>The <code>FromConfigValue</code> trait converts raw <code>ConfigValue</code> to Rust types:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Rust type</th><th>Accepted variants</th><th>Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>String</code></td><td>String, Integer, Float, Bool</td><td>Converts via <code>to_string()</code></td></tr>
+<tr><td><code>i64</code></td><td>Integer, String (parsable)</td><td></td></tr>
+<tr><td><code>i8</code>, <code>i16</code>, <code>i32</code></td><td>Integer, String</td><td>Range-checked via <code>i64</code></td></tr>
+<tr><td><code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>usize</code></td><td>Integer, String</td><td>Range-checked via <code>i64</code></td></tr>
+<tr><td><code>f64</code></td><td>Float, Integer, String</td><td></td></tr>
+<tr><td><code>f32</code></td><td>Float, Integer, String</td><td>Via <code>f64</code> cast</td></tr>
+<tr><td><code>bool</code></td><td>Bool, String (<code>"true"/"false"/"1"/"0"/"yes"/"no"</code>)</td><td>Case-insensitive</td></tr>
+<tr><td><code>Option&lt;T&gt;</code></td><td>Null → <code>None</code>, other → <code>Some(T)</code></td><td></td></tr>
+<tr><td><code>Vec&lt;T&gt;</code></td><td>List → mapped items, single value → <code>vec![T]</code></td><td></td></tr>
+<tr><td><code>HashMap&lt;String, V&gt;</code></td><td>Map → mapped entries</td><td></td></tr>
+<tr><td>Custom enum/struct</td><td>Via <code>#[derive(FromConfigValue)]</code></td><td>Requires <code>serde::Deserialize</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="custom-types-with-derivefromconfigvalue"><a class="header" href="#custom-types-with-derivefromconfigvalue">Custom types with <code>#[derive(FromConfigValue)]</code></a></h3>
+<p>For enums and other types, derive both <code>serde::Deserialize</code> and <code>FromConfigValue</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(serde::Deserialize, FromConfigValue, Clone, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum AppMode {
+    Development,
+    Production,
+    Staging,
+}
+<span class="boring">}</span></code></pre>
+<pre><code class="language-yaml">app:
+  mode: "production"
+</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let mode: AppMode = config.get("app.mode").unwrap();
+// mode == AppMode::Production
+<span class="boring">}</span></code></pre>
+<p>Use as a field in <code>ConfigProperties</code> structs with <code>Option&lt;T&gt;</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(ConfigProperties, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+    pub mode: Option&lt;AppMode&gt;,  // None if absent, deserialized via serde if present
+}
+<span class="boring">}</span></code></pre>
+<p>The derive works with any <code>Deserialize</code> type — enums, structs, or newtypes.</p>
+<h3 id="lists-and-maps"><a class="header" href="#lists-and-maps">Lists and maps</a></h3>
+<p>YAML sequences and maps are fully supported:</p>
+<pre><code class="language-yaml">app:
+  allowed-origins:
+    - "http://localhost:3000"
+    - "https://prod.example.com"
+  feature-flags:
+    dark-mode: true
+    beta: false
+</code></pre>
+<p>Sequences are stored both as a <code>List</code> at the parent key and individually indexed (<code>app.allowed-origins.0</code>, <code>app.allowed-origins.1</code>):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let origins: Vec&lt;String&gt; = config.get("app.allowed-origins").unwrap();
+let first: String = config.get("app.allowed-origins.0").unwrap();
+<span class="boring">}</span></code></pre>
+<h2 id="typed-sections-with-configproperties"><a class="header" href="#typed-sections-with-configproperties">Typed sections with <code>ConfigProperties</code></a></h2>
+<p>For groups of related settings, define a typed struct with <code>#[derive(ConfigProperties)]</code>. The prefix is provided at the injection site or call site — there is no struct-level prefix attribute.</p>
+<h3 id="basic-usage"><a class="header" href="#basic-usage">Basic usage</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(ConfigProperties, Clone, Debug)]
+pub struct DatabaseConfig {
+    /// Database connection URL
+    pub url: String,
+
+    /// Connection pool size
+    #[config(default = 10)]
+    pub pool_size: i64,
+
+    /// Optional connection timeout in seconds
+    pub timeout: Option&lt;i64&gt;,
+}
+<span class="boring">}</span></code></pre>
+<pre><code class="language-yaml">app:
+  database:
+    url: "postgres://localhost/mydb"
+</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let db = DatabaseConfig::from_config(&amp;config, Some("app.database"))?;
+// url = "postgres://localhost/mydb", pool_size = 10 (default), timeout = None
+<span class="boring">}</span></code></pre>
+<h3 id="field-attributes"><a class="header" href="#field-attributes">Field attributes</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attribute</th><th>Effect</th><th>Example</th></tr>
+</thead>
+<tbody>
+<tr><td><em>(none)</em></td><td>Required. Error if missing.</td><td><code>pub url: String</code></td></tr>
+<tr><td><code>Option&lt;T&gt;</code></td><td>Optional. <code>None</code> if missing.</td><td><code>pub timeout: Option&lt;i64&gt;</code></td></tr>
+<tr><td><code>#[config(default = value)]</code></td><td>Fallback if missing</td><td><code>#[config(default = 10)] pub pool_size: i64</code></td></tr>
+<tr><td><code>#[config(default = "str")]</code></td><td>String default (auto <code>.into()</code>)</td><td><code>#[config(default = "hello")] pub greeting: String</code></td></tr>
+<tr><td><code>#[config(key = "custom.path")]</code></td><td>Override key path (relative to prefix)</td><td><code>#[config(key = "jwks.url")] pub jwks_url: String</code></td></tr>
+<tr><td><code>#[config(env = "VAR")]</code></td><td>Env var fallback if key missing</td><td><code>#[config(env = "DATABASE_URL")] pub url: String</code></td></tr>
+<tr><td><code>#[config(section)]</code></td><td>Nested <code>ConfigProperties</code> sub-struct</td><td><code>#[config(section)] pub database: DatabaseConfig</code></td></tr>
+<tr><td><code>/// doc comment</code></td><td>Description in validation errors</td><td><code>/// Connection timeout</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Attributes combine: <code>#[config(key = "client.id", default = "my-app")]</code>.</p>
+<p>Priority for a field: <strong>YAML &gt; env var (<code>#[config(env)]</code>) &gt; default &gt; error/None</strong>.</p>
+<h3 id="custom-key-mapping"><a class="header" href="#custom-key-mapping">Custom key mapping</a></h3>
+<p>When the YAML hierarchy doesn’t match the Rust field name:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(ConfigProperties, Clone, Debug)]
+pub struct OidcConfig {
+    pub issuer: Option&lt;String&gt;,
+
+    #[config(key = "jwks.url")]
+    pub jwks_url: Option&lt;String&gt;,          // reads "&lt;prefix&gt;.jwks.url"
+
+    #[config(key = "client.id", default = "my-app")]
+    pub client_id: String,                  // reads "&lt;prefix&gt;.client.id"
+}
+<span class="boring">}</span></code></pre>
+<h3 id="nested-sections"><a class="header" href="#nested-sections">Nested sections</a></h3>
+<p>Compose config structs hierarchically with <code>#[config(section)]</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(ConfigProperties, Clone, Debug)]
+pub struct DatabaseConfig {
+    pub url: String,
+    #[config(default = 10)]
+    pub pool_size: i64,
+}
+
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+
+    #[config(section)]
+    pub database: DatabaseConfig,       // reads "&lt;prefix&gt;.database.*"
+
+    #[config(section)]
+    pub tls: Option&lt;TlsConfig&gt;,        // optional — None if section absent
+}
+<span class="boring">}</span></code></pre>
+<pre><code class="language-yaml">app:
+  name: "my-app"
+  database:
+    url: "postgres://localhost/mydb"
+    pool_size: 20
+  # tls omitted → None
+</code></pre>
+<p><code>#[config(section)]</code> is required because the derive macro operates on tokens only — it cannot tell whether a field implements <code>FromConfigValue</code> (scalar) or <code>ConfigProperties</code> (nested struct). The attribute tells the macro to generate <code>T::from_config(...)</code> instead of <code>config.get::&lt;T&gt;(...)</code>.</p>
+<p>When using <code>load_config::&lt;Root&gt;()</code>, all <code>#[config(section)]</code> children are <strong>automatically registered as beans</strong> — available for <code>#[inject]</code> in controllers and as dependencies in <code>#[bean]</code> constructors. This happens recursively, so grandchild sections are also registered.</p>
+<h3 id="doc-comments-as-descriptions"><a class="header" href="#doc-comments-as-descriptions">Doc comments as descriptions</a></h3>
+<p>Doc comments on fields become property descriptions, used in validation error messages:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(ConfigProperties, Clone, Debug)]
+pub struct AppConfig {
+    /// The display name of the application
+    pub name: String,
+}
+<span class="boring">}</span></code></pre>
+<p>If <code>app.name</code> is missing, the error includes: <code>-- The display name of the application</code>.</p>
+<h2 id="injection"><a class="header" href="#injection">Injection</a></h2>
+<h3 id="how-to-choose"><a class="header" href="#how-to-choose">How to choose</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Situation</th><th>Use</th></tr>
+</thead>
+<tbody>
+<tr><td>1–2 isolated values from different sections</td><td><code>#[config("full.key")]</code></td></tr>
+<tr><td>Typed config struct (registered via <code>load_config</code>)</td><td><code>#[inject]</code> on the config type</td></tr>
+<tr><td>Config needed outside DI (main, tests)</td><td><code>ConfigProperties::from_config()</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="in-controllers"><a class="header" href="#in-controllers">In controllers</a></h3>
+<p>With <code>load_config::&lt;RootConfig&gt;()</code>, config types are auto-registered as beans. Inject them with <code>#[inject]</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller]
+pub struct ConfigController {
+    #[inject]
+    root_config: RootConfig,          // auto-registered by load_config
+
+    #[config("app.name")]
+    name: String,                     // single scalar value
+}
+
+#[routes]
+impl ConfigController {
+    #[get("/config")]
+    async fn config_info(&amp;self) -&gt; Json&lt;serde_json::Value&gt; {
+        let app = &amp;self.root_config.app;
+        Json(serde_json::json!({
+            "app_name": app.name,
+            "greeting": app.greeting,
+        }))
+    }
+}
+<span class="boring">}</span></code></pre>
 <h3 id="in-beans"><a class="header" href="#in-beans">In beans</a></h3>
+<p>Nested config sections are available as bean dependencies:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[bean]
 impl NotificationService {
     pub fn new(
-        bus: EventBus,
+        bus: LocalEventBus,
         #[config("notification.capacity")] capacity: i64,
+        matching: MatchingConfig,           // auto-registered config child from BeanContext
     ) -&gt; Self {
-        Self { bus, capacity: capacity as usize }
+        Self { bus, capacity: capacity as usize, matching }
     }
 }
 <span class="boring">}</span></code></pre>
@@ -273,33 +550,138 @@ async fn create_pool(#[config("database.url")] url: String) -&gt; SqlitePool {
     SqlitePool::connect(&amp;url).await.unwrap()
 }
 <span class="boring">}</span></code></pre>
-<h3 id="programmatic-access"><a class="header" href="#programmatic-access">Programmatic access</a></h3>
+<h2 id="appbuilder-integration"><a class="header" href="#appbuilder-integration">AppBuilder integration</a></h2>
+<p>Two builder-phase methods to provide config — call before <code>.build_state()</code> or <code>.with_state()</code>.</p>
+<h3 id="load_configc-recommended"><a class="header" href="#load_configc-recommended"><code>load_config::&lt;C&gt;()</code> (recommended)</a></h3>
+<p>The idiomatic way to set up configuration. Loads YAML + env, stores the raw config, provides <code>R2eConfig</code> in the bean registry, and when <code>C</code> is not <code>()</code>:</p>
+<ul>
+<li>Constructs the typed config via <code>C::from_config()</code></li>
+<li><strong>Auto-registers all <code>#[config(section)]</code> children as beans</strong> (recursively)</li>
+<li>Adds both <code>C</code> and <code>R2eConfig</code> to the compile-time type list</li>
+</ul>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let config = R2eConfig::load("dev").unwrap();
-
-// Typed access
-let name: String = config.get("app.name").unwrap();
-let retries: i64 = config.get("app.max-retries").unwrap();
-
-// With default
-let port: i64 = config.get_or("server.port", 3000);
-
-// Manual set
-config.set("app.key", ConfigValue::String("value".into()));
+</span>AppBuilder::new().load_config::&lt;()&gt;()           // raw config only
+AppBuilder::new().load_config::&lt;RootConfig&gt;()   // raw + typed + children (preferred)
 <span class="boring">}</span></code></pre>
-<h2 id="providing-config-to-the-app"><a class="header" href="#providing-config-to-the-app">Providing config to the app</a></h2>
-<p>Pass the config to the builder so controllers can access it:</p>
+<p><code>C</code> must implement <code>LoadableConfig</code> — satisfied by <code>()</code> (raw only) and any <code>T: ConfigProperties</code>.</p>
+<p>Example with nested sections:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let config = R2eConfig::load("dev").unwrap();
+</span>#[derive(ConfigProperties, Clone, Debug)]
+pub struct RootConfig {
+    #[config(section)]
+    pub app: AppConfig,           // auto-registered as a bean
+    #[config(section)]
+    pub database: DatabaseConfig, // auto-registered as a bean
+}
 
 AppBuilder::new()
-    .provide(config.clone())
-    .build_state::&lt;AppState, _&gt;()
-    .await
-    .with_config(config)  // makes it available for #[config] fields
+    .load_config::&lt;RootConfig&gt;()  // RootConfig, AppConfig, DatabaseConfig all available
     // ...
+<span class="boring">}</span></code></pre>
+<h3 id="override_configconfig-tests-only"><a class="header" href="#override_configconfig-tests-only"><code>override_config(config)</code> (tests only)</a></h3>
+<p><code>load_config</code> is the only config registration point. <code>override_config</code> is a
+test-harness stash (part of the <code>override_bean</code>/<code>override_config_value</code> family):
+it holds an in-memory <code>R2eConfig</code> that the <strong>next</strong> <code>load_config::&lt;C&gt;()</code> uses
+instead of reading disk. Prefer plain <code>load_config</code> everywhere else; when
+loading real config from disk, just call <code>.load_config::&lt;C&gt;()</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let config = R2eConfig::from_yaml_str("app:\n  name: test").unwrap();
+AppBuilder::new()
+    .override_config(config)
+    .load_config::&lt;RootConfig&gt;()
+<span class="boring">}</span></code></pre>
+<p>Both paths provide <code>R2eConfig</code> in the
+bean registry. <code>R2eConfig</code> is therefore just another bean in the graph — nothing
+to wire by hand. It is available for <code>#[inject]</code>/<code>#[config(...)]</code> in controllers,
+as a dependency in <code>#[bean]</code>/<code>#[producer]</code> constructors, and from a <code>BeanContext</code>
+via <code>ctx.get::&lt;R2eConfig&gt;()</code>. (There is no state struct and no <code>FromRef</code> impl to
+write — the state type is inferred from the bean graph.)</p>
+<h2 id="startup-validation"><a class="header" href="#startup-validation">Startup validation</a></h2>
+<p>R2E validates configuration at startup. When a controller is registered, all <code>#[config("key")]</code> fields are checked. Missing required keys cause a panic with a clear error:</p>
+<pre><code>=== CONFIGURATION ERRORS (controller: MyController) ===
+
+Missing configuration keys:
+  - `MyController`: key 'app.database.url' (String) — set env var `APP_DATABASE_URL` -- Database connection URL
+  - `MyController`: key 'app.secret' (String) — set env var `APP_SECRET`
+============================
+</code></pre>
+<p>For <code>ConfigProperties</code> sections, validation also catches type mismatches and garde constraint violations.</p>
+<h2 id="serve_auto"><a class="header" href="#serve_auto"><code>serve_auto()</code></a></h2>
+<p>Instead of hardcoding the listen address, read it from configuration:</p>
+<pre><code class="language-yaml">server:
+  host: "0.0.0.0"
+  port: 8080
+</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    // ... build state, register controllers ...
+    .serve_auto()  // reads server.host and server.port from config
+    .await
+    .unwrap();
+<span class="boring">}</span></code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Config key</th><th>Type</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>server.host</code></td><td>String</td><td><code>"0.0.0.0"</code></td></tr>
+<tr><td><code>server.port</code></td><td>u16</td><td><code>3000</code></td></tr>
+<tr><td><code>server.tcp_nodelay</code></td><td>bool</td><td><code>true</code></td></tr>
+<tr><td><code>server.workers</code></td><td>usize | <code>"per-core"</code></td><td><em>(absent → single listener)</em></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>server.workers</code> enables SO_REUSEPORT sharded serving (N worker threads, each a
+<code>current_thread</code> runtime with its own listener). Unix only; unsupported with
+hot-reload. See the <a href="../../../features/19-sharded-serving.html">Sharded Serving feature doc</a>.</p>
+<p>If keys are missing, defaults are used. This replaces <code>.serve("0.0.0.0:3000")</code> for production setups where the address should be configurable per environment.</p>
+<h2 id="built-in-configuration-types"><a class="header" href="#built-in-configuration-types">Built-in configuration types</a></h2>
+<h3 id="tracingconfig"><a class="header" href="#tracingconfig">TracingConfig</a></h3>
+<p>R2E ships with <code>TracingConfig</code>, a <code>ConfigProperties</code> struct that configures the tracing subscriber. It is used by the <code>ConfiguredTracing</code> plugin and embedded in <code>ObservabilityConfig</code>.</p>
+<pre><code class="language-yaml">tracing:
+  filter: "info,tower_http=debug,my_app=trace"
+  format: json
+  ansi: false
+  thread-ids: true
+  span-events: full
+</code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+// Load from R2eConfig
+let tracing = Tracing::from_config(&amp;r2e_config);
+
+// Or build programmatically
+let tracing = Tracing::configured(
+    TracingConfig::default()
+        .with_format(LogFormat::Json)
+        .with_ansi(false)
+);
+<span class="boring">}</span></code></pre>
+<p>See the <a href="../advanced/observability.html">Observability</a> chapter for the full reference.</p>
+<h2 id="testing"><a class="header" href="#testing">Testing</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Empty config
+let config = R2eConfig::empty();
+
+// From YAML string
+let config = R2eConfig::from_yaml_str(r#"
+app:
+  name: "test-app"
+  greeting: "hi"
+"#).unwrap();
+
+// Programmatic setup
+let mut config = R2eConfig::empty();
+config.set("app.name", ConfigValue::String("Test App".into()));
+config.set("app.port", ConfigValue::Integer(8080));
 <span class="boring">}</span></code></pre>
 
                     </main>

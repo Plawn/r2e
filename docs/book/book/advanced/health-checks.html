@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - R2E — Rust Enterprise Edition</title>
+        <title>Health Checks - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-07ec6f4c.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c3694cfa.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">R2E — Rust Enterprise Edition</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/plawn/r2e" title="Git repository" aria-label="Git repository">
@@ -177,73 +177,278 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>R2E</strong> (Rust Enterprise Edition) is an ergonomic enterprise framework for Rust, inspired by Quarkus. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on <a href="https://github.com/tokio-rs/axum">Axum</a> via the <code>r2e-http</code> abstraction layer.</p>
-<h2 id="what-r2e-offers"><a class="header" href="#what-r2e-offers">What R2E offers</a></h2>
+                        <h1 id="health-checks"><a class="header" href="#health-checks">Health Checks</a></h1>
+<p>R2E provides two levels of health check support: a simple endpoint for basic deployments, and an advanced system with custom indicators, liveness/readiness probes, and result caching.</p>
+<h2 id="simple-health-check"><a class="header" href="#simple-health-check">Simple health check</a></h2>
+<p>Install the <code>Health</code> plugin for a minimal <code>GET /health</code> endpoint that always returns <code>"OK"</code> with status 200:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[controller(path = "/users")]
-pub struct UserController {
-    #[inject]           user_service: UserService,
-    #[inject(identity)] user: AuthenticatedUser,
-    #[config("app.greeting")] greeting: String,
+</span>AppBuilder::new()
+    .plugin(Health)
+    .build_state()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
+<span class="boring">}</span></code></pre>
+<p>This is sufficient for basic load balancer health checks where you only need to confirm the process is alive and accepting connections.</p>
+<h2 id="advanced-health-checks"><a class="header" href="#advanced-health-checks">Advanced health checks</a></h2>
+<p>For production systems that need to verify database connectivity, external service availability, or other dependencies, use <code>Health::builder()</code> to create an <code>AdvancedHealth</code> plugin with custom indicators.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+use r2e::builtins::health::{HealthBuilder, HealthIndicator, HealthStatus};
+
+AppBuilder::new()
+    .plugin(
+        Health::builder()
+            .check(DbHealth::new(pool.clone()))
+            .check(RedisHealth::new(redis.clone()))
+            .cache_ttl(Duration::from_secs(5))
+            .build()
+    )
+    .build_state()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
+<span class="boring">}</span></code></pre>
+<h3 id="endpoints"><a class="header" href="#endpoints">Endpoints</a></h3>
+<p>The advanced plugin registers three endpoints:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Path</th><th>Behavior</th><th>Use case</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GET /health</code></td><td>Runs all checks. Returns 200 with JSON if all are UP, 503 if any are DOWN.</td><td>General health monitoring, dashboards.</td></tr>
+<tr><td><code>GET /health/live</code></td><td>Always returns 200 <code>"OK"</code>. No checks are run.</td><td>Kubernetes liveness probe. Confirms the process is running.</td></tr>
+<tr><td><code>GET /health/ready</code></td><td>Runs checks where <code>affects_readiness()</code> returns <code>true</code>. Returns 200 if all pass, 503 otherwise.</td><td>Kubernetes readiness probe. Confirms the app can serve traffic.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="response-format"><a class="header" href="#response-format">Response format</a></h3>
+<p>The <code>/health</code> and <code>/health/ready</code> endpoints return JSON:</p>
+<pre><code class="language-json">{
+  "status": "UP",
+  "checks": [
+    {
+      "name": "db",
+      "status": "UP",
+      "duration_ms": 2
+    },
+    {
+      "name": "redis",
+      "status": "DOWN",
+      "reason": "Connection refused",
+      "duration_ms": 1003
+    }
+  ],
+  "uptime_seconds": 3842
+}
+</code></pre>
+<p>The top-level <code>status</code> is <code>"UP"</code> only when every individual check is UP. If any check is DOWN, the top-level status is <code>"DOWN"</code> and the HTTP status code is 503.</p>
+<h2 id="the-healthindicator-trait"><a class="header" href="#the-healthindicator-trait">The HealthIndicator trait</a></h2>
+<p>Implement <code>HealthIndicator</code> to define a custom health check:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::builtins::health::{HealthIndicator, HealthStatus};
+
+struct DbHealth {
+    pool: sqlx::SqlitePool,
 }
 
-#[routes]
-#[intercept(Logged::info())]
-impl UserController {
-    #[get("/")]
-    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
-        Json(self.user_service.list().await)
+impl DbHealth {
+    fn new(pool: sqlx::SqlitePool) -&gt; Self {
+        Self { pool }
+    }
+}
+
+impl HealthIndicator for DbHealth {
+    fn name(&amp;self) -&gt; &amp;str {
+        "db"
     }
 
-    #[post("/")]
-    #[roles("admin")]
-    #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&amp;self, Json(body): Json&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
-        Json(self.user_service.create(body.name, body.email).await)
+    async fn check(&amp;self) -&gt; HealthStatus {
+        match sqlx::query("SELECT 1").fetch_one(&amp;self.pool).await {
+            Ok(_) =&gt; HealthStatus::Up,
+            Err(e) =&gt; HealthStatus::Down(e.to_string()),
+        }
     }
 }
 <span class="boring">}</span></code></pre>
-<p>If you’ve used Java’s Quarkus, Spring Boot, or C#’s ASP.NET, this should feel familiar — but everything is resolved at compile time with zero runtime reflection.</p>
-<h2 id="key-features"><a class="header" href="#key-features">Key features</a></h2>
+<p>The trait has three methods:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name(&amp;self) -&gt; &amp;str</code></td><td>Yes</td><td>A short identifier for this check (e.g. <code>"db"</code>, <code>"redis"</code>, <code>"disk"</code>).</td></tr>
+<tr><td><code>check(&amp;self) -&gt; impl Future&lt;Output = HealthStatus&gt;</code></td><td>Yes</td><td>Performs the health check. Return <code>HealthStatus::Up</code> or <code>HealthStatus::Down(reason)</code>.</td></tr>
+<tr><td><code>affects_readiness(&amp;self) -&gt; bool</code></td><td>No (default: <code>true</code>)</td><td>Whether this check is included in the <code>/health/ready</code> probe.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="liveness-only-checks"><a class="header" href="#liveness-only-checks">Liveness-only checks</a></h3>
+<p>Some checks indicate degraded state but should not prevent the application from receiving traffic. Override <code>affects_readiness</code> to exclude them from the readiness probe:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>struct DiskSpaceHealth {
+    threshold_mb: u64,
+}
+
+impl HealthIndicator for DiskSpaceHealth {
+    fn name(&amp;self) -&gt; &amp;str {
+        "disk"
+    }
+
+    async fn check(&amp;self) -&gt; HealthStatus {
+        let available = get_available_disk_mb();
+        if available &gt; self.threshold_mb {
+            HealthStatus::Up
+        } else {
+            HealthStatus::Down(format!("Only {} MB available", available))
+        }
+    }
+
+    fn affects_readiness(&amp;self) -&gt; bool {
+        false // disk space issues should not block traffic
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>With this configuration:</p>
 <ul>
-<li><strong>Declarative controllers</strong> — <code>#[controller]</code> + <code>#[routes]</code> generate Axum handlers with zero boilerplate</li>
-<li><strong>Compile-time DI</strong> — <code>#[inject]</code> for services, <code>#[inject(identity)]</code> for request-scoped identity, <code>#[config("key")]</code> for configuration</li>
-<li><strong>JWT/OIDC security</strong> — <code>AuthenticatedUser</code> extractor with JWKS caching, role-based access via <code>#[roles("admin")]</code></li>
-<li><strong>Guards</strong> — Pre-auth and post-auth guards for custom authorization logic</li>
-<li><strong>Interceptors</strong> — AOP-style <code>#[intercept(...)]</code> for logging, timing, caching, and custom cross-cutting concerns</li>
-<li><strong>Rate limiting</strong> — Token-bucket rate limiting per user, per IP, or global</li>
-<li><strong>Event bus</strong> — Typed in-process pub/sub with <code>#[consumer]</code> for declarative event handlers</li>
-<li><strong>Scheduling</strong> — <code>#[scheduled(every = 30)]</code> and <code>#[scheduled(cron = "...")]</code> for background tasks</li>
-<li><strong>Managed resources</strong> — <code>#[managed]</code> for automatic transaction lifecycle</li>
-<li><strong>Database ergonomics</strong> — core pagination and managed SQLx/Diesel transactions</li>
-<li><strong>Validation</strong> — Automatic validation via <code>garde</code> crate — just derive <code>Validate</code> and use <code>Json&lt;T&gt;</code></li>
-<li><strong>OpenAPI</strong> — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI</li>
-<li><strong>Configuration</strong> — YAML + env var overlay with profile support</li>
-<li><strong>Static file serving</strong> — Embed frontend assets in the binary with SPA fallback via <code>EmbeddedFrontend</code> plugin</li>
-<li><strong>SSE &amp; WebSocket</strong> — Built-in <code>SseBroadcaster</code> and <code>WsRooms</code> for real-time communication</li>
-<li><strong>Testing</strong> — <code>TestApp</code> HTTP client wrapper, <code>TestJwt</code>, and <code>r2e test --sonarqube</code> coverage</li>
-<li><strong>CLI</strong> — <code>r2e new</code>, <code>r2e add</code>, <code>r2e dev</code>, <code>r2e generate</code>, <code>r2e test</code> for scaffolding and workflows</li>
+<li><code>GET /health</code> includes the disk check in its response</li>
+<li><code>GET /health/ready</code> skips it entirely</li>
 </ul>
-<h2 id="how-this-book-is-organized"><a class="header" href="#how-this-book-is-organized">How this book is organized</a></h2>
+<h2 id="healthbuilder"><a class="header" href="#healthbuilder">HealthBuilder</a></h2>
+<p><code>HealthBuilder</code> assembles indicators into an <code>AdvancedHealth</code> plugin:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::builtins::health::HealthBuilder;
+use std::time::Duration;
+
+let health_plugin = HealthBuilder::new()
+    .check(DbHealth::new(pool.clone()))
+    .check(RedisHealth::new(redis.clone()))
+    .check(DiskSpaceHealth { threshold_mb: 500 })
+    .cache_ttl(Duration::from_secs(10))
+    .build();
+<span class="boring">}</span></code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>check(indicator)</code></td><td>Register a <code>HealthIndicator</code>. Can be called multiple times.</td></tr>
+<tr><td><code>cache_ttl(duration)</code></td><td>Cache health check results for the given duration. Subsequent requests within the TTL window reuse cached results instead of re-running checks.</td></tr>
+<tr><td><code>build()</code></td><td>Consume the builder and produce an <code>AdvancedHealth</code> plugin.</td></tr>
+</tbody>
+</table>
+</div>
+<p>You can also access the builder through <code>Health::builder()</code> as a convenience:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Health::builder()
+    .check(DbHealth::new(pool))
+    .build()
+<span class="boring">}</span></code></pre>
+<h2 id="cache-ttl"><a class="header" href="#cache-ttl">Cache TTL</a></h2>
+<p>Health checks that contact external services can be expensive. The <code>cache_ttl</code> option prevents checks from running on every request:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>Health::builder()
+    .check(DbHealth::new(pool))
+    .cache_ttl(Duration::from_secs(5))
+    .build()
+<span class="boring">}</span></code></pre>
+<p>With a 5-second TTL:</p>
 <ul>
-<li><strong>Getting Started</strong> — Install R2E, create your first app, learn the project structure</li>
-<li><strong>Core Concepts</strong> — Controllers, DI, beans, plugins, configuration, error handling</li>
-<li><strong>Security</strong> — JWT authentication, guards, roles, rate limiting</li>
-<li><strong>Data Access</strong> — Entities, repositories, queries, pagination, transactions</li>
-<li><strong>Events and Scheduling</strong> — Event bus, consumers, background tasks</li>
-<li><strong>Advanced</strong> — Interceptors, custom guards/plugins, managed resources, lifecycle hooks, OpenAPI, performance</li>
-<li><strong>Testing</strong> — TestApp, TestJwt, integration patterns</li>
-<li><strong>Reference</strong> — Crate map, CLI reference, API docs</li>
+<li>The first request runs all checks and caches the result.</li>
+<li>Requests within the next 5 seconds return the cached response instantly.</li>
+<li>After 5 seconds, the next request re-runs all checks and refreshes the cache.</li>
 </ul>
+<p>Both <code>/health</code> and <code>/health/ready</code> share the same cache. If no <code>cache_ttl</code> is set, every request runs all checks.</p>
+<h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
+<pre class="playground"><code class="language-rust">use r2e::prelude::*;
+use r2e::builtins::health::{HealthBuilder, HealthIndicator, HealthStatus};
+use std::time::Duration;
+
+// -- Database health check --
+
+struct DbHealth {
+    pool: sqlx::SqlitePool,
+}
+
+impl HealthIndicator for DbHealth {
+    fn name(&amp;self) -&gt; &amp;str { "db" }
+
+    async fn check(&amp;self) -&gt; HealthStatus {
+        match sqlx::query("SELECT 1").fetch_one(&amp;self.pool).await {
+            Ok(_) =&gt; HealthStatus::Up,
+            Err(e) =&gt; HealthStatus::Down(e.to_string()),
+        }
+    }
+}
+
+// -- External API health check --
+
+struct ExternalApiHealth {
+    url: String,
+    client: reqwest::Client,
+}
+
+impl HealthIndicator for ExternalApiHealth {
+    fn name(&amp;self) -&gt; &amp;str { "external-api" }
+
+    async fn check(&amp;self) -&gt; HealthStatus {
+        match self.client.get(&amp;self.url).send().await {
+            Ok(resp) if resp.status().is_success() =&gt; HealthStatus::Up,
+            Ok(resp) =&gt; HealthStatus::Down(format!("HTTP {}", resp.status())),
+            Err(e) =&gt; HealthStatus::Down(e.to_string()),
+        }
+    }
+
+    fn affects_readiness(&amp;self) -&gt; bool {
+        false // external API being down should not block our readiness
+    }
+}
+
+// -- Application setup --
+
+#[r2e::main]
+async fn main() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:")
+        .await
+        .unwrap();
+
+    let health = Health::builder()
+        .check(DbHealth { pool: pool.clone() })
+        .check(ExternalApiHealth {
+            url: "https://api.example.com/health".into(),
+            client: reqwest::Client::new(),
+        })
+        .cache_ttl(Duration::from_secs(10))
+        .build();
+
+    AppBuilder::new()
+        .plugin(Tracing)
+        .plugin(health)
+        .build_state()
+        .await
+        .serve("0.0.0.0:3000")
+        .await;
+}</code></pre>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../advanced/openapi.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started/installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../advanced/secure-headers.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -253,8 +458,11 @@ impl UserController {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../advanced/openapi.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started/installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../advanced/secure-headers.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -274,13 +482,13 @@ impl UserController {
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -204,6 +204,23 @@ async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
 async fn slow_query(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
 <h3 id="cache--response-caching"><a class="header" href="#cache--response-caching"><code>Cache</code> — Response caching</a></h3>
+<p><code>Cache</code> reads a cache store from the bean graph, so the store must be provided
+as a bean (an <code>Arc&lt;dyn CacheStore&gt;</code>). A missing store is a <strong>compile error at
+<code>register_controller()</code></strong>. Provide one on the builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_cache::InMemoryStore;
+
+AppBuilder::new()
+    .provide(InMemoryStore::shared())   // Arc&lt;dyn CacheStore&gt;
+    // ... other beans ...
+    .build_state()
+    .await;
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p>There is no global cache store anymore — the old <code>cache_backend()</code> /
+<code>set_cache_backend()</code> functions have been removed. The store is always a bean.</p>
+</blockquote>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[get("/")]
@@ -214,6 +231,9 @@ async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
 #[intercept(Cache::ttl(30).group("users"))]      // Named cache group
 async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
+<p><code>Cache</code> and <code>CacheInvalidate</code> are the only built-in interceptors that read a
+bean. <code>Logged</code>, <code>Timed</code>, <code>Counted</code>, and <code>MetricTimed</code> are self-contained and
+need no beans.</p>
 <h3 id="cacheinvalidate--clear-cache-groups"><a class="header" href="#cacheinvalidate--clear-cache-groups"><code>CacheInvalidate</code> — Clear cache groups</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -247,24 +267,75 @@ impl UserController {
     async fn create(&amp;self, body: Json&lt;Request&gt;) -&gt; Json&lt;User&gt; { /* ... */ }
 }
 <span class="boring">}</span></code></pre>
+<h2 id="scheduled-tasks-and-grpc-methods"><a class="header" href="#scheduled-tasks-and-grpc-methods">Scheduled tasks and gRPC methods</a></h2>
+<p><code>#[intercept(...)]</code> also works on <code>#[scheduled]</code> methods and on methods in a
+<code>#[grpc_routes]</code> block, with the same construction model as HTTP routes: the
+interceptor is built <strong>once at registration</strong>, from the resolved bean graph,
+and wraps every task tick / RPC call. Bean-reading interceptors (e.g. one
+declared with <code>#[derive(DecoratorBean)]</code> and <code>#[inject]</code> fields) work there
+too:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl ReportJobs {
+    #[scheduled(every = 60)]
+    #[intercept(DbAuditLog::spec("nightly"))]  // reads beans — built from the graph
+    async fn refresh(&amp;self) { /* ... */ }
+}
+<span class="boring">}</span></code></pre>
+<p>Differences from HTTP routes:</p>
+<ul>
+<li>Guards don’t apply (there is no request to reject) — only interceptors.</li>
+<li>Type-constrained interceptors must match the method’s return type: a
+scheduled method returns <code>()</code> or <code>Result&lt;(), E&gt;</code>, so <code>Cache</code> (which needs a
+<code>Cacheable</code> return) doesn’t apply there.</li>
+<li><strong>Scheduled methods run their interceptors on direct calls too</strong>: the
+chain wraps the method body itself, so calling <code>self.refresh().await</code> from
+another method (say, an admin route forcing a run) still goes through the
+interceptors.</li>
+<li><strong>A sync <code>#[scheduled]</code> method with interceptors becomes <code>async</code></strong>: the
+chain must be awaited, so the macro promotes the generated method to
+<code>async fn</code> (the body you wrote still runs synchronously inside it). Call
+it with <code>.await</code>; the generated rustdoc carries a note explaining the
+promotion. Controller-level <code>#[intercept]</code> counts too — a sync scheduled
+method in a controller carrying one is promoted even without a
+method-level site. Without any applicable interceptor the method stays
+sync.</li>
+<li>One caveat: a controller built by hand in a test — without going through
+registration — runs its scheduled methods undecorated.</li>
+</ul>
 <h2 id="execution-order"><a class="header" href="#execution-order">Execution order</a></h2>
 <p>When multiple interceptors are applied, they wrap in this order (outermost to innermost):</p>
 <ol>
-<li><code>Logged</code> (controller-level, then method-level)</li>
-<li><code>Timed</code></li>
-<li>User-defined interceptors (<code>#[intercept(...)]</code>)</li>
-<li><code>Cache</code></li>
+<li>Controller-level interceptors (declaration order)</li>
+<li>Method-level interceptors (declaration order)</li>
 <li>Method body</li>
-<li><code>CacheInvalidate</code> (after body)</li>
 </ol>
-<h2 id="writing-custom-interceptors"><a class="header" href="#writing-custom-interceptors">Writing custom interceptors</a></h2>
-<p>Implement the <code>Interceptor&lt;R&gt;</code> trait:</p>
+<p>Interceptors always see the handler’s <strong>raw return type</strong> (<code>Json&lt;T&gt;</code>, <code>Result&lt;Json&lt;T&gt;, E&gt;</code>, etc.). The <code>IntoResponse</code> conversion to <code>Response</code> happens after the outermost interceptor.</p>
+<h2 id="combining-with-guards-and-roles"><a class="header" href="#combining-with-guards-and-roles">Combining with guards and roles</a></h2>
+<p><code>#[intercept(...)]</code> works alongside <code>#[roles]</code>, <code>#[guard]</code>, and <code>#[pre_guard]</code>. Guards run before the interceptor chain and short-circuit independently — they don’t affect the return type that interceptors see:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::interceptors::{Interceptor, InterceptorContext};
+</span>#[get("/admin/users")]
+#[roles("admin")]                                  // Guard: 403 if not admin
+#[intercept(Cache::ttl(30).group("admin_users"))]  // Cache: sees Json&lt;Vec&lt;User&gt;&gt;, not Response
+async fn admin_list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p><strong>Known limitation:</strong> <code>#[managed]</code> parameters combined with type-constrained interceptors (e.g., <code>Cache</code>) don’t work because the managed resource lifecycle wraps <code>into_response</code> inside the interceptor closure, so <code>Cache</code> sees <code>Response</code> instead of the raw type. Workaround: inject the store bean (<code>#[inject] store: Arc&lt;dyn CacheStore&gt;</code>) and cache manually in the handler body.</p>
+</blockquote>
+<h2 id="writing-custom-interceptors"><a class="header" href="#writing-custom-interceptors">Writing custom interceptors</a></h2>
+<p>Implement the <code>Interceptor&lt;R&gt;</code> trait:</p>
+<p>A self-contained interceptor (no bean dependencies) opts in with one line,
+<code>impl SelfBuilt for AuditLog {}</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*; // Interceptor, InterceptorContext, SelfBuilt
 use std::future::Future;
 
 pub struct AuditLog;
+
+impl SelfBuilt for AuditLog {}
 
 impl&lt;R: Send&gt; Interceptor&lt;R&gt; for AuditLog {
     fn around&lt;F, Fut&gt;(&amp;self, ctx: InterceptorContext, next: F) -&gt; impl Future&lt;Output = R&gt; + Send
@@ -296,7 +367,29 @@ impl&lt;R: Send&gt; Interceptor&lt;R&gt; for AuditLog {
 #[intercept(AuditLog)]
 async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
-<p>The type must be constructable as a bare path expression (unit struct or constant).</p>
+<p>The <code>#[intercept(...)]</code> attribute’s leading type path names the decorator spec.
+For a self-contained interceptor, that type is the interceptor itself
+(<code>impl SelfBuilt</code>). An interceptor that needs beans holds them as <code>#[inject]</code>
+fields and derives <code>DecoratorBean</code> — plain fields become config passed to the
+generated <code>spec(...)</code> constructor at the attribute site:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(DecoratorBean)]
+pub struct DbAuditLog {
+    #[inject]
+    pool: SqlitePool,     // from the bean graph, compile-checked
+    prefix: String,       // config, set at the site
+}
+
+impl&lt;R: Send&gt; Interceptor&lt;R&gt; for DbAuditLog { /* uses self.pool */ }
+
+#[get("/")]
+#[intercept(DbAuditLog::spec("api".into()))]
+async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
+<span class="boring">}</span></code></pre>
+<p>See <a href="./custom-guards.html#guards-that-read-beans">Custom Guards</a> for the full
+field-attribute reference (<code>#[inject]</code>, <code>#[config]</code>, plain fields) and the
+low-level <code>DecoratorSpec</code> contract the derive expands to.</p>
 <h3 id="interceptorcontext"><a class="header" href="#interceptorcontext"><code>InterceptorContext</code></a></h3>
 <div class="table-wrapper">
 <table>
@@ -316,7 +409,7 @@ async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../events-and-scheduling/scheduling.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../grpc/guards-and-identity.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -330,7 +423,7 @@ async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; { /* ... */ }
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../events-and-scheduling/scheduling.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../grpc/guards-and-identity.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

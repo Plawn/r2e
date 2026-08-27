@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,55 +181,73 @@
 <p>R2E provides declarative background task scheduling with interval, cron, and delayed execution.</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <p>Enable the scheduler feature and install the <code>Scheduler</code> plugin:</p>
-<pre><code class="language-toml">r2e = { version = "0.1", features = ["scheduler"] }
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["scheduler"] }   # pulls in "executor"
 </code></pre>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use r2e::r2e_scheduler::Scheduler;
+use r2e::r2e_executor::Executor;
 
 AppBuilder::new()
+    .plugin(Executor)                   // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                  // MUST be before build_state()
-    .build_state::&lt;AppState, _&gt;()
+    .build_state()
     .await
     .register_controller::&lt;ScheduledJobs&gt;()
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
 <span class="boring">}</span></code></pre>
-<p>The <code>Scheduler</code> plugin must be installed <strong>before</strong> <code>build_state()</code> because it provides a <code>CancellationToken</code> to the bean graph.</p>
+<p>Both plugins must be installed <strong>before</strong> <code>build_state()</code>. The <code>Scheduler</code> provides a <code>CancelToken</code> and a <code>ScheduledJobRegistry</code> to the bean graph and <strong>requires the <code>Executor</code> plugin</strong>: it declares <code>type Deps = (PoolExecutor,)</code>, so <code>.plugin(Scheduler)</code> without a <code>PoolExecutor</code> in the graph fails at <code>build_state()</code> with a guided “missing <code>.provide::&lt;PoolExecutor&gt;()</code> / <code>.register::&lt;PoolExecutor&gt;()</code>” error. Order between the two plugins does not matter (<code>Deps</code> are checked against the final provision list), and the <code>scheduler</code> feature pulls in <code>executor</code>.</p>
+<h3 id="configuration-scheduler"><a class="header" href="#configuration-scheduler">Configuration (<code>scheduler.*</code>)</a></h3>
+<p>The plugin reads an optional <code>scheduler.*</code> YAML section (<code>SchedulerConfig</code>, <code>CONFIG_PREFIX = "scheduler"</code>). All keys are optional:</p>
+<pre><code class="language-yaml">scheduler:
+  enabled: true            # standard &lt;prefix&gt;.enabled gate; when false, tasks don't start (beans still provided)
+  executor: dedicated      # "shared" (default) or "dedicated"
+  max-concurrent: 8        # dedicated pool only
+  queue-capacity: 256      # dedicated pool only
+  shutdown-timeout: 10s    # dedicated pool only
+</code></pre>
+<p>By default ticks run on the shared <code>PoolExecutor</code>. Set <code>executor: dedicated</code> to give scheduled work a private pool (sized by the keys above) so it never contends with other background jobs.</p>
 <h2 id="declaring-scheduled-tasks"><a class="header" href="#declaring-scheduled-tasks">Declaring scheduled tasks</a></h2>
 <p>Use <code>#[scheduled]</code> on controller methods:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(state = AppState)]
+</span>#[controller]
 pub struct ScheduledJobs {
     #[inject] user_service: UserService,
 }
 
 #[routes]
 impl ScheduledJobs {
-    // Run every 30 seconds
+    // Run every 30 seconds (integer = seconds)
     #[scheduled(every = 30)]
     async fn count_users(&amp;self) {
         let count = self.user_service.count().await;
         tracing::info!(count, "Scheduled user count");
     }
 
-    // Run on a cron schedule (every hour)
+    // Run every 5 minutes (duration string)
+    #[scheduled(every = "5m")]
+    async fn sync_data(&amp;self) {
+        tracing::info!("Syncing data");
+    }
+
+    // Run on a cron schedule (every hour) — validated at compile time
     #[scheduled(cron = "0 0 * * * *")]
     async fn hourly_cleanup(&amp;self) {
         tracing::info!("Running hourly cleanup");
     }
 
     // Run every 60 seconds, first execution after 10 second delay
-    #[scheduled(every = 60, delay = 10)]
+    #[scheduled(every = "1m", initial_delay = "10s")]
     async fn delayed_task(&amp;self) {
         tracing::info!("Delayed task executed");
     }
 }
 <span class="boring">}</span></code></pre>
 <h2 id="schedule-types"><a class="header" href="#schedule-types">Schedule types</a></h2>
+<p><code>every</code> and <code>initial_delay</code> accept either an integer (interpreted as seconds) or a duration string with suffixes <code>ms</code>, <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>. Suffixes are combinable: <code>"1h30m"</code>, <code>"2m30s"</code>.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -237,11 +255,30 @@ impl ScheduledJobs {
 </thead>
 <tbody>
 <tr><td><code>every = N</code></td><td>Run every N seconds</td><td><code>#[scheduled(every = 30)]</code></td></tr>
-<tr><td><code>every = N, delay = D</code></td><td>Every N seconds, first run after D seconds</td><td><code>#[scheduled(every = 60, delay = 10)]</code></td></tr>
-<tr><td><code>cron = "expr"</code></td><td>Cron expression (6 fields)</td><td><code>#[scheduled(cron = "0 */5 * * * *")]</code></td></tr>
+<tr><td><code>every = "dur"</code></td><td>Run at a duration interval</td><td><code>#[scheduled(every = "5m")]</code></td></tr>
+<tr><td><code>every = .., initial_delay = ..</code></td><td>Interval with initial delay</td><td><code>#[scheduled(every = "1m", initial_delay = "10s")]</code></td></tr>
+<tr><td><code>cron = "expr"</code></td><td>Cron expression (6 fields, validated at compile time)</td><td><code>#[scheduled(cron = "0 */5 * * * *")]</code></td></tr>
+<tr><td><code>name = ".."</code></td><td>Override the task name (default <code>&lt;Controller&gt;_&lt;method&gt;</code>)</td><td><code>#[scheduled(every = 30, name = "user_count")]</code></td></tr>
+<tr><td><code>overlap = ".."</code></td><td>Self-overlap policy: <code>"skip"</code> (default) or <code>"concurrent"</code></td><td><code>#[scheduled(every = "50ms", overlap = "concurrent")]</code></td></tr>
+<tr><td><code>skip_if = ".."</code></td><td>Names a <code>&amp;self -&gt; bool</code> predicate that suppresses a tick</td><td><code>#[scheduled(every = "5m", skip_if = "maintenance_mode")]</code></td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="overlap-policy-and-skip-predicate"><a class="header" href="#overlap-policy-and-skip-predicate">Overlap policy and skip predicate</a></h3>
+<p>By default a task uses <code>overlap = "skip"</code>: if a tick is still running when the next one is due, that tick is skipped. Use <code>overlap = "concurrent"</code> to let ticks run in parallel.</p>
+<p><code>skip_if = "method"</code> names a plain <code>&amp;self</code> method (sync or async) on the <strong>same impl block</strong> returning <code>bool</code>. It is evaluated before every tick; <code>true</code> suppresses the body and counts in <code>ScheduledJobInfo::skip_count</code> (Quarkus <code>skipExecutionIf</code>):</p>
+<pre class="playground"><code class="language-rust">#[routes]
+impl ScheduledJobs {
+    fn maintenance_mode(&amp;self) -&gt; bool {
+        // gate on some shared state
+        false
+    }
+
+    #[scheduled(every = "5m", skip_if = "maintenance_mode")]
+    async fn sync(&amp;self) {
+        // ...
+    }
+}</code></pre>
 <h3 id="cron-expression-format"><a class="header" href="#cron-expression-format">Cron expression format</a></h3>
 <p>Six fields: <code>second minute hour day_of_month month day_of_week</code></p>
 <pre><code>0 */5 * * * *      — every 5 minutes
@@ -251,18 +288,20 @@ impl ScheduledJobs {
 </code></pre>
 <h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
 <ul>
-<li>Scheduled controller must <strong>not</strong> have struct-level <code>#[inject(identity)]</code> fields (needs <code>StatefulConstruct</code>)</li>
-<li>The <code>Scheduler</code> plugin must be installed before <code>build_state()</code></li>
+<li>Scheduled methods run on the controller core (built from the bean graph via <code>ContextConstruct</code>) and cannot access request-scoped fields — reading <code>#[inject(identity)]</code> / <code>#[inject(request)]</code> inside a scheduled method is a compile error. <code>ContextConstruct</code> is generated for <strong>every</strong> controller core (identity and request-scoped fields are stripped onto the per-request façade), so a controller may freely combine struct-level identity for its authenticated endpoints with <code>#[scheduled]</code> tasks. Scheduled methods use only core (<code>#[inject]</code> / <code>#[config]</code>) fields.</li>
+<li>The <code>Scheduler</code> <strong>and <code>Executor</code></strong> plugins must be installed before <code>build_state()</code> (the Scheduler runs its ticks on the executor pool)</li>
 <li>Scheduled methods take <code>&amp;self</code> only (no additional parameters)</li>
 </ul>
 <h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
 <ol>
-<li><code>Scheduler</code> plugin creates a <code>CancellationToken</code> and defers setup</li>
-<li><code>build_state()</code> provides the token to the bean graph</li>
+<li><code>Scheduler</code> plugin creates a <code>CancelToken</code> and defers setup</li>
+<li><code>build_state()</code> provides the token to the bean graph and verifies the <code>PoolExecutor</code> dependency (<code>Scheduler::Deps</code>)</li>
 <li><code>register_controller::&lt;ScheduledJobs&gt;()</code> collects scheduled task definitions</li>
-<li><code>serve()</code> starts all scheduled tasks as Tokio tasks</li>
-<li>On shutdown (Ctrl-C / SIGTERM), the <code>CancellationToken</code> is cancelled, stopping all tasks</li>
+<li><code>serve()</code> starts <strong>one</strong> driver task for all schedules: a min-heap of next-fire times. The driver sleeps until the earliest deadline, then submits every due tick to the shared <code>PoolExecutor</code> and goes back to sleep — there is no task, and no loop, per schedule</li>
+<li>Re-arming depends on the job’s overlap policy: <code>Concurrent</code> schedules the next fire <em>before</em> submitting the tick (ticks may overlap), <code>Skip</code> (the default) re-arms only when its own tick completes, so a slow tick silently skips the cadence fires it overran</li>
+<li>On shutdown (Ctrl-C / SIGTERM), the <code>CancelToken</code> is cancelled: the driver stops arming, waits out the ticks already in flight, and they drain via the pool (<code>executor.shutdown-timeout</code>)</li>
 </ol>
+<p>Because ticks run as pool jobs, a panicking tick body is contained and logged (the driver and every other job keep running), scheduled work is bounded by <code>executor.max-concurrent</code>, and it appears in <code>ExecutorMetrics</code>. A panic while <em>constructing</em> a tick — the closure body before its first <code>await</code> — is caught by the driver itself and disables that one job (see the contract below).</p>
 <h2 id="error-handling-in-scheduled-tasks"><a class="header" href="#error-handling-in-scheduled-tasks">Error handling in scheduled tasks</a></h2>
 <p>Scheduled methods can return <code>Result</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -274,12 +313,213 @@ async fn cleanup(&amp;self) -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;
 }
 <span class="boring">}</span></code></pre>
 <p>Errors are logged but don’t stop the scheduler — the task runs again at the next interval.</p>
+<h2 id="schedulerhandle"><a class="header" href="#schedulerhandle">SchedulerHandle</a></h2>
+<p>The <code>SchedulerHandle</code> is an Axum extractor that gives HTTP handlers access to the scheduler runtime. Use it to check scheduler status or trigger cancellation from an endpoint.</p>
+<h3 id="extracting-schedulerhandle"><a class="header" href="#extracting-schedulerhandle">Extracting SchedulerHandle</a></h3>
+<p>Add <code>SchedulerHandle</code> as a parameter to any handler method:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_scheduler::SchedulerHandle;
+
+#[controller(path = "/admin")]
+pub struct AdminController {
+    #[inject] some_service: SomeService,
+}
+
+#[routes]
+impl AdminController {
+    #[get("/scheduler/status")]
+    async fn scheduler_status(&amp;self, scheduler: SchedulerHandle) -&gt; Json&lt;bool&gt; {
+        Json(scheduler.is_cancelled())
+    }
+
+    #[post("/scheduler/stop")]
+    async fn stop_scheduler(&amp;self, scheduler: SchedulerHandle) -&gt; StatusCode {
+        scheduler.cancel();
+        StatusCode::OK
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="schedulerhandle-methods"><a class="header" href="#schedulerhandle-methods">SchedulerHandle methods</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Return type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>is_cancelled()</code></td><td><code>bool</code></td><td>Check if the scheduler has been cancelled</td></tr>
+<tr><td><code>cancel()</code></td><td><code>()</code></td><td>Cancel the scheduler and all running tasks</td></tr>
+<tr><td><code>token()</code></td><td><code>CancelToken</code></td><td>Get the underlying <code>CancelToken</code></td></tr>
+<tr><td><code>pause(name).await</code></td><td><code>bool</code></td><td>Pause a job by name (keeps advancing its cadence but never fires). <code>false</code> if the name is unknown, or the scheduler is shutting down / has no driver</td></tr>
+<tr><td><code>resume(name).await</code></td><td><code>bool</code></td><td>Resume a paused job by name; <code>true</code> iff the job can fire again (see the resume contract below). <code>false</code> if the name is unknown, the schedule can never fire again (spent cron, overflowed interval), or the scheduler is shutting down / has no driver</td></tr>
+<tr><td><code>trigger_now(name).await</code></td><td><code>bool</code></td><td>Fire a job once, immediately and out of band (allowed even when paused). <code>false</code> if the name is unknown, a <code>skip</code>-overlap tick is already in flight, the executor pool is closed (answered first, then the driver stops), the tick factory panicked (contained; the job is disabled), or the scheduler is shutting down / has no driver (a <code>trigger_now</code> can never start a tick once shutdown began)</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>Note:</strong> <code>SchedulerHandle</code> requires the <code>Scheduler</code> plugin to be installed. If it is missing, extraction returns a <code>500 Internal Server Error</code> with a descriptive message.</p>
+</blockquote>
+<h2 id="scheduledjobregistry"><a class="header" href="#scheduledjobregistry">ScheduledJobRegistry</a></h2>
+<p>The <code>ScheduledJobRegistry</code> provides runtime introspection of all registered scheduled jobs. Unlike <code>SchedulerHandle</code> (which is an Axum extractor), the registry is a bean that you inject via <code>#[inject]</code> on a controller field.</p>
+<h3 id="injecting-the-registry"><a class="header" href="#injecting-the-registry">Injecting the registry</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_scheduler::{ScheduledJobRegistry, ScheduledJobInfo};
+
+#[controller(path = "/admin")]
+pub struct JobAdminController {
+    #[inject] jobs: ScheduledJobRegistry,
+}
+
+#[routes]
+impl JobAdminController {
+    #[get("/jobs")]
+    async fn list_jobs(&amp;self) -&gt; Json&lt;Vec&lt;ScheduledJobInfo&gt;&gt; {
+        Json(self.jobs.list_jobs())
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="scheduledjobinfo-fields"><a class="header" href="#scheduledjobinfo-fields">ScheduledJobInfo fields</a></h3>
+<p>Each entry returned by <code>list_jobs()</code> is a <code>ScheduledJobInfo</code> with:</p>
+<p>The metadata (<code>name</code>, <code>schedule</code>) is fixed at registration; the remaining fields carry live runtime stats updated by the driver as the job runs.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th><th>Example value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td><code>String</code></td><td>The name of the scheduled task</td><td><code>"count_users"</code></td></tr>
+<tr><td><code>schedule</code></td><td><code>String</code></td><td>Human-readable schedule description</td><td><code>"every 30s"</code>, <code>"every 60s (delay 10s)"</code>, <code>"cron: 0 */5 * * * *"</code></td></tr>
+<tr><td><code>last_run</code></td><td><code>Option&lt;DateTime&lt;Utc&gt;&gt;</code></td><td>Wall-clock time the job most recently fired</td><td><code>None</code> until first run</td></tr>
+<tr><td><code>last_duration</code></td><td><code>Option&lt;Duration&gt;</code></td><td>Wall duration of the most recent completed tick</td><td></td></tr>
+<tr><td><code>next_run</code></td><td><code>Option&lt;DateTime&lt;Utc&gt;&gt;</code></td><td>The deadline the job currently holds — <code>Some</code> iff a live driver holds one (for a <em>paused</em> job, when it <em>would</em> fire were it resumed: the cadence advances, the fire is skipped). <code>None</code> whenever it holds no deadline: a spent cron, a next fire that overflows the monotonic clock (an absurd interval or <code>initial_delay</code>, logged at <code>WARN</code>), a job disabled by a tick-factory panic that consumed its deadline, a <code>Skip</code> job while its tick is running, a deadline consumed by a submission that never ran, and every job once the driver has stopped</td><td></td></tr>
+<tr><td><code>run_count</code></td><td><code>u64</code></td><td>Number of ticks whose body actually ran</td><td><code>42</code></td></tr>
+<tr><td><code>skip_count</code></td><td><code>u64</code></td><td>Number of ticks suppressed by the job’s <code>skip_if</code> predicate</td><td><code>3</code></td></tr>
+<tr><td><code>panic_count</code></td><td><code>u64</code></td><td>Ticks whose <strong>body</strong> panicked (contained by the pool, schedule untouched) plus tick <strong>factory</strong> panics — the user closure raising while the driver builds the tick, which also disables the job</td><td><code>0</code></td></tr>
+<tr><td><code>paused</code></td><td><code>bool</code></td><td>Whether the job is currently paused: explicitly, or automatically after a tick-factory panic</td><td><code>false</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A tick-factory panic disables the job because a construction failure repeats on
+every fire: the job is paused, <code>panic_count</code> goes up, and other jobs — and the
+driver itself — keep running. <code>resume</code> is the way back, under one contract that
+holds on every path:</p>
+<blockquote>
+<p>A paused job — by <code>pause</code>, or disabled by a tick-factory panic — never fires.
+<code>resume</code> replies <code>true</code> <strong>iff the job can fire again, as far as the driver can
+tell when the command is handled</strong>: it keeps its already-scheduled deadline
+when one is still armed; when one of its ticks is in flight and due to re-arm
+the job on completion, it reports whether the schedule still yields a next
+occurrence; otherwise it re-arms from now (interval: now + period; cron: the
+next matching slot) and reports the outcome. A schedule that can never fire
+again — spent or overflowed — stays unarmed and <code>resume</code> replies <code>false</code>.</p>
+</blockquote>
+<p>So an ordinary pause → resume never double-fires a job (the cadence kept
+advancing, the deadline is still there), a <code>Concurrent</code> job disabled by a
+factory panic resumes onto the deadline it had already scheduled, a <code>Skip</code> job
+disabled the same way is re-armed one period from the resume, and a job pinned
+to a cron with no upcoming occurrence answers <code>false</code>.</p>
+<p>The in-flight case is the one place the reply is a <em>snapshot</em> rather than a
+guarantee: a cron’s final slot can pass between the reply and the tick’s
+completion, leaving the job unarmed after a <code>true</code>. No implementation can
+promise the future here — but the end state is always honest, and <code>next_run</code> is
+the authority on it: it is <code>Some</code> <strong>exactly</strong> when a live driver holds a deadline
+for the job. Read it as the deadline, not as the fire — a <strong>paused</strong> job keeps
+publishing the instant it <em>would</em> fire were it resumed, because its cadence goes
+on advancing and each deadline is re-armed instead of submitted. It reads <code>None</code>
+the whole time a <code>Skip</code> tick runs (the deadline that fired is spent; completion
+publishes the next one), for a spent or unrepresentable schedule, for a deadline
+consumed by a submission that never ran — and for every job once the driver has
+stopped, cancelled or halted by a closed pool: the driver clears what it
+published on the way out, because nothing is left that could fire it.</p>
+<h3 id="scheduledjobregistry-methods"><a class="header" href="#scheduledjobregistry-methods">ScheduledJobRegistry methods</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Return type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>list_jobs()</code></td><td><code>Vec&lt;ScheduledJobInfo&gt;</code></td><td>Returns a snapshot of all registered jobs</td></tr>
+<tr><td><code>job(name)</code></td><td><code>Option&lt;ScheduledJobInfo&gt;</code></td><td>Snapshot of a single job by name</td></tr>
+<tr><td><code>register(info)</code></td><td><code>()</code></td><td>Register a job (used internally by the scheduler)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="combining-schedulerhandle-and-scheduledjobregistry"><a class="header" href="#combining-schedulerhandle-and-scheduledjobregistry">Combining SchedulerHandle and ScheduledJobRegistry</a></h3>
+<p>You can use both together to build a full admin dashboard:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_scheduler::{SchedulerHandle, ScheduledJobRegistry, ScheduledJobInfo};
+
+#[controller(path = "/admin/scheduler")]
+pub struct SchedulerAdminController {
+    #[inject] jobs: ScheduledJobRegistry,
+}
+
+#[routes]
+impl SchedulerAdminController {
+    #[get("/jobs")]
+    async fn list_jobs(&amp;self) -&gt; Json&lt;Vec&lt;ScheduledJobInfo&gt;&gt; {
+        Json(self.jobs.list_jobs())
+    }
+
+    #[get("/status")]
+    async fn status(&amp;self, handle: SchedulerHandle) -&gt; Json&lt;serde_json::Value&gt; {
+        let jobs = self.jobs.list_jobs();
+        Json(serde_json::json!({
+            "cancelled": handle.is_cancelled(),
+            "job_count": jobs.len(),
+            "jobs": jobs.iter().map(|j| serde_json::json!({
+                "name": j.name,
+                "schedule": j.schedule,
+            })).collect::&lt;Vec&lt;_&gt;&gt;(),
+        }))
+    }
+
+    #[post("/cancel")]
+    async fn cancel(&amp;self, handle: SchedulerHandle) -&gt; StatusCode {
+        handle.cancel();
+        StatusCode::OK
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="bean-scheduled-tasks"><a class="header" href="#bean-scheduled-tasks">Bean scheduled tasks</a></h2>
+<p><code>#[scheduled]</code> also works on <code>#[bean]</code> methods — no controller needed. The <code>#[bean]</code> macro generates the task source and an <code>after_register</code> hook, so <code>.register::&lt;T&gt;()</code> alone collects the tasks at <code>build_state()</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone)]
+pub struct CleanupBean {
+    store: Store,
+}
+
+#[bean]
+impl CleanupBean {
+    pub fn new(store: Store) -&gt; Self {
+        Self { store }
+    }
+
+    #[scheduled(every = "1h", name = "cleanup")]
+    async fn tick(&amp;self) {
+        self.store.purge_expired().await;
+    }
+}
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .plugin(Executor)
+    .plugin(Scheduler)
+    .register::&lt;CleanupBean&gt;()
+    .build_state()
+    .await
+    // ...
+<span class="boring">}</span></code></pre>
+<p>Bean scheduled methods take <code>&amp;self</code> and support the same <code>every</code> / <code>cron</code> / <code>initial_delay</code> / <code>overlap</code> / <code>skip_if</code> attributes as controller methods.</p>
 <h2 id="mixed-controllers"><a class="header" href="#mixed-controllers">Mixed controllers</a></h2>
 <p>A controller can have both HTTP routes and scheduled tasks:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/stats", state = AppState)]
+</span>#[controller(path = "/stats")]
 pub struct StatsController {
     #[inject] stats_service: StatsService,
 }
@@ -291,7 +531,7 @@ impl StatsController {
         Json(self.stats_service.current().await)
     }
 
-    #[scheduled(every = 300)]
+    #[scheduled(every = "5m")]
     async fn refresh_stats(&amp;self) {
         self.stats_service.refresh().await;
     }
@@ -306,7 +546,7 @@ impl StatsController {
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../advanced/interceptors.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../real-time/sse.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -320,7 +560,7 @@ impl StatsController {
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../advanced/interceptors.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../real-time/sse.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

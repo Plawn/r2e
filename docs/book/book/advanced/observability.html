@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>TestApp - R2E — Rust Enterprise Edition</title>
+        <title>Observability - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -177,332 +177,365 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="testapp"><a class="header" href="#testapp">TestApp</a></h1>
-<p><code>TestApp</code> provides an HTTP client for integration testing without starting a TCP server.</p>
-<h2 id="creating-a-testapp"><a class="header" href="#creating-a-testapp">Creating a TestApp</a></h2>
+                        <h1 id="observability"><a class="header" href="#observability">Observability</a></h1>
+<p>R2E provides built-in observability through request tracing, request IDs, and metric interceptors. These tools work together to give visibility into your application’s behavior.</p>
+<h2 id="tracing-plugin"><a class="header" href="#tracing-plugin">Tracing plugin</a></h2>
+<p>The <code>Tracing</code> plugin initializes structured logging and adds HTTP-level trace spans to every request.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_test::TestApp;
+</span>use r2e::prelude::*;
 
-let app = TestApp::from_builder(
-    AppBuilder::new()
-        .build_state()
-        .await
-        .register_controller::&lt;UserController&gt;(),
-);
-<span class="boring">}</span></code></pre>
-<h2 id="http-methods"><a class="header" href="#http-methods">HTTP methods</a></h2>
-<p>All methods return a <code>TestRequest</code> builder. Call <code>.send().await</code> to execute the request.</p>
-<h3 id="simple-requests"><a class="header" href="#simple-requests">Simple requests</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// GET
-let resp = app.get("/users").send().await;
-
-// POST with JSON
-let resp = app.post("/users")
-    .json(&amp;serde_json::json!({
-        "name": "Alice",
-        "email": "alice@example.com"
-    }))
-    .send()
-    .await;
-
-// PUT with JSON
-let resp = app.put("/users/1")
-    .json(&amp;updated_user)
-    .send()
-    .await;
-
-// PATCH
-let resp = app.patch("/users/1")
-    .json(&amp;partial_update)
-    .send()
-    .await;
-
-// DELETE
-let resp = app.delete("/users/1").send().await;
-<span class="boring">}</span></code></pre>
-<h3 id="authenticated-requests"><a class="header" href="#authenticated-requests">Authenticated requests</a></h3>
-<p>Use <code>.bearer()</code> to add a Bearer token:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let jwt = TestJwt::new();
-let token = jwt.token("user-1", &amp;["user"]);
-
-let resp = app.get("/users").bearer(&amp;token).send().await;
-
-let resp = app.post("/users")
-    .json(&amp;body)
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="custom-headers"><a class="header" href="#custom-headers">Custom headers</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users")
-    .header("X-Request-Id", "test-123")
-    .header("Accept-Language", "fr")
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="query-parameters"><a class="header" href="#query-parameters">Query parameters</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Single parameter
-let resp = app.get("/users")
-    .query("page", "1")
-    .query("size", "20")
-    .send()
-    .await;
-
-// Multiple parameters at once
-let resp = app.get("/search")
-    .queries([("q", "rust"), ("lang", "en")])
-    .send()
-    .await;
-
-// Works with existing query string in the path
-let resp = app.get("/users?active=true")
-    .query("page", "1")
-    .send()
-    .await;
-// Result: /users?active=true&amp;page=1
-<span class="boring">}</span></code></pre>
-<h3 id="form-data"><a class="header" href="#form-data">Form data</a></h3>
-<p>Send URL-encoded form bodies:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.post("/login")
-    .form(&amp;[("username", "alice"), ("password", "secret")])
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="cookies"><a class="header" href="#cookies">Cookies</a></h3>
-<p>Add cookies to a request:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/dashboard")
-    .cookie("session", "abc123")
-    .cookie("theme", "dark")
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="arbitrary-method"><a class="header" href="#arbitrary-method">Arbitrary method</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use http::Method;
-
-let resp = app.request(Method::OPTIONS, "/users").send().await;
-<span class="boring">}</span></code></pre>
-<h2 id="testresponse"><a class="header" href="#testresponse">TestResponse</a></h2>
-<h3 id="status-assertions"><a class="header" href="#status-assertions">Status assertions</a></h3>
-<p>Common status codes have named helpers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_ok();                    // 200
-resp.assert_created();               // 201
-resp.assert_no_content();            // 204
-resp.assert_bad_request();           // 400
-resp.assert_unauthorized();          // 401
-resp.assert_forbidden();             // 403
-resp.assert_not_found();             // 404
-resp.assert_conflict();              // 409
-resp.assert_unprocessable();         // 422
-resp.assert_too_many_requests();     // 429
-resp.assert_internal_server_error(); // 500
-resp.assert_status(StatusCode::IM_A_TEAPOT); // any status
-<span class="boring">}</span></code></pre>
-<p>Assertion messages include the response body for easier debugging:</p>
-<pre><code>Expected 200 OK, got 403 Forbidden
-Body: {"error":"Forbidden"}
-</code></pre>
-<h3 id="json-path-assertions"><a class="header" href="#json-path-assertions">JSON-path assertions</a></h3>
-<p>Assert directly on nested values in the response body using dot-separated paths,
-array indices <code>[N]</code>, and <code>len()</code>/<code>size()</code> terminals:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>app.get("/filter/1")
-    .bearer(&amp;token)
-    .send()
+AppBuilder::new()
+    .plugin(Tracing)
+    .build_state()
     .await
-    .assert_ok()
-    .assert_json_path("tagGroups.len()", 2)
-    .assert_json_path("tagGroups[0].name", "test Group")
-    .assert_json_path("tagGroups[0].tags.len()", 1)
-    .assert_json_path("meta.page", 1)
-    .assert_json_path("active", true);
+    .serve("0.0.0.0:3000")
+    .await;
 <span class="boring">}</span></code></pre>
-<h4 id="path-syntax"><a class="header" href="#path-syntax">Path syntax</a></h4>
+<h3 id="what-it-does"><a class="header" href="#what-it-does">What it does</a></h3>
+<ol>
+<li>Initializes the global <code>tracing</code> subscriber using <code>tracing_subscriber::fmt</code>.</li>
+<li>Adds a <code>tower_http::TraceLayer</code> that logs requests and responses at the <code>DEBUG</code> level.</li>
+</ol>
+<h3 id="controlling-log-levels"><a class="header" href="#controlling-log-levels">Controlling log levels</a></h3>
+<p>Set the <code>RUST_LOG</code> environment variable:</p>
+<pre><code class="language-bash"># Default (when RUST_LOG is not set)
+RUST_LOG="info"
+
+# Show all framework internals
+RUST_LOG="debug"
+
+# Production — only warnings and errors
+RUST_LOG="warn"
+
+# Fine-grained control
+RUST_LOG="info,my_app=debug,tower_http=trace"
+</code></pre>
+<p>The <code>init_tracing()</code> function is idempotent. If you need logs before the plugin is installed (e.g., during state construction), call it manually:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>r2e::init_tracing();
+<span class="boring">}</span></code></pre>
+<h2 id="configurable-tracing"><a class="header" href="#configurable-tracing">Configurable tracing</a></h2>
+<p>For full control over the log subscriber format, use <code>TracingConfig</code> and the <code>ConfiguredTracing</code> plugin. This lets you configure log format, ANSI colors, thread IDs, file names, and more — either programmatically or via YAML.</p>
+<h3 id="yaml-configuration"><a class="header" href="#yaml-configuration">YAML configuration</a></h3>
+<pre><code class="language-yaml">tracing:
+  filter: "info,tower_http=debug,my_app=trace"
+  format: json
+  ansi: false
+  target: true
+  thread-ids: true
+  thread-names: false
+  file: true
+  line-number: true
+  level: true
+  span-events: full
+</code></pre>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Path</th><th>Resolves to</th></tr>
+<tr><th>Key</th><th>Type</th><th>Default</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>"name"</code></td><td><code>root["name"]</code></td></tr>
-<tr><td><code>"user.email"</code></td><td><code>root["user"]["email"]</code></td></tr>
-<tr><td><code>"users[0]"</code></td><td><code>root["users"][0]</code></td></tr>
-<tr><td><code>"users[0].name"</code></td><td><code>root["users"][0]["name"]</code></td></tr>
-<tr><td><code>"users.len()"</code></td><td>length of <code>root["users"]</code> array</td></tr>
-<tr><td><code>"groups[0].tags.size()"</code></td><td>length of <code>root["groups"][0]["tags"]</code></td></tr>
-<tr><td><code>"meta.len()"</code></td><td>number of keys in <code>root["meta"]</code> object</td></tr>
+<tr><td><code>filter</code></td><td>String</td><td><code>"info"</code></td><td><code>EnvFilter</code> directive. <code>RUST_LOG</code> env var takes priority.</td></tr>
+<tr><td><code>format</code></td><td><code>pretty</code> / <code>json</code></td><td><code>pretty</code></td><td>Log output format</td></tr>
+<tr><td><code>target</code></td><td>bool</td><td><code>true</code></td><td>Print the module path in each log line</td></tr>
+<tr><td><code>thread-ids</code></td><td>bool</td><td><code>false</code></td><td>Print thread IDs</td></tr>
+<tr><td><code>thread-names</code></td><td>bool</td><td><code>false</code></td><td>Print thread names</td></tr>
+<tr><td><code>file</code></td><td>bool</td><td><code>false</code></td><td>Print file name where the log originated</td></tr>
+<tr><td><code>line-number</code></td><td>bool</td><td><code>false</code></td><td>Print line number</td></tr>
+<tr><td><code>level</code></td><td>bool</td><td><code>true</code></td><td>Print the log level</td></tr>
+<tr><td><code>ansi</code></td><td>bool</td><td><code>true</code></td><td>Enable ANSI color codes</td></tr>
+<tr><td><code>span-events</code></td><td><code>none</code> / <code>new</code> / <code>close</code> / <code>active</code> / <code>full</code></td><td><code>close</code></td><td>Which span lifecycle events to record</td></tr>
 </tbody>
 </table>
 </div>
-<h4 id="custom-predicates"><a class="header" href="#custom-predicates">Custom predicates</a></h4>
+<h3 id="programmatic-usage"><a class="header" href="#programmatic-usage">Programmatic usage</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>resp.assert_json_path_fn("scores", |v| {
-    v.as_array().unwrap().iter().all(|s| s.as_f64().unwrap() &gt; 0.0)
-});
-<span class="boring">}</span></code></pre>
-<h4 id="extracting-values"><a class="header" href="#extracting-values">Extracting values</a></h4>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let name: String = resp.json_path("users[0].name");
-let count: usize = resp.json_path("items.len()");
-<span class="boring">}</span></code></pre>
-<h3 id="json-contains-partial-matching"><a class="header" href="#json-contains-partial-matching">JSON contains (partial matching)</a></h3>
-<p>Assert that the response JSON contains a subset of keys/values:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Object subset matching
-resp.assert_json_contains(serde_json::json!({
-    "name": "Alice",
-    "status": "active"
-}));
-// Passes even if response has extra fields like "id", "email", etc.
+</span>use r2e::prelude::*;
 
-// Array subset matching — each expected element must exist somewhere in the actual array
-resp.assert_json_contains(serde_json::json!({
-    "tags": ["rust", "api"]
-}));
-// Passes even if actual tags are ["rust", "web", "api"]
+// Build config programmatically
+let tracing_config = TracingConfig::default()
+    .with_format(LogFormat::Json)
+    .with_ansi(false)
+    .with_thread_ids(true)
+    .with_filter("debug,hyper=warn");
 
-// Partial matching at a specific path
-resp.assert_json_path_contains("users[0]", serde_json::json!({"name": "Alice"}));
-<span class="boring">}</span></code></pre>
-<p>The <code>json_contains</code> function is also exported for custom assertions:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e_test::json_contains;
-
-assert!(json_contains(&amp;actual, &amp;expected));
-<span class="boring">}</span></code></pre>
-<h3 id="json-shape-validation"><a class="header" href="#json-shape-validation">JSON shape validation</a></h3>
-<p>Assert the response matches a type structure without checking exact values.
-Schema values serve as type exemplars (<code>0</code> = number, <code>""</code> = string, <code>true</code> = boolean):</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_json_shape(serde_json::json!({
-    "id": 0,
-    "name": "",
-    "active": true,
-    "tags": [""],
-    "profile": {
-        "bio": "",
-        "verified": true
-    }
-}));
-<span class="boring">}</span></code></pre>
-<h3 id="header-assertions"><a class="header" href="#header-assertions">Header assertions</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_header("content-type", "application/json");
-resp.assert_header_exists("x-request-id");
-<span class="boring">}</span></code></pre>
-<h3 id="header-access"><a class="header" href="#header-access">Header access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let content_type = resp.header("content-type");
-assert_eq!(content_type, Some("application/json"));
-<span class="boring">}</span></code></pre>
-<h3 id="cookie-access"><a class="header" href="#cookie-access">Cookie access</a></h3>
-<p>Read cookies from <code>Set-Cookie</code> response headers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Get a specific cookie value
-let session = resp.cookie("session_id");
-assert_eq!(session, Some("abc123".to_string()));
-
-// Get all Set-Cookie header values
-let all_cookies = resp.cookies();
-<span class="boring">}</span></code></pre>
-<h3 id="body-access"><a class="header" href="#body-access">Body access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = resp.json();
-let body: String = resp.text();
-<span class="boring">}</span></code></pre>
-<h3 id="chaining"><a class="header" href="#chaining">Chaining</a></h3>
-<p>All assertions return <code>&amp;self</code> for chaining:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = app
-    .get("/users")
-    .bearer(&amp;token)
-    .send()
+AppBuilder::new()
+    .plugin(Tracing::configured(tracing_config))
+    .build_state()
     .await
-    .assert_ok()
-    .assert_json_path("meta.total", 3)
-    .json();
+    .serve("0.0.0.0:3000")
+    .await;
 <span class="boring">}</span></code></pre>
-<blockquote>
-<p><strong>Note:</strong> Assertions return <code>&amp;Self</code> (a reference). If you need to use the response after an assertion, bind the response first:</p>
+<h3 id="loading-from-r2econfig"><a class="header" href="#loading-from-r2econfig">Loading from R2eConfig</a></h3>
+<p>When using <code>load_config</code>, you can read <code>TracingConfig</code> directly from your YAML:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let resp = app.get("/users").bearer(&amp;token).send().await;
-resp.assert_ok();
-let users: Vec&lt;User&gt; = resp.json();
+</span>let builder = AppBuilder::new().load_config::&lt;RootConfig&gt;();
+
+// The builder exposes the loaded config via `r2e_config()`, so a
+// config-driven plugin can be constructed before `build_state()`.
+let tracing = Tracing::from_config(builder.r2e_config().unwrap());
+
+builder
+    .plugin(tracing)
+    .build_state()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
 <span class="boring">}</span></code></pre>
-</blockquote>
-<h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
+<p><code>Tracing::from_config()</code> reads the <code>tracing.*</code> keys from <code>R2eConfig</code>.</p>
+<h3 id="tracing-under-the-canonical-entrypoint"><a class="header" href="#tracing-under-the-canonical-entrypoint">Tracing under the canonical entrypoint</a></h3>
+<p>The canonical entrypoint — <code>r2e::app_main!(MyApp)</code> / <code>r2e::launch!</code> — does <strong>not</strong>
+initialize tracing for you. Install the <code>Tracing</code> plugin inside <code>App::setup</code>
+(or in <code>App::build</code>, before <code>build_state()</code>) with <code>.plugin(Tracing)</code> — or the
+config-driven <code>.plugin(Tracing::from_config(builder.r2e_config().unwrap()))</code>
+shown above, since <code>r2e_config()</code> is available as soon as <code>load_config</code> has
+run. With no plugin, the app emits no tracing subscriber.</p>
+<p>Only the custom-entrypoint macro <code>#[r2e::main]</code> auto-initializes tracing before
+config is loaded. If you use that form and want configurable tracing instead:</p>
+<ol>
+<li>Disable the default tracing: <code>#[r2e::main(tracing = false)]</code></li>
+<li>Load config first, then install the configured <code>Tracing</code> plugin</li>
+</ol>
+<h2 id="opentelemetry-observability"><a class="header" href="#opentelemetry-observability">OpenTelemetry observability</a></h2>
+<p>Enable the <code>observability</code> feature and install <code>Observability</code> instead of
+<code>Tracing</code> for distributed traces:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[r2e::test(app = my_app::MyApp)]
-async fn crud_flow(app: TestApp) {
-    // List users
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 2);
+</span>use r2e::r2e_observability::Observability;
 
-    // Create user
-    app.post("/users")
-        .as_user("user-1", &amp;["admin"])
-        .json(&amp;serde_json::json!({
-            "name": "Charlie",
-            "email": "charlie@example.com"
-        }))
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("name", "Charlie");
+builder
+    .plugin(Observability::from_env("my-service"))
+    .build_state()
+    .await
+<span class="boring">}</span></code></pre>
+<p><code>from_env</code> reads the standard OTLP endpoint, service-name, protocol, and
+sampler variables. With no <code>OTEL_EXPORTER_OTLP_TRACES_ENDPOINT</code> or
+<code>OTEL_EXPORTER_OTLP_ENDPOINT</code>, it installs ordinary R2E tracing without an
+exporter. This makes the canonical one-line <code>r2e::app_main!(MyApp)</code> entrypoint
+work in both local and deployed environments without conditional subscriber
+initialization. A custom <code>#[r2e::main]</code> entrypoint must still specify
+<code>tracing = false</code>, since that macro initializes its subscriber before the app
+is built.</p>
+<p>R2E exports OTLP/HTTP to <code>http://localhost:4318/v1/traces</code> by default. A
+pathless HTTP(S) endpoint receives <code>/v1/traces</code> automatically; requesting gRPC
+logs a warning and uses HTTP. Events emitted inside OTel spans include
+<code>trace_id</code> and <code>span_id</code> in pretty and JSON logs.</p>
+<p>To instrument outgoing reqwest calls, wrap the client once:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_observability::traced_reqwest_client;
 
-    // Verify creation
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 3);
+let http = traced_reqwest_client(reqwest::Client::new());
+<span class="boring">}</span></code></pre>
+<p>Every request then runs in an OpenTelemetry <strong>client</strong> span (<code>otel.kind = "client"</code>, named <code>HTTP {method}</code>) carrying the HTTP-client semantic
+conventions — <code>http.request.method</code>, <code>server.address</code>, <code>server.port</code>,
+<code>url.full</code> (credentials stripped), <code>http.response.status_code</code>, and
+<code>otel.status_code</code> / <code>error.message</code> on failure — and the injected
+<code>traceparent</code> carries that client span’s id. Tracing backends build their
+service graph by pairing a CLIENT span with its direct SERVER child (Tempo’s
+metrics-generator, Jaeger, Grafana), so this is what produces the
+<code>caller → callee</code> edge and <code>traces_service_graph_request_client_seconds</code>.</p>
+<p>Span names must stay low-cardinality, so the URL is never part of them. Opt
+into route templates per request with
+<code>.with_extension(OtelPathNames::known_paths(["/items/{id}"])?)</code> (names become
+<code>GET /items/{id}</code>), or force a name with <code>.with_extension(OtelName("…".into()))</code>.
+<code>DisableOtelPropagation</code> turns header injection off for one request. All three
+are re-exported from <code>r2e_observability</code>.</p>
+<p>Pass that <code>ClientWithMiddleware</code> to client SDKs. SDKs restricted to a plain
+reqwest client can instead call <code>inject_current_context(headers)</code> in their
+single request-construction chokepoint — but note that this only injects the
+<em>current</em> span’s context and opens no client span: the trace is still joined
+across services, yet the service graph shows no edge between them. Wrap the
+call in your own <code>otel.kind = "client"</code> span if you need one.</p>
+<h2 id="requestid-plugin"><a class="header" href="#requestid-plugin">RequestId plugin</a></h2>
+<p>The <code>RequestIdPlugin</code> assigns a unique identifier to every request, enabling correlation across log lines and distributed systems.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .plugin(RequestIdPlugin)
+    .plugin(Tracing)
+    .build_state()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
+<span class="boring">}</span></code></pre>
+<h3 id="behavior"><a class="header" href="#behavior">Behavior</a></h3>
+<ol>
+<li>Reads <code>X-Request-Id</code> from the incoming request headers.</li>
+<li>If absent, generates a UUID v4.</li>
+<li>Stores the ID as a request extension (available to handlers).</li>
+<li>Copies the ID into the response <code>X-Request-Id</code> header.</li>
+</ol>
+<p>This means upstream proxies and API gateways can set the request ID, and R2E will propagate it. If no ID is provided, one is generated automatically.</p>
+<h3 id="extracting-the-request-id-in-handlers"><a class="header" href="#extracting-the-request-id-in-handlers">Extracting the request ID in handlers</a></h3>
+<p><code>RequestId</code> implements <code>FromRequestParts</code>, so you can use it as a handler parameter:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+#[controller(path = "/api")]
+pub struct ApiController {
+    #[inject] service: MyService,
+}
+
+#[routes]
+impl ApiController {
+    #[get("/")]
+    async fn handle(&amp;self, req_id: RequestId) -&gt; String {
+        tracing::info!(%req_id, "processing request");
+        format!("request: {}", req_id)
+    }
 }
 <span class="boring">}</span></code></pre>
+<p><code>RequestId</code> implements <code>Display</code>, so it works directly with tracing’s <code>%</code> format and with string formatting.</p>
+<h2 id="metric-interceptors"><a class="header" href="#metric-interceptors">Metric interceptors</a></h2>
+<p>R2E provides two metric interceptors in <code>r2e-utils</code> for instrumenting individual handler methods. Both emit structured log events via <code>tracing</code>, making them compatible with any log aggregation system.</p>
+<h3 id="counted--request-counting"><a class="header" href="#counted--request-counting"><code>Counted</code> — Request counting</a></h3>
+<p>Logs a counter event each time a handler is invoked:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+#[routes]
+impl UserController {
+    #[get("/")]
+    #[intercept(Counted::new("user_list_total"))]
+    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+        Json(self.service.list().await)
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Each invocation produces a log line like:</p>
+<pre><code>INFO user_list counted metric=user_list_total
+</code></pre>
+<p>You can change the log level:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[intercept(Counted::new("user_list_total").with_level(LogLevel::Debug))]
+<span class="boring">}</span></code></pre>
+<h3 id="metrictimed--duration-metrics"><a class="header" href="#metrictimed--duration-metrics"><code>MetricTimed</code> — Duration metrics</a></h3>
+<p>Records the execution duration of a handler as a named metric:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl UserController {
+    #[get("/")]
+    #[intercept(MetricTimed::new("user_list_duration"))]
+    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+        Json(self.service.list().await)
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Each invocation produces:</p>
+<pre><code>INFO user_list metric=user_list_duration elapsed_ms=42
+</code></pre>
+<p>Like <code>Counted</code>, you can adjust the log level:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[intercept(MetricTimed::new("user_list_duration").with_level(LogLevel::Warn))]
+<span class="boring">}</span></code></pre>
+<h3 id="difference-from-timed"><a class="header" href="#difference-from-timed">Difference from <code>Timed</code></a></h3>
+<p><code>Timed</code> is a general-purpose timing interceptor that logs execution time as a plain message (e.g., <code>elapsed_ms=42</code>). It also supports a threshold to suppress fast calls.</p>
+<p><code>MetricTimed</code> is designed for metric collection: it includes a named metric identifier in the log output, making it easy to filter and aggregate in log-based monitoring tools (Loki, CloudWatch, Datadog).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Interceptor</th><th>Output format</th><th>Use case</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Timed::new()</code></td><td><code>elapsed_ms=42</code></td><td>Development logging</td></tr>
+<tr><td><code>Timed::threshold(100)</code></td><td>Only logs if &gt;100ms</td><td>Slow query detection</td></tr>
+<tr><td><code>MetricTimed::new("name")</code></td><td><code>metric=name elapsed_ms=42</code></td><td>Metric collection</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="combining-everything"><a class="header" href="#combining-everything">Combining everything</a></h2>
+<p>A typical production setup uses all observability features together:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+// Application setup
+let builder = AppBuilder::new().load_config::&lt;RootConfig&gt;();
+
+let tracing = Tracing::from_config(builder.r2e_config().unwrap());
+
+builder
+    .plugin(RequestIdPlugin)     // Assign request IDs
+    .plugin(tracing)             // Configurable tracing
+    .plugin(Health)              // Health check endpoint
+    .build_state()
+    .await
+    .register_controller::&lt;ApiController&gt;()
+    .serve("0.0.0.0:3000")
+    .await;
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/users")]
+pub struct UserController {
+    #[inject] service: UserService,
+}
+
+#[routes]
+#[intercept(Logged::info())]
+impl UserController {
+    #[get("/")]
+    #[intercept(Counted::new("users_list_total"))]
+    #[intercept(MetricTimed::new("users_list_duration"))]
+    async fn list(&amp;self, req_id: RequestId) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+        tracing::info!(%req_id, "listing users");
+        Json(self.service.list().await)
+    }
+
+    #[get("/:id")]
+    #[intercept(MetricTimed::new("users_get_by_id_duration"))]
+    async fn get_by_id(&amp;self, Path(id): Path&lt;i64&gt;) -&gt; Json&lt;User&gt; {
+        Json(self.service.find(id).await)
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>This produces structured log output with:</p>
+<ul>
+<li>Request IDs on every request/response (via <code>X-Request-Id</code> header)</li>
+<li>Entry/exit logging for all methods (via <code>Logged::info()</code>)</li>
+<li>Per-endpoint invocation counts (via <code>Counted</code>)</li>
+<li>Per-endpoint duration metrics (via <code>MetricTimed</code>)</li>
+<li>HTTP-level request/response traces (via <code>Tracing</code> plugin)</li>
+</ul>
+<h2 id="tracing-vs-observability-plugin"><a class="header" href="#tracing-vs-observability-plugin"><code>Tracing</code> vs <code>Observability</code> plugin</a></h2>
+<p>R2E offers two levels of tracing support:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th><code>Tracing</code> / <code>ConfiguredTracing</code></th><th><code>Observability</code></th></tr>
+</thead>
+<tbody>
+<tr><td>Crate</td><td><code>r2e-core</code> (always available)</td><td><code>r2e-observability</code> (feature <code>observability</code>)</td></tr>
+<tr><td>Log subscriber</td><td><code>tracing_subscriber::fmt</code></td><td><code>tracing_subscriber::fmt</code> + <code>tracing-opentelemetry</code></td></tr>
+<tr><td>HTTP trace layer</td><td>tower-http <code>TraceLayer</code></td><td>tower-http <code>TraceLayer</code> + <code>OtelTraceLayer</code></td></tr>
+<tr><td>Distributed tracing</td><td>No</td><td>Yes (OTLP export to Jaeger, Tempo, etc.)</td></tr>
+<tr><td>Context propagation</td><td>No</td><td>Yes (W3C <code>traceparent</code>)</td></tr>
+<tr><td>Configuration</td><td><code>TracingConfig</code> (YAML + builder)</td><td><code>ObservabilityConfig</code> (embeds <code>TracingConfig</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Use <code>Tracing</code> for local development and simple services. Switch to <code>Observability</code> when you need distributed tracing across microservices. Do not install both – <code>Observability</code> already includes the <code>TraceLayer</code> and its own log subscriber.</p>
+<p>Both <code>ConfiguredTracing</code> and <code>Observability</code> use <code>TracingConfig</code> for subscriber formatting options (format, ansi, thread IDs, etc.). The <code>Observability</code> plugin embeds a <code>TracingConfig</code> in its <code>ObservabilityConfig</code>, so YAML keys live under <code>observability.tracing.*</code> instead of <code>tracing.*</code>.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../testing/test-setup.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../advanced/multipart.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../testing/test-jwt.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../advanced/performance.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -512,11 +545,11 @@ async fn crud_flow(app: TestApp) {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../testing/test-setup.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../advanced/multipart.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../testing/test-jwt.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../advanced/performance.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

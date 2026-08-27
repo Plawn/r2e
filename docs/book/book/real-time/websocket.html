@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>TestApp - R2E — Rust Enterprise Edition</title>
+        <title>WebSocket - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -177,332 +177,458 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="testapp"><a class="header" href="#testapp">TestApp</a></h1>
-<p><code>TestApp</code> provides an HTTP client for integration testing without starting a TCP server.</p>
-<h2 id="creating-a-testapp"><a class="header" href="#creating-a-testapp">Creating a TestApp</a></h2>
+                        <h1 id="websocket"><a class="header" href="#websocket">WebSocket</a></h1>
+<p>R2E provides first-class WebSocket support built on top of Axum’s WebSocket layer. The <code>#[ws]</code> attribute turns a controller method into a WebSocket endpoint with automatic upgrade handling, while <code>WsStream</code>, <code>WsBroadcaster</code>, and <code>WsRooms</code> give you ergonomic APIs for sending, receiving, and broadcasting messages.</p>
+<h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
+<p>WebSocket support is included in <code>r2e-core</code> – no extra feature flag is needed:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_test::TestApp;
-
-let app = TestApp::from_builder(
-    AppBuilder::new()
-        .build_state()
-        .await
-        .register_controller::&lt;UserController&gt;(),
-);
+</span>use r2e::prelude::*;
+use r2e::web::ws::WsStream;
 <span class="boring">}</span></code></pre>
-<h2 id="http-methods"><a class="header" href="#http-methods">HTTP methods</a></h2>
-<p>All methods return a <code>TestRequest</code> builder. Call <code>.send().await</code> to execute the request.</p>
-<h3 id="simple-requests"><a class="header" href="#simple-requests">Simple requests</a></h3>
+<h2 id="basic-websocket-endpoint"><a class="header" href="#basic-websocket-endpoint">Basic WebSocket endpoint</a></h2>
+<p>Annotate a controller method with <code>#[ws("/path")]</code> and accept a <code>WsStream</code> parameter. The framework handles the HTTP upgrade automatically:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// GET
-let resp = app.get("/users").send().await;
+</span>#[controller(path = "/ws")]
+pub struct EchoController;
 
-// POST with JSON
-let resp = app.post("/users")
-    .json(&amp;serde_json::json!({
-        "name": "Alice",
-        "email": "alice@example.com"
-    }))
-    .send()
-    .await;
-
-// PUT with JSON
-let resp = app.put("/users/1")
-    .json(&amp;updated_user)
-    .send()
-    .await;
-
-// PATCH
-let resp = app.patch("/users/1")
-    .json(&amp;partial_update)
-    .send()
-    .await;
-
-// DELETE
-let resp = app.delete("/users/1").send().await;
+#[routes]
+impl EchoController {
+    #[ws("/echo")]
+    async fn echo(&amp;self, mut ws: WsStream) {
+        ws.send_text("Welcome!").await.ok();
+        ws.on_each(|msg| async move { Some(msg) }).await;
+    }
+}
 <span class="boring">}</span></code></pre>
-<h3 id="authenticated-requests"><a class="header" href="#authenticated-requests">Authenticated requests</a></h3>
-<p>Use <code>.bearer()</code> to add a Bearer token:</p>
+<p>The generated handler accepts a <code>WebSocketUpgrade</code> extractor, calls <code>on_upgrade</code>, wraps the raw socket in <code>WsStream</code>, and invokes your method. You never touch the upgrade machinery directly.</p>
+<h3 id="accepting-additional-extractors"><a class="header" href="#accepting-additional-extractors">Accepting additional extractors</a></h3>
+<p>WebSocket methods support the same Axum extractors as regular handlers. Place them before the <code>WsStream</code> parameter:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let jwt = TestJwt::new();
-let token = jwt.token("user-1", &amp;["user"]);
-
-let resp = app.get("/users").bearer(&amp;token).send().await;
-
-let resp = app.post("/users")
-    .json(&amp;body)
-    .bearer(&amp;token)
-    .send()
-    .await;
+</span>#[ws("/{room}")]
+async fn join(
+    &amp;self,
+    Path(room): Path&lt;String&gt;,
+    Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;,
+    mut ws: WsStream,
+) {
+    let username = params.get("username").cloned().unwrap_or_default();
+    ws.send_text(format!("Hello {username}, welcome to {room}")).await.ok();
+    // ...
+}
 <span class="boring">}</span></code></pre>
-<h3 id="custom-headers"><a class="header" href="#custom-headers">Custom headers</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users")
-    .header("X-Request-Id", "test-123")
-    .header("Accept-Language", "fr")
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="query-parameters"><a class="header" href="#query-parameters">Query parameters</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Single parameter
-let resp = app.get("/users")
-    .query("page", "1")
-    .query("size", "20")
-    .send()
-    .await;
-
-// Multiple parameters at once
-let resp = app.get("/search")
-    .queries([("q", "rust"), ("lang", "en")])
-    .send()
-    .await;
-
-// Works with existing query string in the path
-let resp = app.get("/users?active=true")
-    .query("page", "1")
-    .send()
-    .await;
-// Result: /users?active=true&amp;page=1
-<span class="boring">}</span></code></pre>
-<h3 id="form-data"><a class="header" href="#form-data">Form data</a></h3>
-<p>Send URL-encoded form bodies:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.post("/login")
-    .form(&amp;[("username", "alice"), ("password", "secret")])
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="cookies"><a class="header" href="#cookies">Cookies</a></h3>
-<p>Add cookies to a request:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/dashboard")
-    .cookie("session", "abc123")
-    .cookie("theme", "dark")
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="arbitrary-method"><a class="header" href="#arbitrary-method">Arbitrary method</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use http::Method;
-
-let resp = app.request(Method::OPTIONS, "/users").send().await;
-<span class="boring">}</span></code></pre>
-<h2 id="testresponse"><a class="header" href="#testresponse">TestResponse</a></h2>
-<h3 id="status-assertions"><a class="header" href="#status-assertions">Status assertions</a></h3>
-<p>Common status codes have named helpers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_ok();                    // 200
-resp.assert_created();               // 201
-resp.assert_no_content();            // 204
-resp.assert_bad_request();           // 400
-resp.assert_unauthorized();          // 401
-resp.assert_forbidden();             // 403
-resp.assert_not_found();             // 404
-resp.assert_conflict();              // 409
-resp.assert_unprocessable();         // 422
-resp.assert_too_many_requests();     // 429
-resp.assert_internal_server_error(); // 500
-resp.assert_status(StatusCode::IM_A_TEAPOT); // any status
-<span class="boring">}</span></code></pre>
-<p>Assertion messages include the response body for easier debugging:</p>
-<pre><code>Expected 200 OK, got 403 Forbidden
-Body: {"error":"Forbidden"}
-</code></pre>
-<h3 id="json-path-assertions"><a class="header" href="#json-path-assertions">JSON-path assertions</a></h3>
-<p>Assert directly on nested values in the response body using dot-separated paths,
-array indices <code>[N]</code>, and <code>len()</code>/<code>size()</code> terminals:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>app.get("/filter/1")
-    .bearer(&amp;token)
-    .send()
-    .await
-    .assert_ok()
-    .assert_json_path("tagGroups.len()", 2)
-    .assert_json_path("tagGroups[0].name", "test Group")
-    .assert_json_path("tagGroups[0].tags.len()", 1)
-    .assert_json_path("meta.page", 1)
-    .assert_json_path("active", true);
-<span class="boring">}</span></code></pre>
-<h4 id="path-syntax"><a class="header" href="#path-syntax">Path syntax</a></h4>
+<h2 id="wsstream-api"><a class="header" href="#wsstream-api">WsStream API</a></h2>
+<p><code>WsStream</code> wraps Axum’s <code>WebSocket</code> with typed helpers for common operations.</p>
+<h3 id="sending-messages"><a class="header" href="#sending-messages">Sending messages</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Path</th><th>Resolves to</th></tr>
+<tr><th>Method</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>"name"</code></td><td><code>root["name"]</code></td></tr>
-<tr><td><code>"user.email"</code></td><td><code>root["user"]["email"]</code></td></tr>
-<tr><td><code>"users[0]"</code></td><td><code>root["users"][0]</code></td></tr>
-<tr><td><code>"users[0].name"</code></td><td><code>root["users"][0]["name"]</code></td></tr>
-<tr><td><code>"users.len()"</code></td><td>length of <code>root["users"]</code> array</td></tr>
-<tr><td><code>"groups[0].tags.size()"</code></td><td>length of <code>root["groups"][0]["tags"]</code></td></tr>
-<tr><td><code>"meta.len()"</code></td><td>number of keys in <code>root["meta"]</code> object</td></tr>
+<tr><td><code>send(msg)</code></td><td>Send a raw <code>Message</code></td></tr>
+<tr><td><code>send_text(text)</code></td><td>Send a text message</td></tr>
+<tr><td><code>send_json(&amp;data)</code></td><td>Serialize <code>data</code> as JSON and send as text</td></tr>
+<tr><td><code>send_binary(bytes)</code></td><td>Send a binary message</td></tr>
 </tbody>
 </table>
 </div>
-<h4 id="custom-predicates"><a class="header" href="#custom-predicates">Custom predicates</a></h4>
+<p>All send methods are async and return <code>Result&lt;(), WsError&gt;</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>resp.assert_json_path_fn("scores", |v| {
-    v.as_array().unwrap().iter().all(|s| s.as_f64().unwrap() &gt; 0.0)
-});
+</span>ws.send_text("hello").await?;
+ws.send_json(&amp;MyPayload { value: 42 }).await?;
+ws.send_binary(vec![0x01, 0x02]).await?;
 <span class="boring">}</span></code></pre>
-<h4 id="extracting-values"><a class="header" href="#extracting-values">Extracting values</a></h4>
+<h3 id="batching-feed--flush"><a class="header" href="#batching-feed--flush">Batching: <code>feed*</code> + <code>flush</code></a></h3>
+<p>Every <code>send*</code> call queues <strong>one</strong> frame and flushes it to the socket right
+away — the frame is on the wire when the future resolves. For bulk transport
+(proxies, file streaming, many small frames), queue several frames with
+<code>feed*</code> and push them in one write with <code>flush</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>feed(msg)</code></td><td>Queue a raw <code>Message</code> <strong>without</strong> flushing (awaits sink readiness / backpressure)</td></tr>
+<tr><td><code>feed_text(text)</code></td><td>Queue a text message without flushing</td></tr>
+<tr><td><code>feed_binary(bytes)</code></td><td>Queue a binary message without flushing — <code>Bytes</code> payload, no copy</td></tr>
+<tr><td><code>flush()</code></td><td>Write every queued frame; a no-op when nothing is queued</td></tr>
+<tr><td><code>close()</code></td><td>Flush, then send the close handshake</td></tr>
+</tbody>
+</table>
+</div>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let name: String = resp.json_path("users[0].name");
-let count: usize = resp.json_path("items.len()");
+</span>for message in batch {
+    ws.feed(message).await?;
+}
+ws.flush().await?;
 <span class="boring">}</span></code></pre>
-<h3 id="json-contains-partial-matching"><a class="header" href="#json-contains-partial-matching">JSON contains (partial matching)</a></h3>
-<p>Assert that the response JSON contains a subset of keys/values:</p>
+<p><code>feed</code> vs <code>send</code>: <code>send(msg)</code> is exactly <code>feed(msg)</code> + <code>flush()</code>. Frames are
+delivered in <code>feed</code> order; a <code>send*</code> after some <code>feed*</code> flushes the whole queue.
+There is no timer, no background writer and no implicit flush — nothing leaves
+the process until you call <code>flush</code> (or a <code>send*</code>). The framework does <strong>not</strong>
+cap what you queue between flushes: <strong>bound the batch yourself</strong> (frames and
+bytes — e.g. 16 frames / 256 KiB) to keep memory and latency under control.</p>
+<p><code>WsStream</code> also implements <code>futures::Sink&lt;Message&gt;</code> (error type <code>WsError</code>), so
+<code>SinkExt</code> combinators such as <code>send_all</code> / <code>forward</code> work on it directly.</p>
+<h3 id="receiving-messages"><a class="header" href="#receiving-messages">Receiving messages</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>next()</code></td><td>Receive the next raw <code>Message</code>, or <code>None</code> on close</td></tr>
+<tr><td><code>next_text()</code></td><td>Receive the next text message, skipping non-text frames</td></tr>
+<tr><td><code>next_json::&lt;T&gt;()</code></td><td>Receive and deserialize the next text message as <code>T</code></td></tr>
+</tbody>
+</table>
+</div>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Object subset matching
-resp.assert_json_contains(serde_json::json!({
-    "name": "Alice",
-    "status": "active"
-}));
-// Passes even if response has extra fields like "id", "email", etc.
-
-// Array subset matching — each expected element must exist somewhere in the actual array
-resp.assert_json_contains(serde_json::json!({
-    "tags": ["rust", "api"]
-}));
-// Passes even if actual tags are ["rust", "web", "api"]
-
-// Partial matching at a specific path
-resp.assert_json_path_contains("users[0]", serde_json::json!({"name": "Alice"}));
-<span class="boring">}</span></code></pre>
-<p>The <code>json_contains</code> function is also exported for custom assertions:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e_test::json_contains;
-
-assert!(json_contains(&amp;actual, &amp;expected));
-<span class="boring">}</span></code></pre>
-<h3 id="json-shape-validation"><a class="header" href="#json-shape-validation">JSON shape validation</a></h3>
-<p>Assert the response matches a type structure without checking exact values.
-Schema values serve as type exemplars (<code>0</code> = number, <code>""</code> = string, <code>true</code> = boolean):</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_json_shape(serde_json::json!({
-    "id": 0,
-    "name": "",
-    "active": true,
-    "tags": [""],
-    "profile": {
-        "bio": "",
-        "verified": true
+</span>// Raw message loop
+while let Some(Ok(msg)) = ws.next().await {
+    match msg {
+        Message::Text(t) =&gt; println!("got: {t}"),
+        Message::Binary(b) =&gt; println!("binary: {} bytes", b.len()),
+        Message::Close(_) =&gt; break,
+        _ =&gt; {}
     }
-}));
-<span class="boring">}</span></code></pre>
-<h3 id="header-assertions"><a class="header" href="#header-assertions">Header assertions</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_header("content-type", "application/json");
-resp.assert_header_exists("x-request-id");
-<span class="boring">}</span></code></pre>
-<h3 id="header-access"><a class="header" href="#header-access">Header access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let content_type = resp.header("content-type");
-assert_eq!(content_type, Some("application/json"));
-<span class="boring">}</span></code></pre>
-<h3 id="cookie-access"><a class="header" href="#cookie-access">Cookie access</a></h3>
-<p>Read cookies from <code>Set-Cookie</code> response headers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Get a specific cookie value
-let session = resp.cookie("session_id");
-assert_eq!(session, Some("abc123".to_string()));
+}
 
-// Get all Set-Cookie header values
-let all_cookies = resp.cookies();
-<span class="boring">}</span></code></pre>
-<h3 id="body-access"><a class="header" href="#body-access">Body access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = resp.json();
-let body: String = resp.text();
-<span class="boring">}</span></code></pre>
-<h3 id="chaining"><a class="header" href="#chaining">Chaining</a></h3>
-<p>All assertions return <code>&amp;self</code> for chaining:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = app
-    .get("/users")
-    .bearer(&amp;token)
-    .send()
-    .await
-    .assert_ok()
-    .assert_json_path("meta.total", 3)
-    .json();
-<span class="boring">}</span></code></pre>
-<blockquote>
-<p><strong>Note:</strong> Assertions return <code>&amp;Self</code> (a reference). If you need to use the response after an assertion, bind the response first:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users").bearer(&amp;token).send().await;
-resp.assert_ok();
-let users: Vec&lt;User&gt; = resp.json();
-<span class="boring">}</span></code></pre>
-</blockquote>
-<h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>#[r2e::test(app = my_app::MyApp)]
-async fn crud_flow(app: TestApp) {
-    // List users
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 2);
-
-    // Create user
-    app.post("/users")
-        .as_user("user-1", &amp;["admin"])
-        .json(&amp;serde_json::json!({
-            "name": "Charlie",
-            "email": "charlie@example.com"
-        }))
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("name", "Charlie");
-
-    // Verify creation
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 3);
+// Typed JSON receive
+while let Some(Ok(command)) = ws.next_json::&lt;ClientCommand&gt;().await {
+    handle_command(command).await;
 }
 <span class="boring">}</span></code></pre>
+<h3 id="message-loop-helper"><a class="header" href="#message-loop-helper">Message loop helper</a></h3>
+<p><code>on_each</code> runs a callback for every incoming message until the connection closes. Return <code>Some(msg)</code> to send a reply, or <code>None</code> to send nothing:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>ws.on_each(|msg| async move {
+    match msg {
+        Message::Text(t) =&gt; Some(Message::Text(t.to_uppercase().into())),
+        _ =&gt; None,
+    }
+}).await;
+<span class="boring">}</span></code></pre>
+<h3 id="escape-hatch"><a class="header" href="#escape-hatch">Escape hatch</a></h3>
+<p>Call <code>into_inner()</code> to unwrap the raw Axum <code>WebSocket</code> if you need full control:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let raw: WebSocket = ws.into_inner();
+<span class="boring">}</span></code></pre>
+<h2 id="wshandler-trait"><a class="header" href="#wshandler-trait">WsHandler trait</a></h2>
+<p>For structured WebSocket handling with lifecycle callbacks, implement <code>WsHandler</code>. The framework manages the message loop; you implement the hooks:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::web::ws::{WsHandler, WsStream};
+use r2e::http::ws::Message;
+
+struct ChatHandler {
+    username: String,
+}
+
+impl WsHandler for ChatHandler {
+    async fn on_connect(&amp;mut self, ws: &amp;mut WsStream) {
+        ws.send_text(format!("{} connected", self.username)).await.ok();
+    }
+
+    async fn on_message(&amp;mut self, ws: &amp;mut WsStream, msg: Message) {
+        if let Message::Text(text) = msg {
+            let reply = format!("{}: {}", self.username, text);
+            ws.send_text(reply).await.ok();
+        }
+    }
+
+    async fn on_close(&amp;mut self) {
+        tracing::info!("{} disconnected", self.username);
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="wshandler-lifecycle"><a class="header" href="#wshandler-lifecycle">WsHandler lifecycle</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Callback</th><th>When called</th><th>Required</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_connect</code></td><td>After WebSocket upgrade completes</td><td>No (default no-op)</td></tr>
+<tr><td><code>on_message</code></td><td>For each received message (except <code>Close</code>)</td><td>Yes</td></tr>
+<tr><td><code>on_close</code></td><td>After the connection closes</td><td>No (default no-op)</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="using-wshandler-in-a-controller"><a class="header" href="#using-wshandler-in-a-controller">Using WsHandler in a controller</a></h3>
+<p>When a <code>#[ws]</code> method has no <code>WsStream</code> parameter, the framework expects it to return an <code>impl WsHandler</code>. The generated code calls <code>run_ws_handler</code> automatically:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/ws")]
+pub struct ChatController;
+
+#[routes]
+impl ChatController {
+    #[ws("/chat")]
+    fn chat_handler(&amp;self, Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;) -&gt; ChatHandler {
+        ChatHandler {
+            username: params.get("username").cloned().unwrap_or_default(),
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="wsbroadcaster"><a class="header" href="#wsbroadcaster">WsBroadcaster</a></h2>
+<p><code>WsBroadcaster</code> enables broadcasting messages to all connected WebSocket clients. It is <code>Clone + Send + Sync</code> and can be injected via <code>#[inject]</code>.</p>
+<h3 id="creating-a-broadcaster"><a class="header" href="#creating-a-broadcaster">Creating a broadcaster</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::web::ws::WsBroadcaster;
+
+let broadcaster = WsBroadcaster::new(128); // channel capacity
+<span class="boring">}</span></code></pre>
+<p>Provide it as a bean so it can be injected by type:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let app = AppBuilder::new()
+    .provide(broadcaster)
+    // ... other beans
+    ;
+<span class="boring">}</span></code></pre>
+<h3 id="broadcasting-messages"><a class="header" href="#broadcasting-messages">Broadcasting messages</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>send(msg)</code></td><td>Broadcast a raw <code>Message</code> to all subscribers</td></tr>
+<tr><td><code>send_text(text)</code></td><td>Broadcast a text message</td></tr>
+<tr><td><code>send_json(&amp;data)</code></td><td>Broadcast a JSON-serialized message</td></tr>
+<tr><td><code>send_from(sender_id, msg)</code></td><td>Broadcast, excluding the sender</td></tr>
+<tr><td><code>send_text_from(sender_id, text)</code></td><td>Broadcast text, excluding the sender</td></tr>
+<tr><td><code>send_json_from(sender_id, &amp;data)</code></td><td>Broadcast JSON, excluding the sender</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>_from</code> variants take a <code>sender_id</code> (obtained from <code>WsBroadcastReceiver::client_id()</code>) and skip delivery to that client. This prevents echo in chat-like scenarios.</p>
+<h3 id="subscribing-and-forwarding"><a class="header" href="#subscribing-and-forwarding">Subscribing and forwarding</a></h3>
+<p>Each WebSocket connection subscribes to the broadcaster and gets a <code>WsBroadcastReceiver</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[ws("/notifications")]
+async fn notifications(&amp;self, mut ws: WsStream) {
+    let mut rx = self.broadcaster.subscribe();
+    let client_id = rx.client_id();
+
+    loop {
+        r2e::rt::select! {
+            // Forward broadcasts to this client
+            msg = rx.recv() =&gt; {
+                match msg {
+                    Some(msg) =&gt; {
+                        if ws.send((*msg).clone()).await.is_err() { break; }
+                    }
+                    None =&gt; break,
+                }
+            }
+            // Read from this client and re-broadcast
+            incoming = ws.next_text() =&gt; {
+                match incoming {
+                    Some(Ok(text)) =&gt; {
+                        self.broadcaster.send_text_from(client_id, &amp;text);
+                    }
+                    _ =&gt; break,
+                }
+            }
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<p><code>recv()</code> yields an <code>Option&lt;Arc&lt;Message&gt;&gt;</code> — the broadcaster keeps each payload in an <code>Arc</code>, so forwarding is a cheap pointer clone; call <code>(*msg).clone()</code> when you need an owned <code>Message</code> to hand to <code>ws.send()</code>. It automatically skips messages sent by the same client (matched by <code>sender_id</code>). If the receiver falls behind (lagged), missed messages are silently dropped and the receiver catches up.</p>
+<h2 id="wsrooms"><a class="header" href="#wsrooms">WsRooms</a></h2>
+<p><code>WsRooms</code> manages named broadcasting rooms. Each room is a separate <code>WsBroadcaster</code>, created on demand. It is <code>Clone + Send + Sync</code> and injectable.</p>
+<h3 id="creating-a-room-manager"><a class="header" href="#creating-a-room-manager">Creating a room manager</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::web::ws::WsRooms;
+
+let rooms = WsRooms::new(128); // per-room channel capacity
+<span class="boring">}</span></code></pre>
+<p>Provide it as a bean:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let app = AppBuilder::new()
+    .provide(rooms)
+    // ... other beans
+    ;
+<span class="boring">}</span></code></pre>
+<h3 id="room-api"><a class="header" href="#room-api">Room API</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>room(name)</code></td><td>Get or create a <code>WsBroadcaster</code> for the named room</td></tr>
+<tr><td><code>remove(name)</code></td><td>Remove a room</td></tr>
+<tr><td><code>room_count()</code></td><td>Number of active rooms</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="chat-room-example"><a class="header" href="#chat-room-example">Chat room example</a></h3>
+<p>This is a complete chat controller using <code>WsRooms</code> with JSON messages and event-driven persistence:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+use r2e::web::ws::{WsRooms, WsStream};
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum WsIncoming {
+    #[serde(rename = "message")]
+    Message { text: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum WsOutgoing {
+    #[serde(rename = "message")]
+    Message { username: String, text: String, room: String },
+    #[serde(rename = "join")]
+    Join { username: String, room: String },
+    #[serde(rename = "leave")]
+    Leave { username: String, room: String },
+}
+
+#[controller(path = "/chat")]
+pub struct ChatController {
+    #[inject]
+    ws_rooms: WsRooms,
+}
+
+#[routes]
+impl ChatController {
+    #[ws("/{room}")]
+    async fn join_room(
+        &amp;self,
+        Path(room): Path&lt;String&gt;,
+        Query(params): Query&lt;HashMap&lt;String, String&gt;&gt;,
+        mut ws: WsStream,
+    ) {
+        let username = params
+            .get("username")
+            .cloned()
+            .unwrap_or_else(|| "Anonymous".into());
+
+        let broadcaster = self.ws_rooms.room(room.clone());
+        let mut rx = broadcaster.subscribe();
+        let client_id = rx.client_id();
+
+        // Announce join
+        let _ = broadcaster.send_json(&amp;WsOutgoing::Join {
+            username: username.clone(),
+            room: room.clone(),
+        });
+
+        loop {
+            r2e::rt::select! {
+                msg = rx.recv() =&gt; {
+                    match msg {
+                        Some(msg) =&gt; {
+                            if ws.send((*msg).clone()).await.is_err() { break; }
+                        }
+                        None =&gt; break,
+                    }
+                }
+                incoming = ws.next_json::&lt;WsIncoming&gt;() =&gt; {
+                    match incoming {
+                        Some(Ok(WsIncoming::Message { text })) =&gt; {
+                            let outgoing = WsOutgoing::Message {
+                                username: username.clone(),
+                                text,
+                                room: room.clone(),
+                            };
+                            let _ = broadcaster.send_json_from(client_id, &amp;outgoing);
+                            let _ = ws.send_json(&amp;outgoing).await;
+                        }
+                        Some(Err(_)) =&gt; continue,
+                        None =&gt; break,
+                    }
+                }
+            }
+        }
+
+        // Announce leave
+        let _ = broadcaster.send_json(&amp;WsOutgoing::Leave {
+            username,
+            room,
+        });
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="wserror"><a class="header" href="#wserror">WsError</a></h2>
+<p>WebSocket operations return <code>WsError</code> for error conditions:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>When</th></tr>
+</thead>
+<tbody>
+<tr><td><code>WsError::Send(r2e::http::Error)</code></td><td>Failed to send a message</td></tr>
+<tr><td><code>WsError::Recv(r2e::http::Error)</code></td><td>Failed to receive a message</td></tr>
+<tr><td><code>WsError::Json(serde_json::Error)</code></td><td>JSON serialization or deserialization failed</td></tr>
+<tr><td><code>WsError::Closed</code></td><td>The connection is closed</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>WsError</code> implements <code>Display</code> and <code>Error</code>.</p>
+<h2 id="guards-on-websocket-endpoints"><a class="header" href="#guards-on-websocket-endpoints">Guards on WebSocket endpoints</a></h2>
+<p>WebSocket endpoints support the same <code>#[guard]</code> attribute as HTTP handlers. Guards run before the upgrade, so a failed guard returns an HTTP error response (the WebSocket connection is never established):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[ws("/admin")]
+#[guard(AdminGuard)]
+async fn admin_ws(&amp;self, mut ws: WsStream) {
+    // Only reachable if AdminGuard passes
+}
+<span class="boring">}</span></code></pre>
+<h2 id="summary"><a class="header" href="#summary">Summary</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>#[ws("/path")]</code></td><td>Declare a WebSocket endpoint on a controller method</td></tr>
+<tr><td><code>WsStream</code></td><td>Ergonomic send/receive wrapper with text, JSON, and binary helpers</td></tr>
+<tr><td><code>WsHandler</code></td><td>Lifecycle trait: <code>on_connect</code>, <code>on_message</code>, <code>on_close</code></td></tr>
+<tr><td><code>WsBroadcaster</code></td><td>Broadcast messages to all subscribed clients</td></tr>
+<tr><td><code>WsBroadcastReceiver</code></td><td>Per-client receiver with sender exclusion</td></tr>
+<tr><td><code>WsRooms</code></td><td>Named room manager, each room backed by a <code>WsBroadcaster</code></td></tr>
+<tr><td><code>WsError</code></td><td>Error type for WebSocket operations</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next steps</a></h2>
+<ul>
+<li><a href="../events-and-scheduling/event-bus.html">Event Bus</a> – combine WebSocket with events for persistence</li>
+<li><a href="../security/guards-and-roles.html">Guards and Roles</a> – protect WebSocket endpoints</li>
+<li><a href="../advanced/interceptors.html">Interceptors</a> – add cross-cutting concerns</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../testing/test-setup.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../real-time/sse.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../testing/test-jwt.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../grpc/services.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -512,11 +638,11 @@ async fn crud_flow(app: TestApp) {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../testing/test-setup.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../real-time/sse.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../testing/test-jwt.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../grpc/services.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

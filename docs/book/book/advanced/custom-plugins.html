@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,70 +178,36 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="custom-plugins"><a class="header" href="#custom-plugins">Custom Plugins</a></h1>
-<p>Plugins encapsulate reusable middleware, routes, and services. R2E supports two plugin types: post-state (<code>Plugin</code>) and pre-state (<code>PreStatePlugin</code>).</p>
-<h2 id="post-state-plugins"><a class="header" href="#post-state-plugins">Post-state plugins</a></h2>
-<p>Install after <code>build_state()</code> with <code>.with(plugin)</code>. They receive and transform the <code>AppBuilder</code>:</p>
+<p>Plugins encapsulate reusable middleware, routes, controllers, and services.
+There is exactly <strong>one</strong> plugin trait — <code>Plugin</code> — one install call —
+<code>.plugin(p)</code>, always <strong>before</strong> <code>build_state()</code> — and one factory method,
+<code>build</code>, which runs <em>inside</em> <code>build_state()</code> as a node of the bean graph.</p>
+<h2 id="anatomy-of-a-plugin"><a class="header" href="#anatomy-of-a-plugin">Anatomy of a plugin</a></h2>
+<p>A plugin <strong>is one async, fallible factory</strong> for the beans it provides: <code>build</code>
+runs inside <code>build_state()</code>, exactly like a <code>#[bean]</code> constructor. No builder
+generics needed:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::Plugin;
-use r2e::AppBuilder;
-
-pub struct RequestLogger;
-
-impl Plugin for RequestLogger {
-    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
-        app.with_layer_fn(|router| {
-            router.layer(axum::middleware::from_fn(|req, next| async move {
-                tracing::info!("Request: {} {}", req.method(), req.uri());
-                next.run(req).await
-            }))
-        })
-    }
-}
-<span class="boring">}</span></code></pre>
-<p>Usage:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
-    .await
-    .with(RequestLogger)
-    // ...
-<span class="boring">}</span></code></pre>
-<h3 id="ordering-hint"><a class="header" href="#ordering-hint">Ordering hint</a></h3>
-<p>Override <code>should_be_last()</code> for plugins that must be the outermost layer:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>impl Plugin for NormalizePathPlugin {
-    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
-        app.with_layer_fn(|router| router.layer(NormalizePathLayer::trim_trailing_slash()))
-    }
-
-    fn should_be_last() -&gt; bool
-    where
-        Self: Sized,
-    {
-        true // R2E warns if plugins are added after this one
-    }
-}
-<span class="boring">}</span></code></pre>
-<h2 id="pre-state-plugins"><a class="header" href="#pre-state-plugins">Pre-state plugins</a></h2>
-<p>Install before <code>build_state()</code> with <code>.plugin(plugin)</code>. They provide beans to the DI graph:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::{PreStatePlugin, AppBuilder};
-use r2e::builder::NoState;
-use r2e::type_list::TCons;
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
 pub struct MyPlugin {
     config: MyPluginConfig,
 }
 
-impl PreStatePlugin for MyPlugin {
-    type Provided = MyPluginConfig;
+impl Plugin for MyPlugin {
+    // `Provided` is a tuple of beans: `(A,)` for one, `(A, B)` for several, `()` for none.
+    type Provided = (MyPluginConfig,);
+    type Deps = ();          // no dependencies on other beans (see "Consuming application beans")
+    type Config = ();        // no typed config section (see "Typed configuration")
+    type Controllers = ();   // no controllers shipped (see "Shipping controllers")
 
-    fn install&lt;P&gt;(self, app: AppBuilder&lt;NoState, P&gt;) -&gt; AppBuilder&lt;NoState, TCons&lt;Self::Provided, P&gt;&gt; {
-        app.provide(self.config)
+    async fn build(
+        self,              // by value — owned fields move straight into the beans
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        _ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(MyPluginConfig,), PluginBuildError&gt; {
+        Ok((self.config,))
     }
 }
 <span class="boring">}</span></code></pre>
@@ -250,85 +216,390 @@ impl PreStatePlugin for MyPlugin {
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
     .plugin(MyPlugin { config: MyPluginConfig::default() })
-    .build_state::&lt;AppState, _&gt;()
+    .build_state()
     .await
     // ...
 <span class="boring">}</span></code></pre>
-<h2 id="deferred-actions"><a class="header" href="#deferred-actions">Deferred actions</a></h2>
-<p>For plugins that need to set up infrastructure after state is built but during serve:</p>
+<p><code>build</code> may await (connect to a backend, run migrations, …) and may fail: an
+<code>Err</code> (any <code>Box&lt;dyn Error + Send + Sync&gt;</code>) aborts startup with an error naming
+the plugin. All four associated types are mandatory — stable Rust has no
+associated-type defaults — so write <code>()</code> for the ones you do not use.</p>
+<h2 id="effect-stages-graph-routes-finalize"><a class="header" href="#effect-stages-graph-routes-finalize">Effect stages: Graph, Routes, Finalize</a></h2>
+<p>A plugin never touches the router directly. It registers <strong>effects</strong> on the
+<code>PluginBuildContext</code>, and each effect belongs to a stage:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>Registered with</th><th>Applied</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Graph</strong></td><td><code>add_layer</code>, <code>store_data</code>, <code>on_serve</code>, <code>after_build</code></td><td>right after the bean graph resolves</td></tr>
+<tr><td><strong>Routes</strong></td><td><code>after_routes</code></td><td>after <strong>every</strong> controller (app, module, plugin) is registered</td></tr>
+<tr><td><strong>Finalize</strong></td><td><code>wrap_router</code></td><td>outermost, after every HTTP layer</td></tr>
+</tbody>
+</table>
+</div>
+<p>Within a stage, effects apply in <strong>install order</strong> (a later layer/wrap ends up
+<em>outside</em> an earlier one); builds themselves run in dependency order, so the two
+orders are independent. Nothing needs to be installed “last” any more: whatever
+used to need the complete route table registers a Routes effect, and whatever
+used to need to be outermost registers a Finalize effect.</p>
+<p>Note that layers added via <code>Router::layer</code> run <em>after</em> routing — they cannot
+rewrite the request URI in a way that changes which route matches. R2E’s
+built-in <code>NormalizePath</code> plugin is instead applied at build time as a
+pre-routing rewrite wrapping the whole router, which is why it has no
+ordering constraint.</p>
+<h2 id="consuming-application-beans"><a class="header" href="#consuming-application-beans">Consuming application beans</a></h2>
+<p>Declare the beans a plugin needs in <code>Deps</code>. They are <strong>real edges in the bean
+graph</strong>: the framework constructs them first (in topological order) and hands
+them to <code>build</code> <strong>by value</strong>, already resolved.</p>
+<pre><code class="language-text">  .plugin(Me)                    build_state()                       (serve)
+       │                              │                                 │
+       ▼                              ▼                                 ▼
+  [node queued]     ─►   deps built ─► build(deps, config)  ─►   on_serve hooks
+</code></pre>
+<p><code>Deps</code> can name <strong>any</strong> bean — provided (<code>.provide()</code>), factory-built
+(<code>.register::&lt;T&gt;()</code>), or provided by another plugin. It is appended to the
+builder’s requirement list and verified against the <strong>final</strong> provision list
+at <code>build_state()</code> — nothing is checked at the <code>.plugin()</code> call site, so the
+order between <code>.plugin()</code>, <code>.provide()</code>, and <code>.register()</code> calls does not
+matter. A missing dep is a guided compile error (“missing <code>.provide::&lt;X&gt;()</code>
+or <code>.register::&lt;X&gt;()</code>”).</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::{PreStatePlugin, AppBuilder};
-use r2e::plugin::{DeferredAction, DeferredContext};
-use r2e::builder::NoState;
-use r2e::type_list::TCons;
-use tokio_util::sync::CancellationToken;
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
-pub struct MyPlugin;
+pub struct MetricsExporter;
 
-impl PreStatePlugin for MyPlugin {
-    type Provided = CancellationToken;
+impl Plugin for MetricsExporter {
+    type Provided = (ExporterHandle,);
+    // `MetricsRegistry` is a factory-built bean (`.register::&lt;MetricsRegistry&gt;()`)
+    // — fine: it is constructed before this plugin's `build` runs.
+    type Deps = (MetricsRegistry,);
+    type Config = ();
+    type Controllers = ();
 
-    fn install&lt;P&gt;(self, app: AppBuilder&lt;NoState, P&gt;) -&gt; AppBuilder&lt;NoState, TCons&lt;Self::Provided, P&gt;&gt; {
-        let token = CancellationToken::new();
-
-        app.provide(token.clone()).add_deferred(DeferredAction::new("my-plugin", move |ctx: &amp;mut DeferredContext| {
-            // Add a Tower layer
-            ctx.add_layer(Box::new(|router| router.layer(axum::Extension("my-plugin-data"))));
-
-            // Store data for later access
-            ctx.store_data(MyPluginHandle::new());
-
-            // Hook into server lifecycle
-            let t = token.clone();
-            ctx.on_serve(move |_tasks, _cancel_token| {
-                tracing::info!("Plugin started");
-            });
-
-            ctx.on_shutdown(move || {
-                t.cancel();
-                tracing::info!("Plugin shutting down");
-            });
-        }))
+    async fn build(
+        self,
+        (registry,): (MetricsRegistry,),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(ExporterHandle,), PluginBuildError&gt; {
+        let handle = ExporterHandle::connect().await?;   // async + fallible: just do it
+        let h = handle.clone();
+        ctx.on_serve(move |_sc| h.bind(registry));
+        Ok((handle,))
     }
 }
 <span class="boring">}</span></code></pre>
-<h3 id="deferredcontext-methods"><a class="header" href="#deferredcontext-methods">DeferredContext methods</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// `MetricsRegistry` is registered AFTER the plugin — still fine, because
+// `Deps` is checked at `build_state()`, not at the `.plugin()` call site.
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .register::&lt;MetricsRegistry&gt;()
+    .build_state().await
+
+// ❌ Compile error at `build_state()`: MetricsRegistry never provided —
+//    guided error "missing `.provide::&lt;MetricsRegistry&gt;()` or
+//    `.register::&lt;MetricsRegistry&gt;()`"
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .build_state().await
+<span class="boring">}</span></code></pre>
+<p>Because deps arrive <em>before</em> <code>build</code> runs, a provided bean that depends on
+another bean is constructed <strong>directly</strong> — there is no shell/fill dance.
+(<code>r2e::Late&lt;T&gt;</code> — a <code>Clone</code>, Arc-shared, first-write-wins write-once cell —
+still exists as an escape hatch for values that genuinely cannot exist until
+after the whole graph is resolved; the framework’s own <code>GraphHandle</code> is built
+on it.)</p>
+<h2 id="typed-configuration"><a class="header" href="#typed-configuration">Typed configuration</a></h2>
+<p>A plugin can declare a typed config section — the same <code>#[derive(ConfigProperties)]</code>
+machinery controllers use for <code>#[config(section)]</code>. The framework loads and
+<strong>validates</strong> that section before calling <code>build</code>, and hands it over as
+<code>Option&lt;Self::Config&gt;</code>. For raw, stringly access there is
+<code>ctx.config_raw() -&gt; Option&lt;&amp;R2eConfig&gt;</code>.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e::prelude::ConfigProperties;
+
+#[derive(ConfigProperties, Clone, Debug, Default)]
+pub struct MetricsCfg {
+    pub endpoint: Option&lt;String&gt;,   // optional keys let the builder win
+    pub namespace: Option&lt;String&gt;,
+}
+
+pub struct Metrics { endpoint: Option&lt;String&gt; }  // programmatic builder setting
+
+impl Plugin for Metrics {
+    type Provided = ();
+    type Deps = ();
+    type Config = MetricsCfg;                           // typed section
+    type Controllers = ();
+    const CONFIG_PREFIX: Option&lt;&amp;'static str&gt; = Some("metrics");   // metrics.* in YAML
+
+    async fn build(
+        self,
+        _deps: (),
+        config: Option&lt;MetricsCfg&gt;,      // loaded + validated file config
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(), PluginBuildError&gt; {
+        // Precedence: builder setting (self) &gt; file config &gt; default.
+        let endpoint = self.endpoint
+            .or_else(|| config.and_then(|c| c.endpoint))
+            .unwrap_or_else(|| "/metrics".into());
+        ctx.add_layer(move |router| router /* mount `endpoint` */);
+        Ok(())
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Rules for the delivered <code>config</code>:</p>
+<ul>
+<li><strong><code>Config = ()</code></strong> (the default surface) — no config; <code>CONFIG_PREFIX</code> stays
+<code>None</code>; <code>build</code> gets <code>None</code>.</li>
+<li><strong>Presence-based (optional section).</strong> <code>build</code> gets <code>Some(cfg)</code> only when
+<code>CONFIG_PREFIX</code> is <code>Some(prefix)</code>, config was loaded (<code>load_config</code>, or an
+<code>override_config</code> test stash consumed by it), <strong>and</strong> at least one key lives
+under <code>prefix</code>. No config loaded, or an absent section → <code>None</code>. This
+mirrors a controller’s <code>Option&lt;Section&gt;</code>.</li>
+<li><strong>Validation.</strong> A present-but-malformed section (missing required key, wrong
+type) is a <strong>boot error</strong> — during <code>build_state()</code> — with the same
+missing-key / type-mismatch report a controller <code>#[config]</code> mismatch
+produces, naming the plugin and section. The section is parsed even when the
+plugin is disabled (<code>&lt;prefix&gt;.enabled: false</code>), so it is always structurally
+validated. The precedence is: <strong>builder setting &gt; file config &gt; default</strong>.</li>
+</ul>
+<p><code>CONFIG_PREFIX</code> is an associated const with a default (<code>None</code>), so a plugin
+that reads no config writes only <code>type Config = ();</code>. Because <code>build</code> runs
+inside <code>build_state()</code>, config is <strong>guaranteed loaded</strong> there — the order
+between <code>.plugin()</code> and <code>load_config()</code> does not matter.</p>
+<h2 id="enabling-and-disabling-a-plugin-from-config"><a class="header" href="#enabling-and-disabling-a-plugin-from-config">Enabling and disabling a plugin from config</a></h2>
+<p>Any plugin with a <code>CONFIG_PREFIX</code> gets an on/off switch for free: the boolean key
+<code>&lt;prefix&gt;.enabled</code> (default <strong>true</strong>). Set it to <code>false</code> to turn the plugin off
+without touching code:</p>
+<pre><code class="language-yaml">prometheus:
+  enabled: false      # no /metrics route, no tracking layer
+</code></pre>
+<p>When disabled:</p>
+<ul>
+<li><strong><code>build</code> still runs</strong> — the provision list is fixed at compile time, so the
+provided beans must exist. Check <code>ctx.enabled()</code> and return a cheap,
+<em>disabled</em> variant of your beans (e.g. OpenFga returns a fail-closed
+backend; the Scheduler starts no driver task). Anything injecting the beans
+keeps compiling and running.</li>
+<li><strong>All three surface stages are dropped</strong> — Graph (<code>add_layer</code>, <code>store_data</code>,
+<code>on_serve</code>, <code>after_build</code>), Routes (<code>after_routes</code>) and Finalize
+(<code>wrap_router</code>). Disabling gates the plugin’s <em>wiring</em>, not its beans.</li>
+<li><strong>Cleanup effects still run</strong> — <code>on_shutdown</code> and <code>on_shutdown_async</code>.
+<code>build</code> ran, so whatever it constructed still has to be released; dropping
+its disposal would leak exactly what a disabled plugin built. Keep those
+hooks to disposal only.</li>
+<li><strong><code>pre_destroy</code> hooks still run</strong> (<code>run_pre_destroy</code> registered in <code>setup</code>)
+— the beans are real and may be injected elsewhere.</li>
+</ul>
+<p>Making the beans <em>inert</em> is the plugin’s job: check <code>ctx.enabled()</code> before any
+process-global side effect inside <code>build</code> itself, not just around the effects
+(Prometheus, for example, returns early so the global metrics recorder is never
+installed).</p>
+<p>Plugins with no <code>CONFIG_PREFIX</code>, and apps that never load config, are always
+enabled (the flag defaults to on).</p>
+<h2 id="effects-layers-hooks-plugin-data"><a class="header" href="#effects-layers-hooks-plugin-data">Effects: layers, hooks, plugin data</a></h2>
+<p>Side effects are registered on the <code>PluginBuildContext</code> during <code>build</code> — plain
+closures, no <code>Box</code>, no <code>DeferredAction</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e::rt::CancelToken;
+
+pub struct MyPlugin;
+
+impl Plugin for MyPlugin {
+    type Provided = (CancelToken,);
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(CancelToken,), PluginBuildError&gt; {
+        let token = CancelToken::new();
+        let t = token.clone();
+
+        // Add a Tower layer
+        ctx.add_layer(|router| router.layer(r2e::http::Extension("my-plugin-data")));
+
+        // Store data for later access (app.get_plugin_data::&lt;T&gt;())
+        ctx.store_data(MyPluginHandle::new());
+
+        // Hook into server lifecycle
+        ctx.on_serve(move |_serve_ctx| {
+            tracing::info!("Plugin started");
+        });
+
+        ctx.on_shutdown(move || {
+            t.cancel();
+            tracing::info!("Plugin shutting down");
+        });
+
+        Ok((token,))
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="pluginbuildcontext-methods"><a class="header" href="#pluginbuildcontext-methods"><code>PluginBuildContext</code> methods</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Method</th><th>Signature</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>add_layer</code></td><td><code>(&amp;mut self, Box&lt;dyn FnOnce(Router) -&gt; Router + Send&gt;)</code></td><td>Add a Tower layer to the router</td></tr>
-<tr><td><code>store_data</code></td><td><code>&lt;D: Any + Send + Sync&gt;(&amp;mut self, D)</code></td><td>Store a value keyed by type for later retrieval</td></tr>
-<tr><td><code>on_serve</code></td><td><code>(&amp;mut self, FnOnce(Vec&lt;Box&lt;dyn Any + Send&gt;&gt;, CancellationToken))</code></td><td>Run when the server starts listening</td></tr>
-<tr><td><code>on_shutdown</code></td><td><code>(&amp;mut self, FnOnce())</code></td><td>Run during graceful shutdown</td></tr>
+<tr><td><code>enabled</code></td><td><code>(&amp;self) -&gt; bool</code></td><td>The <code>&lt;prefix&gt;.enabled</code> config gate (default <code>true</code>)</td></tr>
+<tr><td><code>graph</code></td><td><code>(&amp;self) -&gt; GraphHandle</code></td><td>Cloneable <strong>weak</strong> handle on the <strong>final</strong> resolved graph (fills at the end of a successful <code>build_state()</code>; reads <code>Some</code> for the app’s whole life <em>and</em> for any tracked task that outlives it, since the router, every tracked task and the serving scope each hold the graph independently — it reads <code>None</code> only once the last of those owners is gone)</td></tr>
+<tr><td><code>config_raw</code></td><td><code>(&amp;self) -&gt; Option&lt;&amp;R2eConfig&gt;</code></td><td>The loaded raw config, if any</td></tr>
+<tr><td><code>add_layer</code></td><td><code>&lt;F: FnOnce(Router) -&gt; Router + Send + 'static&gt;(&amp;mut self, F)</code></td><td><strong>Graph</strong> — add a Tower layer to the router</td></tr>
+<tr><td><code>store_data</code></td><td><code>&lt;D: Any + Send + Sync&gt;(&amp;mut self, D)</code></td><td><strong>Graph</strong> — store a value keyed by type for later retrieval</td></tr>
+<tr><td><code>on_serve</code></td><td><code>&lt;F: FnOnce(ServeContext) + Send + 'static&gt;(&amp;mut self, F)</code></td><td><strong>Graph</strong> — run when the server starts listening</td></tr>
+<tr><td><code>after_build</code></td><td><code>&lt;F: FnOnce(&amp;mut DeferredContext) + Send + 'static&gt;(&amp;mut self, F)</code></td><td><strong>Graph</strong> — boot-time escape hatch with full-graph access</td></tr>
+<tr><td><code>after_routes</code></td><td><code>&lt;F: FnOnce(&amp;mut RoutesContext) + Send + 'static&gt;(&amp;mut self, F)</code></td><td><strong>Routes</strong> — runs after every controller is registered</td></tr>
+<tr><td><code>wrap_router</code></td><td><code>&lt;F: FnOnce(Router) -&gt; Router + Send + 'static&gt;(&amp;mut self, F)</code></td><td><strong>Finalize</strong> — outermost transport-level router transform</td></tr>
+<tr><td><code>on_shutdown</code></td><td><code>&lt;F: FnOnce() + Send + 'static&gt;(&amp;mut self, F)</code></td><td>cleanup — run during graceful shutdown</td></tr>
+<tr><td><code>on_shutdown_async</code></td><td><code>&lt;F: FnOnce() -&gt; Fut + Send + 'static&gt;(&amp;mut self, F)</code></td><td>cleanup — run (and await) during graceful shutdown</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="step-by-step-request-id-plugin"><a class="header" href="#step-by-step-request-id-plugin">Step-by-step: Request ID plugin</a></h2>
-<p>A post-state plugin that adds a unique <code>X-Request-Id</code> header to every response.</p>
+<p>Effects are buffered and applied per stage, <strong>in plugin install order</strong> within a
+stage (<code>.plugin(A)</code> before <code>.plugin(B)</code> ⇒ A’s layers apply inside B’s, even
+if B’s <code>build</code> executed first because of dependencies) — and every surface stage
+is dropped when the plugin is disabled (shutdown hooks are not; see above).</p>
+<h3 id="the-routes-stage-and-the-route-registry"><a class="header" href="#the-routes-stage-and-the-route-registry">The Routes stage and the route registry</a></h3>
+<p><code>after_routes</code> hands you a <code>RoutesContext</code>, the only place with the <strong>complete</strong>
+route table:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::{Plugin, AppBuilder};
-use axum::http::{Request, HeaderValue};
-use axum::middleware::{self, Next};
-use axum::response::Response;
+</span>ctx.after_routes(move |routes| {
+    for route in routes.routes() {          // &amp;[RouteInfo] — every registered route
+        tracing::debug!("{} {}", route.method, route.path);
+    }
+    routes.register_routes(my_router);      // mount your own routes
+});
+<span class="boring">}</span></code></pre>
+<p>Because the stage runs after <em>all</em> controllers are registered — app,
+feature-module and plugin ones alike — a Routes effect is install-order
+independent. This is how <code>OpenApiPlugin</code> builds its spec and mounts
+<code>/openapi.json</code> without having to be installed last.</p>
+<p>When an effect needs one of the plugin’s own provided beans, resolve it from the
+graph at apply time — <code>ctx.after_build(|dctx| { let x = dctx.bean_context().try_get::&lt;X&gt;(); … })</code> — instead of capturing the value
+<code>build</code> just made. A test that pins only <em>some</em> of the provisions with
+<code>override_bean</code> still runs <code>build</code>, and the graph then exposes the pinned bean
+while your captured one is invisible to everyone else.</p>
+<h3 id="setup--rare-pre-graph-hook"><a class="header" href="#setup--rare-pre-graph-hook"><code>setup()</code> — rare pre-graph hook</a></h3>
+<p><code>fn setup(&amp;mut self, ctx: &amp;mut PluginSetupContext)</code> (default no-op) runs once
+at <code>.plugin()</code> time, before the graph — and possibly before config — exists.
+Use it only for things other builder-phase code must observe: <code>store_data</code> that
+must exist even when the plugin is disabled, <code>run_pre_destroy::&lt;B&gt;()</code>
+lifecycle registrars, or low-level <code>ctx.add_deferred(DeferredAction::new(..))</code>
+actions. Everything else belongs in <code>build</code>.</p>
+<p>Setup actions are <strong>never</strong> gated on <code>&lt;prefix&gt;.enabled</code> — which is why the setup
+context carries no surface-effect sugar: there is no <code>add_layer</code>,
+<code>wrap_router</code>, <code>on_serve</code> or shutdown hook on <code>PluginSetupContext</code>, and reaching
+for one is a compile error. So a disabled plugin cannot mount a route <em>by
+accident</em>.</p>
+<p><code>add_deferred</code> is the deliberate hole: it hands you a full <code>DeferredContext</code>,
+which the framework cannot gate for you, so a route mounted from there is
+mounted whether the plugin is enabled or not. That is the price of the escape
+hatch — if what you register should disappear under <code>enabled = false</code>, register
+it from <code>build</code> instead.</p>
+<h2 id="multiple-provided-beans"><a class="header" href="#multiple-provided-beans">Multiple provided beans</a></h2>
+<p>A <code>Plugin</code> can provide <strong>several</strong> beans — just make <code>Provided</code> a longer
+tuple and return all of them. Each element becomes its own bean in the graph:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e::rt::CancelToken;
+
+pub struct MyMultiPlugin;
+
+impl Plugin for MyMultiPlugin {
+    // Provides two beans: CancelToken and MyRegistry
+    type Provided = (CancelToken, MyRegistry);
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(CancelToken, MyRegistry), PluginBuildError&gt; {
+        let token = CancelToken::new();
+        let registry = MyRegistry::new();
+
+        let t = token.clone();
+        ctx.on_shutdown(move || {
+            t.cancel();
+            tracing::info!("Shutting down");
+        });
+
+        Ok((token, registry))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Both beans are then injectable by type (<code>#[inject] token: CancelToken</code>,
+<code>#[inject] registry: MyRegistry</code>).</p>
+<p>Note that plugin-provided beans register <strong>strictly</strong>: an app
+<code>.provide()</code>/<code>.register()</code> of the same type — or installing the same plugin
+twice — is a <code>DuplicateBean</code> error at boot. In tests, pin an override
+<strong>before</strong> <code>.plugin()</code> with <code>override_bean</code>: the pin wins for that type and
+<code>build</code> still runs, so the plugin’s routes, layers and hooks stay in place
+(they are not beans, and no pin can replace them). A plugin whose <code>build</code> is
+pure bean construction <em>and</em> expensive — a connection, a container, key
+generation — can opt out with <code>const SKIP_BUILD_WHEN_ALL_PINNED: bool = true;</code>,
+and then pinning <em>every</em> provided type skips <code>build</code> entirely. To silence a
+plugin that carries effects, disable it with <code>&lt;prefix&gt;.enabled = false</code>.</p>
+<h3 id="escape-hatch-plugininstall"><a class="header" href="#escape-hatch-plugininstall">Escape hatch: <code>PluginInstall</code></a></h3>
+<p><code>PluginInstall</code> is the internal, HList-based trait that <code>.plugin()</code> actually
+dispatches on; every <code>Plugin</code> gets one for free via a blanket impl.
+Because <code>Plugin</code> now covers multiple provided beans, the <strong>only</strong> reason
+to hand-write a <code>PluginInstall</code> is to call arbitrary builder methods
+(<code>.register()</code>, <code>.provide()</code>, <code>.when()</code>, …) during install. It is <code>#[doc(hidden)]</code>
+and almost never needed — reach for it only when a plugin genuinely has to drive
+the builder itself.</p>
+<h2 id="step-by-step-request-id-plugin"><a class="header" href="#step-by-step-request-id-plugin">Step-by-step: Request ID plugin</a></h2>
+<p>A plugin that adds a unique <code>X-Request-Id</code> header to every response — one Graph
+effect, no beans.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e::prelude::*; // Request, Next, Response, middleware
+use r2e::http::header::HeaderValue;
 use uuid::Uuid;
 
 pub struct RequestId;
 
 impl Plugin for RequestId {
-    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
-        app.with_layer_fn(|router| {
-            router.layer(middleware::from_fn(request_id_middleware))
-        })
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(), PluginBuildError&gt; {
+        ctx.add_layer(|router| router.layer(middleware::from_fn(request_id_middleware)));
+        Ok(())
     }
 }
 
 async fn request_id_middleware(
-    request: Request&lt;axum::body::Body&gt;,
+    request: Request&lt;Body&gt;,
     next: Next,
 ) -&gt; Response {
     let request_id = Uuid::new_v4().to_string();
@@ -344,21 +615,63 @@ async fn request_id_middleware(
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+    .plugin(RequestId)
+    .build_state()
     .await
-    .with(RequestId)
     .serve("0.0.0.0:3000")
     .await;
 <span class="boring">}</span></code></pre>
-<h2 id="step-by-step-background-health-checker"><a class="header" href="#step-by-step-background-health-checker">Step-by-step: Background health checker</a></h2>
-<p>A pre-state plugin that spawns a periodic health check task and cancels it on shutdown.</p>
+<h2 id="shipping-controllers-from-a-plugin"><a class="header" href="#shipping-controllers-from-a-plugin">Shipping controllers from a plugin</a></h2>
+<p>Instead of hand-assembling a <code>Router</code>, a plugin can declare <code>#[controller]</code>
+types in <code>Controllers</code>. They are written exactly like application controllers —
+guards, <code>#[roles]</code>, extractors and OpenAPI metadata all work — and they may
+<code>#[inject]</code> the plugin’s own provided beans as well as any application bean:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::{PreStatePlugin, AppBuilder};
-use r2e::plugin::{DeferredAction, DeferredContext};
-use r2e::builder::NoState;
-use r2e::type_list::TCons;
-use tokio_util::sync::CancellationToken;
+</span>use r2e::prelude::*;
+use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+
+#[controller(path = "/metrics")]
+pub struct MetricsController {
+    #[inject] registry: MetricsRegistry,   // the plugin's own provided bean
+}
+
+#[routes]
+impl MetricsController {
+    #[get("/")]
+    async fn scrape(&amp;self) -&gt; String { self.registry.render() }
+}
+
+pub struct Metrics;
+
+impl Plugin for Metrics {
+    type Provided = (MetricsRegistry,);
+    type Deps = ();
+    type Config = ();
+    type Controllers = (MetricsController,);
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        _ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(MetricsRegistry,), PluginBuildError&gt; {
+        Ok((MetricsRegistry::new(),))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Plugin controllers are registered by <code>build_state()</code> right after the graph
+resolves, so their routes are part of the route registry every <code>after_routes</code>
+effect sees. Their <code>#[inject]</code> fields ride along in the builder’s requirement
+list and are checked against the <strong>final</strong> provision list at <code>build_state()</code>,
+exactly like <code>Deps</code> — a bean the controller needs but nobody provides is a
+compile error naming the plugin.</p>
+<h2 id="step-by-step-background-health-checker"><a class="header" href="#step-by-step-background-health-checker">Step-by-step: Background health checker</a></h2>
+<p>A plugin that spawns a periodic health check task and cancels it on shutdown.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e::rt::CancelToken;
 use std::time::Duration;
 
 pub struct HealthChecker {
@@ -366,43 +679,50 @@ pub struct HealthChecker {
     pub url: String,
 }
 
-impl PreStatePlugin for HealthChecker {
-    type Provided = CancellationToken;
+impl Plugin for HealthChecker {
+    type Provided = (CancelToken,);
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
 
-    fn install&lt;P&gt;(self, app: AppBuilder&lt;NoState, P&gt;) -&gt; AppBuilder&lt;NoState, TCons&lt;Self::Provided, P&gt;&gt; {
-        let token = CancellationToken::new();
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(CancelToken,), PluginBuildError&gt; {
+        let token = CancelToken::new();
         let interval = self.interval;
         let url = self.url;
+        let t = token.clone();
+        let t2 = token.clone();
 
-        app.provide(token.clone()).add_deferred(DeferredAction::new("health-checker", move |ctx: &amp;mut DeferredContext| {
-            let t = token.clone();
-
-            // Start the checker when the server begins serving
-            ctx.on_serve(move |_tasks, _cancel_token| {
-                let t = t.clone();
-                tokio::spawn(async move {
-                    loop {
-                        tokio::select! {
-                            _ = tokio::time::sleep(interval) =&gt; {
-                                match reqwest::get(&amp;url).await {
-                                    Ok(resp) =&gt; tracing::info!("Health check: {}", resp.status()),
-                                    Err(e) =&gt; tracing::warn!("Health check failed: {}", e),
-                                }
-                            }
-                            _ = t.cancelled() =&gt; {
-                                tracing::info!("Health checker stopped");
-                                break;
+        // Start the checker when the server begins serving
+        ctx.on_serve(move |_serve_ctx| {
+            r2e::rt::spawn(async move {
+                loop {
+                    r2e::rt::select! {
+                        _ = r2e::rt::sleep(interval) =&gt; {
+                            match reqwest::get(&amp;url).await {
+                                Ok(resp) =&gt; tracing::info!("Health check: {}", resp.status()),
+                                Err(e) =&gt; tracing::warn!("Health check failed: {}", e),
                             }
                         }
+                        _ = t2.cancelled() =&gt; {
+                            tracing::info!("Health checker stopped");
+                            break;
+                        }
                     }
-                });
+                }
             });
+        });
 
-            // Cancel the checker on shutdown
-            ctx.on_shutdown(move || {
-                token.cancel();
-            });
-        }))
+        // Cancel the checker on shutdown
+        ctx.on_shutdown(move || {
+            t.cancel();
+        });
+
+        Ok((token,))
     }
 }
 <span class="boring">}</span></code></pre>
@@ -416,35 +736,34 @@ AppBuilder::new()
         interval: Duration::from_secs(30),
         url: "https://api.example.com/health".into(),
     })
-    .build_state::&lt;AppState, _&gt;()
+    .build_state()
     .await
     .serve("0.0.0.0:3000")
     .await;
 <span class="boring">}</span></code></pre>
-<h2 id="available-appbuilder-methods-for-plugin-authors"><a class="header" href="#available-appbuilder-methods-for-plugin-authors">Available AppBuilder methods for plugin authors</a></h2>
-<p>Post-state plugins (<code>Plugin::install</code>) receive <code>AppBuilder&lt;T&gt;</code> and can call:</p>
+<h2 id="available-appbuilder-methods-application-side"><a class="header" href="#available-appbuilder-methods-application-side">Available AppBuilder methods (application side)</a></h2>
+<p>These are methods <strong>the application</strong> calls on the built app (after
+<code>build_state()</code>); a plugin reaches the same surface through its effects rather
+than by receiving the builder:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Description</th></tr>
+<tr><th>Method</th><th>Plugin equivalent</th></tr>
 </thead>
 <tbody>
-<tr><td><code>with_layer(layer)</code></td><td>Add a Tower layer (strict type bounds)</td></tr>
-<tr><td><code>with_layer_fn(|router| ...)</code></td><td>Apply a custom router transformation (escape hatch)</td></tr>
-<tr><td><code>with_service_builder(|router| ...)</code></td><td>Alias for <code>with_layer_fn</code></td></tr>
-<tr><td><code>register_routes(router)</code></td><td>Merge a raw <code>axum::Router&lt;T&gt;</code> into the app</td></tr>
-<tr><td><code>merge_router(router)</code></td><td>Alias for <code>register_routes</code></td></tr>
-<tr><td><code>on_start(|state| async { Ok(()) })</code></td><td>Register a startup hook (runs before listening)</td></tr>
-<tr><td><code>on_stop(|| async { })</code></td><td>Register a shutdown hook (runs after signal)</td></tr>
+<tr><td><code>with_layer(layer)</code></td><td><code>ctx.add_layer(|r| r.layer(layer))</code></td></tr>
+<tr><td><code>with_layer_fn(|router| ...)</code></td><td><code>ctx.add_layer(f)</code></td></tr>
+<tr><td><code>register_routes(router)</code> / <code>merge_router(router)</code></td><td><code>ctx.after_routes(|routes| routes.register_routes(r))</code>, or <code>type Controllers</code></td></tr>
+<tr><td><code>on_start(|state| async { Ok(()) })</code></td><td><code>ctx.on_serve(f)</code></td></tr>
+<tr><td><code>on_stop(|| async { })</code></td><td><code>ctx.on_shutdown(f)</code> / <code>ctx.on_shutdown_async(f)</code></td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="example-metrics-plugin"><a class="header" href="#example-metrics-plugin">Example: Metrics plugin</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::{Plugin, AppBuilder};
-use axum::routing::get;
-use axum::Router;
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e::http::{routing::get, Router};
 
 pub struct MetricsPlugin {
     endpoint: String,
@@ -457,10 +776,24 @@ impl MetricsPlugin {
 }
 
 impl Plugin for MetricsPlugin {
-    fn install&lt;T: Clone + Send + Sync + 'static&gt;(self, app: AppBuilder&lt;T&gt;) -&gt; AppBuilder&lt;T&gt; {
-        let metrics_router = Router::new()
-            .route(&amp;self.endpoint, get(|| async { "metrics data" }));
-        app.register_routes(metrics_router)
+    type Provided = ();
+    type Deps = ();
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(), PluginBuildError&gt; {
+        let endpoint = self.endpoint;
+        ctx.after_routes(move |routes| {
+            routes.register_routes(
+                Router::new().route(&amp;endpoint, get(|| async { "metrics data" })),
+            );
+        });
+        Ok(())
     }
 }
 <span class="boring">}</span></code></pre>

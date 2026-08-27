@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,35 +181,34 @@
 <p>R2E provides token-bucket rate limiting with three key strategies: global, per-IP, and per-user.</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <p>Enable the rate-limit feature:</p>
-<pre><code class="language-toml">r2e = { version = "0.1", features = ["rate-limit"] }
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["rate-limit"] }
 </code></pre>
-<p>Add <code>RateLimitRegistry</code> to your state:</p>
+<p>Provide a <code>RateLimitRegistry</code> as a bean. There is no hand-written state struct —
+the registry becomes part of the inferred state and rate-limit guards resolve it
+from the bean graph by type:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use r2e::r2e_rate_limit::RateLimitRegistry;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub rate_limiter: RateLimitRegistry,
-    // ...
-}
-<span class="boring">}</span></code></pre>
-<p>Provide a default instance:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>AppBuilder::new()
+AppBuilder::new()
     .provide(RateLimitRegistry::default())
-    // ...
+    // ... other beans ...
+    .build_state()
+    .await
+    // ... plugins, controllers, serve ...
+    ;
 <span class="boring">}</span></code></pre>
 <h2 id="rate-limit-strategies"><a class="header" href="#rate-limit-strategies">Rate limit strategies</a></h2>
 <h3 id="global-rate-limit-pre-auth"><a class="header" href="#global-rate-limit-pre-auth">Global rate limit (pre-auth)</a></h3>
-<p>Shared bucket across all requests. Runs before JWT validation:</p>
+<p>Shared bucket across all requests to that handler. Runs before JWT validation:</p>
+<p>Pre-auth strategies (<code>global</code>, <code>per_ip</code>) live on the <code>PreRateLimit</code> type;
+the post-auth per-user strategy lives on <code>RateLimit</code>.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::r2e_rate_limit::RateLimit;
+</span>use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
 
 #[get("/")]
-#[pre_guard(RateLimit::global(100, 60))]  // 100 requests per 60 seconds total
+#[pre_guard(PreRateLimit::global(100, 60))]  // 100 requests per 60 seconds total
 async fn list(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
 <h3 id="per-ip-rate-limit-pre-auth"><a class="header" href="#per-ip-rate-limit-pre-auth">Per-IP rate limit (pre-auth)</a></h3>
@@ -217,10 +216,11 @@ async fn list(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; { /* ... */ }
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[get("/")]
-#[pre_guard(RateLimit::per_ip(10, 60))]  // 10 requests per 60 seconds per IP
+#[pre_guard(PreRateLimit::per_ip(10, 60))]  // 10 requests per 60 seconds per IP
 async fn list(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
-<p>IP is extracted from the <code>X-Forwarded-For</code> header.</p>
+<p>See <a href="#client-ip-resolution">Client IP resolution</a> for how the IP is determined
+and what your proxy must do.</p>
 <h3 id="per-user-rate-limit-post-auth"><a class="header" href="#per-user-rate-limit-post-auth">Per-user rate limit (post-auth)</a></h3>
 <p>Separate bucket per authenticated user. Runs after JWT validation:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -230,6 +230,147 @@ async fn list(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; { /* ... */ }
 async fn create(&amp;self, body: Json&lt;Request&gt;) -&gt; Json&lt;Response&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
 <p>User is identified by the <code>sub</code> claim from the JWT token.</p>
+<p><strong>A per-user limit requires an identity.</strong> <code>RateLimit</code> / <code>ConfiguredRateLimit</code>
+declare <code>DecoratorSpec::REQUIRES_IDENTITY = true</code>:</p>
+<ul>
+<li>placing one on a route that can never have an identity (no struct-level
+<code>#[inject(identity)]</code>, no identity parameter, or an <code>#[anonymous]</code> route
+without an <code>Option&lt;..&gt;</code> identity parameter) is a <strong>compile error</strong>;</li>
+<li>at runtime, an <code>Option&lt;..&gt;</code> identity that came back <code>None</code> is answered with
+<strong>401 Unauthorized</strong> (and a warning). Unauthenticated callers never share an
+“anonymous” bucket — that would silently turn a per-user budget into a global
+one.</li>
+</ul>
+<h2 id="bucket-keys"><a class="header" href="#bucket-keys">Bucket keys</a></h2>
+<p>A bucket key is built from <strong>the fully-qualified controller name, the handler
+name, and the key strategy</strong>:</p>
+<pre><code>&lt;crate::module::ControllerName&gt;:&lt;handler&gt;:global
+&lt;crate::module::ControllerName&gt;:&lt;handler&gt;:ip:&lt;client-ip&gt;
+&lt;crate::module::ControllerName&gt;:&lt;handler&gt;:user:&lt;sub&gt;
+</code></pre>
+<p>The controller name is module-qualified (<code>module_path!()</code> + type name), so two
+same-named controllers in different modules cannot collide. Two controllers
+exposing homonymous handlers (<code>start</code>, <code>answer</code>, <code>list</code>, …) likewise get
+<strong>independent buckets</strong> — adding a limit to one endpoint never eats the budget
+of an unrelated endpoint that happens to share a method name. Each annotated
+handler owns its own bucket; there is no way to intentionally share one bucket
+across handlers (declare a shared limit as a middleware or a custom guard if you
+need that). Bucket keys are an internal detail: renaming or moving a controller
+changes them (buckets are per-process and reset on restart anyway).</p>
+<h2 id="client-ip-resolution"><a class="header" href="#client-ip-resolution">Client IP resolution</a></h2>
+<p>For <code>per_ip</code> limits the client address is resolved in this order:</p>
+<ol>
+<li>the leftmost entry of the <code>X-Forwarded-For</code> header, <strong>when it parses as an IP
+address</strong>;</li>
+<li>otherwise the <strong>transport peer address</strong> (<code>ConnectInfo&lt;SocketAddr&gt;</code>, port stripped);</li>
+<li>otherwise the literal bucket <code>unknown</code> — logged once per process with a
+<code>tracing::warn!</code>, because every such request then shares a single bucket and
+“per IP” silently degrades to “global”.</li>
+</ol>
+<h3 id="what-counts-as-a-parseable-entry"><a class="header" href="#what-counts-as-a-parseable-entry">What counts as a parseable entry</a></h3>
+<p>The candidate is the leftmost comma-separated entry, trimmed. It is accepted
+only if it parses into a <code>std::net::IpAddr</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Header value</th><th>Bucket fragment</th></tr>
+</thead>
+<tbody>
+<tr><td><code>1.2.3.4</code></td><td><code>1.2.3.4</code></td></tr>
+<tr><td><code>1.2.3.4:5678</code></td><td><code>1.2.3.4</code> (port dropped)</td></tr>
+<tr><td><code>[::1]:8080</code>, <code>[::1]</code>, <code>0:0:0:0:0:0:0:1</code></td><td><code>::1</code> (canonical form)</td></tr>
+<tr><td><code>1.2.3.4, 10.0.0.1</code></td><td><code>1.2.3.4</code> (leftmost only)</td></tr>
+<tr><td><code>unknown</code>, <code>not-an-ip</code>, <code>'; DROP TABLE …</code>, empty</td><td><em>treated as absent</em> → peer address</td></tr>
+</tbody>
+</table>
+</div>
+<p>Anything unparseable is treated as <strong>absent</strong>, so a client cannot mint a fresh
+bucket per garbage value, and cannot suppress the peer fallback either. Entries
+to the right of a malformed one are never used to “repair” it — they come from
+the same untrusted hop. The bucket string is always the canonical <code>IpAddr</code>
+<code>Display</code> form, so two spellings of one address share one bucket.</p>
+<h3 id="deployment-the-header-must-be-overwritten-not-appended"><a class="header" href="#deployment-the-header-must-be-overwritten-not-appended">Deployment: the header must be overwritten, not appended</a></h3>
+<p><code>X-Forwarded-For</code> is client-controlled unless something in front rewrites it.</p>
+<ul>
+<li><strong>Proxy that overwrites</strong> (<code>proxy_set_header X-Forwarded-For $remote_addr;</code> in
+nginx, or Traefik/ALB configured to replace): correct — the leftmost entry is
+the real client and cannot be forged.</li>
+<li><strong>Proxy that appends</strong> (<code>$proxy_add_x_forwarded_for</code>, the nginx default
+recipe): a client can prepend its own <code>X-Forwarded-For: 1.2.3.4</code> and get a
+fresh bucket per forged value, defeating the limit. Either switch the proxy to
+overwrite, or use <code>peer_ip_only()</code> / <code>trust-forwarded-for: false</code> — but note
+that behind a proxy the peer address is the proxy, so all traffic then shares
+one bucket.</li>
+<li><strong>No proxy at all</strong> (the app is exposed directly): use <code>peer_ip_only()</code>. The
+peer address is un-forgeable, and trusting the header here would let any
+client mint unlimited buckets.</li>
+</ul>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Directly exposed: ignore X-Forwarded-For entirely.
+#[pre_guard(PreRateLimit::per_ip(10, 60).peer_ip_only())]
+<span class="boring">}</span></code></pre>
+<p>The peer address is available under <code>serve_auto</code> / the sharded serve path /
+HTTP-3, and in <code>TestServer</code> (live TCP). It is <strong>not</strong> available under
+<code>TestApp</code>’s in-process dispatch (no socket) — per-IP limits there fall back to
+<code>unknown</code> unless the test sets <code>X-Forwarded-For</code> explicitly.</p>
+<p>Guards written by hand can read the same information from the guard context:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>ctx.forwarded_for()  // Option&lt;&amp;str&gt;    — leftmost XFF entry, RAW and unvalidated
+ctx.forwarded_ip()   // Option&lt;IpAddr&gt;  — the same entry, parsed (None if malformed)
+ctx.peer_ip()        // Option&lt;IpAddr&gt;  — transport peer, port stripped
+ctx.client_ip()      // Option&lt;ClientIp&gt; — parsed XFF first, else peer
+<span class="boring">}</span></code></pre>
+<p><code>ClientIp</code> is <code>Forwarded(IpAddr)</code> / <code>Peer(IpAddr)</code>: it tells you <em>where</em> the
+address came from (so a guard can decide how much to trust it), and its
+<code>Display</code>/<code>ip()</code> give the canonical address. Never key anything on
+<code>forwarded_for()</code> — use <code>forwarded_ip()</code> or <code>client_ip()</code>.</p>
+<h2 id="configurable-budgets"><a class="header" href="#configurable-budgets">Configurable budgets</a></h2>
+<p><code>PreRateLimit</code> / <code>RateLimit</code> take literal budgets. To make a limit tunable per
+environment, use the config-resolved specs <code>ConfiguredPreRateLimit</code> /
+<code>ConfiguredRateLimit</code>: they read their budget from <code>R2eConfig</code> at controller
+registration, with the literal arguments as fallback defaults.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_rate_limit::{ConfiguredPreRateLimit, ConfiguredRateLimit};
+
+#[post("/start")]
+#[pre_guard(ConfiguredPreRateLimit::per_ip("rate-limit.public").defaults(30, 60))]
+async fn start(&amp;self) -&gt; Json&lt;Session&gt; { /* ... */ }
+
+#[post("/heavy")]
+#[guard(ConfiguredRateLimit::per_user("rate-limit.api").defaults(5, 60))]
+async fn heavy(&amp;self) -&gt; Json&lt;Report&gt; { /* ... */ }
+<span class="boring">}</span></code></pre>
+<pre><code class="language-yaml">rate-limit:
+  public:
+    max: 30                    # default: the spec's `defaults(...)` value
+    window-secs: 60            # default: the spec's `defaults(...)` value
+    enabled: true              # false → the guard always allows (handy in `application-test.yaml`)
+    trust-forwarded-for: true  # false → peer address only, like `peer_ip_only()`
+  api:
+    max: 5
+    window-secs: 60
+</code></pre>
+<p>Keys are read under the prefix passed to the constructor, so several sites can
+share one prefix or each own its own. Any key may be omitted; the spec’s
+defaults apply.</p>
+<h3 id="malformed-configuration-fails-startup"><a class="header" href="#malformed-configuration-fails-startup">Malformed configuration fails startup</a></h3>
+<p>The default applies <strong>only when the key is absent</strong>. A key that is present but
+not convertible to its type (<code>max: plenty</code>, <code>enabled: yes-please</code>) aborts
+startup with a message naming the key — it never silently reinstates the
+default budget, because a security limit that quietly reverts is worse than one
+that refuses to boot. Specs are built once, at controller registration, so the
+failure happens at boot, not on the first request.</p>
+<p>A <code>window-secs</code> of <code>0</code> is rejected the same way, in every path: the literal
+constructors (<code>PreRateLimit::per_ip(10, 0)</code>, <code>RateLimit::per_user(5, 0)</code>,
+<code>.defaults(5, 0)</code>) panic where they are written, and <code>&lt;prefix&gt;.window-secs: 0</code>
+aborts startup. A zero-length window makes the refill rate infinite — the bucket
+returns to capacity on every request, which disables the limit entirely.</p>
+<p>These are <strong>separate spec types</strong>, not extra constructors on <code>PreRateLimit</code>:
+a <code>DecoratorSpec</code> declares its bean dependencies at the type level, and the
+config-resolved variants additionally depend on <code>R2eConfig</code>.</p>
 <h2 id="key-classification"><a class="header" href="#key-classification">Key classification</a></h2>
 <div class="table-wrapper">
 <table>
@@ -237,45 +378,60 @@ async fn create(&amp;self, body: Json&lt;Request&gt;) -&gt; Json&lt;Response&gt;
 <tr><th>Strategy</th><th>Attribute</th><th>Runs when</th><th>Needs identity</th></tr>
 </thead>
 <tbody>
-<tr><td><code>RateLimit::global(max, window)</code></td><td><code>#[pre_guard(...)]</code></td><td>Before JWT</td><td>No</td></tr>
-<tr><td><code>RateLimit::per_ip(max, window)</code></td><td><code>#[pre_guard(...)]</code></td><td>Before JWT</td><td>No</td></tr>
-<tr><td><code>RateLimit::per_user(max, window)</code></td><td><code>#[guard(...)]</code></td><td>After JWT</td><td>Yes</td></tr>
+<tr><td><code>PreRateLimit::global(max, window)</code></td><td><code>#[pre_guard(...)]</code></td><td>Before JWT</td><td>No</td></tr>
+<tr><td><code>PreRateLimit::per_ip(max, window)</code></td><td><code>#[pre_guard(...)]</code></td><td>Before JWT</td><td>No</td></tr>
+<tr><td><code>RateLimit::per_user(max, window)</code></td><td><code>#[guard(...)]</code></td><td>After JWT</td><td>Yes (enforced)</td></tr>
+<tr><td><code>ConfiguredPreRateLimit::{global,per_ip}(prefix)</code></td><td><code>#[pre_guard(...)]</code></td><td>Before JWT</td><td>No</td></tr>
+<tr><td><code>ConfiguredRateLimit::per_user(prefix)</code></td><td><code>#[guard(...)]</code></td><td>After JWT</td><td>Yes (enforced)</td></tr>
 </tbody>
 </table>
 </div>
+<p>“Enforced” = <code>REQUIRES_IDENTITY = true</code>: a compile error where no identity can
+exist, a 401 where an optional identity is missing.</p>
 <h2 id="combining-rate-limits"><a class="header" href="#combining-rate-limits">Combining rate limits</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[post("/upload")]
-#[pre_guard(RateLimit::global(1000, 60))]     // 1000 total uploads/min
-#[pre_guard(RateLimit::per_ip(50, 60))]       // 50 uploads/min per IP
+#[pre_guard(PreRateLimit::global(1000, 60))]  // 1000 total uploads/min
+#[pre_guard(PreRateLimit::per_ip(50, 60))]    // 50 uploads/min per IP
 #[guard(RateLimit::per_user(10, 60))]         // 10 uploads/min per user
-async fn upload(&amp;self, body: Bytes) -&gt; Result&lt;(), AppError&gt; { /* ... */ }
+async fn upload(&amp;self, body: Bytes) -&gt; Result&lt;(), HttpError&gt; { /* ... */ }
 <span class="boring">}</span></code></pre>
 <h2 id="response-on-rate-limit-exceeded"><a class="header" href="#response-on-rate-limit-exceeded">Response on rate limit exceeded</a></h2>
 <p>When a rate limit is exceeded, R2E returns:</p>
 <pre><code>HTTP/1.1 429 Too Many Requests
 </code></pre>
+<p>A per-user limit reached without an identity returns <code>401 Unauthorized</code>
+instead — see <a href="#per-user-rate-limit-post-auth">Per-user rate limit</a>.</p>
 <h2 id="custom-rate-limit-backend"><a class="header" href="#custom-rate-limit-backend">Custom rate limit backend</a></h2>
-<p>The default backend is <code>InMemoryRateLimiter</code> (DashMap-based). For distributed rate limiting, implement the <code>RateLimitBackend</code> trait:</p>
+<p>The default backend is <code>InMemoryRateLimiter</code> (DashMap-based).</p>
+<p><strong>It is single-process.</strong> Buckets live in this process’s memory, so N replicas
+behind a load balancer allow up to N × <code>max</code> requests per window, and a restart
+resets every bucket. Treat it as protection against a single abusive client, not
+as a cluster-wide quota. Budgets are <em>not</em> frozen at the first call: when a call
+presents a different <code>max</code>/<code>window_secs</code> (config change, two sites on one key)
+the bucket is re-tuned in place and its token count clamped to the new maximum.
+A <code>window_secs</code> of 0 can never come from this crate’s constructors; should a
+hand-rolled guard pass one, the bucket simply never refills (fail closed).</p>
+<p>For a distributed limit, implement the <code>RateLimitBackend</code> trait over a shared
+store and provide it as the registry’s backend:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_rate_limit::RateLimitBackend;
+</span>use r2e::r2e_rate_limit::{RateLimitBackend, RateLimitRegistry};
 
 struct RedisRateLimiter { /* ... */ }
 
 impl RateLimitBackend for RedisRateLimiter {
-    async fn check_rate_limit(
-        &amp;self,
-        key: &amp;str,
-        max_requests: u64,
-        window_secs: u64,
-    ) -&gt; bool {
-        // Return true if allowed, false if exceeded
+    fn try_acquire(&amp;self, key: &amp;str, max: u64, window_secs: u64) -&gt; bool {
+        // Return true if allowed, false if exceeded.
         todo!()
     }
 }
+
+AppBuilder::new().provide(RateLimitRegistry::new(RedisRateLimiter { /* ... */ }));
 <span class="boring">}</span></code></pre>
+<p><code>try_acquire</code> is synchronous and runs inline in the guard — keep it cheap, or
+front it with a local cache.</p>
 
                     </main>
 
@@ -285,7 +441,7 @@ impl RateLimitBackend for RedisRateLimiter {
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../data-access/entities-and-repository.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../data-access/pagination.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -299,7 +455,7 @@ impl RateLimitBackend for RedisRateLimiter {
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../data-access/entities-and-repository.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../data-access/pagination.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Entities and Repository - R2E — Rust Enterprise Edition</title>
+        <title>gRPC Services - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -177,143 +177,335 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="entities-and-repository"><a class="header" href="#entities-and-repository">Entities and Repository</a></h1>
-<p>R2E provides data access abstractions: <code>Entity</code> for mapping Rust structs to SQL tables, and <code>Repository</code> for async CRUD operations.</p>
+                        <h1 id="grpc-services"><a class="header" href="#grpc-services">gRPC Services</a></h1>
+<p>R2E provides first-class gRPC support with the same developer experience as HTTP controllers: <code>#[inject]</code>, <code>#[config]</code>, and interceptors — all wired at compile time.</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
-<p>Enable the data feature:</p>
-<pre><code class="language-toml">r2e = { version = "0.1", features = ["data"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+<p>Enable the gRPC feature:</p>
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["grpc"] }
 </code></pre>
-<h2 id="defining-entities"><a class="header" href="#defining-entities">Defining entities</a></h2>
-<p>Implement the <code>Entity</code> trait to map a struct to a database table:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::r2e_data::Entity;
-use serde::{Deserialize, Serialize};
+<p>Add the runtime proto crates and the R2E build helper that compiles your protos:</p>
+<pre><code class="language-toml">[dependencies]
+tonic = "0.14"
+tonic-prost = "0.14"
+prost = "0.14"
 
-#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct User {
-    pub id: i64,
-    pub name: String,
-    pub email: String,
+[build-dependencies]
+r2e-grpc-build = "0.3"
+</code></pre>
+<h2 id="defining-a-proto-file"><a class="header" href="#defining-a-proto-file">Defining a proto file</a></h2>
+<p>Create a <code>proto/</code> directory at the project root with your service definition:</p>
+<pre><code class="language-protobuf">// proto/greeter.proto
+syntax = "proto3";
+
+package greeter;
+
+service Greeter {
+  rpc SayHello (HelloRequest) returns (HelloReply);
+  rpc SayHelloAdmin (HelloRequest) returns (HelloReply);
 }
 
-impl Entity for User {
-    type Id = i64;
+message HelloRequest {
+  string name = 1;
+}
 
-    fn table_name() -&gt; &amp;'static str {
-        "users"
+message HelloReply {
+  string message = 1;
+}
+</code></pre>
+<h2 id="build-script"><a class="header" href="#build-script">Build script</a></h2>
+<p>Create a one-line <code>build.rs</code> at the project root. <code>r2e_grpc_build::compile()</code> finds and compiles <strong>every</strong> <code>proto/**/*.proto</code> file (no per-file list), emitting an aggregated per-package module plus a combined <code>FileDescriptorSet</code> into <code>OUT_DIR</code>:</p>
+<pre class="playground"><code class="language-rust">// build.rs
+fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    r2e_grpc_build::compile()
+}</code></pre>
+<p>The generated code produces a server trait (<code>greeter::greeter_server::Greeter</code>) and message types (<code>HelloRequest</code>, <code>HelloReply</code>), grouped under one Rust module per protobuf package. The <code>proto/</code> directory is registered with <code>cargo:rerun-if-changed</code>, so dropping a new <code>.proto</code> file in is picked up on the next build without touching <code>build.rs</code>.</p>
+<h2 id="including-generated-code"><a class="header" href="#including-generated-code">Including generated code</a></h2>
+<p>Use <code>include_protos!()</code> to bring the generated modules into scope. It expands to the aggregator written into <code>OUT_DIR</code>: one module per protobuf <code>package</code> (dotted packages nest) plus a <code>FILE_DESCRIPTOR_SET</code> constant:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub mod proto {
+    r2e::r2e_grpc::include_protos!();
+}
+
+use proto::greeter::{HelloReply, HelloRequest};
+<span class="boring">}</span></code></pre>
+<p>Types live under a module named after the <code>.proto</code> <code>package</code> — here <code>package greeter;</code> becomes <code>proto::greeter</code>.</p>
+<h2 id="implementing-a-grpc-service"><a class="header" href="#implementing-a-grpc-service">Implementing a gRPC service</a></h2>
+<p>A gRPC service in R2E follows the same pattern as an HTTP controller:</p>
+<ol>
+<li>Define a struct with <code>#[controller]</code> (no <code>state =</code> — the service resolves its <code>#[inject]</code> fields by type from the bean graph)</li>
+<li>Implement the tonic service trait with <code>#[grpc_routes(path::to::ServiceTrait)]</code></li>
+</ol>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
+
+#[controller]
+pub struct GreeterService {
+    #[inject] greeting_prefix: GreetingPrefix,
+}
+
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+impl GreeterService {
+    async fn say_hello(
+        &amp;self,
+        request: tonic::Request&lt;HelloRequest&gt;,
+    ) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+        let name = &amp;request.get_ref().name;
+        let reply = HelloReply {
+            message: format!("{} {}!", self.greeting_prefix.0, name),
+        };
+        Ok(tonic::Response::new(reply))
     }
 
-    fn id_column() -&gt; &amp;'static str {
-        "id"
-    }
-
-    fn columns() -&gt; &amp;'static [&amp;'static str] {
-        &amp;["id", "name", "email"]
-    }
-
-    fn id(&amp;self) -&gt; &amp;i64 {
-        &amp;self.id
+    async fn say_hello_admin(
+        &amp;self,
+        request: tonic::Request&lt;HelloRequest&gt;,
+    ) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+        let name = &amp;request.get_ref().name;
+        let reply = HelloReply {
+            message: format!("[ADMIN] {} {}!", self.greeting_prefix.0, name),
+        };
+        Ok(tonic::Response::new(reply))
     }
 }
 <span class="boring">}</span></code></pre>
-<h3 id="entity-trait-methods"><a class="header" href="#entity-trait-methods">Entity trait methods</a></h3>
+<h3 id="what-grpc_routes-generates"><a class="header" href="#what-grpc_routes-generates">What <code>#[grpc_routes]</code> generates</a></h3>
+<p>The macro produces:</p>
+<ul>
+<li>A wrapper struct <code>__R2eGrpc_&lt;Name&gt;</code> that holds an <code>Arc</code> to the service core</li>
+<li>An <code>#[async_trait]</code> implementation of the tonic service trait (e.g., <code>Greeter</code>)</li>
+<li>A <code>GrpcService</code> trait implementation that wires everything into the builder (no state generic — it constructs from the <code>BeanContext</code> and exposes <code>add_to_routes(Routes, &amp;Arc&lt;BeanContext&gt;)</code>; each registered service folds into a single <code>tonic::service::Routes</code> collection, drained once by the <code>GrpcServer</code> plugin at serve time)</li>
+</ul>
+<p>Each method goes through the pipeline: core construction via <code>ContextConstruct</code> (<code>from_context</code> pulls each <code>#[inject]</code> field by type from the resolved bean graph, once at registration), interceptor wrapping, then the method body.</p>
+<h2 id="dependency-injection"><a class="header" href="#dependency-injection">Dependency injection</a></h2>
+<p>gRPC services support the same injection as HTTP controllers:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller]
+pub struct UserGrpcService {
+    #[inject] user_service: UserService,
+    #[inject] event_bus: LocalEventBus,
+    #[config("app.name")] app_name: String,
+}
+<span class="boring">}</span></code></pre>
+<ul>
+<li><code>#[inject]</code> — resolved by type from the bean graph (services, pools, shared types)</li>
+<li><code>#[config("key")]</code> — resolves from <code>R2eConfig</code> (itself a bean in the graph)</li>
+</ul>
+<p>The service core is constructed once from the resolved <code>BeanContext</code> via <code>ContextConstruct</code> and shared as an <code>Arc</code> across all requests. A <code>#[inject]</code> type that is not a registered bean is a <strong>compile error</strong> naming the missing type.</p>
+<h2 id="interceptors"><a class="header" href="#interceptors">Interceptors</a></h2>
+<p>Apply interceptors at the impl level or method level, same as HTTP:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+#[intercept(Logged::info())]
+impl GreeterService {
+    #[intercept(Timed::default())]
+    async fn say_hello(
+        &amp;self,
+        request: tonic::Request&lt;HelloRequest&gt;,
+    ) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+        // ...
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Interceptors wrap the method body, not the tonic handler. The wrapping order is the same as HTTP: logged &gt; timed &gt; user-defined &gt; method body.</p>
+<h2 id="installing-the-plugin"><a class="header" href="#installing-the-plugin">Installing the plugin</a></h2>
+<p>The <code>GrpcServer</code> plugin must be installed <strong>before</strong> <code>build_state()</code>:</p>
+<pre class="playground"><code class="language-rust">use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
+
+#[r2e::main]
+async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+    let prefix = GreetingPrefix("Hello".to_string());
+
+    let app = AppBuilder::new()
+        .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+        .provide(prefix)
+        .build_state()
+        .await
+        .register_grpc_service::&lt;GreeterService&gt;();
+
+    tracing::info!("HTTP on :3000, gRPC on :50051");
+    app.serve("0.0.0.0:3000").await
+}</code></pre>
+<p><code>.provide(...)</code> and <code>.register::&lt;T&gt;()</code> populate the bean graph, <code>build_state().await</code> resolves it into the inferred state (no hand-written state struct), and <code>.register_grpc_service::&lt;S&gt;()</code> then constructs the service core from that graph.</p>
+<p>Register gRPC services with <code>.register_grpc_service::&lt;S&gt;()</code> — the gRPC analog of <code>.register_controller()</code> for HTTP, including the compile-time dependency check: if the service’s <code>#[inject]</code> fields or its <code>#[intercept(...)]</code> specs read a bean the app never provided, the registration line fails to compile with a <code>missing .provide::&lt;TheBean&gt;()</code> diagnostic — exactly like an HTTP controller.</p>
+<h2 id="transport-modes"><a class="header" href="#transport-modes">Transport modes</a></h2>
+<p>R2E supports two ways to expose gRPC:</p>
+<h3 id="separate-port-recommended"><a class="header" href="#separate-port-recommended">Separate port (recommended)</a></h3>
+<p>gRPC runs on a dedicated port, HTTP on another:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    // ...
+    .serve("0.0.0.0:3000")  // HTTP on :3000
+<span class="boring">}</span></code></pre>
+<p>When <code>serve()</code> starts, the plugin binds the configured address and spawns the tonic server next to the HTTP one; graceful shutdown is tied to the application’s shutdown sequence. Clients connect to the gRPC port directly:</p>
+<pre><code class="language-bash">grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHello
+</code></pre>
+<p>This is the simplest setup and recommended for most deployments. It avoids content-type routing overhead and allows independent load balancing per protocol.</p>
+<h3 id="multiplexed-single-port"><a class="header" href="#multiplexed-single-port">Multiplexed (single port)</a></h3>
+<p>gRPC and HTTP share the same port, routed by the <code>content-type</code> header:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .plugin(GrpcServer::multiplexed())
+    // ...
+    .serve("0.0.0.0:3000")  // both HTTP and gRPC on :3000
+<span class="boring">}</span></code></pre>
+<p>Requests with <code>content-type: application/grpc*</code> are routed to the gRPC services; all others go to the Axum HTTP router. The routing is handled by <code>MultiplexService</code>, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.</p>
+<p>Since gRPC requires HTTP/2, plaintext clients must use h2c prior knowledge (tonic’s default); the HTTP server accepts both HTTP/1.1 and h2c on the shared port.</p>
+<p>Use this when infrastructure constraints require a single port (e.g., certain PaaS environments).</p>
+<h2 id="combining-http-and-grpc"><a class="header" href="#combining-http-and-grpc">Combining HTTP and gRPC</a></h2>
+<p>A single application can serve both HTTP controllers and gRPC services:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let app = AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    .provide(prefix)
+    .build_state()
+    .await
+    .register_grpc_service::&lt;GreeterService&gt;()    // gRPC
+    .register_controller::&lt;HealthController&gt;()     // HTTP
+    .register_controller::&lt;UserController&gt;();       // HTTP
+
+app.serve("0.0.0.0:3000").await
+<span class="boring">}</span></code></pre>
+<p>HTTP controllers use <code>#[routes]</code>, gRPC services use <code>#[grpc_routes]</code>. Both construct their cores from the same resolved bean graph.</p>
+<h2 id="grpc-reflection"><a class="header" href="#grpc-reflection">gRPC reflection</a></h2>
+<p>Enable server reflection for introspection tools like <code>grpcurl</code> and gRPC UI. Reflection needs the encoded <code>FileDescriptorSet</code> of your protos — and <code>r2e_grpc_build::compile()</code> already emits the <strong>combined</strong> set for every proto and exposes it as the <code>FILE_DESCRIPTOR_SET</code> constant in your <code>proto</code> module. So there is no extra build.rs step: just two pieces cooperate:</p>
+<ol>
+<li><strong>Service</strong> — declare the set on the service via the <code>descriptor</code> argument:</li>
+</ol>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[grpc_routes(proto::greeter::greeter_server::Greeter, descriptor = proto::FILE_DESCRIPTOR_SET)]
+impl GreeterService { /* ... */ }
+<span class="boring">}</span></code></pre>
+<ol start="2">
+<li><strong>Plugin</strong> — enable reflection:</li>
+</ol>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())
+<span class="boring">}</span></code></pre>
+<p>Each <code>register_grpc_service</code> contributes its service’s descriptor set to the reflection registry (identical sets are stored once). For descriptor sets not carried by a service, use <code>with_reflection_descriptor(bytes)</code> — it also implies <code>with_reflection()</code>. Both reflection protocol versions (v1 and v1alpha) are served, on both transports (separate port and multiplexed).</p>
+<p>This requires the <code>reflection</code> feature on <code>r2e-grpc</code> (<code>grpc-reflection</code> on the <code>r2e</code> facade) — without it, <code>with_reflection()</code> does not exist and the build fails instead of silently serving no reflection:</p>
+<pre><code class="language-toml">[dependencies]
+r2e = { version = "0.3", features = ["grpc", "grpc-reflection"] }
+</code></pre>
+<p>With reflection enabled, clients can discover services without the proto file:</p>
+<pre><code class="language-bash">grpcurl -plaintext localhost:50051 list
+grpcurl -plaintext localhost:50051 describe greeter.Greeter
+</code></pre>
+<h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
+<p>You can configure the gRPC port via <code>application.yaml</code>:</p>
+<pre><code class="language-yaml">grpc:
+  port: 50051
+</code></pre>
+<p>And reference it in your setup:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let config = R2eConfig::load().unwrap();
+let grpc_port = config.get_or("grpc.port", "50051".to_string());
+let grpc_addr = format!("0.0.0.0:{grpc_port}");
+
+AppBuilder::new()
+    .plugin(GrpcServer::on_port(grpc_addr))
+<span class="boring">}</span></code></pre>
+<h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
+<ul>
+<li>gRPC service structs must <strong>not</strong> have struct-level <code>#[inject(identity)]</code> fields — the core is built from the bean context via <code>ContextConstruct</code>, which has no request to extract identity from (use param-level identity once macro support lands)</li>
+<li>The <code>GrpcServer</code> plugin must be installed before <code>build_state()</code></li>
+<li>Proto files are compiled at build time — changes to <code>.proto</code> files require a <code>cargo build</code></li>
+</ul>
+<h2 id="cli-scaffolding"><a class="header" href="#cli-scaffolding">CLI scaffolding</a></h2>
+<p>The R2E CLI can generate gRPC service skeletons:</p>
+<pre><code class="language-bash">r2e generate grpc-service User --package myapp
+</code></pre>
+<p>This creates:</p>
+<ul>
+<li><code>proto/user.proto</code> — proto file with CRUD RPC definitions</li>
+<li><code>src/grpc/user.rs</code> — Rust service implementation skeleton</li>
+<li><code>src/grpc/mod.rs</code> — declares the shared <code>proto</code> module (via <code>include_protos!()</code>) if it doesn’t exist yet</li>
+</ul>
+<p>The <code>--package</code> flag sets the protobuf package name (defaults to <code>myapp</code>).</p>
+<p>After generating, you need to:</p>
+<ol>
+<li>Register in <code>src/app.rs</code>, inside <code>App::build</code>: <code>.register_grpc_service::&lt;UserService&gt;()</code></li>
+<li>Run <code>cargo build</code> — the one-line <code>build.rs</code> (<code>r2e_grpc_build::compile()</code>) picks up the new proto automatically, no per-file edit needed</li>
+</ol>
+<p>If the project has no <code>build.rs</code> yet, run <code>r2e add grpc</code> first — it scaffolds the one-line build script.</p>
+<p>See <a href="../reference/cli-reference.html">CLI Reference</a> for full details.</p>
+<h2 id="grpcserver-api"><a class="header" href="#grpcserver-api">GrpcServer API</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+<tr><th>Constructor</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>table_name()</code></td><td><code>&amp;'static str</code></td><td>SQL table name</td></tr>
-<tr><td><code>id_column()</code></td><td><code>&amp;'static str</code></td><td>Primary key column name</td></tr>
-<tr><td><code>columns()</code></td><td><code>&amp;'static [&amp;'static str]</code></td><td>All column names</td></tr>
-<tr><td><code>id(&amp;self)</code></td><td><code>&amp;Id</code></td><td>Primary key value</td></tr>
+<tr><td><code>GrpcServer::on_port(addr)</code></td><td>gRPC on a separate port</td></tr>
+<tr><td><code>GrpcServer::multiplexed()</code></td><td>gRPC and HTTP on the same port</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="using-sqlxrepository"><a class="header" href="#using-sqlxrepository">Using <code>SqlxRepository</code></a></h2>
-<p><code>SqlxRepository</code> provides CRUD operations backed by SQLx:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::r2e_data_sqlx::SqlxRepository;
-
-let repo = SqlxRepository::&lt;User, _&gt;::new(pool.clone());
-
-// Find by ID
-let user: Option&lt;User&gt; = repo.find_by_id(&amp;1).await?;
-
-// Find all
-let users: Vec&lt;User&gt; = repo.find_all().await?;
-
-// Create
-let user = repo.create(&amp;new_user).await?;
-
-// Update
-repo.update(&amp;updated_user).await?;
-
-// Delete
-repo.delete(&amp;1).await?;
-<span class="boring">}</span></code></pre>
-<h2 id="in-controllers"><a class="header" href="#in-controllers">In controllers</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
-pub struct UserController {
-    #[inject] pool: SqlitePool,
-}
-
-#[routes]
-impl UserController {
-    #[get("/")]
-    async fn list(&amp;self) -&gt; Result&lt;Json&lt;Vec&lt;User&gt;&gt;, AppError&gt; {
-        let users = sqlx::query_as::&lt;_, User&gt;("SELECT id, name, email FROM users")
-            .fetch_all(&amp;self.pool)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        Ok(Json(users))
-    }
-
-    #[get("/{id}")]
-    async fn get_by_id(&amp;self, Path(id): Path&lt;i64&gt;) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
-        let user = sqlx::query_as::&lt;_, User&gt;(
-            "SELECT id, name, email FROM users WHERE id = ?"
-        )
-        .bind(id)
-        .fetch_optional(&amp;self.pool)
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .ok_or_else(|| AppError::NotFound("User not found".into()))?;
-
-        Ok(Json(user))
-    }
-}
-<span class="boring">}</span></code></pre>
-<h2 id="haspool-trait"><a class="header" href="#haspool-trait">HasPool trait</a></h2>
-<p>For controllers that use data-sqlx features, implement <code>HasPool</code> on your state:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::r2e_data_sqlx::HasPool;
-use sqlx::{Pool, Sqlite};
-
-impl HasPool&lt;Sqlite&gt; for AppState {
-    fn pool(&amp;self) -&gt; &amp;Pool&lt;Sqlite&gt; {
-        &amp;self.pool
-    }
-}
-<span class="boring">}</span></code></pre>
-<p>This is required for <code>#[managed]</code> transactions and <code>SqlxRepository</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>.with_reflection()</code></td><td>Enable gRPC server reflection, v1 + v1alpha (requires <code>reflection</code> feature)</td></tr>
+<tr><td><code>.with_reflection_descriptor(bytes)</code></td><td>Enable reflection and register an extra encoded <code>FileDescriptorSet</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Builder method</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>.register_grpc_service::&lt;S&gt;()</code></td><td>Register a gRPC service (analog of <code>register_controller</code>)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="supported-decorators"><a class="header" href="#supported-decorators">Supported decorators</a></h2>
+<p>Currently, <code>#[grpc_routes]</code> supports:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Decorator</th><th>Status</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>#[intercept(...)]</code></td><td>Supported</td><td>Interceptors (impl and method level)</td></tr>
+<tr><td><code>#[roles(...)]</code></td><td>Planned</td><td>Role-based guards</td></tr>
+<tr><td><code>#[guard(...)]</code></td><td>Planned</td><td>Custom guards</td></tr>
+<tr><td><code>#[inject(identity)]</code></td><td>Planned</td><td>Identity extraction from metadata</td></tr>
+</tbody>
+</table>
+</div>
+<p>The guard and identity infrastructure exists in <code>r2e-grpc</code> (<code>GrpcGuard</code>, <code>GrpcGuardContext</code>, <code>GrpcRolesGuard</code>, <code>GrpcIdentityExtractor</code>) and will be enabled in a future release. See <a href="./guards-and-identity.html">Guards and Identity</a> for the API design.</p>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next steps</a></h2>
+<ul>
+<li><a href="./guards-and-identity.html">Guards and Identity</a> — guard and identity API design for gRPC</li>
+<li><a href="../advanced/interceptors.html">Interceptors</a> — interceptor patterns (shared with HTTP)</li>
+<li><a href="../reference/cli-reference.html">CLI Reference</a> — <code>r2e generate grpc-service</code></li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../security/rate-limiting.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../real-time/websocket.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../data-access/query-builder.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../grpc/guards-and-identity.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -323,11 +515,11 @@ impl HasPool&lt;Sqlite&gt; for AppState {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../security/rate-limiting.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../real-time/websocket.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../data-access/query-builder.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../grpc/guards-and-identity.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

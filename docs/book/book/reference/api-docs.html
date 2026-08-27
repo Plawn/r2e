@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,27 +192,34 @@
 </thead>
 <tbody>
 <tr><td><code>AppBuilder</code></td><td>Fluent application builder</td></tr>
-<tr><td><code>AppError</code></td><td>Built-in error type with HTTP status mapping</td></tr>
+<tr><td><code>HttpError</code></td><td>Built-in error type with HTTP status mapping</td></tr>
 <tr><td><code>R2eConfig</code></td><td>YAML + env var configuration</td></tr>
 <tr><td><code>Controller</code></td><td>Trait for route registration</td></tr>
-<tr><td><code>Guard&lt;S, I&gt;</code></td><td>Post-auth guard trait</td></tr>
-<tr><td><code>PreAuthGuard&lt;S&gt;</code></td><td>Pre-auth guard trait</td></tr>
+<tr><td><code>Guard&lt;I&gt;</code></td><td>Post-auth guard trait (built once from the bean graph)</td></tr>
+<tr><td><code>PreAuthGuard</code></td><td>Pre-auth guard trait</td></tr>
 <tr><td><code>GuardContext&lt;I&gt;</code></td><td>Guard context with identity</td></tr>
 <tr><td><code>PreAuthGuardContext</code></td><td>Guard context without identity</td></tr>
 <tr><td><code>Identity</code></td><td>Identity trait for guards</td></tr>
-<tr><td><code>Interceptor&lt;R&gt;</code></td><td>AOP interceptor trait</td></tr>
-<tr><td><code>InterceptorContext</code></td><td>Interceptor context</td></tr>
+<tr><td><code>Interceptor&lt;R&gt;</code></td><td>AOP interceptor trait, generic over the return type <code>R</code></td></tr>
+<tr><td><code>InterceptorContext</code></td><td>Interceptor context (<code>Copy</code>: method + controller name)</td></tr>
+<tr><td><code>DecoratorSpec</code></td><td>Build contract for guards/interceptors (Product + Deps + build)</td></tr>
+<tr><td><code>SelfBuilt</code></td><td>Marker for self-contained decorators (no bean deps)</td></tr>
+<tr><td><code>DecoratorBean</code> (derive)</td><td>Generates the <code>DecoratorSpec</code> plumbing for a bean-reading guard/interceptor (<code>#[inject]</code> fields + <code>Type::spec(...)</code> constructor)</td></tr>
 <tr><td><code>ManagedResource&lt;S&gt;</code></td><td>Managed resource lifecycle trait</td></tr>
 <tr><td><code>ManagedErr&lt;E&gt;</code></td><td>Error wrapper for managed resources</td></tr>
 <tr><td><code>Plugin&lt;S&gt;</code></td><td>Post-state plugin trait</td></tr>
-<tr><td><code>PreStatePlugin</code></td><td>Pre-state plugin trait</td></tr>
+<tr><td><code>Plugin</code></td><td>Pre-state plugin trait</td></tr>
 <tr><td><code>DeferredAction</code></td><td>Deferred setup action for plugins</td></tr>
-<tr><td><code>StatefulConstruct&lt;S&gt;</code></td><td>Construct from state (no HTTP context)</td></tr>
+<tr><td><code>ContextConstruct</code></td><td>Construct a controller from the resolved bean graph by type (no HTTP context) — replaces the removed <code>StatefulConstruct</code></td></tr>
 <tr><td><code>Bean</code></td><td>Sync bean trait</td></tr>
 <tr><td><code>AsyncBean</code></td><td>Async bean trait</td></tr>
 <tr><td><code>Producer</code></td><td>Factory trait for external types</td></tr>
-<tr><td><code>BeanContext</code></td><td>Bean graph context</td></tr>
-<tr><td><code>Validated&lt;T&gt;</code></td><td>Validation extractor (feature: <code>validation</code>)</td></tr>
+<tr><td><code>BeanContext</code></td><td>Resolved bean graph; beans are fetched by type (<code>ctx.get::&lt;T&gt;()</code>)</td></tr>
+<tr><td><code>BeanLookup</code></td><td>Dynamic, witness-free bean access on the state (<code>state.bean::&lt;T&gt;() -&gt; Option&lt;T&gt;</code>); the vocabulary for guards, interceptors, and <code>ManagedResource</code>. In the prelude</td></tr>
+<tr><td><code>BeanAccess</code></td><td>Witness-free fixed-offset bean access on the state (<code>state.get::&lt;T&gt;()</code>). Not in the prelude — import via <code>use r2e_core::type_list::BeanAccess;</code></td></tr>
+<tr><td><code>FromRequestPartsVia&lt;S, M&gt;</code></td><td>Request-scoped extractor trait (identity + <code>#[inject(request)]</code>); <code>OptionalFromRequestPartsVia&lt;S, M&gt;</code> is the optional variant. Plain axum <code>FromRequestParts</code> extractors bridge automatically via <code>ViaAxum</code></td></tr>
+<tr><td><code>Validate</code></td><td>Re-export of <code>garde::Validate</code> for automatic validation</td></tr>
+<tr><td><code>Params</code></td><td>Derive macro for aggregating path/query/header params</td></tr>
 </tbody>
 </table>
 </div>
@@ -223,15 +230,22 @@
 <tr><th>Macro</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>#[derive(Controller)]</code></td><td>Generate controller metadata and extractor</td></tr>
+<tr><td><code>#[controller]</code></td><td>Declare a controller: generate metadata, request façade, and routes</td></tr>
 <tr><td><code>#[routes]</code></td><td>Generate Axum handlers and Controller impl</td></tr>
 <tr><td><code>#[bean]</code></td><td>Generate Bean or AsyncBean impl</td></tr>
 <tr><td><code>#[producer]</code></td><td>Generate Producer impl from free function</td></tr>
 <tr><td><code>#[derive(Bean)]</code></td><td>Derive Bean from struct fields</td></tr>
-<tr><td><code>#[derive(BeanState)]</code></td><td>Derive FromRef for state struct</td></tr>
 </tbody>
 </table>
 </div>
+<blockquote>
+<p><strong>State is inferred, not declared.</strong> There is no state struct and no state-deriving
+macro. Beans are <code>.provide()</code>-d or <code>.register::&lt;T&gt;()</code>-ed on the builder, and
+<code>.build_state().await</code> materializes the application state as an HList inferred from
+the provision list. <code>#[controller]</code> resolves its <code>#[inject]</code> fields from that graph
+<strong>by type</strong> — a missing bean is a compile error naming the type. (The old
+<code>#[derive(BeanState)]</code> / <code>BeanState</code> trait and <code>build_state!</code> macro have been removed.)</p>
+</blockquote>
 <h3 id="r2e-security"><a class="header" href="#r2e-security">r2e-security</a></h3>
 <div class="table-wrapper">
 <table>
@@ -255,7 +269,8 @@
 <tr><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>EventBus</code></td><td>Typed in-process pub/sub</td></tr>
+<tr><td><code>EventBus</code></td><td>Pluggable event bus trait</td></tr>
+<tr><td><code>LocalEventBus</code></td><td>Default in-process pub/sub implementation</td></tr>
 </tbody>
 </table>
 </div>
@@ -266,24 +281,21 @@
 <tr><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Scheduler</code></td><td>PreStatePlugin for background tasks</td></tr>
+<tr><td><code>Scheduler</code></td><td>Plugin for background tasks</td></tr>
 <tr><td><code>ScheduleConfig</code></td><td>Interval/cron/delay configuration</td></tr>
 <tr><td><code>ScheduledTaskDef&lt;T&gt;</code></td><td>Task definition</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="r2e-data"><a class="header" href="#r2e-data">r2e-data</a></h3>
+<h3 id="r2e-core-pagination"><a class="header" href="#r2e-core-pagination">r2e-core pagination</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Entity</code></td><td>Table mapping trait</td></tr>
-<tr><td><code>QueryBuilder</code></td><td>Fluent SQL builder</td></tr>
 <tr><td><code>Pageable</code></td><td>Pagination parameters</td></tr>
 <tr><td><code>Page&lt;T&gt;</code></td><td>Paginated response</td></tr>
-<tr><td><code>DataError</code></td><td>Data layer error</td></tr>
 </tbody>
 </table>
 </div>
@@ -294,9 +306,18 @@
 <tr><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>SqlxRepository&lt;E, DB&gt;</code></td><td>SQLx-backed repository</td></tr>
-<tr><td><code>Tx&lt;DB&gt;</code></td><td>Transaction wrapper</td></tr>
-<tr><td><code>HasPool&lt;DB&gt;</code></td><td>Pool accessor trait</td></tr>
+<tr><td><code>Tx&lt;'a, DB&gt;</code> / <code>SqlxTx&lt;'a, DB&gt;</code></td><td>Cancellation-safe managed SQLx transaction</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="r2e-data-diesel"><a class="header" href="#r2e-data-diesel">r2e-data-diesel</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Tx&lt;C&gt;</code> / <code>DieselTx&lt;C&gt;</code></td><td>Managed Diesel transaction on an r2d2 connection</td></tr>
 </tbody>
 </table>
 </div>

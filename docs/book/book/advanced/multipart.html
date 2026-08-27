@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - R2E — Rust Enterprise Edition</title>
+        <title>Multipart File Uploads - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-07ec6f4c.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c3694cfa.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">R2E — Rust Enterprise Edition</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/plawn/r2e" title="Git repository" aria-label="Git repository">
@@ -177,73 +177,258 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>R2E</strong> (Rust Enterprise Edition) is an ergonomic enterprise framework for Rust, inspired by Quarkus. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on <a href="https://github.com/tokio-rs/axum">Axum</a> via the <code>r2e-http</code> abstraction layer.</p>
-<h2 id="what-r2e-offers"><a class="header" href="#what-r2e-offers">What R2E offers</a></h2>
+                        <h1 id="multipart-file-uploads"><a class="header" href="#multipart-file-uploads">Multipart File Uploads</a></h1>
+<p>R2E provides typed multipart form extraction, turning <code>multipart/form-data</code> requests into regular Rust structs. Derive <code>FromMultipart</code> on a struct and use <code>TypedMultipart&lt;T&gt;</code> as a handler parameter – fields are parsed, files are collected, and errors are returned as structured 400 responses.</p>
+<h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
+<p>Enable the <code>multipart</code> feature (included in <code>full</code>):</p>
+<pre><code class="language-toml">[dependencies]
+r2e = { version = "0.3", features = ["multipart"] }
+</code></pre>
+<p>All multipart types are available through the prelude:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[controller(path = "/users")]
-pub struct UserController {
-    #[inject]           user_service: UserService,
-    #[inject(identity)] user: AuthenticatedUser,
-    #[config("app.greeting")] greeting: String,
+</span>use r2e::prelude::*;
+// Exports: FromMultipart, Multipart, MultipartSchema, TypedMultipart, UploadedFile
+<span class="boring">}</span></code></pre>
+<p>Or import explicitly:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::web::multipart::{TypedMultipart, UploadedFile, FromMultipart};
+<span class="boring">}</span></code></pre>
+<h2 id="defining-a-multipart-struct"><a class="header" href="#defining-a-multipart-struct">Defining a multipart struct</a></h2>
+<p>Derive <code>FromMultipart</code> on a struct with named fields. The macro inspects each field’s type and generates the appropriate extraction logic at compile time.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+#[derive(FromMultipart)]
+pub struct ProfileUpload {
+    pub name: String,
+    pub avatar: UploadedFile,
 }
-
-#[routes]
-#[intercept(Logged::info())]
-impl UserController {
-    #[get("/")]
-    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
-        Json(self.user_service.list().await)
-    }
-
-    #[post("/")]
-    #[roles("admin")]
-    #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&amp;self, Json(body): Json&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
-        Json(self.user_service.create(body.name, body.email).await)
+<span class="boring">}</span></code></pre>
+<p>Each field name must match the corresponding form field name sent by the client.</p>
+<h2 id="using-in-handlers"><a class="header" href="#using-in-handlers">Using in handlers</a></h2>
+<p>Wrap your struct with <code>TypedMultipart&lt;T&gt;</code> in the handler signature:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl ProfileController {
+    #[post("/profile")]
+    async fn upload(
+        &amp;self,
+        TypedMultipart(form): TypedMultipart&lt;ProfileUpload&gt;,
+    ) -&gt; Json&lt;String&gt; {
+        Json(format!(
+            "Hello {}, received {} bytes",
+            form.name,
+            form.avatar.len()
+        ))
     }
 }
 <span class="boring">}</span></code></pre>
-<p>If you’ve used Java’s Quarkus, Spring Boot, or C#’s ASP.NET, this should feel familiar — but everything is resolved at compile time with zero runtime reflection.</p>
-<h2 id="key-features"><a class="header" href="#key-features">Key features</a></h2>
-<ul>
-<li><strong>Declarative controllers</strong> — <code>#[controller]</code> + <code>#[routes]</code> generate Axum handlers with zero boilerplate</li>
-<li><strong>Compile-time DI</strong> — <code>#[inject]</code> for services, <code>#[inject(identity)]</code> for request-scoped identity, <code>#[config("key")]</code> for configuration</li>
-<li><strong>JWT/OIDC security</strong> — <code>AuthenticatedUser</code> extractor with JWKS caching, role-based access via <code>#[roles("admin")]</code></li>
-<li><strong>Guards</strong> — Pre-auth and post-auth guards for custom authorization logic</li>
-<li><strong>Interceptors</strong> — AOP-style <code>#[intercept(...)]</code> for logging, timing, caching, and custom cross-cutting concerns</li>
-<li><strong>Rate limiting</strong> — Token-bucket rate limiting per user, per IP, or global</li>
-<li><strong>Event bus</strong> — Typed in-process pub/sub with <code>#[consumer]</code> for declarative event handlers</li>
-<li><strong>Scheduling</strong> — <code>#[scheduled(every = 30)]</code> and <code>#[scheduled(cron = "...")]</code> for background tasks</li>
-<li><strong>Managed resources</strong> — <code>#[managed]</code> for automatic transaction lifecycle</li>
-<li><strong>Database ergonomics</strong> — core pagination and managed SQLx/Diesel transactions</li>
-<li><strong>Validation</strong> — Automatic validation via <code>garde</code> crate — just derive <code>Validate</code> and use <code>Json&lt;T&gt;</code></li>
-<li><strong>OpenAPI</strong> — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI</li>
-<li><strong>Configuration</strong> — YAML + env var overlay with profile support</li>
-<li><strong>Static file serving</strong> — Embed frontend assets in the binary with SPA fallback via <code>EmbeddedFrontend</code> plugin</li>
-<li><strong>SSE &amp; WebSocket</strong> — Built-in <code>SseBroadcaster</code> and <code>WsRooms</code> for real-time communication</li>
-<li><strong>Testing</strong> — <code>TestApp</code> HTTP client wrapper, <code>TestJwt</code>, and <code>r2e test --sonarqube</code> coverage</li>
-<li><strong>CLI</strong> — <code>r2e new</code>, <code>r2e add</code>, <code>r2e dev</code>, <code>r2e generate</code>, <code>r2e test</code> for scaffolding and workflows</li>
-</ul>
-<h2 id="how-this-book-is-organized"><a class="header" href="#how-this-book-is-organized">How this book is organized</a></h2>
-<ul>
-<li><strong>Getting Started</strong> — Install R2E, create your first app, learn the project structure</li>
-<li><strong>Core Concepts</strong> — Controllers, DI, beans, plugins, configuration, error handling</li>
-<li><strong>Security</strong> — JWT authentication, guards, roles, rate limiting</li>
-<li><strong>Data Access</strong> — Entities, repositories, queries, pagination, transactions</li>
-<li><strong>Events and Scheduling</strong> — Event bus, consumers, background tasks</li>
-<li><strong>Advanced</strong> — Interceptors, custom guards/plugins, managed resources, lifecycle hooks, OpenAPI, performance</li>
-<li><strong>Testing</strong> — TestApp, TestJwt, integration patterns</li>
-<li><strong>Reference</strong> — Crate map, CLI reference, API docs</li>
-</ul>
+<p><code>TypedMultipart</code> is an Axum extractor. It consumes the request body, collects all multipart fields, and calls <code>FromMultipart::from_multipart</code> to build your struct. If any required field is missing or a value cannot be parsed, a 400 Bad Request is returned before your handler runs.</p>
+<h2 id="uploadedfile"><a class="header" href="#uploadedfile">UploadedFile</a></h2>
+<p><code>UploadedFile</code> represents a single file received from the form. A field is treated as a file when the client sends a <code>filename</code> attribute.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>pub struct UploadedFile {
+    /// The field name in the form.
+    pub name: String,
+    /// The original file name provided by the client, if any.
+    pub file_name: Option&lt;String&gt;,
+    /// The content type (MIME type), if provided.
+    pub content_type: Option&lt;String&gt;,
+    /// The raw file data.
+    pub data: Bytes,
+}
+<span class="boring">}</span></code></pre>
+<h3 id="methods"><a class="header" href="#methods">Methods</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Returns</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>len()</code></td><td><code>usize</code></td><td>Size of the file data in bytes</td></tr>
+<tr><td><code>is_empty()</code></td><td><code>bool</code></td><td>Whether the file data is empty</td></tr>
+</tbody>
+</table>
+</div>
+<p>Access the raw bytes through the <code>data</code> field (<code>bytes::Bytes</code>). The file content is held in memory. <code>TypedMultipart</code> enforces built-in byte caps by default (<code>MultipartLimits::DEFAULT</code> — 10 MiB per field, 100 MiB per request); exceeding them returns a <code>413 Payload Too Large</code> before your handler runs. For different caps, collect manually via <code>MultipartFields::collect_from_with_limits</code> in a custom extractor.</p>
+<h2 id="field-type-mapping"><a class="header" href="#field-type-mapping">Field type mapping</a></h2>
+<p>The derive macro maps field types to extraction strategies automatically:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Rust type</th><th>Form field kind</th><th>Behavior</th></tr>
+</thead>
+<tbody>
+<tr><td><code>String</code></td><td>Text</td><td>Required text field</td></tr>
+<tr><td><code>UploadedFile</code></td><td>File</td><td>Required file field</td></tr>
+<tr><td><code>i32</code>, <code>u64</code>, <code>bool</code>, <code>f64</code>, …</td><td>Text</td><td>Required, parsed via <code>FromStr</code></td></tr>
+<tr><td><code>Bytes</code></td><td>Text or File</td><td>Required, raw bytes from either kind</td></tr>
+<tr><td><code>Option&lt;String&gt;</code></td><td>Text</td><td>Optional text, <code>None</code> if absent</td></tr>
+<tr><td><code>Option&lt;UploadedFile&gt;</code></td><td>File</td><td>Optional file, <code>None</code> if absent</td></tr>
+<tr><td><code>Option&lt;T&gt;</code></td><td>Text</td><td>Optional, parsed via <code>FromStr</code></td></tr>
+<tr><td><code>Option&lt;Bytes&gt;</code></td><td>Text or File</td><td>Optional raw bytes</td></tr>
+<tr><td><code>Vec&lt;UploadedFile&gt;</code></td><td>File</td><td>Zero or more files with the same field name</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>Note:</strong> <code>Vec&lt;T&gt;</code> is only supported for <code>UploadedFile</code>. For repeated text fields, use the raw <code>Multipart</code> extractor.</p>
+</blockquote>
+<h2 id="mixed-text-and-file-fields"><a class="header" href="#mixed-text-and-file-fields">Mixed text and file fields</a></h2>
+<p>A single struct can combine text fields, parsed values, and file uploads:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(FromMultipart)]
+pub struct DocumentUpload {
+    pub title: String,
+    pub page_count: u32,
+    pub draft: bool,
+    pub document: UploadedFile,
+}
+<span class="boring">}</span></code></pre>
+<p>Text fields without a <code>filename</code> attribute are extracted as text and parsed into the target type. Fields with a <code>filename</code> attribute are extracted as <code>UploadedFile</code>.</p>
+<h2 id="optional-fields"><a class="header" href="#optional-fields">Optional fields</a></h2>
+<p>Wrap any field in <code>Option&lt;T&gt;</code> to make it optional. If the field is absent from the form, the value is <code>None</code> – no error is returned:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(FromMultipart)]
+pub struct ProfileUpload {
+    pub name: String,
+    pub bio: Option&lt;String&gt;,
+    pub age: Option&lt;u32&gt;,
+    pub avatar: UploadedFile,
+    pub cover_photo: Option&lt;UploadedFile&gt;,
+}
+<span class="boring">}</span></code></pre>
+<h2 id="repeated-file-fields"><a class="header" href="#repeated-file-fields">Repeated file fields</a></h2>
+<p>Use <code>Vec&lt;UploadedFile&gt;</code> to accept multiple files under the same field name. If the client sends no files for that name, the vector is empty:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(FromMultipart)]
+pub struct GalleryUpload {
+    pub album_name: String,
+    pub photos: Vec&lt;UploadedFile&gt;,
+}
+<span class="boring">}</span></code></pre>
+<h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
+<p>Putting it all together – a controller that accepts a profile with optional bio, a required avatar, and any number of attachments:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+use r2e::web::multipart::{TypedMultipart, UploadedFile};
+use serde_json::Value;
+
+#[derive(FromMultipart)]
+pub struct ProfileUpload {
+    pub name: String,
+    pub bio: Option&lt;String&gt;,
+    pub avatar: UploadedFile,
+    pub attachments: Vec&lt;UploadedFile&gt;,
+}
+
+#[controller(path = "/uploads")]
+pub struct UploadController;
+
+#[routes]
+impl UploadController {
+    #[post("/profile")]
+    async fn upload_profile(
+        &amp;self,
+        TypedMultipart(form): TypedMultipart&lt;ProfileUpload&gt;,
+    ) -&gt; JsonResult&lt;Value&gt; {
+        let attachment_sizes: Vec&lt;usize&gt; =
+            form.attachments.iter().map(|f| f.len()).collect();
+
+        Ok(Json(serde_json::json!({
+            "name": form.name,
+            "bio": form.bio,
+            "avatar_size": form.avatar.len(),
+            "avatar_filename": form.avatar.file_name,
+            "avatar_content_type": form.avatar.content_type,
+            "attachment_count": attachment_sizes.len(),
+            "attachment_sizes": attachment_sizes,
+        })))
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="error-response-format"><a class="header" href="#error-response-format">Error response format</a></h2>
+<p>When extraction fails, <code>TypedMultipart</code> returns a 400 Bad Request with a JSON body:</p>
+<pre><code class="language-json">{
+    "error": "missing required field: avatar"
+}
+</code></pre>
+<pre><code class="language-json">{
+    "error": "failed to parse field 'page_count': invalid digit found in string"
+}
+</code></pre>
+<p>The error variants are:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Cause</th><th>Status</th></tr>
+</thead>
+<tbody>
+<tr><td><code>MissingField</code></td><td>A required field was not present</td><td>400</td></tr>
+<tr><td><code>ParseError</code></td><td>A text field could not be parsed to the expected type</td><td>400</td></tr>
+<tr><td><code>AxumError</code></td><td>The underlying Axum multipart extractor failed (e.g., content-type mismatch)</td><td>400</td></tr>
+<tr><td><code>ReadError</code></td><td>A field’s data could not be read (e.g., UTF-8 decoding failure)</td><td>400</td></tr>
+<tr><td><code>FieldTooLarge</code></td><td>A single field exceeded the per-field byte limit</td><td>413</td></tr>
+<tr><td><code>PayloadTooLarge</code></td><td>The aggregated request payload exceeded the total byte limit</td><td>413</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="raw-multipart-access"><a class="header" href="#raw-multipart-access">Raw multipart access</a></h2>
+<p>For advanced use cases where you need full control over field iteration, use the raw <code>Multipart</code> extractor directly:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::web::multipart::Multipart;
+
+#[post("/raw")]
+async fn upload_raw(&amp;self, mut multipart: Multipart) -&gt; JsonResult&lt;Value&gt; {
+    let mut fields = Vec::new();
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        HttpError::BadRequest(format!("multipart error: {e}"))
+    })? {
+        let name = field.name().unwrap_or("unknown").to_string();
+        let file_name = field.file_name().map(|s| s.to_string());
+        let data = field.bytes().await.map_err(|e| {
+            HttpError::Internal(format!("failed to read field: {e}"))
+        })?;
+        fields.push(serde_json::json!({
+            "name": name,
+            "file_name": file_name,
+            "size": data.len(),
+        }));
+    }
+    Ok(Json(serde_json::json!({ "fields": fields })))
+}
+<span class="boring">}</span></code></pre>
+<p><code>Multipart</code> is re-exported from axum via <code>r2e::http::multipart::Multipart</code>. See the <a href="https://docs.rs/axum/latest/axum/extract/struct.Multipart.html">Axum documentation</a> for its full API.</p>
+<h2 id="openapi-integration"><a class="header" href="#openapi-integration">OpenAPI integration</a></h2>
+<p>Multipart endpoints appear in the generated OpenAPI spec automatically. A <code>TypedMultipart&lt;T&gt;</code> parameter is documented as a <code>multipart/form-data</code> request body whose schema is derived from <code>T</code>’s fields (<code>#[derive(FromMultipart)]</code> also generates a <code>MultipartSchema</code> impl — no <code>JsonSchema</code> derive required): text fields map to their JSON type, file fields to <code>type: string, format: binary</code>, and <code>Option&lt;...&gt;</code> fields are not listed as required. A raw <code>Multipart</code> parameter is documented as a free-form <code>multipart/form-data</code> object. Manual <code>FromMultipart</code> impls can opt in by also implementing <code>r2e::web::multipart::MultipartSchema</code>.</p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<ol>
+<li><code>TypedMultipart&lt;T&gt;</code> implements Axum’s <code>FromRequest</code> trait</li>
+<li>It extracts the raw <code>Multipart</code> from the request</li>
+<li><code>MultipartFields::collect_from()</code> iterates all fields and sorts them into text (no filename) and file (has filename) buckets</li>
+<li><code>T::from_multipart()</code> (generated by the derive macro) pulls each field by name using <code>take_text</code>, <code>take_file</code>, <code>take_files</code>, etc.</li>
+<li>Missing required fields and parse failures are returned as <code>MultipartError</code>, which converts to a 400 response</li>
+</ol>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../advanced/static-files.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started/installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../advanced/observability.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -253,8 +438,11 @@ impl UserController {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../advanced/static-files.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started/installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../advanced/observability.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -274,13 +462,13 @@ impl UserController {
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

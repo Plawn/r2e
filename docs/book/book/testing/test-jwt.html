@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,7 +186,7 @@
 
 let jwt = TestJwt::new();
 <span class="boring">}</span></code></pre>
-<p>This creates a JWT generator with a random HMAC-SHA256 key. Tokens are valid for 1 hour.</p>
+<p>This creates a JWT generator with a static HMAC-SHA256 key. Tokens are valid for 1 hour by default.</p>
 <h2 id="generating-tokens"><a class="header" href="#generating-tokens">Generating tokens</a></h2>
 <h3 id="basic-token"><a class="header" href="#basic-token">Basic token</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -199,16 +199,48 @@ let jwt = TestJwt::new();
 <li><code>roles</code>: <code>["user"]</code></li>
 <li><code>iss</code>, <code>aud</code>, <code>exp</code>: auto-populated</li>
 </ul>
-<h3 id="token-with-custom-claims"><a class="header" href="#token-with-custom-claims">Token with custom claims</a></h3>
+<h3 id="token-with-email"><a class="header" href="#token-with-email">Token with email</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let token = jwt.token_with_claims(serde_json::json!({
-    "sub": "user-123",
-    "email": "alice@example.com",
-    "roles": ["user", "admin"],
-    "tenant_id": "acme-corp",
-    "custom_field": "value",
-}));
+</span>let token = jwt.token_with_claims("user-123", &amp;["user"], Some("alice@example.com"));
+<span class="boring">}</span></code></pre>
+<h3 id="token-builder"><a class="header" href="#token-builder">Token builder</a></h3>
+<p>For fine-grained control over claims and expiration, use <code>token_builder()</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let token = jwt.token_builder("user-123")
+    .roles(&amp;["admin", "user"])
+    .email("alice@example.com")
+    .claim("tenant_id", "acme-corp")
+    .claim("department", "engineering")
+    .expires_in_secs(7200)  // 2 hours
+    .build();
+<span class="boring">}</span></code></pre>
+<h3 id="expired-tokens"><a class="header" href="#expired-tokens">Expired tokens</a></h3>
+<p>Test that your application rejects expired tokens:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let expired_token = jwt.token_builder("user-1")
+    .roles(&amp;["user"])
+    .expired()
+    .build();
+
+app.get("/users")
+    .bearer(&amp;expired_token)
+    .send()
+    .await
+    .assert_unauthorized();
+<span class="boring">}</span></code></pre>
+<h3 id="custom-claims"><a class="header" href="#custom-claims">Custom claims</a></h3>
+<p>Add any extra claim to the token:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let token = jwt.token_builder("user-1")
+    .roles(&amp;["user"])
+    .claim("tenant_id", "acme-corp")
+    .claim("org_id", 42)
+    .claim("feature_flags", serde_json::json!(["beta", "dark-mode"]))
+    .build();
 <span class="boring">}</span></code></pre>
 <h2 id="getting-the-validator"><a class="header" href="#getting-the-validator">Getting the validator</a></h2>
 <p><code>TestJwt</code> provides validators compatible with R2E’s security system:</p>
@@ -220,42 +252,59 @@ let validator = jwt.validator();
 // For JwtClaimsValidator (low-level, used by AuthenticatedUser)
 let claims_validator = jwt.claims_validator();
 <span class="boring">}</span></code></pre>
-<h2 id="wiring-into-test-state"><a class="header" href="#wiring-into-test-state">Wiring into test state</a></h2>
+<h2 id="getting-the-apps-testjwt"><a class="header" href="#getting-the-apps-testjwt">Getting the app’s <code>TestJwt</code></a></h2>
+<p>When you boot an <code>App</code> with <code>#[r2e::test(app = ...)]</code>, the harness pins a
+<code>TestJwt</code> over the app’s own validator for you. Most tests never touch it
+directly — <code>.as_user(sub, roles)</code> mints and attaches a token in one call:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use std::sync::Arc;
-
-async fn setup() -&gt; (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            // ...
-            .build_state::&lt;AppState, _&gt;()
-            .await
-            .register_controller::&lt;UserController&gt;(),
-    );
-
-    (app, jwt)
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn admin_panel(app: TestApp) {
+    app.get("/admin/panel")
+        .as_user("admin-1", &amp;["admin"])
+        .send()
+        .await
+        .assert_ok();
 }
 <span class="boring">}</span></code></pre>
+<p>Bind an <code>app: TestApp</code> <strong>and</strong> a <code>jwt: TestJwt</code> parameter when you need the raw
+token API — expired tokens, custom claims, or reusing one token across
+requests. It is the same key the app validates against:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn custom_claims(app: TestApp, jwt: TestJwt) {
+    let token = jwt.token_builder("user-1")
+        .roles(&amp;["admin"])
+        .claim("tenant_id", "acme-corp")
+        .build();
+
+    app.get("/admin/panel")
+        .bearer(&amp;token)
+        .send()
+        .await
+        .assert_ok();
+}
+<span class="boring">}</span></code></pre>
+<p>Hand-assembled apps (<code>TestApp::from_builder</code>) instead provide the validator
+explicitly with <code>.provide(Arc::new(jwt.claims_validator()))</code> — see
+<a href="./test-setup.html#hand-assembled-apps-testappfrom_builder">Test Setup</a>.</p>
 <h2 id="testing-different-roles"><a class="header" href="#testing-different-roles">Testing different roles</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_role_access() {
-    let (app, jwt) = setup().await;
-
-    // Regular user
-    let user_token = jwt.token("user-1", &amp;["user"]);
-    app.get_authenticated("/admin/panel", &amp;user_token)
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn role_access(app: TestApp) {
+    // Regular user — forbidden
+    app.get("/admin/panel")
+        .as_user("user-1", &amp;["user"])
+        .send()
         .await
         .assert_forbidden();
 
-    // Admin user
-    let admin_token = jwt.token("admin-1", &amp;["admin"]);
-    app.get_authenticated("/admin/panel", &amp;admin_token)
+    // Admin user — allowed
+    app.get("/admin/panel")
+        .as_user("admin-1", &amp;["admin"])
+        .send()
         .await
         .assert_ok();
 }
@@ -263,12 +312,10 @@ async fn test_role_access() {
 <h2 id="testing-unauthenticated-access"><a class="header" href="#testing-unauthenticated-access">Testing unauthenticated access</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_no_auth() {
-    let (app, _) = setup().await;
-
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn no_auth(app: TestApp) {
     // No token → 401
-    app.get("/users").await.assert_unauthorized();
+    app.get("/users").send().await.assert_unauthorized();
 }
 <span class="boring">}</span></code></pre>
 
@@ -280,7 +327,7 @@ async fn test_no_auth() {
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../testing/integration-patterns.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../testing/test-session.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -294,7 +341,7 @@ async fn test_no_auth() {
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../testing/integration-patterns.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../testing/test-session.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

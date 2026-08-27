@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,132 +179,207 @@
                     <main>
                         <h1 id="integration-patterns"><a class="header" href="#integration-patterns">Integration Patterns</a></h1>
 <p>Common patterns for writing R2E integration tests.</p>
-<h2 id="shared-setup-function"><a class="header" href="#shared-setup-function">Shared setup function</a></h2>
-<p>Create a reusable setup that mirrors your production app:</p>
+<h2 id="boot-the-real-app"><a class="header" href="#boot-the-real-app">Boot the real app</a></h2>
+<p>Integration tests boot the <strong>same <code>App</code> your <code>main</code> launches</strong> — never
+re-declare controllers or routers in a test. <code>#[r2e::test(app = ...)]</code> runs
+<code>App::setup</code> + <code>App::build</code>, forces the <code>test</code> profile, and pins a local
+<code>TestJwt</code> so <code>.as_user(sub, roles)</code> mints a valid token with no identity
+provider:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::prelude::*;
-use r2e_test::{TestApp, TestJwt};
-use std::sync::Arc;
+</span>use r2e_test::TestApp;
 
-async fn setup() -&gt; (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-    let event_bus = EventBus::new();
-
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .provide(event_bus)
-            .with_bean::&lt;UserService&gt;()
-            .build_state::&lt;AppState, _&gt;()
-            .await
-            .with(Health)
-            .with(ErrorHandling)
-            .register_controller::&lt;UserController&gt;()
-            .register_controller::&lt;AccountController&gt;(),
-    );
-
-    (app, jwt)
+#[r2e::test(app = my_app::MyApp)]
+async fn lists_users(app: TestApp) {
+    app.get("/users")
+        .as_user("user-1", &amp;["user"])
+        .send()
+        .await
+        .assert_ok();
 }
 <span class="boring">}</span></code></pre>
+<p>See <a href="./test-setup.html">Test Setup</a> for declaring the <code>App</code> and for the <code>with</code>
+hook that pins mocks (<code>override_bean</code>) and patches config
+(<code>override_config_value</code>).</p>
 <h2 id="testing-validation"><a class="header" href="#testing-validation">Testing validation</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_validation_errors() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &amp;["admin"]);
-
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn validation_errors(app: TestApp) {
     // Missing required field
-    let resp = app.post_json_authenticated("/users", &amp;serde_json::json!({
-        "email": "alice@example.com"
-    }), &amp;token).await;
-    resp.assert_bad_request();
+    app.post("/users")
+        .as_user("user-1", &amp;["admin"])
+        .json(&amp;serde_json::json!({
+            "email": "alice@example.com"
+        }))
+        .send()
+        .await
+        .assert_bad_request();
 
     // Invalid email
-    let resp = app.post_json_authenticated("/users", &amp;serde_json::json!({
-        "name": "Alice",
-        "email": "not-an-email"
-    }), &amp;token).await;
-    resp.assert_bad_request();
+    app.post("/users")
+        .as_user("user-1", &amp;["admin"])
+        .json(&amp;serde_json::json!({
+            "name": "Alice",
+            "email": "not-an-email"
+        }))
+        .send()
+        .await
+        .assert_bad_request();
 }
 <span class="boring">}</span></code></pre>
 <h2 id="testing-error-responses"><a class="header" href="#testing-error-responses">Testing error responses</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_not_found() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &amp;["user"]);
-
-    let resp = app.get_authenticated("/users/99999", &amp;token).await;
-    resp.assert_status(StatusCode::NOT_FOUND);
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn not_found(app: TestApp) {
+    let resp = app.get("/users/99999")
+        .as_user("user-1", &amp;["user"])
+        .send()
+        .await;
+    resp.assert_not_found();
 
     let body: serde_json::Value = resp.json();
     assert_eq!(body["error"], "User not found");
 }
 <span class="boring">}</span></code></pre>
-<h2 id="testing-with-database"><a class="header" href="#testing-with-database">Testing with database</a></h2>
-<p>For tests with SQLite:</p>
+<h2 id="testing-response-shape"><a class="header" href="#testing-response-shape">Testing response shape</a></h2>
+<p>Use <code>assert_json_shape</code> to verify the structure without asserting exact values:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>async fn setup_with_db() -&gt; (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-
-    // Run migrations or create tables
-    sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
-        .execute(&amp;pool)
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn user_response_shape(app: TestApp) {
+    app.get("/users/1")
+        .as_user("user-1", &amp;["user"])
+        .send()
         .await
-        .unwrap();
-
-    // Seed test data
-    sqlx::query("INSERT INTO users (name, email) VALUES ('Alice', 'alice@test.com')")
-        .execute(&amp;pool)
-        .await
-        .unwrap();
-
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .provide(pool)
-            .with_bean::&lt;UserService&gt;()
-            .build_state::&lt;AppState, _&gt;()
-            .await
-            .with(ErrorHandling)
-            .register_controller::&lt;UserController&gt;(),
-    );
-
-    (app, jwt)
+        .assert_ok()
+        .assert_json_shape(serde_json::json!({
+            "id": 0,
+            "name": "",
+            "email": "",
+            "roles": [""],
+            "created_at": ""
+        }));
 }
 <span class="boring">}</span></code></pre>
+<h2 id="testing-partial-json-matching"><a class="header" href="#testing-partial-json-matching">Testing partial JSON matching</a></h2>
+<p>Use <code>assert_json_contains</code> to check a subset of the response:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn user_contains_expected_fields(app: TestApp) {
+    app.post("/users")
+        .as_user("user-1", &amp;["admin"])
+        .json(&amp;serde_json::json!({
+            "name": "Alice",
+            "email": "alice@example.com"
+        }))
+        .send()
+        .await
+        .assert_ok()
+        .assert_json_contains(serde_json::json!({
+            "name": "Alice",
+            "email": "alice@example.com"
+        }));
+    // Passes even though the response also contains "id", "created_at", etc.
+}
+<span class="boring">}</span></code></pre>
+<h2 id="testing-with-a-database"><a class="header" href="#testing-with-a-database">Testing with a database</a></h2>
+<p>Boot the real app and point it at a throwaway database in the <code>with</code> hook —
+patch the config key your producer reads, rather than re-wiring a pool by hand:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp, with = |b| {
+    b.override_config_value("database.url", "sqlite::memory:")
+})]
+async fn users_are_listed(app: TestApp, #[inject] pool: sqlx::SqlitePool) {
+    // The test shares the exact pool the app resolved.
+    sqlx::query("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
+        .execute(&amp;pool).await.unwrap();
+    sqlx::query("INSERT INTO users (name, email) VALUES ('Alice', 'alice@test.com')")
+        .execute(&amp;pool).await.unwrap();
+
+    app.get("/users")
+        .as_user("user-1", &amp;["user"])
+        .send()
+        .await
+        .assert_ok();
+}
+<span class="boring">}</span></code></pre>
+<p>For a real Postgres/Redis container instead of an in-memory database, use
+<code>r2e-devservices</code> (<code>DevPostgres::shared()</code>) via <code>TestApp::boot_with</code> — see
+<a href="./test-setup.html#dev-services-containerized-infrastructure">Test Setup</a>. Any
+other service (ClickHouse, Kafka, your own image) goes through <code>DevService</code>,
+described in the same section.</p>
 <h2 id="testing-rate-limiting"><a class="header" href="#testing-rate-limiting">Testing rate limiting</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_rate_limiting() {
-    let (app, jwt) = setup().await;
-    let token = jwt.token("user-1", &amp;["user"]);
-
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn rate_limiting(app: TestApp) {
     // Make requests up to the limit
     for _ in 0..5 {
-        app.get_authenticated("/api/data", &amp;token)
+        app.get("/api/data")
+            .as_user("user-1", &amp;["user"])
+            .send()
             .await
             .assert_ok();
     }
 
     // Next request should be rate limited
-    app.get_authenticated("/api/data", &amp;token)
+    app.get("/api/data")
+        .as_user("user-1", &amp;["user"])
+        .send()
         .await
-        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+        .assert_too_many_requests();
+}
+<span class="boring">}</span></code></pre>
+<h2 id="testing-with-sessions"><a class="header" href="#testing-with-sessions">Testing with sessions</a></h2>
+<p>Use <code>TestSession</code> for cookie-based authentication flows:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn session_login_flow(app: TestApp) {
+    let session = app.session();
+
+    // Login with form data
+    session.post("/login")
+        .form(&amp;[("username", "alice"), ("password", "secret")])
+        .send()
+        .await
+        .assert_ok();
+
+    // Session cookie is automatically included
+    session.get("/dashboard")
+        .send()
+        .await
+        .assert_ok();
+}
+<span class="boring">}</span></code></pre>
+<h2 id="testing-with-query-parameters"><a class="header" href="#testing-with-query-parameters">Testing with query parameters</a></h2>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn pagination(app: TestApp) {
+    app.get("/users")
+        .as_user("user-1", &amp;["user"])
+        .query("page", "2")
+        .query("size", "10")
+        .send()
+        .await
+        .assert_ok()
+        .assert_json_path("meta.page", 2)
+        .assert_json_path("meta.size", 10);
 }
 <span class="boring">}</span></code></pre>
 <h2 id="testing-events"><a class="header" href="#testing-events">Testing events</a></h2>
+<p>Read the app’s own <code>EventBus</code> instance from the resolved graph — an
+<code>#[inject]</code> test parameter (or <code>app.bean::&lt;LocalEventBus&gt;()</code>) returns the same
+bean your controllers publish to:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_event_emission() {
-    let event_bus = EventBus::new();
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn event_emission(app: TestApp, #[inject] event_bus: LocalEventBus) {
     let received = Arc::new(AtomicBool::new(false));
     let received_clone = received.clone();
 
@@ -315,44 +390,37 @@ async fn test_event_emission() {
         }
     }).await;
 
-    // Setup app with the event bus
-    let jwt = TestJwt::new();
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .provide(event_bus)
-            .with_bean::&lt;UserService&gt;()
-            .build_state::&lt;AppState, _&gt;()
-            .await
-            .register_controller::&lt;UserController&gt;(),
-    );
-
-    let token = jwt.token("admin-1", &amp;["admin"]);
-    app.post_json_authenticated("/users", &amp;serde_json::json!({
-        "name": "Alice",
-        "email": "alice@test.com"
-    }), &amp;token).await.assert_ok();
+    app.post("/users")
+        .as_user("admin-1", &amp;["admin"])
+        .json(&amp;serde_json::json!({
+            "name": "Alice",
+            "email": "alice@test.com"
+        }))
+        .send()
+        .await
+        .assert_ok();
 
     // Give async event handlers time to run
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    r2e::rt::sleep(Duration::from_millis(100)).await;
     assert!(received.load(Ordering::SeqCst));
 }
 <span class="boring">}</span></code></pre>
 <h2 id="testing-mixed-controllers"><a class="header" href="#testing-mixed-controllers">Testing mixed controllers</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[tokio::test]
-async fn test_public_and_protected() {
-    let (app, jwt) = setup().await;
-
+</span>#[r2e::test(app = my_app::MyApp)]
+async fn public_and_protected(app: TestApp) {
     // Public endpoint works without auth
-    app.get("/api/public").await.assert_ok();
+    app.get("/api/public").send().await.assert_ok();
 
     // Protected endpoint requires auth
-    app.get("/api/me").await.assert_unauthorized();
+    app.get("/api/me").send().await.assert_unauthorized();
 
-    let token = jwt.token("user-1", &amp;["user"]);
-    app.get_authenticated("/api/me", &amp;token).await.assert_ok();
+    app.get("/api/me")
+        .as_user("user-1", &amp;["user"])
+        .send()
+        .await
+        .assert_ok();
 }
 <span class="boring">}</span></code></pre>
 
@@ -360,7 +428,7 @@ async fn test_public_and_protected() {
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../testing/test-jwt.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../testing/test-session.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -374,7 +442,7 @@ async fn test_public_and_protected() {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../testing/test-jwt.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../testing/test-session.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,17 +180,18 @@
                         <h1 id="plugins"><a class="header" href="#plugins">Plugins</a></h1>
 <p>Plugins extend R2E applications with reusable middleware, routes, and services. R2E ships with several built-in plugins and supports custom ones.</p>
 <h2 id="built-in-plugins"><a class="header" href="#built-in-plugins">Built-in plugins</a></h2>
-<p>Install plugins with <code>.with(plugin)</code> on the builder (after <code>build_state()</code>):</p>
+<p>Install plugins with <code>.plugin(p)</code> on the builder — <strong>always before</strong>
+<code>build_state()</code>. There is only one plugin kind and one install call:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+    .plugin(Health)
+    .plugin(Cors::permissive())
+    .plugin(Tracing)
+    .plugin(ErrorHandling)
+    .plugin(NormalizePath)
+    .build_state()
     .await
-    .with(Health)
-    .with(Cors::permissive())
-    .with(Tracing)
-    .with(ErrorHandling)
-    .with(NormalizePath)
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
@@ -205,7 +206,9 @@
 <tr><td><code>Health</code></td><td><code>GET /health</code> returning 200 “OK”</td></tr>
 <tr><td><code>Cors::permissive()</code></td><td>Permissive CORS headers</td></tr>
 <tr><td><code>Cors::new(layer)</code></td><td>Custom CORS configuration</td></tr>
-<tr><td><code>Tracing</code></td><td>Request tracing via <code>tracing</code> + <code>tower-http</code></td></tr>
+<tr><td><code>Tracing</code></td><td>Request tracing via <code>tracing</code> + <code>tower-http</code> (default config)</td></tr>
+<tr><td><code>Tracing::configured(config)</code></td><td>Configurable tracing (format, ansi, thread IDs, etc.)</td></tr>
+<tr><td><code>Tracing::from_config(&amp;r2e_config)</code></td><td>Tracing configured from YAML (<code>tracing.*</code> keys)</td></tr>
 <tr><td><code>ErrorHandling</code></td><td>Catches panics, returns JSON 500</td></tr>
 <tr><td><code>NormalizePath</code></td><td>Trailing-slash normalization</td></tr>
 <tr><td><code>DevReload</code></td><td>Dev-mode <code>/__r2e_dev/*</code> endpoints</td></tr>
@@ -213,106 +216,282 @@
 <tr><td><code>SecureHeaders</code></td><td>Security headers (X-Content-Type-Options, etc.)</td></tr>
 <tr><td><code>OpenApiPlugin</code></td><td>OpenAPI spec + docs UI</td></tr>
 <tr><td><code>Prometheus</code></td><td>Prometheus metrics at <code>/metrics</code></td></tr>
+<tr><td><code>EmbeddedFrontend</code></td><td>Embedded static file serving with SPA fallback (feature <code>static</code>)</td></tr>
 </tbody>
 </table>
 </div>
-<h3 id="pre-state-plugins"><a class="header" href="#pre-state-plugins">Pre-state plugins</a></h3>
-<p>Some plugins need to install before <code>build_state()</code>. Use <code>.plugin()</code> instead of <code>.with()</code>:</p>
+<h3 id="plugins-that-provide-beans"><a class="header" href="#plugins-that-provide-beans">Plugins that provide beans</a></h3>
+<p>Many plugins publish beans into the graph, which other beans and controllers
+then <code>#[inject]</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
-    .plugin(Scheduler)    // provides CancellationToken to the bean graph
-    .build_state::&lt;AppState, _&gt;()
+    .plugin(Executor)     // provides PoolExecutor (Scheduler runs ticks on it)
+    .plugin(Scheduler)    // provides CancelToken + ScheduledJobRegistry
+    .build_state()
     .await
     // ...
 <span class="boring">}</span></code></pre>
+<p><code>Scheduler</code> <strong>requires the <code>Executor</code> plugin</strong>: it declares
+<code>type Deps = (PoolExecutor,)</code>, so <code>.plugin(Scheduler)</code> without a <code>PoolExecutor</code>
+in the graph fails at <code>build_state()</code> with the guided “missing
+<code>.provide::&lt;PoolExecutor&gt;()</code> / <code>.register::&lt;PoolExecutor&gt;()</code>” error. <code>Deps</code> are
+checked against the final provision list, so the order between the two plugins does
+not matter.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Pre-state Plugin</th><th>Description</th></tr>
+<tr><th>Plugin</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Scheduler</code></td><td>Background task scheduling runtime</td></tr>
+<tr><td><code>Executor</code></td><td>Managed task pool (<code>PoolExecutor</code>) with bounded concurrency and graceful drain</td></tr>
+<tr><td><code>Scheduler</code></td><td>Background task scheduling runtime (requires <code>Executor</code>; ticks run on its pool)</td></tr>
 </tbody>
 </table>
 </div>
+<h2 id="enabling-and-disabling-plugins-from-config"><a class="header" href="#enabling-and-disabling-plugins-from-config">Enabling and disabling plugins from config</a></h2>
+<p>Any plugin with a config section (a <code>CONFIG_PREFIX</code>) can be switched off from
+YAML with <code>&lt;prefix&gt;.enabled: false</code> — no code change:</p>
+<pre><code class="language-yaml">prometheus:
+  enabled: false
+</code></pre>
+<p>The default is <code>true</code>. A disabled plugin drops its <em>surface</em> effects (routes,
+layers, serve hooks, stored data) — but <strong>not</strong> its cleanup hooks
+(<code>on_shutdown</code>/<code>on_shutdown_async</code>): <code>build</code> ran, so whatever it constructed is
+still disposed of at shutdown. And <strong>its provided beans still exist</strong> —
+<code>build</code> runs with <code>ctx.enabled() == false</code> and returns a disabled variant, so
+anything injecting the beans keeps working. See
+<a href="../advanced/custom-plugins.html#enabling-and-disabling-a-plugin-from-config">Custom Plugins</a>
+for the full semantics.</p>
+<h2 id="feature-modules-and-plugins"><a class="header" href="#feature-modules-and-plugins">Feature modules and plugins</a></h2>
+<p>A feature module either <strong>requires</strong> a plugin someone else installs, or
+<strong>brings</strong> the plugin itself.</p>
+<h3 id="require"><a class="header" href="#require">Require</a></h3>
+<p>Declaring the plugins a module depends on turns a missing plugin into a clear
+compile error naming the plugin, instead of a confusing missing-bean error:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[module(
+    controllers(JobController),
+    requires_plugins(Scheduler),
+)]
+pub struct JobsModule;
+<span class="boring">}</span></code></pre>
+<p>If <code>Scheduler</code> is not installed before <code>register_module::&lt;JobsModule&gt;()</code> — by
+the app, by an earlier module, or by this module itself — the build fails with a
+message pointing at <code>.plugin(Scheduler)</code>.</p>
+<h3 id="bring"><a class="header" href="#bring">Bring</a></h3>
+<p>A module that owns a piece of infrastructure can ship the plugin with it, so the
+app only registers the module:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[module(
+    providers(ItemRepo),
+    controllers(ItemController),
+    exports(ItemRepo),
+    plugins(SqlxDataSource&lt;Sqlite&gt; = SqlxDataSource::&lt;Sqlite&gt;::new()),
+)]
+pub struct DataModule;
+
+AppBuilder::new()
+    .register_module::&lt;DataModule&gt;()   // installs the datasource plugin too
+<span class="boring">}</span></code></pre>
+<p>Each entry is written <code>Type = expr</code>: the type grows the provision list at
+compile time, the expression is the instance to install. Installing happens
+exactly as a <code>.plugin(..)</code> at the <code>register_module</code> call site would — the
+plugin’s beans become available to the whole app (they need <strong>no</strong> <code>exports(..)</code>
+entry, and must not be listed in one), its controllers are mounted, and its
+effects apply at that position in install order.</p>
+<h3 id="one-owner-per-plugin"><a class="header" href="#one-owner-per-plugin">One owner per plugin</a></h3>
+<p>A plugin is installed by exactly one owner: the app <strong>or</strong> one module. Every
+other module that merely needs it uses <code>requires_plugins</code>. Installing the same
+plugin twice is a startup error naming both owners:</p>
+<pre><code class="language-text">Plugin 'Scheduler' is installed by app and by module 'JobsModule'.
+A plugin has exactly one owner — the app or ONE module. Use
+`requires_plugins(Scheduler)` in every module that only needs it, and keep the
+single `.plugin(Scheduler)` / `plugins(Scheduler = ..)` install.
+</code></pre>
 <h2 id="plugin-ordering"><a class="header" href="#plugin-ordering">Plugin ordering</a></h2>
-<p>Plugins are installed in registration order. Some have ordering requirements:</p>
+<p>Nothing has to be installed “last” any more. Every plugin registers its effects
+into one of three stages, and the stage — not the install position — decides
+when the effect is applied:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Stage</th><th>What goes there</th><th>Applied</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Graph</strong></td><td>Tower layers, plugin data, serve hooks</td><td>right after the bean graph resolves</td></tr>
+<tr><td><strong>Routes</strong></td><td>anything that needs the complete route table (OpenAPI)</td><td>after <strong>every</strong> controller is registered</td></tr>
+<tr><td><strong>Finalize</strong></td><td>transport-level wraps (a gRPC multiplexer)</td><td>outermost, after every HTTP layer</td></tr>
+</tbody>
+</table>
+</div>
+<p>Within a stage, effects apply in install order, and a later layer ends up
+<strong>outside</strong> an earlier one. Practical consequences:</p>
 <ul>
-<li><code>NormalizePath</code> should be installed last (or use <code>should_be_last()</code> hint — R2E warns if plugins are added after it)</li>
-<li><code>Tracing</code> should be early to capture all requests</li>
-<li><code>ErrorHandling</code> should be after <code>Tracing</code> but before route registration</li>
+<li><code>NormalizePath</code> can be installed at any point: it is applied at build time as a pre-routing URI rewrite wrapping the whole router</li>
+<li><code>EmbeddedFrontend</code> and <code>OpenApiPlugin</code> can be installed anywhere — their routes are mounted from a Routes-stage effect</li>
+<li><code>Tracing</code> early keeps it inside (and therefore observing) later layers</li>
+<li><code>ErrorHandling</code>’s panic-to-JSON layer is installed by the framework as the outermost HTTP layer regardless</li>
 </ul>
 <h2 id="custom-tower-layers"><a class="header" href="#custom-tower-layers">Custom Tower layers</a></h2>
-<p>For Tower middleware that doesn’t need the full plugin API, use <code>.with_layer()</code>:</p>
+<p>For Tower middleware that doesn’t need the full plugin API, use <code>.with_layer()</code>
+on the built app:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use tower_http::timeout::TimeoutLayer;
 
 AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+    .build_state()
     .await
     .with_layer(TimeoutLayer::new(Duration::from_secs(30)))
     // ...
 <span class="boring">}</span></code></pre>
 <h2 id="writing-custom-plugins"><a class="header" href="#writing-custom-plugins">Writing custom plugins</a></h2>
-<h3 id="post-state-plugins"><a class="header" href="#post-state-plugins">Post-state plugins</a></h3>
-<p>Implement the <code>Plugin</code> trait for plugins that install after <code>build_state()</code>:</p>
+<p>A plugin <strong>is one async, fallible factory</strong> for the beans it
+provides: <code>build</code> runs inside <code>build_state()</code> as a node of the bean graph.
+<code>Provided</code> is a <strong>tuple</strong> of beans — <code>(A,)</code> for one, <code>(A, B)</code> for several,
+<code>()</code> for none — and <code>build</code> returns it. No builder generics needed:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::plugin::Plugin;
-use axum::Router;
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
 pub struct MyPlugin;
 
-impl&lt;S: Clone + Send + Sync + 'static&gt; Plugin&lt;S&gt; for MyPlugin {
-    fn install(self, router: Router&lt;S&gt;) -&gt; Router&lt;S&gt; {
-        // Add routes, layers, or middleware
-        router.route("/my-endpoint", get(|| async { "Hello from plugin" }))
-    }
+impl Plugin for MyPlugin {
+    type Provided = (MyConfig,);
+    type Deps = ();          // no dependencies on other beans
+    type Config = ();
+    type Controllers = ();   // no controllers shipped by this plugin
 
-    fn should_be_last(&amp;self) -&gt; bool {
-        false
+    async fn build(
+        self,
+        _deps: (),
+        _config: Option&lt;()&gt;,
+        _ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(MyConfig,), PluginBuildError&gt; {
+        Ok((MyConfig::default(),))
     }
 }
 <span class="boring">}</span></code></pre>
-<h3 id="pre-state-plugins-1"><a class="header" href="#pre-state-plugins-1">Pre-state plugins</a></h3>
-<p>Implement <code>PreStatePlugin</code> for plugins that need to run before <code>build_state()</code>:</p>
+<p><code>build</code> may await (connect to a backend, run migrations…) and may fail — an
+<code>Err</code> aborts startup with an error naming the plugin. Every impl declares
+<code>type Deps</code>; set it to <code>()</code> unless the plugin consumes an application bean.</p>
+<h3 id="consuming-application-beans"><a class="header" href="#consuming-application-beans">Consuming application beans</a></h3>
+<p><code>Deps</code> names the beans the plugin builds from. They are <strong>real edges in the
+bean graph</strong>: constructed before <code>build</code> runs and handed to it by value. Any
+bean qualifies — <code>.provide()</code>-d, factory-built (<code>.register::&lt;T&gt;()</code>), or
+provided by another plugin. <code>Deps</code> is verified against the <strong>final</strong> provision
+list at <code>build_state()</code>, so the order between <code>.plugin()</code>, <code>.provide()</code>, and
+<code>.register()</code> calls does not matter; a missing dep is a guided compile error
+(“missing <code>.provide::&lt;X&gt;()</code> or <code>.register::&lt;X&gt;()</code>”).</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::plugin::PreStatePlugin;
+</span>use r2e::{Plugin, PluginBuildContext, PluginBuildError};
 
-pub struct MyPreStatePlugin;
+pub struct MetricsExporter;
 
-impl PreStatePlugin for MyPreStatePlugin {
-    fn install(self, builder: &amp;mut AppBuilder) {
-        // Store data, register deferred actions, etc.
+impl Plugin for MetricsExporter {
+    type Provided = (ExporterHandle,);
+    type Deps = (MetricsRegistry,);   // factory-built is fine
+    type Config = ();
+    type Controllers = ();
+
+    async fn build(
+        self,
+        (registry,): (MetricsRegistry,),
+        _config: Option&lt;()&gt;,
+        ctx: &amp;mut PluginBuildContext,
+    ) -&gt; Result&lt;(ExporterHandle,), PluginBuildError&gt; {
+        let handle = ExporterHandle::connect().await?;
+        let h = handle.clone();
+        ctx.on_serve(move |_sc| h.bind(registry));
+        Ok((handle,))
     }
 }
+
+// `MetricsRegistry` may be registered AFTER the plugin — `Deps` is checked
+// against the final provision list at `build_state()`, not at the call site.
+AppBuilder::new()
+    .plugin(MetricsExporter)
+    .register::&lt;MetricsRegistry&gt;()
+    .build_state().await
 <span class="boring">}</span></code></pre>
-<h3 id="deferred-actions"><a class="header" href="#deferred-actions">Deferred actions</a></h3>
-<p>For plugins that need to perform setup after state construction, use <code>DeferredAction</code>:</p>
+<p>Because deps arrive before <code>build</code>, a provided bean that depends on another
+bean is constructed <strong>directly</strong> — there is no shell/fill pattern anymore.
+(<code>r2e::Late&lt;T&gt;</code> still exists as an escape hatch for genuinely post-boot
+fills.)</p>
+<h3 id="effects-layers-hooks-plugin-data"><a class="header" href="#effects-layers-hooks-plugin-data">Effects: layers, hooks, plugin data</a></h3>
+<p>Side effects are registered on the <code>PluginBuildContext</code> during <code>build</code> — plain
+closures, no <code>Box</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::plugin::{DeferredAction, DeferredContext};
-
-impl PreStatePlugin for MyPlugin {
-    fn install(self, builder: &amp;mut AppBuilder) {
-        builder.defer(DeferredAction::new("my-plugin", |ctx: &amp;mut DeferredContext| {
-            ctx.add_layer(my_layer);
-            ctx.on_serve(|| async { /* run when server starts */ });
-            ctx.on_shutdown(|| async { /* run when server stops */ });
-        }));
-    }
+</span>async fn build(
+    self,
+    _deps: (),
+    _config: Option&lt;()&gt;,
+    ctx: &amp;mut PluginBuildContext,
+) -&gt; Result&lt;(MyToken,), PluginBuildError&gt; {
+    let token = MyToken::new();
+    let t = token.clone();
+    ctx.add_layer(|router| router);              // Tower layer
+    ctx.on_serve(|_serve_ctx| { /* server starting */ });
+    ctx.on_shutdown(move || { t.cancel(); });
+    Ok((token,))
 }
 <span class="boring">}</span></code></pre>
-<p><code>DeferredContext</code> provides:</p>
+<p><code>PluginBuildContext</code> provides:</p>
 <ul>
-<li><code>add_layer()</code> — add a Tower layer</li>
-<li><code>store_data()</code> — store data in the builder</li>
-<li><code>on_serve()</code> — register a serve hook</li>
-<li><code>on_shutdown()</code> — register a shutdown hook</li>
+<li><code>enabled()</code> — the <code>&lt;prefix&gt;.enabled</code> config gate (default <code>true</code>)</li>
+<li><code>graph()</code> — a weak <code>GraphHandle</code> on the final resolved graph (fills at the end of a successful <code>build_state()</code>; stays readable for the app’s whole life and for any tracked task that outlives it — the router, each tracked task and the serving scope own the graph independently, so reads only go <code>None</code> once the last owner is gone)</li>
+<li><code>config_raw()</code> — the loaded <code>R2eConfig</code>, if any</li>
+<li><code>add_layer()</code> — Tower layer (<strong>Graph</strong> stage)</li>
+<li><code>store_data()</code> — type-keyed plugin data for cross-plugin coordination (<strong>Graph</strong>)</li>
+<li><code>on_serve()</code> — serve-time hook (<strong>Graph</strong>)</li>
+<li><code>after_build()</code> — boot-time escape hatch with full-graph access (<strong>Graph</strong>)</li>
+<li><code>after_routes()</code> — runs once <strong>every</strong> controller is registered; read the route
+registry (<code>routes.routes()</code>) and mount routers from it (<strong>Routes</strong> stage)</li>
+<li><code>wrap_router()</code> — replace the whole router, outside every HTTP layer (<strong>Finalize</strong>)</li>
+<li><code>on_shutdown()</code> / <code>on_shutdown_async()</code> — cleanup hooks (never gated)</li>
 </ul>
+<p>Effects are buffered and applied per stage, <strong>in plugin install order</strong> within a
+stage (builds themselves run in dependency order). Disabling the plugin via
+<code>&lt;prefix&gt;.enabled: false</code> drops <strong>all three</strong> surface stages but keeps the
+<em>cleanup</em> hooks (<code>on_shutdown</code>, <code>on_shutdown_async</code>) — <code>build</code> still runs, so the
+beans exist and whatever they hold still has to be released; check
+<code>ctx.enabled()</code> and return a cheap, inert disabled variant.</p>
+<h3 id="shipping-controllers-from-a-plugin"><a class="header" href="#shipping-controllers-from-a-plugin">Shipping controllers from a plugin</a></h3>
+<p>A plugin can declare <code>#[controller]</code> types instead of hand-assembling a
+<code>Router</code>, which gets it guards, <code>#[roles]</code>, OpenAPI metadata and extractors for
+free:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/metrics")]
+pub struct MetricsController {
+    #[inject] registry: MetricsRegistry,   // the plugin's own provided bean
+}
+
+impl Plugin for Metrics {
+    type Provided = (MetricsRegistry,);
+    type Deps = ();
+    type Config = ();
+    type Controllers = (MetricsController,);
+    // ...
+}
+<span class="boring">}</span></code></pre>
+<p>Plugin controllers are registered by <code>build_state()</code>, so their routes are part
+of the route registry every <code>after_routes</code> effect sees. Their <code>#[inject]</code> fields
+are checked against the final provision list at <code>build_state()</code> — a missing bean
+is a compile error naming the plugin.</p>
+<p>There is also a rare pre-graph hook, <code>fn setup(&amp;mut self, &amp;mut PluginSetupContext)</code> (default no-op), for the few things that must happen at
+<code>.plugin()</code> time — e.g. <code>store_data</code> that other subsystems read even when the
+plugin is disabled. It cannot register layers, routes or hooks: setup actions
+are ungated, so allowing them would let a disabled plugin serve traffic.</p>
+<p>The lower-level <code>PluginInstall</code> trait (<code>#[doc(hidden)]</code>, HList-based) still
+backs <code>.plugin()</code> via a blanket impl, but you only need to implement it directly
+when a plugin must call arbitrary builder methods (<code>.register()</code>, <code>.provide()</code>,
+…) itself — a rare escape hatch.</p>
 
                     </main>
 

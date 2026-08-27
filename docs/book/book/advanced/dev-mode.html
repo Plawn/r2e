@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,77 +178,172 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="dev-mode"><a class="header" href="#dev-mode">Dev Mode</a></h1>
-<p>R2E provides development-mode endpoints for hot-reload detection and diagnostics.</p>
-<h2 id="enabling-dev-mode"><a class="header" href="#enabling-dev-mode">Enabling dev mode</a></h2>
-<p>Add the <code>DevReload</code> plugin:</p>
+<p>R2E supports <strong>Subsecond hot-patching</strong> via Dioxus 0.7 for instant code reloading during development. Instead of killing and restarting the server, Subsecond recompiles only the changed code as a dynamic library and patches it into the running process — typically in under 500ms.</p>
+<h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
+<ol>
+<li>Install the Dioxus CLI: <code>cargo install dioxus-cli</code></li>
+<li>Add <code>dev-reload</code> feature to your app:</li>
+</ol>
+<pre><code class="language-toml">[features]
+dev-reload = ["r2e/dev-reload"]
+</code></pre>
+<ol start="3">
+<li>Put the canonical <strong><code>App</code> trait</strong> implementation in <code>src/app.rs</code>. <code>lib.rs</code>
+compiles it for tests and <code>app_main!</code> compiles it in the binary tip crate:</li>
+</ol>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// src/app.rs
+pub mod controllers;
+pub mod env;
+
+use env::{setup_env, AppEnv};
+
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -&gt; AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, env: AppEnv) -&gt; impl BootableApp {
+        // this body is hot-patched on every code change
+        b.load_config::&lt;()&gt;()          // sole config entry; re-read from disk per patch (YAML edits apply next patch)
+            .provide(env.event_bus)
+            .provide(env.pool)
+            .register::&lt;UserService&gt;()
+            .plugin(Health)
+            .plugin(Cors::permissive())
+            .plugin(DevReload)
+            .build_state().await
+            .register_controller::&lt;UserController&gt;()
+    }
+}
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// src/lib.rs — integration tests
+include!("app.rs");
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// src/main.rs — app.rs becomes binary tip-crate code
+r2e::app_main!(MyApp);
+<span class="boring">}</span></code></pre>
+<p><code>r2e::app_main!</code> includes <code>src/app.rs</code> in the binary, generates the Tokio
+<code>main</code>, and delegates to <code>r2e::launch!</code>. Under <code>dev-reload</code>, <code>launch!</code> runs
+<code>setup()</code> once and re-runs <code>build()</code> per hot-patch. It is a macro (not
+<code>launch::&lt;MyApp&gt;()</code>) because Subsecond only patches functions in the <em>tip crate</em>
+that owns <code>main.rs</code>; its hot-reload loop — including the concrete function
+Subsecond remaps — must expand directly into your crate. The unconditional
+include performed by <code>app_main!</code> makes the app, controllers, and services
+tip-crate code in both dev and production, with no user-written <code>cfg</code> or
+crate-name import. Tests use the library inclusion of the same source.</p>
+<p>Keep the persistent <code>AppEnv</code> and its setup helper in <code>src/env.rs</code>. Changes to
+that cold file, <code>src/env/**</code>, <code>Cargo.toml</code>, or <code>build.rs</code> make <code>r2e dev</code> perform
+a safe full process restart. Other application changes stay on the hot-patch
+path.</p>
+<h3 id="what-goes-in-appsetup-vs-appbuild"><a class="header" href="#what-goes-in-appsetup-vs-appbuild">What goes in <code>App::setup()</code> vs <code>App::build()</code></a></h3>
+<p>This split is critical for correct hot-reload behavior:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th><code>App::setup() -&gt; Env</code> — runs once</th><th><code>App::build(b, env)</code> — hot-patched</th></tr>
+</thead>
+<tbody>
+<tr><td>Database pool creation</td><td><code>AppBuilder</code> assembly</td></tr>
+<tr><td>Event bus creation</td><td><code>load_config</code> (re-reads YAML per patch)</td></tr>
+<tr><td>JWT validator setup</td><td>Bean graph resolution (<code>.build_state()</code>)</td></tr>
+<tr><td>SSE broadcasters, shared channels</td><td>Controller registration</td></tr>
+<tr><td>Anything expensive or stateful</td><td>Plugin installation, route definitions</td></tr>
+<tr><td>Anything you want preserved across patches</td><td>Anything you want to iterate on quickly</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Rule of thumb:</strong> If it holds a connection, spawns a background task, or takes more than a few ms to initialize, put it in <code>setup()</code> and thread it through <code>Env</code>.</p>
+<ol start="4">
+<li>Run with: <code>r2e dev</code></li>
+</ol>
+<pre><code class="language-bash">r2e dev
+r2e dev --port 8080
+r2e dev --features openapi scheduler
+</code></pre>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<pre><code>Source code change
+    → dx detects change
+    → recompiles the changed tip-crate application code as a dynamic library
+    → patches it into the running process (setup state preserved)
+    → ~200-500ms turnaround
+</code></pre>
+<h3 id="state-caching"><a class="header" href="#state-caching">State caching</a></h3>
+<p>When the <code>dev-reload</code> feature is active, the bean graph is cached between hot-patches. If the graph fingerprint hasn’t changed (no bean constructors modified), the cached state is reused — making reloads even faster.</p>
+<p>To force a full state rebuild (e.g., after changing a bean constructor), call:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>r2e::invalidate_state_cache();
+<span class="boring">}</span></code></pre>
+<h3 id="lifecycle-hooks-and-hot-reload"><a class="header" href="#lifecycle-hooks-and-hot-reload">Lifecycle hooks and hot-reload</a></h3>
+<p>Startup hooks (<code>on_start</code>), consumer registrations (<code>#[consumer]</code>), and scheduled tasks (<code>#[scheduled]</code>) are only executed on the <strong>first</strong> cycle. Subsequent hot-patches skip them to avoid duplicate subscriptions or double-started tasks.</p>
+<h3 id="port-conflict-with-dioxus-devserver"><a class="header" href="#port-conflict-with-dioxus-devserver">Port conflict with Dioxus devserver</a></h3>
+<p>The Dioxus devserver (<code>dx serve</code>) listens on port <strong>8080</strong> by default. If your R2E app also binds to 8080, requests will be silently intercepted and never reach your app. Use a different port via config (<code>launch</code> reads <code>server.port</code>):</p>
+<pre><code class="language-yaml"># application.yaml — keep your app off 8080 during dev
+server:
+  port: 3000
+</code></pre>
+<h2 id="anti-patterns"><a class="header" href="#anti-patterns">Anti-patterns</a></h2>
+<p><strong>Don’t</strong> create connection pools or event buses inside <code>App::build()</code> — they are rebuilt and leak on every hot-patch. Build them in <code>setup()</code> and thread them through <code>Env</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Bad: new pool on every hot-patch (leaks connections)
+async fn build(b: AppBuilder, _env: ()) -&gt; impl BootableApp {
+    let pool = PgPool::connect("...").await.unwrap();
+    b.provide(pool) /* ... */
+}
+
+// Good: pool created once in setup(), reused via env
+async fn setup() -&gt; AppEnv {
+    AppEnv { pool: PgPool::connect("...").await.unwrap() }
+}
+async fn build(b: AppBuilder, env: AppEnv) -&gt; impl BootableApp {
+    b.provide(env.pool) /* ... */
+}
+<span class="boring">}</span></code></pre>
+<p><strong>Do</strong> keep <code>load_config</code> inside <code>build()</code>. Because <code>build()</code> re-runs per patch,
+its <code>load_config</code> re-reads <code>application.yaml</code> from disk each time — deliberately,
+so config file edits are picked up on the next hot-patch (the ~1 ms read beats a
+dev session pinned to stale first-boot config). The old
+<code>#[r2e::main] async fn main(env)</code> + <code>with_config</code> hand-wiring is gone —
+express the split with <code>App::setup</code> / <code>App::build</code> and launch via <code>r2e::launch!</code>.</p>
+<h2 id="devreload-plugin"><a class="header" href="#devreload-plugin">DevReload plugin</a></h2>
+<p>The <code>DevReload</code> plugin adds development-mode endpoints and response headers:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+    .plugin(DevReload)
+    .build_state()
     .await
-    .with(DevReload)
     // ...
 <span class="boring">}</span></code></pre>
-<h2 id="dev-endpoints"><a class="header" href="#dev-endpoints">Dev endpoints</a></h2>
-<h3 id="status"><a class="header" href="#status">Status</a></h3>
-<pre><code>GET /__r2e_dev/status → "dev"
+<h3 id="dev-endpoints"><a class="header" href="#dev-endpoints">Dev endpoints</a></h3>
+<pre><code>GET /__r2e_dev/status → "dev"          # Check if running in dev mode
+GET /__r2e_dev/ping   → {"boot_time": 1234567890123, "status": "ok"}  # Detect restarts
 </code></pre>
-<p>Returns plain text <code>"dev"</code>. Use to check if the server is running in development mode.</p>
-<h3 id="ping"><a class="header" href="#ping">Ping</a></h3>
-<pre><code>GET /__r2e_dev/ping → {"boot_time": 1234567890123, "status": "ok"}
-</code></pre>
-<p>Returns the server’s boot timestamp (milliseconds since epoch). Use to detect server restarts.</p>
-<h2 id="hot-reload-workflow"><a class="header" href="#hot-reload-workflow">Hot-reload workflow</a></h2>
-<ol>
-<li>Use <code>cargo watch</code> (or <code>r2e dev</code>) to auto-restart on file changes</li>
-<li>Client-side JavaScript polls <code>/__r2e_dev/ping</code></li>
-<li>When <code>boot_time</code> changes, a restart occurred → refresh the page</li>
-</ol>
-<pre><code>Source code change
-    → cargo-watch detects change
-    → kills server process
-    → rebuilds and restarts
-    → new boot_time
-    → client detects → page refresh
-</code></pre>
-<h3 id="client-side-polling-example"><a class="header" href="#client-side-polling-example">Client-side polling example</a></h3>
-<pre><code class="language-javascript">let lastBootTime = null;
-
-setInterval(async () =&gt; {
-    try {
-        const res = await fetch('/__r2e_dev/ping');
-        const data = await res.json();
-
-        if (lastBootTime === null) {
-            lastBootTime = data.boot_time;
-        } else if (data.boot_time !== lastBootTime) {
-            location.reload();
-        }
-    } catch {
-        // Server is restarting, wait for next poll
-    }
-}, 1000);
-</code></pre>
-<h2 id="using-r2e-dev"><a class="header" href="#using-r2e-dev">Using <code>r2e dev</code></a></h2>
-<p>The CLI provides a convenient wrapper:</p>
-<pre><code class="language-bash">r2e dev
-</code></pre>
-<p>This:</p>
+<h3 id="dev-headers"><a class="header" href="#dev-headers">Dev headers</a></h3>
+<p>When <code>DevReload</code> is active, R2E adds two headers to every response:</p>
 <ul>
-<li>Sets <code>R2E_PROFILE=dev</code></li>
-<li>Watches <code>src/</code>, <code>application.yaml</code>, <code>application-dev.yaml</code>, <code>migrations/</code></li>
-<li>Prints discovered routes</li>
-<li>Auto-restarts on changes</li>
+<li><code>Cache-Control: no-store</code> — prevents browsers from caching stale API responses</li>
+<li><code>Connection: close</code> — forces the browser to close TCP connections after each response, avoiding stale keep-alive connections routed to old handler tasks after a hot-patch</li>
 </ul>
-<p>Add <code>--open</code> to auto-open the browser:</p>
-<pre><code class="language-bash">r2e dev --open
-</code></pre>
-<h2 id="production-note"><a class="header" href="#production-note">Production note</a></h2>
+<h3 id="production-note"><a class="header" href="#production-note">Production note</a></h3>
 <p>Do <strong>not</strong> enable <code>DevReload</code> in production. The dev endpoints are informational only but expose internal details (boot time) that shouldn’t be public.</p>
+<p><code>.plugin()</code> changes the builder’s compile-time provision list, so it cannot be
+applied behind a runtime flag. Gate it at compile time instead:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[cfg(debug_assertions)]
-builder = builder.with(DevReload);
+let builder = builder.plugin(DevReload);
 <span class="boring">}</span></code></pre>
 
                     </main>
@@ -259,7 +354,7 @@ builder = builder.with(DevReload);
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../advanced/openapi.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../advanced/route-attributes.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -273,7 +368,7 @@ builder = builder.with(DevReload);
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../advanced/openapi.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../advanced/route-attributes.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

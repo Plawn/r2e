@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,14 +178,13 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="declarative-consumers"><a class="header" href="#declarative-consumers">Declarative Consumers</a></h1>
-<p>Instead of manually calling <code>event_bus.subscribe()</code>, use <code>#[consumer]</code> for declarative event handling within a controller.</p>
-<h2 id="defining-a-consumer"><a class="header" href="#defining-a-consumer">Defining a consumer</a></h2>
+<p>Instead of manually calling <code>event_bus.subscribe()</code>, use <code>#[consumer]</code> for declarative event handling within controllers and beans. Consumers are auto-discovered and registered — no manual wiring needed.</p>
+<h2 id="controller-consumers"><a class="header" href="#controller-consumers">Controller consumers</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(state = AppState)]
+</span>#[controller]
 pub struct UserEventConsumer {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
 }
 
 #[routes]
@@ -206,17 +205,19 @@ impl UserEventConsumer {
     }
 }
 <span class="boring">}</span></code></pre>
+<p>The <code>bus = "event_bus"</code> attribute refers to the <strong>field name</strong> on the controller struct.</p>
 <h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
 <ol>
-<li><code>#[consumer(bus = "event_bus")]</code> tells R2E which <code>EventBus</code> field to subscribe to</li>
+<li><code>#[consumer(bus = "event_bus")]</code> tells R2E which event bus field to subscribe to</li>
 <li>The event type is inferred from the parameter type (<code>Arc&lt;UserCreatedEvent&gt;</code>)</li>
-<li><code>register_controller::&lt;UserEventConsumer&gt;()</code> auto-discovers and registers all consumer methods</li>
-<li>At runtime, the controller is constructed from state via <code>StatefulConstruct</code> and the closure subscribes to events</li>
+<li><code>register_controller::&lt;UserEventConsumer&gt;()</code> auto-discovers all <code>#[consumer]</code> methods</li>
+<li>At registration, the controller core is constructed from the bean graph via <code>ContextConstruct</code> (each <code>#[inject]</code> field resolved by type) and each consumer method is subscribed to its event type</li>
 </ol>
+<p>Under the hood, the <code>#[routes]</code> macro generates a <code>register_consumers()</code> method on the <code>Controller</code> trait impl. When <code>register_controller()</code> is called, it invokes this and subscribes each handler via <code>EventBus::subscribe()</code> (UFCS).</p>
 <h2 id="requirements"><a class="header" href="#requirements">Requirements</a></h2>
 <ul>
-<li>The controller must have an <code>EventBus</code> field (named in the <code>bus = "..."</code> attribute)</li>
-<li>The controller must <strong>not</strong> have struct-level <code>#[inject(identity)]</code> fields (consumers need <code>StatefulConstruct</code>)</li>
+<li>The controller must have a field implementing <code>EventBus</code> (named in the <code>bus = "..."</code> attribute)</li>
+<li>Consumer methods run on the controller core (built from the bean graph via <code>ContextConstruct</code>) and so cannot access request-scoped fields — reading <code>#[inject(identity)]</code> / <code>#[inject(request)]</code> inside a consumer is a compile error. <code>ContextConstruct</code> is generated for <strong>every</strong> controller core (identity and request-scoped fields are stripped onto the per-request façade), so a controller may freely combine struct-level identity for its authenticated HTTP routes with <code>#[consumer]</code> methods — the consumer simply doesn’t see the identity. Consumer methods use only core (<code>#[inject]</code> / <code>#[config]</code>) fields.</li>
 <li>The consumer method must take <code>&amp;self</code> and <code>Arc&lt;EventType&gt;</code></li>
 <li>Consumer controllers don’t need a <code>path</code> in <code>#[controller]</code></li>
 </ul>
@@ -226,19 +227,19 @@ impl UserEventConsumer {
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
     .provide(event_bus)
-    .build_state::&lt;AppState, _&gt;()
+    .build_state()
     .await
     .register_controller::&lt;UserEventConsumer&gt;()
     // ...
 <span class="boring">}</span></code></pre>
+<p>Registration happens once at startup. All consumer methods on the controller are subscribed in a single pass.</p>
 <h2 id="mixed-controllers"><a class="header" href="#mixed-controllers">Mixed controllers</a></h2>
-<p>A controller can have both HTTP routes and consumers:</p>
+<p>A controller can have both HTTP routes and consumers. This is common when a feature needs both a REST API and event-driven side-effects:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/notifications", state = AppState)]
+</span>#[controller(path = "/notifications")]
 pub struct NotificationController {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
     #[inject] notification_service: NotificationService,
 }
 
@@ -260,6 +261,120 @@ impl NotificationController {
     }
 }
 <span class="boring">}</span></code></pre>
+<h2 id="using-injected-services"><a class="header" href="#using-injected-services">Using injected services</a></h2>
+<p>Consumer methods have access to all <code>#[inject]</code> fields on the controller, just like HTTP handlers. This makes it easy to reuse services:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller]
+pub struct OrderConsumer {
+    #[inject] event_bus: LocalEventBus,
+    #[inject] inventory_service: InventoryService,
+    #[inject] notification_service: NotificationService,
+}
+
+#[routes]
+impl OrderConsumer {
+    #[consumer(bus = "event_bus")]
+    async fn on_order_placed(&amp;self, event: Arc&lt;OrderPlacedEvent&gt;) {
+        // Use injected services
+        self.inventory_service.reserve(event.order_id).await;
+        self.notification_service.send_order_confirmation(event.order_id).await;
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="error-handling"><a class="header" href="#error-handling">Error handling</a></h2>
+<p>Consumer handlers return <code>()</code> — there is no built-in error propagation for event handlers. Handle errors within the handler:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[consumer(bus = "event_bus")]
+async fn on_order_placed(&amp;self, event: Arc&lt;OrderPlacedEvent&gt;) {
+    if let Err(e) = self.inventory_service.reserve(event.order_id).await {
+        tracing::error!(order_id = event.order_id, error = %e, "Failed to reserve inventory");
+        // Optionally: emit a failure event, push to a retry queue, etc.
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>If a handler panics, the panic is caught by the Tokio runtime. Other handlers for the same event continue running, and the bus remains operational. See <a href="./event-bus.html#panic-isolation">Panic isolation</a>.</p>
+<h2 id="bean-consumers"><a class="header" href="#bean-consumers">Bean consumers</a></h2>
+<p>Beans can also declare <code>#[consumer]</code> methods using the same syntax. This avoids creating a controller just for event handling:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone)]
+pub struct NotificationService {
+    event_bus: LocalEventBus,
+    mailer: Mailer,
+}
+
+#[bean]
+impl NotificationService {
+    pub fn new(event_bus: LocalEventBus, mailer: Mailer) -&gt; Self {
+        Self { event_bus, mailer }
+    }
+
+    #[consumer(bus = "event_bus")]
+    async fn on_user_created(&amp;self, event: Arc&lt;UserCreatedEvent&gt;) {
+        self.mailer.send_welcome(&amp;event.email).await;
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>The <code>#[bean]</code> macro generates an <code>EventSubscriber</code> impl when <code>#[consumer]</code> methods are present, and registration is automatic — <code>.register::&lt;S&gt;()</code> alone is enough:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>AppBuilder::new()
+    .provide(event_bus)
+    .register::&lt;NotificationService&gt;()
+    .build_state()
+    .await
+    // ...
+<span class="boring">}</span></code></pre>
+<p><code>build_state()</code> collects the subscription (resolving <code>S</code> from the bean graph by type) and it runs at server startup, at the same point controller <code>#[consumer]</code> methods subscribe. Bean consumers capture <code>self</code> directly, so no per-event construction happens.</p>
+<blockquote>
+<p><strong>Note:</strong> the auto-collection hook only runs for <strong>registered</strong> beans. An instance deposited via <code>.provide(..)</code> does not auto-subscribe — register the type instead, or wire it manually with <code>add_consumer_registration</code>.</p>
+</blockquote>
+<h2 id="multiple-buses"><a class="header" href="#multiple-buses">Multiple buses</a></h2>
+<p>Both controllers and beans support multiple event bus fields of different types. Each <code>#[consumer]</code> references a specific field by name:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[bean]
+impl NotificationService {
+    pub fn new(local_bus: LocalEventBus, kafka_bus: KafkaEventBus, mailer: Mailer) -&gt; Self {
+        Self { local_bus, kafka_bus, mailer }
+    }
+
+    #[consumer(bus = "local_bus")]
+    async fn on_user_created(&amp;self, event: Arc&lt;UserCreatedEvent&gt;) {
+        self.mailer.send_welcome(&amp;event.email).await;
+    }
+
+    #[consumer(bus = "kafka_bus")]
+    async fn on_order_placed(&amp;self, event: Arc&lt;OrderPlacedEvent&gt;) {
+        self.mailer.send_receipt(&amp;event.order_id).await;
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>The generated code calls <code>EventBus::subscribe()</code> via UFCS on each field — fully monomorphized per bus type, zero dynamic dispatch.</p>
+<h2 id="consumers-vs-manual-subscribe"><a class="header" href="#consumers-vs-manual-subscribe">Consumers vs manual subscribe</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Controller <code>#[consumer]</code></th><th>Bean <code>#[consumer]</code></th><th><code>bus.subscribe()</code></th></tr>
+</thead>
+<tbody>
+<tr><td>Wiring</td><td><code>register_controller()</code></td><td>Automatic (<code>.register::&lt;S&gt;()</code>)</td><td>Manual at startup</td></tr>
+<tr><td>Access to services</td><td>Via <code>#[inject]</code> fields</td><td>Via struct fields</td><td>Must capture in closure</td></tr>
+<tr><td>Construction</td><td>Once at registration (from bean graph)</td><td>None (self captured)</td><td>N/A</td></tr>
+<tr><td>Discovery</td><td>Declarative</td><td>Declarative</td><td>Scattered across init code</td></tr>
+<tr><td>Identity access</td><td>No (<code>ContextConstruct</code>)</td><td>No</td><td>No (no HTTP context)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Use <code>#[consumer]</code> on <strong>beans</strong> for services that primarily handle events. Use <code>#[consumer]</code> on <strong>controllers</strong> when you need both HTTP routes and event handlers on the same type. Use manual <code>subscribe()</code> when you need to register handlers dynamically.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<ul>
+<li><strong>No unsubscribe</strong> — once registered, a consumer listens for the lifetime of the application. There is no mechanism to remove a subscription.</li>
+<li><strong>No ordering guarantees</strong> — when multiple handlers are subscribed to the same event type, they run concurrently. Execution order is not guaranteed.</li>
+<li><strong>No identity</strong> — consumers run outside an HTTP context, so identity and request-scoped fields (<code>#[inject(identity)]</code> / <code>#[inject(request)]</code>) are unreachable from a consumer body (a compile error). The controller may still declare struct-level identity for its authenticated HTTP routes — the consumer just cannot read it.</li>
+</ul>
 
                     </main>
 

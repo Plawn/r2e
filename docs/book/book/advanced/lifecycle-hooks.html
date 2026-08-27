@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,15 +180,23 @@
                         <h1 id="lifecycle-hooks"><a class="header" href="#lifecycle-hooks">Lifecycle Hooks</a></h1>
 <p>R2E provides <code>on_start</code> and <code>on_stop</code> hooks for running code during application startup and shutdown.</p>
 <h2 id="on_start--startup-hook"><a class="header" href="#on_start--startup-hook"><code>on_start</code> — Startup hook</a></h2>
-<p>Runs before the server starts listening. Receives the application state:</p>
+<p>Runs before the server starts listening. Receives the application state — the
+inferred HList of resolved beans. There is no hand-written state struct, so you
+pull each bean out <strong>by type</strong> with <code>state.get::&lt;T&gt;()</code> (fixed-offset access via
+the <code>BeanAccess</code> trait — <code>use r2e_core::type_list::BeanAccess;</code>) or, if you want
+an <code>Option</code>, <code>state.bean::&lt;T&gt;()</code> (via <code>BeanLookup</code>, already in the prelude):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+</span>use r2e_core::type_list::BeanAccess;
+
+AppBuilder::new()
+    .build_state()
     .await
     .on_start(|state| async move {
+        // Pull the pool bean out of the state by type
+        let pool = state.get::&lt;sqlx::SqlitePool&gt;();
         // Verify database connectivity
-        sqlx::query("SELECT 1").execute(&amp;state.pool).await?;
+        sqlx::query("SELECT 1").execute(&amp;pool).await?;
         tracing::info!("Database connection verified");
         Ok(())
     })
@@ -199,7 +207,8 @@
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>.on_start(|state| async move {
-    if !state.config.get::&lt;bool&gt;("app.ready").unwrap_or(false) {
+    let config = state.get::&lt;R2eConfig&gt;();
+    if !config.get::&lt;bool&gt;("app.ready").unwrap_or(false) {
         return Err("Application not ready".into());
     }
     Ok(())
@@ -210,19 +219,68 @@
 <li>Database connectivity checks</li>
 <li>Running migrations (<code>sqlx::migrate!().run(&amp;pool).await</code>)</li>
 <li>Cache preloading</li>
+<li>Data seeding</li>
 <li>Configuration validation</li>
 <li>JWKS key pre-warming</li>
 </ul>
-<h2 id="on_stop--shutdown-hook"><a class="header" href="#on_stop--shutdown-hook"><code>on_stop</code> — Shutdown hook</a></h2>
-<p>Runs after the server stops accepting connections and all in-flight requests complete:</p>
+<h3 id="example-seeding-an-admin-user-from-environment-variables"><a class="header" href="#example-seeding-an-admin-user-from-environment-variables">Example: seeding an admin user from environment variables</a></h3>
+<p>A common pattern is seeding an initial admin user at startup. <code>on_start</code> gives you full access to the DI-resolved state, and <code>R2eConfig</code> automatically overlays environment variables (<code>ADMIN_EMAIL</code> → <code>admin.email</code>), so there’s no need for manual <code>std::env::var()</code> calls or reconstructing repositories:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>.on_stop(|| async {
-    tracing::info!("Shutdown in progress");
-    // Flush logs, close connections, notify monitoring
+</span>use r2e_core::type_list::BeanAccess;
+
+AppBuilder::new()
+    .build_state()
+    .await
+    .on_start(|state| async move {
+        // Beans are pulled out of the inferred HList state by type
+        let config = state.get::&lt;R2eConfig&gt;();
+        let user_repo = state.get::&lt;UserRepository&gt;();
+
+        // R2eConfig maps ADMIN_EMAIL → admin.email automatically
+        let email: String = config.get("admin.email").unwrap_or_default();
+        let password: String = config.get("admin.password").unwrap_or_default();
+
+        if email.is_empty() || password.is_empty() {
+            return Ok(()); // no seed requested
+        }
+
+        // the UserRepository bean is already in the graph — no manual construction
+        if user_repo.find_by_email(&amp;email).await?.is_some() {
+            tracing::debug!("Admin seed skipped — {} already exists", email);
+            return Ok(());
+        }
+
+        let hash = hash_password(&amp;password)?;
+        user_repo.create(&amp;NewUser {
+            email: email.clone(),
+            role: Role::Admin,
+            password_hash: Some(hash),
+            ..Default::default()
+        }).await?;
+
+        tracing::info!("Admin user seeded: {}", email);
+        Ok(())
+    })
+    .serve("0.0.0.0:3000").await
+<span class="boring">}</span></code></pre>
+<p>Key points:</p>
+<ul>
+<li><strong>No <code>std::env::var()</code></strong> — read the <code>R2eConfig</code> bean (<code>state.get::&lt;R2eConfig&gt;()</code>) and call <code>config.get()</code>. Environment variables are overlaid automatically (<code>ADMIN_EMAIL</code> → <code>admin.email</code>).</li>
+<li><strong>No manual repository construction</strong> — every service is already a bean in the graph; pull it from state by type with <code>state.get::&lt;T&gt;()</code>.</li>
+<li><strong>Use <code>?</code> for error propagation</strong> — <code>on_start</code> returns <code>Result</code>, so errors block server startup cleanly instead of being silently logged.</li>
+</ul>
+<h2 id="on_stop--shutdown-hook"><a class="header" href="#on_stop--shutdown-hook"><code>on_stop</code> — Shutdown hook</a></h2>
+<p>Runs after the server stops accepting connections and all in-flight requests complete. Receives the application state (same as <code>on_start</code>):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>.on_stop(|state| async move {
+    let pool = state.get::&lt;sqlx::SqlitePool&gt;();
+    pool.close().await;
+    tracing::info!("Shutdown complete");
 })
 <span class="boring">}</span></code></pre>
-<p>Shutdown hooks don’t return <code>Result</code> — there’s no meaningful way to handle errors during shutdown.</p>
+<p>Shutdown hooks don’t return <code>Result</code> — there’s no meaningful way to handle errors during shutdown. Use <code>|_state|</code> if you don’t need the state.</p>
 <h3 id="common-use-cases-1"><a class="header" href="#common-use-cases-1">Common use cases</a></h3>
 <ul>
 <li>Flushing metrics/logs</li>
@@ -235,7 +293,7 @@
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+    .build_state()
     .await
     .on_start(|state| async move {
         tracing::info!("Hook 1: check DB");
@@ -245,14 +303,30 @@
         tracing::info!("Hook 2: warm cache");
         Ok(())
     })
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Hook 1: flush logs");
     })
-    .on_stop(|| async {
+    .on_stop(|_state| async {
         tracing::info!("Hook 2: close connections");
     })
     // ...
 <span class="boring">}</span></code></pre>
+<h2 id="shutdown-grace-period"><a class="header" href="#shutdown-grace-period">Shutdown grace period</a></h2>
+<p>By default, R2E waits indefinitely for shutdown hooks to complete. Use <code>shutdown_grace_period</code> to set a maximum duration — if hooks don’t finish in time, the process force-exits:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::time::Duration;
+
+AppBuilder::new()
+    .build_state()
+    .await
+    .shutdown_grace_period(Duration::from_secs(5))
+    .on_stop(|_state| async {
+        tracing::info!("Cleaning up...");
+    })
+    .serve("0.0.0.0:3000").await
+<span class="boring">}</span></code></pre>
+<p>This replaces the common pattern of manually spawning a shutdown handler with <code>CancellationToken</code> + <code>tokio::signal::ctrl_c()</code> + <code>process::exit()</code>.</p>
 <h2 id="execution-sequence"><a class="header" href="#execution-sequence">Execution sequence</a></h2>
 <pre><code>on_start hooks (in order)
     ↓ (if all succeed)
@@ -265,7 +339,7 @@ Stop accepting connections
 Wait for in-flight requests
     ↓
 on_stop hooks (in order)
-    ↓
+    ↓ (if grace period set and exceeded → force exit)
 Process exit
 </code></pre>
 <p>If any <code>on_start</code> hook fails, execution stops immediately — later hooks and the server don’t run.</p>

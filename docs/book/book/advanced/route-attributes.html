@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - R2E — Rust Enterprise Edition</title>
+        <title>Route Attributes - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-07ec6f4c.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c3694cfa.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">R2E — Rust Enterprise Edition</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/plawn/r2e" title="Git repository" aria-label="Git repository">
@@ -177,73 +177,297 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>R2E</strong> (Rust Enterprise Edition) is an ergonomic enterprise framework for Rust, inspired by Quarkus. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on <a href="https://github.com/tokio-rs/axum">Axum</a> via the <code>r2e-http</code> abstraction layer.</p>
-<h2 id="what-r2e-offers"><a class="header" href="#what-r2e-offers">What R2E offers</a></h2>
+                        <h1 id="route-attributes"><a class="header" href="#route-attributes">Route Attributes</a></h1>
+<p>R2E provides several route-level attributes that go beyond the standard <code>#[get]</code>, <code>#[post]</code>, etc. These give you fine-grained control over middleware, OpenAPI metadata, and Axum extractor usage on individual routes or entire controllers.</p>
+<p>All attributes described here are re-exported from the prelude:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[controller(path = "/users")]
-pub struct UserController {
-    #[inject]           user_service: UserService,
-    #[inject(identity)] user: AuthenticatedUser,
-    #[config("app.greeting")] greeting: String,
-}
+</span>use r2e::prelude::*; // middleware, layer, status, returns, raw
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="middleware--tower-middleware-functions"><a class="header" href="#middleware--tower-middleware-functions"><code>#[middleware]</code> — Tower middleware functions</a></h2>
+<p>The <code>#[middleware]</code> attribute applies a Tower middleware function to a specific route. It wraps the handler using <code>r2e::http::middleware::from_fn</code>, so the function must follow the standard middleware signature.</p>
+<h3 id="middleware-function-signature"><a class="header" href="#middleware-function-signature">Middleware function signature</a></h3>
+<p>A middleware function takes a <code>Request</code> and <code>Next</code>, and returns a <code>Response</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
 
-#[routes]
-#[intercept(Logged::info())]
-impl UserController {
-    #[get("/")]
-    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
-        Json(self.user_service.list().await)
+async fn require_api_key(
+    req: Request,
+    next: r2e::http::middleware::Next,
+) -&gt; Response {
+    let has_key = req
+        .headers()
+        .get("x-api-key")
+        .map_or(false, |v| v == "secret");
+
+    if !has_key {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
 
-    #[post("/")]
-    #[roles("admin")]
-    #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&amp;self, Json(body): Json&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
-        Json(self.user_service.create(body.name, body.email).await)
+    next.run(req).await
+}
+<span class="boring">}</span></code></pre>
+<h3 id="applying-to-a-single-route"><a class="header" href="#applying-to-a-single-route">Applying to a single route</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl ApiController {
+    #[get("/data")]
+    #[middleware(require_api_key)]
+    async fn protected_data(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+        Json(self.service.list().await)
     }
 }
 <span class="boring">}</span></code></pre>
-<p>If you’ve used Java’s Quarkus, Spring Boot, or C#’s ASP.NET, this should feel familiar — but everything is resolved at compile time with zero runtime reflection.</p>
-<h2 id="key-features"><a class="header" href="#key-features">Key features</a></h2>
+<p>The generated code calls <code>.layer(r2e::http::middleware::from_fn(require_api_key))</code> on that route’s handler.</p>
+<h3 id="multiple-middleware"><a class="header" href="#multiple-middleware">Multiple middleware</a></h3>
+<p>You can stack multiple <code>#[middleware]</code> attributes. They are applied in the order declared (outermost first):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/data")]
+#[middleware(log_request)]
+#[middleware(require_api_key)]
+async fn protected_data(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+    // log_request runs first, then require_api_key, then the handler
+    Json(self.service.list().await)
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="layer--arbitrary-tower-layers"><a class="header" href="#layer--arbitrary-tower-layers"><code>#[layer]</code> — Arbitrary Tower layers</a></h2>
+<p>While <code>#[middleware]</code> wraps a function via <code>from_fn</code>, <code>#[layer]</code> accepts any expression that evaluates to a Tower <code>Layer</code>. This lets you use layers from <code>tower-http</code> and other Tower-compatible crates directly.</p>
+<h3 id="basic-usage"><a class="header" href="#basic-usage">Basic usage</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use tower_http::timeout::TimeoutLayer;
+use std::time::Duration;
+
+#[routes]
+impl ApiController {
+    #[get("/slow")]
+    #[layer(TimeoutLayer::new(Duration::from_secs(5)))]
+    async fn slow_operation(&amp;self) -&gt; Json&lt;&amp;'static str&gt; {
+        // If this takes longer than 5 seconds, the layer returns a timeout error
+        Json("done")
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="using-tower-http-layers-with-status-codes"><a class="header" href="#using-tower-http-layers-with-status-codes">Using <code>tower-http</code> layers with status codes</a></h3>
+<p>The <code>TimeoutLayer</code> from <code>tower-http</code> supports a custom status code variant:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/slow")]
+#[layer(tower_http::timeout::TimeoutLayer::with_status_code(
+    r2e::http::StatusCode::REQUEST_TIMEOUT,
+    std::time::Duration::from_secs(2),
+))]
+async fn slow_endpoint(&amp;self) -&gt; Json&lt;&amp;'static str&gt; {
+    Json("done")
+}
+<span class="boring">}</span></code></pre>
+<h3 id="combining-with-middleware"><a class="header" href="#combining-with-middleware">Combining with <code>#[middleware]</code></a></h3>
+<p>Both attributes can be used on the same route. They are all applied as <code>.layer()</code> calls on the route handler:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/data")]
+#[middleware(require_api_key)]
+#[layer(TimeoutLayer::new(Duration::from_secs(10)))]
+async fn guarded_with_timeout(&amp;self) -&gt; Json&lt;Data&gt; {
+    Json(self.service.fetch().await)
+}
+<span class="boring">}</span></code></pre>
+<h3 id="common-layers"><a class="header" href="#common-layers">Common layers</a></h3>
+<p>Here are some frequently used Tower layers:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layer</th><th>Crate</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>TimeoutLayer</code></td><td><code>tower-http</code></td><td>Request timeout</td></tr>
+<tr><td><code>SetResponseHeaderLayer</code></td><td><code>tower-http</code></td><td>Add response headers</td></tr>
+<tr><td><code>CorsLayer</code></td><td><code>tower-http</code></td><td>CORS configuration</td></tr>
+<tr><td><code>CompressionLayer</code></td><td><code>tower-http</code></td><td>Response compression</td></tr>
+<tr><td><code>ConcurrencyLimitLayer</code></td><td><code>tower</code></td><td>Limit concurrent requests</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<h2 id="status--override-http-status-code"><a class="header" href="#status--override-http-status-code"><code>#[status]</code> — Override HTTP status code</a></h2>
+<p>By default, R2E assigns a conventional HTTP status code to each route method for OpenAPI documentation:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>HTTP method</th><th>Default status</th></tr>
+</thead>
+<tbody>
+<tr><td><code>GET</code></td><td>200</td></tr>
+<tr><td><code>POST</code></td><td>201</td></tr>
+<tr><td><code>PUT</code></td><td>200</td></tr>
+<tr><td><code>PATCH</code></td><td>200</td></tr>
+<tr><td><code>DELETE</code></td><td>204</td></tr>
+</tbody>
+</table>
+</div>
+<p>Use <code>#[status(N)]</code> to override the default when your endpoint deviates from these conventions.</p>
+<h3 id="when-to-use-it"><a class="header" href="#when-to-use-it">When to use it</a></h3>
+<p>The status code override affects the <strong>OpenAPI specification</strong> generated by <code>r2e-openapi</code>. It tells the documentation what the expected success status code is. It does not change the actual HTTP response your handler returns – that is still determined by your return type and <code>IntoResponse</code> implementation.</p>
+<h3 id="examples"><a class="header" href="#examples">Examples</a></h3>
+<p>Override a <code>DELETE</code> that returns a body (default is 204 No Content):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[delete("/users/{id}")]
+#[status(200)]
+async fn delete_user(
+    &amp;self,
+    Path(id): Path&lt;u64&gt;,
+) -&gt; JsonResult&lt;DeleteConfirmation&gt; {
+    let confirmation = self.service.delete(id).await?;
+    Ok(Json(confirmation))
+}
+<span class="boring">}</span></code></pre>
+<p>Override a <code>POST</code> that does not create a resource:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[post("/users/search")]
+#[status(200)]
+async fn search_users(
+    &amp;self,
+    body: Json&lt;SearchQuery&gt;,
+) -&gt; JsonResult&lt;Vec&lt;User&gt;&gt; {
+    let results = self.service.search(&amp;body).await?;
+    Ok(Json(results))
+}
+<span class="boring">}</span></code></pre>
+<p>Mark a <code>POST</code> endpoint that returns 202 Accepted for async processing:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[post("/jobs")]
+#[status(202)]
+async fn submit_job(
+    &amp;self,
+    body: Json&lt;JobRequest&gt;,
+) -&gt; JsonResult&lt;JobId&gt; {
+    let id = self.service.enqueue(body.0).await?;
+    Ok(Json(id))
+}
+<span class="boring">}</span></code></pre>
+<hr>
+<h2 id="returns--explicit-response-type-for-openapi"><a class="header" href="#returns--explicit-response-type-for-openapi"><code>#[returns]</code> — Explicit response type for OpenAPI</a></h2>
+<p>R2E’s OpenAPI generator inspects handler return types to generate response schemas. It can auto-detect types like <code>Json&lt;T&gt;</code>, <code>Result&lt;Json&lt;T&gt;, E&gt;</code>, <code>JsonResult&lt;T&gt;</code>, and <code>ApiResult&lt;T&gt;</code>. However, when you return an opaque type such as <code>impl IntoResponse</code>, the macro cannot determine the schema.</p>
+<p>Use <code>#[returns(T)]</code> to explicitly tell the OpenAPI generator what type the response body contains.</p>
+<h3 id="when-to-use-it-1"><a class="header" href="#when-to-use-it-1">When to use it</a></h3>
 <ul>
-<li><strong>Declarative controllers</strong> — <code>#[controller]</code> + <code>#[routes]</code> generate Axum handlers with zero boilerplate</li>
-<li><strong>Compile-time DI</strong> — <code>#[inject]</code> for services, <code>#[inject(identity)]</code> for request-scoped identity, <code>#[config("key")]</code> for configuration</li>
-<li><strong>JWT/OIDC security</strong> — <code>AuthenticatedUser</code> extractor with JWKS caching, role-based access via <code>#[roles("admin")]</code></li>
-<li><strong>Guards</strong> — Pre-auth and post-auth guards for custom authorization logic</li>
-<li><strong>Interceptors</strong> — AOP-style <code>#[intercept(...)]</code> for logging, timing, caching, and custom cross-cutting concerns</li>
-<li><strong>Rate limiting</strong> — Token-bucket rate limiting per user, per IP, or global</li>
-<li><strong>Event bus</strong> — Typed in-process pub/sub with <code>#[consumer]</code> for declarative event handlers</li>
-<li><strong>Scheduling</strong> — <code>#[scheduled(every = 30)]</code> and <code>#[scheduled(cron = "...")]</code> for background tasks</li>
-<li><strong>Managed resources</strong> — <code>#[managed]</code> for automatic transaction lifecycle</li>
-<li><strong>Database ergonomics</strong> — core pagination and managed SQLx/Diesel transactions</li>
-<li><strong>Validation</strong> — Automatic validation via <code>garde</code> crate — just derive <code>Validate</code> and use <code>Json&lt;T&gt;</code></li>
-<li><strong>OpenAPI</strong> — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI</li>
-<li><strong>Configuration</strong> — YAML + env var overlay with profile support</li>
-<li><strong>Static file serving</strong> — Embed frontend assets in the binary with SPA fallback via <code>EmbeddedFrontend</code> plugin</li>
-<li><strong>SSE &amp; WebSocket</strong> — Built-in <code>SseBroadcaster</code> and <code>WsRooms</code> for real-time communication</li>
-<li><strong>Testing</strong> — <code>TestApp</code> HTTP client wrapper, <code>TestJwt</code>, and <code>r2e test --sonarqube</code> coverage</li>
-<li><strong>CLI</strong> — <code>r2e new</code>, <code>r2e add</code>, <code>r2e dev</code>, <code>r2e generate</code>, <code>r2e test</code> for scaffolding and workflows</li>
+<li>Your handler returns <code>impl IntoResponse</code></li>
+<li>Your handler returns a custom wrapper type that the macro does not recognize</li>
+<li>You want the OpenAPI schema to reflect a different type than the literal return type</li>
 </ul>
-<h2 id="how-this-book-is-organized"><a class="header" href="#how-this-book-is-organized">How this book is organized</a></h2>
-<ul>
-<li><strong>Getting Started</strong> — Install R2E, create your first app, learn the project structure</li>
-<li><strong>Core Concepts</strong> — Controllers, DI, beans, plugins, configuration, error handling</li>
-<li><strong>Security</strong> — JWT authentication, guards, roles, rate limiting</li>
-<li><strong>Data Access</strong> — Entities, repositories, queries, pagination, transactions</li>
-<li><strong>Events and Scheduling</strong> — Event bus, consumers, background tasks</li>
-<li><strong>Advanced</strong> — Interceptors, custom guards/plugins, managed resources, lifecycle hooks, OpenAPI, performance</li>
-<li><strong>Testing</strong> — TestApp, TestJwt, integration patterns</li>
-<li><strong>Reference</strong> — Crate map, CLI reference, API docs</li>
-</ul>
+<h3 id="examples-1"><a class="header" href="#examples-1">Examples</a></h3>
+<p>Annotating a handler that returns <code>impl IntoResponse</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/widgets/{id}")]
+#[returns(Widget)]
+async fn get_widget(
+    &amp;self,
+    Path(id): Path&lt;u64&gt;,
+) -&gt; impl IntoResponse {
+    let widget = self.service.find(id).await;
+    Json(widget)
+}
+<span class="boring">}</span></code></pre>
+<p>The OpenAPI spec will show <code>Widget</code> as the response schema for this endpoint, just as if the handler returned <code>Json&lt;Widget&gt;</code> directly.</p>
+<p>Annotating a handler with a custom response builder:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/report")]
+#[returns(Report)]
+#[status(200)]
+async fn generate_report(&amp;self) -&gt; impl IntoResponse {
+    let report = self.service.build_report().await;
+    (StatusCode::OK, Json(report))
+}
+<span class="boring">}</span></code></pre>
+<h3 id="combining-with-status"><a class="header" href="#combining-with-status">Combining with <code>#[status]</code></a></h3>
+<p><code>#[returns]</code> and <code>#[status]</code> work well together for complete OpenAPI control:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[post("/orders")]
+#[status(202)]
+#[returns(OrderReceipt)]
+async fn place_order(
+    &amp;self,
+    body: Json&lt;OrderRequest&gt;,
+) -&gt; impl IntoResponse {
+    let receipt = self.service.place(body.0).await;
+    (StatusCode::ACCEPTED, Json(receipt))
+}
+<span class="boring">}</span></code></pre>
+<p>This produces an OpenAPI operation with a <code>202</code> response containing an <code>OrderReceipt</code> schema.</p>
+<hr>
+<h2 id="raw--marking-raw-axum-extractors"><a class="header" href="#raw--marking-raw-axum-extractors"><code>#[raw]</code> — Marking raw Axum extractors</a></h2>
+<p>All handler parameters that are not annotated with <code>#[inject(identity)]</code> or <code>#[managed]</code> are already treated as raw Axum extractors and passed directly to the generated handler function. The <code>#[raw]</code> attribute is a <strong>documentation-only marker</strong> – it has no effect on code generation. Its purpose is to make intent explicit when using uncommon extractors.</p>
+<h3 id="when-to-use-it-2"><a class="header" href="#when-to-use-it-2">When to use it</a></h3>
+<p>Use <code>#[raw]</code> when a handler parameter is an Axum extractor that might be confused with an R2E-managed type, or when you want to signal to other developers that the parameter is intentionally passed through as-is.</p>
+<h3 id="examples-2"><a class="header" href="#examples-2">Examples</a></h3>
+<p>Accessing client connection info:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::net::SocketAddr;
+use r2e::http::ConnectInfo;
+
+#[get("/")]
+async fn handler(
+    &amp;self,
+    #[raw] connect_info: ConnectInfo&lt;SocketAddr&gt;,
+    #[raw] headers: HeaderMap,
+) -&gt; Json&lt;&amp;'static str&gt; {
+    let addr = connect_info.0;
+    tracing::info!("Request from {}", addr);
+    Json("hello")
+}
+<span class="boring">}</span></code></pre>
+<p>Using a custom Axum extractor alongside injected dependencies:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[post("/upload")]
+async fn upload(
+    &amp;self,
+    #[inject(identity)] user: AuthenticatedUser,
+    #[raw] multipart: Multipart,
+) -&gt; Result&lt;Json&lt;UploadResult&gt;, HttpError&gt; {
+    // user is extracted via R2E identity injection
+    // multipart is extracted directly by Axum
+    self.service.handle_upload(&amp;user, multipart).await
+}
+<span class="boring">}</span></code></pre>
+<h3 id="without-raw"><a class="header" href="#without-raw">Without <code>#[raw]</code></a></h3>
+<p>The following is functionally identical – <code>#[raw]</code> changes nothing at runtime:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/")]
+async fn handler(
+    &amp;self,
+    headers: HeaderMap,
+    Path(id): Path&lt;u64&gt;,
+    Query(params): Query&lt;ListParams&gt;,
+) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+    // headers, Path, Query are all raw Axum extractors regardless
+    Json(self.service.list(id, params).await)
+}
+<span class="boring">}</span></code></pre>
+<p>The <code>#[raw]</code> marker simply makes it clear that a parameter is an escape hatch from R2E’s injection system, which is useful for code review and documentation.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../advanced/dev-mode.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started/installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../advanced/openapi.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -253,8 +477,11 @@ impl UserController {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../advanced/dev-mode.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started/installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../advanced/openapi.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -274,13 +501,13 @@ impl UserController {
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,63 +179,99 @@
                     <main>
                         <h1 id="dependency-injection"><a class="header" href="#dependency-injection">Dependency Injection</a></h1>
 <p>R2E uses compile-time dependency injection — no runtime reflection, no trait objects, no service locator. All dependencies are resolved at compile time through Rust’s type system.</p>
-<h2 id="three-injection-scopes"><a class="header" href="#three-injection-scopes">Three injection scopes</a></h2>
+<h2 id="four-injection-scopes"><a class="header" href="#four-injection-scopes">Four injection scopes</a></h2>
+<p>Two scopes are <strong>app-scoped</strong> — resolved once when the controller core is built
+at router-registration time — and two are <strong>request-scoped</strong> — extracted per
+request into a small stack façade that holds an <code>Arc</code> to the core:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Attribute</th><th>Scope</th><th>Mechanism</th><th>Cost per request</th></tr>
+<tr><th>Attribute</th><th>Scope</th><th>Lives on</th><th>Mechanism</th><th>Resolved</th></tr>
 </thead>
 <tbody>
-<tr><td><code>#[inject]</code></td><td>App</td><td><code>state.field.clone()</code></td><td>~10-50 ns (Arc)</td></tr>
-<tr><td><code>#[inject(identity)]</code></td><td>Request</td><td><code>FromRequestParts</code></td><td>~10-50 us (JWT)</td></tr>
-<tr><td><code>#[config("key")]</code></td><td>Config</td><td><code>config.get(key)</code></td><td>~50 ns</td></tr>
+<tr><td><code>#[inject]</code></td><td>App</td><td>Core</td><td><code>ctx.get::&lt;T&gt;()</code> (by type)</td><td>Once, at build</td></tr>
+<tr><td><code>#[config("key")]</code></td><td>App</td><td>Core</td><td><code>config.get(key)</code></td><td>Once, at build</td></tr>
+<tr><td><code>#[inject(identity)]</code></td><td>Request</td><td>Façade</td><td><code>FromRequestParts</code> (auth identity)</td><td>Per request</td></tr>
+<tr><td><code>#[inject(request)]</code></td><td>Request</td><td>Façade</td><td><code>FromRequestParts</code> (any value)</td><td>Per request</td></tr>
 </tbody>
 </table>
 </div>
+<p>The app-scoped fields are resolved a single time; the only per-request cost for a
+controller is one <code>Arc</code> clone of the core plus the <code>FromRequestParts</code> extraction
+of its request-scoped fields (which, for identity, includes JWT verification).</p>
 <h3 id="inject--app-scoped"><a class="header" href="#inject--app-scoped"><code>#[inject]</code> — App-scoped</a></h3>
-<p>Clones the field from the Axum state. The type must exist as a field in your state struct and implement <code>Clone + Send + Sync</code>:</p>
+<p>Resolves the field from the bean graph <strong>by type</strong>. The type must be present in
+the graph (via <code>.provide</code> or <code>.register</code>) and implement <code>Clone + Send + Sync</code>. A
+missing bean is a <strong>compile error naming the type</strong>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
     #[inject] pool: SqlitePool,
 }
 <span class="boring">}</span></code></pre>
 <p><strong>Tip:</strong> Wrap services in <code>Arc</code> for cheap clones (reference count increment instead of deep copy).</p>
-<h3 id="injectidentity--request-scoped"><a class="header" href="#injectidentity--request-scoped"><code>#[inject(identity)]</code> — Request-scoped</a></h3>
-<p>Extracts identity from the HTTP request (typically a JWT bearer token). The type must implement <code>Identity</code>:</p>
+<h3 id="injectidentity--request-scoped-auth"><a class="header" href="#injectidentity--request-scoped-auth"><code>#[inject(identity)]</code> — Request-scoped (auth)</a></h3>
+<p>Extracts identity from the HTTP request (typically a JWT bearer token). The type must implement <code>Identity</code> and drives guards and <code>#[roles(...)]</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
 }
 <span class="boring">}</span></code></pre>
-<p>When placed on a struct field, <strong>every</strong> handler in the controller requires authentication. For selective auth, use <a href="./controllers.html#mixed-controllers-param-level-identity">param-level identity</a>.</p>
-<h3 id="configkey--config-scoped"><a class="header" href="#configkey--config-scoped"><code>#[config("key")]</code> — Config-scoped</a></h3>
-<p>Resolves a value from <code>R2eConfig</code> at request time. Supported types: <code>String</code>, <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>Option&lt;T&gt;</code>:</p>
+<p>When placed on a struct field, <strong>every</strong> handler in the controller requires authentication. For selective auth, use <a href="./controllers.html#mixed-controllers-param-level-identity">param-level identity</a>. <code>Option&lt;AuthenticatedUser&gt;</code> makes the identity optional.</p>
+<h3 id="injectrequest--request-scoped-generic"><a class="header" href="#injectrequest--request-scoped-generic"><code>#[inject(request)]</code> — Request-scoped (generic)</a></h3>
+<p>For request-scoped values that are <strong>not</strong> the auth identity, use <code>#[inject(request)]</code>. Any type implementing <code>FromRequestParts&lt;S&gt;</code> (generic over the state) qualifies — for example a tenant id, a correlation/trace context, or a request-scoped handle:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
+pub struct UserController {
+    #[inject(request)] tenant: TenantId,
+    #[inject(request)] trace: Option&lt;TraceContext&gt;,
+}
+<span class="boring">}</span></code></pre>
+<p>Like identity, these live on the per-request façade and are isolated per request. <code>Option&lt;T&gt;</code> is supported. Unlike identity, <code>#[inject(request)]</code> does not participate in guards/roles. (Current limitation: <code>#[inject(request)]</code> fields are not modeled in OpenAPI yet.)</p>
+<h3 id="configkey--app-scoped-config"><a class="header" href="#configkey--app-scoped-config"><code>#[config("key")]</code> — App-scoped config</a></h3>
+<p>Resolves a value from <code>R2eConfig</code> when the core is built. Supported types: <code>String</code>, <code>i64</code>, <code>f64</code>, <code>bool</code>, <code>Option&lt;T&gt;</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[config("app.greeting")] greeting: String,
     #[config("app.max-retries")] max_retries: i64,
     #[config("app.optional-key")] maybe: Option&lt;String&gt;,
 }
 <span class="boring">}</span></code></pre>
-<p>Missing required config keys panic at request time with a message including the environment variable equivalent (e.g., <code>APP_GREETING</code>).</p>
-<h2 id="statefulconstruct"><a class="header" href="#statefulconstruct">StatefulConstruct</a></h2>
-<p>When a controller has no struct-level <code>#[inject(identity)]</code> fields, R2E generates a <code>StatefulConstruct&lt;S&gt;</code> implementation. This allows constructing the controller from state alone (without an HTTP request), which is required for:</p>
+<p>Missing required config keys fail with a message including the environment variable equivalent (e.g., <code>APP_GREETING</code>).</p>
+<h2 id="contextconstruct"><a class="header" href="#contextconstruct">ContextConstruct</a></h2>
+<p>R2E always generates a <code>ContextConstruct</code> implementation for the controller core.
+It builds the core <strong>from the resolved bean graph by type</strong> — <code>ctx.get::&lt;T&gt;()</code>
+per <code>#[inject]</code> field, plus <code>ctx.get::&lt;R2eConfig&gt;()</code> for <code>#[config]</code> fields:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl ContextConstruct for UserController {
+    fn from_context(ctx: &amp;BeanContext) -&gt; Self {
+        Self {
+            user_service: ctx.get::&lt;UserService&gt;(),
+            greeting:     ctx.get::&lt;R2eConfig&gt;().get::&lt;String&gt;("app.greeting").unwrap(),
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Because request-scoped fields (<code>#[inject(identity)]</code> and <code>#[inject(request)]</code>)
+are stripped out of the core and only ever live on the per-request façade, the
+core can always be constructed from the context alone (without an HTTP request).
+This is required for:</p>
 <ul>
 <li><strong>Event consumers</strong> (<code>#[consumer]</code>) — handle events outside HTTP context</li>
 <li><strong>Scheduled tasks</strong> (<code>#[scheduled]</code>) — run background jobs</li>
 </ul>
-<p>Controllers with struct-level <code>#[inject(identity)]</code> fields do <strong>not</strong> get <code>StatefulConstruct</code> — attempting to use them for consumers or scheduled tasks produces a compile error.</p>
-<p>The <a href="./controllers.html#mixed-controllers-param-level-identity">mixed controller pattern</a> (param-level <code>#[inject(identity)]</code>) preserves <code>StatefulConstruct</code> while still supporting authentication on individual endpoints.</p>
+<p>Consumers and scheduled methods run on the core and therefore <strong>cannot</strong> access
+request identity. A controller can freely combine struct-level identity for its
+HTTP routes with <code>#[consumer]</code>/<code>#[scheduled]</code> methods that use only core fields.</p>
+<p>The <a href="./controllers.html#mixed-controllers-param-level-identity">mixed controller pattern</a> (param-level <code>#[inject(identity)]</code>) is still recommended for mixed public/protected controllers, since it makes request scope explicit per endpoint.</p>
 
                     </main>
 

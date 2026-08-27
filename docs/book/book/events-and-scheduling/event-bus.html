@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,98 +178,247 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="event-bus"><a class="header" href="#event-bus">Event Bus</a></h1>
-<p>R2E provides an in-process typed pub/sub event bus for decoupling components.</p>
+<p>R2E provides a pluggable event bus for decoupling components. The <code>EventBus</code> trait defines the interface; <code>LocalEventBus</code> is the default in-process implementation. Events are dispatched by <code>TypeId</code> — no string-based routing, no downcasting, fully type-safe at compile time.</p>
+<p>Custom backends (Kafka, Redis, NATS) can implement the <code>EventBus</code> trait for remote event transport.</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <p>Enable the events feature:</p>
-<pre><code class="language-toml">r2e = { version = "0.1", features = ["events"] }
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["events"] }
 </code></pre>
 <h2 id="defining-events"><a class="header" href="#defining-events">Defining events</a></h2>
-<p>Events are plain Rust types. No trait implementation needed — just <code>Send + Sync + 'static</code>:</p>
+<p>Events must implement <code>Serialize + DeserializeOwned + Send + Sync + 'static</code>. The serde bounds are required by the <code>EventBus</code> trait for backend compatibility. <code>LocalEventBus</code> never actually serializes — zero overhead.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Debug, Clone)]
+</span>#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserCreatedEvent {
     pub user_id: u64,
     pub name: String,
     pub email: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OrderPlacedEvent {
     pub order_id: u64,
     pub total: f64,
 }
 <span class="boring">}</span></code></pre>
-<h2 id="creating-the-eventbus"><a class="header" href="#creating-the-eventbus">Creating the EventBus</a></h2>
+<h2 id="creating-a-localeventbus"><a class="header" href="#creating-a-localeventbus">Creating a LocalEventBus</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let event_bus = EventBus::new();
+</span>use r2e::r2e_events::{EventBus, LocalEventBus};
+
+// Default: 1024 concurrent handlers max
+let event_bus = LocalEventBus::new();
 <span class="boring">}</span></code></pre>
-<p>Add it to your state:</p>
+<p>Provide it as a bean so it can be injected by type:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub event_bus: EventBus,
-    // ...
+</span>let app = AppBuilder::new()
+    .provide(event_bus)
+    // ... other beans
+    ;
+<span class="boring">}</span></code></pre>
+<p>Any controller or bean can then inject it by type:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller]
+pub struct MyController {
+    #[inject] event_bus: LocalEventBus,
 }
 <span class="boring">}</span></code></pre>
+<p><code>LocalEventBus</code> is <code>Clone</code> — all clones share the same subscriber list.</p>
 <h2 id="subscribing-to-events"><a class="header" href="#subscribing-to-events">Subscribing to events</a></h2>
-<p>Subscribers receive events wrapped in <code>Arc&lt;E&gt;</code>:</p>
+<p>Handlers receive an <code>EventEnvelope&lt;E&gt;</code> (the event as <code>Arc&lt;E&gt;</code> plus its metadata as <code>Arc&lt;EventMetadata&gt;</code> — both shared across subscribers) and return a <code>HandlerResult</code> (<code>Ack</code> / <code>Nack</code>). <code>subscribe</code> returns a <code>SubscriptionHandle</code> you can later <code>unsubscribe()</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>event_bus.subscribe(|event: Arc&lt;UserCreatedEvent&gt;| async move {
+</span>event_bus.subscribe(|envelope: EventEnvelope&lt;UserCreatedEvent&gt;| async move {
+    let event = &amp;envelope.event;
     tracing::info!(user_id = event.user_id, "User created: {}", event.name);
+    HandlerResult::Ack
 }).await;
 <span class="boring">}</span></code></pre>
-<p>Multiple subscribers can listen to the same event type:</p>
+<blockquote>
+<p><strong>Note:</strong> the raw <code>subscribe</code> API works with <code>EventEnvelope&lt;E&gt;</code> / <code>HandlerResult</code>. Declarative <a href="./consumers.html"><code>#[consumer]</code></a> methods take a plain <code>Arc&lt;E&gt;</code> and may return <code>()</code> — the macro wraps them for you.</p>
+</blockquote>
+<p>Multiple subscribers can listen to the same event type. They all run concurrently:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>// Send welcome email
-event_bus.subscribe(|event: Arc&lt;UserCreatedEvent&gt;| async move {
-    send_welcome_email(&amp;event.email).await;
+event_bus.subscribe(|envelope: EventEnvelope&lt;UserCreatedEvent&gt;| async move {
+    send_welcome_email(&amp;envelope.event.email).await;
+    HandlerResult::Ack
 }).await;
 
 // Update analytics
-event_bus.subscribe(|event: Arc&lt;UserCreatedEvent&gt;| async move {
-    analytics.track_signup(event.user_id).await;
+event_bus.subscribe(|envelope: EventEnvelope&lt;UserCreatedEvent&gt;| async move {
+    analytics.track_signup(envelope.event.user_id).await;
+    HandlerResult::Ack
 }).await;
 <span class="boring">}</span></code></pre>
-<h2 id="emitting-events"><a class="header" href="#emitting-events">Emitting events</a></h2>
-<h3 id="fire-and-forget"><a class="header" href="#fire-and-forget">Fire-and-forget</a></h3>
+<h2 id="two-messaging-models"><a class="header" href="#two-messaging-models">Two messaging models</a></h2>
+<p>R2E’s bus follows the Vert.x split between two distinct interaction styles:</p>
+<ul>
+<li><strong><code>emit</code> — fan-out, fire-and-forget</strong> (Vert.x <code>publish</code>). Every subscriber receives a copy; the emitter never waits for handlers and cannot observe a reply. Use it for notifications, analytics, logging — anything where the caller does not depend on the outcome.</li>
+<li><strong><code>request</code> — point-to-point with one reply</strong> (Vert.x <code>request</code>). Exactly one responder handles the message and returns a value; the requester awaits that reply. Use it when you need an answer back.</li>
+</ul>
+<h2 id="emitting-events-fan-out"><a class="header" href="#emitting-events-fan-out">Emitting events (fan-out)</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>self.event_bus.emit(UserCreatedEvent {
     user_id: user.id,
     name: user.name.clone(),
     email: user.email.clone(),
-}).await;
+}).await?;
 <span class="boring">}</span></code></pre>
-<p>Handlers are spawned as concurrent tasks — <code>emit()</code> returns immediately.</p>
-<h3 id="wait-for-completion"><a class="header" href="#wait-for-completion">Wait for completion</a></h3>
+<p>Handlers are spawned as concurrent Tokio tasks. <code>emit()</code> returns once all handlers have been <strong>spawned</strong> (not completed) — it is fire-and-forget by design, so it never blocks on downstream work and never surfaces a handler’s result. Emitting respects the <a href="#concurrency-and-backpressure">concurrency limit</a>.</p>
+<h2 id="request-reply-point-to-point"><a class="header" href="#request-reply-point-to-point">Request-reply (point-to-point)</a></h2>
+<p>When you need a value back, use <code>request</code>/<code>respond</code> instead of <code>emit</code>. One responder is registered per request type; the requester awaits its reply.</p>
+<p>Define the request and reply as ordinary event types:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>self.event_bus.emit_and_wait(UserCreatedEvent {
-    user_id: user.id,
-    name: user.name.clone(),
-    email: user.email.clone(),
-}).await;
+</span>#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GreetRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GreetReply {
+    pub message: String,
+}
 <span class="boring">}</span></code></pre>
-<p><code>emit_and_wait()</code> blocks until all handlers complete. Use this when downstream processing must finish before responding.</p>
-<h2 id="type-safety"><a class="header" href="#type-safety">Type safety</a></h2>
-<p>Events are dispatched by <code>TypeId</code>. Each event type has its own set of subscribers. There’s no downcasting or string-based routing — everything is type-safe at compile time.</p>
+<p>Register the responder with <code>respond</code>. The handler receives the request and
+returns <code>Result&lt;Resp, E&gt;</code> where <code>E: Display</code> — the <code>Ok</code> value becomes the
+reply, and the displayed error reaches the requester as
+<code>EventBusError::Remote(msg)</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>event_bus.respond(|req: EventEnvelope&lt;GreetRequest&gt;| async move {
+    Ok(GreetReply { message: format!("Hello, {}!", req.event.name) })
+}).await?;
+<span class="boring">}</span></code></pre>
+<p>Send a request from anywhere with the injected bus and await the reply:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let reply: GreetReply = self.event_bus
+    .request(GreetRequest { name: "Alice".into() })
+    .await?;
+// reply.message == "Hello, Alice!"
+<span class="boring">}</span></code></pre>
+<h3 id="responder-via-consumer"><a class="header" href="#responder-via-consumer">Responder via <code>#[consumer]</code></a></h3>
+<p>A <code>#[consumer]</code> method with a <strong>non-<code>()</code> return type</strong> is registered as a responder automatically (Quarkus <code>@ConsumeEvent</code>-style — the return value IS the reply). A <code>-&gt; ()</code> consumer stays a plain fan-out subscriber:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl UserEventConsumer {
+    // Plain fan-out subscriber: `-&gt; ()`, registered via `subscribe`.
+    #[consumer(bus = "event_bus")]
+    async fn on_user_created(&amp;self, event: Arc&lt;UserCreatedEvent&gt;) {
+        tracing::info!(user_id = event.user_id, "user created");
+    }
+
+    // Responder: non-`()` return, registered via `respond`. The return
+    // value is delivered to `bus.request`.
+    #[consumer(bus = "event_bus")]
+    async fn greet(&amp;self, req: Arc&lt;GreetRequest&gt;) -&gt; GreetReply {
+        GreetReply { message: format!("Hello, {}!", req.name) }
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="one-responder-per-type"><a class="header" href="#one-responder-per-type">One responder per type</a></h3>
+<p><strong>At most one responder may be registered per request type per process.</strong> A second registration returns an error. This is deliberate: point-to-point means one reply, so there is no in-process round-robin. Across instances, every responder for a request topic joins the same deterministic broker queue/group/subscription, independent of the fan-out consumer-group setting, so each request goes to one responder.</p>
+<h3 id="timeouts-and-errors"><a class="header" href="#timeouts-and-errors">Timeouts and errors</a></h3>
+<p><code>request</code> applies a <strong>30-second default timeout</strong> (<code>DEFAULT_REQUEST_TIMEOUT</code>). Use <code>request_with</code> and <code>RequestOptions</code> to override the timeout or attach explicit metadata:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::time::Duration;
+use r2e::r2e_events::RequestOptions;
+
+let reply: GreetReply = self.event_bus
+    .request_with(
+        GreetRequest { name: "Alice".into() },
+        RequestOptions::new().with_timeout(Duration::from_secs(5)),
+    )
+    .await?;
+<span class="boring">}</span></code></pre>
+<p><code>request</code> fails with an <code>EventBusError</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>NoResponder</code></td><td>No responder is registered for the request type. <strong>Local bus only</strong> — distributed backends can’t see remote registrations, so an absent responder surfaces as <code>RequestTimeout</code> instead.</td></tr>
+<tr><td><code>RequestTimeout</code></td><td>No reply arrived within the timeout.</td></tr>
+<tr><td><code>Remote(msg)</code></td><td>The responder ran but returned <code>Err(msg)</code> (the Vert.x <code>ReplyException</code> equivalent).</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>respond</code> returns a <code>ResponderHandle</code>; call <code>unregister()</code> on it to remove the responder so a different one can take its place.</p>
+<h3 id="distributed-reply-topic-retention"><a class="header" href="#distributed-reply-topic-retention">Distributed reply-topic retention</a></h3>
+<p>Kafka, Pulsar, and Iggy route replies through an instance-private topic named
+<code>&lt;prefix&gt;.replies.&lt;instance-id&gt;</code>. A new topic is used after each process
+restart, so old reply topics need short broker-side retention:</p>
+<ul>
+<li><strong>Kafka:</strong> auto-created reply topics receive <code>retention.ms=300000</code> (five
+minutes) automatically. If <code>auto_create</code> is disabled, apply the same setting
+in your topic provisioning.</li>
+<li><strong>Pulsar:</strong> configure a short namespace <code>messageTTL</code> and a
+<code>subscriptionExpirationTimeMinutes</code> policy, or use non-persistent topics for
+replies where appropriate.</li>
+<li><strong>Iggy:</strong> configure topic expiry/TTL when supported by the deployed version,
+or periodically remove stale <code>.replies.</code> topics that have no active consumer.</li>
+</ul>
+<p>The retention window should remain longer than the maximum request timeout so
+late replies can still be delivered while their requester is alive.</p>
+<h2 id="concurrency-and-backpressure"><a class="header" href="#concurrency-and-backpressure">Concurrency and backpressure</a></h2>
+<p>By default, <code>LocalEventBus::new()</code> limits concurrently executing handlers to <strong>1024</strong> (the value of <code>DEFAULT_MAX_CONCURRENCY</code>). When the limit is reached, <code>emit()</code> blocks until a handler slot becomes available. This prevents unbounded memory growth under heavy load.</p>
+<h3 id="custom-concurrency-limit"><a class="header" href="#custom-concurrency-limit">Custom concurrency limit</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// Allow at most 50 concurrent handlers
+let bus = LocalEventBus::with_concurrency(50);
+<span class="boring">}</span></code></pre>
+<p>Choose a limit based on what your handlers do:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Handler type</th><th>Suggested limit</th><th>Rationale</th></tr>
+</thead>
+<tbody>
+<tr><td>CPU-bound (serialization, hashing)</td><td>Low (10–50)</td><td>Avoids starving the Tokio runtime</td></tr>
+<tr><td>I/O-bound (HTTP calls, DB writes)</td><td>Medium (100–500)</td><td>Limited by downstream capacity</td></tr>
+<tr><td>Lightweight (logging, counters)</td><td>High (1000+)</td><td>Default is usually fine</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="unbounded-mode"><a class="header" href="#unbounded-mode">Unbounded mode</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let bus = LocalEventBus::unbounded();
+<span class="boring">}</span></code></pre>
+<p>Disables backpressure entirely. Every handler is spawned immediately regardless of load. Use with caution — if events are emitted faster than handlers can process them, memory usage grows without bound.</p>
+<h2 id="type-isolation"><a class="header" href="#type-isolation">Type isolation</a></h2>
+<p>Each event type has its own subscriber list, keyed by <code>TypeId</code>. Emitting an <code>OrderPlacedEvent</code> never triggers handlers subscribed to <code>UserCreatedEvent</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>bus.subscribe(|_: EventEnvelope&lt;UserCreatedEvent&gt;| async { HandlerResult::Ack }).await;
+bus.emit(OrderPlacedEvent { order_id: 1, total: 99.0 }).await;
+// Nothing happens — different type
+<span class="boring">}</span></code></pre>
+<h2 id="panic-isolation"><a class="header" href="#panic-isolation">Panic isolation</a></h2>
+<p>If a handler panics, the panic is caught by the Tokio task. Other handlers for the same event continue running, and the bus remains operational.</p>
+<p>This means a single misbehaving handler cannot bring down the event bus.</p>
 <h2 id="in-services"><a class="header" href="#in-services">In services</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[derive(Clone)]
 pub struct UserService {
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
     // ...
 }
 
 #[bean]
 impl UserService {
-    pub fn new(event_bus: EventBus) -&gt; Self {
+    pub fn new(event_bus: LocalEventBus) -&gt; Self {
         Self { event_bus }
     }
 
@@ -287,9 +436,72 @@ impl UserService {
     }
 }
 <span class="boring">}</span></code></pre>
+<h2 id="api-reference"><a class="header" href="#api-reference">API reference</a></h2>
+<h3 id="eventbus-trait"><a class="header" href="#eventbus-trait"><code>EventBus</code> trait</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Method</th><th>Signature</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>subscribe</code></td><td><code>async fn subscribe&lt;E, F, Fut&gt;(&amp;self, handler: F)</code></td><td>Register a fan-out handler for event type <code>E</code></td></tr>
+<tr><td><code>emit</code></td><td><code>async fn emit&lt;E&gt;(&amp;self, event: E)</code></td><td>Fire-and-forget fan-out: spawn handlers, return immediately</td></tr>
+<tr><td><code>request</code></td><td><code>async fn request&lt;Req, Resp&gt;(&amp;self, req: Req) -&gt; Result&lt;Resp, _&gt;</code></td><td>Point-to-point: await one responder’s reply (30s default timeout)</td></tr>
+<tr><td><code>request_with</code></td><td><code>async fn request_with&lt;Req, Resp&gt;(&amp;self, req: Req, options: RequestOptions)</code></td><td><code>request</code> with explicit timeout/metadata</td></tr>
+<tr><td><code>respond</code></td><td><code>async fn respond&lt;Req, Resp, F, Fut&gt;(&amp;self, handler: F)</code></td><td>Register the responder for <code>Req</code> (one per type per process)</td></tr>
+<tr><td><code>clear</code></td><td><code>async fn clear(&amp;self)</code></td><td>Remove all subscribers</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Type constraints:</strong></p>
+<ul>
+<li><code>subscribe</code>: <code>E: DeserializeOwned + Send + Sync + 'static</code></li>
+<li><code>emit</code>: <code>E: Serialize + Send + Sync + 'static</code></li>
+<li><code>request</code>: <code>Req: Serialize + Send + Sync + 'static</code>, <code>Resp: DeserializeOwned + Send + 'static</code></li>
+<li><code>respond</code>: <code>Req: DeserializeOwned + Send + Sync + 'static</code>, <code>Resp: Serialize + Send + 'static</code>; handler returns <code>Result&lt;Resp, E&gt;</code> with <code>E: Display + Send + 'static</code></li>
+<li>Handler <code>F</code>: <code>Fn(EventEnvelope&lt;E&gt;) -&gt; Fut + Send + Sync + 'static</code></li>
+<li>Future <code>Fut</code>: <code>Future&lt;Output = HandlerResult&gt; + Send + 'static</code></li>
+</ul>
+<h3 id="localeventbus-default-implementation"><a class="header" href="#localeventbus-default-implementation"><code>LocalEventBus</code> (default implementation)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Constructor</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>LocalEventBus::new()</code></td><td>Default concurrency limit (1024)</td></tr>
+<tr><td><code>LocalEventBus::with_concurrency(n)</code></td><td>Custom concurrency limit</td></tr>
+<tr><td><code>LocalEventBus::unbounded()</code></td><td>No concurrency limit</td></tr>
+<tr><td><code>concurrency_limit()</code></td><td>Current limit, or <code>None</code> if unbounded</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="custom-backends"><a class="header" href="#custom-backends">Custom backends</a></h3>
+<p>Implement the <code>EventBus</code> trait for remote transport:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone)]
+pub struct KafkaEventBus { /* ... */ }
+
+impl EventBus for KafkaEventBus {
+    fn subscribe&lt;E, F, Fut&gt;(
+        &amp;self,
+        handler: F,
+    ) -&gt; impl Future&lt;Output = Result&lt;SubscriptionHandle, EventBusError&gt;&gt; + Send
+    where E: DeserializeOwned + Send + Sync + 'static, /* ... */
+    { /* consume from Kafka topic, deserialize, dispatch */ }
+
+    fn emit&lt;E&gt;(&amp;self, event: E) -&gt; impl Future&lt;Output = Result&lt;(), EventBusError&gt;&gt; + Send
+    where E: Serialize + Send + Sync + 'static
+    { /* serialize and produce to Kafka topic */ }
+
+    // ...
+}
+<span class="boring">}</span></code></pre>
 <h2 id="next-steps"><a class="header" href="#next-steps">Next steps</a></h2>
 <ul>
 <li><a href="./consumers.html">Declarative Consumers</a> — use <code>#[consumer]</code> for cleaner event handling</li>
+<li><a href="./scheduling.html">Scheduling</a> — run background tasks on a timer</li>
 </ul>
 
                     </main>

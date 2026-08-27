@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>TestApp - R2E — Rust Enterprise Edition</title>
+        <title>Guards and Identity - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -177,332 +177,292 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="testapp"><a class="header" href="#testapp">TestApp</a></h1>
-<p><code>TestApp</code> provides an HTTP client for integration testing without starting a TCP server.</p>
-<h2 id="creating-a-testapp"><a class="header" href="#creating-a-testapp">Creating a TestApp</a></h2>
+                        <h1 id="guards-and-identity"><a class="header" href="#guards-and-identity">Guards and Identity</a></h1>
+<blockquote>
+<p><strong>Status:</strong> The guard and identity infrastructure is implemented in <code>r2e-grpc</code> as runtime types, but <strong>not yet wired into the <code>#[grpc_routes]</code> macro</strong>. Currently, only <code>#[intercept]</code> is supported as a method decorator. <code>#[roles]</code>, <code>#[guard]</code>, and <code>#[inject(identity)]</code> will be enabled in a future release.</p>
+</blockquote>
+<h2 id="manual-identity-extraction-available-now"><a class="header" href="#manual-identity-extraction-available-now">Manual identity extraction (available now)</a></h2>
+<p>While <code>#[inject(identity)]</code> is not yet available as a macro decorator, you can extract identity manually using the runtime functions:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_test::TestApp;
+</span>use r2e::r2e_grpc::{extract_bearer_token, GrpcIdentityExtractor};
 
-let app = TestApp::from_builder(
-    AppBuilder::new()
-        .build_state()
-        .await
-        .register_controller::&lt;UserController&gt;(),
-);
-<span class="boring">}</span></code></pre>
-<h2 id="http-methods"><a class="header" href="#http-methods">HTTP methods</a></h2>
-<p>All methods return a <code>TestRequest</code> builder. Call <code>.send().await</code> to execute the request.</p>
-<h3 id="simple-requests"><a class="header" href="#simple-requests">Simple requests</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// GET
-let resp = app.get("/users").send().await;
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+impl GreeterService {
+    async fn say_hello(
+        &amp;self,
+        request: tonic::Request&lt;HelloRequest&gt;,
+    ) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+        let metadata = request.metadata();
+        let claims = GrpcIdentityExtractor::extract_claims(metadata, &amp;self.jwt_validator).await?;
+        // `claims` is `r2e::StandardClaims` — the same typed claim set HTTP uses.
+        let tenant = claims.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("-");
 
-// POST with JSON
-let resp = app.post("/users")
-    .json(&amp;serde_json::json!({
-        "name": "Alice",
-        "email": "alice@example.com"
-    }))
-    .send()
-    .await;
-
-// PUT with JSON
-let resp = app.put("/users/1")
-    .json(&amp;updated_user)
-    .send()
-    .await;
-
-// PATCH
-let resp = app.patch("/users/1")
-    .json(&amp;partial_update)
-    .send()
-    .await;
-
-// DELETE
-let resp = app.delete("/users/1").send().await;
+        Ok(tonic::Response::new(HelloReply {
+            message: format!("Hello {} ({tenant})!", claims.sub),
+        }))
+    }
+}
 <span class="boring">}</span></code></pre>
-<h3 id="authenticated-requests"><a class="header" href="#authenticated-requests">Authenticated requests</a></h3>
-<p>Use <code>.bearer()</code> to add a Bearer token:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let jwt = TestJwt::new();
-let token = jwt.token("user-1", &amp;["user"]);
-
-let resp = app.get("/users").bearer(&amp;token).send().await;
-
-let resp = app.post("/users")
-    .json(&amp;body)
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="custom-headers"><a class="header" href="#custom-headers">Custom headers</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users")
-    .header("X-Request-Id", "test-123")
-    .header("Accept-Language", "fr")
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="query-parameters"><a class="header" href="#query-parameters">Query parameters</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Single parameter
-let resp = app.get("/users")
-    .query("page", "1")
-    .query("size", "20")
-    .send()
-    .await;
-
-// Multiple parameters at once
-let resp = app.get("/search")
-    .queries([("q", "rust"), ("lang", "en")])
-    .send()
-    .await;
-
-// Works with existing query string in the path
-let resp = app.get("/users?active=true")
-    .query("page", "1")
-    .send()
-    .await;
-// Result: /users?active=true&amp;page=1
-<span class="boring">}</span></code></pre>
-<h3 id="form-data"><a class="header" href="#form-data">Form data</a></h3>
-<p>Send URL-encoded form bodies:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.post("/login")
-    .form(&amp;[("username", "alice"), ("password", "secret")])
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="cookies"><a class="header" href="#cookies">Cookies</a></h3>
-<p>Add cookies to a request:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/dashboard")
-    .cookie("session", "abc123")
-    .cookie("theme", "dark")
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="arbitrary-method"><a class="header" href="#arbitrary-method">Arbitrary method</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use http::Method;
-
-let resp = app.request(Method::OPTIONS, "/users").send().await;
-<span class="boring">}</span></code></pre>
-<h2 id="testresponse"><a class="header" href="#testresponse">TestResponse</a></h2>
-<h3 id="status-assertions"><a class="header" href="#status-assertions">Status assertions</a></h3>
-<p>Common status codes have named helpers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_ok();                    // 200
-resp.assert_created();               // 201
-resp.assert_no_content();            // 204
-resp.assert_bad_request();           // 400
-resp.assert_unauthorized();          // 401
-resp.assert_forbidden();             // 403
-resp.assert_not_found();             // 404
-resp.assert_conflict();              // 409
-resp.assert_unprocessable();         // 422
-resp.assert_too_many_requests();     // 429
-resp.assert_internal_server_error(); // 500
-resp.assert_status(StatusCode::IM_A_TEAPOT); // any status
-<span class="boring">}</span></code></pre>
-<p>Assertion messages include the response body for easier debugging:</p>
-<pre><code>Expected 200 OK, got 403 Forbidden
-Body: {"error":"Forbidden"}
-</code></pre>
-<h3 id="json-path-assertions"><a class="header" href="#json-path-assertions">JSON-path assertions</a></h3>
-<p>Assert directly on nested values in the response body using dot-separated paths,
-array indices <code>[N]</code>, and <code>len()</code>/<code>size()</code> terminals:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>app.get("/filter/1")
-    .bearer(&amp;token)
-    .send()
-    .await
-    .assert_ok()
-    .assert_json_path("tagGroups.len()", 2)
-    .assert_json_path("tagGroups[0].name", "test Group")
-    .assert_json_path("tagGroups[0].tags.len()", 1)
-    .assert_json_path("meta.page", 1)
-    .assert_json_path("active", true);
-<span class="boring">}</span></code></pre>
-<h4 id="path-syntax"><a class="header" href="#path-syntax">Path syntax</a></h4>
+<p>This requires the controller to have <code>#[inject] jwt_validator: Arc&lt;JwtClaimsValidator&gt;</code>, and <code>r2e-security</code>’s <code>grpc</code> feature — turned on automatically when <code>r2e</code> is built with both <code>grpc</code> and <code>security</code> — which implements <code>JwtClaimsValidatorLike</code> for <code>JwtClaimsValidator</code>.</p>
+<h2 id="runtime-types-available-now"><a class="header" href="#runtime-types-available-now">Runtime types (available now)</a></h2>
+<p>The following types are exported by <code>r2e-grpc</code> and ready for use:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Path</th><th>Resolves to</th></tr>
+<tr><th>Type</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>"name"</code></td><td><code>root["name"]</code></td></tr>
-<tr><td><code>"user.email"</code></td><td><code>root["user"]["email"]</code></td></tr>
-<tr><td><code>"users[0]"</code></td><td><code>root["users"][0]</code></td></tr>
-<tr><td><code>"users[0].name"</code></td><td><code>root["users"][0]["name"]</code></td></tr>
-<tr><td><code>"users.len()"</code></td><td>length of <code>root["users"]</code> array</td></tr>
-<tr><td><code>"groups[0].tags.size()"</code></td><td>length of <code>root["groups"][0]["tags"]</code></td></tr>
-<tr><td><code>"meta.len()"</code></td><td>number of keys in <code>root["meta"]</code> object</td></tr>
+<tr><td><code>GrpcGuard&lt;I&gt;</code></td><td>Guard trait for gRPC methods (analog of <code>Guard&lt;I&gt;</code> for HTTP)</td></tr>
+<tr><td><code>GrpcGuardContext&lt;'a, I&gt;</code></td><td>Context passed to guards (service name, method name, metadata, identity)</td></tr>
+<tr><td><code>GrpcRolesGuard</code></td><td>Built-in guard that checks required roles</td></tr>
+<tr><td><code>GrpcRoleBasedIdentity</code></td><td>Extension trait for identity types that carry roles</td></tr>
+<tr><td><code>GrpcIdentityExtractor</code></td><td>JWT extraction from gRPC metadata</td></tr>
+<tr><td><code>JwtClaimsValidatorLike</code></td><td>Trait abstracting JWT validation → <code>StandardClaims</code> (implemented by <code>JwtClaimsValidator</code> under <code>r2e-security/grpc</code>; blanket impl for <code>Arc&lt;T&gt;</code>)</td></tr>
 </tbody>
 </table>
 </div>
-<h4 id="custom-predicates"><a class="header" href="#custom-predicates">Custom predicates</a></h4>
+<h3 id="guard-context"><a class="header" href="#guard-context">Guard context</a></h3>
+<p><code>GrpcGuardContext</code> provides access to service metadata and identity:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field/Method</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>service_name</code></td><td><code>&amp;'static str</code></td><td>Proto service name</td></tr>
+<tr><td><code>method_name</code></td><td><code>&amp;'static str</code></td><td>RPC method name</td></tr>
+<tr><td><code>metadata</code></td><td><code>&amp;MetadataMap</code></td><td>gRPC request metadata</td></tr>
+<tr><td><code>identity</code></td><td><code>Option&lt;&amp;I&gt;</code></td><td>Authenticated identity (if extracted)</td></tr>
+<tr><td><code>identity_sub()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>Subject from identity</td></tr>
+<tr><td><code>identity_email()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>Email from identity</td></tr>
+<tr><td><code>identity_claims()</code></td><td><code>Option&lt;&amp;StandardClaims&gt;</code></td><td>Typed JWT claims</td></tr>
+</tbody>
+</table>
+</div>
+<hr>
+<p>The following sections document the <strong>planned API</strong> for when macro support is enabled. The runtime types above already support these patterns — only the macro integration is pending.</p>
+<hr>
+<h2 id="identity-extraction-planned"><a class="header" href="#identity-extraction-planned">Identity extraction (planned)</a></h2>
+<p><code>#[inject(identity)]</code> on method parameters will extract authenticated identity from gRPC metadata:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>resp.assert_json_path_fn("scores", |v| {
-    v.as_array().unwrap().iter().all(|s| s.as_f64().unwrap() &gt; 0.0)
-});
-<span class="boring">}</span></code></pre>
-<h4 id="extracting-values"><a class="header" href="#extracting-values">Extracting values</a></h4>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let name: String = resp.json_path("users[0].name");
-let count: usize = resp.json_path("items.len()");
-<span class="boring">}</span></code></pre>
-<h3 id="json-contains-partial-matching"><a class="header" href="#json-contains-partial-matching">JSON contains (partial matching)</a></h3>
-<p>Assert that the response JSON contains a subset of keys/values:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Object subset matching
-resp.assert_json_contains(serde_json::json!({
-    "name": "Alice",
-    "status": "active"
-}));
-// Passes even if response has extra fields like "id", "email", etc.
-
-// Array subset matching — each expected element must exist somewhere in the actual array
-resp.assert_json_contains(serde_json::json!({
-    "tags": ["rust", "api"]
-}));
-// Passes even if actual tags are ["rust", "web", "api"]
-
-// Partial matching at a specific path
-resp.assert_json_path_contains("users[0]", serde_json::json!({"name": "Alice"}));
-<span class="boring">}</span></code></pre>
-<p>The <code>json_contains</code> function is also exported for custom assertions:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e_test::json_contains;
-
-assert!(json_contains(&amp;actual, &amp;expected));
-<span class="boring">}</span></code></pre>
-<h3 id="json-shape-validation"><a class="header" href="#json-shape-validation">JSON shape validation</a></h3>
-<p>Assert the response matches a type structure without checking exact values.
-Schema values serve as type exemplars (<code>0</code> = number, <code>""</code> = string, <code>true</code> = boolean):</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_json_shape(serde_json::json!({
-    "id": 0,
-    "name": "",
-    "active": true,
-    "tags": [""],
-    "profile": {
-        "bio": "",
-        "verified": true
+</span>#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+impl GreeterService {
+    async fn say_hello(
+        &amp;self,
+        request: tonic::Request&lt;HelloRequest&gt;,
+        #[inject(identity)] user: AuthenticatedUser,
+    ) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+        let reply = HelloReply {
+            message: format!("Hello {}, you are {}!", request.get_ref().name, user.sub),
+        };
+        Ok(tonic::Response::new(reply))
     }
-}));
-<span class="boring">}</span></code></pre>
-<h3 id="header-assertions"><a class="header" href="#header-assertions">Header assertions</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_header("content-type", "application/json");
-resp.assert_header_exists("x-request-id");
-<span class="boring">}</span></code></pre>
-<h3 id="header-access"><a class="header" href="#header-access">Header access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let content_type = resp.header("content-type");
-assert_eq!(content_type, Some("application/json"));
-<span class="boring">}</span></code></pre>
-<h3 id="cookie-access"><a class="header" href="#cookie-access">Cookie access</a></h3>
-<p>Read cookies from <code>Set-Cookie</code> response headers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Get a specific cookie value
-let session = resp.cookie("session_id");
-assert_eq!(session, Some("abc123".to_string()));
-
-// Get all Set-Cookie header values
-let all_cookies = resp.cookies();
-<span class="boring">}</span></code></pre>
-<h3 id="body-access"><a class="header" href="#body-access">Body access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = resp.json();
-let body: String = resp.text();
-<span class="boring">}</span></code></pre>
-<h3 id="chaining"><a class="header" href="#chaining">Chaining</a></h3>
-<p>All assertions return <code>&amp;self</code> for chaining:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = app
-    .get("/users")
-    .bearer(&amp;token)
-    .send()
-    .await
-    .assert_ok()
-    .assert_json_path("meta.total", 3)
-    .json();
-<span class="boring">}</span></code></pre>
-<blockquote>
-<p><strong>Note:</strong> Assertions return <code>&amp;Self</code> (a reference). If you need to use the response after an assertion, bind the response first:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users").bearer(&amp;token).send().await;
-resp.assert_ok();
-let users: Vec&lt;User&gt; = resp.json();
-<span class="boring">}</span></code></pre>
-</blockquote>
-<h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>#[r2e::test(app = my_app::MyApp)]
-async fn crud_flow(app: TestApp) {
-    // List users
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 2);
-
-    // Create user
-    app.post("/users")
-        .as_user("user-1", &amp;["admin"])
-        .json(&amp;serde_json::json!({
-            "name": "Charlie",
-            "email": "charlie@example.com"
-        }))
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("name", "Charlie");
-
-    // Verify creation
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 3);
 }
 <span class="boring">}</span></code></pre>
+<p>Identity is extracted from the <code>authorization</code> metadata key using the <code>Bearer</code> scheme, then validated with <code>JwtClaimsValidator</code> — the same validator used for HTTP requests.</p>
+<h3 id="optional-identity-planned"><a class="header" href="#optional-identity-planned">Optional identity (planned)</a></h3>
+<p>Use <code>Option&lt;AuthenticatedUser&gt;</code> for methods that work with or without authentication:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>async fn say_hello(
+    &amp;self,
+    request: tonic::Request&lt;HelloRequest&gt;,
+    #[inject(identity)] user: Option&lt;AuthenticatedUser&gt;,
+) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+    let greeting = match &amp;user {
+        Some(u) =&gt; format!("Hello {}!", u.sub),
+        None =&gt; "Hello anonymous!".to_string(),
+    };
+    Ok(tonic::Response::new(HelloReply { message: greeting }))
+}
+<span class="boring">}</span></code></pre>
+<h3 id="how-extraction-works"><a class="header" href="#how-extraction-works">How extraction works</a></h3>
+<p>The extraction pipeline (implemented in <code>r2e_grpc::identity</code>):</p>
+<ol>
+<li>Read <code>authorization</code> metadata from <code>tonic::Request</code></li>
+<li>Strip the <code>Bearer </code> prefix (supports <code>Bearer</code> and <code>bearer</code>)</li>
+<li>Validate the token with <code>JwtClaimsValidator</code> (the <code>Arc&lt;JwtClaimsValidator&gt;</code> bean read from the resolved graph)</li>
+<li>Build <code>AuthenticatedUser</code> from the validated claims</li>
+</ol>
+<p>If validation fails, the method returns <code>Status::unauthenticated</code> before the handler body runs.</p>
+<h2 id="role-based-guards-planned"><a class="header" href="#role-based-guards-planned">Role-based guards (planned)</a></h2>
+<p><code>#[roles("...")]</code> will restrict methods to specific roles:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+impl GreeterService {
+    #[roles("admin")]
+    async fn say_hello_admin(
+        &amp;self,
+        request: tonic::Request&lt;HelloRequest&gt;,
+    ) -&gt; Result&lt;tonic::Response&lt;HelloReply&gt;, tonic::Status&gt; {
+        // Only reachable if the caller has the "admin" role
+        Ok(tonic::Response::new(HelloReply {
+            message: format!("[ADMIN] Hello {}!", request.get_ref().name),
+        }))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>The built-in <code>GrpcRolesGuard</code> checks roles via the <code>GrpcRoleBasedIdentity</code> trait. If the caller lacks the required role, the guard returns <code>Status::permission_denied("Insufficient roles")</code>.</p>
+<h2 id="custom-guards-planned"><a class="header" href="#custom-guards-planned">Custom guards (planned)</a></h2>
+<p>Implement the <code>GrpcGuard</code> trait for custom authorization logic:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::future::Future;
+use r2e::r2e_grpc::{GrpcGuard, GrpcGuardContext};
+use r2e::Identity;
+use tonic::Status;
+
+struct TenantGuard;
+
+impl&lt;I: Identity&gt; GrpcGuard&lt;I&gt; for TenantGuard {
+    fn check(
+        &amp;self,
+        ctx: &amp;GrpcGuardContext&lt;'_, I&gt;,
+    ) -&gt; impl Future&lt;Output = Result&lt;(), Status&gt;&gt; + Send {
+        async move {
+            let tenant = ctx.metadata
+                .get("x-tenant-id")
+                .and_then(|v| v.to_str().ok());
+
+            match tenant {
+                Some(_) =&gt; Ok(()),
+                None =&gt; Err(Status::permission_denied("Missing tenant ID")),
+            }
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Once enabled, apply with <code>#[guard(...)]</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[guard(TenantGuard)]
+async fn create_user(
+    &amp;self,
+    request: tonic::Request&lt;CreateUserRequest&gt;,
+) -&gt; Result&lt;tonic::Response&lt;UserResponse&gt;, tonic::Status&gt; {
+    // ...
+}
+<span class="boring">}</span></code></pre>
+<h3 id="guards-that-need-beans-planned"><a class="header" href="#guards-that-need-beans-planned">Guards that need beans (planned)</a></h3>
+<p>Unlike HTTP guards, gRPC guards do <strong>not</strong> go through <code>DecoratorSpec</code> — they are
+plain <code>GrpcGuard&lt;I&gt;</code> implementations. A guard that needs a database pool (or any
+service) holds it as a <strong>field</strong>, constructed by the caller who wires the guard
+onto the service:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>struct ActiveUserGuard {
+    pool: SqlitePool,   // resolved by the caller, held as a field
+}
+
+impl&lt;I: Identity&gt; GrpcGuard&lt;I&gt; for ActiveUserGuard {
+    fn check(
+        &amp;self,
+        ctx: &amp;GrpcGuardContext&lt;'_, I&gt;,
+    ) -&gt; impl Future&lt;Output = Result&lt;(), Status&gt;&gt; + Send {
+        async move {
+            let sub = ctx.identity_sub().unwrap_or("");
+
+            let active = sqlx::query_scalar::&lt;_, bool&gt;(
+                "SELECT active FROM users WHERE sub = ?"
+            )
+            .bind(sub)
+            .fetch_optional(&amp;self.pool)
+            .await
+            .map_err(|_| Status::internal("Database error"))?;
+
+            match active {
+                Some(true) =&gt; Ok(()),
+                _ =&gt; Err(Status::permission_denied("Account suspended")),
+            }
+        }
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="combining-guards-planned"><a class="header" href="#combining-guards-planned">Combining guards (planned)</a></h3>
+<p>Guards will be stackable and execute in order:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[roles("editor")]
+#[guard(TenantGuard)]
+#[guard(ActiveUserGuard)]
+async fn update_user(
+    &amp;self,
+    request: tonic::Request&lt;UpdateUserRequest&gt;,
+) -&gt; Result&lt;tonic::Response&lt;UserResponse&gt;, tonic::Status&gt; {
+    // Reached only if all guards pass
+}
+<span class="boring">}</span></code></pre>
+<p>Execution order: roles check first, then custom guards in declaration order. Short-circuits on first failure.</p>
+<h2 id="http-vs-grpc-comparison"><a class="header" href="#http-vs-grpc-comparison">HTTP vs gRPC comparison</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>HTTP</th><th>gRPC</th></tr>
+</thead>
+<tbody>
+<tr><td>Guard trait</td><td><code>Guard&lt;I&gt;</code></td><td><code>GrpcGuard&lt;I&gt;</code></td></tr>
+<tr><td>Error type</td><td><code>Response</code> (HTTP response)</td><td><code>tonic::Status</code></td></tr>
+<tr><td>Context type</td><td><code>GuardContext</code></td><td><code>GrpcGuardContext</code></td></tr>
+<tr><td>Request metadata</td><td><code>&amp;HeaderMap</code> + <code>&amp;Uri</code></td><td><code>&amp;MetadataMap</code></td></tr>
+<tr><td>Role guard</td><td><code>RolesGuard</code></td><td><code>GrpcRolesGuard</code></td></tr>
+<tr><td>Attribute</td><td><code>#[guard(...)]</code></td><td><code>#[guard(...)]</code> (same syntax)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The concepts are identical — only the error type and metadata source differ.</p>
+<h2 id="setup-for-identity"><a class="header" href="#setup-for-identity">Setup for identity</a></h2>
+<p>To use identity extraction in gRPC services, <code>Arc&lt;JwtClaimsValidator&gt;</code> must be a bean in the graph (same requirement as HTTP) — provide it before <code>build_state()</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use std::sync::Arc;
+use r2e::r2e_security::JwtClaimsValidator;
+
+AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    .provide(Arc::new(jwt_validator))   // Arc&lt;JwtClaimsValidator&gt; as a bean
+    .build_state()
+    .await
+    .register_grpc_service::&lt;GreeterService&gt;();
+<span class="boring">}</span></code></pre>
+<p>There is no hand-written state struct: the application state is the inferred HList of everything you <code>.provide()</code>/<code>.register()</code>, and beans are read back by type. The gRPC identity extractor uses <code>JwtClaimsValidatorLike</code>; <code>JwtClaimsValidator</code> implements it under <code>r2e-security</code>’s <code>grpc</code> feature (on when <code>r2e</code> has <code>grpc</code> + <code>security</code>), and the <code>Arc&lt;T&gt;</code> blanket impl covers the bean. No additional setup needed beyond what HTTP authentication already requires.</p>
+<h3 id="grpcrolebasedidentity"><a class="header" href="#grpcrolebasedidentity">GrpcRoleBasedIdentity</a></h3>
+<p>For role-based guards, your identity type must implement <code>GrpcRoleBasedIdentity</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_grpc::GrpcRoleBasedIdentity;
+
+impl GrpcRoleBasedIdentity for AuthenticatedUser {
+    fn roles(&amp;self) -&gt; &amp;[String] {
+        &amp;self.roles
+    }
+}
+<span class="boring">}</span></code></pre>
+<p><code>AuthenticatedUser</code> from <code>r2e-security</code> already has role information — if you’re using it, this is the only additional trait needed.</p>
+<h2 id="limitations"><a class="header" href="#limitations">Limitations</a></h2>
+<ul>
+<li><strong>No pre-auth guards</strong> — gRPC doesn’t have the same pre-auth/post-auth distinction as HTTP. All guards run after identity extraction is attempted.</li>
+<li><strong>No struct-level identity</strong> — gRPC services cannot have <code>#[inject(identity)]</code> on struct fields (the core is built from the bean context via <code>ContextConstruct</code>, with no request to extract from). Use param-level injection instead.</li>
+<li><strong>Metadata vs headers</strong> — gRPC uses <code>tonic::metadata::MetadataMap</code>, not HTTP <code>HeaderMap</code>. Custom guards must use the metadata API.</li>
+</ul>
+<h2 id="next-steps"><a class="header" href="#next-steps">Next steps</a></h2>
+<ul>
+<li><a href="./services.html">gRPC Services</a> — setup and service implementation</li>
+<li><a href="../advanced/custom-guards.html">Custom Guards</a> — HTTP guard patterns (same concepts apply)</li>
+<li><a href="../security/jwt-oidc.html">JWT / OIDC Authentication</a> — JWT validator setup</li>
+</ul>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../testing/test-setup.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../grpc/services.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../testing/test-jwt.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../advanced/interceptors.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -512,11 +472,11 @@ async fn crud_flow(app: TestApp) {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../testing/test-setup.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../grpc/services.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../testing/test-jwt.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../advanced/interceptors.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

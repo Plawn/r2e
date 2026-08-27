@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,25 +197,27 @@ async fn manage(&amp;self) -&gt; Json&lt;&amp;'static str&gt; {
 }
 <span class="boring">}</span></code></pre>
 <p>If the user doesn’t have the required role, a 403 Forbidden response is returned.</p>
+<p>With a struct-level <code>#[inject(identity)]</code> field, <code>#[roles]</code> needs no identity parameter — the guard reads the extracted struct identity directly. Routes opted out of authentication with <code>#[anonymous]</code> cannot carry <code>#[roles]</code> (compile error); other guards still run there with <code>identity: None</code> (or the route’s own optional identity parameter, when declared). See <a href="optional-identity.html">Optional Identity</a>.</p>
 <h2 id="the-guard-trait"><a class="header" href="#the-guard-trait">The <code>Guard</code> trait</a></h2>
-<p>Custom post-auth guards implement <code>Guard&lt;S, I&gt;</code>:</p>
+<p>Custom post-auth guards implement <code>Guard&lt;I&gt;</code>. A guard that reads no beans is a
+self-contained decorator — implement the trait and add <code>impl SelfBuilt</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::{Guard, GuardContext, Identity};
-use axum::response::{IntoResponse, Response};
+</span>use r2e::prelude::*; // Guard, GuardContext, Identity, SelfBuilt, IntoResponse, Response
 
 struct TenantGuard;
 
-impl&lt;S: Send + Sync, I: Identity&gt; Guard&lt;S, I&gt; for TenantGuard {
+impl SelfBuilt for TenantGuard {}
+
+impl&lt;I: Identity&gt; Guard&lt;I&gt; for TenantGuard {
     fn check(
         &amp;self,
-        state: &amp;S,
         ctx: &amp;GuardContext&lt;'_, I&gt;,
     ) -&gt; impl Future&lt;Output = Result&lt;(), Response&gt;&gt; + Send {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() =&gt; Ok(()),
-                _ =&gt; Err(AppError::Forbidden("Missing tenant".into()).into_response()),
+                _ =&gt; Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
             }
         }
     }
@@ -240,35 +242,166 @@ async fn tenant_data(&amp;self) -&gt; Json&lt;Data&gt; { /* ... */ }
 <tr><td><code>controller_name</code></td><td><code>&amp;str</code></td><td>Controller struct name</td></tr>
 <tr><td><code>headers</code></td><td><code>&amp;HeaderMap</code></td><td>Request headers</td></tr>
 <tr><td><code>uri</code></td><td><code>&amp;Uri</code></td><td>Request URI</td></tr>
+<tr><td><code>path_params</code></td><td><code>PathParams</code></td><td>Route path parameters captured from patterns like <code>/projects/{pid}</code></td></tr>
 <tr><td><code>identity</code></td><td><code>Option&lt;&amp;I&gt;</code></td><td>Authenticated identity (if available)</td></tr>
 </tbody>
 </table>
 </div>
-<p>Convenience methods: <code>identity_sub()</code>, <code>identity_roles()</code>, <code>identity_email()</code>, <code>identity_claims()</code>, <code>path()</code>, <code>query_string()</code>.</p>
+<p>Convenience methods: <code>identity_sub()</code>, <code>identity_email()</code>, <code>identity_claims()</code>, <code>path()</code>, <code>query_string()</code>, <code>path_param()</code>, <code>parse_path_param()</code>.</p>
+<p>Use <code>parse_path_param()</code> for resource authorization guards that need typed IDs:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*; // Guard, GuardContext, DecoratorSpec, GuardError, ...
+use r2e::PathParam;
+use r2e::beans::BeanContext;
+use r2e::type_list::{TCons, TNil};
+use std::future::Future;
+
+#[derive(Clone, Copy)]
+struct ProjectId(u64);
+
+impl std::str::FromStr for ProjectId {
+    type Err = std::num::ParseIntError;
+
+    fn from_str(value: &amp;str) -&gt; Result&lt;Self, Self::Err&gt; {
+        value.parse().map(Self)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ProjectRole {
+    Viewer,
+}
+
+// Spec: the value the `#[guard(...)]` expression evaluates to. Holds config
+// (the path-param name + minimum role); reads the AuthzService bean in build().
+// This one is hand-written (instead of `#[derive(DecoratorBean)]`) because the
+// domain constructors (`viewer(path::pid)`, …) ARE the config surface — the
+// derive's generated `spec(...)` would lose that vocabulary.
+struct ProjectGuard {
+    param: &amp;'static str,
+    min_role: ProjectRole,
+}
+
+impl ProjectGuard {
+    const fn viewer(param: PathParam&lt;ProjectId&gt;) -&gt; Self {
+        Self {
+            param: param.name(),
+            min_role: ProjectRole::Viewer,
+        }
+    }
+}
+
+// Product: the finished guard, holding the resolved bean plus the config.
+struct ProjectGuardReady {
+    authz: AuthzService,
+    param: &amp;'static str,
+    min_role: ProjectRole,
+}
+
+impl DecoratorSpec for ProjectGuard {
+    type Product = ProjectGuardReady;
+    type Deps = TCons&lt;AuthzService, TNil&gt;;   // compile-checked at register_controller()
+
+    fn build(self, ctx: &amp;BeanContext) -&gt; ProjectGuardReady {
+        ProjectGuardReady {
+            authz: ctx.get::&lt;AuthzService&gt;(),
+            param: self.param,
+            min_role: self.min_role,
+        }
+    }
+}
+
+impl Guard&lt;AuthenticatedUser&gt; for ProjectGuardReady {
+    fn check(
+        &amp;self,
+        ctx: &amp;GuardContext&lt;'_, AuthenticatedUser&gt;,
+    ) -&gt; impl Future&lt;Output = Result&lt;(), Response&gt;&gt; + Send {
+        async move {
+            let user = ctx
+                .identity
+                .ok_or_else(|| GuardError::unauthorized("identity required"))?;
+            let project_id: ProjectId = ctx.parse_path_param(self.param)?;
+
+            // The authorization service was resolved once at registration.
+            self.authz
+                .require_project_role(user.sub(), project_id, self.min_role)
+                .await
+                .map_err(|_| Response::from(GuardError::forbidden("insufficient project role")))
+        }
+    }
+}
+
+#[get("/projects/{pid}")]
+#[guard(ProjectGuard::viewer(path::pid))]
+async fn project(
+    &amp;self,
+    #[inject(identity)] user: AuthenticatedUser,
+    Path(pid): Path&lt;ProjectId&gt;,
+) -&gt; Json&lt;Project&gt; {
+    /* ... */
+}
+<span class="boring">}</span></code></pre>
+<p><code>#[routes]</code> generates a local <code>path</code> namespace for each guarded route. Each
+symbol is a <code>PathParam&lt;T&gt;</code> containing the route parameter name and, when the
+handler uses <code>Path&lt;T&gt;</code>, the extracted Rust type. String-based constructors such
+as <code>ProjectGuard::viewer("pid")</code> continue to work for compatibility. Prefer
+<code>path::pid</code> in new guard declarations because an unknown symbol like
+<code>path::missing</code> fails at compile time. Use <code>ctx.parse_path_param::&lt;T&gt;("pid")</code>
+inside the guard implementation when reading the actual request value.</p>
+<p>Path-param parsing has consistent error mapping:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Case</th><th>Response</th></tr>
+</thead>
+<tbody>
+<tr><td>Guard references a missing route parameter</td><td><code>500 Internal Server Error</code></td></tr>
+<tr><td>Route parameter is present but cannot parse as <code>T</code></td><td><code>400 Bad Request</code></td></tr>
+<tr><td>Authorization policy denies access</td><td><code>403 Forbidden</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>For nested resources, keep the route parameter names explicit in the guard constructor:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/tenants/{tid}/projects/{pid}/sboms/{sid}")]
+#[guard(TenantGuard::member("tid"))]
+#[guard(ProjectGuard::viewer(path::pid))]
+#[guard(SbomGuard::viewer(path::pid, path::sid))]
+async fn sbom(
+    &amp;self,
+    #[inject(identity)] user: AuthenticatedUser,
+    Path((tid, pid, sid)): Path&lt;(TenantId, ProjectId, SbomVersionId)&gt;,
+) -&gt; Json&lt;Sbom&gt; {
+    /* ... */
+}
+<span class="boring">}</span></code></pre>
+<p>This pattern keeps controller routes readable while moving tenant/project policy decisions into application-level guards.</p>
 <h3 id="the-identity-trait"><a class="header" href="#the-identity-trait">The <code>Identity</code> trait</a></h3>
 <p>Guards are generic over the <code>Identity</code> trait, decoupling them from the concrete <code>AuthenticatedUser</code> type:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>pub trait Identity: Send + Sync {
     fn sub(&amp;self) -&gt; &amp;str;
-    fn roles(&amp;self) -&gt; &amp;[String];
     fn email(&amp;self) -&gt; Option&lt;&amp;str&gt; { None }
     fn claims(&amp;self) -&gt; Option&lt;&amp;serde_json::Value&gt; { None }
 }
 <span class="boring">}</span></code></pre>
-<p><code>AuthenticatedUser</code> implements <code>Identity</code>. You can create custom identity types by implementing this trait.</p>
+<p><code>AuthenticatedUser</code> implements <code>Identity</code>. Role checks use <code>RoleBasedIdentity</code> from <code>r2e-security</code>. You can create custom identity types by implementing these traits.</p>
 <h2 id="pre-auth-guards"><a class="header" href="#pre-auth-guards">Pre-auth guards</a></h2>
 <p>For authorization that doesn’t need identity (e.g., IP allowlisting), use <code>PreAuthGuard</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e_core::{PreAuthGuard, PreAuthGuardContext};
+</span>use r2e::prelude::*; // PreAuthGuard, PreAuthGuardContext, SelfBuilt, HttpError, IntoResponse, Response
 
 struct IpAllowlistGuard;
 
-impl&lt;S: Send + Sync&gt; PreAuthGuard&lt;S&gt; for IpAllowlistGuard {
+impl SelfBuilt for IpAllowlistGuard {}
+
+impl PreAuthGuard for IpAllowlistGuard {
     fn check(
         &amp;self,
-        state: &amp;S,
         ctx: &amp;PreAuthGuardContext&lt;'_&gt;,
     ) -&gt; impl Future&lt;Output = Result&lt;(), Response&gt;&gt; + Send {
         async move {
@@ -276,7 +409,7 @@ impl&lt;S: Send + Sync&gt; PreAuthGuard&lt;S&gt; for IpAllowlistGuard {
                 .and_then(|v| v.to_str().ok());
             match ip {
                 Some("10.0.0.1") =&gt; Ok(()),
-                _ =&gt; Err(AppError::Forbidden("IP not allowed".into()).into_response()),
+                _ =&gt; Err(HttpError::Forbidden("IP not allowed".into()).into_response()),
             }
         }
     }
@@ -289,37 +422,45 @@ async fn restricted(&amp;self) -&gt; &amp;'static str { "allowed" }
 <p>Pre-auth guards run <strong>before</strong> JWT extraction, avoiding wasted token validation.</p>
 <h2 id="async-guards-with-database-access"><a class="header" href="#async-guards-with-database-access">Async guards with database access</a></h2>
 <p>Guards can perform async operations like database lookups:</p>
+<p>A guard that needs a database pool holds it as an <code>#[inject]</code> field;
+<code>#[derive(DecoratorBean)]</code> pulls the bean from the graph once, at registration:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>struct DatabaseGuard;
+</span>#[derive(DecoratorBean)]
+struct DatabaseGuard {
+    #[inject]
+    pool: sqlx::SqlitePool,
+}
 
-impl&lt;S: Send + Sync, I: Identity&gt; Guard&lt;S, I&gt; for DatabaseGuard
-where
-    sqlx::SqlitePool: FromRef&lt;S&gt;,
-{
+impl&lt;I: Identity&gt; Guard&lt;I&gt; for DatabaseGuard {
     fn check(
         &amp;self,
-        state: &amp;S,
         ctx: &amp;GuardContext&lt;'_, I&gt;,
     ) -&gt; impl Future&lt;Output = Result&lt;(), Response&gt;&gt; + Send {
         async move {
-            let pool = sqlx::SqlitePool::from_ref(state);
             let allowed = sqlx::query_scalar::&lt;_, bool&gt;(
                 "SELECT active FROM users WHERE sub = ?"
             )
             .bind(ctx.identity_sub().unwrap_or(""))
-            .fetch_optional(&amp;pool)
+            .fetch_optional(&amp;self.pool)
             .await
-            .map_err(|_| AppError::Internal("DB error".into()).into_response())?;
+            .map_err(|_| HttpError::Internal("DB error".into()).into_response())?;
 
             match allowed {
                 Some(true) =&gt; Ok(()),
-                _ =&gt; Err(AppError::Forbidden("Account suspended".into()).into_response()),
+                _ =&gt; Err(HttpError::Forbidden("Account suspended".into()).into_response()),
             }
         }
     }
 }
 <span class="boring">}</span></code></pre>
+<p>Applied with <code>#[guard(DatabaseGuard::spec())]</code> — the generated constructor
+takes the non-injected fields (none here).</p>
+<blockquote>
+<p>The database query still runs <strong>per request</strong> inside <code>check</code>. What changed is
+that the pool is resolved <strong>once</strong> at registration and held as a field — there
+is no <code>state.bean::&lt;...&gt;()</code> lookup at request time.</p>
+</blockquote>
 <h2 id="guard-execution-order"><a class="header" href="#guard-execution-order">Guard execution order</a></h2>
 <ol>
 <li>Pre-auth guards (<code>#[pre_guard(...)]</code>) — run before JWT validation</li>
@@ -332,7 +473,7 @@ where
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[post("/")]
-#[pre_guard(RateLimit::per_ip(10, 60))]      // Pre-auth: IP rate limit
+#[pre_guard(PreRateLimit::per_ip(10, 60))]    // Pre-auth: IP rate limit
 #[guard(RateLimit::per_user(5, 60))]          // Post-auth: user rate limit
 #[roles("editor")]                             // Role check
 #[guard(TenantGuard)]                          // Custom check
@@ -340,12 +481,23 @@ async fn create(&amp;self, body: Json&lt;Request&gt;) -&gt; Json&lt;Response&gt;
     // Only reached if ALL guards pass
 }
 <span class="boring">}</span></code></pre>
+<h2 id="combining-guards-with-interceptors"><a class="header" href="#combining-guards-with-interceptors">Combining guards with interceptors</a></h2>
+<p>Guards and interceptors work together. Guards run first and short-circuit independently; interceptors see the handler’s raw return type, not <code>Response</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/admin/users")]
+#[roles("admin")]
+#[intercept(Cache::ttl(30).group("admin_users"))]
+async fn admin_list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+    // Cache interceptor sees Json&lt;Vec&lt;User&gt;&gt;, roles guard runs before
+}
+<span class="boring">}</span></code></pre>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../security/jwt-oidc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../security/optional-identity.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -359,7 +511,7 @@ async fn create(&amp;self, body: Json&lt;Request&gt;) -&gt; Json&lt;Response&gt;
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../security/jwt-oidc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../security/optional-identity.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

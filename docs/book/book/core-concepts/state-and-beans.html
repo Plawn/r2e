@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -179,20 +179,40 @@
                     <main>
                         <h1 id="state-and-beans"><a class="header" href="#state-and-beans">State and Beans</a></h1>
 <p>R2E’s dependency injection is built on a bean graph — a set of factories that produce your application services in dependency order.</p>
-<h2 id="application-state"><a class="header" href="#application-state">Application state</a></h2>
-<p>Your state struct holds all app-scoped dependencies. Derive <code>BeanState</code> to generate <code>FromRef</code> implementations:</p>
+<h2 id="application-state-is-inferred--you-never-write-it"><a class="header" href="#application-state-is-inferred--you-never-write-it">Application state is inferred — you never write it</a></h2>
+<p>There is no hand-written state struct. You do not define a <code>Services</code>/<code>AppState</code>
+type, and there is no <code>#[derive(BeanState)]</code>. Instead:</p>
+<ol>
+<li><strong>Beans form the graph.</strong> Each <code>.provide(value)</code> or <code>.register::&lt;T&gt;()</code> call adds
+a node. The builder threads the set of provided types through the chain at the
+type level (the <em>provision list</em>).</li>
+<li><strong>State is the provision list materialized as an HList.</strong> <code>build_state()</code>
+resolves the graph in dependency order and packs every provided value into a
+heterogeneous list whose shape is inferred from your <code>.provide</code> / <code>.register</code>
+calls. The state <strong>type is inferred</strong> — you never spell it out.</li>
+<li><strong>You read beans out of the state by type</strong>, not by field name (see
+<a href="#reading-beans-from-state">Reading beans from state</a>).</li>
+</ol>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use r2e::prelude::*;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub pool: SqlitePool,
-    pub event_bus: EventBus,
-    pub config: R2eConfig,
-}
+let app = AppBuilder::new()
+    .provide(event_bus)            // LocalEventBus becomes a bean
+    .provide(pool)                 // SqlitePool becomes a bean
+    .register::&lt;UserService&gt;();    // a #[bean] type, constructed from the graph
+
+app.build_state()                  // NO type args; async — resolves the graph
+    .await
+    // ... plugins, controllers, serve ...
+    ;
 <span class="boring">}</span></code></pre>
+<blockquote>
+<p>Apps with more than ~127 provisions need <code>#![recursion_limit = "512"]</code> at the
+crate root (in <code>main.rs</code>) — the inferred HList is a deeply nested type and the
+default recursion limit (128) is not enough. <code>r2e doctor</code> warns as the bean
+count approaches the threshold. Fewer than ~127 beans needs nothing.</p>
+</blockquote>
 <h2 id="bean-traits"><a class="header" href="#bean-traits">Bean traits</a></h2>
 <p>R2E provides three bean traits for registering services:</p>
 <h3 id="bean--synchronous-construction"><a class="header" href="#bean--synchronous-construction"><code>Bean</code> — Synchronous construction</a></h3>
@@ -202,17 +222,17 @@ pub struct AppState {
 </span>#[derive(Clone)]
 pub struct UserService {
     pool: SqlitePool,
-    event_bus: EventBus,
+    event_bus: LocalEventBus,
 }
 
 #[bean]
 impl UserService {
-    pub fn new(pool: SqlitePool, event_bus: EventBus) -&gt; Self {
+    pub fn new(pool: SqlitePool, event_bus: LocalEventBus) -&gt; Self {
         Self { pool, event_bus }
     }
 }
 <span class="boring">}</span></code></pre>
-<p>Register with <code>.with_bean::&lt;UserService&gt;()</code>.</p>
+<p>Register with <code>.register::&lt;UserService&gt;()</code>.</p>
 <h3 id="asyncbean--asynchronous-construction"><a class="header" href="#asyncbean--asynchronous-construction"><code>AsyncBean</code> — Asynchronous construction</a></h3>
 <p>For services that need async initialization (e.g., database connections):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -230,9 +250,9 @@ impl CacheService {
     }
 }
 <span class="boring">}</span></code></pre>
-<p>Register with <code>.with_async_bean::&lt;CacheService&gt;()</code>. The <code>#[bean]</code> macro auto-detects async constructors and generates <code>impl AsyncBean</code> instead of <code>impl Bean</code>.</p>
+<p>Register with <code>.register::&lt;CacheService&gt;()</code>. The <code>#[bean]</code> macro auto-detects async constructors and generates <code>impl AsyncBean</code> instead of <code>impl Bean</code>.</p>
 <h3 id="producer--factory-for-types-you-dont-own"><a class="header" href="#producer--factory-for-types-you-dont-own"><code>Producer</code> — Factory for types you don’t own</a></h3>
-<p>For types from external crates (e.g., connection pools):</p>
+<p>For types from external crates (e.g., connection pools) where you can’t write <code>impl Bean</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[producer]
@@ -240,14 +260,53 @@ async fn create_pool(#[config("database.url")] url: String) -&gt; SqlitePool {
     SqlitePool::connect(&amp;url).await.unwrap()
 }
 <span class="boring">}</span></code></pre>
-<p>This generates a struct <code>CreatePool</code> with <code>impl Producer</code>. Register with <code>.with_producer::&lt;CreatePool&gt;()</code>.</p>
+<p>This generates a struct <code>CreatePool</code> (PascalCase of the function name) with <code>impl Producer</code>. Register with <code>.register::&lt;CreatePool&gt;()</code>. The struct is just a vehicle for the trait impl — you never instantiate it yourself.</p>
+<p>Producer parameters can be <strong>bean dependencies</strong>, <strong>config values</strong>, or both:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[producer]
+async fn create_notifier(
+    bus: LocalEventBus,                                // ← resolved from BeanContext
+    #[config("notification.url")] url: String,    // ← resolved from R2eConfig
+    #[config("notification.timeout")] timeout: i64,
+) -&gt; NotificationClient {
+    NotificationClient::new(&amp;url, timeout, bus).await
+}
+// Generates: CreateNotifier with deps [LocalEventBus, R2eConfig]
+// Register: .register::&lt;CreateNotifier&gt;()
+<span class="boring">}</span></code></pre>
+<p>Parameters without <code>#[config]</code> are treated as bean dependencies (pulled from <code>ctx.get::&lt;T&gt;()</code>). Parameters with <code>#[config("key")]</code> are resolved from <code>R2eConfig</code> — and <code>R2eConfig</code> is automatically added to the dependency list when any <code>#[config]</code> param is present.</p>
+<h3 id="conditional-availability-with-optiont"><a class="header" href="#conditional-availability-with-optiont">Conditional availability with <code>Option&lt;T&gt;</code></a></h3>
+<p>A producer may return <code>Option&lt;T&gt;</code> to express that a service is only available under certain conditions (e.g., a feature flag, an optional API key):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[producer]
+async fn create_llm_client(
+    #[config("app.llm.api_key")] api_key: Option&lt;String&gt;,
+) -&gt; Option&lt;Arc&lt;LlmClient&gt;&gt; {
+    let key = api_key?;
+    Some(Arc::new(LlmClient::new(&amp;key)))
+}
+<span class="boring">}</span></code></pre>
+<p><code>Option&lt;T&gt;</code> is a <strong>first-class bean type</strong> in R2E: the slot is registered under <code>TypeId::of::&lt;Option&lt;T&gt;&gt;()</code> — separate from <code>TypeId::of::&lt;T&gt;()</code> — and is <strong>always</strong> present in the graph. The value (<code>Some</code>/<code>None</code>) reflects the producer’s decision.</p>
+<p>Consumers then <strong>hard-depend</strong> on <code>Option&lt;T&gt;</code> and decide how to behave based on the inner <code>Option</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[bean]
+impl ChatService {
+    fn new(llm: Option&lt;Arc&lt;LlmClient&gt;&gt;) -&gt; Self {
+        Self { llm }
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>This gives you a single, honest knob: the producer encapsulates the decision, the consumer handles both branches, and the compile-time dependency graph catches missing registrations. This is the blessed pattern for conditional beans consumed by macro-derived beans — the <code>Option&lt;T&gt;</code> slot is always registered, so the graph stays complete regardless of the runtime decision. (For conditional plugins or layers that don’t change the provision list, use <code>.when(cond, |b| ...)</code> with the <code>config_flag(key)</code> / <code>profile_is(profile)</code> helpers.)</p>
 <h3 id="derivebean--derive-based-beans"><a class="header" href="#derivebean--derive-based-beans"><code>#[derive(Bean)]</code> — Derive-based beans</a></h3>
 <p>For simple structs where the constructor just clones fields from the graph:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[derive(Clone, Bean)]
 pub struct MyService {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
     #[inject] pool: SqlitePool,
     #[config("app.name")] name: String,
 }
@@ -259,7 +318,7 @@ pub struct MyService {
 </span>#[bean]
 impl NotificationService {
     pub fn new(
-        bus: EventBus,
+        bus: LocalEventBus,
         #[config("notification.capacity")] capacity: i64,
         #[config("notification.enabled")] enabled: bool,
     ) -&gt; Self {
@@ -268,23 +327,130 @@ impl NotificationService {
 }
 <span class="boring">}</span></code></pre>
 <p>When <code>#[config]</code> is used, <code>R2eConfig</code> is automatically added to the bean’s dependency list. Missing keys panic with an error that includes the environment variable equivalent.</p>
+<h2 id="post-construct-hooks"><a class="header" href="#post-construct-hooks">Post-construct hooks</a></h2>
+<p>Sometimes a bean needs to perform initialization <em>after</em> the entire bean graph is resolved — for example, warming a cache, running migrations, or cleaning up stale data. Use <code>#[post_construct]</code> for this:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone)]
+pub struct CacheService {
+    pool: SqlitePool,
+}
+
+#[bean]
+impl CacheService {
+    pub async fn new(pool: SqlitePool) -&gt; Self {
+        Self { pool }
+    }
+
+    #[post_construct]
+    async fn warm_cache(&amp;self) -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+        // pre-load frequently accessed data
+        let _rows = sqlx::query("SELECT * FROM hot_data")
+            .fetch_all(&amp;*self.pool)
+            .await?;
+        Ok(())
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Key points:</p>
+<ul>
+<li>Methods must take <code>&amp;self</code> only — no additional parameters</li>
+<li>Return <code>()</code> or <code>Result&lt;(), Box&lt;dyn Error + Send + Sync&gt;&gt;</code></li>
+<li>Can be <code>async</code></li>
+<li>Multiple <code>#[post_construct]</code> methods run in declaration order</li>
+<li>Hooks run after <strong>all</strong> beans are constructed, in dependency order</li>
+<li>If any hook returns an error, <code>build_state()</code> fails with <code>BeanError::PostConstruct</code></li>
+</ul>
+<p><strong>Do</strong> use <code>#[post_construct]</code> for: cache warming, stale data cleanup, migrations, cross-bean validation.</p>
+<p><strong>Don’t</strong> use it for: construction logic (belongs in the constructor), event subscriptions (<code>#[consumer]</code>), periodic work (<code>#[scheduled]</code>).</p>
+<h3 id="lifecycle-for-pre-built-provide-d-beans"><a class="header" href="#lifecycle-for-pre-built-provide-d-beans">Lifecycle for pre-built (<code>provide</code>-d) beans</a></h3>
+<p><code>#[post_construct]</code> attaches to factory beans (<code>#[bean]</code> / <code>register</code>). A value
+handed to <code>.provide(instance)</code> can opt into the <strong>same</strong> lifecycle explicitly —
+and into disposal via the symmetric <code>PreDestroy</code> trait:</p>
+<pre><code class="language-rust ignore">AppBuilder::new()
+    // T: PostConstruct — hook runs during build_state(), after every
+    // factory-bean post-construct.
+    .provide_with_post_construct(cache)
+    // T: PreDestroy — pre_destroy() runs during graceful shutdown.
+    .provide_with_pre_destroy(pool)
+    .build_state().await;</code></pre>
+<p>Both hooks read the bean from the resolved graph by type (a pinned test
+override is honoured); a failing post-construct fails <code>build_state()</code> with
+<code>BeanError::PostConstruct</code>; disposers run in reverse registration order during
+shutdown. Plugins initialize their <code>Provided</code> beans inline (their <code>build</code> is
+async and fallible) and opt into disposal via <code>ctx.run_pre_destroy::&lt;T&gt;()</code> in
+<code>setup</code>.</p>
+<h2 id="startup-hooks--on_start"><a class="header" href="#startup-hooks--on_start">Startup hooks — <code>#[on_start]</code></a></h2>
+<p><code>#[post_construct]</code> runs <em>while the graph is still being assembled</em>, so it can
+only see the bean’s own dependencies. When the work needs the <strong>finished</strong>
+application — every bean and every controller core — use <code>#[on_start]</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[bean]
+impl SearchIndex {
+    pub fn new(repo: DocRepo) -&gt; Self { Self { repo } }
+
+    #[on_start(order = -10)]   // i32, default 0, ascending
+    async fn warm(&amp;self) -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+        self.repo.prime_index().await?;   // Err aborts boot
+        Ok(())
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Same signature rules as <code>#[post_construct]</code> (<code>&amp;self</code> only, sync or async, <code>()</code>
+or <code>Result&lt;…&gt;</code>), and it works on <code>#[routes]</code> controller impls too. Hooks run at
+boot — after every <code>#[post_construct]</code>, before the server binds — sorted
+ascending by <code>order</code> (ties in registration order), and an <code>Err</code> aborts boot just
+like an <code>Err</code> from the builder’s <code>.on_start(...)</code> closure. A pinned
+<code>override_bean</code> skips the hook. Unlike <code>#[pre_destroy]</code>, <code>#[on_start]</code> <strong>does</strong>
+run under <code>TestApp::boot</code> — booting a test app is a real startup.</p>
+<h2 id="reading-beans-from-state"><a class="header" href="#reading-beans-from-state">Reading beans from state</a></h2>
+<p>Because the state is an inferred HList (not a struct with named fields), you read
+beans out of it <strong>by type</strong>. Controller <code>#[inject]</code> fields resolve this way
+automatically at registration time. Code that holds the state directly — guards,
+interceptors, <code>ManagedResource</code>, plugins — uses one of two accessors:</p>
+<ul>
+<li><code>state.bean::&lt;T&gt;() -&gt; Option&lt;T&gt;</code> — dynamic lookup via the <code>BeanLookup</code> trait.
+In the prelude. This is the vocabulary for guards / interceptors /
+<code>ManagedResource</code>, which must be <strong>generic over the state</strong> (<code>S: BeanLookup</code>).</li>
+<li><code>state.get::&lt;T&gt;() -&gt; T</code> — witness-free fixed-offset access via <code>BeanAccess</code>.
+<strong>Not</strong> in the prelude (its blanket <code>get</code> would shadow <code>Deref</code>-reached inherent
+<code>get</code>s). Import it explicitly: <code>use r2e_core::type_list::BeanAccess;</code>.</li>
+</ul>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e_core::type_list::BeanAccess;
+
+// generic over the state, reads a bean dynamically:
+let pool = state.bean::&lt;SqlitePool&gt;().expect("SqlitePool bean");
+
+// fixed-offset access when you hold a concrete state:
+let pool: SqlitePool = state.get::&lt;SqlitePool&gt;();
+<span class="boring">}</span></code></pre>
+<p>A type that is not in the graph is a <strong>compile error naming the type</strong> for
+<code>#[inject]</code> fields (checked via the controller’s <code>Deps</code> against the provision
+list), and <code>None</code>/an unsatisfied bound for the accessors.</p>
 <h2 id="building-state"><a class="header" href="#building-state">Building state</a></h2>
-<p>The <code>build_state()</code> method resolves the bean graph in dependency order:</p>
+<p>The <code>build_state()</code> method resolves the bean graph in dependency order and packs
+the resolved values into the inferred HList state. It takes <strong>no type arguments</strong>
+and is async (the graph may contain async beans):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
     .provide(event_bus)                    // provide pre-built instances
     .provide(pool)
-    .with_producer::&lt;CreatePool&gt;()         // async producer
-    .with_async_bean::&lt;CacheService&gt;()     // async bean
-    .with_bean::&lt;UserService&gt;()            // sync bean
-    .build_state::&lt;AppState, _&gt;()          // resolve the graph
+    .register::&lt;CreatePool&gt;()              // async producer
+    .register::&lt;CacheService&gt;()            // async bean
+    .register::&lt;UserService&gt;()             // sync bean
+    // config sections are auto-registered by load_config (available as bean deps)
+    .build_state()                         // resolve the graph — no type args
     .await                                 // async because graph may contain async beans
 <span class="boring">}</span></code></pre>
-<h3 id="provide-vs-with_bean"><a class="header" href="#provide-vs-with_bean"><code>provide()</code> vs <code>with_bean()</code></a></h3>
+<p><code>try_build_state()</code> is the non-panicking (<code>Result</code>) variant.</p>
+<h3 id="provide-vs-register"><a class="header" href="#provide-vs-register"><code>provide()</code> vs <code>register()</code></a></h3>
 <ul>
 <li><code>provide(value)</code> — injects a pre-built instance directly into the graph</li>
-<li><code>with_bean::&lt;T&gt;()</code> — registers a factory; R2E constructs it from its dependencies</li>
+<li><code>register::&lt;T&gt;()</code> — registers a factory (bean, async bean, or producer); R2E constructs it from its dependencies</li>
 </ul>
 <p>Use <code>provide()</code> for values constructed outside the bean graph (e.g., configuration, tokens, pre-existing pools).</p>
 <h3 id="resolution-order"><a class="header" href="#resolution-order">Resolution order</a></h3>
@@ -292,39 +458,30 @@ impl NotificationService {
 <li>All <code>provide()</code>d values are available immediately</li>
 <li><code>Bean</code> / <code>AsyncBean</code> / <code>Producer</code> factories run in dependency order</li>
 <li>If bean A depends on bean B, B is constructed first</li>
-<li>Circular dependencies cause a panic at startup</li>
+<li>Circular dependencies fail at startup with a concrete <code>A -&gt; B -&gt; A</code> path</li>
 </ol>
 <h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
-<pre class="playground"><code class="language-rust">use r2e::prelude::*;
+<pre class="playground"><code class="language-rust">#![recursion_limit = "512"] // only needed past ~127 beans; harmless otherwise
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub notification_service: NotificationService,
-    pub pool: SqlitePool,
-    pub event_bus: EventBus,
-    pub config: R2eConfig,
-}
+use r2e::prelude::*;
 
 #[producer]
 async fn create_pool(#[config("database.url")] url: String) -&gt; SqlitePool {
     SqlitePool::connect(&amp;url).await.unwrap()
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
-    let config = R2eConfig::load("dev").unwrap();
-    let event_bus = EventBus::new();
+    let event_bus = LocalEventBus::new();
 
     AppBuilder::new()
+        .load_config::&lt;()&gt;()
         .provide(event_bus)
-        .provide(config.clone())
-        .with_producer::&lt;CreatePool&gt;()
-        .with_bean::&lt;UserService&gt;()
-        .with_bean::&lt;NotificationService&gt;()
-        .build_state::&lt;AppState, _&gt;()
+        .register::&lt;CreatePool&gt;()
+        .register::&lt;UserService&gt;()
+        .register::&lt;NotificationService&gt;()
+        .build_state()                  // state type is inferred from the provisions
         .await
-        .with_config(config)
         // ... register controllers, plugins, etc.
         .serve("0.0.0.0:3000")
         .await

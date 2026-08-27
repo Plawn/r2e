@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,66 +180,115 @@
                         <h1 id="crate-map"><a class="header" href="#crate-map">Crate Map</a></h1>
 <p>R2E is organized as a workspace of focused crates. The <code>r2e</code> facade crate re-exports everything with feature gates.</p>
 <h2 id="crate-overview"><a class="header" href="#crate-overview">Crate overview</a></h2>
-<pre><code>r2e              Facade crate — re-exports everything, feature-gated
-r2e-core         Runtime: AppBuilder, Controller, guards, interceptors, config, plugins
-r2e-macros       Proc macros: #[derive(Controller)], #[routes], #[bean], #[producer]
-r2e-security     JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
-r2e-events       In-process typed EventBus with pub/sub
-r2e-scheduler    Background task scheduling (interval, cron)
-r2e-data         Database: Entity, Repository, QueryBuilder, Pageable/Page
-r2e-data-sqlx    SQLx backend: SqlxRepository, Tx, HasPool, migrations
-r2e-data-diesel  Diesel backend (skeleton)
-r2e-cache        TTL cache with pluggable backends
-r2e-rate-limit   Token-bucket rate limiting with pluggable backends
-r2e-openapi      OpenAPI 3.0.3 spec generation + docs UI
-r2e-prometheus   Prometheus metrics middleware
-r2e-observability Structured observability (tracing, metrics)
-r2e-openfga      OpenFGA authorization integration
-r2e-utils        Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
-r2e-test         TestApp, TestJwt for integration testing
-r2e-cli          CLI scaffolding tool
-</code></pre>
-<h2 id="dependency-flow"><a class="header" href="#dependency-flow">Dependency flow</a></h2>
-<pre><code>r2e-macros (proc-macro, no runtime deps)
-    ↑
-r2e-core (runtime foundation)
-    ↑
-r2e-security / r2e-events / r2e-scheduler / r2e-data
-    ↑
-r2e-data-sqlx / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils / r2e-test
-    ↑
-r2e (facade)
-    ↑
-your application
-</code></pre>
-<h2 id="feature-flags"><a class="header" href="#feature-flags">Feature flags</a></h2>
-<p>The <code>r2e</code> facade crate gates sub-crates behind features:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Feature</th><th>Crates enabled</th></tr>
+<tr><th>Crate</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>security</code></td><td><code>r2e-security</code></td></tr>
-<tr><td><code>events</code></td><td><code>r2e-events</code></td></tr>
-<tr><td><code>scheduler</code></td><td><code>r2e-scheduler</code></td></tr>
-<tr><td><code>data</code></td><td><code>r2e-data</code>, <code>r2e-data-sqlx</code></td></tr>
-<tr><td><code>cache</code></td><td><code>r2e-cache</code></td></tr>
-<tr><td><code>rate-limit</code></td><td><code>r2e-rate-limit</code></td></tr>
-<tr><td><code>openapi</code></td><td><code>r2e-openapi</code></td></tr>
-<tr><td><code>utils</code></td><td><code>r2e-utils</code></td></tr>
-<tr><td><code>prometheus</code></td><td><code>r2e-prometheus</code></td></tr>
-<tr><td><code>validation</code></td><td>Enables <code>Validated&lt;T&gt;</code> in <code>r2e-core</code></td></tr>
-<tr><td><code>full</code></td><td>All of the above</td></tr>
+<tr><td><code>r2e</code></td><td>Quarkus-like ergonomic layer over Axum — declarative controllers, compile-time DI, and zero runtime reflection</td></tr>
+<tr><td><code>r2e-cache</code></td><td>TTL cache with pluggable backends for R2E - in-memory caching with expiration</td></tr>
+<tr><td><code>r2e-cli</code></td><td>CLI tool for R2E - project scaffolding, code generation, and development server</td></tr>
+<tr><td><code>r2e-compile-tests</code></td><td>(no description)</td></tr>
+<tr><td><code>r2e-core</code></td><td>Core runtime for R2E web framework - AppBuilder, plugins, guards, and dependency injection</td></tr>
+<tr><td><code>r2e-data-diesel</code></td><td>Cancellation-safe managed Diesel transactions</td></tr>
+<tr><td><code>r2e-data-sqlx</code></td><td>Cancellation-safe managed SQLx transactions</td></tr>
+<tr><td><code>r2e-devservices</code></td><td>Dev services for R2E tests — containerized Postgres/Redis/OpenFGA started on demand and wired into the test config, plus <code>DevService</code> for any other image</td></tr>
+<tr><td><code>r2e-devtools</code></td><td>Subsecond hot-reload integration for R2E</td></tr>
+<tr><td><code>r2e-events-iggy</code></td><td>Apache Iggy event bus backend for R2E — persistent distributed event streaming</td></tr>
+<tr><td><code>r2e-events-kafka</code></td><td>Apache Kafka event bus backend for R2E — distributed event streaming</td></tr>
+<tr><td><code>r2e-events-pulsar</code></td><td>Apache Pulsar event bus backend for R2E — distributed event streaming</td></tr>
+<tr><td><code>r2e-events-rabbitmq</code></td><td>RabbitMQ (AMQP 0-9-1) event bus backend for R2E — durable message queuing</td></tr>
+<tr><td><code>r2e-events</code></td><td>In-process typed event bus for R2E - publish/subscribe with async handlers</td></tr>
+<tr><td><code>r2e-executor</code></td><td>Managed task pool executor for R2E — injectable, bounded, with graceful shutdown</td></tr>
+<tr><td><code>r2e-grpc</code></td><td>gRPC server support for R2E framework</td></tr>
+<tr><td><code>r2e-grpc-build</code></td><td>Build-script helper for R2E gRPC — compiles every <code>.proto</code> under <code>proto/</code> and generates one aggregated, reflection-ready module</td></tr>
+<tr><td><code>r2e-http</code></td><td>HTTP abstraction layer for R2E - sole owner of the axum dependency</td></tr>
+<tr><td><code>r2e-macros</code></td><td>Procedural macros for R2E framework - Controller derive and routes attribute</td></tr>
+<tr><td><code>r2e-observability</code></td><td>OpenTelemetry observability plugin for R2E — distributed tracing and context propagation</td></tr>
+<tr><td><code>r2e-oidc</code></td><td>Embedded OIDC server plugin for R2E - issue JWT tokens without an external identity provider</td></tr>
+<tr><td><code>r2e-openapi</code></td><td>OpenAPI 3.1 spec generation for R2E - automatic API documentation with Swagger UI</td></tr>
+<tr><td><code>r2e-openfga</code></td><td>OpenFGA fine-grained authorization for R2E - Zanzibar-style relationship-based access control</td></tr>
+<tr><td><code>r2e-prometheus</code></td><td>Prometheus metrics plugin for R2E - HTTP request tracking and /metrics endpoint</td></tr>
+<tr><td><code>r2e-rate-limit</code></td><td>Token-bucket rate limiting for R2E - per-user, per-IP, or global rate limits</td></tr>
+<tr><td><code>r2e-scheduler</code></td><td>Background task scheduler for R2E - interval, cron, and delayed task execution</td></tr>
+<tr><td><code>r2e-security</code></td><td>JWT/OIDC security module for R2E - token validation, JWKS cache, and AuthenticatedUser extractor</td></tr>
+<tr><td><code>r2e-static</code></td><td>Embedded static file serving with SPA support for R2E</td></tr>
+<tr><td><code>r2e-test</code></td><td>Test utilities for R2E - TestApp HTTP client and TestJwt token generation</td></tr>
+<tr><td><code>r2e-utils</code></td><td>Built-in interceptors for R2E - Logged, Timed, Cache, and CacheInvalidate</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="dependency-flow"><a class="header" href="#dependency-flow">Dependency flow</a></h2>
+<pre><code>r2e-http (HTTP abstraction - sole axum dependency)
+    ^
+r2e-macros (proc-macro, no runtime deps)
+    ^
+r2e-core (runtime foundation, re-exports r2e-http as `http` module)
+    ^
+r2e-security / r2e-events / r2e-executor / r2e-scheduler / r2e-grpc
+    ^
+r2e-data-sqlx / r2e-data-diesel / r2e-cache / r2e-rate-limit / r2e-openapi / r2e-utils
+r2e-prometheus / r2e-observability / r2e-oidc / r2e-openfga / r2e-static
+r2e-events-iggy / r2e-events-kafka / r2e-events-pulsar / r2e-events-rabbitmq
+r2e-devtools / r2e-devservices / r2e-test
+    ^
+r2e (facade)
+    ^
+your application
+</code></pre>
+<blockquote>
+<p><code>r2e-grpc-build</code> is a build-dependency (build-script helper), not part of the
+runtime dependency graph. Event bus backends live under <code>r2e-events/backends/*</code>
+and the data backends under <code>r2e-data/backends/*</code>.</p>
+</blockquote>
+<h2 id="feature-flags"><a class="header" href="#feature-flags">Feature flags</a></h2>
+<p>The <code>r2e</code> facade crate gates sub-crates behind features.</p>
+<p><strong>Default features:</strong> <code>security</code>, <code>events</code>, <code>utils</code></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Crates / effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>security</code></td><td>r2e-security</td></tr>
+<tr><td><code>events</code></td><td>r2e-events</td></tr>
+<tr><td><code>utils</code></td><td>r2e-utils</td></tr>
+<tr><td><code>data</code></td><td>compatibility marker; pagination is always in core</td></tr>
+<tr><td><code>data-sqlx</code></td><td>r2e-data-sqlx</td></tr>
+<tr><td><code>data-diesel</code></td><td>r2e-data-diesel</td></tr>
+<tr><td><code>sqlx-{sqlite,postgres,mysql}</code></td><td>SQLx managed Tx + selected driver</td></tr>
+<tr><td><code>diesel-{sqlite,postgres,mysql}</code></td><td>Diesel managed Tx + selected driver</td></tr>
+<tr><td><code>events-iggy</code></td><td>events, r2e-events-iggy</td></tr>
+<tr><td><code>events-kafka</code></td><td>events, r2e-events-kafka</td></tr>
+<tr><td><code>events-pulsar</code></td><td>events, r2e-events-pulsar</td></tr>
+<tr><td><code>events-rabbitmq</code></td><td>events, r2e-events-rabbitmq</td></tr>
+<tr><td><code>executor</code></td><td>r2e-executor</td></tr>
+<tr><td><code>scheduler</code></td><td>r2e-scheduler (pulls in <code>executor</code>)</td></tr>
+<tr><td><code>cache</code></td><td>r2e-cache</td></tr>
+<tr><td><code>rate-limit</code></td><td>r2e-rate-limit</td></tr>
+<tr><td><code>oidc</code></td><td>r2e-oidc</td></tr>
+<tr><td><code>openapi</code></td><td>r2e-openapi</td></tr>
+<tr><td><code>prometheus</code></td><td>r2e-prometheus</td></tr>
+<tr><td><code>openfga</code></td><td>r2e-openfga</td></tr>
+<tr><td><code>observability</code></td><td>r2e-observability</td></tr>
+<tr><td><code>grpc</code></td><td>r2e-grpc</td></tr>
+<tr><td><code>grpc-reflection</code></td><td>grpc, r2e-grpc/reflection</td></tr>
+<tr><td><code>static</code></td><td>r2e-static</td></tr>
+<tr><td><code>ws</code></td><td>r2e-core/ws</td></tr>
+<tr><td><code>multipart</code></td><td>r2e-core/multipart</td></tr>
+<tr><td><code>quic</code></td><td>r2e-core/quic (HTTP/3; not in <code>full</code>)</td></tr>
+<tr><td><code>dev-reload</code></td><td>r2e-devtools, r2e-core/dev-reload</td></tr>
+<tr><td><code>full</code></td><td>All of the above <strong>except</strong> <code>quic</code> and <code>dev-reload</code></td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="using-sub-crates-directly"><a class="header" href="#using-sub-crates-directly">Using sub-crates directly</a></h2>
 <p>While most applications should use the <code>r2e</code> facade, you can depend on individual crates:</p>
 <pre><code class="language-toml">[dependencies]
-r2e-core = "0.1"
-r2e-macros = "0.1"
-r2e-security = "0.1"
+r2e-core = "0.3"
+r2e-macros = "0.3"
+r2e-security = "0.3"
 </code></pre>
 <p>The proc macros use <code>proc-macro-crate</code> for dynamic path detection — they check for <code>r2e</code> first, then fall back to <code>r2e-core</code>. This means generated code uses <code>::r2e::</code> paths when using the facade, or <code>::r2e_core::</code> when using crates directly.</p>
 

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,40 +182,122 @@
 <h2 id="dependencies"><a class="header" href="#dependencies">Dependencies</a></h2>
 <p>Add to your <code>Cargo.toml</code>:</p>
 <pre><code class="language-toml">[dev-dependencies]
-r2e-test = "0.1"
-tokio = { version = "1", features = ["full"] }
+r2e-test = "0.3"
 </code></pre>
-<h2 id="basic-test-structure"><a class="header" href="#basic-test-structure">Basic test structure</a></h2>
+<h2 id="recommended-pattern-boot-your-app"><a class="header" href="#recommended-pattern-boot-your-app">Recommended pattern: boot your <code>App</code></a></h2>
+<p>Implement the <code>App</code> trait once in <code>app.rs</code>. <code>lib.rs</code> compiles that source for
+tests; <code>r2e::app_main!</code> compiles the same source in the binary tip crate for
+production and real hot-reload:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::prelude::*;
-use r2e_test::{TestApp, TestJwt};
+</span>// src/app.rs
+pub struct MyApp;
 
-async fn setup() -&gt; (TestApp, TestJwt) {
-    let jwt = TestJwt::new();
-
-    // Build app state for testing
-    let app = TestApp::from_builder(
-        AppBuilder::new()
-            .provide(Arc::new(jwt.claims_validator()))
-            .with_bean::&lt;UserService&gt;()
-            .build_state::&lt;AppState, _&gt;()
-            .await
-            .with(Health)
-            .with(ErrorHandling)
-            .register_controller::&lt;UserController&gt;(),
-    );
-
-    (app, jwt)
+impl App for MyApp {
+    type Env = ();
+    async fn setup() {}
+    async fn build(b: AppBuilder, _env: ()) -&gt; impl BootableApp {
+        b.load_config::&lt;AppConfig&gt;()
+            .register::&lt;UserService&gt;()
+            .plugin(Health)
+            .plugin(ErrorHandling)
+            .build_state().await
+            .register_controllers::&lt;(UserController,)&gt;()
+    }
 }
 
-#[tokio::test]
-async fn test_health_check() {
-    let (app, _) = setup().await;
-    app.get("/health").await.assert_ok();
+// src/lib.rs
+include!("app.rs");
+
+// src/main.rs
+r2e::app_main!(MyApp);
+<span class="boring">}</span></code></pre>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>// tests/users.rs
+use r2e_test::TestApp;
+
+#[r2e::test(app = my_app::MyApp)]
+async fn lists_users(app: TestApp) {
+    app.get("/users").as_user("alice", &amp;["user"]).send().await.assert_ok();
 }
 <span class="boring">}</span></code></pre>
-<h2 id="key-pattern-testappfrom_builder"><a class="header" href="#key-pattern-testappfrom_builder">Key pattern: <code>TestApp::from_builder</code></a></h2>
+<p>Booting an app this way:</p>
+<ul>
+<li>forces the <strong><code>test</code> profile</strong>, so <code>application-test.yaml</code> overlays your base
+config,</li>
+<li>pins a local <code>TestJwt</code> validator over the app’s own, so <code>.as_user(sub, roles)</code>
+works with no identity provider,</li>
+<li>retains the resolved bean graph: <code>app.bean::&lt;UserService&gt;()</code> (or an
+<code>#[inject] users: UserService</code> test parameter) returns the same instance
+your controllers use.</li>
+</ul>
+<p>Mocks and config patches go through the <code>with</code> hook — overrides are <strong>pinned</strong>,
+so the app’s own registration of the same type becomes a no-op:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp, with = |b| {
+    b.override_bean(FakeMailer::new())          // @InjectMock
+        .override_config_value("mail.enabled", false)  // @TestProfile
+})]
+async fn signup_does_not_send_mail(app: TestApp, #[inject] mailer: FakeMailer) {
+    app.post("/signup").json(&amp;payload()).send().await.assert_ok();
+    assert_eq!(mailer.sent().len(), 0);
+}
+<span class="boring">}</span></code></pre>
+<h2 id="ordered-tests-order"><a class="header" href="#ordered-tests-order">Ordered tests (<code>@Order</code>)</a></h2>
+<p>Most tests should stay independent and parallel. When a scenario genuinely has
+to run in sequence — create a resource, then read it back — tag each test with
+<code>order = &lt;u32&gt;</code>. Tests carrying an <code>order</code> run sequentially in ascending order;
+tests without one are unaffected and keep running in parallel (no
+<code>--test-threads=1</code> needed):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp, order = 1)]
+async fn creates_user(app: TestApp) {
+    app.post("/users").json(&amp;new_user()).send().await.assert_created();
+}
+
+#[r2e::test(app = my_app::MyApp, order = 2)]
+async fn lists_created_user(app: TestApp) {
+    app.get("/users").send().await
+        .assert_ok()
+        .assert_json_path("/0/name", "Alice");
+}
+<span class="boring">}</span></code></pre>
+<p>Ordering is scoped to the <strong>test binary</strong> (one file under <code>tests/</code>) — there is
+no cross-binary or cross-crate ordering. Orders need not be contiguous
+(<code>10, 20, 30</code> is fine). When <code>app = …</code> is present, the barrier also covers the
+<code>TestApp</code> boot, so ordered tests never race on shared dev services.</p>
+<p>Add <code>group = "&lt;name&gt;"</code> to run several independent sequences in one binary; an
+ordered test only waits on lower orders of its <strong>own</strong> group (the default is the
+unnamed group):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[r2e::test(app = my_app::MyApp, order = 1, group = "billing")]
+async fn creates_invoice(app: TestApp) { /* … */ }
+
+#[r2e::test(app = my_app::MyApp, order = 1, group = "catalog")]
+async fn seeds_catalog(app: TestApp) { /* … */ } // runs independently of billing
+<span class="boring">}</span></code></pre>
+<p>Failure semantics are <strong>fail-fast</strong>: if an ordered test fails — by panicking,
+or by returning <code>Err</code> from a <code>Result</code> test — its group is poisoned and every
+later test in that group fails immediately with a message naming the failed
+predecessor — no deadlock, no cascade of timeouts. A <code>#[should_panic]</code> ordered
+test that panics as expected is a pass and does <strong>not</strong> poison its group.
+Declaring the same <code>order</code> twice in one group panics at runtime, naming both
+tests.</p>
+<p>If a lower order is filtered out (<code>cargo test &lt;filter&gt;</code>) or starved by
+<code>--test-threads</code>, a waiting test would otherwise hang. Instead, once the group
+is idle, it panics after a watchdog timeout, listing the pending orders. A
+predecessor that is actually running never trips the watchdog, however slow.
+Tune the timeout with <code>R2E_TEST_ORDER_TIMEOUT_SECS</code> (default <code>60</code>).</p>
+<blockquote>
+<p><code>group</code> without <code>order</code> is a compile error, as is <code>order</code>/<code>group</code> on
+<code>#[r2e::main]</code>. Using <code>order</code> requires the <code>r2e-test</code> dev-dependency (already
+present whenever you use <code>app = …</code>).</p>
+</blockquote>
+<h2 id="hand-assembled-apps-testappfrom_builder"><a class="header" href="#hand-assembled-apps-testappfrom_builder">Hand-assembled apps: <code>TestApp::from_builder</code></a></h2>
 <p><code>TestApp</code> wraps your router with an in-process HTTP client (via <code>tower::ServiceExt::oneshot</code> — no TCP). This means:</p>
 <ul>
 <li>Tests run fast (no network overhead)</li>
@@ -231,12 +313,103 @@ async fn test_health_check() {
 );
 <span class="boring">}</span></code></pre>
 <h2 id="test-configuration"><a class="header" href="#test-configuration">Test configuration</a></h2>
-<p>For tests, use <code>R2eConfig::empty()</code> or manual config:</p>
+<p>Booted apps use the <code>test</code> profile: put test-only keys in
+<code>application-test.yaml</code>, patch individual keys with
+<code>b.override_config_value(key, value)</code> in the <code>with</code> hook, and read the final
+config in the test via <code>app.config()</code>.</p>
+<p>For hand-assembled apps, use <code>R2eConfig::empty()</code> or manual config:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>let config = R2eConfig::empty();
 config.set("app.name", ConfigValue::String("test-app".into()));
 <span class="boring">}</span></code></pre>
+<h2 id="dev-services-containerized-infrastructure"><a class="header" href="#dev-services-containerized-infrastructure">Dev services (containerized infrastructure)</a></h2>
+<p>When a test needs real infrastructure, <code>r2e-devservices</code> starts Docker
+containers on demand (features <code>postgres</code>, <code>redis</code>, <code>openfga</code>):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e_devservices::DevPostgres;
+
+#[r2e::test]
+async fn users_are_persisted() {
+    let pg = DevPostgres::shared().await; // one container for the test session
+    let app = TestApp::boot_with::&lt;my_app::MyApp&gt;(|b| {
+        b.override_config_value("app.database.url", pg.url())
+    })
+    .await;
+    // ...
+}
+<span class="boring">}</span></code></pre>
+<p><code>shared()</code> reuses one stable container across all test processes in the
+workspace session. Each process keeps a TCP lease to a shared Ryuk reaper;
+after the final process exits, Ryuk removes the managed containers (10-second
+grace by default) and then removes itself. <code>start()</code> gives an isolated
+handle-scoped container, also labelled so Ryuk can clean it after a crash or
+<code>SIGKILL</code>.</p>
+<p>Ryuk requires a local Docker Unix socket. Override its host path with
+<code>R2E_DEVSERVICES_DOCKER_SOCKET</code>; use <code>R2E_DEVSERVICES_KEEP=1</code> only when the
+containers must survive for post-mortem inspection.</p>
+<h3 id="choosing-the-image-and-credentials"><a class="header" href="#choosing-the-image-and-credentials">Choosing the image and credentials</a></h3>
+<p><code>shared_with</code> / <code>start_with</code> take a spec, and the image and credentials are part
+of the container’s identity — two specs differing in either get two shared
+containers:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e_devservices::{DevPostgres, DevRedis, PostgresImage, PostgresSpec, RedisImage};
+
+let pg = DevPostgres::shared_with(PostgresImage::new("pgvector/pgvector", "pg18")).await;
+let valkey = DevRedis::shared_with(RedisImage::new("valkey/valkey", "8-alpine")).await;
+
+let app_db = DevPostgres::shared_with(
+    PostgresSpec::default()
+        .with_user("app")
+        .with_password("s3cret")
+        .with_database("appdb"),
+)
+.await; // url → postgres://app:s3cret@localhost:32771/appdb
+<span class="boring">}</span></code></pre>
+<p>Defaults are <code>postgres:16-alpine</code> (<code>postgres</code>/<code>postgres</code>, database <code>postgres</code>)
+and <code>redis:7-alpine</code>. A Postgres image must speak Postgres on 5432 and honour
+<code>POSTGRES_USER</code> / <code>POSTGRES_PASSWORD</code> / <code>POSTGRES_DB</code>.</p>
+<h3 id="any-other-service"><a class="header" href="#any-other-service">Any other service</a></h3>
+<p><code>DevService</code> is the generic form behind those wrappers, available without a
+feature flag: any testcontainers <code>Image</code> — a <code>testcontainers-modules</code> one, a
+<code>GenericImage</code>, or your own — gets the same labelling, Ryuk reaping and
+cross-process sharing.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e_devservices::testcontainers::core::{IntoContainerPort, WaitFor};
+use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+use r2e_devservices::{DevService, DevServiceSpec};
+
+let clickhouse = DevService::shared(
+    DevServiceSpec::new("clickhouse", || {
+        GenericImage::new("clickhouse/clickhouse-server", "24.8-alpine")
+            .with_exposed_port(8123.tcp())
+            .with_wait_for(WaitFor::message_on_either_std("Ready for connections"))
+            .into()
+    })
+    .with_port(8123),
+)
+.await;
+let url = format!("http://{}", clickhouse.endpoint(8123));
+<span class="boring">}</span></code></pre>
+<p><code>testcontainers</code> and <code>testcontainers_modules</code> are re-exported so the spec builds
+against the versions this crate uses; a ready-made module image needs its own
+feature enabled through your <code>[dev-dependencies]</code>
+(<code>testcontainers-modules = { version = "0.15", features = ["clickhouse"] }</code>).
+<code>with_port</code> resolves a port the image exposes rather than publishing one. The
+closure must build the same request every time: it runs again for the sharing
+key and on every start attempt, and <code>shared</code> compares each attempt against that
+key rather than start a container the name does not describe.</p>
+<p>Sharing is keyed on the request — the fields that shape the container Docker
+creates: image, env vars, labels, command, mounts, port mappings, device
+requests, network — so two specs that differ anywhere get two containers.
+<code>with_discriminator</code> appends to that key for what stays outside it: ulimits
+(testcontainers keeps them private), the contents of a file copied by path, and
+anything applied after start — seeded data, or exec hooks the image runs itself.
+A host-config modifier is refused rather than guessed: <code>shared</code> panics on a spec
+that sets one without a discriminator, since its effect is a closure.</p>
 <h2 id="running-tests"><a class="header" href="#running-tests">Running tests</a></h2>
 <pre><code class="language-bash">cargo test --workspace
 </code></pre>
@@ -245,7 +418,7 @@ config.set("app.name", ConfigValue::String("test-app".into()));
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../advanced/performance.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../advanced/controller-lifecycle-and-dispatch.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -259,7 +432,7 @@ config.set("app.name", ConfigValue::String("test-app".into()));
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../advanced/performance.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../advanced/controller-lifecycle-and-dispatch.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

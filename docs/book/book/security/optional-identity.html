@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - R2E — Rust Enterprise Edition</title>
+        <title>Optional Identity - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -12,33 +12,33 @@
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
-        <link rel="icon" href="favicon-de23e50b.svg">
-        <link rel="shortcut icon" href="favicon-8114d1fc.png">
-        <link rel="stylesheet" href="css/variables-8adf115d.css">
-        <link rel="stylesheet" href="css/general-2459343d.css">
-        <link rel="stylesheet" href="css/chrome-ae938929.css">
-        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
 
         <!-- Fonts -->
-        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
 
         <!-- Highlight.js Stylesheets -->
-        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
-        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
-        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
 
 
         <!-- Provide site root and default themes to javascript -->
         <script>
-            const path_to_root = "";
+            const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-07ec6f4c.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c3694cfa.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -105,7 +105,7 @@
             <!-- populated by js -->
             <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
             <noscript>
-                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
             </noscript>
             <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -140,7 +140,7 @@
                     <h1 class="menu-title">R2E — Rust Enterprise Edition</h1>
 
                     <div class="right-buttons">
-                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
                             <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
                         </a>
                         <a href="https://github.com/plawn/r2e" title="Git repository" aria-label="Git repository">
@@ -177,73 +177,192 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>R2E</strong> (Rust Enterprise Edition) is an ergonomic enterprise framework for Rust, inspired by Quarkus. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on <a href="https://github.com/tokio-rs/axum">Axum</a> via the <code>r2e-http</code> abstraction layer.</p>
-<h2 id="what-r2e-offers"><a class="header" href="#what-r2e-offers">What R2E offers</a></h2>
+                        <h1 id="optional-identity"><a class="header" href="#optional-identity">Optional Identity</a></h1>
+<p>R2E supports mixed controllers where some endpoints require authentication and others do not. This is achieved through parameter-level identity injection, with optional support for endpoints that behave differently depending on whether a user is authenticated.</p>
+<h2 id="struct-level-vs-parameter-level-identity"><a class="header" href="#struct-level-vs-parameter-level-identity">Struct-level vs parameter-level identity</a></h2>
+<p>There are two places to inject identity in a controller:</p>
+<h3 id="struct-level-identity"><a class="header" href="#struct-level-identity">Struct-level identity</a></h3>
+<p>When <code>#[inject(identity)]</code> is on a struct field, <strong>every endpoint</strong> in the controller requires authentication. If the JWT is missing or invalid, the request is rejected before any handler runs.</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[controller(path = "/users")]
 pub struct UserController {
-    #[inject]           user_service: UserService,
     #[inject(identity)] user: AuthenticatedUser,
-    #[config("app.greeting")] greeting: String,
+    #[inject] service: UserService,
 }
-
-#[routes]
-#[intercept(Logged::info())]
+<span class="boring">}</span></code></pre>
+<p>The identity field lives on the per-request façade, never on the controller core. The core still gets a <code>ContextConstruct</code> impl (it always does), so the controller can also host <code>#[consumer]</code> / <code>#[scheduled]</code> methods — those run on the core and simply cannot access the request identity.</p>
+<p>This is the <strong>fail-closed default</strong> for protected controllers: every route requires auth unless explicitly opted out with <code>#[anonymous]</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
 impl UserController {
-    #[get("/")]
-    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
-        Json(self.user_service.list().await)
-    }
+    #[get("/health")]
+    #[anonymous]           // public: no JWT extraction runs at all
+    async fn health(&amp;self) -&gt; &amp;'static str { "OK" }
 
-    #[post("/")]
-    #[roles("admin")]
-    #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&amp;self, Json(body): Json&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
-        Json(self.user_service.create(body.name, body.email).await)
+    #[get("/me")]          // authenticated by default
+    async fn me(&amp;self) -&gt; Json&lt;String&gt; {
+        Json(self.user.sub().to_string())
     }
 }
 <span class="boring">}</span></code></pre>
-<p>If you’ve used Java’s Quarkus, Spring Boot, or C#’s ASP.NET, this should feel familiar — but everything is resolved at compile time with zero runtime reflection.</p>
-<h2 id="key-features"><a class="header" href="#key-features">Key features</a></h2>
-<ul>
-<li><strong>Declarative controllers</strong> — <code>#[controller]</code> + <code>#[routes]</code> generate Axum handlers with zero boilerplate</li>
-<li><strong>Compile-time DI</strong> — <code>#[inject]</code> for services, <code>#[inject(identity)]</code> for request-scoped identity, <code>#[config("key")]</code> for configuration</li>
-<li><strong>JWT/OIDC security</strong> — <code>AuthenticatedUser</code> extractor with JWKS caching, role-based access via <code>#[roles("admin")]</code></li>
-<li><strong>Guards</strong> — Pre-auth and post-auth guards for custom authorization logic</li>
-<li><strong>Interceptors</strong> — AOP-style <code>#[intercept(...)]</code> for logging, timing, caching, and custom cross-cutting concerns</li>
-<li><strong>Rate limiting</strong> — Token-bucket rate limiting per user, per IP, or global</li>
-<li><strong>Event bus</strong> — Typed in-process pub/sub with <code>#[consumer]</code> for declarative event handlers</li>
-<li><strong>Scheduling</strong> — <code>#[scheduled(every = 30)]</code> and <code>#[scheduled(cron = "...")]</code> for background tasks</li>
-<li><strong>Managed resources</strong> — <code>#[managed]</code> for automatic transaction lifecycle</li>
-<li><strong>Database ergonomics</strong> — core pagination and managed SQLx/Diesel transactions</li>
-<li><strong>Validation</strong> — Automatic validation via <code>garde</code> crate — just derive <code>Validate</code> and use <code>Json&lt;T&gt;</code></li>
-<li><strong>OpenAPI</strong> — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI</li>
-<li><strong>Configuration</strong> — YAML + env var overlay with profile support</li>
-<li><strong>Static file serving</strong> — Embed frontend assets in the binary with SPA fallback via <code>EmbeddedFrontend</code> plugin</li>
-<li><strong>SSE &amp; WebSocket</strong> — Built-in <code>SseBroadcaster</code> and <code>WsRooms</code> for real-time communication</li>
-<li><strong>Testing</strong> — <code>TestApp</code> HTTP client wrapper, <code>TestJwt</code>, and <code>r2e test --sonarqube</code> coverage</li>
-<li><strong>CLI</strong> — <code>r2e new</code>, <code>r2e add</code>, <code>r2e dev</code>, <code>r2e generate</code>, <code>r2e test</code> for scaffolding and workflows</li>
-</ul>
-<h2 id="how-this-book-is-organized"><a class="header" href="#how-this-book-is-organized">How this book is organized</a></h2>
-<ul>
-<li><strong>Getting Started</strong> — Install R2E, create your first app, learn the project structure</li>
-<li><strong>Core Concepts</strong> — Controllers, DI, beans, plugins, configuration, error handling</li>
-<li><strong>Security</strong> — JWT authentication, guards, roles, rate limiting</li>
-<li><strong>Data Access</strong> — Entities, repositories, queries, pagination, transactions</li>
-<li><strong>Events and Scheduling</strong> — Event bus, consumers, background tasks</li>
-<li><strong>Advanced</strong> — Interceptors, custom guards/plugins, managed resources, lifecycle hooks, OpenAPI, performance</li>
-<li><strong>Testing</strong> — TestApp, TestJwt, integration patterns</li>
-<li><strong>Reference</strong> — Crate map, CLI reference, API docs</li>
-</ul>
+<p>An <code>#[anonymous]</code> route runs on the controller core, like consumers: reading <code>self.user</code> there is a compile error, identity extraction is skipped entirely (no JWT cost), guards run with <code>identity: None</code> (or the route’s own optional identity parameter, when declared), and combining the marker with <code>#[roles]</code> or a required identity parameter is rejected at compile time (an <code>Option&lt;T&gt;</code> identity parameter is allowed, for adaptive public routes). The marker requires a <strong>required</strong> struct identity — on an <code>Option&lt;T&gt;</code> struct identity there is nothing fail-closed to opt out of, and it is rejected. Forgetting the marker fails closed (401) — there is no marker whose omission silently publishes a route.</p>
+<h3 id="parameter-level-identity"><a class="header" href="#parameter-level-identity">Parameter-level identity</a></h3>
+<p>When <code>#[inject(identity)]</code> is on a handler parameter instead, only the annotated endpoints require authentication. Prefer this form for mostly-public controllers, where each endpoint opts into authentication individually.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/api")]
+pub struct ApiController {
+    #[inject] service: MyService,
+}
+
+#[routes]
+impl ApiController {
+    // No auth required
+    #[get("/public")]
+    async fn public_data(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+        Json(self.service.list().await)
+    }
+
+    // Auth required — injected per-handler
+    #[get("/me")]
+    async fn me(
+        &amp;self,
+        #[inject(identity)] user: AuthenticatedUser,
+    ) -&gt; Json&lt;AuthenticatedUser&gt; {
+        Json(user)
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="optional-identity-with-optionauthenticateduser"><a class="header" href="#optional-identity-with-optionauthenticateduser">Optional identity with <code>Option&lt;AuthenticatedUser&gt;</code></a></h2>
+<p>For endpoints that should work both with and without authentication, wrap the identity type in <code>Option</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/greeting")]
+async fn greeting(
+    &amp;self,
+    #[inject(identity)] user: Option&lt;AuthenticatedUser&gt;,
+) -&gt; String {
+    match user {
+        Some(u) =&gt; format!("Hello, {}!", u.sub()),
+        None =&gt; "Hello, stranger!".to_string(),
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="behavior"><a class="header" href="#behavior">Behavior</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Request state</th><th>Result</th></tr>
+</thead>
+<tbody>
+<tr><td>No <code>Authorization</code> header</td><td><code>None</code> — handler runs normally</td></tr>
+<tr><td>Valid JWT</td><td><code>Some(AuthenticatedUser)</code> — user is populated</td></tr>
+<tr><td>Invalid or expired JWT</td><td><strong>401 Unauthorized</strong> — handler does not run</td></tr>
+</tbody>
+</table>
+</div>
+<p>This is intentional: a missing token means the caller chose not to authenticate, but a malformed token is always an error.</p>
+<h3 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h3>
+<p>R2E implements <code>OptionalFromRequestParts</code> for <code>AuthenticatedUser</code>. When the macro sees <code>Option&lt;AuthenticatedUser&gt;</code> annotated with <code>#[inject(identity)]</code>, it:</p>
+<ol>
+<li>Unwraps the <code>Option</code> to determine the inner identity type.</li>
+<li>Uses <code>OptionalFromRequestParts</code> instead of <code>FromRequestParts</code> for extraction.</li>
+<li>Passes <code>None</code> to the handler when the <code>Authorization</code> header is absent.</li>
+<li>Passes <code>Some(user)</code> when a valid JWT is present.</li>
+</ol>
+<p>Guards that reference identity (via <code>GuardContext</code>) receive <code>Option&lt;&amp;AuthenticatedUser&gt;</code> — they can check <code>.is_some()</code> or match on the value.</p>
+<h2 id="complete-example-mixed-controller"><a class="header" href="#complete-example-mixed-controller">Complete example: mixed controller</a></h2>
+<p>This example shows a controller with public, protected, role-gated, and optionally-authenticated endpoints:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+#[controller(path = "/items")]
+pub struct ItemController {
+    #[inject] item_service: ItemService,
+    #[inject(identity)] user: AuthenticatedUser,
+}
+
+#[routes]
+impl ItemController {
+    /// Public — no identity extraction at all (`self.user` here would be a
+    /// compile error).
+    #[get("/")]
+    #[anonymous]
+    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+        Json(self.item_service.list().await)
+    }
+
+    /// Optional auth — personalized results when logged in. The optional
+    /// parameter overrides nothing: it is its own extraction, useful for
+    /// adaptive endpoints on any controller shape.
+    #[get("/feed")]
+    #[anonymous]
+    async fn feed(&amp;self, #[inject(identity)] user: Option&lt;AuthenticatedUser&gt;) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+        match user {
+            Some(u) =&gt; Json(self.item_service.feed_for(&amp;u.sub()).await),
+            None =&gt; Json(self.item_service.default_feed().await),
+        }
+    }
+
+    /// Protected by default — reads the struct identity, no `Option`.
+    #[get("/mine")]
+    async fn my_items(&amp;self) -&gt; Json&lt;Vec&lt;Item&gt;&gt; {
+        Json(self.item_service.items_for(&amp;self.user.sub()).await)
+    }
+
+    /// Protected + role check — the roles guard reads the struct identity;
+    /// no unused parameter needed.
+    #[post("/")]
+    #[roles("admin")]
+    async fn create(&amp;self, body: Json&lt;CreateItem&gt;) -&gt; Json&lt;Item&gt; {
+        Json(self.item_service.create(body.0).await)
+    }
+}
+<span class="boring">}</span></code></pre>
+<h2 id="when-to-use-which-approach"><a class="header" href="#when-to-use-which-approach">When to use which approach</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Scenario</th><th>Approach</th></tr>
+</thead>
+<tbody>
+<tr><td>Mostly/fully protected controller</td><td>Struct-level <code>#[inject(identity)]</code> + <code>#[anonymous]</code> on public routes (fail-closed)</td></tr>
+<tr><td>Mostly public controller, a few protected routes</td><td>Parameter-level <code>#[inject(identity)]</code> on the protected handlers</td></tr>
+<tr><td>Endpoint adapts to auth presence</td><td><code>#[inject(identity)] user: Option&lt;AuthenticatedUser&gt;</code> parameter</td></tr>
+<tr><td>Route requires auth but never reads the identity</td><td>Struct identity, no parameter — <code>#[roles]</code>/guards read it directly</td></tr>
+<tr><td>Controller is also a consumer/scheduled task target</td><td>Any — the core never holds request identity</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="combining-with-guards"><a class="header" href="#combining-with-guards">Combining with guards</a></h2>
+<p>Parameter-level identity works with <code>#[roles]</code> and <code>#[guard]</code>. The identity is extracted before guards run, so the guard context has access to it:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[get("/admin")]
+#[roles("admin")]
+async fn admin_panel(
+    &amp;self,
+    #[inject(identity)] user: AuthenticatedUser,
+) -&gt; Json&lt;AdminData&gt; {
+    // Only reachable if JWT is valid AND user has "admin" role
+    Json(self.item_service.admin_data(user.sub()).await)
+}
+<span class="boring">}</span></code></pre>
+<p>On a controller with a struct-level identity, the parameter is unnecessary — <code>#[roles]</code> and <code>#[guard]</code> read the struct identity directly, so a handler that never touches the user needs no identity binding at all.</p>
+<p>With optional identity, guard context receives <code>Option&lt;&amp;AuthenticatedUser&gt;</code>. Custom guards can use this to implement conditional authorization logic; on <code>#[anonymous]</code> routes the context carries <code>identity: None</code>, unless the route declares its own optional identity parameter.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../security/embedded-oidc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
 
-                            <a rel="next prefetch" href="getting-started/installation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../security/guards-and-roles.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -253,8 +372,11 @@ impl UserController {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../security/embedded-oidc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
 
-                    <a rel="next prefetch" href="getting-started/installation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../security/guards-and-roles.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -274,13 +396,13 @@ impl UserController {
         </script>
 
 
-        <script src="elasticlunr-ef4e11c1.min.js"></script>
-        <script src="mark-09e88c2c.min.js"></script>
-        <script src="searcher-c2a407aa.js"></script>
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
 
-        <script src="clipboard-1626706a.min.js"></script>
-        <script src="highlight-abc7f01d.js"></script>
-        <script src="book-a0b12cfe.js"></script>
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
 
         <!-- Custom JS scripts -->
 

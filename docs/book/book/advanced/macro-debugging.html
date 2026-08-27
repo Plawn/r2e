@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,72 +193,131 @@ cargo expand -p example-app controllers::user_controller
 # Filter for R2E-generated items
 cargo expand -p example-app 2&gt;/dev/null | grep "__r2e_"
 </code></pre>
-<h2 id="what-derivecontroller-generates"><a class="header" href="#what-derivecontroller-generates">What <code>#[derive(Controller)]</code> generates</a></h2>
+<h2 id="what-controller-generates"><a class="header" href="#what-controller-generates">What <code>#[controller]</code> generates</a></h2>
 <p>Given this controller:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
 }
 <span class="boring">}</span></code></pre>
-<p>The derive produces <strong>three items</strong>:</p>
-<h3 id="1-metadata-module-__r2e_meta_usercontroller"><a class="header" href="#1-metadata-module-__r2e_meta_usercontroller">1. Metadata module <code>__r2e_meta_UserController</code></a></h3>
+<p><code>#[controller]</code> is a <strong>transforming attribute</strong> — it rewrites the struct into a
+physical <em>core</em> (request-scoped fields stripped out) and produces four hidden
+items around it:</p>
+<h3 id="1-the-controller-core"><a class="header" href="#1-the-controller-core">1. The controller core</a></h3>
+<p>The emitted struct keeps only app-scoped fields (<code>#[inject]</code> and <code>#[config]</code>).
+Any <code>#[inject(identity)]</code> / <code>#[inject(request)]</code> fields are removed — they only
+ever exist on the per-request façade (below). The core is built <strong>once</strong> when the
+router is registered and shared as an <code>Arc&lt;UserController&gt;</code>.</p>
+<h3 id="2-metadata-module-__r2e_meta_usercontroller"><a class="header" href="#2-metadata-module-__r2e_meta_usercontroller">2. Metadata module <code>__r2e_meta_UserController</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[doc(hidden)]
 mod __r2e_meta_UserController {
     use super::*;
-    pub type State = AppState;
     pub const PATH_PREFIX: Option&lt;&amp;str&gt; = Some("/users");
-    pub type IdentityType = r2e::NoIdentity;  // no #[inject(identity)] field
+    pub const HAS_STRUCT_IDENTITY: bool = false;   // no #[inject(identity)] field
+    pub type IdentityType = r2e::NoIdentity;
 
-    pub fn guard_identity(_ctrl: &amp;super::UserController) -&gt; Option&lt;&amp;r2e::NoIdentity&gt; {
+    // Reads the identity off the request façade (never the core).
+    pub fn guard_identity(_facade: &amp;super::__R2eRequest_UserController) -&gt; Option&lt;&amp;r2e::NoIdentity&gt; {
         None
     }
+
+    // Moves request-scoped values + the core Arc into the façade. Generic over
+    // the per-field marker tuple `__M` so `#[routes]` can thread it as one
+    // opaque inferred generic.
+    pub fn bind_request&lt;__M&gt;(
+        core: std::sync::Arc&lt;super::UserController&gt;,
+        data: super::__R2eRequestData_UserController&lt;__M&gt;,
+    ) -&gt; super::__R2eRequest_UserController { /* ... */ }
 
     pub fn validate_config(_config: &amp;r2e::config::R2eConfig) -&gt; Vec&lt;r2e::config::MissingKeyError&gt; {
         Vec::new()
     }
 }
 <span class="boring">}</span></code></pre>
-<p>This module is referenced by <code>#[routes]</code> through naming convention. It tells the routes macro what state type to use, what the path prefix is, and what identity type is available for guards.</p>
-<h3 id="2-extractor-struct-__r2eextract_usercontroller"><a class="header" href="#2-extractor-struct-__r2eextract_usercontroller">2. Extractor struct <code>__R2eExtract_UserController</code></a></h3>
+<p>This module is referenced by <code>#[routes]</code> through naming convention. It carries the
+path prefix, whether the controller has struct-level identity, what identity type
+is available for guards, and how to bind the per-request façade. There is <strong>no
+<code>State</code> alias</strong> — the state type is inferred (the HList of provisions), so the
+generated <code>Controller</code> impl and the request-data extractor are generic over it.</p>
+<h3 id="3-request-data-extractor-__r2erequestdata_usercontroller"><a class="header" href="#3-request-data-extractor-__r2erequestdata_usercontroller">3. Request-data extractor <code>__R2eRequestData_UserController</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[doc(hidden)]
-pub struct __R2eExtract_UserController(pub UserController);
+pub struct __R2eRequestData_UserController&lt;__M&gt; {
+    // One field per request-scoped (#[inject(identity)] / #[inject(request)]) field.
+    // Marker-only (zero-sized) here, since UserController has none.
+    __markers: core::marker::PhantomData&lt;__M&gt;,
+}
 
-impl r2e::http::extract::FromRequestParts&lt;AppState&gt; for __R2eExtract_UserController {
+// State-generic: works with any inferred HList state `S`. Each request-scoped
+// field is extracted through `FromRequestPartsVia&lt;S, M&gt;`, which lets a
+// bean-backed extractor park its `HasBean` index witness in the marker `M`.
+impl&lt;S&gt; r2e::http::extract::FromRequestParts&lt;S&gt; for __R2eRequestData_UserController&lt;()&gt;
+where
+    S: Send + Sync,
+{
     type Rejection = r2e::http::response::Response;
 
     async fn from_request_parts(
         __parts: &amp;mut r2e::http::header::Parts,
-        __state: &amp;AppState,
+        __state: &amp;S,
     ) -&gt; Result&lt;Self, Self::Rejection&gt; {
-        Ok(Self(UserController {
-            user_service: __state.user_service.clone(),
-            event_bus: __state.event_bus.clone(),
-        }))
+        Ok(Self { __markers: core::marker::PhantomData })
     }
 }
 <span class="boring">}</span></code></pre>
-<p>Each <code>#[inject]</code> field is cloned from the corresponding field on the state struct. Identity fields (<code>#[inject(identity)]</code>) use Axum’s <code>FromRequestParts</code> instead.</p>
-<h3 id="3-statefulconstruct-impl"><a class="header" href="#3-statefulconstruct-impl">3. <code>StatefulConstruct</code> impl</a></h3>
+<p>This is the only per-request extraction. When the controller has no request-scoped
+fields the extractor is marker-only and infallible (implemented for <code>__M = ()</code>).
+Plain axum <code>FromRequestParts&lt;S&gt;</code> extractors reach this path through the blanket
+<code>ViaAxum</code> bridge; R2E-owned extractors (like <code>AuthenticatedUser</code>) go through
+<code>FromRequestPartsVia</code> / <code>BeanExtract&lt;T, I&gt;</code>.</p>
+<h3 id="4-request-façade-__r2erequest_usercontroller--deref"><a class="header" href="#4-request-façade-__r2erequest_usercontroller--deref">4. Request façade <code>__R2eRequest_UserController</code> + <code>Deref</code></a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>impl r2e::StatefulConstruct&lt;AppState&gt; for UserController {
-    fn from_state(__state: &amp;AppState) -&gt; Self {
+</span>#[doc(hidden)]
+pub struct __R2eRequest_UserController {
+    __core: std::sync::Arc&lt;UserController&gt;,
+    // plus one field per request-scoped controller field
+}
+
+impl core::ops::Deref for __R2eRequest_UserController {
+    type Target = UserController;
+    fn deref(&amp;self) -&gt; &amp;UserController { &amp;self.__core }
+}
+<span class="boring">}</span></code></pre>
+<p>Route methods run on this façade. <code>self.user_service</code> resolves to the core through <code>Deref</code>; <code>self.user</code> (if present) is a direct façade field.</p>
+<h3 id="5-contextconstruct-impl"><a class="header" href="#5-contextconstruct-impl">5. <code>ContextConstruct</code> impl</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>impl r2e::ContextConstruct for UserController {
+    // Unique #[inject] types (+ R2eConfig when #[config] fields exist),
+    // checked against the state's provision list via AllSatisfied at
+    // register_controller() — a missing bean is a compile error naming the type.
+    type Deps = r2e::type_list::TCons&lt;
+        UserService,
+        r2e::type_list::TCons&lt;LocalEventBus, r2e::type_list::TNil&gt;,
+    &gt;;
+
+    // Each #[inject] field is pulled BY TYPE from the resolved bean graph.
+    fn from_context(__ctx: &amp;r2e::beans::BeanContext) -&gt; Self {
         Self {
-            user_service: __state.user_service.clone(),
-            event_bus: __state.event_bus.clone(),
+            user_service: __ctx.get::&lt;UserService&gt;(),
+            event_bus: __ctx.get::&lt;LocalEventBus&gt;(),
         }
     }
 }
 <span class="boring">}</span></code></pre>
-<p>This is only generated when there are <strong>no</strong> <code>#[inject(identity)]</code> struct fields. It enables the controller to be used with <code>#[consumer]</code> and <code>#[scheduled]</code> methods that run outside of HTTP requests.</p>
+<p>This replaces the old <code>StatefulConstruct::from_state</code> (which cloned fields from a
+hand-written state struct by name). It is <strong>always</strong> generated (the core never
+holds request-scoped fields), builds the core once from the <code>BeanContext</code> by type,
+and enables the controller to be used with <code>#[consumer]</code> and <code>#[scheduled]</code>
+methods that run outside of HTTP requests. <code>#[config("key")]</code> fields resolve from
+the <code>R2eConfig</code> bean (<code>__ctx.get::&lt;R2eConfig&gt;().get::&lt;T&gt;("key")</code>).</p>
 <h2 id="what-routes-generates"><a class="header" href="#what-routes-generates">What <code>#[routes]</code> generates</a></h2>
 <p>Given:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -272,85 +331,144 @@ impl UserController {
 
     #[get("/{id}")]
     #[roles("admin")]
-    async fn get_by_id(&amp;self, Path(id): Path&lt;i64&gt;) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    async fn get_by_id(&amp;self, Path(id): Path&lt;i64&gt;) -&gt; Result&lt;Json&lt;User&gt;, HttpError&gt; {
         // ...
     }
 }
 <span class="boring">}</span></code></pre>
 <h3 id="plain-handler"><a class="header" href="#plain-handler">Plain handler</a></h3>
+<p>Route methods are emitted on the façade (<code>impl __R2eRequest_UserController</code>), and
+each route is registered as a closure that captures the core <code>Arc</code>, extracts the
+request data, and binds the façade:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>async fn __r2e_UserController_list(
-    __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
-) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
-    __ctrl.list().await
+</span>// Method moved onto the façade.
+impl __R2eRequest_UserController {
+    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;User&gt;&gt; {
+        Json(self.user_service.list().await)  // user_service via Deref to the core
+    }
+}
+
+// Route closure (one Arc clone of the core captured once, cloned per request).
+{
+    let core = core.clone();
+    move |__data: __R2eRequestData_UserController| {
+        let core = core.clone();
+        async move {
+            let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
+            __ctrl.list().await
+        }
+    }
 }
 <span class="boring">}</span></code></pre>
-<p>The extractor constructs the controller from state, then the handler delegates to the method.</p>
+<p>The closure binds the façade from the captured core <code>Arc</code> and the extracted request data, then delegates to the method.</p>
 <h3 id="guarded-handler-with-roles"><a class="header" href="#guarded-handler-with-roles">Guarded handler (with <code>#[roles]</code>)</a></h3>
+<p>Guards are <strong>built once at registration</strong> from the resolved <code>BeanContext</code> (via
+<code>DecoratorSpec::build</code>) and captured by the route closure in a decorator bundle
+(<code>__deco</code>) — one <code>Arc</code> per route, no state access at request time:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>async fn __r2e_UserController_get_by_id(
-    axum::extract::State(__state): axum::extract::State&lt;AppState&gt;,
+</span>move |
     __headers: axum::http::HeaderMap,
     __uri: axum::http::Uri,
-    __R2eExtract_UserController(__ctrl): __R2eExtract_UserController,
+    __raw_path_params: axum::extract::RawPathParams,
+    __data: __R2eRequestData_UserController&lt;()&gt;,
     Path(id): Path&lt;i64&gt;,
-) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
-    // Guard check runs before method body
-    let __identity_ref = __r2e_meta_UserController::guard_identity(&amp;__ctrl);
-    let __guard_ctx = r2e::GuardContext::new(
-        "get_by_id",
-        "UserController",
-        &amp;__headers,
-        &amp;__uri,
-        __identity_ref,
-    );
-    r2e::Guard::check(&amp;r2e::RolesGuard::new(&amp;["admin"]), &amp;__state, &amp;__guard_ctx)
-        .await
-        .map_err(/* ... */)?;
+| {
+    let core = core.clone();
+    let __deco = __deco.clone();     // prebuilt guards/interceptors
+    async move {
+        let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
 
-    // Original method body
-    __ctrl.get_by_id(Path(id)).await
+        // Guard check runs before method body; identity is read off the façade.
+        let __identity_ref = __r2e_meta_UserController::guard_identity(&amp;__ctrl);
+        let __path_params = r2e::PathParams::from_raw(&amp;__raw_path_params);
+        let __guard_ctx = r2e::GuardContext {
+            method_name: "get_by_id",
+            controller_name: "UserController",
+            headers: &amp;__headers,
+            uri: &amp;__uri,
+            path_params: __path_params,
+            identity: __identity_ref,
+        };
+        // The guard was built at registration; check() takes no state.
+        r2e::Guard::check(&amp;__deco.__g0, &amp;__guard_ctx)
+            .await
+            .map_err(/* ... */)?;
+
+        // Original method body, on the façade.
+        __ctrl.get_by_id(Path(id)).await
+    }
 }
 <span class="boring">}</span></code></pre>
-<p>Guarded handlers also extract <code>State</code>, <code>HeaderMap</code>, and <code>Uri</code> to build a <code>GuardContext</code>.</p>
-<h3 id="controllerappstate-impl"><a class="header" href="#controllerappstate-impl"><code>Controller&lt;AppState&gt;</code> impl</a></h3>
+<p>Guarded handlers extract <code>HeaderMap</code> and <code>Uri</code> to build a <code>GuardContext</code>.
+<code>guard_identity</code> reads the identity directly from the façade. The guard itself
+(<code>__deco.__g0</code>) was constructed once at registration, so there is no <code>State</code>
+extraction and no per-request DI.</p>
+<h3 id="controllers-w-impl"><a class="header" href="#controllers-w-impl"><code>Controller&lt;S, W&gt;</code> impl</a></h3>
+<p>The generated impl is <strong>generic over the state</strong> <code>S</code> (the inferred HList) and over
+an opaque witness carrier <code>W</code> that parks the request-data extraction markers. User
+code never names <code>S</code> or <code>W</code> — <code>register_controller()</code> infers both:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>impl r2e::Controller&lt;AppState&gt; for UserController {
-    fn routes() -&gt; axum::Router&lt;AppState&gt; {
+</span>impl&lt;S, W&gt; r2e::Controller&lt;S, W&gt; for UserController
+where
+    S: Clone + Send + Sync + 'static + r2e::type_list::BeanLookup,
+    // ... plus the inferred `HasBean` bounds carried by W
+{
+    // #[inject] types PLUS every guard/interceptor spec's `Deps`, folded into
+    // one list and checked against S's provisions via AllSatisfied — so a bean
+    // a guard needs is a compile error here too.
+    type Deps = /* ContextConstruct::Deps ++ each DecoratorSpec::Deps */;
+
+    // Build the core once from the resolved bean graph.
+    fn construct(_state: &amp;S, ctx: &amp;r2e::beans::BeanContext) -&gt; Self {
+        &lt;Self as r2e::ContextConstruct&gt;::from_context(ctx)
+    }
+
+    fn routes(
+        state: &amp;S,
+        core: std::sync::Arc&lt;Self&gt;,
+        ctx: &amp;r2e::beans::BeanContext,   // resolved graph — guards/interceptors are built here
+    ) -&gt; axum::Router&lt;S&gt; {
+        // Guards and interceptors are built ONCE from `ctx` via
+        // `build_decorator::&lt;_, Spec&gt;(expr, ctx)`, then captured by the
+        // route closures (see the guarded-handler shape above).
         axum::Router::new()
-            .route("/users/", axum::routing::get(__r2e_UserController_list))
-            .route("/users/{id}", axum::routing::get(__r2e_UserController_get_by_id))
+            // Each generated closure captures core.clone() (and any built decorators).
+            .route("/users/", axum::routing::get(/* generated closure */))
+            .route("/users/{id}", axum::routing::get(/* generated closure */))
     }
 
     fn register_meta(registry: &amp;mut r2e::MetaRegistry) { /* ... */ }
 
-    fn scheduled_tasks(_state: &amp;AppState) -&gt; Vec&lt;r2e::scheduling::ScheduledTaskDef&lt;AppState&gt;&gt; {
-        vec![]
-    }
+    // Consumers and scheduled tasks receive the same core Arc.
 }
 <span class="boring">}</span></code></pre>
+<p>Registration itself lives on the <code>RegisterController</code> / <code>RegisterControllers</code>
+extension traits (in the prelude), called on the built app after
+<code>build_state().await</code>.</p>
 <h2 id="what-bean-generates"><a class="header" href="#what-bean-generates">What <code>#[bean]</code> generates</a></h2>
 <h3 id="sync-bean"><a class="header" href="#sync-bean">Sync bean</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>#[bean]
 impl UserService {
-    fn new(event_bus: EventBus) -&gt; Self { Self { event_bus } }
+    fn new(event_bus: LocalEventBus) -&gt; Self { Self { event_bus } }
 }
 <span class="boring">}</span></code></pre>
 <p>Generates:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>impl r2e::beans::Bean for UserService {
+    type Deps = r2e::type_list::TCons&lt;LocalEventBus, r2e::type_list::TNil&gt;;
+
     fn dependencies() -&gt; Vec&lt;(std::any::TypeId, &amp;'static str)&gt; {
-        vec![(std::any::TypeId::of::&lt;EventBus&gt;(), std::any::type_name::&lt;EventBus&gt;())]
+        vec![(std::any::TypeId::of::&lt;LocalEventBus&gt;(), std::any::type_name::&lt;LocalEventBus&gt;())]
     }
 
     fn build(ctx: &amp;r2e::beans::BeanContext) -&gt; Self {
-        let __arg_0: EventBus = ctx.get::&lt;EventBus&gt;();
+        let __arg_0: LocalEventBus = ctx.get::&lt;LocalEventBus&gt;();
         UserService::new(__arg_0)
     }
 }
@@ -363,7 +481,7 @@ impl DbService {
     async fn new(pool: SqlitePool) -&gt; Self { Self { pool } }
 }
 <span class="boring">}</span></code></pre>
-<p>Generates <code>impl AsyncBean</code> with an <code>async fn build(ctx)</code> instead.</p>
+<p>Generates <code>impl AsyncBean</code> with <code>type Deps = TCons&lt;SqlitePool, TNil&gt;</code> and an <code>async fn build(ctx)</code> instead.</p>
 <h2 id="what-producer-generates"><a class="header" href="#what-producer-generates">What <code>#[producer]</code> generates</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
@@ -385,6 +503,7 @@ pub struct CreatePool;
 
 impl r2e::beans::Producer for CreatePool {
     type Output = SqlitePool;
+    type Deps = r2e::type_list::TCons&lt;r2e::config::R2eConfig, r2e::type_list::TNil&gt;;
 
     fn dependencies() -&gt; Vec&lt;(std::any::TypeId, &amp;'static str)&gt; {
         vec![(std::any::TypeId::of::&lt;r2e::config::R2eConfig&gt;(), /* ... */)]
@@ -400,13 +519,38 @@ impl r2e::beans::Producer for CreatePool {
 }
 <span class="boring">}</span></code></pre>
 <p>The function name is converted to PascalCase for the struct name (<code>create_pool</code> -&gt; <code>CreatePool</code>).</p>
+<h3 id="producer---optiont-conditional-availability"><a class="header" href="#producer---optiont-conditional-availability"><code>#[producer] -&gt; Option&lt;T&gt;</code> (conditional availability)</a></h3>
+<p>When the user function returns <code>Option&lt;T&gt;</code>, the <code>Output</code> associated type is
+<code>Option&lt;T&gt;</code> — the whole type, not the inner <code>T</code>. The <code>Option&lt;T&gt;</code> slot is
+registered under <code>TypeId::of::&lt;Option&lt;T&gt;&gt;()</code>, and consumers hard-depend on
+<code>Option&lt;T&gt;</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[producer]
+async fn create_cache(#[config("cache.enabled")] on: bool) -&gt; Option&lt;RedisCache&gt; {
+    if on { Some(RedisCache::new().await) } else { None }
+}
+
+// Generates:
+impl r2e::beans::Producer for CreateCache {
+    type Output = Option&lt;RedisCache&gt;;  // the WHOLE Option, not RedisCache
+    // ...
+    async fn produce(ctx: &amp;r2e::beans::BeanContext) -&gt; Self::Output {
+        let __r2e_config = ctx.get::&lt;r2e::config::R2eConfig&gt;();
+        let __arg_0: bool = __r2e_config.get::&lt;bool&gt;("cache.enabled").unwrap_or_else(/* ... */);
+        create_cache(__arg_0).await  // returns Option&lt;RedisCache&gt; verbatim
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Consumers declare <code>Option&lt;RedisCache&gt;</code> as a hard dependency (e.g. a
+<code>#[bean] fn new(cache: Option&lt;RedisCache&gt;)</code> constructor param).</p>
 <h2 id="scheduled-and-consumer"><a class="header" href="#scheduled-and-consumer"><code>#[scheduled]</code> and <code>#[consumer]</code></a></h2>
 <p>These contribute to the <code>Controller</code> trait impl generated by <code>#[routes]</code>:</p>
 <ul>
 <li><code>#[scheduled(every = 30)]</code> methods appear in <code>scheduled_tasks()</code> as <code>ScheduledTaskDef</code> entries</li>
 <li><code>#[consumer(bus = "event_bus")]</code> methods are wired up in <code>register_event_consumers()</code></li>
 </ul>
-<p>Both require <code>StatefulConstruct</code> (i.e. no struct-level <code>#[inject(identity)]</code>).</p>
+<p>Both run on the controller core built via <code>ContextConstruct</code> (always available) and therefore cannot access request identity. They coexist with struct-level <code>#[inject(identity)]</code>, which only affects the controller’s HTTP routes.</p>
 <h2 id="debugging-tips"><a class="header" href="#debugging-tips">Debugging tips</a></h2>
 <h3 id="common-error-patterns"><a class="header" href="#common-error-patterns">Common error patterns</a></h3>
 <div class="table-wrapper">
@@ -415,10 +559,12 @@ impl r2e::beans::Producer for CreatePool {
 <tr><th>Error message</th><th>Cause</th><th>Fix</th></tr>
 </thead>
 <tbody>
-<tr><td><code>cannot find __R2eExtract_X</code></td><td>Missing <code>#[derive(Controller)]</code> on the struct</td><td>Add <code>#[derive(Controller)]</code></td></tr>
-<tr><td><code>StatefulConstruct is not implemented</code></td><td>Struct has <code>#[inject(identity)]</code> field</td><td>Use param-level <code>#[inject(identity)]</code> on individual handlers instead</td></tr>
-<tr><td><code>#[controller(state = ...)] is required</code></td><td>Missing <code>state</code> in controller attribute</td><td>Add <code>#[controller(state = AppState)]</code></td></tr>
+<tr><td><code>cannot find __R2eRequest_X</code> / <code>__r2e_meta_X</code></td><td>Missing <code>#[controller(...)]</code> on the struct</td><td>Add <code>#[controller]</code></td></tr>
+<tr><td><code>#[routes]</code> cannot find the controller metadata</td><td><code>#[routes]</code> impl block on a struct without <code>#[controller(...)]</code></td><td>Add <code>#[controller(...)]</code> to the struct</td></tr>
+<tr><td><code>`T` cannot be constructed from the bean context</code></td><td><code>#[routes]</code> / <code>#[grpc_routes]</code> on a struct without <code>#[controller]</code></td><td>Add <code>#[controller]</code> to the struct</td></tr>
+<tr><td><code>the trait bound `S: HasBean&lt;T, _&gt;` is not satisfied</code> (bean <code>T</code> is not registered)</td><td>A <code>#[inject] T</code> field whose type was never registered as a bean</td><td><code>.register::&lt;T&gt;()</code> or <code>.provide(T)</code> before <code>build_state()</code></td></tr>
 <tr><td><code>every controller field must be annotated</code></td><td>Field without <code>#[inject]</code>, <code>#[config]</code>, etc.</td><td>Annotate the field with one of the supported attributes</td></tr>
+<tr><td><code>E0283: type annotations needed</code> at <code>register_controller()</code>, with <code>multiple impls satisfying ...: FromRequestPartsVia</code></td><td>A request-scoped type has <strong>two extraction routes</strong>: it implements both axum’s <code>FromRequestParts</code>/<code>OptionalFromRequestParts</code> (generically) and R2E’s <code>FromRequestPartsVia</code>/<code>OptionalFromRequestPartsVia</code></td><td>Keep exactly one route (bean-backed extractors: the R2E <code>*Via</code> impls only). Extractor authors should pin the type with <code>r2e::web::extract::assert_unambiguous_extractor</code> in a test</td></tr>
 </tbody>
 </table>
 </div>

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -185,25 +185,19 @@ cd my-api
 </code></pre>
 <p>Add dependencies to <code>Cargo.toml</code>:</p>
 <pre><code class="language-toml">[dependencies]
-r2e = { version = "0.1" }
-tokio = { version = "1", features = ["full"] }
+r2e = { version = "0.3" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 </code></pre>
-<h2 id="2-define-your-state"><a class="header" href="#2-define-your-state">2. Define your state</a></h2>
-<p>Create <code>src/state.rs</code>:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::prelude::*;
-
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub config: R2eConfig,
-}
-<span class="boring">}</span></code></pre>
-<p><code>BeanState</code> derives the <code>FromRef</code> implementations needed for Axum’s state extraction.</p>
+<h2 id="2-understand-application-state"><a class="header" href="#2-understand-application-state">2. Understand application state</a></h2>
+<p>There is <strong>no state struct to write</strong>. R2E infers your application’s state from
+the bean graph: every value you <code>.provide(...)</code> and every type you
+<code>.register::&lt;T&gt;()</code> becomes a bean, and <code>build_state()</code> materializes them into an
+inferred state that controllers draw from <em>by type</em>. Config (<code>R2eConfig</code>) is
+registered as a bean automatically when you call <code>load_config</code> — so a minimal app
+has nothing to define here and you can go straight to writing a controller.</p>
 <h2 id="3-create-a-controller"><a class="header" href="#3-create-a-controller">3. Create a controller</a></h2>
 <p>Create <code>src/controllers/mod.rs</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
@@ -213,11 +207,9 @@ pub struct AppState {
 <p>Create <code>src/controllers/hello.rs</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use crate::state::AppState;
-use r2e::prelude::*;
+</span>use r2e::prelude::*;
 
-#[derive(Controller)]
-#[controller(path = "/hello", state = AppState)]
+#[controller(path = "/hello")]
 pub struct HelloController;
 
 #[routes]
@@ -233,31 +225,64 @@ impl HelloController {
     }
 }
 <span class="boring">}</span></code></pre>
-<h2 id="4-wire-it-up-in-main"><a class="header" href="#4-wire-it-up-in-main">4. Wire it up in main</a></h2>
-<p>Replace <code>src/main.rs</code>:</p>
-<pre class="playground"><code class="language-rust">use r2e::prelude::*;
-use r2e::plugins::{Health, Tracing};
+<h2 id="4-define-the-application-once"><a class="header" href="#4-define-the-application-once">4. Define the application once</a></h2>
+<p>Create <code>src/env.rs</code> for resources that must survive hot-patches:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Clone, Default)]
+pub struct AppEnv;
 
-mod controllers;
-mod state;
+pub async fn setup_env() -&gt; AppEnv {
+    AppEnv
+}
+<span class="boring">}</span></code></pre>
+<p>Create the canonical <code>src/app.rs</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+pub mod controllers;
+pub mod env;
 
 use controllers::hello::HelloController;
-use state::AppState;
+use env::{setup_env, AppEnv};
 
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
+pub struct MyApp;
 
-    AppBuilder::new()
-        .build_state::&lt;AppState, _&gt;()
-        .await
-        .with(Health)
-        .with(Tracing)
-        .register_controller::&lt;HelloController&gt;()
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
-}</code></pre>
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -&gt; AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, _env: AppEnv) -&gt; impl BootableApp {
+        b.load_config::&lt;()&gt;()
+            .plugin(Health)
+            .plugin(Tracing)
+            .build_state().await
+            .register_controller::&lt;HelloController&gt;()
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Expose the same app type to integration tests from <code>src/lib.rs</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>include!("app.rs");
+<span class="boring">}</span></code></pre>
+<p>Then replace <code>src/main.rs</code> with the standard entrypoint:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>r2e::app_main!(MyApp);
+<span class="boring">}</span></code></pre>
+<p><code>app_main!</code> includes the same <code>app.rs</code> in the binary, generates Tokio <code>main</code>,
+and handles normal serving or hot reload. <code>build_state()</code> takes no type
+arguments; controllers are registered after it.</p>
+<blockquote>
+<p><strong>Large apps:</strong> if your bean graph grows past ~127 registrations, add
+<code>#![recursion_limit = "512"]</code> at the top of both <code>main.rs</code> and <code>lib.rs</code>.
+<code>r2e doctor</code> warns as you approach the threshold.</p>
+</blockquote>
 <h2 id="5-run-it"><a class="header" href="#5-run-it">5. Run it</a></h2>
 <pre><code class="language-bash">cargo run
 </code></pre>
@@ -276,7 +301,7 @@ curl http://localhost:3000/health
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use std::sync::Arc;
-use tokio::sync::RwLock;
+use r2e::rt::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use r2e::prelude::*;
 
@@ -318,14 +343,12 @@ impl UserService {
 <p>Create <code>src/controllers/user.rs</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use crate::state::AppState;
-use crate::services::{User, UserService};
+</span>use crate::services::{User, UserService};
 use r2e::prelude::*;
 
-#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
-    #[inject] user_service: UserService,
+    #[inject] user_service: UserService,   // resolved from the bean graph by type
 }
 
 #[routes]
@@ -342,52 +365,50 @@ impl UserController {
     }
 }
 <span class="boring">}</span></code></pre>
-<p>Update <code>src/state.rs</code> to include the service:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::prelude::*;
-use crate::services::UserService;
-
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub config: R2eConfig,
-}
-<span class="boring">}</span></code></pre>
+<p>No state struct to edit — registering <code>UserService</code> in <code>App::build</code> (next step)
+is all it takes. The controller’s <code>#[inject] user_service: UserService</code>
+field is resolved from the graph by type.</p>
 <p>Update <code>src/controllers/mod.rs</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>pub mod hello;
 pub mod user;
 <span class="boring">}</span></code></pre>
-<p>Update <code>src/main.rs</code>:</p>
-<pre class="playground"><code class="language-rust">use r2e::prelude::*;
-use r2e::plugins::{Health, Tracing};
+<p>Update <code>src/app.rs</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
 
-mod controllers;
-mod services;
-mod state;
+pub mod controllers;
+pub mod env;
+pub mod services;
 
 use controllers::hello::HelloController;
 use controllers::user::UserController;
-use state::AppState;
+use env::{setup_env, AppEnv};
 
-#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
+pub struct MyApp;
 
-    AppBuilder::new()
-        .with_bean::&lt;services::UserService&gt;()
-        .build_state::&lt;AppState, _&gt;()
-        .await
-        .with(Health)
-        .with(Tracing)
-        .register_controller::&lt;HelloController&gt;()
-        .register_controller::&lt;UserController&gt;()
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
-}</code></pre>
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -&gt; AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, _env: AppEnv) -&gt; impl BootableApp {
+        b.load_config::&lt;()&gt;()
+            .register::&lt;services::UserService&gt;()
+            .plugin(Health)
+            .plugin(Tracing)
+            .build_state().await
+            .register_controllers::&lt;(HelloController, UserController)&gt;()
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Multiple controllers can be registered in one call with the tuple form
+<code>.register_controllers::&lt;(A, B, ...)&gt;()</code> (arity 1..=16), or one at a time with
+<code>.register_controller::&lt;T&gt;()</code>.</p>
 <p>Test:</p>
 <pre><code class="language-bash">curl http://localhost:3000/users
 # [{"id":1,"name":"Alice"},{"id":2,"name":"Bob"}]

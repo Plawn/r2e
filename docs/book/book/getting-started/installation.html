@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,15 +186,14 @@
 <h2 id="adding-r2e-to-a-project"><a class="header" href="#adding-r2e-to-a-project">Adding R2E to a project</a></h2>
 <p>Add R2E and its common dependencies to your <code>Cargo.toml</code>:</p>
 <pre><code class="language-toml">[dependencies]
-r2e = { version = "0.1", features = ["full", "validation"] }
-tokio = { version = "1", features = ["full"] }
+r2e = { version = "0.3", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 </code></pre>
 <p>The <code>"full"</code> feature enables all R2E sub-crates (security, events, scheduler, data, cache, rate-limit, openapi, utils). You can also pick individual features:</p>
-<pre><code class="language-toml">r2e = { version = "0.1", features = ["security", "data", "openapi"] }
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["security", "data", "openapi"] }
 </code></pre>
 <h3 id="available-features"><a class="header" href="#available-features">Available features</a></h3>
 <div class="table-wrapper">
@@ -206,13 +205,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 <tr><td><code>security</code></td><td>JWT/OIDC authentication (<code>r2e-security</code>)</td></tr>
 <tr><td><code>events</code></td><td>In-process event bus (<code>r2e-events</code>)</td></tr>
 <tr><td><code>scheduler</code></td><td>Background task scheduling (<code>r2e-scheduler</code>)</td></tr>
-<tr><td><code>data</code></td><td>Data access abstractions (<code>r2e-data</code>, <code>r2e-data-sqlx</code>)</td></tr>
+<tr><td><code>sqlx-{sqlite,postgres,mysql}</code></td><td>Managed SQLx transaction and selected driver</td></tr>
+<tr><td><code>diesel-{sqlite,postgres,mysql}</code></td><td>Managed Diesel transaction and selected driver</td></tr>
 <tr><td><code>cache</code></td><td>TTL cache with pluggable backends (<code>r2e-cache</code>)</td></tr>
 <tr><td><code>rate-limit</code></td><td>Token-bucket rate limiting (<code>r2e-rate-limit</code>)</td></tr>
-<tr><td><code>openapi</code></td><td>OpenAPI 3.0.3 spec generation (<code>r2e-openapi</code>)</td></tr>
+<tr><td><code>openapi</code></td><td>OpenAPI 3.1.0 spec generation (<code>r2e-openapi</code>)</td></tr>
 <tr><td><code>utils</code></td><td>Built-in interceptors: Logged, Timed, Cache (<code>r2e-utils</code>)</td></tr>
-<tr><td><code>validation</code></td><td><code>Validated&lt;T&gt;</code> extractor (<code>validator</code> crate integration)</td></tr>
-<tr><td><code>full</code></td><td>Enables all features above</td></tr>
+<tr><td><code>static</code></td><td>Embedded static file serving with SPA support (<code>r2e-static</code>)</td></tr>
+<tr><td><code>full</code></td><td>Enables all non-database features above; add a <code>sqlx-*</code> or <code>diesel-*</code> feature separately for a database driver</td></tr>
 </tbody>
 </table>
 </div>
@@ -225,6 +225,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 <li><code>r2e new &lt;name&gt;</code> — scaffold a new project</li>
 <li><code>r2e dev</code> — start a development server with hot-reload</li>
 <li><code>r2e generate</code> — generate controllers, services, and CRUD scaffolds</li>
+<li><code>r2e test</code> — run tests, optionally with <code>--coverage</code> or SonarQube LCOV output</li>
 <li><code>r2e doctor</code> — check your project setup</li>
 <li><code>r2e routes</code> — list all registered routes</li>
 </ul>
@@ -239,7 +240,7 @@ cd hello-r2e
 # Run the app
 cargo run
 </code></pre>
-<p>You should see the server start on <code>http://localhost:8080</code>. Visit <code>http://localhost:8080/</code> to see “Hello, World!” and <code>http://localhost:8080/health</code> for the health check.</p>
+<p>You should see the server start on <code>http://localhost:3000</code> (the scaffolded <code>application.yaml</code> sets <code>server.port: 3000</code>, which is also the default when unset). Visit <code>http://localhost:3000/</code> to see “Hello, World!” and <code>http://localhost:3000/health</code> for the health check.</p>
 
                     </main>
 

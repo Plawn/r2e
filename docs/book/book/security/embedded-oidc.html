@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>TestApp - R2E — Rust Enterprise Edition</title>
+        <title>Embedded OIDC Server - R2E — Rust Enterprise Edition</title>
 
 
         <!-- Custom HTML head -->
@@ -177,332 +177,471 @@
 
                 <div id="mdbook-content" class="content">
                     <main>
-                        <h1 id="testapp"><a class="header" href="#testapp">TestApp</a></h1>
-<p><code>TestApp</code> provides an HTTP client for integration testing without starting a TCP server.</p>
-<h2 id="creating-a-testapp"><a class="header" href="#creating-a-testapp">Creating a TestApp</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e_test::TestApp;
-
-let app = TestApp::from_builder(
-    AppBuilder::new()
-        .build_state()
-        .await
-        .register_controller::&lt;UserController&gt;(),
-);
-<span class="boring">}</span></code></pre>
-<h2 id="http-methods"><a class="header" href="#http-methods">HTTP methods</a></h2>
-<p>All methods return a <code>TestRequest</code> builder. Call <code>.send().await</code> to execute the request.</p>
-<h3 id="simple-requests"><a class="header" href="#simple-requests">Simple requests</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// GET
-let resp = app.get("/users").send().await;
-
-// POST with JSON
-let resp = app.post("/users")
-    .json(&amp;serde_json::json!({
-        "name": "Alice",
-        "email": "alice@example.com"
-    }))
-    .send()
-    .await;
-
-// PUT with JSON
-let resp = app.put("/users/1")
-    .json(&amp;updated_user)
-    .send()
-    .await;
-
-// PATCH
-let resp = app.patch("/users/1")
-    .json(&amp;partial_update)
-    .send()
-    .await;
-
-// DELETE
-let resp = app.delete("/users/1").send().await;
-<span class="boring">}</span></code></pre>
-<h3 id="authenticated-requests"><a class="header" href="#authenticated-requests">Authenticated requests</a></h3>
-<p>Use <code>.bearer()</code> to add a Bearer token:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let jwt = TestJwt::new();
-let token = jwt.token("user-1", &amp;["user"]);
-
-let resp = app.get("/users").bearer(&amp;token).send().await;
-
-let resp = app.post("/users")
-    .json(&amp;body)
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="custom-headers"><a class="header" href="#custom-headers">Custom headers</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users")
-    .header("X-Request-Id", "test-123")
-    .header("Accept-Language", "fr")
-    .bearer(&amp;token)
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="query-parameters"><a class="header" href="#query-parameters">Query parameters</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Single parameter
-let resp = app.get("/users")
-    .query("page", "1")
-    .query("size", "20")
-    .send()
-    .await;
-
-// Multiple parameters at once
-let resp = app.get("/search")
-    .queries([("q", "rust"), ("lang", "en")])
-    .send()
-    .await;
-
-// Works with existing query string in the path
-let resp = app.get("/users?active=true")
-    .query("page", "1")
-    .send()
-    .await;
-// Result: /users?active=true&amp;page=1
-<span class="boring">}</span></code></pre>
-<h3 id="form-data"><a class="header" href="#form-data">Form data</a></h3>
-<p>Send URL-encoded form bodies:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.post("/login")
-    .form(&amp;[("username", "alice"), ("password", "secret")])
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="cookies"><a class="header" href="#cookies">Cookies</a></h3>
-<p>Add cookies to a request:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/dashboard")
-    .cookie("session", "abc123")
-    .cookie("theme", "dark")
-    .send()
-    .await;
-<span class="boring">}</span></code></pre>
-<h3 id="arbitrary-method"><a class="header" href="#arbitrary-method">Arbitrary method</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use http::Method;
-
-let resp = app.request(Method::OPTIONS, "/users").send().await;
-<span class="boring">}</span></code></pre>
-<h2 id="testresponse"><a class="header" href="#testresponse">TestResponse</a></h2>
-<h3 id="status-assertions"><a class="header" href="#status-assertions">Status assertions</a></h3>
-<p>Common status codes have named helpers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_ok();                    // 200
-resp.assert_created();               // 201
-resp.assert_no_content();            // 204
-resp.assert_bad_request();           // 400
-resp.assert_unauthorized();          // 401
-resp.assert_forbidden();             // 403
-resp.assert_not_found();             // 404
-resp.assert_conflict();              // 409
-resp.assert_unprocessable();         // 422
-resp.assert_too_many_requests();     // 429
-resp.assert_internal_server_error(); // 500
-resp.assert_status(StatusCode::IM_A_TEAPOT); // any status
-<span class="boring">}</span></code></pre>
-<p>Assertion messages include the response body for easier debugging:</p>
-<pre><code>Expected 200 OK, got 403 Forbidden
-Body: {"error":"Forbidden"}
+                        <h1 id="embedded-oauthjwt-issuer"><a class="header" href="#embedded-oauthjwt-issuer">Embedded OAuth/JWT Issuer</a></h1>
+<p><code>r2e-oidc</code> provides a local OAuth-style JWT issuer embedded directly in your application. It issues RS256 access tokens without requiring an external identity provider (Keycloak, Auth0, etc.). Ideal for development, prototyping, and monolithic applications.</p>
+<p>It is not a full browser-facing OpenID Connect Provider: it does not implement an authorization endpoint, Authorization Code + PKCE, redirects, nonces, or ID tokens. Use an external provider for SSO, federation, or multi-application login.</p>
+<h2 id="installation"><a class="header" href="#installation">Installation</a></h2>
+<p>Enable the <code>oidc</code> feature:</p>
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["security", "oidc"] }
 </code></pre>
-<h3 id="json-path-assertions"><a class="header" href="#json-path-assertions">JSON-path assertions</a></h3>
-<p>Assert directly on nested values in the response body using dot-separated paths,
-array indices <code>[N]</code>, and <code>len()</code>/<code>size()</code> terminals:</p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick start</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>app.get("/filter/1")
-    .bearer(&amp;token)
-    .send()
-    .await
-    .assert_ok()
-    .assert_json_path("tagGroups.len()", 2)
-    .assert_json_path("tagGroups[0].name", "test Group")
-    .assert_json_path("tagGroups[0].tags.len()", 1)
-    .assert_json_path("meta.page", 1)
-    .assert_json_path("active", true);
+</span>use r2e::prelude::*;
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
+
+let users = InMemoryUserStore::new()
+    .add_user("alice", "password123", OidcUser {
+        sub: "user-1".into(),
+        email: Some("alice@example.com".into()),
+        roles: vec!["admin".into()],
+        ..Default::default()
+    })
+    .add_user("bob", "secret456", OidcUser {
+        sub: "user-2".into(),
+        email: Some("bob@example.com".into()),
+        roles: vec!["user".into()],
+        ..Default::default()
+    });
+
+let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
+    .with_user_store(users);
+
+AppBuilder::new()
+    .plugin(oidc)                              // provides Arc&lt;JwtClaimsValidator&gt;
+    .build_state().await
+    .register_controller::&lt;UserController&gt;()
+    .serve("0.0.0.0:3000").await.unwrap();
 <span class="boring">}</span></code></pre>
-<h4 id="path-syntax"><a class="header" href="#path-syntax">Path syntax</a></h4>
+<p>That’s it. <code>AuthenticatedUser</code> works immediately — no need to manually configure a <code>JwtClaimsValidator</code>.</p>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<p><code>OidcServer</code> is a <code>Plugin</code>. During installation it:</p>
+<ol>
+<li><strong>Generates an RSA-2048 key pair</strong> for signing tokens</li>
+<li><strong>Creates a <code>JwtClaimsValidator</code></strong> with the public key and injects it into the bean graph</li>
+<li><strong>Registers token, metadata, JWKS, and userinfo endpoints</strong> via a deferred action (after state construction)</li>
+</ol>
+<p>Issued tokens are validated locally — no network requests, no JWKS cache.</p>
+<h2 id="hot-reload-support-oidcruntime"><a class="header" href="#hot-reload-support-oidcruntime">Hot-reload support (<code>OidcRuntime</code>)</a></h2>
+<p>By default, <code>OidcServer</code> regenerates RSA keys and rebuilds internal state on each call to <code>install()</code>. With hot-reload (<code>r2e dev</code>), <code>main()</code> is re-executed on each code patch, which invalidates all previously issued tokens and loses in-memory data (user store, client registry).</p>
+<p><code>OidcServer::build()</code> separates the expensive construction (once) from route registration (on each patch). It returns an <code>OidcRuntime</code> — a <code>Clone</code>-able handle that preserves RSA keys, the user store, and the client registry across hot-reload cycles.</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
+
+// App::setup() — called once, before the hot-reload loop
+let users = InMemoryUserStore::new()
+    .add_user("alice", "password123", OidcUser {
+        sub: "user-1".into(),
+        roles: vec!["admin".into()],
+        ..Default::default()
+    });
+
+let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
+    .with_user_store(users)
+    .build(); // returns OidcRuntime
+
+// App::build(b, env) — called on each hot-patch
+AppBuilder::new()
+    .plugin(oidc.clone()) // reuses the same keys and state
+    .build_state().await
+    .register_controller::&lt;UserController&gt;()
+    .serve("0.0.0.0:3000").await.unwrap();
+<span class="boring">}</span></code></pre>
+<p>Using <code>OidcServer</code> directly as a plugin (without <code>.build()</code>) works. Persist a signing key with <code>.with_signing_key_pem(...)</code>, or build one <code>OidcRuntime</code> in setup, if tokens must survive reloads/restarts.</p>
+<h2 id="exposed-endpoints"><a class="header" href="#exposed-endpoints">Exposed endpoints</a></h2>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Path</th><th>Resolves to</th></tr>
+<tr><th>Method</th><th>Path</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>"name"</code></td><td><code>root["name"]</code></td></tr>
-<tr><td><code>"user.email"</code></td><td><code>root["user"]["email"]</code></td></tr>
-<tr><td><code>"users[0]"</code></td><td><code>root["users"][0]</code></td></tr>
-<tr><td><code>"users[0].name"</code></td><td><code>root["users"][0]["name"]</code></td></tr>
-<tr><td><code>"users.len()"</code></td><td>length of <code>root["users"]</code> array</td></tr>
-<tr><td><code>"groups[0].tags.size()"</code></td><td>length of <code>root["groups"][0]["tags"]</code></td></tr>
-<tr><td><code>"meta.len()"</code></td><td>number of keys in <code>root["meta"]</code> object</td></tr>
+<tr><td><code>POST</code></td><td><code>/oauth/token</code></td><td>Token issuance (<code>client_credentials</code>; optional development <code>password</code>)</td></tr>
+<tr><td><code>GET</code></td><td><code>/.well-known/openid-configuration</code></td><td>Local issuer metadata</td></tr>
+<tr><td><code>GET</code></td><td><code>/.well-known/jwks.json</code></td><td>Public key in JWKS format</td></tr>
+<tr><td><code>GET</code> / <code>POST</code></td><td><code>/userinfo</code></td><td>User information (requires a user Bearer token with <code>openid</code> scope)</td></tr>
 </tbody>
 </table>
 </div>
-<h4 id="custom-predicates"><a class="header" href="#custom-predicates">Custom predicates</a></h4>
+<h3 id="obtaining-a-token-development-password-grant"><a class="header" href="#obtaining-a-token-development-password-grant">Obtaining a token (development password grant)</a></h3>
+<p>The password grant is disabled by default. Enable it explicitly only for local fixtures:</p>
+<pre><code class="language-bash">curl -X POST http://localhost:3000/oauth/token \
+  -d "grant_type=password" \
+  -d "username=alice" \
+  -d "password=password123"
+</code></pre>
+<p>Response:</p>
+<pre><code class="language-json">{
+  "access_token": "eyJhbGciOiJSUzI1NiIs...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+</code></pre>
+<h3 id="using-the-token"><a class="header" href="#using-the-token">Using the token</a></h3>
+<pre><code class="language-bash">curl http://localhost:3000/users/me \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
+</code></pre>
+<h3 id="querying-userinfo"><a class="header" href="#querying-userinfo">Querying userinfo</a></h3>
+<pre><code class="language-bash">curl http://localhost:3000/userinfo \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIs..."
+</code></pre>
+<p>Response:</p>
+<pre><code class="language-json">{
+  "sub": "user-1",
+  "email": "alice@example.com",
+  "roles": ["admin"]
+}
+</code></pre>
+<h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
+<p>The builder offers several customization options:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>resp.assert_json_path_fn("scores", |v| {
-    v.as_array().unwrap().iter().all(|s| s.as_f64().unwrap() &gt; 0.0)
-});
+</span>let oidc = OidcServer::new()
+    .issuer("https://myapp.example.com")   // `iss` claim (default: "http://localhost:3000")
+    .audience("my-app")                     // `aud` claim (default: "r2e-app")
+    .token_ttl(7200)                        // lifetime in seconds (default: 3600)
+    .base_path("/auth")                     // endpoint prefix (default: "")
+    .with_signing_key_pem(private_key_pem)   // persist keys across process restarts
+    .max_credential_verifications(16)        // bound concurrent Argon2 work
+    .with_user_store(users);
 <span class="boring">}</span></code></pre>
-<h4 id="extracting-values"><a class="header" href="#extracting-values">Extracting values</a></h4>
+<p>With <code>base_path("/auth")</code>, the endpoints become:</p>
+<ul>
+<li><code>POST /auth/oauth/token</code></li>
+<li><code>GET /auth/.well-known/openid-configuration</code></li>
+<li><code>GET /auth/.well-known/jwks.json</code></li>
+<li><code>GET /auth/userinfo</code></li>
+</ul>
+<p>The canonical JWT issuer also includes the base path. For example, issuer <code>https://myapp.example.com</code> plus <code>base_path("/auth")</code> yields <code>iss = "https://myapp.example.com/auth"</code>.</p>
+<h2 id="user-store"><a class="header" href="#user-store">User store</a></h2>
+<h3 id="inmemoryuserstore"><a class="header" href="#inmemoryuserstore">InMemoryUserStore</a></h3>
+<p>The default in-memory store, suitable for development and testing:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let name: String = resp.json_path("users[0].name");
-let count: usize = resp.json_path("items.len()");
+</span>let users = InMemoryUserStore::new()
+    .add_user("alice", "password123", OidcUser {
+        sub: "user-1".into(),
+        email: Some("alice@example.com".into()),
+        roles: vec!["admin".into()],
+        extra_claims: HashMap::from([
+            ("tenant_id".into(), json!("tenant-42")),
+        ]),
+    });
 <span class="boring">}</span></code></pre>
-<h3 id="json-contains-partial-matching"><a class="header" href="#json-contains-partial-matching">JSON contains (partial matching)</a></h3>
-<p>Assert that the response JSON contains a subset of keys/values:</p>
+<p>Passwords are hashed with <strong>Argon2</strong> — plaintext passwords are never stored.</p>
+<h3 id="oidcuser"><a class="header" href="#oidcuser">OidcUser</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>// Object subset matching
-resp.assert_json_contains(serde_json::json!({
-    "name": "Alice",
-    "status": "active"
-}));
-// Passes even if response has extra fields like "id", "email", etc.
-
-// Array subset matching — each expected element must exist somewhere in the actual array
-resp.assert_json_contains(serde_json::json!({
-    "tags": ["rust", "api"]
-}));
-// Passes even if actual tags are ["rust", "web", "api"]
-
-// Partial matching at a specific path
-resp.assert_json_path_contains("users[0]", serde_json::json!({"name": "Alice"}));
-<span class="boring">}</span></code></pre>
-<p>The <code>json_contains</code> function is also exported for custom assertions:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e_test::json_contains;
-
-assert!(json_contains(&amp;actual, &amp;expected));
-<span class="boring">}</span></code></pre>
-<h3 id="json-shape-validation"><a class="header" href="#json-shape-validation">JSON shape validation</a></h3>
-<p>Assert the response matches a type structure without checking exact values.
-Schema values serve as type exemplars (<code>0</code> = number, <code>""</code> = string, <code>true</code> = boolean):</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_json_shape(serde_json::json!({
-    "id": 0,
-    "name": "",
-    "active": true,
-    "tags": [""],
-    "profile": {
-        "bio": "",
-        "verified": true
-    }
-}));
-<span class="boring">}</span></code></pre>
-<h3 id="header-assertions"><a class="header" href="#header-assertions">Header assertions</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>resp.assert_header("content-type", "application/json");
-resp.assert_header_exists("x-request-id");
-<span class="boring">}</span></code></pre>
-<h3 id="header-access"><a class="header" href="#header-access">Header access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let content_type = resp.header("content-type");
-assert_eq!(content_type, Some("application/json"));
-<span class="boring">}</span></code></pre>
-<h3 id="cookie-access"><a class="header" href="#cookie-access">Cookie access</a></h3>
-<p>Read cookies from <code>Set-Cookie</code> response headers:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>// Get a specific cookie value
-let session = resp.cookie("session_id");
-assert_eq!(session, Some("abc123".to_string()));
-
-// Get all Set-Cookie header values
-let all_cookies = resp.cookies();
-<span class="boring">}</span></code></pre>
-<h3 id="body-access"><a class="header" href="#body-access">Body access</a></h3>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = resp.json();
-let body: String = resp.text();
-<span class="boring">}</span></code></pre>
-<h3 id="chaining"><a class="header" href="#chaining">Chaining</a></h3>
-<p>All assertions return <code>&amp;self</code> for chaining:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let users: Vec&lt;User&gt; = app
-    .get("/users")
-    .bearer(&amp;token)
-    .send()
-    .await
-    .assert_ok()
-    .assert_json_path("meta.total", 3)
-    .json();
-<span class="boring">}</span></code></pre>
-<blockquote>
-<p><strong>Note:</strong> Assertions return <code>&amp;Self</code> (a reference). If you need to use the response after an assertion, bind the response first:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>let resp = app.get("/users").bearer(&amp;token).send().await;
-resp.assert_ok();
-let users: Vec&lt;User&gt; = resp.json();
-<span class="boring">}</span></code></pre>
-</blockquote>
-<h2 id="complete-example"><a class="header" href="#complete-example">Complete example</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>#[r2e::test(app = my_app::MyApp)]
-async fn crud_flow(app: TestApp) {
-    // List users
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 2);
-
-    // Create user
-    app.post("/users")
-        .as_user("user-1", &amp;["admin"])
-        .json(&amp;serde_json::json!({
-            "name": "Charlie",
-            "email": "charlie@example.com"
-        }))
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("name", "Charlie");
-
-    // Verify creation
-    app.get("/users")
-        .as_user("user-1", &amp;["admin"])
-        .send()
-        .await
-        .assert_ok()
-        .assert_json_path("len()", 3);
+</span>pub struct OidcUser {
+    pub sub: String,                                    // unique identifier
+    pub email: Option&lt;String&gt;,                          // email address
+    pub roles: Vec&lt;String&gt;,                             // roles for authorization
+    pub extra_claims: HashMap&lt;String, serde_json::Value&gt;, // additional claims
 }
 <span class="boring">}</span></code></pre>
+<p><code>extra_claims</code> are merged into the JWT. Reserved claims (<code>sub</code>, <code>iss</code>, <code>aud</code>, <code>iat</code>, <code>exp</code>, <code>nbf</code>, <code>jti</code>, <code>roles</code>, <code>email</code>, <code>scope</code>, <code>token_use</code>, <code>principal_type</code>, <code>client_id</code>) are ignored to avoid conflicts.</p>
+<h3 id="custom-user-store"><a class="header" href="#custom-user-store">Custom user store</a></h3>
+<p>Implement the <code>UserStore</code> trait to use your own backend (SQLx, Redis, LDAP, etc.):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_oidc::{OidcUser, StoreResult, UserStore, UserStoreError};
+
+struct SqlxUserStore {
+    pool: sqlx::SqlitePool,
+}
+
+impl UserStore for SqlxUserStore {
+    async fn find_by_username(&amp;self, username: &amp;str) -&gt; StoreResult&lt;Option&lt;OidcUser&gt;&gt; {
+        let row = sqlx::query_as::&lt;_, UserRow&gt;(
+            "SELECT sub, email, roles FROM users WHERE username = ?"
+        )
+        .bind(username)
+        .fetch_optional(&amp;self.pool)
+        .await
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
+
+        Ok(row.map(|row| OidcUser {
+            sub: row.sub,
+            email: Some(row.email),
+            roles: serde_json::from_str(&amp;row.roles).unwrap_or_default(),
+            ..Default::default()
+        }))
+    }
+
+    async fn verify_password(&amp;self, username: &amp;str, password: &amp;str) -&gt; StoreResult&lt;bool&gt; {
+        let hash = sqlx::query_scalar::&lt;_, String&gt;(
+            "SELECT password_hash FROM users WHERE username = ?"
+        )
+        .bind(username)
+        .fetch_optional(&amp;self.pool)
+        .await
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
+
+        Ok(match hash {
+            Some(h) =&gt; verify_argon2(&amp;h, password),
+            None =&gt; false,
+        })
+    }
+
+    async fn find_by_sub(&amp;self, sub: &amp;str) -&gt; StoreResult&lt;Option&lt;OidcUser&gt;&gt; {
+        let row = sqlx::query_as::&lt;_, UserRow&gt;(
+            "SELECT sub, email, roles FROM users WHERE sub = ?"
+        )
+        .bind(sub)
+        .fetch_optional(&amp;self.pool)
+        .await
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
+
+        Ok(row.map(|row| OidcUser {
+            sub: row.sub,
+            email: Some(row.email),
+            roles: serde_json::from_str(&amp;row.roles).unwrap_or_default(),
+            ..Default::default()
+        }))
+    }
+
+    async fn authenticate(&amp;self, username: &amp;str, password: &amp;str) -&gt; StoreResult&lt;Option&lt;OidcUser&gt;&gt; {
+        let row = sqlx::query_as::&lt;_, UserRow&gt;(
+            "SELECT sub, email, roles, password_hash FROM users WHERE username = ?"
+        )
+        .bind(username)
+        .fetch_optional(&amp;self.pool)
+        .await
+        .map_err(|e| UserStoreError::new(e.to_string()))?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        if !verify_argon2(&amp;row.password_hash, password) {
+            return Ok(None);
+        }
+
+        Ok(Some(OidcUser {
+            sub: row.sub,
+            email: Some(row.email),
+            roles: serde_json::from_str(&amp;row.roles).unwrap_or_default(),
+            ..Default::default()
+        }))
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Then use it:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>let store = SqlxUserStore { pool: pool.clone() };
+let oidc = OidcServer::new().with_user_store(store);
+<span class="boring">}</span></code></pre>
+<h2 id="client-credentials-grant"><a class="header" href="#client-credentials-grant">Client credentials grant</a></h2>
+<p>For service-to-service communication, configure a <code>ClientRegistry</code>:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::r2e_oidc::ClientRegistry;
+
+let clients = ClientRegistry::new()
+    .add_client("my-service", "service-secret-key")
+    .add_client("batch-worker", "worker-secret");
+
+let oidc = OidcServer::new()
+    .with_user_store(users)
+    .with_client_registry(clients);
+<span class="boring">}</span></code></pre>
+<p>Client secrets are also hashed with Argon2.</p>
+<h3 id="obtaining-a-client-token"><a class="header" href="#obtaining-a-client-token">Obtaining a client token</a></h3>
+<pre><code class="language-bash">curl -X POST http://localhost:3000/oauth/token \
+  -u "my-service:service-secret-key" \
+  -d "grant_type=client_credentials"
+</code></pre>
+<p><code>client_secret_post</code> is still accepted for compatibility:</p>
+<pre><code class="language-bash">curl -X POST http://localhost:3000/oauth/token \
+  -d "grant_type=client_credentials" \
+  -d "client_id=my-service" \
+  -d "client_secret=service-secret-key"
+</code></pre>
+<p>The issued token has <code>sub = "client:&lt;client_id&gt;"</code>, <code>principal_type = "client"</code>, and is rejected by <code>/userinfo</code>.</p>
+<h2 id="jwt-claims"><a class="header" href="#jwt-claims">JWT claims</a></h2>
+<p>Issued tokens contain the following claims:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Claim</th><th>Source</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>sub</code></td><td><code>OidcUser.sub</code> / <code>client:&lt;client_id&gt;</code></td><td>Unique subject identifier</td></tr>
+<tr><td><code>iss</code></td><td>Canonical issuer</td><td>Token issuer</td></tr>
+<tr><td><code>aud</code></td><td>Configuration</td><td>Target audience</td></tr>
+<tr><td><code>iat</code></td><td>Automatic</td><td>Issued-at timestamp</td></tr>
+<tr><td><code>exp</code></td><td>Configuration</td><td>Expiration timestamp</td></tr>
+<tr><td><code>scope</code></td><td>Request/default</td><td>Granted scopes</td></tr>
+<tr><td><code>token_use</code></td><td>Automatic</td><td><code>access</code></td></tr>
+<tr><td><code>principal_type</code></td><td>Automatic</td><td><code>user</code> or <code>client</code></td></tr>
+<tr><td><code>client_id</code></td><td>Client registry</td><td>Present on machine tokens</td></tr>
+<tr><td><code>roles</code></td><td><code>OidcUser.roles</code></td><td>User roles</td></tr>
+<tr><td><code>email</code></td><td><code>OidcUser.email</code></td><td>Email (if set)</td></tr>
+<tr><td><em>custom</em></td><td><code>OidcUser.extra_claims</code></td><td>Additional claims</td></tr>
+</tbody>
+</table>
+</div>
+<p>The signing algorithm is <strong>RS256</strong> (RSA + SHA-256).</p>
+<h2 id="error-handling"><a class="header" href="#error-handling">Error handling</a></h2>
+<p>Error responses follow RFC 6749 (OAuth 2.0):</p>
+<pre><code class="language-json">{
+  "error": "invalid_grant",
+  "error_description": "invalid username or password"
+}
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Error code</th><th>HTTP</th><th>Cause</th></tr>
+</thead>
+<tbody>
+<tr><td><code>invalid_request</code></td><td>400</td><td>Missing or invalid parameter</td></tr>
+<tr><td><code>invalid_grant</code></td><td>400</td><td>Invalid credentials (password grant)</td></tr>
+<tr><td><code>unsupported_grant_type</code></td><td>400</td><td>Unsupported grant type</td></tr>
+<tr><td><code>invalid_client</code></td><td>401</td><td>Invalid client credentials</td></tr>
+<tr><td><code>invalid_token</code></td><td>401</td><td>Missing or invalid token (userinfo)</td></tr>
+<tr><td><code>insufficient_scope</code></td><td>403</td><td>Valid token without required scope</td></tr>
+<tr><td><code>server_error</code></td><td>500</td><td>Internal error</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="full-example"><a class="header" href="#full-example">Full example</a></h2>
+<pre class="playground"><code class="language-rust">use r2e::prelude::*;
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser, ClientRegistry};
+use std::collections::HashMap;
+use serde_json::json;
+
+#[controller(path = "/api")]
+pub struct ApiController {
+    #[inject] user_service: UserService,
+}
+
+#[routes]
+impl ApiController {
+    #[get("/public")]
+    async fn public_data(&amp;self) -&gt; Json&lt;&amp;'static str&gt; {
+        Json("accessible to everyone")
+    }
+
+    #[get("/me")]
+    async fn me(&amp;self, #[inject(identity)] user: AuthenticatedUser) -&gt; Json&lt;AuthenticatedUser&gt; {
+        Json(user)
+    }
+
+    #[get("/admin")]
+    #[roles("admin")]
+    async fn admin(&amp;self, #[inject(identity)] user: AuthenticatedUser) -&gt; Json&lt;&amp;'static str&gt; {
+        Json("admin data")
+    }
+}
+
+#[r2e::main]
+async fn main() {
+    let users = InMemoryUserStore::new()
+        .add_user("alice", "pass", OidcUser {
+            sub: "u1".into(),
+            email: Some("alice@example.com".into()),
+            roles: vec!["admin".into()],
+            ..Default::default()
+        });
+
+    let clients = ClientRegistry::new()
+        .add_client("worker", "worker-secret");
+
+    let oidc = OidcServer::new()
+        .issuer("http://localhost:3000")
+        .enable_password_grant_for_development()
+        .with_user_store(users)
+        .with_client_registry(clients);
+
+    AppBuilder::new()
+        .plugin(oidc)
+        .register::&lt;UserService&gt;()
+        .plugin(Health)
+        .plugin(Tracing)
+        .build_state().await
+        .register_controller::&lt;ApiController&gt;()
+        .serve("0.0.0.0:3000").await.unwrap();
+}</code></pre>
+<h2 id="testing"><a class="header" href="#testing">Testing</a></h2>
+<p><code>r2e-oidc</code> integrates naturally with <code>r2e-test</code>. Use <code>OidcServer</code> in your integration tests:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e_test::TestApp;
+use r2e::r2e_oidc::{OidcServer, InMemoryUserStore, OidcUser};
+
+let users = InMemoryUserStore::new()
+    .add_user("test-user", "test-pass", OidcUser {
+        sub: "test-1".into(),
+        roles: vec!["admin".into()],
+        ..Default::default()
+    });
+
+let oidc = OidcServer::new()
+    .enable_password_grant_for_development()
+    .with_user_store(users);
+
+let app = TestApp::from_builder(
+    AppBuilder::new()
+        .plugin(oidc)
+        .build_state().await
+        .register_controller::&lt;MyController&gt;(),
+);
+
+// 1. Obtain a token
+let token_resp = app.post("/oauth/token")
+    .form(&amp;[
+        ("grant_type", "password"),
+        ("username", "test-user"),
+        ("password", "test-pass"),
+    ])
+    .send()
+    .await;
+token_resp.assert_ok();
+let token: serde_json::Value = token_resp.json();
+let access_token = token["access_token"].as_str().unwrap();
+
+// 2. Use the token
+app.get("/api/me")
+    .bearer(access_token)
+    .send()
+    .await
+    .assert_ok();
+<span class="boring">}</span></code></pre>
+<blockquote>
+<p><strong>Tip:</strong> For simple tests that don’t need the full OAuth flow, <code>TestJwt</code> (see <a href="../testing/test-jwt.html">TestJwt</a>) remains the fastest way to generate test tokens.</p>
+</blockquote>
+<h2 id="when-to-use-r2e-oidc-vs-an-external-provider"><a class="header" href="#when-to-use-r2e-oidc-vs-an-external-provider">When to use r2e-oidc vs an external provider</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Scenario</th><th>Recommendation</th></tr>
+</thead>
+<tbody>
+<tr><td>Local development</td><td><code>r2e-oidc</code> — no external infrastructure needed</td></tr>
+<tr><td>Integration tests</td><td><code>r2e-oidc</code> or <code>TestJwt</code></td></tr>
+<tr><td>Prototyping / MVP</td><td><code>r2e-oidc</code> — simplified deployment</td></tr>
+<tr><td>Monolithic app without SSO</td><td><code>r2e-oidc</code> — built-in user management</td></tr>
+<tr><td>Production with SSO</td><td>External provider (Keycloak, Auth0, etc.)</td></tr>
+<tr><td>Multi-app / federation</td><td>External provider</td></tr>
+</tbody>
+</table>
+</div>
+<p>Migrating to an external provider is transparent: your controllers use <code>AuthenticatedUser</code> in both cases. Only the configuration in <code>main.rs</code> changes.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../testing/test-setup.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../security/jwt-oidc.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../testing/test-jwt.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../security/optional-identity.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -512,11 +651,11 @@ async fn crud_flow(app: TestApp) {
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../testing/test-setup.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../security/jwt-oidc.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../testing/test-jwt.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../security/optional-identity.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

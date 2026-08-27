@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,119 +178,241 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="validation"><a class="header" href="#validation">Validation</a></h1>
-<p>R2E provides a <code>Validated&lt;T&gt;</code> extractor that validates request bodies using the <code>validator</code> crate.</p>
+<p>R2E validates request bodies automatically using the <code>garde</code> crate. If a type derives <code>garde::Validate</code>, validation runs transparently when the body is extracted — no special wrapper needed.</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
-<p>Enable the <code>validation</code> feature:</p>
 <pre><code class="language-toml">[dependencies]
-r2e = { version = "0.1", features = ["validation"] }
-validator = { version = "0.18", features = ["derive"] }
+r2e = { version = "0.3", features = ["full"] }
+garde = { version = "0.23", features = ["derive", "email"] }
 </code></pre>
+<p>Validation is always available — no feature flag required.</p>
 <h2 id="defining-validation-rules"><a class="header" href="#defining-validation-rules">Defining validation rules</a></h2>
 <p>Derive <code>Validate</code> on your request types:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use serde::Deserialize;
-use validator::Validate;
+use garde::Validate;
 
 #[derive(Deserialize, Validate)]
 pub struct CreateUserRequest {
-    #[validate(length(min = 1, max = 100))]
+    #[garde(length(min = 1, max = 100))]
     pub name: String,
 
-    #[validate(email)]
+    #[garde(email)]
     pub email: String,
 
-    #[validate(range(min = 0, max = 150))]
+    #[garde(range(min = 0, max = 150))]
     pub age: Option&lt;i32&gt;,
 
-    #[validate(url)]
+    #[garde(url)]
     pub website: Option&lt;String&gt;,
 }
 <span class="boring">}</span></code></pre>
-<h3 id="available-rules"><a class="header" href="#available-rules">Available rules</a></h3>
+<h3 id="available-rules-garde"><a class="header" href="#available-rules-garde">Available rules (garde)</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Rule</th><th>Description</th></tr>
+<tr><th>Rule</th><th>Attribute</th><th>Description</th></tr>
 </thead>
 <tbody>
-<tr><td><code>length(min = N, max = N)</code></td><td>String length constraints</td></tr>
-<tr><td><code>email</code></td><td>Valid email format</td></tr>
-<tr><td><code>url</code></td><td>Valid URL format</td></tr>
-<tr><td><code>range(min = N, max = N)</code></td><td>Numeric range</td></tr>
-<tr><td><code>regex(path = "PATTERN")</code></td><td>Regex match</td></tr>
-<tr><td><code>contains(pattern = "str")</code></td><td>String contains substring</td></tr>
-<tr><td><code>must_match(other = "field")</code></td><td>Two fields must be equal</td></tr>
-<tr><td><code>custom(function = "fn_name")</code></td><td>Custom validation function</td></tr>
+<tr><td>Length</td><td><code>#[garde(length(min = 1, max = 100))]</code></td><td>String length constraints</td></tr>
+<tr><td>Email</td><td><code>#[garde(email)]</code></td><td>Valid email format</td></tr>
+<tr><td>URL</td><td><code>#[garde(url)]</code></td><td>Valid URL format</td></tr>
+<tr><td>Range</td><td><code>#[garde(range(min = 0, max = 1000))]</code></td><td>Numeric range</td></tr>
+<tr><td>Pattern</td><td><code>#[garde(pattern("regex"))]</code></td><td>Regex match</td></tr>
+<tr><td>Custom</td><td><code>#[garde(custom(my_fn))]</code></td><td>Custom validation function</td></tr>
+<tr><td>Skip</td><td><code>#[garde(skip)]</code></td><td>Don’t validate this field</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="using-validatedt"><a class="header" href="#using-validatedt">Using <code>Validated&lt;T&gt;</code></a></h2>
-<p>Replace <code>Json&lt;T&gt;</code> with <code>Validated&lt;T&gt;</code> in your handler:</p>
+<h2 id="using-in-handlers"><a class="header" href="#using-in-handlers">Using in handlers</a></h2>
+<p>Use <code>Json&lt;T&gt;</code> normally — validation is automatic:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use r2e::prelude::*;
 
 #[post("/")]
-async fn create(&amp;self, Validated(body): Validated&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
+async fn create(&amp;self, Json(body): Json&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
+    // `body` is guaranteed valid here
     Json(self.user_service.create(body.name, body.email).await)
 }
 <span class="boring">}</span></code></pre>
-<p><code>Validated&lt;T&gt;</code> performs two steps:</p>
-<ol>
-<li>Deserializes the JSON body (returns 400 on parse error)</li>
-<li>Runs validation rules (returns 400 with field-level errors)</li>
-</ol>
+<p>Types without <code>#[derive(Validate)]</code> work normally — no validation is performed (zero overhead).</p>
 <h2 id="error-response-format"><a class="header" href="#error-response-format">Error response format</a></h2>
 <p>On validation failure, R2E returns a 400 response with structured errors:</p>
 <pre><code class="language-json">{
-  "error": "Validation failed",
-  "fields": {
-    "name": [
-      {
-        "code": "length",
-        "message": null,
-        "params": {
-          "min": 1,
-          "max": 100,
-          "value": ""
+    "error": "Validation failed",
+    "details": [
+        {
+            "field": "email",
+            "message": "not a valid email address",
+            "code": "validation"
+        },
+        {
+            "field": "name",
+            "message": "length is lower than 1",
+            "code": "validation"
         }
-      }
-    ],
-    "email": [
-      {
-        "code": "email",
-        "message": null,
-        "params": {
-          "value": "not-an-email"
-        }
-      }
     ]
-  }
 }
 </code></pre>
 <h2 id="json-deserialization-errors"><a class="header" href="#json-deserialization-errors">JSON deserialization errors</a></h2>
 <p>If the body can’t be deserialized (e.g., wrong types, missing required fields), R2E returns a 400 before validation runs:</p>
 <pre><code class="language-json">{
-  "error": "Invalid JSON: missing field `name` at line 1 column 2"
+    "error": "Failed to deserialize the JSON body ..."
 }
 </code></pre>
 <h2 id="custom-validation-functions"><a class="header" href="#custom-validation-functions">Custom validation functions</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>fn validate_username(username: &amp;str) -&gt; Result&lt;(), validator::ValidationError&gt; {
-    if username.contains(' ') {
-        return Err(validator::ValidationError::new("no_spaces"));
+</span>fn validate_username(value: &amp;str, _ctx: &amp;()) -&gt; garde::Result {
+    if value.contains(' ') {
+        return Err(garde::Error::new("username must not contain spaces"));
     }
     Ok(())
 }
 
 #[derive(Deserialize, Validate)]
 pub struct CreateUserRequest {
-    #[validate(custom(function = "validate_username"))]
+    #[garde(custom(validate_username))]
     pub username: String,
 }
 <span class="boring">}</span></code></pre>
+<h2 id="params--aggregated-parameter-extraction"><a class="header" href="#params--aggregated-parameter-extraction">Params — aggregated parameter extraction</a></h2>
+<p><code>#[derive(Params)]</code> lets you group path, query, and header parameters into a single struct, similar to JAX-RS <code>@BeanParam</code>. Combined with <code>garde::Validate</code>, all parameters are extracted <strong>and</strong> validated in one step.</p>
+<h3 id="defining-a-params-struct"><a class="header" href="#defining-a-params-struct">Defining a Params struct</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+use garde::Validate;
+
+#[derive(Params, Validate)]
+pub struct GetUserParams {
+    #[path]
+    #[garde(skip)]
+    pub id: u64,
+
+    #[query]
+    #[garde(range(min = 1))]
+    pub page: Option&lt;u32&gt;,
+
+    #[query(name = "q")]
+    #[garde(skip)]
+    pub search: Option&lt;String&gt;,
+
+    #[header("X-Tenant-Id")]
+    #[garde(length(min = 1))]
+    pub tenant_id: String,
+}
+<span class="boring">}</span></code></pre>
+<h3 id="field-attributes"><a class="header" href="#field-attributes">Field attributes</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Attribute</th><th>Source</th><th>Default name</th></tr>
+</thead>
+<tbody>
+<tr><td><code>#[path]</code></td><td>URL path segments</td><td>Field name</td></tr>
+<tr><td><code>#[path(name = "userId")]</code></td><td>URL path segments</td><td>Custom name</td></tr>
+<tr><td><code>#[query]</code></td><td>Query string</td><td>Field name</td></tr>
+<tr><td><code>#[query(name = "q")]</code></td><td>Query string</td><td>Custom name</td></tr>
+<tr><td><code>#[header("X-Custom")]</code></td><td>HTTP headers</td><td>Explicit (required)</td></tr>
+<tr><td><code>#[param(default)]</code></td><td>—</td><td>Uses <code>Default::default()</code> when absent</td></tr>
+<tr><td><code>#[param(default = expr)]</code></td><td>—</td><td>Uses <code>expr</code> when absent</td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><code>Option&lt;T&gt;</code> fields are optional — absent values become <code>None</code></li>
+<li>Non-Option fields are required — absent values return 400 Bad Request</li>
+<li><code>#[param(default)]</code> uses <code>Default::default()</code> when the parameter is absent</li>
+<li><code>#[param(default = expr)]</code> uses the given expression when absent</li>
+<li>Values are parsed via <code>FromStr</code> (supports <code>u32</code>, <code>u64</code>, <code>i64</code>, <code>String</code>, <code>bool</code>, <code>Uuid</code>, etc.)</li>
+</ul>
+<h3 id="using-in-handlers-1"><a class="header" href="#using-in-handlers-1">Using in handlers</a></h3>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[routes]
+impl UserController {
+    #[get("/{id}")]
+    async fn get_user(&amp;self, params: GetUserParams) -&gt; Json&lt;User&gt; {
+        // params.id, params.page, params.search, params.tenant_id
+        // are all extracted and validated automatically
+        let user = self.user_service.find(params.id).await;
+        Json(user)
+    }
+}
+<span class="boring">}</span></code></pre>
+<h3 id="error-responses"><a class="header" href="#error-responses">Error responses</a></h3>
+<p>Missing or unparseable parameters return 400:</p>
+<pre><code class="language-json">{
+    "error": "Missing path parameter 'id'"
+}
+</code></pre>
+<pre><code class="language-json">{
+    "error": "Invalid query parameter 'page': parse error"
+}
+</code></pre>
+<p>If the struct also derives <code>Validate</code>, validation errors are returned in the same format as JSON body validation.</p>
+<h3 id="default-values"><a class="header" href="#default-values">Default values</a></h3>
+<p>Use <code>#[param(default)]</code> or <code>#[param(default = expr)]</code> on non-Option fields to provide a fallback when the parameter is absent, instead of returning 400:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Params)]
+pub struct PaginationParams {
+    #[query]
+    #[param(default = 1)]
+    pub page: u32,
+
+    #[query]
+    #[param(default = 20)]
+    pub size: u32,
+
+    #[query]
+    #[param(default)]           // uses Default::default() → ""
+    pub sort: String,
+}
+<span class="boring">}</span></code></pre>
+<ul>
+<li><code>#[param(default)]</code> — calls <code>Default::default()</code> (the field type must implement <code>Default</code>)</li>
+<li><code>#[param(default = expr)]</code> — uses the given expression (e.g., <code>1</code>, <code>"name".to_string()</code>, <code>MyEnum::Asc</code>)</li>
+</ul>
+<h3 id="openapi-integration"><a class="header" href="#openapi-integration">OpenAPI integration</a></h3>
+<p><code>#[derive(Params)]</code> also generates an implementation of <code>ParamsMetadata</code>, which feeds parameter metadata (name, location, type, required) into the OpenAPI spec. When a <code>Params</code> struct is used as a handler parameter, its fields automatically appear in the generated <code>/openapi.json</code> — no manual annotation needed.</p>
+<h3 id="params-without-validation"><a class="header" href="#params-without-validation">Params without validation</a></h3>
+<p><code>#[derive(Params)]</code> works on its own without <code>Validate</code>. In that case only extraction and type parsing are performed:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[derive(Params)]
+pub struct PaginationParams {
+    #[query]
+    #[param(default = 1)]
+    pub page: u32,
+
+    #[query]
+    #[param(default = 20)]
+    pub size: u32,
+}
+<span class="boring">}</span></code></pre>
+<h2 id="how-it-works"><a class="header" href="#how-it-works">How it works</a></h2>
+<p>The <code>#[routes]</code> macro generates validation calls using an autoref specialization trick:</p>
+<ol>
+<li>Deserialization via <code>Json&lt;T&gt;</code> / extraction via <code>Params</code> (standard Axum <code>FromRequest</code> / <code>FromRequestParts</code>)</li>
+<li>The generated handler code calls <code>(&amp;__AutoValidator(&amp;value)).__maybe_validate()</code></li>
+<li>Method resolution picks the right implementation at compile time:
+<ul>
+<li>If <code>T: garde::Validate</code> → <code>__DoValidate</code> trait (direct match, higher priority) → runs validation</li>
+<li>Otherwise → <code>__SkipValidate</code> trait (autoref fallback, lower priority) → no-op, zero overhead</li>
+</ul>
+</li>
+<li>On validation failure, <code>garde::Report</code> is converted directly to a 400 Bad Request response (bypassing <code>HttpError</code>):
+<ul>
+<li>Each field error has <code>field</code> (path like <code>"email"</code> or <code>"users[0].name"</code>), <code>message</code>, and <code>code</code> (<code>"validation"</code>)</li>
+<li>Empty paths (top-level errors) become <code>"value"</code></li>
+</ul>
+</li>
+<li>The response is returned before the handler body runs — an invalid request never reaches your code</li>
+</ol>
+<p>The JSON response structure is identical to <code>HttpError::Validation</code> (see <a href="./error-handling.html">Error Handling</a>), but the validation path produces the response directly without going through <code>HttpError</code>.</p>
 
                     </main>
 

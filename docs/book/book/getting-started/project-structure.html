@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,18 +181,18 @@
 <p>A typical R2E project follows this layout:</p>
 <pre><code>my-app/
 ├── Cargo.toml
-├── application.yaml              # Base configuration
-├── application-dev.yaml          # Dev profile overrides
-├── application-prod.yaml         # Prod profile overrides
+├── application.yaml              # Configuration
 ├── migrations/                   # SQL migrations (if using data features)
 │   └── 20250101000001_init.sql
 ├── src/
-│   ├── main.rs                   # Application entry point
-│   ├── state.rs                  # AppState definition
+│   ├── app.rs                    # Canonical App implementation and DI graph
+│   ├── env.rs                    # Cold resources retained across hot-patches
+│   ├── lib.rs                    # Includes app.rs for integration tests
+│   ├── main.rs                   # r2e::app_main!(MyApp);
 │   ├── error.rs                  # Custom error type (optional)
 │   ├── models/
 │   │   ├── mod.rs
-│   │   └── user.rs               # Entity definitions, request/response types
+│   │   └── user.rs               # Domain models and request/response types
 │   ├── services/
 │   │   ├── mod.rs
 │   │   └── user_service.rs       # Business logic
@@ -207,47 +207,71 @@
 </code></pre>
 <h2 id="key-files"><a class="header" href="#key-files">Key files</a></h2>
 <h3 id="mainrs--application-entry-point"><a class="header" href="#mainrs--application-entry-point"><code>main.rs</code> — Application entry point</a></h3>
-<p>The main function assembles the application using <code>AppBuilder</code>:</p>
-<pre class="playground"><code class="language-rust">#[tokio::main]
-async fn main() {
-    r2e::init_tracing();
-
-    let config = R2eConfig::load("dev").unwrap_or_else(|_| R2eConfig::empty());
-
-    AppBuilder::new()
-        .with_bean::&lt;UserService&gt;()
-        .build_state::&lt;AppState, _&gt;()
-        .await
-        .with_config(config)
-        .with(Health)
-        .with(Cors::permissive())
-        .with(Tracing)
-        .with(ErrorHandling)
-        .register_controller::&lt;UserController&gt;()
-        .serve("0.0.0.0:3000")
-        .await
-        .unwrap();
-}</code></pre>
-<h3 id="staters--application-state"><a class="header" href="#staters--application-state"><code>state.rs</code> — Application state</a></h3>
-<p>The state struct holds all app-scoped dependencies. <code>BeanState</code> derives <code>FromRef</code> for each field:</p>
+<p>The conventional entry point is deliberately one line:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub user_service: UserService,
-    pub pool: SqlitePool,
-    pub event_bus: EventBus,
-    pub config: R2eConfig,
+</span>r2e::app_main!(MyApp);
+<span class="boring">}</span></code></pre>
+<p>The macro includes <code>src/app.rs</code> in the binary tip crate, generates the Tokio
+<code>main</code>, and invokes the normal or hot-reload launch path. A custom
+<code>#[r2e::main]</code> plus <code>r2e::launch!</code> remains available when needed.</p>
+<h3 id="apprs--canonical-application-assembly"><a class="header" href="#apprs--canonical-application-assembly"><code>app.rs</code> — Canonical application assembly</a></h3>
+<p>Production, dev, and tests share this one <code>App</code> implementation:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>use r2e::prelude::*;
+
+pub mod controllers;
+pub mod env;
+
+use controllers::user::UserController;
+use env::{setup_env, AppEnv};
+
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = AppEnv;
+
+    async fn setup() -&gt; AppEnv {
+        setup_env().await
+    }
+
+    async fn build(b: AppBuilder, _env: AppEnv) -&gt; impl BootableApp {
+        b.load_config::&lt;()&gt;()
+            .register::&lt;UserService&gt;()
+            .plugin(Health)
+            .plugin(Tracing)
+            .build_state().await
+            .register_controller::&lt;UserController&gt;()
+    }
 }
 <span class="boring">}</span></code></pre>
-<h3 id="controllers"><a class="header" href="#controllers">Controllers</a></h3>
-<p>Controllers are structs with <code>#[derive(Controller)]</code> and an impl block with <code>#[routes]</code>. Each method becomes an Axum handler:</p>
+<p><code>build_state()</code> takes no type arguments — the state type is inferred from the
+registered beans. If your bean graph grows past ~127 registrations, add
+<code>#![recursion_limit = "512"]</code> to the crate roots in <code>main.rs</code> and <code>lib.rs</code>
+(<code>r2e doctor</code> warns as you approach the threshold).</p>
+<h3 id="envrs-and-librs"><a class="header" href="#envrs-and-librs"><code>env.rs</code> and <code>lib.rs</code></a></h3>
+<p><code>env.rs</code> owns process-lifetime pools, buses, and clients created by
+<code>App::setup</code>; <code>r2e dev</code> fully restarts when its layout changes. <code>lib.rs</code> is the
+thin test adapter:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>include!("app.rs");
+<span class="boring">}</span></code></pre>
+<h3 id="application-state--inferred-no-struct-to-write"><a class="header" href="#application-state--inferred-no-struct-to-write">Application state — inferred, no struct to write</a></h3>
+<p>R2E has <strong>no hand-written state struct</strong>. Application state is the <em>inferred</em> set
+of beans: each value you <code>.provide(...)</code> and each type you <code>.register::&lt;T&gt;()</code>
+forms the bean graph, and <code>build_state()</code> materializes it into a state that
+controllers and plugins read from <em>by type</em>. Config (<code>R2eConfig</code>) and typed
+<code>#[config(section)]</code> children are registered as beans automatically by
+<code>load_config</code>. There is no <code>state.rs</code> file in an R2E project.</p>
+<h3 id="controllers"><a class="header" href="#controllers">Controllers</a></h3>
+<p>Controllers are structs with <code>#[controller]</code> and an impl block with <code>#[routes]</code>. Each method becomes an Axum handler:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/users")]
 pub struct UserController {
-    #[inject] user_service: UserService,
+    #[inject] user_service: UserService,   // resolved from the bean graph by type
 }
 
 #[routes]
@@ -277,29 +301,25 @@ pub struct User { pub id: i64, pub name: String }
 
 #[derive(Deserialize, Validate)]
 pub struct CreateUserRequest {
-    #[validate(length(min = 1))]
+    #[garde(length(min = 1))]
     pub name: String,
 }
 <span class="boring">}</span></code></pre>
 <h3 id="configuration-files"><a class="header" href="#configuration-files">Configuration files</a></h3>
-<p>YAML files with profile-based overrides and env var overlay:</p>
-<pre><code class="language-yaml"># application.yaml — base config
+<p>YAML file with env var overlay:</p>
+<pre><code class="language-yaml"># application.yaml
 app:
   name: "my-app"
 database:
   url: "sqlite:data.db"
-
-# application-dev.yaml — dev overrides
-database:
-  url: "sqlite::memory:"
 </code></pre>
 <h2 id="convention-over-configuration"><a class="header" href="#convention-over-configuration">Convention over configuration</a></h2>
 <p>R2E follows a few conventions:</p>
 <ul>
 <li>Controllers live in <code>src/controllers/</code> and are registered explicitly via <code>register_controller::&lt;T&gt;()</code></li>
-<li>Services live in <code>src/services/</code> and are registered as beans via <code>with_bean::&lt;T&gt;()</code></li>
-<li>Configuration is loaded from <code>application.yaml</code> (with optional profile overrides)</li>
-<li>The state struct uses <code>#[derive(BeanState)]</code> for automatic <code>FromRef</code> implementations</li>
+<li>Services live in <code>src/services/</code> and are registered as beans via <code>register::&lt;T&gt;()</code></li>
+<li>Configuration is loaded from <code>application.yaml</code> (with env var overlay)</li>
+<li>There is no state struct — application state is the inferred bean graph, materialized by <code>build_state()</code></li>
 </ul>
 
                     </main>

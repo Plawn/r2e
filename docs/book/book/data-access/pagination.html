@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,10 +183,10 @@
 <p><code>Pageable</code> is an Axum <code>Query</code> extractor with pagination parameters:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>use r2e::r2e_data::{Pageable, Page};
+</span>use r2e::prelude::{Pageable, Page};
 
 #[get("/")]
-async fn list(&amp;self, Query(pageable): Query&lt;Pageable&gt;) -&gt; Result&lt;Json&lt;Page&lt;User&gt;&gt;, AppError&gt; {
+async fn list(&amp;self, Query(pageable): Query&lt;Pageable&gt;) -&gt; Result&lt;Json&lt;Page&lt;User&gt;&gt;, HttpError&gt; {
     // pageable.page  — page number (0-based, default: 0)
     // pageable.size  — items per page (default: 20)
     // pageable.sort  — sort field (optional)
@@ -204,10 +204,10 @@ GET /users?page=2&amp;size=10&amp;sort=created_at,desc
 </span>#[derive(Serialize)]
 pub struct Page&lt;T&gt; {
     pub content: Vec&lt;T&gt;,
-    pub total_elements: i64,
-    pub total_pages: i64,
-    pub page: i64,
-    pub size: i64,
+    pub page: u64,
+    pub size: u64,
+    pub total_elements: u64,
+    pub total_pages: u64,
 }
 <span class="boring">}</span></code></pre>
 <h3 id="constructing-a-page"><a class="header" href="#constructing-a-page">Constructing a <code>Page</code></a></h3>
@@ -222,26 +222,26 @@ pub struct Page&lt;T&gt; {
 async fn list(
     &amp;self,
     Query(pageable): Query&lt;Pageable&gt;,
-) -&gt; Result&lt;Json&lt;Page&lt;User&gt;&gt;, AppError&gt; {
-    let offset = pageable.page * pageable.size;
+) -&gt; Result&lt;Json&lt;Page&lt;User&gt;&gt;, HttpError&gt; {
+    let offset = pageable.offset();
 
     // Get total count
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&amp;self.pool)
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+        .map_err(|e| HttpError::internal(e.to_string()))?;
 
     // Get page of results
     let users = sqlx::query_as::&lt;_, User&gt;(
         "SELECT id, name, email FROM users ORDER BY id LIMIT ? OFFSET ?"
     )
-    .bind(pageable.size)
-    .bind(offset)
+    .bind(pageable.size as i64)
+    .bind(offset as i64)
     .fetch_all(&amp;self.pool)
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?;
+    .map_err(|e| HttpError::internal(e.to_string()))?;
 
-    Ok(Json(Page::new(users, &amp;pageable, total.0)))
+    Ok(Json(Page::new(users, &amp;pageable, total.0 as u64)))
 }
 <span class="boring">}</span></code></pre>
 <h3 id="response-format"><a class="header" href="#response-format">Response format</a></h3>
@@ -256,38 +256,12 @@ async fn list(
   "size": 20
 }
 </code></pre>
-<h2 id="with-querybuilder"><a class="header" href="#with-querybuilder">With QueryBuilder</a></h2>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>use r2e::r2e_data::QueryBuilder;
-
-#[get("/")]
-async fn list(
-    &amp;self,
-    Query(pageable): Query&lt;Pageable&gt;,
-) -&gt; Result&lt;Json&lt;Page&lt;User&gt;&gt;, AppError&gt; {
-    let mut qb = QueryBuilder::new("users");
-
-    if let Some(ref sort) = pageable.sort {
-        qb = qb.order_by(sort, true);
-    }
-
-    qb = qb.limit(pageable.size as usize)
-            .offset((pageable.page * pageable.size) as usize);
-
-    let (sql, params) = qb.build_select("id, name, email");
-    let (count_sql, count_params) = QueryBuilder::new("users").build_count();
-
-    // Execute both queries...
-    // Return Page::new(users, &amp;pageable, total)
-}
-<span class="boring">}</span></code></pre>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../data-access/query-builder.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../security/rate-limiting.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -301,7 +275,7 @@ async fn list(
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../data-access/query-builder.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../security/rate-limiting.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

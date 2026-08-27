@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,13 +182,12 @@
 <h2 id="declaring-a-controller"><a class="header" href="#declaring-a-controller">Declaring a controller</a></h2>
 <p>A controller requires two macros working together:</p>
 <ol>
-<li><code>#[derive(Controller)]</code> on the struct — generates the Axum extractor and metadata</li>
+<li><code>#[controller(path = "...")]</code> on the struct — a transforming attribute that generates the controller core, the request-data extractor, the per-request façade, and metadata</li>
 <li><code>#[routes]</code> on the impl block — generates Axum handler functions and route registration</li>
 </ol>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[inject] user_service: UserService,
 }
@@ -201,10 +200,10 @@ impl UserController {
     }
 
     #[get("/{id}")]
-    async fn get_by_id(&amp;self, Path(id): Path&lt;u64&gt;) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    async fn get_by_id(&amp;self, Path(id): Path&lt;u64&gt;) -&gt; Result&lt;Json&lt;User&gt;, HttpError&gt; {
         self.user_service.get_by_id(id).await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("User not found".into()))
+            .ok_or_else(|| HttpError::NotFound("User not found".into()))
     }
 
     #[post("/")]
@@ -213,14 +212,14 @@ impl UserController {
     }
 
     #[put("/{id}")]
-    async fn update(&amp;self, Path(id): Path&lt;u64&gt;, Json(body): Json&lt;UpdateUserRequest&gt;) -&gt; Result&lt;Json&lt;User&gt;, AppError&gt; {
+    async fn update(&amp;self, Path(id): Path&lt;u64&gt;, Json(body): Json&lt;UpdateUserRequest&gt;) -&gt; Result&lt;Json&lt;User&gt;, HttpError&gt; {
         self.user_service.update(id, body).await
             .map(Json)
-            .ok_or_else(|| AppError::NotFound("User not found".into()))
+            .ok_or_else(|| HttpError::NotFound("User not found".into()))
     }
 
     #[delete("/{id}")]
-    async fn delete(&amp;self, Path(id): Path&lt;u64&gt;) -&gt; Result&lt;(), AppError&gt; {
+    async fn delete(&amp;self, Path(id): Path&lt;u64&gt;) -&gt; Result&lt;(), HttpError&gt; {
         self.user_service.delete(id).await
     }
 }
@@ -234,10 +233,13 @@ impl UserController {
 </thead>
 <tbody>
 <tr><td><code>path</code></td><td>No</td><td>URL prefix for all routes (default: <code>""</code>)</td></tr>
-<tr><td><code>state</code></td><td>Yes</td><td>The application state type</td></tr>
 </tbody>
 </table>
 </div>
+<p>There is no <code>state</code> parameter: <code>#[inject]</code> fields are resolved <strong>by type</strong> from the
+bean graph, so a controller with only consumers/scheduled tasks (no routes) can be
+declared as a bare <code>#[controller]</code>. The application state type is inferred by the
+builder — you never write it.</p>
 <h2 id="http-method-attributes"><a class="header" href="#http-method-attributes">HTTP method attributes</a></h2>
 <p>Mark handler methods with the HTTP method they respond to:</p>
 <div class="table-wrapper">
@@ -263,43 +265,105 @@ impl UserController {
 async fn add_comment(
     &amp;self,
     Path(id): Path&lt;u64&gt;,                    // Path parameter
-    Json(body): Json&lt;CreateCommentRequest&gt;,  // JSON body
+    Json(body): Json&lt;CreateCommentRequest&gt;,  // JSON body (auto-validated if T: Validate)
     Query(params): Query&lt;PaginationParams&gt;,  // Query string
     headers: HeaderMap,                      // Headers
-) -&gt; Result&lt;Json&lt;Comment&gt;, AppError&gt; {
+) -&gt; Result&lt;Json&lt;Comment&gt;, HttpError&gt; {
     // ...
 }
 <span class="boring">}</span></code></pre>
-<h2 id="injection-scopes"><a class="header" href="#injection-scopes">Injection scopes</a></h2>
-<p>Controller fields support three injection scopes:</p>
+<p>You can also aggregate multiple parameter sources into a single struct using <code>#[derive(Params)]</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[derive(Params)]
+pub struct CommentParams {
+    #[path]
+    pub id: u64,
+    #[query]
+    pub page: Option&lt;u32&gt;,
+    #[header("X-Tenant-Id")]
+    pub tenant_id: String,
+}
+
+#[get("/{id}/comments")]
+async fn list_comments(&amp;self, params: CommentParams) -&gt; Json&lt;Vec&lt;Comment&gt;&gt; {
+    // params.id, params.page, params.tenant_id extracted automatically
+}
+<span class="boring">}</span></code></pre>
+<p>See <a href="./validation.html#params--aggregated-parameter-extraction">Validation</a> for details on <code>#[derive(Params)]</code> and its integration with garde validation.</p>
+<h2 id="injection-scopes"><a class="header" href="#injection-scopes">Injection scopes</a></h2>
+<p>Controller fields support four injection scopes — two app-scoped (on the core)
+and two request-scoped (on the per-request façade):</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/users")]
 pub struct UserController {
-    #[inject]              user_service: UserService,     // App-scoped (from state)
-    #[inject(identity)]    user: AuthenticatedUser,       // Request-scoped (from request)
-    #[config("app.name")]  app_name: String,              // Config-scoped (from R2eConfig)
+    #[inject]              user_service: UserService,     // App-scoped (from the bean graph)
+    #[config("app.name")]  app_name: String,              // App-scoped (from R2eConfig)
+    #[inject(identity)]    user: AuthenticatedUser,        // Request-scoped auth identity
+    #[inject(request)]     tenant: TenantId,               // Request-scoped (any FromRequestParts)
 }
 <span class="boring">}</span></code></pre>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Scope</th><th>Attribute</th><th>Timing</th><th>Notes</th></tr>
+<tr><th>Scope</th><th>Attribute</th><th>Lives on</th><th>Timing</th><th>Notes</th></tr>
 </thead>
 <tbody>
-<tr><td>App</td><td><code>#[inject]</code></td><td>Per request</td><td>Cloned from state. Must be <code>Clone + Send + Sync</code>.</td></tr>
-<tr><td>Request</td><td><code>#[inject(identity)]</code></td><td>Per request</td><td>Extracted from request parts. Must implement <code>Identity</code>.</td></tr>
-<tr><td>Config</td><td><code>#[config("key")]</code></td><td>Per request</td><td>Looked up from <code>R2eConfig</code>.</td></tr>
+<tr><td>App</td><td><code>#[inject]</code></td><td>Core</td><td>Built once</td><td>Resolved by type from the bean graph. Must be <code>Clone + Send + Sync</code>.</td></tr>
+<tr><td>Config</td><td><code>#[config("key")]</code></td><td>Core</td><td>Built once</td><td>Looked up from <code>R2eConfig</code>.</td></tr>
+<tr><td>Request (identity)</td><td><code>#[inject(identity)]</code></td><td>Façade</td><td>Per request</td><td>Extracted from request parts. Must implement <code>Identity</code>. Drives guards/roles.</td></tr>
+<tr><td>Request (generic)</td><td><code>#[inject(request)]</code></td><td>Façade</td><td>Per request</td><td>Any <code>FromRequestParts</code> value (tenant id, trace context, request-scoped handle). Not modeled in OpenAPI yet.</td></tr>
 </tbody>
 </table>
 </div>
-<h2 id="mixed-controllers-param-level-identity"><a class="header" href="#mixed-controllers-param-level-identity">Mixed controllers (param-level identity)</a></h2>
-<p>When only some endpoints need authentication, use param-level <code>#[inject(identity)]</code> instead of struct-level:</p>
+<p><code>Option&lt;T&gt;</code> is supported for both <code>#[inject(identity)]</code> and <code>#[inject(request)]</code>.</p>
+<p>The app-scoped fields live on a physical <strong>core</strong> struct built once when the
+router is registered; the request-scoped fields live on a generated per-request
+<strong>façade</strong> that <code>Deref</code>s to the core. As a result, struct-level identity does
+<strong>not</strong> rebuild the controller’s dependencies per request — only the small façade
+(one <code>Arc</code> clone of the core plus the extracted request values) is created per
+request. See <a href="../advanced/controller-lifecycle-and-dispatch.html">Controller Lifecycle and Handler Dispatch</a>.</p>
+<p><strong>Important:</strong> Struct-level <code>#[inject(identity)]</code> means <strong>all</strong> endpoints require authentication — a fail-closed default. For a mostly-protected controller with a few public routes, keep the struct identity and mark the exceptions with <code>#[anonymous]</code> (see below). For mostly-public controllers, use param-level injection instead.</p>
+<h2 id="anonymous-routes-anonymous"><a class="header" href="#anonymous-routes-anonymous">Anonymous routes: <code>#[anonymous]</code></a></h2>
+<p>On a controller with a struct-level identity, mark public routes with <code>#[anonymous]</code> (@PermitAll-style opt-out):</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/api", state = AppState)]
+</span>#[controller(path = "/posts")]
+pub struct PostController {
+    #[inject] posts: PostService,
+    #[inject(identity)] user: AuthenticatedUser,
+}
+
+#[routes]
+impl PostController {
+    #[get("/")]
+    #[anonymous]               // public: no JWT extraction at all
+    async fn list(&amp;self) -&gt; Json&lt;Vec&lt;Post&gt;&gt; {
+        Json(self.posts.list().await)
+    }
+
+    #[post("/")]               // authenticated by default (fail-closed)
+    async fn create(&amp;self, body: Json&lt;NewPost&gt;) -&gt; Json&lt;Post&gt; {
+        let owner = self.user.sub();   // plain access, no Option
+        // ...
+    }
+}
+<span class="boring">}</span></code></pre>
+<p>Semantics of an <code>#[anonymous]</code> route:</p>
+<ul>
+<li><strong>No identity extraction runs</strong> — anonymous requests never pay JWT-validation cost, and credentials sent anyway are ignored.</li>
+<li>The method runs on the controller <strong>core</strong> (like <code>#[consumer]</code>/<code>#[scheduled]</code> methods): reading <code>self.user</code> — or any request-scoped field — in the body is a <strong>compile error</strong>. <code>#[inject]</code>/<code>#[config]</code> fields and handler parameters work as usual.</li>
+<li>Guards (<code>#[guard]</code>, <code>#[pre_guard]</code>) still run. The guard context carries <code>identity: None</code> — unless the route declares its own optional identity parameter, which guards then see. <code>#[roles]</code>/<code>#[all_roles]</code> and <strong>required</strong> <code>#[inject(identity)]</code> parameters are rejected at compile time — they require an identity. An <code>Option&lt;T&gt;</code> identity parameter is allowed: a public route that personalizes when a valid credential is present.</li>
+<li>OpenAPI drops the identity-based security requirement for the route (explicit <code>#[guard]</code>s still mark it as guarded).</li>
+<li>The controller must declare a <strong>required</strong> struct-level identity. With no identity the routes are already public, and with an <code>Option&lt;T&gt;</code> identity extraction never rejects — in both cases there is nothing fail-closed to opt out of, and the marker is rejected at compile time.</li>
+</ul>
+<p>The direction of the marker is deliberate: <strong>forgetting <code>#[anonymous]</code> yields a 401 (fail closed); there is no marker whose omission silently publishes a route.</strong></p>
+<h2 id="mixed-controllers-param-level-identity"><a class="header" href="#mixed-controllers-param-level-identity">Mixed controllers (param-level identity)</a></h2>
+<p>When most endpoints are public and only a few need authentication, use param-level <code>#[inject(identity)]</code> instead of struct-level:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -328,13 +392,14 @@ impl ApiController {
     }
 }
 <span class="boring">}</span></code></pre>
-<p>This is the <strong>mixed controller pattern</strong> — it’s more efficient because JWT validation only runs on endpoints that need it. It also preserves <code>StatefulConstruct</code>, enabling the controller to be used with <code>#[consumer]</code> and <code>#[scheduled]</code>.</p>
+<p>This is the <strong>mixed controller pattern</strong> — it’s more efficient because JWT validation only runs on endpoints that need it, and it keeps request scope explicit per handler. The controller core always implements <code>ContextConstruct</code> (it is built by type from the resolved bean graph), so it can also be used with <code>#[consumer]</code> and <code>#[scheduled]</code> (which run on the core and cannot access request identity).</p>
 <h2 id="registering-controllers"><a class="header" href="#registering-controllers">Registering controllers</a></h2>
 <p>Controllers are registered with the application builder:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>AppBuilder::new()
-    .build_state::&lt;AppState, _&gt;()
+    .register::&lt;UserService&gt;()   // register beans first (see State and Beans)
+    .build_state()               // no type argument — the state type is inferred
     .await
     .register_controller::&lt;UserController&gt;()
     .register_controller::&lt;AccountController&gt;()
@@ -342,14 +407,20 @@ impl ApiController {
     .await
     .unwrap();
 <span class="boring">}</span></code></pre>
+<p>To register several controllers at once, use <code>register_controllers::&lt;(A, B, ...)&gt;()</code> (tuples of arity 1..=16). It is equivalent to the sequential <code>register_controller</code> calls above, preserving order:</p>
+<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
+</span><span class="boring">fn main() {
+</span>    .register_controllers::&lt;(UserController, AccountController)&gt;()
+<span class="boring">}</span></code></pre>
 <h2 id="what-gets-generated"><a class="header" href="#what-gets-generated">What gets generated</a></h2>
-<p>Behind the scenes, <code>#[derive(Controller)]</code> and <code>#[routes]</code> generate:</p>
+<p>Behind the scenes, <code>#[controller]</code> and <code>#[routes]</code> generate:</p>
 <ol>
-<li><strong>Metadata module</strong> (<code>__r2e_meta_&lt;Name&gt;</code>) — state type, identity type, path prefix</li>
-<li><strong>Extractor struct</strong> (<code>__R2eExtract_&lt;Name&gt;</code>) — implements <code>FromRequestParts</code> to construct the controller</li>
-<li><strong>StatefulConstruct impl</strong> — when no struct-level <code>#[inject(identity)]</code> fields exist</li>
-<li><strong>Handler functions</strong> — standalone async functions for each route</li>
-<li><strong>Controller trait impl</strong> — wires routes into <code>axum::Router&lt;State&gt;</code></li>
+<li><strong>Controller core</strong> — your struct with request-scoped fields stripped out; holds only <code>#[inject]</code> + <code>#[config]</code> fields and is built once into an <code>Arc</code></li>
+<li><strong>Metadata module</strong> (<code>__r2e_meta_&lt;Name&gt;</code>) — identity type, path prefix, <code>bind_request</code>, config validation</li>
+<li><strong>Request-data extractor</strong> (<code>__R2eRequestData_&lt;Name&gt;</code>) — implements <code>FromRequestParts</code> to extract the request-scoped values (identity + <code>#[inject(request)]</code>)</li>
+<li><strong>Request façade</strong> (<code>__R2eRequest_&lt;Name&gt;</code>) — <code>{ __core: Arc&lt;Core&gt;, &lt;request fields&gt; }</code> with <code>Deref&lt;Target = Core&gt;</code>; route methods run here</li>
+<li><strong>ContextConstruct impl</strong> — always generated; builds the core from the resolved bean graph, resolving each <code>#[inject]</code> field by type via <code>ctx.get::&lt;T&gt;()</code></li>
+<li><strong>Controller trait impl</strong> — generic over the (inferred) state; wires the core supplied by <code>register_controller()</code> into routes, consumers, and scheduled tasks. Its <code>Deps</code> (the unique <code>#[inject]</code> types plus <code>R2eConfig</code>) are checked at registration, so injecting a type that is not a bean is a compile error naming that type.</li>
 </ol>
 <p>All of this is hidden from your code — you just write the struct and methods.</p>
 

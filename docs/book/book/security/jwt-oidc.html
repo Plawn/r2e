@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "../searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-e378e123.js"></script>
+        <script src="../toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,7 +181,7 @@
 <p>R2E provides JWT-based authentication with support for both static keys and JWKS endpoints (for OIDC providers like Keycloak, Auth0, etc.).</p>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <p>Enable the security feature:</p>
-<pre><code class="language-toml">r2e = { version = "0.1", features = ["security"] }
+<pre><code class="language-toml">r2e = { version = "0.3", features = ["security"] }
 </code></pre>
 <h2 id="configuring-the-validator"><a class="header" href="#configuring-the-validator">Configuring the validator</a></h2>
 <h3 id="static-key-testing--simple-setups"><a class="header" href="#static-key-testing--simple-setups">Static key (testing / simple setups)</a></h3>
@@ -197,41 +197,47 @@ let validator = JwtClaimsValidator::new_with_static_key(key, config);
 <h3 id="jwks-endpoint-production"><a class="header" href="#jwks-endpoint-production">JWKS endpoint (production)</a></h3>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>let config = SecurityConfig::new(
+</span>use std::sync::Arc;
+use r2e::r2e_security::{JwksCache, JwtClaimsValidator, SecurityConfig};
+
+let config = SecurityConfig::new(
     "https://auth.example.com/.well-known/jwks.json",
     "https://auth.example.com",
     "my-app",
 );
-let validator = JwtClaimsValidator::new(config);
+let jwks = Arc::new(JwksCache::new(config.clone()).await.unwrap());
+let validator = JwtClaimsValidator::new(jwks, config);
 <span class="boring">}</span></code></pre>
 <p>The JWKS keys are fetched and cached automatically. Cache misses trigger a background refresh.</p>
-<h2 id="storing-in-application-state"><a class="header" href="#storing-in-application-state">Storing in application state</a></h2>
-<p>The validator must be stored as <code>Arc&lt;JwtClaimsValidator&gt;</code> in your state:</p>
+<blockquote>
+<p>Most apps build the validator inside a <code>#[producer]</code> and register it with
+<code>.register::&lt;JwtValidator&gt;()</code> — the <code>r2e new --auth</code> scaffold generates exactly
+this. The snippet above is the equivalent manual construction.</p>
+</blockquote>
+<h2 id="providing-the-validator-as-a-bean"><a class="header" href="#providing-the-validator-as-a-bean">Providing the validator as a bean</a></h2>
+<p>The <code>AuthenticatedUser</code> extractor resolves <code>Arc&lt;JwtClaimsValidator&gt;</code> from the bean
+graph by type. Provide it during app assembly — there is no state struct to write:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use std::sync::Arc;
 
-#[derive(Clone, BeanState)]
-pub struct AppState {
-    pub claims_validator: Arc&lt;JwtClaimsValidator&gt;,
-    // ... other fields
-}
-<span class="boring">}</span></code></pre>
-<p>Then provide it during app assembly:</p>
-<pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
-</span><span class="boring">fn main() {
-</span>AppBuilder::new()
-    .provide(Arc::new(validator))
+AppBuilder::new()
+    .provide(Arc::new(validator))   // Arc&lt;JwtClaimsValidator&gt; becomes a bean
+    // ... other .provide / .register calls
+    .build_state()
+    .await
     // ...
 <span class="boring">}</span></code></pre>
+<p>Any controller with <code>#[inject(identity)]</code> (or a handler-param <code>#[inject(identity)]</code>)
+picks the validator up automatically; if it is missing you get a compile error
+naming <code>Arc&lt;JwtClaimsValidator&gt;</code>.</p>
 <h2 id="authenticateduser-extractor"><a class="header" href="#authenticateduser-extractor"><code>AuthenticatedUser</code> extractor</a></h2>
 <p><code>AuthenticatedUser</code> is an Axum <code>FromRequestParts</code> extractor that validates the JWT bearer token:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
 </span>use r2e::r2e_security::AuthenticatedUser;
 
-#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
 }
@@ -284,8 +290,7 @@ user.has_any_role(&amp;["admin", "moderator"])  // check any of roles
 <p><strong>Struct-level</strong> — all endpoints require authentication:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[inject(identity)] user: AuthenticatedUser,
 }
@@ -293,8 +298,7 @@ pub struct UserController {
 <p><strong>Param-level</strong> — only annotated endpoints require authentication:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/api", state = AppState)]
+</span>#[controller(path = "/api")]
 pub struct ApiController {
     #[inject] service: MyService,
 }
@@ -333,6 +337,8 @@ async fn greeting(
     audience: "my-app"
     jwks-url: "https://auth.example.com/.well-known/jwks.json"
 </code></pre>
+<h2 id="embedded-oidc-server"><a class="header" href="#embedded-oidc-server">Embedded OIDC server</a></h2>
+<p>To issue JWT tokens directly from your application — without an external provider — see the <a href="./embedded-oidc.html">Embedded OIDC Server</a>.</p>
 
                     </main>
 
@@ -342,7 +348,7 @@ async fn greeting(
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../security/guards-and-roles.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../security/embedded-oidc.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -356,7 +362,7 @@ async fn greeting(
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../security/guards-and-roles.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../security/embedded-oidc.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

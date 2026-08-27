@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-df6d6725.js";
+            window.path_to_searchindex_js = "searchindex-07ec6f4c.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-e378e123.js"></script>
+        <script src="toc-c3694cfa.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,12 +178,11 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="introduction"><a class="header" href="#introduction">Introduction</a></h1>
-<p><strong>R2E</strong> (Rust Enterprise Edition) is a Quarkus-like ergonomic layer over <a href="https://github.com/tokio-rs/axum">Axum</a> for Rust. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.</p>
+<p><strong>R2E</strong> (Rust Enterprise Edition) is an ergonomic enterprise framework for Rust, inspired by Quarkus. It provides declarative controllers, compile-time dependency injection, JWT/OIDC security, and zero runtime reflection. Built on <a href="https://github.com/tokio-rs/axum">Axum</a> via the <code>r2e-http</code> abstraction layer.</p>
 <h2 id="what-r2e-offers"><a class="header" href="#what-r2e-offers">What R2E offers</a></h2>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>#[derive(Controller)]
-#[controller(path = "/users", state = AppState)]
+</span>#[controller(path = "/users")]
 pub struct UserController {
     #[inject]           user_service: UserService,
     #[inject(identity)] user: AuthenticatedUser,
@@ -201,7 +200,7 @@ impl UserController {
     #[post("/")]
     #[roles("admin")]
     #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&amp;self, Validated(body): Validated&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
+    async fn create(&amp;self, Json(body): Json&lt;CreateUserRequest&gt;) -&gt; Json&lt;User&gt; {
         Json(self.user_service.create(body.name, body.email).await)
     }
 }
@@ -209,7 +208,7 @@ impl UserController {
 <p>If you’ve used Java’s Quarkus, Spring Boot, or C#’s ASP.NET, this should feel familiar — but everything is resolved at compile time with zero runtime reflection.</p>
 <h2 id="key-features"><a class="header" href="#key-features">Key features</a></h2>
 <ul>
-<li><strong>Declarative controllers</strong> — <code>#[derive(Controller)]</code> + <code>#[routes]</code> generate Axum handlers with zero boilerplate</li>
+<li><strong>Declarative controllers</strong> — <code>#[controller]</code> + <code>#[routes]</code> generate Axum handlers with zero boilerplate</li>
 <li><strong>Compile-time DI</strong> — <code>#[inject]</code> for services, <code>#[inject(identity)]</code> for request-scoped identity, <code>#[config("key")]</code> for configuration</li>
 <li><strong>JWT/OIDC security</strong> — <code>AuthenticatedUser</code> extractor with JWKS caching, role-based access via <code>#[roles("admin")]</code></li>
 <li><strong>Guards</strong> — Pre-auth and post-auth guards for custom authorization logic</li>
@@ -218,13 +217,14 @@ impl UserController {
 <li><strong>Event bus</strong> — Typed in-process pub/sub with <code>#[consumer]</code> for declarative event handlers</li>
 <li><strong>Scheduling</strong> — <code>#[scheduled(every = 30)]</code> and <code>#[scheduled(cron = "...")]</code> for background tasks</li>
 <li><strong>Managed resources</strong> — <code>#[managed]</code> for automatic transaction lifecycle</li>
-<li><strong>Data access</strong> — <code>Entity</code>, <code>Repository</code>, <code>QueryBuilder</code>, and <code>Pageable</code>/<code>Page</code></li>
-<li><strong>Validation</strong> — <code>Validated&lt;T&gt;</code> extractor backed by the <code>validator</code> crate</li>
-<li><strong>OpenAPI</strong> — Auto-generated OpenAPI 3.0.3 spec with interactive docs UI</li>
+<li><strong>Database ergonomics</strong> — core pagination and managed SQLx/Diesel transactions</li>
+<li><strong>Validation</strong> — Automatic validation via <code>garde</code> crate — just derive <code>Validate</code> and use <code>Json&lt;T&gt;</code></li>
+<li><strong>OpenAPI</strong> — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI</li>
 <li><strong>Configuration</strong> — YAML + env var overlay with profile support</li>
+<li><strong>Static file serving</strong> — Embed frontend assets in the binary with SPA fallback via <code>EmbeddedFrontend</code> plugin</li>
 <li><strong>SSE &amp; WebSocket</strong> — Built-in <code>SseBroadcaster</code> and <code>WsRooms</code> for real-time communication</li>
-<li><strong>Testing</strong> — <code>TestApp</code> HTTP client wrapper and <code>TestJwt</code> token generator</li>
-<li><strong>CLI</strong> — <code>r2e new</code>, <code>r2e add</code>, <code>r2e dev</code>, <code>r2e generate</code> for scaffolding</li>
+<li><strong>Testing</strong> — <code>TestApp</code> HTTP client wrapper, <code>TestJwt</code>, and <code>r2e test --sonarqube</code> coverage</li>
+<li><strong>CLI</strong> — <code>r2e new</code>, <code>r2e add</code>, <code>r2e dev</code>, <code>r2e generate</code>, <code>r2e test</code> for scaffolding and workflows</li>
 </ul>
 <h2 id="how-this-book-is-organized"><a class="header" href="#how-this-book-is-organized">How this book is organized</a></h2>
 <ul>
