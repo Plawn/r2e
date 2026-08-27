@@ -15,7 +15,8 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::Value;
 
-use crate::auth::tools::{tool_visible, ToolRequirements};
+use crate::auth::tools::{requirements_visible, ToolRequirements};
+use crate::auth::McpPrincipal;
 use crate::registry::RegisteredMcpService;
 use crate::route::{PromptCall, PromptRoute, ResourceCall, ResourceRoute, ToolCall, ToolRoute};
 
@@ -30,12 +31,23 @@ pub(crate) struct ServerIdentity {
 /// One member family's dispatch table: routes by key, the precomputed list
 /// payload, and the parallel requirements for the visibility filter.
 struct Family<R, W> {
-    routes: HashMap<String, R>,
+    routes: HashMap<String, FamilyRoute<R>>,
     list: Vec<W>,
     reqs: Vec<ToolRequirements>,
     /// Per-caller list filtering (`mcp.auth.filter-tools`). Off — or no
     /// member has requirements — means the precomputed list goes out as-is.
     filter: bool,
+}
+
+/// Dispatch data for one member plus its slot in the precomputed wire list.
+///
+/// rmcp asks for a tool descriptor again before dispatching a call so it can
+/// validate the arguments. Keeping the list index here lets that path clone
+/// the descriptor built at boot instead of rebuilding its strings,
+/// annotations and schema pointers for every invocation.
+struct FamilyRoute<R> {
+    route: R,
+    wire_index: usize,
 }
 
 impl<R, W: Clone> Family<R, W> {
@@ -44,10 +56,11 @@ impl<R, W: Clone> Family<R, W> {
         filter: bool,
         members: Vec<(&'static str, String, ToolRequirements, W, R)>,
     ) -> Self {
-        let mut routes = HashMap::new();
-        let mut owners: HashMap<String, &'static str> = HashMap::new();
-        let mut list = Vec::new();
-        let mut reqs = Vec::new();
+        let capacity = members.len();
+        let mut routes = HashMap::with_capacity(capacity);
+        let mut owners: HashMap<String, &'static str> = HashMap::with_capacity(capacity);
+        let mut list = Vec::with_capacity(capacity);
+        let mut reqs = Vec::with_capacity(capacity);
         for (service, key, req, wire, route) in members {
             if let Some(previous) = owners.get(key.as_str()) {
                 panic!(
@@ -56,9 +69,10 @@ impl<R, W: Clone> Family<R, W> {
                 );
             }
             owners.insert(key.clone(), service);
+            let wire_index = list.len();
             list.push(wire);
             reqs.push(req);
-            routes.insert(key, route);
+            routes.insert(key, FamilyRoute { route, wire_index });
         }
         let filter = filter && reqs.iter().any(|r| !r.is_empty());
         Family {
@@ -77,16 +91,25 @@ impl<R, W: Clone> Family<R, W> {
         }
         // The auth layer's principal travels in the HTTP request parts that
         // the transport copies into the request extensions.
-        let extensions = context
+        let principal = context
             .extensions
             .get::<Parts>()
-            .map(|parts| &parts.extensions);
+            .and_then(|parts| parts.extensions.get::<McpPrincipal>());
         self.list
             .iter()
             .zip(self.reqs.iter())
-            .filter(|(_, req)| tool_visible(extensions, req))
+            .filter(|(_, req)| requirements_visible(principal, req))
             .map(|(wire, _)| wire.clone())
             .collect()
+    }
+
+    fn route(&self, key: &str) -> Option<&R> {
+        self.routes.get(key).map(|entry| &entry.route)
+    }
+
+    fn wire(&self, key: &str) -> Option<W> {
+        let entry = self.routes.get(key)?;
+        self.list.get(entry.wire_index).cloned()
     }
 }
 
@@ -248,7 +271,7 @@ impl ServerHandler for R2eMcpHandler {
     /// arguments are checked against `inputSchema` before `call_tool` runs
     /// (SEP-2243).
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.rt.tools.routes.get(name).map(ToolRoute::to_rmcp_tool)
+        self.rt.tools.wire(name)
     }
 
     async fn call_tool(
@@ -256,7 +279,7 @@ impl ServerHandler for R2eMcpHandler {
         request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let Some(route) = self.rt.tools.routes.get(request.name.as_ref()) else {
+        let Some(route) = self.rt.tools.route(request.name.as_ref()) else {
             // Unknown tool is a protocol error (unroutable request), per the
             // MCP convention rmcp documents on `call_tool`.
             return Err(ErrorData::new(
@@ -299,7 +322,7 @@ impl ServerHandler for R2eMcpHandler {
         request: ReadResourceRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        let Some(route) = self.rt.resources.routes.get(request.uri.as_str()) else {
+        let Some(route) = self.rt.resources.route(request.uri.as_str()) else {
             // Unknown resource URI has its own JSON-RPC code per the spec.
             return Err(ErrorData::new(
                 ErrorCode::RESOURCE_NOT_FOUND,
@@ -340,7 +363,7 @@ impl ServerHandler for R2eMcpHandler {
         request: GetPromptRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
-        let Some(route) = self.rt.prompts.routes.get(request.name.as_str()) else {
+        let Some(route) = self.rt.prompts.route(request.name.as_str()) else {
             // Unknown prompt name is invalid params per the MCP spec.
             return Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,

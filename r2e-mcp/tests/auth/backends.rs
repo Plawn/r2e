@@ -152,6 +152,25 @@ async fn introspection_caches_positive_results_per_token() {
 }
 
 #[tokio::test]
+async fn introspection_coalesces_concurrent_misses_for_the_same_token() {
+    let (base, log) = mini_endpoint(|_| (200, active_response())).await;
+    let backend = introspection_backend(&format!("{base}/introspect"));
+
+    let (a, b, c, d) = r2e_core::rt::join!(
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+    );
+    assert!(a.is_ok() && b.is_ok() && c.is_ok() && d.is_ok());
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "concurrent cache misses must share one introspection request"
+    );
+}
+
+#[tokio::test]
 async fn introspection_rejects_and_negatively_caches_an_inactive_token() {
     let (base, log) = mini_endpoint(|_| (200, json!({ "active": false }))).await;
     let backend = introspection_backend(&format!("{base}/introspect"));
@@ -232,6 +251,30 @@ async fn introspection_maps_endpoint_failures_to_upstream_and_never_caches_them(
 }
 
 #[tokio::test]
+async fn concurrent_introspection_outage_is_coalesced_but_not_cached() {
+    let (base, log) = mini_endpoint(|_| (503, json!({}))).await;
+    let backend = introspection_backend(&format!("{base}/introspect"));
+
+    let (a, b) = r2e_core::rt::join!(
+        backend.validate("same-token"),
+        backend.validate("same-token"),
+    );
+    assert!(matches!(a, Err(McpAuthError::Upstream(_))));
+    assert!(matches!(b, Err(McpAuthError::Upstream(_))));
+    assert_eq!(log.lock().unwrap().len(), 1, "current waiters share the outage");
+
+    assert!(matches!(
+        backend.validate("same-token").await,
+        Err(McpAuthError::Upstream(_))
+    ));
+    assert_eq!(
+        log.lock().unwrap().len(),
+        2,
+        "a later request retries because upstream failures are not cached"
+    );
+}
+
+#[tokio::test]
 async fn introspection_without_any_endpoint_names_the_config_key() {
     let backend = IntrospectionBackend::new(
         reqwest::Client::new(),
@@ -295,6 +338,26 @@ async fn cache_entry_cap_evicts_when_full() {
     assert_eq!(log.lock().unwrap().len(), 3);
 }
 
+#[tokio::test]
+async fn cache_cap_evicts_only_the_least_recently_used_entry() {
+    let (base, log) = mini_endpoint(|_| (200, active_response())).await;
+    let backend = introspection_backend(&format!("{base}/introspect"))
+        .with_cache(Duration::from_secs(3600), 2);
+
+    backend.validate("token-a").await.unwrap(); // request 1
+    backend.validate("token-b").await.unwrap(); // request 2
+    backend.validate("token-a").await.unwrap(); // make A most recently used
+    backend.validate("token-c").await.unwrap(); // request 3, evicts B only
+    backend.validate("token-a").await.unwrap(); // still cached
+    backend.validate("token-b").await.unwrap(); // request 4
+
+    assert_eq!(
+        log.lock().unwrap().len(),
+        4,
+        "reaching the cap must not flush unrelated live entries"
+    );
+}
+
 // ── Userinfo ───────────────────────────────────────────────────────────────
 
 fn userinfo_backend(endpoint: &str) -> UserinfoBackend {
@@ -341,6 +404,24 @@ async fn userinfo_caches_positive_results_per_token() {
     backend.validate("token").await.unwrap();
     backend.validate("token").await.unwrap();
     assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn userinfo_coalesces_concurrent_misses_for_the_same_token() {
+    let (base, log) = mini_endpoint(|_| (200, json!({ "sub": "google-user" }))).await;
+    let backend = userinfo_backend(&format!("{base}/userinfo"));
+
+    let (a, b, c) = r2e_core::rt::join!(
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+    );
+    assert!(a.is_ok() && b.is_ok() && c.is_ok());
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "concurrent cache misses must share one userinfo request"
+    );
 }
 
 #[tokio::test]

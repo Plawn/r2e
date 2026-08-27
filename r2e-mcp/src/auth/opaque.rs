@@ -6,11 +6,15 @@
 //! positive results for `mcp.auth.opaque-cache-ttl-secs` (capped by the
 //! token's own `exp`), rejections for a short fixed window. IdP outages are
 //! never cached — they surface as 503 and the next request retries.
+//! Concurrent misses for one token are single-flighted into one IdP request;
+//! the bounded cache evicts only its least-recently-used live entry.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::future::Future;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use r2e_core::rt::sync::OnceCell;
 use r2e_security::identity::build_authenticated_user;
 use r2e_security::StandardClaims;
 
@@ -41,6 +45,21 @@ struct CacheEntry {
     token: String,
     result: Result<McpPrincipal, &'static str>,
     expires_at: Instant,
+    /// Monotonic access sequence used for bounded LRU eviction.
+    last_used: u64,
+}
+
+struct CacheState {
+    entries: HashMap<u64, CacheEntry>,
+    access_seq: u64,
+}
+
+/// Result shared by concurrent validation attempts for the same raw token.
+struct InFlight {
+    /// Full-token comparison keeps the 64-bit hash a lookup accelerator,
+    /// never an authentication identity.
+    token: String,
+    result: OnceCell<Result<McpPrincipal, McpAuthError>>,
 }
 
 /// A bounded token-keyed validation cache. All operations are sync (the
@@ -48,7 +67,8 @@ struct CacheEntry {
 struct TokenCache {
     ttl: Duration,
     max_entries: usize,
-    entries: Mutex<HashMap<u64, CacheEntry>>,
+    state: Mutex<CacheState>,
+    in_flight: Mutex<HashMap<u64, Weak<InFlight>>>,
 }
 
 impl TokenCache {
@@ -56,39 +76,140 @@ impl TokenCache {
         Self {
             ttl,
             max_entries: max_entries.max(1),
-            entries: Mutex::new(HashMap::new()),
+            state: Mutex::new(CacheState {
+                entries: HashMap::new(),
+                access_seq: 0,
+            }),
+            in_flight: Mutex::new(HashMap::new()),
         }
     }
 
     fn get(&self, hash: u64, bearer: &str) -> Option<Result<McpPrincipal, McpAuthError>> {
-        let entries = self.entries.lock().expect("token cache poisoned");
-        let entry = entries.get(&hash)?;
-        if entry.token != bearer || entry.expires_at <= Instant::now() {
+        let mut state = self.state.lock().expect("token cache poisoned");
+        let entry = state.entries.get(&hash)?;
+        if entry.token != bearer {
             return None;
         }
+        if entry.expires_at <= Instant::now() {
+            state.entries.remove(&hash);
+            return None;
+        }
+
+        state.access_seq = state.access_seq.wrapping_add(1);
+        let last_used = state.access_seq;
+        let entry = state.entries.get_mut(&hash).expect("entry checked above");
+        entry.last_used = last_used;
         Some(entry.result.clone().map_err(McpAuthError::InvalidToken))
     }
 
-    fn insert(&self, hash: u64, bearer: &str, result: Result<McpPrincipal, &'static str>, ttl: Duration) {
-        let mut entries = self.entries.lock().expect("token cache poisoned");
-        if entries.len() >= self.max_entries && !entries.contains_key(&hash) {
+    fn insert(
+        &self,
+        hash: u64,
+        bearer: &str,
+        result: Result<McpPrincipal, &'static str>,
+        ttl: Duration,
+    ) {
+        let mut state = self.state.lock().expect("token cache poisoned");
+        if state.entries.len() >= self.max_entries && !state.entries.contains_key(&hash) {
             let now = Instant::now();
-            entries.retain(|_, e| e.expires_at > now);
-            if entries.len() >= self.max_entries {
-                // Still full of live entries: drop everything. Crude, but the
-                // cache is only an optimization — this bounds memory without
-                // an LRU list on what is a low-traffic endpoint.
-                entries.clear();
+            state.entries.retain(|_, entry| entry.expires_at > now);
+            if state.entries.len() >= self.max_entries {
+                // Evict one least-recently-used live entry. Insertions are
+                // rare (one per distinct token), so the bounded O(cap) scan
+                // avoids an extra linked structure on every cache hit.
+                if let Some(oldest) = state
+                    .entries
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.last_used)
+                    .map(|(key, _)| *key)
+                {
+                    state.entries.remove(&oldest);
+                }
             }
         }
-        entries.insert(
+        state.access_seq = state.access_seq.wrapping_add(1);
+        let last_used = state.access_seq;
+        state.entries.insert(
             hash,
             CacheEntry {
                 token: bearer.to_string(),
                 result,
                 expires_at: Instant::now() + ttl,
+                last_used,
             },
         );
+    }
+
+    /// Coalesce concurrent cache misses for the same token into one IdP
+    /// request. A completed cacheable result is inserted by `validate`; an
+    /// upstream error is shared only with current waiters and is never
+    /// retained for the next request.
+    async fn singleflight<F, Fut>(
+        &self,
+        hash: u64,
+        bearer: &str,
+        validate: F,
+    ) -> Result<McpPrincipal, McpAuthError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<McpPrincipal, McpAuthError>>,
+    {
+        if let Some(cached) = self.get(hash, bearer) {
+            return cached;
+        }
+
+        let flight = {
+            let mut flights = self
+                .in_flight
+                .lock()
+                .expect("opaque validation flights poisoned");
+            // Cancelled/completed flights leave only a weak slot. Prune
+            // opportunistically at the same bound as the result cache.
+            if flights.len() >= self.max_entries {
+                flights.retain(|_, flight| flight.strong_count() > 0);
+            }
+            match flights
+                .get(&hash)
+                .and_then(Weak::upgrade)
+                .filter(|flight| flight.token == bearer)
+            {
+                Some(flight) => flight,
+                None => {
+                    let flight = Arc::new(InFlight {
+                        token: bearer.to_owned(),
+                        result: OnceCell::new(),
+                    });
+                    flights.insert(hash, Arc::downgrade(&flight));
+                    flight
+                }
+            }
+        };
+
+        let result = flight
+            .result
+            .get_or_init(|| async {
+                // Close the race between the first cache lookup and flight
+                // registration: a previous flight may have populated it.
+                match self.get(hash, bearer) {
+                    Some(cached) => cached,
+                    None => validate().await,
+                }
+            })
+            .await
+            .clone();
+
+        let mut flights = self
+            .in_flight
+            .lock()
+            .expect("opaque validation flights poisoned");
+        if flights
+            .get(&hash)
+            .and_then(Weak::upgrade)
+            .is_some_and(|current| Arc::ptr_eq(&current, &flight))
+        {
+            flights.remove(&hash);
+        }
+        result
     }
 
     /// Positive-entry TTL: the configured TTL, capped by the token's `exp`.
@@ -192,15 +313,12 @@ impl IntrospectionBackend {
         self.cache = TokenCache::new(ttl, max_entries);
         self
     }
-}
 
-impl TokenValidatorBackend for IntrospectionBackend {
-    async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
-        let hash = hash_token(bearer);
-        if let Some(cached) = self.cache.get(hash, bearer) {
-            return cached;
-        }
-
+    async fn validate_uncached(
+        &self,
+        hash: u64,
+        bearer: &str,
+    ) -> Result<McpPrincipal, McpAuthError> {
         let endpoint = match &self.endpoint_override {
             Some(url) => url.clone(),
             None => self
@@ -239,11 +357,17 @@ impl TokenValidatorBackend for IntrospectionBackend {
             McpAuthError::Upstream(format!("introspection response is not JSON: {e}"))
         })?;
 
-        if !body.get("active").and_then(|v| v.as_bool()).unwrap_or(false) {
+        if !body
+            .get("active")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
             return deny(&self.cache, hash, bearer, "token is not active");
         }
         let claims: StandardClaims = serde_json::from_value(body).map_err(|e| {
-            McpAuthError::Upstream(format!("introspection response is not a claims object: {e}"))
+            McpAuthError::Upstream(format!(
+                "introspection response is not a claims object: {e}"
+            ))
         })?;
         let exp = claims.exp;
         if let Some(exp) = exp {
@@ -280,9 +404,22 @@ impl TokenValidatorBackend for IntrospectionBackend {
             scopes: scope_values,
             token_hash: hash,
         };
-        self.cache
-            .insert(hash, bearer, Ok(principal.clone()), self.cache.positive_ttl(exp));
+        self.cache.insert(
+            hash,
+            bearer,
+            Ok(principal.clone()),
+            self.cache.positive_ttl(exp),
+        );
         Ok(principal)
+    }
+}
+
+impl TokenValidatorBackend for IntrospectionBackend {
+    async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
+        let hash = hash_token(bearer);
+        self.cache
+            .singleflight(hash, bearer, || self.validate_uncached(hash, bearer))
+            .await
     }
 }
 
@@ -336,15 +473,12 @@ impl UserinfoBackend {
         self.cache = TokenCache::new(ttl, max_entries);
         self
     }
-}
 
-impl TokenValidatorBackend for UserinfoBackend {
-    async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
-        let hash = hash_token(bearer);
-        if let Some(cached) = self.cache.get(hash, bearer) {
-            return cached;
-        }
-
+    async fn validate_uncached(
+        &self,
+        hash: u64,
+        bearer: &str,
+    ) -> Result<McpPrincipal, McpAuthError> {
         let endpoint = match &self.endpoint_override {
             Some(url) => url.clone(),
             None => self
@@ -371,7 +505,12 @@ impl TokenValidatorBackend for UserinfoBackend {
             .map_err(|e| McpAuthError::Upstream(format!("userinfo request failed: {e}")))?;
         let status = response.status();
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            return deny(&self.cache, hash, bearer, "token rejected by the userinfo endpoint");
+            return deny(
+                &self.cache,
+                hash,
+                bearer,
+                "token rejected by the userinfo endpoint",
+            );
         }
         if !status.is_success() {
             return Err(McpAuthError::Upstream(format!(
@@ -382,7 +521,12 @@ impl TokenValidatorBackend for UserinfoBackend {
             McpAuthError::Upstream(format!("userinfo response is not a claims object: {e}"))
         })?;
         if claims.sub.is_empty() {
-            return deny(&self.cache, hash, bearer, "userinfo response has no subject");
+            return deny(
+                &self.cache,
+                hash,
+                bearer,
+                "userinfo response has no subject",
+            );
         }
 
         let scope_values: Arc<[String]> = self.scopes.scopes(&claims).into();
@@ -392,8 +536,21 @@ impl TokenValidatorBackend for UserinfoBackend {
             scopes: scope_values,
             token_hash: hash,
         };
-        self.cache
-            .insert(hash, bearer, Ok(principal.clone()), self.cache.positive_ttl(None));
+        self.cache.insert(
+            hash,
+            bearer,
+            Ok(principal.clone()),
+            self.cache.positive_ttl(None),
+        );
         Ok(principal)
+    }
+}
+
+impl TokenValidatorBackend for UserinfoBackend {
+    async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
+        let hash = hash_token(bearer);
+        self.cache
+            .singleflight(hash, bearer, || self.validate_uncached(hash, bearer))
+            .await
     }
 }

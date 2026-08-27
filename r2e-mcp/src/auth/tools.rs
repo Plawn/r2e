@@ -143,10 +143,20 @@ pub fn check_access(
 /// requirement (scopes AND recorded roles) is satisfied; no principal → only
 /// requirement-free tools.
 pub fn tool_visible(extensions: Option<&Extensions>, req: &ToolRequirements) -> bool {
+    requirements_visible(extensions.and_then(|ext| ext.get::<McpPrincipal>()), req)
+}
+
+/// Visibility check when the caller principal has already been extracted.
+/// List handlers use this form so one request performs one extensions lookup,
+/// not one lookup per registered member.
+pub(crate) fn requirements_visible(
+    principal: Option<&McpPrincipal>,
+    req: &ToolRequirements,
+) -> bool {
     if req.is_empty() {
         return true;
     }
-    match extensions.and_then(|ext| ext.get::<McpPrincipal>()) {
+    match principal {
         Some(principal) => req.satisfied_by(principal),
         None => false,
     }

@@ -376,8 +376,8 @@ impl AdminTools {
 | `token-validation` | `jwt` | `jwt` = local JWKS validation (zero network per request); `introspection` = RFC 7662 (opaque tokens; requires `client-id` + `client-secret`); `userinfo` = OIDC userinfo probe (Google-style opaque tokens; forces `audience: skip`) |
 | `client-id`, `client-secret` | — | confidential client the introspection backend authenticates as (Basic) |
 | `introspection-endpoint`, `userinfo-endpoint` | discovered | explicit overrides for the opaque backends |
-| `opaque-cache-ttl-secs` | 60 | positive validation cache for opaque tokens (capped by the token's `exp`; rejections cached 5s, outages never) |
-| `opaque-cache-max-entries` | 1024 | opaque-token cache size cap |
+| `opaque-cache-ttl-secs` | 60 | positive validation cache for opaque tokens (capped by the token's `exp`; rejections cached 5s, outages never; concurrent misses for one token share one IdP request) |
+| `opaque-cache-max-entries` | 1024 | opaque-token cache size cap; least-recently-used live entry evicted at capacity |
 | `allowed-algorithms` | RS256, ES256, PS256 | JWT signature algorithms |
 | `clock-skew-secs` | 60 | leeway for `exp`/`nbf` |
 | `audience` | `resource` | `any-of` (+ `extra-audiences`), `client-id`, `skip` |
