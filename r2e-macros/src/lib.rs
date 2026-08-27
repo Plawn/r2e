@@ -6,6 +6,7 @@ pub(crate) mod codegen;
 pub(crate) mod derives;
 pub(crate) mod extract;
 pub(crate) mod grpc_codegen;
+pub(crate) mod mcp_codegen;
 pub(crate) mod model;
 pub(crate) mod parsing;
 pub(crate) mod util;
@@ -17,7 +18,7 @@ use derives::{
     api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
     decorator_bean_derive, from_config_value_derive, from_multipart, params_derive,
 };
-use parsing::grpc_routes_parsing;
+use parsing::{grpc_routes_parsing, mcp_routes_parsing};
 
 /// Safety net for the controller-level decorator family (`#[guard]`,
 /// `#[pre_guard]`, `#[roles]`, `#[all_roles]`, `#[intercept]`): these
@@ -42,13 +43,18 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
         a.path()
             .segments
             .last()
-            .is_some_and(|s| s.ident == "routes" || s.ident == "bean" || s.ident == "grpc_routes")
+            .is_some_and(|s| {
+                s.ident == "routes"
+                    || s.ident == "bean"
+                    || s.ident == "grpc_routes"
+                    || s.ident == "mcp_routes"
+            })
     });
     let msg = if has_transformer {
         format!(
             "#[{name}] is placed above the transforming macro — attribute macros expand \
              top-down, so the macro below never sees it and the decorator would be silently \
-             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]."
+             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]/#[mcp_routes]."
         )
     } else {
         format!(
@@ -1384,6 +1390,71 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(def) => grpc_codegen::generate(&def).into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+/// Attribute macro turning `#[tool]`-marked methods of an impl block into MCP
+/// tools.
+///
+/// The struct must use [`macro@controller`] (for `#[inject]`, `#[config]`,
+/// and the metadata module). Only `#[tool]`-marked `async fn(&self, ...)`
+/// methods become tools; other methods pass through unchanged.
+///
+/// Tool parameters (any order, each at most once):
+/// - `Params(p): Params<T>` — the deserialized tool arguments (`T:
+///   Deserialize + JsonSchema`, drives the input schema)
+/// - `#[inject(identity)] user: I` (or `Option<I>`) — the authenticated
+///   caller, read from the transport request extensions
+/// - `call: ToolCall` — raw call metadata (arguments, HTTP parts, request id)
+/// - `cancel: CancelToken` — cancelled on client abort / shutdown
+///
+/// Guards (`#[roles]`, `#[all_roles]`, `#[guard]`) and interceptors
+/// (`#[intercept]`) are supported per method and on the impl block (applied
+/// to every tool) — the same `Guard<I>`/`Interceptor` machinery as HTTP
+/// routes, prebuilt once at registration.
+///
+/// # Example
+///
+/// ```ignore
+/// #[controller]
+/// pub struct MathTools {
+///     #[inject] calc: CalcService,
+/// }
+///
+/// #[mcp_routes]
+/// impl MathTools {
+///     /// Add two numbers.
+///     #[tool(name = "add", read_only)]
+///     async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
+///         Json(self.calc.add(p.a, p.b))
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[mcp_routes] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let item = syn::parse_macro_input!(input as syn::ItemImpl);
+    match mcp_routes_parsing::parse(item) {
+        Ok(def) => mcp_codegen::generate(&def).into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Marker attribute declaring an MCP tool method inside `#[mcp_routes]`.
+///
+/// Arguments: `name = "..."`, `title = "..."`, `description = "..."` and the
+/// annotation flags `read_only`, `destructive`, `idempotent`, `open_world`
+/// (bare or `= <bool>`). This is a no-op on its own — it is consumed by
+/// `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn tool(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
 }
 
 // ---------------------------------------------------------------------------

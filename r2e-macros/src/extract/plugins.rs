@@ -214,6 +214,40 @@ static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
 /// Decorator plugins allowed for gRPC routes.
 static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[&InterceptPlugin];
 
+/// Decorator plugins allowed for MCP tools. Unlike gRPC, MCP methods run the
+/// full post-auth guard family — `GuardContext` is transport-neutral and the
+/// tool dispatch path has real request heads to feed it (rule of three:
+/// HTTP + WS + MCP). Ordering matters as for HTTP: roles-derived guards are
+/// injected at the front of `guard_fns`.
+static MCP_PLUGINS: &[&dyn RoutePlugin] = &[
+    &RolesPlugin,
+    &AllRolesPlugin,
+    &GuardPlugin,
+    &InterceptPlugin,
+];
+
+const MCP_DISALLOWED_ATTRS: &[&str] = &[
+    // Pre-auth/anonymous/middleware are HTTP-pipeline concepts; MCP tools sit
+    // behind one shared transport endpoint and have no per-tool middleware
+    // stack. `#[anonymous]` needs a fail-closed struct identity, which
+    // `#[mcp_routes]` types don't have (identity is per-method).
+    "anonymous",
+    "pre_guard",
+    "middleware",
+    "layer",
+    // HTTP response shaping has no MCP equivalent.
+    "status",
+    "returns",
+    // Lifecycle / transverse markers are not wired for MCP services (same
+    // rationale as gRPC): left unrejected they would silently never run.
+    "pre_destroy",
+    "post_construct",
+    "on_start",
+    "scheduled",
+    "consumer",
+    "async_exec",
+];
+
 const GRPC_DISALLOWED_ATTRS: &[&str] = &[
     "anonymous",
     "roles",
@@ -288,6 +322,58 @@ pub fn validate_grpc_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
                     format!(
                         "#[{}] is not supported on a #[grpc_routes] impl block — \
                          gRPC controller-level decorators support #[intercept] only",
+                        name
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Parse decorators for MCP tools (`#[roles]`/`#[all_roles]`/`#[guard]`/
+/// `#[intercept]`).
+pub fn parse_mcp_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDecorators> {
+    validate_mcp_attrs(attrs)?;
+    let mut decorators = MethodDecorators::default();
+    for plugin in MCP_PLUGINS {
+        plugin.parse(attrs, &mut decorators)?;
+    }
+    Ok(decorators)
+}
+
+/// Reject attributes that are not supported on `#[mcp_routes]` methods.
+///
+/// Runs for **every** method in an MCP impl — both `#[tool]` methods (via
+/// [`parse_mcp_decorators`]) and pass-through helpers — so a disallowed
+/// marker on a helper is caught instead of silently dropped.
+pub fn validate_mcp_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    for attr in attrs {
+        for name in MCP_DISALLOWED_ATTRS {
+            if attr.path().is_ident(name) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!("#[{}] is not supported on #[mcp_routes] methods", name),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject disallowed attributes on the `#[mcp_routes]` **impl block** itself.
+/// The impl level supports `#[intercept]`, `#[guard]`, `#[roles]` and
+/// `#[all_roles]` (applied to every tool).
+pub fn validate_mcp_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    for attr in attrs {
+        for name in MCP_DISALLOWED_ATTRS {
+            if attr.path().is_ident(name) {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    format!(
+                        "#[{}] is not supported on a #[mcp_routes] impl block — \
+                         MCP controller-level decorators support #[intercept], \
+                         #[guard], #[roles] and #[all_roles] only",
                         name
                     ),
                 ));
