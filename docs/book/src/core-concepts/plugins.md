@@ -85,10 +85,15 @@ anything injecting the beans keeps working. See
 [Custom Plugins](../advanced/custom-plugins.md#enabling-and-disabling-a-plugin-from-config)
 for the full semantics.
 
-## Requiring a plugin from a feature module
+## Feature modules and plugins
 
-A feature module can declare the plugins it depends on so a missing plugin is a
-clear compile error naming the plugin, instead of a confusing missing-bean error:
+A feature module either **requires** a plugin someone else installs, or
+**brings** the plugin itself.
+
+### Require
+
+Declaring the plugins a module depends on turns a missing plugin into a clear
+compile error naming the plugin, instead of a confusing missing-bean error:
 
 ```rust
 #[module(
@@ -98,8 +103,47 @@ clear compile error naming the plugin, instead of a confusing missing-bean error
 pub struct JobsModule;
 ```
 
-If `Scheduler` is not `.plugin(Scheduler)`-ed before `register_module::<JobsModule>()`,
-the build fails with a message pointing at `.plugin(Scheduler)`.
+If `Scheduler` is not installed before `register_module::<JobsModule>()` — by
+the app, by an earlier module, or by this module itself — the build fails with a
+message pointing at `.plugin(Scheduler)`.
+
+### Bring
+
+A module that owns a piece of infrastructure can ship the plugin with it, so the
+app only registers the module:
+
+```rust
+#[module(
+    providers(ItemRepo),
+    controllers(ItemController),
+    exports(ItemRepo),
+    plugins(SqlxDataSource<Sqlite> = SqlxDataSource::<Sqlite>::new()),
+)]
+pub struct DataModule;
+
+AppBuilder::new()
+    .register_module::<DataModule>()   // installs the datasource plugin too
+```
+
+Each entry is written `Type = expr`: the type grows the provision list at
+compile time, the expression is the instance to install. Installing happens
+exactly as a `.plugin(..)` at the `register_module` call site would — the
+plugin's beans become available to the whole app (they need **no** `exports(..)`
+entry, and must not be listed in one), its controllers are mounted, and its
+effects apply at that position in install order.
+
+### One owner per plugin
+
+A plugin is installed by exactly one owner: the app **or** one module. Every
+other module that merely needs it uses `requires_plugins`. Installing the same
+plugin twice is a startup error naming both owners:
+
+```text
+Plugin 'Scheduler' is installed by app and by module 'JobsModule'.
+A plugin has exactly one owner — the app or ONE module. Use
+`requires_plugins(Scheduler)` in every module that only needs it, and keep the
+single `.plugin(Scheduler)` / `plugins(Scheduler = ..)` install.
+```
 
 ## Plugin ordering
 

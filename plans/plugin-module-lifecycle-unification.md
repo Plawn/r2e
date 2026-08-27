@@ -372,6 +372,59 @@ with a default, so hand-written impls compile unchanged.
 Nothing. Benefits from plan 1 (a module can bring `Health`/`OpenApi`) and is
 what makes plan 4's datasource composable.
 
+### Status — DONE (2026-08-27)
+
+Shipped on `feat/plugin-module-lifecycle` in three commits
+(`plan2(module-plugins): …` core / macro / tests) plus this docs commit.
+
+Landed:
+
+- `FeatureModule` gains `type Plugins` + `fn plugins()`; `ModulePluginList`
+  (P/R-independent, feeds `ModuleScope`/`ModuleProvided`) and
+  `ModulePlugins<P, R, Mods>` (the value fold whose `OutP`/`OutR`/`OutMods`
+  are exactly what a sequential `.plugin(a).plugin(b)` chain yields), both
+  arity 0–8, in `r2e-core/src/di/module.rs`.
+- `register_module_impl` folds `M::plugins()` through `.plugin()` **first**,
+  then registers providers; `ModuleRegistered` / `RegisterModule` grow `P` by
+  `Exports ++ plugin provisions` and `R` by `plugin Deps ++ Imports`.
+  `RequiredPluginsInstalled` is checked against the **post-fold** `P`, so a
+  module may both bring and require, and a later module can be satisfied by an
+  earlier one's brought plugin.
+- Owner tracking: `BeanRegistry::set_plugin_owner` brackets the module fold,
+  `register_plugin_group` records the owner per `PluginOut<Pl>`, and
+  `check_for_duplicates` upgrades `DuplicateBean` to the new
+  `BeanError::DuplicatePlugin { plugin, owners }`, which renders
+  "by app and by module 'X'" and suggests `requires_plugins`.
+- `#[module(plugins(Type = expr, …))]`, with targeted macro errors for a bare
+  type and for a missing `=`.
+- Tests: 4 runtime tests in `r2e-core/tests/di/module.rs` (brings a plugin +
+  controller uses its bean; brought bean visible to an app controller;
+  `requires_plugins` satisfied by an earlier module; double install names both
+  owners), 2 trybuild fail cases (`module_plugin_bare_type`,
+  `module_plugin_missing_eq`) + 1 pass case (`module_brings_plugin`), and 2
+  end-to-end tests in `r2e-data/backends/sqlx/tests/datasource/module.rs`
+  (module brings `SqlxDataSource<Sqlite>`, exports its repo).
+
+Deviations from the plan as written:
+
+1. **No associated-type default.** Stable Rust has no
+   `associated_type_defaults`, so `type Plugins: ModulePluginList = ()` is not
+   expressible. `Plugins` + `fn plugins()` are **required** items; the macro
+   always emits them, and the 11 in-tree hand-written `FeatureModule` impls
+   were updated to `type Plugins = (); fn plugins() {}`. This makes the plan's
+   "Breaking: none" wrong for **out-of-tree hand-written** `FeatureModule`
+   impls (macro users are unaffected).
+2. **`ExportsProvided` unchanged** — a brought plugin's bean must **not** be
+   listed in `exports(..)`. Plugin provisions already join the app-global `P`;
+   also putting them in `Exports` would place the same type in two state HList
+   slots, making `HasBean`/`Contains` index inference ambiguous (E0283). The
+   `ProvidedByModule` diagnostic and the module docs now say so explicitly, and
+   the "module exports a plugin bean" test became "brought plugin bean is
+   visible to app controllers without exporting".
+3. Trybuild case names differ from the sketch: the double-install case is a
+   **runtime** test (it is a boot error, not a compile error), and the two new
+   compile-fail cases cover the macro's `plugins(...)` syntax instead.
+
 ---
 
 ## Plan 3 — Bean-level startup observers (`#[on_start]`)

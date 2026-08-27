@@ -766,10 +766,12 @@ checked closed subgraph:
     exports(UserService),                 // visible to the rest of the app
     imports(LocalEventBus, SqlitePool,    // beans: satisfied by the app's provide/load_config
             module(BillingModule)),       // module(...): pulls in BillingModule's exports
+    plugins(Scheduler = Scheduler),       // plugins this module BRINGS (installs)
+    requires_plugins(Executor),           // plugins this module only NEEDS (installed elsewhere)
 )]
 pub struct UserModule;
 
-// in App::build:
+// in App::build, BEFORE build_state() (register_module is a builder-phase call):
 b.register_module::<BillingModule>()      // imported modules are NOT auto-registered
  .register_module::<UserModule>()
 ```
@@ -778,6 +780,23 @@ An `imports(...)` entry is either a bean type (satisfied by the app's
 `provide`/`load_config`) or `module(OtherModule)`, which pulls in that module's
 `exports` without restating them. Importing a module only *requires* its exports —
 you must still `.register_module::<OtherModule>()` yourself.
+
+`plugins(...)` vs `requires_plugins(...)`:
+
+- `plugins(Type = expr, ...)` — the module **installs** the plugin, exactly as
+  `.plugin(expr)` at the `register_module` call site: the plugin's beans become
+  app-global (no `exports(..)` entry — and they must NOT be listed there), its
+  controllers are mounted, its effects apply at that position in install order.
+  The `Type = expr` form is required (the type grows the provision list at
+  compile time, the expression is the instance).
+- `requires_plugins(Type, ...)` — the module only **needs** the plugin, installed
+  by the app, an earlier module, or this module's own `plugins(..)`. A missing one
+  is a compile error naming the plugin.
+- **One owner per plugin**: installing the same plugin twice (app + module, or two
+  modules) is a startup `DuplicatePlugin` error naming both owners. Use
+  `requires_plugins` in every module that does not own it.
+- Hand-written `FeatureModule` impls (no macro) must write
+  `type Plugins = (); fn plugins() {}` when they bring nothing.
 
 ### Same-typed beans
 
@@ -808,13 +827,13 @@ AppBuilder::new()
     .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
     .provide(bean)                              // constructed values
     .register::<CreatePool>()                   // beans / producers (one unified method)
+    .register_module::<UserModule>()            // modules: builder phase (may bring plugins)
     .build_state().await
-    // ── App phase: controllers, modules, lifecycle ──
+    // ── App phase: controllers, lifecycle ──
     .on_start(|state| async move { Ok(()) })
     .on_stop(|state| async move { if let Some(p) = state.bean::<SqlitePool>() { p.close().await; } })
     .register_controller::<UserController>()
     .register_controllers::<(AccountController, ScheduledJobs)>()  // several at once
-    .register_module::<UserModule>()
     // bean #[consumer] subscribers auto-collected at build_state() — no explicit call
     .serve_auto().await                         // server.host/server.port from config
     // or .serve("0.0.0.0:3000").await

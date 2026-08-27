@@ -251,8 +251,11 @@ node per element** that clones element *i* out of the group. Plugin nodes are
 **Duplicate/override semantics (breaking vs pre-W15, deliberate):**
 
 - Projections register **strict**: an app `.provide()`/`.register()` of the
-  same type, or installing the same plugin twice, is a `DuplicateBean` error
-  at boot (previously a silent overwrite).
+  same type is a `DuplicateBean` error at boot (previously a silent
+  overwrite). Installing the **same plugin twice** (app + module, or two
+  modules) is the dedicated `BeanError::DuplicatePlugin`, which names both
+  owners and points at `requires_plugins` — see
+  [Modules and plugins](#modules-and-plugins).
 - **Pin-before-install wins**: `override_bean::<T>(mock)` before `.plugin()`
   makes the `T` projection an early-return — the graph holds the override.
   Pin-after-install is `DuplicateBean` (exact parity with `.register::<T>()`).
@@ -574,16 +577,83 @@ is released when the last one exits. See the ownership rules above.
   `on_shutdown_async` hooks, reverse registration order, reading `B` from the
   resolved graph (so a pinned override is the value acted on).
 
-## Module-declared required plugins
+## Modules and plugins
 
-Unchanged by W15 (`Provisions = Provided::AsList` was preserved). A feature
-module can declare `requires_plugins(Scheduler)` (macro) or
-`type RequiredPlugins = (Scheduler,)` (hand-written `FeatureModule`); at
+A feature module relates to a plugin in exactly one of two ways.
+
+| | Macro key | `FeatureModule` item | Meaning |
+|---|---|---|---|
+| **Bring** | `plugins(Scheduler = Scheduler)` | `type Plugins = (Scheduler,)` + `fn plugins()` | the module **installs** the plugin, as if `.plugin(Scheduler)` sat at the `register_module` call site |
+| **Require** | `requires_plugins(Scheduler)` | `type RequiredPlugins = (Scheduler,)` | the module only **needs** the plugin installed — by the app or by another module |
+
+### Bring — `plugins(Type = expr, ...)`
+
+The `Type = expr` form is mandatory (a bare type or a missing `=` is a
+targeted macro error): the **type** is needed at compile time — it grows the
+provision list — while the **expression** is the instance to install, so a
+plugin that needs builder configuration still works
+(`plugins(Executor = Executor::with_max_concurrent(8))`).
+
+At `register_module` the brought plugins are installed **first**, before the
+module's own providers are registered and scope-checked, by folding
+`M::plugins()` through the same `.plugin()` machinery
+(`ModulePlugins<P, R, Mods>`, `r2e-core/src/di/module.rs`). Consequences:
+
+- their `Provisions` join the **app-global** `P` and their `Deps` join `R`,
+  exactly like an app-level `.plugin(..)` at that position;
+- their `Controllers` are queued through the usual `PushPluginCtrls` fold, so
+  a plugin's endpoints appear whether the app or a module installed it;
+- their effects land at this `register_module` call's position in **install
+  order** — a plugin brought by the second of two modules applies its Graph
+  layer / Routes effect / Finalize wrap after everything installed before that
+  `register_module` call, and before anything installed after it (see
+  [Effect stages](#effect-stages));
+- the module's own providers and controllers may depend on the brought
+  plugin's beans (they are part of the module scope), and so may the rest of
+  the app — a brought plugin's bean is app-global, needs **no** `exports(..)`
+  entry, and **must not** appear in one (`Exports` is still checked against
+  the module's own `Providers`; listing a plugin bean there would put the same
+  type in two state slots and break `HasBean` index inference).
+
+### Require — `requires_plugins(Type, ...)`
+
+Unchanged by W15 (`Provisions = Provided::AsList` was preserved). At
 `register_module` the compiler checks every provided bean of each required
-plugin is already in the provision list — i.e. the plugin was `.plugin(..)`-ed
-before the module — with a plugin-named diagnostic
-(`RequiredPluginInstalled` + `do_not_recommend`, `r2e-core/src/di/module.rs`).
-Covered by `compile-fail/module_required_plugin_not_installed.rs`.
+plugin is present in the provision list **after** the module's own brought
+plugins were folded in — so a plugin may be satisfied by the app, by a module
+registered earlier, or by this module's own `plugins(..)`. The diagnostic is
+plugin-named (`RequiredPluginInstalled` + `do_not_recommend`). Covered by
+`compile-fail/module_required_plugin_not_installed.rs`.
+
+### Ownership rule — exactly one owner (decided 2026-08-26)
+
+A plugin is installed by exactly one owner: the app **or** one module. Every
+other module that merely needs it uses `requires_plugins`. A double install is
+a boot error — `BeanError::DuplicatePlugin`, which records the owner label per
+plugin group node at registration and renders both:
+
+```text
+Plugin 'BroughtPlugin' is installed by app and by module 'BillingModule'.
+A plugin has exactly one owner — the app or ONE module. Use
+`requires_plugins(BroughtPlugin)` in every module that only needs it, and keep
+the single `.plugin(BroughtPlugin)` / `plugins(BroughtPlugin = ..)` install.
+```
+
+(Mechanically: `BeanRegistry::set_plugin_owner` brackets the module's plugin
+fold, `register_plugin_group` records the owner for `PluginOut<Pl>`, and
+`check_for_duplicates` upgrades the generic `DuplicateBean` to
+`DuplicatePlugin` when the duplicated node is a plugin group with more than
+one recorded owner. The group node is registered before its projections, so
+the specific message always wins over an opaque projection duplicate.)
+
+Hand-written `FeatureModule` impls must supply both items — stable Rust has no
+associated-type defaults, so `Plugins` is a required associated type; a module
+that brings nothing writes:
+
+```rust
+type Plugins = ();
+fn plugins() {}
+```
 
 ## `PluginInstall` (hidden escape hatch)
 
