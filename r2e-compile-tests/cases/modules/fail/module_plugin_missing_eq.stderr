@@ -1,0 +1,5 @@
+error: `plugins(...)` entries must be written `Type = expr` — e.g. `plugins(Scheduler = Scheduler::default())`. The plugin type is needed at compile time (it grows the provision list); the expression is the instance to install. If the module only *needs* a plugin installed elsewhere, use `requires_plugins(Scheduler)` instead
+  --> cases/modules/fail/module_plugin_missing_eq.rs:34:18
+   |
+34 | #[module(plugins(MarkerPlugin::new()))]
+   |                  ^^^^^^^^^^^^^^^^^

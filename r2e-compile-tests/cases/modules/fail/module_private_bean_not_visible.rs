@@ -32,6 +32,9 @@ impl FeatureModule for UserModule {
     type Controllers = ();
     type Exports = TCons<Api, TNil>; // Secret stays private
     type Imports = TNil; type RequiredPlugins = ();
+    type Plugins = ();
+
+    fn plugins() {}
 }
 
 #[controller(path = "/spy")]

@@ -33,6 +33,9 @@ impl FeatureModule for NeedsPluginModule {
     type Exports = r2e::type_list::TNil;
     type Imports = r2e::type_list::TNil;
     type RequiredPlugins = (MarkerPlugin,);
+    type Plugins = ();
+
+    fn plugins() {}
 }
 
 fn main() {
