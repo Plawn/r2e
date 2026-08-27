@@ -6090,13 +6090,17 @@ dependencies = [
  "http-body-util",
  "r2e-core",
  "r2e-macros",
+ "r2e-security",
+ "reqwest 0.13.4",
  "rmcp",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "tokio",
  "tower",
+ "tower-http 0.7.0",
  "tracing",
+ "url",
 ]
 
 [[package]]

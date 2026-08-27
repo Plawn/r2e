@@ -46,8 +46,9 @@ impl SecurityError {
     /// Whether this is a server-side failure (vs a client authentication failure).
     ///
     /// A failure to reach or parse the JWKS endpoint is the server's problem, not
-    /// the client's — it should surface as `503`, not `401`.
-    fn is_server_error(&self) -> bool {
+    /// the client's — it should surface as `503`, not `401`. `pub`: crates
+    /// building auth layers on r2e-security (r2e-mcp) apply the same split.
+    pub fn is_server_error(&self) -> bool {
         matches!(self, SecurityError::JwksFetchError(_))
     }
 

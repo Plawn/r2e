@@ -37,6 +37,7 @@
 //!     .serve_auto()
 //! ```
 
+pub mod auth;
 pub mod config;
 pub mod error;
 pub mod guard;
@@ -51,6 +52,7 @@ pub mod service;
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
 
+pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements};
 pub use config::McpConfig;
 pub use error::McpError;
 pub use params::{Params, ToolParams};
@@ -182,6 +184,7 @@ pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
     pub use crate::error::McpError;
     pub use crate::params::Params;
+    pub use crate::auth::{McpAuthConfig, McpTokenValidator};
     pub use crate::plugin::McpServer;
     pub use crate::route::ToolCall;
     pub use crate::service::McpService;

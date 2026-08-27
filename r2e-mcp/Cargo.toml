@@ -15,6 +15,13 @@ default = []
 
 [dependencies]
 r2e-core = { workspace = true }
+# OAuth resource-server layer (mcp.auth.*): JWT validation, JWKS cache,
+# role extractors and the shared OAuth HTTP client all come from r2e-security.
+r2e-security = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls"] }
+url = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true, features = ["cors"] }
 # `default-features = false`: rmcp's default `macros` feature is deliberately
 # unused — R2E dispatches tools itself (#[mcp_routes]), rmcp is the wire only.
 rmcp = { workspace = true }

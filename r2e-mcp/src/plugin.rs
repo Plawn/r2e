@@ -12,6 +12,10 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService,
 };
 
+use crate::auth::config::McpAuthConfig;
+use crate::auth::layer::McpAuthLayer;
+use crate::auth::setup::{build_auth, cors_layer, default_cors_origins, AuthInputs};
+use crate::auth::validator::McpTokenValidator;
 use crate::config::McpConfig;
 use crate::handler::{McpRuntime, R2eMcpHandler, ServerIdentity};
 use crate::registry::McpServiceRegistry;
@@ -69,6 +73,9 @@ pub struct McpServer {
     allowed_hosts: Option<Vec<String>>,
     allowed_origins: Option<Vec<String>>,
     max_request_body_bytes: Option<u64>,
+    cors_allowed_origins: Option<Vec<String>>,
+    auth: Option<McpAuthConfig>,
+    token_validator: Option<McpTokenValidator>,
 }
 
 impl McpServer {
@@ -140,6 +147,31 @@ impl McpServer {
         self.max_request_body_bytes = Some(bytes);
         self
     }
+
+    /// Origins granted CORS access to the MCP endpoint (overrides
+    /// `mcp.cors.allowed-origins`). Entries are exact origins or `host:*`
+    /// for any port.
+    pub fn with_cors_allowed_origins(
+        mut self,
+        origins: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.cors_allowed_origins = Some(origins.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Enable the OAuth resource-server layer programmatically (overrides
+    /// the `mcp.auth` file section entirely when set).
+    pub fn with_auth(mut self, auth: McpAuthConfig) -> Self {
+        self.auth = Some(auth);
+        self
+    }
+
+    /// Replace the token validator (custom backends, test pinning without
+    /// `override_bean`). Only used when auth is enabled.
+    pub fn with_token_validator(mut self, validator: McpTokenValidator) -> Self {
+        self.token_validator = Some(validator);
+        self
+    }
 }
 
 /// Validate the configured endpoint path: absolute, single segment target,
@@ -166,8 +198,10 @@ fn validate_path(path: &str) -> Result<(), PluginBuildError> {
 
 impl Plugin for McpServer {
     /// The real coordination happens via [`McpServiceRegistry`] in plugin
-    /// data; `McpMarker` is the type-level placeholder.
-    type Provided = (McpMarker,);
+    /// data; `McpMarker` is the type-level placeholder. [`McpTokenValidator`]
+    /// is a real bean so tests can pin it (`override_bean`) — auth off
+    /// provides the inert [`McpTokenValidator::disabled`].
+    type Provided = (McpMarker, McpTokenValidator);
     type Deps = ();
     type Config = McpConfig;
     type Controllers = ();
@@ -189,7 +223,7 @@ impl Plugin for McpServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         if !ctx.enabled() {
             tracing::info!("MCP server disabled (mcp.enabled = false); endpoint not mounted");
-            return Ok((McpMarker,));
+            return Ok((McpMarker, McpTokenValidator::disabled()));
         }
         let cfg = config.unwrap_or_default();
 
@@ -243,6 +277,63 @@ impl Plugin for McpServer {
                 );
             }
         }
+
+        // ── Auth + CORS ─────────────────────────────────────────────────
+        // The resolved profile is written back to `r2e.profile` at load time.
+        let profile = ctx
+            .config_raw()
+            .and_then(|c| c.try_get::<String>("r2e.profile"))
+            .unwrap_or_default();
+        let auth_cfg = match self.auth.or(cfg.auth) {
+            Some(auth) if auth.enabled != Some(false) => Some(auth),
+            _ => None,
+        };
+        let (auth_layer, provided_validator, auth_slot, auth_routes) = match auth_cfg {
+            Some(auth) => {
+                let artifacts = build_auth(AuthInputs {
+                    cfg: auth,
+                    mcp_path: &path,
+                    profile: &profile,
+                    public_url: ctx
+                        .config_raw()
+                        .and_then(|c| c.try_get::<String>("server.public-url")),
+                    server_host: ctx
+                        .config_raw()
+                        .and_then(|c| c.try_get::<String>("server.host")),
+                    server_port: ctx.config_raw().and_then(|c| c.try_get::<u16>("server.port")),
+                    allowed_origins: &allowed_origins,
+                    validator_override: self.token_validator,
+                })
+                .await?;
+                (
+                    artifacts.layer,
+                    artifacts.validator,
+                    Some(artifacts.slot),
+                    Some(artifacts.extra_routes),
+                )
+            }
+            None => (McpAuthLayer::disabled(), McpTokenValidator::disabled(), None, None),
+        };
+        // The layer reads the validator through the slot, filled from the
+        // BEAN CONTEXT after the graph resolves: a test-pinned validator
+        // (`override_bean`) is resolved, not captured (plugins.md
+        // partial-pins rule). Falling back to the built value keeps this
+        // total.
+        if let Some(slot) = auth_slot {
+            let fallback = provided_validator.clone();
+            ctx.after_build(move |dctx| {
+                let resolved = dctx
+                    .bean_context()
+                    .try_get::<McpTokenValidator>()
+                    .unwrap_or(fallback);
+                let _ = slot.set(resolved);
+            });
+        }
+        let cors = cors_layer(
+            self.cors_allowed_origins
+                .or(cfg.cors.and_then(|c| c.allowed_origins))
+                .unwrap_or_else(|| default_cors_origins(&profile)),
+        );
 
         // Dedicated transport token, relayed from the app shutdown token at
         // serve time (`docs/claude/plugins.md` shutdown-token pattern):
@@ -307,9 +398,22 @@ impl Plugin for McpServer {
                 session_manager,
                 transport_config,
             );
-            router.route_service(&path, service)
+            // CORS OUTERMOST: even a 401 from the auth layer must carry the
+            // CORS headers or a browser client cannot read the
+            // `WWW-Authenticate` challenge. The well-known/shim routes are
+            // merged NEXT TO the service — public by design, never behind
+            // the auth layer (they answer unauthenticated discovery).
+            let service = tower::ServiceBuilder::new()
+                .layer(cors)
+                .layer(auth_layer)
+                .service(service);
+            let router = router.route_service(&path, service);
+            match auth_routes {
+                Some(extra) => router.merge(extra),
+                None => router,
+            }
         });
 
-        Ok((McpMarker,))
+        Ok((McpMarker, provided_validator))
     }
 }

@@ -1,5 +1,6 @@
 //! Typed `mcp.*` configuration.
 
+use crate::auth::McpAuthConfig;
 use r2e_core::prelude::ConfigProperties;
 
 /// Typed view of the `mcp.*` config section.
@@ -55,4 +56,26 @@ pub struct McpConfig {
     /// Maximum POST body size in bytes (default 4 MiB).
     #[config(key = "max-request-body-bytes")]
     pub max_request_body_bytes: Option<u64>,
+    /// Browser CORS policy for the MCP endpoint.
+    #[config(section)]
+    pub cors: Option<McpCorsConfig>,
+    /// OAuth 2.1 resource-server layer (presence-based: no section ⇒
+    /// unauthenticated endpoint). See [`McpAuthConfig`].
+    #[config(section)]
+    pub auth: Option<McpAuthConfig>,
+}
+
+/// Typed view of the `mcp.cors.*` section.
+///
+/// Distinct from `mcp.allowed-origins` (the transport-level Origin
+/// *rejection* list): `cors.allowed-origins` is what the endpoint *replies*
+/// to browsers in `Access-Control-Allow-Origin`. Defaults to Claude's
+/// origins (`https://claude.ai`, `https://claude.com`), plus
+/// `http://localhost:*` under the `dev` profile.
+#[derive(ConfigProperties, Clone, Debug, Default)]
+pub struct McpCorsConfig {
+    /// Origins granted CORS access to the MCP endpoint. Entries are exact
+    /// origins, or `host:*` to accept any port on that host.
+    #[config(key = "allowed-origins")]
+    pub allowed_origins: Option<Vec<String>>,
 }
