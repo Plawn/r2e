@@ -407,7 +407,7 @@ fn claims_validator_accessor() {
 #[test]
 fn config_accessor() {
     let validator = test_validator();
-    assert_eq!(validator.config().audience, TEST_AUDIENCE);
+    assert_eq!(validator.config().audience(), TEST_AUDIENCE);
 }
 
 #[r2e_core::test]
@@ -455,4 +455,119 @@ async fn validate_as_value_is_still_the_dynamic_escape_hatch() {
     let claims: serde_json::Value = validator.validate_as(&token).await.unwrap();
     assert_eq!(claims["sub"].as_str().unwrap(), "user-1");
     assert_eq!(claims["roles"][0].as_str().unwrap(), "admin");
+}
+
+// ── audiences / skip_audience_validation / leeway ──
+
+fn claims_validator_with(config: SecurityConfig) -> JwtClaimsValidator {
+    JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), config)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+#[r2e_core::test]
+async fn any_of_multiple_configured_audiences_accepts_the_token() {
+    // `aud` validation is a membership test: a token carrying ANY configured
+    // audience passes, including when the token's `aud` is itself an array
+    // (the Keycloak/Auth0 shape).
+    let config = test_config().with_audiences(["other-api", TEST_AUDIENCE]);
+    let validator = claims_validator_with(config);
+
+    let single = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER, "aud": "other-api", "exp": now_secs() + 3600,
+    });
+    validator.validate(&encode_claims(&single)).await.unwrap();
+
+    let array = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER,
+        "aud": ["account", TEST_AUDIENCE],
+        "exp": now_secs() + 3600,
+    });
+    validator.validate(&encode_claims(&array)).await.unwrap();
+}
+
+#[r2e_core::test]
+async fn with_audiences_replaces_the_constructor_audience() {
+    let config = test_config().with_audiences(["only-this"]);
+    let validator = claims_validator_with(config);
+
+    // The constructor audience no longer passes once replaced.
+    let token = valid_token("u", &[]);
+    assert!(validator.validate(&token).await.is_err());
+}
+
+#[r2e_core::test]
+async fn skip_audience_validation_accepts_a_token_without_aud() {
+    let config = test_config().skip_audience_validation();
+    let validator = claims_validator_with(config);
+
+    let no_aud = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER, "exp": now_secs() + 3600,
+    });
+    validator.validate(&encode_claims(&no_aud)).await.unwrap();
+
+    let wrong_aud = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER, "aud": "someone-else", "exp": now_secs() + 3600,
+    });
+    validator
+        .validate(&encode_claims(&wrong_aud))
+        .await
+        .unwrap();
+}
+
+#[r2e_core::test]
+async fn skip_audience_validation_still_enforces_issuer_and_exp() {
+    let config = test_config().skip_audience_validation();
+    let validator = claims_validator_with(config);
+
+    let wrong_iss = serde_json::json!({
+        "sub": "u", "iss": "evil", "exp": now_secs() + 3600,
+    });
+    assert!(validator.validate(&encode_claims(&wrong_iss)).await.is_err());
+
+    let expired = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER, "exp": 0,
+    });
+    assert!(validator.validate(&encode_claims(&expired)).await.is_err());
+}
+
+#[r2e_core::test]
+async fn leeway_tolerates_a_slightly_future_nbf() {
+    // A fresh token from a slightly-ahead IdP clock (nbf a few seconds in the
+    // future) is rejected with zero leeway and accepted with one.
+    let claims = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER, "aud": TEST_AUDIENCE,
+        "exp": now_secs() + 3600,
+        "nbf": now_secs() + 30,
+    });
+    let token = encode_claims(&claims);
+
+    let strict = claims_validator_with(test_config());
+    assert!(strict.validate(&token).await.is_err());
+
+    let lenient = claims_validator_with(test_config().with_leeway(60));
+    lenient.validate(&token).await.unwrap();
+}
+
+#[r2e_core::test]
+async fn leeway_tolerates_a_slightly_expired_token() {
+    let claims = serde_json::json!({
+        "sub": "u", "iss": TEST_ISSUER, "aud": TEST_AUDIENCE,
+        "exp": now_secs() - 30,
+    });
+    let token = encode_claims(&claims);
+
+    let strict = claims_validator_with(test_config());
+    assert!(matches!(
+        strict.validate(&token).await.unwrap_err(),
+        SecurityError::TokenExpired
+    ));
+
+    let lenient = claims_validator_with(test_config().with_leeway(60));
+    lenient.validate(&token).await.unwrap();
 }

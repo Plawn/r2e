@@ -20,6 +20,10 @@ pub use identity::{
     FromValidatedJwtClaims, IdentityBuilder, IdentityBuilderWith,
 };
 pub use jwks::JwksCache;
+/// The JWKS HTTP client builder doubles as the OAuth-metadata HTTP client
+/// (same timeouts, same HTTPS-only policy) for crates building on
+/// r2e-security, e.g. r2e-mcp discovery.
+pub use jwks::build_jwks_client as build_oauth_http_client;
 pub use jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
 // The claim set carried by `AuthenticatedUser` / `Identity::claims()`. Defined
 // in `r2e-core` (the `Identity` trait names it), re-exported here because every

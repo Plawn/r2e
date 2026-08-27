@@ -83,10 +83,16 @@ impl JwtClaimsValidator {
         );
         validation.algorithms = config.allowed_algorithms.clone();
         validation.set_issuer(&[&config.issuer]);
-        validation.set_audience(&[&config.audience]);
-        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+        if config.validate_audience {
+            validation.set_audience(&config.audiences);
+            validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+        } else {
+            validation.validate_aud = false;
+            validation.set_required_spec_claims(&["exp", "iss", "sub"]);
+        }
         validation.validate_exp = true;
         validation.validate_nbf = true;
+        validation.leeway = config.leeway_secs;
         validation
     }
 
