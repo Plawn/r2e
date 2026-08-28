@@ -2,4 +2,4 @@ error[E0080]: evaluation panicked: this #[guard] requires an authenticated ident
   --> cases/openfga/fail/fga_guard_without_identity.rs:17:13
    |
 17 |     #[guard(FgaCheck::relation("viewer").on("document").from_path("id"))]
-   |             ^^^^^^^^ evaluation of `_` failed here
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

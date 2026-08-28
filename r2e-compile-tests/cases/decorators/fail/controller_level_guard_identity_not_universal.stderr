@@ -2,4 +2,4 @@ error[E0080]: evaluation panicked: this #[guard] requires an authenticated ident
   --> cases/decorators/fail/controller_level_guard_identity_not_universal.rs:15:9
    |
 15 | #[guard(RateLimit::per_user(5, 60))]
-   |         ^^^^^^^^^ evaluation of `_` failed here
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

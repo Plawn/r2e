@@ -1,99 +1,13 @@
-error[E0277]: the `ShipsController` plugin's controllers cannot be registered
-  --> cases/plugins/fail/plugin_controller_dep_missing.rs:54:9
-   |
-54 | /         AppBuilder::new()
-55 | |             .plugin(ShipsController)
-   | |____________________________________^ installed here
-   |
-   = help: the trait `PluginControllerList<ShipsController, HCons<PluginBean, HNil>, ((((),), (Here, (There<_>, ()))),)>` is not implemented for `(ShippedController,)`
-   = note: every type in `ShipsController::Controllers` must be a `#[controller]` type whose `#[inject]` dependencies are all in the application's provision list
-   = note: `.provide(..)` / `.register::<_>()` the missing bean, or add it to `ShipsController::Provided`
-help: the trait `PluginControllerList<Pl, T, ()>` is implemented for `()`
-  --> $WORKSPACE/r2e-core/src/di/module.rs
-   |
-   | impl<Pl, T: Clone + Send + Sync + 'static> PluginControllerList<Pl, T, ()> for () {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: required for `TCons<PluginCtrls<ShipsController>, TNil>` to implement `ModuleList<HCons<PluginBean, HNil>, (((((),), (Here, (There<_>, ()))),), ())>`
-note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
-  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
-   |
-   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
-   |                  ----------- required by a bound in this associated function
-...
-   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
-
-error[E0277]: the `ShipsController` plugin's controllers cannot be registered
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<PluginBean, TNil>, TNil, TCons<PluginCtrls<ShipsController>, TNil>>`, but its trait bounds were not satisfied
   --> cases/plugins/fail/plugin_controller_dep_missing.rs:57:14
-   |
-57 |             .build_state()
-   |              ^^^^^^^^^^^ installed here
-   |
-   = help: the trait `PluginControllerList<ShipsController, HCons<PluginBean, HNil>, ((((),), (Here, (There<_>, ()))),)>` is not implemented for `(ShippedController,)`
-   = note: every type in `ShipsController::Controllers` must be a `#[controller]` type whose `#[inject]` dependencies are all in the application's provision list
-   = note: `.provide(..)` / `.register::<_>()` the missing bean, or add it to `ShipsController::Provided`
-help: the trait `PluginControllerList<Pl, T, ()>` is implemented for `()`
-  --> $WORKSPACE/r2e-core/src/di/module.rs
-   |
-   | impl<Pl, T: Clone + Send + Sync + 'static> PluginControllerList<Pl, T, ()> for () {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: required for `TCons<PluginCtrls<ShipsController>, TNil>` to implement `ModuleList<HCons<PluginBean, HNil>, (((((),), (Here, (There<_>, ()))),), ())>`
-note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
-  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
-   |
-   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
-   |                  ----------- required by a bound in this associated function
-...
-   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
-
-error[E0277]: the `ShipsController` plugin's controllers cannot be registered
-  --> cases/plugins/fail/plugin_controller_dep_missing.rs:54:9
    |
 54 | /         AppBuilder::new()
 55 | |             .plugin(ShipsController)
 56 | |             // `MissingBean` is never `.provide()`-d or `.register()`-ed.
 57 | |             .build_state()
-   | |__________________________^ installed here
+   | |             -^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   | |_____________|
    |
-   = help: the trait `PluginControllerList<ShipsController, HCons<PluginBean, HNil>, ((((),), (Here, (There<_>, ()))),)>` is not implemented for `(ShippedController,)`
-   = note: every type in `ShipsController::Controllers` must be a `#[controller]` type whose `#[inject]` dependencies are all in the application's provision list
-   = note: `.provide(..)` / `.register::<_>()` the missing bean, or add it to `ShipsController::Provided`
-help: the trait `PluginControllerList<Pl, T, ()>` is implemented for `()`
-  --> $WORKSPACE/r2e-core/src/di/module.rs
    |
-   | impl<Pl, T: Clone + Send + Sync + 'static> PluginControllerList<Pl, T, ()> for () {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: required for `TCons<PluginCtrls<ShipsController>, TNil>` to implement `ModuleList<HCons<PluginBean, HNil>, (((((),), (Here, (There<_>, ()))),), ())>`
-note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
-  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
-   |
-   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
-   |                  ----------- required by a bound in this associated function
-...
-   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
-
-error[E0277]: the `ShipsController` plugin's controllers cannot be registered
-  --> cases/plugins/fail/plugin_controller_dep_missing.rs:58:14
-   |
-58 |             .await
-   |              ^^^^^ installed here
-   |
-   = help: the trait `PluginControllerList<ShipsController, HCons<PluginBean, HNil>, ((((),), (Here, (There<_>, ()))),)>` is not implemented for `(ShippedController,)`
-   = note: every type in `ShipsController::Controllers` must be a `#[controller]` type whose `#[inject]` dependencies are all in the application's provision list
-   = note: `.provide(..)` / `.register::<_>()` the missing bean, or add it to `ShipsController::Provided`
-help: the trait `PluginControllerList<Pl, T, ()>` is implemented for `()`
-  --> $WORKSPACE/r2e-core/src/di/module.rs
-   |
-   | impl<Pl, T: Clone + Send + Sync + 'static> PluginControllerList<Pl, T, ()> for () {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-   = note: required for `TCons<PluginCtrls<ShipsController>, TNil>` to implement `ModuleList<HCons<PluginBean, HNil>, (((((),), (Here, (There<_>, ()))),), ())>`
-note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::build_state`
-  --> $WORKSPACE/r2e-core/src/builder/nostate.rs
-   |
-   |     pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
-   |                  ----------- required by a bound in this associated function
-...
-   |         Mods: ModuleList<<P as BuildHList>::Output, MW>,
-   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::build_state`
+   = note: the following trait bounds were not satisfied:
+           `(ShippedController,): PluginControllerList<ShipsController, HCons<PluginBean, HNil>, _>`
