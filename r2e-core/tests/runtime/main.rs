@@ -13,3 +13,5 @@ mod shutdown_budget;
 mod tcp_nodelay;
 mod tracing_config;
 mod worker_services;
+#[cfg(feature = "ws")]
+mod ws_shutdown;

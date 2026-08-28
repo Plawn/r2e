@@ -8,7 +8,8 @@ use super::*;
 impl AppBuilder<NoState, TNil, TNil, TNil> {
     /// Create a new, empty builder in the pre-state phase.
     pub fn new() -> Self {
-        Self {
+        #[allow(unused_mut)]
+        let mut builder = Self {
             shared: BuilderConfig {
                 config: None,
                 custom_layers: Vec::new(),
@@ -51,7 +52,21 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             _provided: PhantomData,
             _required: PhantomData,
             _modules: PhantomData,
-        }
+        };
+
+        // Framework-provided bean, deliberately deposited straight into the
+        // registry rather than through `.provide()`: that would push
+        // `WsSessions` onto the type-level provision list `P`, i.e. into the
+        // app's state HList, for a value only generated `#[ws]` code reads —
+        // and it reads it from the `BeanContext` at registration time, not
+        // from the state. See `builder::ws_sessions`.
+        #[cfg(feature = "ws")]
+        builder
+            .shared
+            .bean_registry
+            .provide(super::WsSessions::default());
+
+        builder
     }
 }
 

@@ -18,6 +18,16 @@
 //! # WsBroadcaster / WsRooms
 //!
 //! Multi-client broadcast utilities for chat rooms, notifications, etc.
+//!
+//! # Shutdown
+//!
+//! Sessions opened by a generated `#[ws(...)]` route are **tracked**: they run
+//! on the app's tracked-handle lane ([`WsSessions`](crate::builder::WsSessions))
+//! instead of axum's detached upgrade task, they own the bean graph while they
+//! run, and shutdown joins them under `shutdown_grace_period`. A
+//! [`WsStream`] built that way also watches the shutdown token and ends its
+//! receive loop with a [`CLOSE_GOING_AWAY`] frame. See
+//! `docs/features/22-serve-lifecycle.md`.
 
 use std::borrow::Borrow;
 use std::future::Future;
@@ -27,8 +37,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::http::ws::{Message, WebSocket};
+use crate::http::ws::{CloseFrame, Message, WebSocket};
 use crate::rt::sync::broadcast;
+use crate::rt::CancelToken;
 use dashmap::DashMap;
 use futures_util::{Sink, SinkExt};
 use serde::{de::DeserializeOwned, Serialize};
@@ -91,16 +102,89 @@ impl std::error::Error for WsError {}
 ///
 /// `WsStream` also implements [`futures_util::Sink<Message>`], so it composes
 /// with `SinkExt` combinators (`send_all`, `forward`, …).
+///
+/// # Shutdown
+///
+/// A stream built by a generated `#[ws(...)]` route watches the app shutdown
+/// token. When graceful shutdown starts, the **next**
+/// [`next`](Self::next)/[`next_text`](Self::next_text)/[`next_json`](Self::next_json)/[`on_each`](Self::on_each)
+/// call sends a `1001 Going Away` close frame and then reports end-of-stream
+/// (`None`) — so the usual `while let Some(msg) = ws.next().await` loop ends by
+/// itself, in time to run whatever comes after it. A loop that never awaits the
+/// receive side (a pure broadcast pusher, say) must observe
+/// [`shutdown_requested`](Self::shutdown_requested) itself, or it will be
+/// abandoned once `shutdown_grace_period` elapses — with a warning naming
+/// `ws:<Controller>::<method>`. See `docs/features/22-serve-lifecycle.md`.
 pub struct WsStream {
     inner: WebSocket,
+    /// The app shutdown token, when this stream belongs to a serving app.
+    /// `None` for a hand-built stream ([`new`](Self::new)) and for a session in
+    /// an app that is not served through `run()` (`TestApp`), which is exactly
+    /// the "no shutdown to observe" case.
+    shutdown: Option<CancelToken>,
+    /// Set once the going-away frame has been sent, so every later receive
+    /// reports end-of-stream instead of racing the close handshake.
+    going_away: bool,
 }
+
+/// WebSocket close code sent to live sessions when the app shuts down: RFC 6455
+/// `1001 Going Away`, "the server is going down".
+pub const CLOSE_GOING_AWAY: u16 = 1001;
 
 impl crate::http::ws::IsWebSocket for WsStream {}
 
 impl WsStream {
     /// Wrap a raw Axum WebSocket.
+    ///
+    /// The stream observes no shutdown token — use
+    /// [`with_shutdown`](Self::with_shutdown) for a session that should end on
+    /// its own when the app shuts down. Generated `#[ws]` routes do that for
+    /// you.
     pub fn new(socket: WebSocket) -> Self {
-        Self { inner: socket }
+        Self {
+            inner: socket,
+            shutdown: None,
+            going_away: false,
+        }
+    }
+
+    /// Wrap a raw Axum WebSocket that ends itself when `shutdown` fires.
+    ///
+    /// Called by generated `#[ws(...)]` code with the app shutdown token
+    /// (`None` when the app is not served through `run()`). See the
+    /// [type docs](Self#shutdown) for what the session then observes.
+    pub fn with_shutdown(socket: WebSocket, shutdown: Option<CancelToken>) -> Self {
+        Self {
+            inner: socket,
+            shutdown,
+            going_away: false,
+        }
+    }
+
+    /// The app shutdown token this session observes, if any.
+    pub fn shutdown_token(&self) -> Option<&CancelToken> {
+        self.shutdown.as_ref()
+    }
+
+    /// Resolves when the app starts shutting down.
+    ///
+    /// For loops that do not sit on the receive side — `rt::select!` this
+    /// against your own work and end the session when it wins. Pending forever
+    /// when there is no token (a hand-built stream, or a `TestApp` that never
+    /// shuts down), so it is safe to select on unconditionally.
+    ///
+    /// The returned future borrows nothing: `WsStream` is `Send` but not
+    /// `Sync`, so a future holding `&self` across an await would make the whole
+    /// session future non-`Send` — and a session must be `Send` to be spawned
+    /// and tracked.
+    pub fn shutdown_requested(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let token = self.shutdown.clone();
+        async move {
+            match token {
+                Some(token) => token.cancelled_owned().await,
+                None => std::future::pending::<()>().await,
+            }
+        }
     }
 
     // ── Send (queue + flush) ──
@@ -180,10 +264,50 @@ impl WsStream {
 
     // ── Receive ──
 
-    /// Receive the next message, or `None` if the connection is closed.
+    /// Receive the next message, or `None` if the connection is closed **or the
+    /// app is shutting down**.
+    ///
+    /// On the first poll after the shutdown token fires, this sends a
+    /// [`CLOSE_GOING_AWAY`] frame and reports end-of-stream; every later call
+    /// returns `None` immediately. Nothing is lost that would not be lost
+    /// anyway: the alternative is the session being killed outright when the
+    /// runtime goes down. See the [type docs](Self#shutdown).
     pub async fn next(&mut self) -> Option<Result<Message, WsError>> {
         use crate::rt::stream::StreamExt;
-        self.inner.next().await.map(|r| r.map_err(WsError::Recv))
+        if self.going_away {
+            return None;
+        }
+        // Clone the token out: `cancelled()` borrows `self.shutdown` while
+        // `inner.next()` needs `&mut self.inner`.
+        let Some(shutdown) = self.shutdown.clone() else {
+            return self.inner.next().await.map(|r| r.map_err(WsError::Recv));
+        };
+        // `biased`: once shutdown has fired the session is over, so never let a
+        // busy socket keep winning the race. Both arms are cancel-safe —
+        // `StreamExt::next` on a `WebSocket` buffers nothing on drop.
+        let received = crate::rt::select! {
+            biased;
+            _ = shutdown.cancelled() => None,
+            msg = self.inner.next() => Some(msg),
+        };
+        match received {
+            Some(msg) => msg.map(|r| r.map_err(WsError::Recv)),
+            None => {
+                self.begin_going_away().await;
+                None
+            }
+        }
+    }
+
+    /// Send the going-away close frame, once. Errors are swallowed: the peer
+    /// may already be gone, and either way the session ends here.
+    async fn begin_going_away(&mut self) {
+        self.going_away = true;
+        let frame = CloseFrame {
+            code: CLOSE_GOING_AWAY,
+            reason: "server shutting down".into(),
+        };
+        let _ = self.send(Message::Close(Some(frame))).await;
     }
 
     /// Receive the next text message, skipping non-text messages.
@@ -292,6 +416,11 @@ pub trait WsHandler: Send + 'static {
 }
 
 /// Run a WsHandler on a WsStream. Called by generated code.
+///
+/// The loop sits on [`WsStream::next`], so it ends on app shutdown for free:
+/// the stream sends [`CLOSE_GOING_AWAY`] and reports end-of-stream, and
+/// `on_close` still runs — inside the `shutdown_grace_period` budget, since the
+/// session is a tracked task.
 pub async fn run_ws_handler(mut ws: WsStream, mut handler: impl WsHandler) {
     handler.on_connect(&mut ws).await;
     while let Some(Ok(msg)) = ws.next().await {

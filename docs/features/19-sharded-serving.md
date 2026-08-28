@@ -63,6 +63,16 @@ before this feature existed: a single listener bound on the caller's runtime.
    shutdown future is a `child_token().cancelled()`. The main thread then joins
    the worker threads; worker panics are logged via `tracing::error!`, and a
    worker's serve `Err` is propagated as the overall run error.
+7. **Workers park before dying.** A worker runtime owns the I/O driver of every
+   socket that worker accepted — including sockets that were *upgraded* and
+   whose task now runs on the control plane (a `#[ws(...)]` session). So a
+   drained worker does not drop its runtime: it reports "HTTP drained, services
+   down" and waits inside `block_on` (still driving that I/O driver) until the
+   control plane has joined the tracked handles, then returns. The handshake is
+   `runtime::sharded::WorkerPark`; the release token is held through a
+   cancel-on-drop guard, so a panicking or dropped `run()` still releases the
+   workers. Without it a WebSocket session that reacted slowly to shutdown lost
+   its socket mid-grace-period.
 
 The lifecycle (consumer registration, serve/startup hooks, QUIC spawn, shutdown
 phase, grace period) is **shared** with the single-listener path — only the
@@ -227,7 +237,8 @@ and you have shard-local QUIC without r2e knowing about Quinn.
    `worker {i} exited before reporting startup (panicked?)`).
 4. **Shutdown ordering per worker:** `worker.shutdown()` is cancelled together
    with the HTTP listener → in-flight HTTP drains → `WorkerService::shutdown`
-   awaited for each service in reverse start order → `LocalSet` and runtime
+   awaited for each service in reverse start order → the worker parks until the
+   control plane's tracked-handle join is over → `LocalSet` and runtime
    dropped (which cancels any local task still running — await your tasks in
    `shutdown` if they must finish). A service is never dropped while its
    `shutdown` future is pending.

@@ -294,8 +294,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         //      response bodies (they outlive the service value, and the body
         //      outlives the head);
         //   2. each TRACKED TASK — `ServeContext::track`, `spawn_service`, the
-        //      scheduler driver and the QUIC drain all spawn through
-        //      `ServiceHandles::spawn_owning`, which moves an `Arc` INTO the
+        //      scheduler driver, the QUIC drain and every upgraded WebSocket
+        //      session all spawn through `ServiceHandles::spawn_owning{,_ctl}`,
+        //      which moves an `Arc` INTO the
         //      task. Every exit this function controls cancels the token and
         //      joins those handles (normal shutdown below, and both aborts via
         //      `abort_started_work`), but the join is still best-effort: an
@@ -320,16 +321,21 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // `GraphHandle` can observe `None`, and only after the last owner is
         // gone.
         //
-        // Residual window, derived — not assumed: a WebSocket session still
-        // running AFTER `run()` returns. On upgrade, hyper's
-        // `UpgradeableConnection::poll` hands the IO to the upgrade and
-        // immediately returns `Ready(Ok(()))`, so the connection counts as
-        // finished and axum's `on_upgrade` task (detached, spawned by axum itself, empty
-        // 101 body) is watched by neither graceful shutdown nor the tracked
-        // set. In a normal binary that window closes immediately (the runtime
-        // is dropped right after `run()`, taking detached tasks with it); an
-        // embedder that keeps the runtime alive past `run()` must resolve what
-        // a session needs BEFORE its socket loop. See `docs/claude/plugins.md`
+        // WebSocket sessions used to be the residual window here, derived from
+        // hyper: on upgrade, `UpgradeableConnection::poll` hands the IO over
+        // and immediately returns `Ready(Ok(()))`, so the connection counts as
+        // finished (the HTTP drain does not wait for it) and axum's
+        // `on_upgrade` task is detached (the tracked set never saw it). A
+        // session therefore outlived `run()` and died with the runtime. It is
+        // closed since #979: generated `#[ws]` handlers run the session
+        // through `WsSessions::run_session`, which puts it on the tracked lane
+        // (owner 2) — so a session holds the graph, is joined after the HTTP
+        // drain under its own `shutdown_grace_period`, and is told to close by
+        // the shutdown token. What is left is a session in an app served
+        // OUTSIDE `run()` (a bare router served by hand, a
+        // `TestApp`): the registry is unarmed there, the session runs inline
+        // in axum's detached task, and the old advice stands — resolve what it
+        // needs before its socket loop. See `docs/claude/plugins.md`
         // § "The graph outlives the router".
         let serve_scope_graph = self.graph;
 
@@ -376,6 +382,21 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             .downcast_ref::<ServiceHandles>()
             .expect("ServiceHandles type mismatch in plugin_data")
             .clone();
+
+        // Claim the WebSocket session registry for this run, BEFORE anything
+        // can accept a connection. Until this line every `#[ws]` route runs
+        // its session inline (the `TestApp` / `build_with_consumers`
+        // behaviour); from here on sessions land on the tracked lane above.
+        // Re-armed on every `run()` because `r2e dev` carries one graph — and
+        // with it one registry — across hot-patch cycles.
+        #[cfg(feature = "ws")]
+        if let Some(ws_sessions) = serve_scope_graph.try_get::<super::WsSessions>() {
+            ws_sessions.arm(
+                service_handles.clone(),
+                cancel_token.clone(),
+                &serve_scope_graph,
+            );
+        }
 
         if !skip_lifecycle {
             // Controller-core `#[post_construct]` hooks run before consumers
@@ -669,10 +690,30 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                          a multi-thread runtime (use #[r2e::main])"
                     );
                 }
+                // ── Worker parking ──────────────────────────────────
+                // A worker runtime owns the I/O driver of every socket that
+                // worker accepted, upgraded WebSocket sockets included — and
+                // those sessions run on the control plane, outliving the HTTP
+                // drain by design. Dropping the worker runtime at the end of
+                // its serve loop would kill their driver mid-shutdown, so the
+                // workers park after draining and we release them only once
+                // the tracked handles are joined. `_park_guard` cancels the
+                // release token on every exit path (including a panic or a
+                // dropped `run()` future), so a parked worker can never
+                // outlive this function.
+                let (park_drained, mut park_drained_rx) =
+                    crate::rt::sync::mpsc::unbounded_channel::<()>();
+                let park_release = CancelToken::new();
+                let _park_guard = park_release.clone().drop_guard();
+                let park = crate::runtime::sharded::WorkerPark {
+                    drained: park_drained,
+                    release: park_release.clone(),
+                };
+
                 // `serve_sharded` blocks the calling thread joining the worker
                 // threads, so run it on a blocking task to avoid stalling the
                 // main runtime (which must keep driving the shutdown future).
-                let join = crate::rt::spawn_blocking(move || {
+                let serve_task = crate::rt::spawn_blocking(move || {
                     crate::runtime::sharded::serve_sharded(
                         router,
                         &addrs,
@@ -682,9 +723,36 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                         cancel_for_workers,
                         drain_bound,
                         &per_worker_services,
+                        park,
                     )
-                })
-                .await;
+                });
+
+                // Wait for every worker to report "HTTP drained, services
+                // down". `recv()` yields `None` once all senders are gone —
+                // i.e. once every worker has reported or died — so a worker
+                // panic (or an aborted startup, where no worker ever serves)
+                // cannot hang this.
+                let mut parked_workers = 0usize;
+                while park_drained_rx.recv().await.is_some() {
+                    parked_workers += 1;
+                    if parked_workers == workers {
+                        break;
+                    }
+                }
+
+                if parked_workers > 0 {
+                    // Sharded shutdown order: the workers' HTTP drain is over
+                    // and their runtimes are still turning, so this is where
+                    // the tracked-handle join belongs — the WebSocket sessions
+                    // in it still have a live I/O driver and can write their
+                    // going-away frames. The unconditional call further down
+                    // then finds an empty set (`ServiceHandles::drain` takes
+                    // the vec) and is a no-op.
+                    drain_tracked_handles(&service_handles, self.shutdown_grace_period).await;
+                }
+                // Release the parked workers; their runtimes drop from here.
+                park_release.cancel();
+                let join = serve_task.await;
 
                 // Ensure the shutdown future's task is wound down. By now it
                 // has already fired: workers only leave their serve loop on
@@ -722,6 +790,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 "serve failed",
             )
             .await;
+            #[cfg(feature = "ws")]
+            disarm_ws_sessions(&serve_scope_graph);
             return Err(e);
         }
 
@@ -734,6 +804,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // abandoned (with a warning naming it) without eating the budget of the
         // others, so this whole phase costs at most one grace period.
         drain_tracked_handles(&service_handles, self.shutdown_grace_period).await;
+
+        // The tracked lane is closed: nothing pushed from here on would ever
+        // be joined, so any late WebSocket upgrade runs inline instead.
+        #[cfg(feature = "ws")]
+        disarm_ws_sessions(&serve_scope_graph);
 
         // ── Post-drain phase 2: user `on_stop` hooks ────────────────────────
         // MUST-RUN, outside every budget. These hooks carry application-state
@@ -822,11 +897,22 @@ impl PluginShutdownCell {
     }
 }
 
+/// Release the WebSocket session registry claimed at the start of this run, so
+/// later upgrades go back to running inline instead of pushing handles nobody
+/// will join. A no-op when the app has no `WsSessions` bean (a `with_state()`
+/// app, whose graph is empty).
+#[cfg(feature = "ws")]
+fn disarm_ws_sessions(graph: &Arc<crate::beans::BeanContext>) {
+    if let Some(sessions) = graph.try_get::<super::WsSessions>() {
+        sessions.disarm();
+    }
+}
+
 /// Await every tracked task handle, logging join failures.
 ///
 /// The tracked set is the union of `spawn_service` tasks, `ServeContext::track`
-/// tasks (gRPC server drain, scheduler driver, tenant sweeper, …) and the QUIC
-/// endpoint drain.
+/// tasks (gRPC server drain, scheduler driver, tenant sweeper, …), upgraded
+/// WebSocket sessions and the QUIC endpoint drain.
 ///
 /// `grace` is applied **per handle**, not to the phase: the handles are joined
 /// concurrently and each gets its own budget, so a service that ignores its

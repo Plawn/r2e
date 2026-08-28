@@ -34,14 +34,14 @@ use r2e_core::type_list::TNil;
 
 /// Every event recorded by [`CaptureLayer`], as `LEVEL field=value …` lines.
 #[derive(Clone, Default)]
-struct Captured(Arc<Mutex<Vec<String>>>);
+pub(crate) struct Captured(Arc<Mutex<Vec<String>>>);
 
 impl Captured {
-    fn contains(&self, needle: &str) -> bool {
+    pub(crate) fn contains(&self, needle: &str) -> bool {
         self.0.lock().unwrap().iter().any(|l| l.contains(needle))
     }
 
-    fn dump(&self) -> String {
+    pub(crate) fn dump(&self) -> String {
         self.0.lock().unwrap().join("\n")
     }
 }
@@ -71,7 +71,7 @@ impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for CaptureLayer {
     }
 }
 
-fn capturing() -> (Captured, impl tracing::Subscriber + Send + Sync) {
+pub(crate) fn capturing() -> (Captured, impl tracing::Subscriber + Send + Sync) {
     use tracing_subscriber::layer::SubscriberExt as _;
     let captured = Captured::default();
     let subscriber = tracing_subscriber::registry().with(CaptureLayer(captured.clone()));
@@ -80,7 +80,7 @@ fn capturing() -> (Captured, impl tracing::Subscriber + Send + Sync) {
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
-fn current_thread_rt() -> r2e_core::rt::Runtime {
+pub(crate) fn current_thread_rt() -> r2e_core::rt::Runtime {
     r2e_core::rt::RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()
@@ -244,10 +244,11 @@ fn drain_timeout_unbounded_yields_no_bound() {
 }
 
 #[test]
-fn invalid_config_drain_timeout_falls_back_to_the_default() {
-    // An unparseable budget must never silently mean "unbounded".
-    let app = prepare_with_yaml("server:\n  drain-timeout: nonsense\n");
-    assert_eq!(app.drain_timeout(), Some(DEFAULT_DRAIN_TIMEOUT));
+#[should_panic(expected = "server.drain-timeout")]
+fn invalid_config_drain_timeout_fails_the_boot() {
+    // An unparseable budget is a boot error, never a silent default (and never
+    // "unbounded").
+    let _ = prepare_with_yaml("server:\n  drain-timeout: nonsense\n");
 }
 
 // ── `drain_timeout` bounds the HTTP drain ───────────────────────────────────

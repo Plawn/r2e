@@ -46,9 +46,14 @@ pub const DRAIN_TIMEOUT_CONFIG_KEY: &str = "server.drain-timeout";
 /// wins over [`DRAIN_TIMEOUT_CONFIG_KEY`], which wins over
 /// [`DEFAULT_DRAIN_TIMEOUT`].
 ///
-/// A malformed config value is reported and ignored (falling back to the
-/// default) rather than failing the boot: an unparseable budget must never turn
-/// into an unbounded drain.
+/// A malformed config value **fails the boot** (panics with the key and the
+/// parse error), like every other invalid `server.*` value: a shutdown budget
+/// that silently became something else is exactly the surprise this option
+/// exists to prevent.
+///
+/// # Panics
+///
+/// When `server.drain-timeout` is present but not a valid duration.
 pub fn resolve_drain_timeout(
     explicit: Option<Option<Duration>>,
     config: Option<&crate::config::R2eConfig>,
@@ -64,15 +69,11 @@ pub fn resolve_drain_timeout(
     }
     match config.get::<Duration>(DRAIN_TIMEOUT_CONFIG_KEY) {
         Ok(d) => Some(d),
-        Err(e) => {
-            tracing::error!(
-                key = DRAIN_TIMEOUT_CONFIG_KEY,
-                error = %e,
-                default_ms = DEFAULT_DRAIN_TIMEOUT.as_millis() as u64,
-                "invalid HTTP drain budget; falling back to the default"
-            );
-            Some(DEFAULT_DRAIN_TIMEOUT)
-        }
+        Err(e) => panic!(
+            "\n=== CONFIGURATION ERRORS ===\n\n{DRAIN_TIMEOUT_CONFIG_KEY}: {e}\n\
+             expected a duration (integer seconds, or \"30s\" / \"500ms\" / \"2m\")\n\
+             ============================\n"
+        ),
     }
 }
 

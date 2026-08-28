@@ -38,6 +38,18 @@
 //! [`crate::rt::spawn_ctl`]) is routed back onto the control plane rather than
 //! the worker's `current_thread` runtime.
 //!
+//! # Worker parking (shutdown)
+//!
+//! A worker's runtime owns the I/O driver of every socket it accepted —
+//! including sockets that were *upgraded* (WebSocket) and are now driven by a
+//! task on the control plane. Dropping the worker runtime kills that driver, so
+//! an upgraded session would lose its socket mid-shutdown. Workers therefore
+//! **park** after their HTTP drain and their per-worker services are down:
+//! each reports through [`WorkerPark::drained`] and then waits on
+//! [`WorkerPark::release`], which the control plane cancels only once it has
+//! joined the tracked handles (the WebSocket sessions among them). See
+//! [`crate::builder::WsSessions`] § "Sharded serving".
+//!
 //! # Lazy beans
 //!
 //! A lazy bean first touched from within a worker is resolved on the
@@ -171,6 +183,40 @@ mod imp {
         }
     }
 
+    /// Handshake keeping a worker's runtime alive across the control plane's
+    /// tracked-handle join.
+    ///
+    /// A worker sends one `()` on `drained` (and drops the sender) as soon as
+    /// its HTTP drain is over and its per-worker services are down, then waits
+    /// for `release` before returning from `block_on` — i.e. before its runtime,
+    /// and the I/O driver of every socket it accepted, is dropped. The control
+    /// plane counts the reports, joins the tracked handles, and only then
+    /// cancels `release`.
+    ///
+    /// `release` is held by the caller through a
+    /// [`CancelDropGuard`](crate::rt::CancelDropGuard), so workers are released
+    /// even if the shutdown path unwinds or the `run()` future is dropped.
+    #[derive(Clone)]
+    pub struct WorkerPark {
+        /// One `()` per worker, sent once that worker is drained and parked.
+        pub drained: crate::rt::sync::mpsc::UnboundedSender<()>,
+        /// Cancelled by the control plane once the tracked handles are joined.
+        pub release: CancelToken,
+    }
+
+    impl WorkerPark {
+        /// A handshake nobody is listening to: `release` is already cancelled,
+        /// so workers drop their runtime as soon as they are drained, and the
+        /// `drained` reports go nowhere. For callers that drive
+        /// [`serve_sharded`] directly and own no tracked handles (tests).
+        pub fn unparked() -> Self {
+            let (drained, _rx) = crate::rt::sync::mpsc::unbounded_channel();
+            let release = CancelToken::new();
+            release.cancel();
+            Self { drained, release }
+        }
+    }
+
     /// Shut down `services` in reverse start order, awaiting each cleanup.
     async fn shutdown_services(worker: usize, mut services: Vec<Box<dyn WorkerService>>) {
         while let Some(svc) = services.pop() {
@@ -202,7 +248,10 @@ mod imp {
     /// Blocks until `cancel_token` is cancelled (each worker observes a child
     /// token via graceful shutdown), then joins all worker threads. Inside a
     /// worker, cancellation drains HTTP first, then shuts down the services in
-    /// reverse start order, then drops the runtime.
+    /// reverse start order, then **parks** on [`WorkerPark`] until the control
+    /// plane has joined the tracked handles, and only then drops the runtime.
+    /// The join below therefore returns one `park.release` cancellation later
+    /// than the workers' own drain.
     ///
     /// `drain_timeout` ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout))
     /// bounds each worker's HTTP drain **individually**, measured from the
@@ -226,6 +275,7 @@ mod imp {
         cancel_token: CancelToken,
         drain_timeout: Option<std::time::Duration>,
         services: &[PerWorkerServiceFactory],
+        park: WorkerPark,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Pre-create the listeners on the main thread so that a bind failure
         // surfaces synchronously as a run error (rather than from inside a
@@ -275,6 +325,10 @@ mod imp {
             let control_plane = control_plane.clone();
             let services = Arc::clone(&services);
             let start_gate = start_gate.clone();
+            let WorkerPark {
+                drained: park_drained,
+                release: park_release,
+            } = park.clone();
             let mut ready = ReadyGuard {
                 worker: i,
                 tx: Some(ready_tx.clone()),
@@ -386,6 +440,18 @@ mod imp {
                         // serve loop ended on an error rather than on the token.
                         child_token.cancel();
                         shutdown_services(i, started).await;
+
+                        // ── Park: outlive the tracked-handle join ────────
+                        // This worker is drained, but its runtime still owns
+                        // the I/O driver of every socket it accepted —
+                        // including the upgraded WebSocket sessions now
+                        // running on the control plane. Report, then stay
+                        // inside `block_on` (which keeps that driver turning)
+                        // until the control plane has joined them.
+                        let _ = park_drained.send(());
+                        drop(park_drained);
+                        park_release.cancelled().await;
+
                         serve_result.map_err(|e| format!("worker {i}: serve error: {e}"))
                     }))
                 })
@@ -395,6 +461,10 @@ mod imp {
             handles.push((i, handle));
         }
         drop(ready_tx);
+        // The workers hold the only remaining senders: once every one of them
+        // has either reported or died, the control plane's `recv()` yields
+        // `None` instead of hanging.
+        drop(park);
 
         // ── Startup barrier (main thread) ───────────────────────────────────
         // Collect one report per worker. A worker that dies before reporting
@@ -473,4 +543,4 @@ mod imp {
     unix,
     not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
 ))]
-pub use imp::serve_sharded;
+pub use imp::{serve_sharded, WorkerPark};
