@@ -202,6 +202,58 @@ fn add_mcp_scaffolds_source_without_overwriting_it() {
 
 #[test]
 #[serial]
+fn add_mcp_declares_the_module_in_the_crate_root() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+    // lib.rs wins over main.rs; the declaration joins the existing `mod`s.
+    fs::write("src/lib.rs", "mod app;\n\npub use app::App;\n").unwrap();
+    fs::write("src/main.rs", "fn main() {}\n").unwrap();
+
+    add::run("mcp").unwrap();
+    assert_eq!(
+        fs::read_to_string("src/lib.rs").unwrap(),
+        "mod app;\nmod mcp;\n\npub use app::App;\n"
+    );
+    assert_eq!(fs::read_to_string("src/main.rs").unwrap(), "fn main() {}\n");
+
+    // Idempotent: a second run (module already scaffolded) leaves it alone.
+    add::run("mcp").unwrap();
+    assert_eq!(fs::read_to_string("src/lib.rs").unwrap().matches("mod mcp;").count(), 1);
+}
+
+#[test]
+#[serial]
+fn add_mcp_declares_the_module_after_inner_attributes_in_main() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+    fs::write("src/main.rs", "#![recursion_limit = \"512\"]\n\nfn main() {}\n").unwrap();
+
+    add::run("mcp").unwrap();
+    assert_eq!(
+        fs::read_to_string("src/main.rs").unwrap(),
+        "#![recursion_limit = \"512\"]\nmod mcp;\n\nfn main() {}\n"
+    );
+}
+
+#[test]
+#[serial]
+fn add_mcp_keeps_an_existing_pub_mod_declaration() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+    fs::write("src/lib.rs", "pub mod mcp;\n").unwrap();
+
+    add::run("mcp").unwrap();
+    assert_eq!(fs::read_to_string("src/lib.rs").unwrap(), "pub mod mcp;\n");
+}
+
+#[test]
+#[serial]
 fn add_mcp_repairs_missing_schemars_for_direct_dependency() {
     let tmp = TempDir::new().unwrap();
     let _cwd = CwdGuard::new(tmp.path());

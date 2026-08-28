@@ -203,6 +203,14 @@ fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
             super::templates::project::mcp_service_rs(uses_facade),
         )?;
         println!("{} Created {}", "✓".green(), "src/mcp.rs".cyan());
+        if let Some(root) = declare_module(src, "mcp")? {
+            println!(
+                "{} Declared {} in {}",
+                "✓".green(),
+                "mod mcp;".cyan(),
+                root.display().to_string().cyan()
+            );
+        }
     } else if has_mcp_module {
         println!(
             "{} MCP source module already exists — left it unchanged",
@@ -234,8 +242,7 @@ fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("Wire the generated MCP adapter into your App (src/app.rs):");
     println!();
-    println!("  mod mcp;");
-    println!("  use mcp::McpTools;");
+    println!("  use crate::mcp::McpTools;");
     println!();
     println!("  b.plugin(McpServer::new())");
     println!("      .build_state().await");
@@ -243,6 +250,65 @@ fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("  Then: cargo build");
     Ok(())
+}
+
+/// Declare `mod <name>;` in the crate root (`src/lib.rs`, else `src/main.rs`)
+/// so a freshly scaffolded `src/<name>.rs` compiles without a manual edit.
+/// Returns the root that was edited, `None` when there is no root or the
+/// module is already declared (`mod x;` / `pub mod x;`, possibly attributed).
+fn declare_module(
+    src: &Path,
+    name: &str,
+) -> Result<Option<std::path::PathBuf>, Box<dyn std::error::Error>> {
+    let Some(root) = ["lib.rs", "main.rs"]
+        .into_iter()
+        .map(|file| src.join(file))
+        .find(|path| path.exists())
+    else {
+        return Ok(None);
+    };
+    let content = std::fs::read_to_string(&root)?;
+    let declares = |line: &str| {
+        let line = line.trim();
+        let line = line.strip_prefix("pub ").unwrap_or(line);
+        line.strip_prefix("mod ")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .is_some_and(|declared| declared.trim() == name)
+    };
+    if content.lines().any(declares) {
+        return Ok(None);
+    }
+    let declaration = format!("mod {name};\n");
+    // Group with the existing module declarations when there are any (right
+    // after the last one), otherwise lead the file (after inner attributes).
+    let lines: Vec<&str> = content.lines().collect();
+    let after_last_mod = lines
+        .iter()
+        .rposition(|line| {
+            let line = line.trim();
+            let line = line.strip_prefix("pub ").unwrap_or(line);
+            line.starts_with("mod ") && line.ends_with(';')
+        })
+        .map(|index| index + 1);
+    let insert_at = after_last_mod.unwrap_or_else(|| {
+        lines
+            .iter()
+            .take_while(|line| line.trim_start().starts_with("#!"))
+            .count()
+    });
+    let mut updated = String::with_capacity(content.len() + declaration.len());
+    for (index, line) in lines.iter().enumerate() {
+        if index == insert_at {
+            updated.push_str(&declaration);
+        }
+        updated.push_str(line);
+        updated.push('\n');
+    }
+    if insert_at >= lines.len() {
+        updated.push_str(&declaration);
+    }
+    std::fs::write(&root, updated)?;
+    Ok(Some(root))
 }
 
 /// `r2e add grpc` — full gRPC setup: enable the `grpc`/`grpc-reflection`
