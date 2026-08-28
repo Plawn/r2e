@@ -130,13 +130,27 @@ fn resolve_lazy_factory_falls_back_on_current_thread_runtime() {
 }
 
 /// The single worker thread of `rt` — spawned tasks land there, so the id
-/// identifies where a control-plane-resolved factory actually ran.
+/// identifies *which runtime* a factory was polled inside.
+///
+/// The factory itself runs on a dedicated `r2e-lazy-bean` OS thread (its future
+/// may be `!Send`, so it is never handed to a spawner); that thread enters the
+/// control-plane runtime with `block_on`. What identifies the control plane is
+/// therefore not the factory's own thread but where a task *spawned from inside
+/// the factory* lands — with `worker_threads(1)`, exactly this id.
 fn single_worker_id(rt: &r2e_core::rt::Runtime) -> std::thread::ThreadId {
     rt.block_on(async {
         r2e_core::rt::spawn(async { std::thread::current().id() })
             .await
             .unwrap()
     })
+}
+
+/// Run inside a lazy factory: returns the thread a task spawned from here lands
+/// on, i.e. a worker of the runtime the factory is being polled inside.
+async fn enclosing_runtime_worker() -> std::thread::ThreadId {
+    r2e_core::rt::spawn(async { std::thread::current().id() })
+        .await
+        .unwrap()
 }
 
 #[test]
@@ -150,19 +164,30 @@ fn resolve_lazy_factory_uses_control_plane_when_registered() {
         .unwrap();
     let worker_id = single_worker_id(&rt);
     let handle = rt.handle();
-    let (value, factory_thread) = std::thread::spawn(move || {
+    let caller_id = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let caller_slot = std::sync::Arc::clone(&caller_id);
+    let (value, factory_thread, enclosing) = std::thread::spawn(move || {
+        *caller_slot.lock().unwrap() = Some(std::thread::current().id());
         r2e_core::rt::set_control_plane(handle);
         r2e_core::di::lazy::__resolve_lazy_factory_for_tests(Box::new(|| {
-            Box::pin(async { (11u32, std::thread::current().id()) })
+            Box::pin(async {
+                (
+                    11u32,
+                    std::thread::current().id(),
+                    enclosing_runtime_worker().await,
+                )
+            })
         }))
     })
     .join()
     .unwrap();
     assert_eq!(value, 11);
-    // The factory must run on the control-plane worker — not on the calling
-    // thread, and not on the `lazy-fallback-runtime` global runtime (which
-    // would also produce the right value if this branch regressed).
-    assert_eq!(factory_thread, worker_id);
+    // The factory must be polled inside the control-plane runtime — not on the
+    // `lazy-fallback-runtime` global runtime (which would also produce the
+    // right value if this branch regressed).
+    assert_eq!(enclosing, worker_id);
+    // ... and never inline on the calling thread, which stays blocked.
+    assert_ne!(Some(factory_thread), *caller_id.lock().unwrap());
 }
 
 #[test]
@@ -185,7 +210,7 @@ fn resolve_lazy_factory_control_plane_panic_resurfaces() {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             r2e_core::di::lazy::__resolve_lazy_factory_for_tests::<()>(Box::new(move || {
                 Box::pin(async move {
-                    *seen_in_factory.lock().unwrap() = Some(std::thread::current().id());
+                    *seen_in_factory.lock().unwrap() = Some(enclosing_runtime_worker().await);
                     panic!("factory boom")
                 })
             }))
