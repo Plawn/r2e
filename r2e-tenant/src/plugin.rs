@@ -401,7 +401,7 @@ where
                 .unwrap_or(sweeper_fallback);
             dctx.on_serve(move |sctx| {
                 let token = sctx.shutdown_token();
-                sctx.track(async move {
+                sctx.track_named("tenant sweeper", async move {
                     r2e_core::runtime::service::ServiceComponent::start(sweeper, token).await;
                 });
             });
@@ -412,7 +412,7 @@ where
                     .try_get::<Tenanted<T>>()
                     .unwrap_or(warming_fallback);
                 dctx.on_serve(move |sctx| {
-                    sctx.track(async move {
+                    sctx.track_named("tenant eager warmup", async move {
                         for (tenant, err) in warming.preload(eager).await {
                             tracing::warn!(
                                 %tenant,

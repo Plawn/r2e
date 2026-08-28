@@ -20,6 +20,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 normalize_path: false,
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
+                drain_timeout: None,
                 active_profile: "default".to_string(),
                 forced_profile: None,
                 per_worker_services: Vec::new(),
@@ -429,9 +430,12 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                                 // would ever restart it — serve hooks run once
                                 // per process, and are skipped entirely from
                                 // the second `r2e dev` hot-patch cycle on.
-                                serve_ctx.track(crate::config::supervise_config_watch(
-                                    provider, watch_ctx, sink,
-                                ));
+                                serve_ctx.track_named(
+                                    "live-config watch supervisor",
+                                    crate::config::supervise_config_watch(
+                                        provider, watch_ctx, sink,
+                                    ),
+                                );
                             });
                         }
                     },
