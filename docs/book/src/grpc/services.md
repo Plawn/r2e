@@ -224,11 +224,26 @@ AppBuilder::new()
     .serve("0.0.0.0:3000")  // both HTTP and gRPC on :3000
 ```
 
-Requests with `content-type: application/grpc*` are routed to the gRPC services; all others go to the Axum HTTP router. The routing is handled by `MultiplexService`, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.
+Requests with `content-type: application/grpc*` are routed to the gRPC services (`application/grpc-web*` to the grpc-web arm when enabled, see below); all others go to the Axum HTTP router. The routing is handled by `MultiplexService`, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.
 
 Since gRPC requires HTTP/2, plaintext clients must use h2c prior knowledge (tonic's default); the HTTP server accepts both HTTP/1.1 and h2c on the shared port.
 
 Use this when infrastructure constraints require a single port (e.g., certain PaaS environments).
+
+#### grpc-web (browser clients)
+
+Browsers cannot speak native gRPC. With the `grpc-web` facade feature (`web` on `r2e-grpc`), `with_grpc_web()` adds a third arm to the multiplexer: requests with `content-type: application/grpc-web`, `grpc-web+proto` or `grpc-web-text` are translated by `tonic-web` into native gRPC calls against the same services, and the response carries the gRPC trailers as a trailer frame (base64-encoded for `-text`, chosen from the request `Accept` header). It works over HTTP/1.1 and HTTP/2. CORS preflights that name `x-grpc-web` are answered by the arm's own CORS layer — permissive by default, `with_grpc_web_cors(CorsLayer)` to restrict it.
+
+```toml
+r2e = { version = "0.3", features = ["grpc", "grpc-web"] }
+```
+
+```rust
+AppBuilder::new()
+    .plugin(GrpcServer::multiplexed().with_grpc_web())
+```
+
+Native gRPC and plain HTTP traffic are unchanged. Without `with_grpc_web()` (or without the feature) the multiplexer answers grpc-web requests with `415 Unsupported Media Type` and logs a warning at boot; on `on_port` the option is ignored with a warning.
 
 ## Combining HTTP and gRPC
 
@@ -342,6 +357,7 @@ See [CLI Reference](../reference/cli-reference.md) for full details.
 | Method | Description |
 |--------|-------------|
 | `.with_reflection()` | Enable gRPC server reflection, v1 + v1alpha (requires `reflection` feature) |
+| `.with_grpc_web()` / `.with_grpc_web_cors(cors)` | Serve grpc-web on the multiplexed port (requires `web` feature) |
 | `.with_reflection_descriptor(bytes)` | Enable reflection and register an extra encoded `FileDescriptorSet` |
 
 | Builder method | Description |

@@ -93,6 +93,7 @@ The `r2e` facade crate gates sub-crates behind features.
 | `observability` | r2e-observability |
 | `grpc` | r2e-grpc |
 | `grpc-reflection` | grpc, r2e-grpc/reflection |
+| `grpc-web` | grpc, r2e-grpc/web |
 | `static` | r2e-static |
 | `ws` | r2e-core/ws |
 | `multipart` | r2e-core/multipart |

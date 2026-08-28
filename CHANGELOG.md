@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **grpc-web on the multiplexed gRPC transport** (feature `grpc-web`, `web` on
+  `r2e-grpc`): `GrpcServer::multiplexed().with_grpc_web()` (or
+  `.with_grpc_web_cors(CorsLayer)`) adds a `tonic-web` arm to
+  `MultiplexService` for `application/grpc-web`, `grpc-web+proto` and
+  `grpc-web-text` requests over HTTP/1.1 and HTTP/2, with CORS preflight
+  handling. Without it grpc-web requests still get `415` + a boot warning.
+
 - **`r2e::http::IntoHttpResponse`** — R2E's own response-conversion contract,
   the counterpart of `FromRequestPartsVia` on the extract side. R2E error types
   (`HttpError`, `ParamError`, `MultipartError`, `RequestId`, `SecurityError`,

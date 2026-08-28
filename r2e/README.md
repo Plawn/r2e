@@ -68,7 +68,7 @@ dev-reload, and tests (`TestApp::boot::<MyApp>()` / `#[r2e::test(app = MyApp)]`)
 | `openfga`       | no      | `r2e-openfga` — Zanzibar authz       |
 | `observability` | no      | `r2e-observability` — OpenTelemetry  |
 | `oidc`          | no      | `r2e-oidc` — embedded OIDC server    |
-| `grpc` / `grpc-reflection` | no | `r2e-grpc` — Tonic gRPC server |
+| `grpc` / `grpc-reflection` / `grpc-web` | no | `r2e-grpc` — Tonic gRPC server (`grpc-web`: browser clients on the multiplexed port) |
 | `events-{iggy,kafka,pulsar,rabbitmq}` | no | distributed EventBus backends |
 | `static`        | no      | `r2e-static` — embedded static files + SPA |
 | `ws`            | no      | WebSocket support                    |
