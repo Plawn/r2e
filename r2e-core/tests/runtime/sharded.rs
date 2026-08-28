@@ -289,7 +289,7 @@ mod integration {
                     // does some async work (yield) — proving it runs on a real
                     // runtime, not block_in_place on the current_thread one.
                     let factory: Box<
-                        dyn FnOnce() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync,
+                        dyn FnOnce() -> Pin<Box<dyn Future<Output = bool>>> + Send + Sync,
                     > = Box::new(|| {
                         Box::pin(async {
                             r2e_core::rt::yield_now().await;
@@ -334,7 +334,7 @@ mod integration {
                     .unwrap();
                 worker_rt.block_on(async {
                     let factory: Box<
-                        dyn FnOnce() -> Pin<Box<dyn Future<Output = u32> + Send>> + Send + Sync,
+                        dyn FnOnce() -> Pin<Box<dyn Future<Output = u32>>> + Send + Sync,
                     > = Box::new(|| Box::pin(async { panic!("boom-payload") }));
                     // Panics — the payload is asserted from join() below.
                     r2e_core::di::lazy::__resolve_lazy_factory_for_tests(factory);
@@ -354,6 +354,55 @@ mod integration {
             Some("boom-payload"),
             "the factory's original panic payload must be re-raised on the worker"
         );
+    }
+
+    /// A lazy factory whose future is **not** `Send` must still resolve on the
+    /// control plane. Async bean constructors are `!Send` by design (see
+    /// `AsyncBean::build`), so `resolve_on` may never move the future between
+    /// threads — it creates it on the thread that drives it.
+    #[test]
+    fn worker_lazy_resolves_non_send_factory() {
+        use std::future::Future;
+        use std::pin::Pin;
+        use std::rc::Rc;
+
+        let cp_rt = r2e_core::rt::RuntimeBuilder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let cp_handle = cp_rt.handle();
+
+        let worker = std::thread::Builder::new()
+            .name("lazy-nonsend-worker".to_string())
+            .spawn(move || {
+                r2e_core::rt::set_control_plane(cp_handle);
+                let worker_rt = r2e_core::rt::RuntimeBuilder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                worker_rt.block_on(async {
+                    let factory: Box<
+                        dyn FnOnce() -> Pin<Box<dyn Future<Output = u32>>> + Send + Sync,
+                    > = Box::new(|| {
+                        Box::pin(async {
+                            // `Rc` is `!Send` and is held across an await, so
+                            // this future cannot be spawned — only driven in
+                            // place.
+                            let counter = Rc::new(41u32);
+                            r2e_core::rt::yield_now().await;
+                            *counter + 1
+                        })
+                    });
+                    let value = r2e_core::di::lazy::__resolve_lazy_factory_for_tests(factory);
+                    assert_eq!(value, 42, "a !Send lazy factory must resolve normally");
+                });
+            })
+            .unwrap();
+
+        worker
+            .join()
+            .expect("non-Send lazy worker thread should not panic");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

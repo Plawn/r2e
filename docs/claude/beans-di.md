@@ -44,6 +44,32 @@ impl MyAsyncService {
 }
 ```
 
+### Async constructor futures are not `Send`
+
+`AsyncBean::build` and `Producer::produce` (and `Plugin::build`) return
+`impl Future<Output = _> + '_` with **no** `+ Send` bound. The graph is resolved
+by `BeanRegistry::resolve` inside `build_state()`, awaited in place on the boot
+thread; no boot path (`serve`/`serve_auto`, `build_with_consumers`,
+`TestApp::boot`, `r2e::launch`, dev-reload, sharded serving) ever spawns the
+construction future, and `Factory` in `beans/registry.rs` boxes it without
+`Send` accordingly.
+
+The bound used to be there and had to go: an auto-trait bound on an RPITIT is
+checked for *all* lifetimes, which rejects ordinary sqlx bodies (a transaction
+reborrowed into an `Acquire`/`Executor`-generic helper) with
+`error: lifetime bound not satisfied` + `see issue #100013` — historically
+rendered as "implementation of `Executor` is not general enough". Regression
+guards: `r2e-compile-tests/cases/beans/pass/async_ctor_not_send.rs` and
+`async_constructors_may_be_non_send` in `r2e-core/tests/di/async_beans.rs`.
+
+The one construction future that leaves the boot thread is a **lazy** bean
+resolved from a sharded worker (`di/lazy.rs`): the factory *closure* is
+`Send + Sync` and is moved to a dedicated `r2e-lazy-bean` OS thread which enters
+the control-plane runtime via `block_on`, so the future is created and polled on
+that thread and never needs `Send`. Consequence: `rt::block_in_place` inside a
+lazy constructor panics (it is not a runtime worker thread) — use
+`rt::spawn_blocking`.
+
 ## `#[producer]` attribute macro
 
 For free functions producing types you don't own:

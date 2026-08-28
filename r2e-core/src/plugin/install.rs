@@ -332,12 +332,17 @@ pub trait Plugin: Send + Sized + 'static {
     ///     }
     /// }
     /// ```
+    ///
+    /// Like [`AsyncBean::build`](crate::beans::AsyncBean::build), the returned
+    /// future is **not** required to be `Send`: a plugin's build node is just
+    /// another factory in the bean graph, which is awaited in place on the boot
+    /// thread.
     fn build(
         self,
         deps: Self::Deps,
         config: Option<Self::Config>,
         ctx: &mut PluginBuildContext,
-    ) -> impl std::future::Future<Output = Result<Self::Provided, PluginBuildError>> + Send;
+    ) -> impl std::future::Future<Output = Result<Self::Provided, PluginBuildError>>;
 }
 
 /// The error type [`Plugin::build`] returns; an `Err` aborts boot with

@@ -7,7 +7,21 @@ use std::sync::{Arc, OnceLock};
 use crate::rt::sync::OnceCell;
 
 /// Boxed async factory for a lazy bean, held until first access.
-type LazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>;
+///
+/// The **closure** is `Send + Sync` (the slot lives in an `Arc<BeanContext>`
+/// that is shared across threads), but the **future it returns is not**: an
+/// async bean constructor's future is `!Send` by design — see
+/// [`AsyncBean::build`](crate::beans::AsyncBean::build). Every resolution path
+/// below therefore *creates* the future on the thread that will drive it,
+/// never moving one between threads.
+type LazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T>>> + Send + Sync>;
+
+/// Factory shape for the deprecated public [`Lazy<T>`] wrapper.
+///
+/// Unlike [`LazyFactory`], this one stays `Send`: [`Lazy::get`] awaits the
+/// factory inline, so the future is part of whatever task calls it — including
+/// request handlers, which require `Send` futures.
+type SendLazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>;
 
 thread_local! {
     /// Stack of lazy-bean `(TypeId, type_name)` pairs currently being resolved
@@ -85,7 +99,7 @@ pub(crate) struct LazySlot<T: Clone + Send + Sync + 'static> {
 impl<T: Clone + Send + Sync + 'static> LazySlot<T> {
     pub(crate) fn new<F>(factory: F) -> Self
     where
-        F: FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync + 'static,
+        F: FnOnce() -> Pin<Box<dyn Future<Output = T>>> + Send + Sync + 'static,
     {
         Self {
             cell: OnceLock::new(),
@@ -118,24 +132,39 @@ impl<T: Clone + Send + Sync + 'static> LazyResolve for LazySlot<T> {
 }
 
 /// Resolve `factory` on the runtime behind `handle`, blocking the current
-/// thread on a channel for the result.
+/// thread until it completes.
+///
+/// The factory future is `!Send` (see [`LazyFactory`]), so it cannot be handed
+/// to `handle.spawn`. Instead a dedicated OS thread is started, enters
+/// `handle`'s runtime, and drives the future there with
+/// [`RuntimeHandle::block_on`](crate::rt::RuntimeHandle::block_on): the
+/// **closure** crosses the thread boundary (it is `Send + Sync`), the future is
+/// created and polled entirely on the new thread, and any runtime resources the
+/// constructor opens still bind to `handle`'s long-lived reactor — not to a
+/// throwaway runtime that would be dropped underneath them.
 ///
 /// Legal from ANY context — including from within async execution, where
-/// `Handle::block_on` / `Runtime::block_on` would panic — because the wait is
-/// a plain thread block and the factory runs on `handle`'s own workers.
+/// calling `block_on` directly would panic — because the wait on this thread is
+/// a plain `join()` and the `block_on` happens on a thread no runtime drives.
 /// A factory panic is re-raised on this thread with its original payload.
 ///
-/// CAUTION: while this thread waits on `recv()`, whatever runtime it was
+/// `handle` must be a multi-thread runtime (both call sites check): a
+/// `current_thread` handle would have `block_on` fight the runtime's real
+/// driver.
+///
+/// CAUTION: while this thread waits on `join()`, whatever runtime it was
 /// driving is stalled — on a `current_thread` runtime every other in-flight
 /// task stops being polled until the factory completes. Lazy beans should be
 /// resolved eagerly during state construction; this path exists so an
 /// off-main-runtime first-touch is *correct*, not so it is cheap.
 ///
-/// Known limitation: the circular-lazy-dependency detector (`RESOLVING`
-/// thread-local) does not see across threads. A factory running on `handle`
-/// that circularly re-touches the bean being resolved on this thread
-/// deadlocks instead of panicking with a cycle trace. Same-thread detection
-/// on the main runtime is unaffected (this helper is never used there).
+/// Known limitations: the circular-lazy-dependency detector (`RESOLVING`
+/// thread-local) does not see across threads, so a factory that circularly
+/// re-touches the bean being resolved deadlocks instead of panicking with a
+/// cycle trace (same-thread detection on the main runtime is unaffected — this
+/// helper is never used there). And because the factory runs off a runtime
+/// worker thread, `block_in_place` inside a lazy constructor panics; do the
+/// blocking work in `spawn_blocking` instead.
 fn resolve_on<T>(
     handle: &crate::rt::RuntimeHandle,
     factory: LazyFactory<T>,
@@ -144,29 +173,21 @@ fn resolve_on<T>(
 where
     T: Send + 'static,
 {
-    // Two-stage spawn so the factory's JoinHandle outcome (value, panic
-    // payload, cancellation) crosses the thread boundary intact: the second
-    // task awaits the first and forwards the join result over the channel.
-    let factory_task = handle.spawn(factory());
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    handle.spawn(async move {
-        // If this send fails, the receiver was dropped — nothing to do.
-        let _ = tx.send(factory_task.await);
-    });
-    match rx.recv() {
-        Ok(Ok(value)) => value,
+    let handle = handle.clone();
+    let join = std::thread::Builder::new()
+        .name("r2e-lazy-bean".to_owned())
+        .spawn(move || handle.block_on(factory()))
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to spawn the resolver thread for lazy bean {} on the {runtime_desc}: {err}",
+                std::any::type_name::<T>()
+            )
+        });
+    match join.join() {
+        Ok(value) => value,
         // Re-raise the factory's own panic on this thread so the caller
         // sees the original payload, not a generic message.
-        Ok(Err(join_err)) if join_err.is_panic() => {
-            std::panic::resume_unwind(join_err.into_panic())
-        }
-        Ok(Err(join_err)) => {
-            panic!("lazy bean factory task was cancelled on the {runtime_desc}: {join_err}")
-        }
-        Err(_) => panic!(
-            "{runtime_desc} shut down while resolving lazy bean {}",
-            std::any::type_name::<T>()
-        ),
+        Err(payload) => std::panic::resume_unwind(payload),
     }
 }
 
@@ -299,7 +320,7 @@ struct LazyInner<T: Clone + Send + Sync + 'static> {
     /// Holds the factory until first access. Uses `std::sync::Mutex` (not
     /// async) because the critical section is just `Option::take()` — no
     /// `.await` while holding the lock.
-    factory: std::sync::Mutex<Option<LazyFactory<T>>>,
+    factory: std::sync::Mutex<Option<SendLazyFactory<T>>>,
 }
 
 impl<T: Clone + Send + Sync + 'static> Lazy<T> {
