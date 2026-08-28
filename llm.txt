@@ -442,7 +442,9 @@ resolves to `None` (not a startup error), an explicit `null` also yields `None`,
 and a present value yields `Some(v)` (a type mismatch still fails loudly). This
 applies everywhere `#[config]` is accepted — `#[producer]`/`#[bean]` params,
 `#[derive(Bean)]`/`#[derive(DecoratorBean)]`/`#[derive(BackgroundService)]`
-fields, and `#[controller]` fields.
+fields, `#[controller]` fields, and `#[derive(ConfigProperties)]` fields (where
+an explicit `null` also falls back to `#[config(env = …)]` / `#[config(default
+= …)]`, exactly like an absent key).
 
 ### Assembly — state is inferred
 

@@ -1,6 +1,6 @@
 //! `#[derive(ConfigProperties)]`: key mapping, defaults, `skip`, metadata, manual impls.
 
-use r2e_core::config::{ConfigError, ConfigProperties, R2eConfig};
+use r2e_core::config::{ConfigError, ConfigProperties, ConfigValue, R2eConfig};
 
 // --- ConfigProperties: basic usage (required, optional, default) ---
 
@@ -246,4 +246,81 @@ fn test_string_default_metadata_is_unquoted() {
     let meta = OptionDefaultConfig::properties_metadata(None);
     let lang = meta.iter().find(|m| m.key == "lang").unwrap();
     assert_eq!(lang.default_value.as_deref(), Some("en")); // not "\"en\""
+}
+
+// =========================================================================
+// Option<T> and explicit YAML `null`
+//
+// An `Option<T>` field resolves through `R2eConfig::get_opt`: absence AND an
+// explicit `null` both mean "no value". A present-but-mistyped value stays a
+// loud error.
+// =========================================================================
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct NullableConfig {
+    port: Option<u32>,
+}
+
+#[test]
+fn test_option_absent_key_is_none() {
+    let config = R2eConfig::empty();
+    let c = NullableConfig::from_config(&config, Some("app")).unwrap();
+    assert_eq!(c.port, None);
+}
+
+#[test]
+fn test_option_explicit_yaml_null_is_none() {
+    // Both spellings flatten to `ConfigValue::Null` at `app.port`.
+    for yaml in ["app:\n  port: null\n", "app:\n  port:\n"] {
+        let config = R2eConfig::from_yaml_str(yaml).unwrap();
+        let c = NullableConfig::from_config(&config, Some("app"))
+            .unwrap_or_else(|e| panic!("explicit null must resolve to None, got {e}"));
+        assert_eq!(c.port, None, "yaml: {yaml:?}");
+    }
+}
+
+#[test]
+fn test_option_programmatic_null_is_none() {
+    let mut config = R2eConfig::empty();
+    config.set("app.port", ConfigValue::Null);
+    let c = NullableConfig::from_config(&config, Some("app")).unwrap();
+    assert_eq!(c.port, None);
+}
+
+#[test]
+fn test_option_type_mismatch_is_still_an_error() {
+    let config = R2eConfig::from_yaml_str("app:\n  port: \"abc\"\n").unwrap();
+    let err = NullableConfig::from_config(&config, Some("app")).unwrap_err();
+    assert!(
+        matches!(err, ConfigError::TypeMismatch { .. }),
+        "expected a type mismatch, got {err:?}"
+    );
+}
+
+#[test]
+fn test_option_with_default_treats_null_as_absent() {
+    let config = R2eConfig::from_yaml_str("lang: null\nretries: null\n").unwrap();
+    let c = OptionDefaultConfig::from_config(&config, None).unwrap();
+    assert_eq!(c.lang.as_deref(), Some("en"));
+    assert_eq!(c.retries, Some(5));
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct OptionEnvConfig {
+    #[config(env = "R2E_TEST_OPT_NULL_ENV")]
+    token: Option<String>,
+}
+
+#[test]
+fn test_option_with_env_treats_null_as_absent() {
+    let _env = crate::support::env_lock();
+    let config = R2eConfig::from_yaml_str("token: null\n").unwrap();
+
+    std::env::set_var("R2E_TEST_OPT_NULL_ENV", "from-env");
+    let c = OptionEnvConfig::from_config(&config, None).unwrap();
+    assert_eq!(c.token.as_deref(), Some("from-env"));
+
+    std::env::remove_var("R2E_TEST_OPT_NULL_ENV");
+    let c = OptionEnvConfig::from_config(&config, None).unwrap();
+    assert_eq!(c.token, None);
 }
