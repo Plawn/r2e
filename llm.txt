@@ -570,7 +570,7 @@ the router itself was already dropped (`router.oneshot(req)` hands the service
 to the future before polling it); (2) **every tracked task** — `ServeContext::
 track`, `spawn_service`, the scheduler driver and the QUIC drain move an `Arc`
 *into* the task, which is what makes them sound on the paths where nothing joins
-the handle (an elapsed `shutdown_grace_period`, a dropped `run()` future under
+the handle (an elapsed per-handle `shutdown_grace_period`, a dropped `run()` future under
 `r2e dev` — where they are still cancelled, since every framework shutdown token
 is a child of the app one, or relayed from it as the scheduler's is); (3) when
 serving, `PreparedApp` itself for the whole of `run()`,
@@ -843,7 +843,26 @@ AppBuilder::new()
 
 `serve()` runs startup hooks, registers consumers, starts scheduled tasks,
 listens with graceful shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
-`.shutdown_grace_period(Duration)` bounds shutdown-hook time.
+
+**Shutdown budgets — which bound covers what.** Two independent options, each
+covering exactly one phase; the phases run in this order:
+
+| Phase | Bounded by | Default | On overflow |
+|---|---|---|---|
+| `on_drain` hooks | — | — | — |
+| plugin sync + async shutdown hooks (incl. `#[pre_destroy]`) | — | — | — |
+| HTTP drain (in-flight requests, listener no longer accepting) | `.drain_timeout(Duration)` | unbounded (plain-axum behaviour) | `warn!(phase = "http drain", ..)`, remaining connections abandoned, shutdown continues |
+| tracked-handle join (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains) | `.shutdown_grace_period(Duration)`, applied **per handle** | unbounded | `warn!(phase = "tracked-handle join", service = <label>, ..)`, that handle detached (never aborted), others keep their own budget |
+| `on_stop` hooks | — **always run** | — | — |
+
+`on_stop` is **must-run**: it executes even when the drain timed out and every
+tracked handle blew its grace period — that is where state reconciliation
+belongs. `drain_timeout` is measured from cancellation (the moment the listener
+stops accepting), not from `serve()`. Under sharded serving (`server.workers`)
+each worker bounds its own drain on its own child token, so both strategies
+behave identically. The grace-period warning names the handle:
+`spawn_service::<C>()` uses `C`'s type name, `ServeContext::track_named(name,
+fut)` the name you give, plain `track(fut)` shows `<unnamed>`.
 
 ---
 
@@ -3425,7 +3444,9 @@ shutdown sequence
 cancels it early (before the HTTP drain) through a plugin shutdown hook, and the
 exits that run no hook — a panic, or `r2e dev` dropping the `run()` future —
 still reach it when the app token's drop guard fires. Services must observe
-their token; the join at shutdown is bounded only by `shutdown_grace_period`. The derive declares `ServiceComponent::Deps` (every
+their token; the join at shutdown is bounded per handle by
+`shutdown_grace_period` (a service that ignores its token is abandoned with a
+`warn!` naming its type, and `on_stop` still runs). The derive declares `ServiceComponent::Deps` (every
 `#[inject]` type, plus `R2eConfig` / `LiveConfigRegistry` when config fields are
 present), so a service reading an absent bean is a **compile error** at
 `spawn_service` instead of a panic at startup; and it declares
@@ -3953,7 +3974,10 @@ Alongside `&self`:
 | `.bridge_sse::<Bus, E>()` | app | EventBus → SSE topic bridge |
 | `.schedule_task(def)` | app | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | app | Raw axum escape hatches (last resort) |
-| `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks |
+| `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks (`on_stop` always runs at shutdown, outside every budget) |
+| `.on_drain(f)` | app | Awaited hooks run at shutdown trigger, BEFORE the listener stops accepting |
+| `.drain_timeout(d)` | app | Bound the HTTP drain (in-flight requests after the listener stops). Default: unbounded |
+| `.shutdown_grace_period(d)` | app | Bound the tracked-handle join, PER handle (`spawn_service`, `ServeContext::track`). Default: unbounded |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
 | `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 

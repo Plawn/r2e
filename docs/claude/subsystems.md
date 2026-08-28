@@ -53,7 +53,9 @@ AppBuilder::new()
 
 `build()` returns a `Router` (from `r2e::http`). `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, starts listening, waits for shutdown signal (Ctrl-C / SIGTERM), stops the scheduler, then runs shutdown hooks. `serve_auto()` does the same but reads address from config keys `server.host` (String, default `"0.0.0.0"`) and `server.port` (u16, default `3000`).
 
-`.shutdown_grace_period(Duration)` — optional maximum time for shutdown hooks to complete before force-exiting the process. Without it, the process waits indefinitely.
+`.shutdown_grace_period(Duration)` — optional maximum time for **each tracked handle** (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains) to finish after the HTTP drain. Without it, shutdown waits indefinitely. It does NOT bound the HTTP drain (that is `.drain_timeout(Duration)`) nor the `on_stop` hooks, which always run.
+
+`.drain_timeout(Duration)` — optional maximum time for the HTTP drain itself (in-flight requests finishing after the listener stopped accepting), measured from cancellation. Default `None` = unbounded, as in plain axum. On overflow the remaining connections are abandoned with a `warn!` and shutdown continues to the tracked-handle join and the `on_stop` hooks. Applied per worker under sharded serving. See `docs/features/22-serve-lifecycle.md`.
 
 `.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. Used by `Tracing::from_config()` to read tracing settings from YAML.
 
