@@ -141,6 +141,7 @@ mod lifecycle {
                 true,
                 cp_handle,
                 token,
+                None,
                 &factories,
             )
             .map_err(|e| e.to_string())

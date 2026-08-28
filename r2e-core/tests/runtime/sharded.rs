@@ -246,6 +246,7 @@ mod integration {
                 true,
                 cp_handle,
                 token,
+                None,
                 &[],
             )
         });
