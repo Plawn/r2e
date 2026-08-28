@@ -1,4 +1,4 @@
-use r2e_oidc::{InMemoryUserStore, OidcError, OidcServer, OidcUser};
+use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcError, OidcServer, OidcUser};
 
 #[test]
 fn try_build_rejects_insecure_non_localhost_issuer() {
@@ -45,6 +45,25 @@ fn in_memory_store_rejects_duplicate_subjects() {
     };
 
     assert!(err.to_string().contains("already assigned"));
+}
+
+#[test]
+fn client_id_cannot_be_both_public_and_confidential() {
+    let public_first = ClientRegistry::new()
+        .add_public_client("shared", ["http://127.0.0.1/callback"])
+        .try_add_client("shared", "secret")
+        .err()
+        .expect("public client id must not become confidential");
+    assert!(public_first.to_string().contains("public client"));
+
+    let confidential_first = ClientRegistry::new()
+        .add_client("shared", "secret")
+        .try_add_public_client("shared", ["http://127.0.0.1/callback"])
+        .err()
+        .expect("confidential client id must not become public");
+    assert!(confidential_first
+        .to_string()
+        .contains("confidential client"));
 }
 
 fn build_error(server: OidcServer) -> OidcError {

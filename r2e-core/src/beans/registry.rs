@@ -96,6 +96,11 @@ pub(super) type ServiceConfigDecl = (
 /// direct calls both see a decorated bean.
 pub(super) type DecoFillHook = Box<dyn FnOnce(&BeanContext) + Send>;
 
+/// A post-resolution registration hook. It observes the final graph without
+/// changing it and is re-run on dev-reload cache hits against that cycle's
+/// context. Transport adapters use this for bean-owned endpoint collection.
+pub(super) type AfterResolveHook = Box<dyn FnOnce(&BeanContext) + Send>;
+
 /// Registration for a lazy bean: excluded from the topological sort,
 /// resolved on first `get::<T>()` call.
 pub(super) struct LazyBeanRegistration {
@@ -183,6 +188,10 @@ pub struct BeanRegistry {
     /// post-construct hooks. Keyed by the bean `TypeId` (one hook per type —
     /// the default/override pattern registers twice but must fill once).
     pub(super) deco_fills: Vec<(TypeId, DecoFillHook)>,
+    /// Post-resolution hooks queued by generated bean registrations. They are
+    /// drained by `build_state()` before resolution so cache-hit and cold paths
+    /// both execute them exactly once per build.
+    pub(super) after_resolve_hooks: Vec<(TypeId, AfterResolveHook)>,
     /// Eager-clone hooks for **provided** values, keyed by `TypeId`. The
     /// dev-reload partial rebuild pins provided instances from the previous
     /// cycle's context (except `R2eConfig`, which is deliberately re-read

@@ -1,9 +1,9 @@
 //! Typed tool parameters.
 //!
 //! `#[tool]` methods declare their arguments as one `Params<T>` parameter
-//! where `T: Deserialize + JsonSchema`. The macro uses [`ToolParams`] to (a)
-//! derive the tool's `inputSchema` at registration and (b) deserialize the
-//! `arguments` object per call.
+//! where `T: Deserialize + JsonSchema + ObjectParams`. The explicit marker
+//! makes scalar, tuple and enum roots a compile error instead of silently
+//! advertising an unconstrained object schema.
 
 use schemars::generate::SchemaSettings;
 use schemars::JsonSchema;
@@ -23,11 +23,24 @@ use crate::route::SchemaObject;
 #[derive(Debug, Clone)]
 pub struct Params<T>(pub T);
 
+/// Marker for named structs that are valid MCP argument objects.
+///
+/// Derive it with `#[derive(ObjectParams)]`. The derive rejects enums, tuple
+/// structs and unit structs, so a `Params<u32>`/`Params<MyEnum>` call cannot
+/// compile into an invalid MCP `inputSchema`.
+pub trait ObjectParams: private::Sealed {}
+
+#[doc(hidden)]
+pub mod private {
+    /// Implementation detail for the `ObjectParams` derive.
+    pub trait Sealed {}
+}
+
 /// Schema + deserialization contract used by the generated dispatch code.
 ///
-/// Blanket-implemented for every `T: DeserializeOwned + JsonSchema`; a
-/// missing `#[derive(JsonSchema)]` therefore surfaces as a plain trait-bound
-/// error at the tool method.
+/// Blanket-implemented for every
+/// `T: DeserializeOwned + JsonSchema + ObjectParams`; a missing derive
+/// therefore surfaces as a plain trait-bound error at the tool method.
 pub trait ToolParams: Sized {
     /// The JSON Schema (draft 2020-12) object describing the arguments.
     fn input_schema() -> SchemaObject;
@@ -36,7 +49,7 @@ pub trait ToolParams: Sized {
     fn from_arguments(arguments: Value) -> Result<Self, McpError>;
 }
 
-impl<T: DeserializeOwned + JsonSchema> ToolParams for T {
+impl<T: DeserializeOwned + JsonSchema + ObjectParams> ToolParams for T {
     fn input_schema() -> SchemaObject {
         schema_object_for::<T>()
     }
@@ -53,9 +66,9 @@ impl<T: DeserializeOwned + JsonSchema> ToolParams for T {
 /// same-document refs are resolved by rmcp's input validator and all
 /// mainstream clients.
 ///
-/// A non-object root schema (e.g. `Params<u32>`) cannot be an MCP
-/// `inputSchema`; it degrades to an empty accept-all object schema with a
-/// `warn!`.
+/// [`ObjectParams`] guarantees that MCP input types originate from named
+/// structs. The runtime check remains as a defensive backstop for custom
+/// `JsonSchema` implementations that deliberately emit a non-object root.
 pub fn schema_object_for<T: ?Sized + JsonSchema>() -> SchemaObject {
     let schema = SchemaSettings::draft2020_12()
         .into_generator()

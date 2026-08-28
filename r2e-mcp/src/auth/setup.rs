@@ -272,7 +272,11 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     };
     let discovery = if discovery_mode == DiscoveryMode::Off {
         let missing = match validation_mode {
-            TokenValidationMode::Jwt if cfg.jwks_url.is_none() => Some("mcp.auth.jwks-url"),
+            TokenValidationMode::Jwt
+                if inputs.validator_override.is_none() && cfg.jwks_url.is_none() =>
+            {
+                Some("mcp.auth.jwks-url")
+            }
             TokenValidationMode::Introspection if cfg.introspection_endpoint.is_none() => {
                 Some("mcp.auth.introspection-endpoint")
             }

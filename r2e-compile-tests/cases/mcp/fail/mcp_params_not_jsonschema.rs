@@ -5,7 +5,7 @@
 use r2e::prelude::*;
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ObjectParams)]
 pub struct NoSchema {
     pub a: f64,
 }

@@ -149,6 +149,7 @@ async-trait = "0.1"
 rsa = "0.9"
 argon2 = "0.5"
 rand = "0.8"
+sha2 = "0.10"
 
 # Data
 sqlx = { version = "0.9", features = ["runtime-tokio"] }

@@ -104,20 +104,24 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `r2e add mcp` — enable the facade feature used by the documented MCP
-/// quick start, or fall back to a direct `r2e-mcp` dependency when the
-/// project does not use the facade. `schemars` is always ensured because MCP
-/// parameter and result types derive `JsonSchema` in user code.
+/// `r2e add mcp` — dependencies plus an idempotent MCP bean/config scaffold.
 fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(cargo_path)?;
     let mut doc = content.parse::<toml_edit::DocumentMut>()?;
 
+    let package_name = doc
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml_edit::Item::as_str)
+        .unwrap_or("app")
+        .to_string();
     let deps = doc
         .entry("dependencies")
         .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
         .as_table_mut()
         .ok_or("dependencies is not a table")?;
 
+    let uses_facade = deps.contains_key("r2e");
     if let Some(r2e_dep) = deps.get_mut("r2e") {
         if add_dep_feature(r2e_dep, "mcp")? {
             println!(
@@ -149,6 +153,15 @@ fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if !uses_facade && !deps.contains_key("r2e-core") {
+        deps.insert("r2e-core", toml_edit::value(R2E_DEP_VERSION));
+        println!(
+            "{} Added {} for the direct-crate scaffold",
+            "✓".green(),
+            "r2e-core".cyan()
+        );
+    }
+
     if !deps.contains_key("schemars") {
         deps.insert("schemars", toml_edit::value("1"));
         println!(
@@ -158,8 +171,77 @@ fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    if !deps.contains_key("serde") {
+        let mut serde = toml_edit::InlineTable::new();
+        serde.insert("version", "1".into());
+        let mut features = toml_edit::Array::new();
+        features.push("derive");
+        serde.insert("features", features.into());
+        deps.insert("serde", toml_edit::value(serde));
+        println!(
+            "{} Also added {} with derive support",
+            "✓".green(),
+            "serde".cyan()
+        );
+    } else if add_dep_feature(deps.get_mut("serde").expect("checked above"), "derive")? {
+        println!(
+            "{} Enabled feature {} on the {} dependency",
+            "✓".green(),
+            "derive".cyan(),
+            "serde".cyan()
+        );
+    }
+
     std::fs::write(cargo_path, doc.to_string())?;
-    println!("  Run `cargo build` to fetch the new dependency.");
+
+    let src = Path::new("src");
+    let mcp_rs = src.join("mcp.rs");
+    let has_mcp_module = mcp_rs.exists() || src.join("mcp/mod.rs").exists();
+    if src.exists() && !has_mcp_module {
+        std::fs::write(
+            &mcp_rs,
+            super::templates::project::mcp_service_rs(uses_facade),
+        )?;
+        println!("{} Created {}", "✓".green(), "src/mcp.rs".cyan());
+    } else if has_mcp_module {
+        println!(
+            "{} MCP source module already exists — left it unchanged",
+            "!".yellow()
+        );
+    }
+
+    let config_path = Path::new("application.yaml");
+    let mut config = if config_path.exists() {
+        std::fs::read_to_string(config_path)?
+    } else {
+        String::new()
+    };
+    let has_mcp_config = config
+        .lines()
+        .any(|line| !line.starts_with(char::is_whitespace) && line.trim_end() == "mcp:");
+    if !has_mcp_config {
+        if !config.is_empty() && !config.ends_with('\n') {
+            config.push('\n');
+        }
+        if !config.is_empty() {
+            config.push('\n');
+        }
+        config.push_str(&format!("mcp:\n  path: /mcp\n  name: {package_name}\n"));
+        std::fs::write(config_path, config)?;
+        println!("{} Configured {}", "✓".green(), "application.yaml".cyan());
+    }
+
+    println!();
+    println!("Wire the generated bean into your App (src/app.rs):");
+    println!();
+    println!("  mod mcp;");
+    println!("  use mcp::McpTools;");
+    println!();
+    println!("  b.plugin(McpServer::new())");
+    println!("      .register::<McpTools>()");
+    println!("      .build_state().await");
+    println!();
+    println!("  Then: cargo build");
     Ok(())
 }
 

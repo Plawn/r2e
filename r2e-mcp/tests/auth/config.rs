@@ -10,7 +10,9 @@ use r2e_mcp::auth::{AudienceMode, McpAuthConfig, TokenValidationMode};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::Value;
 
-use crate::fixtures::{self, offline_auth, pinned, secured_app_with, test_jwt, ISSUER};
+use crate::fixtures::{
+    self, offline_auth, pinned, secured_app_with, secured_plugin_app, test_jwt, ISSUER, RESOURCE,
+};
 
 // ── Boot rejections ────────────────────────────────────────────────────────
 
@@ -163,11 +165,21 @@ async fn relative_registration_path_is_a_boot_error() {
 #[tokio::test]
 #[should_panic(expected = "requires an explicit `mcp.auth.jwks-url`")]
 async fn discovery_off_requires_jwks_url() {
-    let _ = secured_app_with(McpAuthConfig {
+    let _ = secured_plugin_app(McpServer::new().with_auth(McpAuthConfig {
+        jwks_url: None,
+        ..offline_auth()
+    }))
+    .await;
+}
+
+#[tokio::test]
+async fn discovery_off_with_validator_override_needs_no_jwks_url() {
+    let router = secured_app_with(McpAuthConfig {
         jwks_url: None,
         ..offline_auth()
     })
     .await;
+    assert_eq!(prm_resource(&router).await, RESOURCE);
 }
 
 #[tokio::test]

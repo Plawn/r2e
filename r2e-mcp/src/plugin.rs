@@ -16,6 +16,7 @@ use crate::auth::validator::McpTokenValidator;
 use crate::config::McpConfig;
 use crate::handler::{McpRuntime, R2eMcpHandler, ServerIdentity};
 use crate::registry::McpServiceRegistry;
+use crate::resource_updates::McpResourceUpdates;
 
 /// MCP server plugin for R2E.
 ///
@@ -53,6 +54,7 @@ use crate::registry::McpServiceRegistry;
 #[derive(Default)]
 pub struct McpServer {
     registry: McpServiceRegistry,
+    resource_updates: McpResourceUpdates,
     path: Option<String>,
     name: Option<String>,
     version: Option<String>,
@@ -165,6 +167,14 @@ impl McpServer {
         self.token_validator = Some(validator);
         self
     }
+
+    /// Use an application-owned resource update publisher. The same handle is
+    /// also provided as a bean; this override is useful when code needs the
+    /// publisher before the bean graph is built.
+    pub fn with_resource_updates(mut self, updates: McpResourceUpdates) -> Self {
+        self.resource_updates = updates;
+        self
+    }
 }
 
 /// Validate the configured endpoint path: absolute, single segment target,
@@ -194,7 +204,7 @@ impl Plugin for McpServer {
     /// data. [`McpTokenValidator`] is a real bean so tests can pin it
     /// (`override_bean`) — auth off provides the inert
     /// [`McpTokenValidator::disabled`].
-    type Provided = (McpTokenValidator,);
+    type Provided = (McpTokenValidator, McpServiceRegistry, McpResourceUpdates);
     type Deps = ();
     type Config = McpConfig;
     type Controllers = ();
@@ -216,7 +226,11 @@ impl Plugin for McpServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         if !ctx.enabled() {
             tracing::info!("MCP server disabled (mcp.enabled = false); endpoint not mounted");
-            return Ok((McpTokenValidator::disabled(),));
+            return Ok((
+                McpTokenValidator::disabled(),
+                self.registry,
+                self.resource_updates,
+            ));
         }
         let cfg = config.unwrap_or_default();
 
@@ -357,7 +371,8 @@ impl Plugin for McpServer {
         // `register_mcp_service` call filled the registry, and BEFORE the
         // sharded server clones the router per worker — so the session
         // manager, dispatch table and token below are shared by all workers.
-        let registry = self.registry;
+        let registry = self.registry.clone();
+        let resource_updates = self.resource_updates.clone();
         ctx.wrap_router(move |router| {
             let Some(services) = registry.take() else {
                 tracing::warn!(
@@ -379,7 +394,6 @@ impl Plugin for McpServer {
                 prompts = runtime.prompt_count(),
                 "Mounting MCP endpoint"
             );
-            let handler = R2eMcpHandler::new(runtime);
             let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite
             // the fields we own (all pub).
@@ -400,7 +414,12 @@ impl Plugin for McpServer {
                 transport_config.max_request_body_bytes = bytes;
             }
             let service = StreamableHttpService::new(
-                move || Ok(handler.clone()),
+                move || {
+                    Ok(R2eMcpHandler::new(
+                        runtime.clone(),
+                        resource_updates.clone(),
+                    ))
+                },
                 session_manager,
                 transport_config,
             );
@@ -421,6 +440,6 @@ impl Plugin for McpServer {
             }
         });
 
-        Ok((provided_validator,))
+        Ok((provided_validator, self.registry, self.resource_updates))
     }
 }

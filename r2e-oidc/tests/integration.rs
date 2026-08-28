@@ -1,11 +1,160 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::{Body, Request, Response, StatusCode};
+use r2e_core::http::{header, Body, Request, Response, StatusCode};
 use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcServer, OidcUser};
+use sha2::{Digest, Sha256};
 use tower::ServiceExt;
 
 async fn body_json(resp: Response) -> serde_json::Value {
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+fn form(pairs: &[(&str, &str)]) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.extend_pairs(pairs.iter().copied());
+    serializer.finish()
+}
+
+#[r2e_core::test]
+async fn authorization_code_pkce_is_discoverable_one_time_and_bound() {
+    const AUDIENCE: &str = "http://localhost:3000/mcp";
+    const REDIRECT: &str = "http://127.0.0.1:49152/callback";
+    const VERIFIER: &str = "0123456789abcdefghijklmnopqrstuvwxyz-._~ABCDE";
+
+    let users = InMemoryUserStore::new().add_user(
+        "alice",
+        "password123",
+        OidcUser {
+            sub: "user-1".into(),
+            email: Some("alice@example.com".into()),
+            roles: vec!["admin".into()],
+            ..Default::default()
+        },
+    );
+    let clients = ClientRegistry::new().add_public_client("mcp-client", [REDIRECT]);
+    let app = r2e_core::AppBuilder::new()
+        .plugin(
+            OidcServer::new()
+                .audience(AUDIENCE)
+                .with_user_store(users)
+                .with_client_registry(clients),
+        )
+        .build_state()
+        .await
+        .build();
+
+    let discovery = app
+        .clone()
+        .oneshot(
+            Request::get("/.well-known/openid-configuration")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let discovery = body_json(discovery).await;
+    assert_eq!(
+        discovery["authorization_endpoint"],
+        "http://localhost:3000/oauth/authorize"
+    );
+    assert!(discovery["grant_types_supported"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("authorization_code")));
+    assert_eq!(
+        discovery["code_challenge_methods_supported"],
+        serde_json::json!(["S256"])
+    );
+
+    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(VERIFIER.as_bytes()));
+    let authorize = form(&[
+        ("response_type", "code"),
+        ("client_id", "mcp-client"),
+        ("redirect_uri", REDIRECT),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", "openid mcp:read"),
+        ("state", "state-123"),
+        ("resource", AUDIENCE),
+    ]);
+    let login = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/oauth/authorize?{authorize}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    assert_eq!(login.headers()[header::CACHE_CONTROL], "no-store");
+
+    let submit = form(&[
+        ("response_type", "code"),
+        ("client_id", "mcp-client"),
+        ("redirect_uri", REDIRECT),
+        ("code_challenge", &challenge),
+        ("code_challenge_method", "S256"),
+        ("scope", "openid mcp:read"),
+        ("state", "state-123"),
+        ("resource", AUDIENCE),
+        ("username", "alice"),
+        ("password", "password123"),
+    ]);
+    let redirect = app
+        .clone()
+        .oneshot(
+            Request::post("/oauth/authorize")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(submit))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(redirect.status().is_redirection());
+    let location = redirect.headers()[header::LOCATION].to_str().unwrap();
+    let location = url::Url::parse(location).unwrap();
+    assert_eq!(
+        location.origin().ascii_serialization(),
+        "http://127.0.0.1:49152"
+    );
+    let params: std::collections::HashMap<_, _> = location.query_pairs().into_owned().collect();
+    assert_eq!(params["state"], "state-123");
+    let code = &params["code"];
+
+    let redeem = form(&[
+        ("grant_type", "authorization_code"),
+        ("client_id", "mcp-client"),
+        ("redirect_uri", REDIRECT),
+        ("code", code),
+        ("code_verifier", VERIFIER),
+    ]);
+    let token = app
+        .clone()
+        .oneshot(
+            Request::post("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(redeem.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(token.status(), StatusCode::OK);
+    let token = body_json(token).await;
+    assert!(token["access_token"].as_str().unwrap().len() > 50);
+
+    let replay = app
+        .oneshot(
+            Request::post("/oauth/token")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(redeem))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(replay).await["error"], "invalid_grant");
 }
 
 /// Full integration: issue token, then validate it with the same claims_validator.

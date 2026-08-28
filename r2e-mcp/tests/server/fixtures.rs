@@ -94,7 +94,7 @@ impl<I: Identity> Guard<I> for KeyGuard {
 
 // ── Tool argument / result DTOs ────────────────────────────────────────────
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, ObjectParams)]
 pub struct BinaryOperands {
     /// Left operand.
     pub a: f64,
@@ -119,7 +119,7 @@ pub struct Inner {
     pub label: String,
 }
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, ObjectParams)]
 pub struct RichInput {
     /// A documented required field.
     pub name: String,

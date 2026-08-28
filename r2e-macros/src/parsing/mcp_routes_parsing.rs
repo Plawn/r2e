@@ -165,6 +165,60 @@ pub struct McpRoutesImplDef {
     pub impl_block: syn::ItemImpl,
 }
 
+impl McpRoutesImplDef {
+    /// Every decorator expression whose dependencies/config belong to the
+    /// hosting component, in the same order as MCP codegen builds them.
+    pub fn decorator_exprs(&self) -> Vec<&syn::Expr> {
+        let mut exprs = Vec::new();
+        if !self.members.is_empty() {
+            exprs.extend(&self.controller_intercepts);
+            exprs.extend(&self.controller_guards);
+        }
+        for member in &self.members {
+            exprs.extend(&member.decorators.guard_fns);
+            exprs.extend(&member.decorators.intercept_fns);
+        }
+        exprs
+    }
+}
+
+/// Parse only the `#[tool]` methods of a `#[bean]` impl for automatic MCP
+/// collection. Other bean methods stay entirely under the bean macro.
+pub fn parse_bean_tools(item: &syn::ItemImpl) -> syn::Result<Option<McpRoutesImplDef>> {
+    let mut synthetic = item.clone();
+    synthetic.items.retain(|item| {
+        let syn::ImplItem::Fn(method) = item else {
+            return false;
+        };
+        method.attrs.iter().any(|attr| {
+            attr.path().is_ident("tool")
+                || attr.path().is_ident("resource")
+                || attr.path().is_ident("prompt")
+        })
+    });
+    if synthetic.items.is_empty() {
+        return Ok(None);
+    }
+
+    for item in &synthetic.items {
+        let syn::ImplItem::Fn(method) = item else {
+            continue;
+        };
+        if let Some(attr) = method
+            .attrs
+            .iter()
+            .find(|attr| attr.path().is_ident("resource") || attr.path().is_ident("prompt"))
+        {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "#[bean] auto-collection currently accepts #[tool] methods only; keep resources and prompts on a dedicated #[mcp_routes] adapter",
+            ));
+        }
+    }
+
+    parse(synthetic).map(Some)
+}
+
 /// The argument keys each member family accepts, for validation and the
 /// error message. Order is the documentation order.
 fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {

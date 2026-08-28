@@ -16,7 +16,8 @@ use attrs::{
 };
 use derives::{
     api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
-    decorator_bean_derive, from_config_value_derive, from_multipart, params_derive,
+    decorator_bean_derive, from_config_value_derive, from_multipart, object_params_derive,
+    params_derive,
 };
 use parsing::{grpc_routes_parsing, mcp_routes_parsing};
 
@@ -40,15 +41,12 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
         return input;
     };
     let has_transformer = item.attrs.iter().any(|a| {
-        a.path()
-            .segments
-            .last()
-            .is_some_and(|s| {
-                s.ident == "routes"
-                    || s.ident == "bean"
-                    || s.ident == "grpc_routes"
-                    || s.ident == "mcp_routes"
-            })
+        a.path().segments.last().is_some_and(|s| {
+            s.ident == "routes"
+                || s.ident == "bean"
+                || s.ident == "grpc_routes"
+                || s.ident == "mcp_routes"
+        })
     });
     let msg = if has_transformer {
         format!(
@@ -1401,7 +1399,7 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Tool parameters (any order, each at most once):
 /// - `Params(p): Params<T>` — the deserialized tool arguments (`T:
-///   Deserialize + JsonSchema`, drives the input schema)
+///   Deserialize + JsonSchema + ObjectParams`, drives the input schema)
 /// - `#[inject(identity)] user: I` (or `Option<I>`) — the authenticated
 ///   caller, read from the transport request extensions
 /// - `call: ToolCall` — raw call metadata (arguments, HTTP parts, request id)
@@ -1476,6 +1474,15 @@ pub fn resource(_args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
+}
+
+/// Mark an MCP `Params<T>` type as an object-shaped argument structure.
+///
+/// Only structs with named fields are accepted. Combine this derive with
+/// `serde::Deserialize` and `schemars::JsonSchema`.
+#[proc_macro_derive(ObjectParams)]
+pub fn derive_object_params(input: TokenStream) -> TokenStream {
+    object_params_derive::expand(input)
 }
 
 // ---------------------------------------------------------------------------

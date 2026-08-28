@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
+use r2e_core::http::extract::Query;
 use r2e_core::http::extract::State;
 use r2e_core::http::header;
-use r2e_core::http::response::IntoResponse;
+use r2e_core::http::response::{Html, IntoResponse, Redirect, Response};
 use r2e_core::http::Form;
 use r2e_core::http::HeaderMap;
 use r2e_core::http::Json;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
+use crate::authorization::{valid_code_challenge, verify_s256, AuthorizationGrant};
 use crate::error::OidcError;
 use crate::state::OidcState;
 use crate::token::{has_scope, normalize_scope, AccessTokenClaims, DEFAULT_USER_SCOPE};
@@ -33,6 +35,9 @@ pub(crate) struct TokenRequest {
     /// RFC 8707 `resource` indicator. One value only; this embedded issuer
     /// accepts it only when it names the configured audience.
     pub resource: Option<String>,
+    pub code: Option<String>,
+    pub redirect_uri: Option<String>,
+    pub code_verifier: Option<String>,
 }
 
 /// Validate an RFC 8707 `resource` parameter and bind it to this issuer's
@@ -78,6 +83,7 @@ pub(crate) async fn token_handler(
     let json = match grant_type {
         "password" => handle_password_grant(&state, req).await?,
         "client_credentials" => handle_client_credentials_grant(&state, &headers, &req).await?,
+        "authorization_code" => handle_authorization_code_grant(&state, req)?,
         other => {
             return Err(OidcError::UnsupportedGrantType(format!(
                 "grant_type '{other}' is not supported"
@@ -86,6 +92,214 @@ pub(crate) async fn token_handler(
     };
     // RFC 6749 §5.1: token responses MUST include Cache-Control: no-store.
     Ok((TOKEN_HEADERS, json))
+}
+
+fn handle_authorization_code_grant(
+    state: &OidcState,
+    req: TokenRequest,
+) -> Result<Json<TokenResponse>, OidcError> {
+    if !state.client_registry.has_public_clients() {
+        return Err(OidcError::UnsupportedGrantType(
+            "authorization_code grant is not configured".into(),
+        ));
+    }
+    let code = req
+        .code
+        .ok_or_else(|| OidcError::InvalidRequest("missing 'code' parameter".into()))?;
+    let client_id = req
+        .client_id
+        .ok_or_else(|| OidcError::InvalidRequest("missing 'client_id' parameter".into()))?;
+    let redirect_uri = req
+        .redirect_uri
+        .ok_or_else(|| OidcError::InvalidRequest("missing 'redirect_uri' parameter".into()))?;
+    let verifier = req
+        .code_verifier
+        .ok_or_else(|| OidcError::InvalidRequest("missing 'code_verifier' parameter".into()))?;
+
+    let grant = state
+        .authorization_codes
+        .take(&code)
+        .ok_or_else(|| OidcError::InvalidGrant("invalid or expired authorization code".into()))?;
+    if grant.client_id != client_id
+        || grant.redirect_uri != redirect_uri
+        || !state
+            .client_registry
+            .accepts_redirect(&client_id, &redirect_uri)
+        || !verify_s256(&verifier, &grant.code_challenge)
+    {
+        return Err(OidcError::InvalidGrant(
+            "authorization code binding or PKCE verification failed".into(),
+        ));
+    }
+    validate_resource(grant.resource.as_deref(), &state.config.audience)?;
+    let token = state
+        .token_service
+        .issue_user_token(&grant.user, &grant.scope)?;
+    Ok(Json(TokenResponse {
+        access_token: token,
+        token_type: "Bearer",
+        expires_in: state.token_service.token_ttl_secs(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AuthorizeRequest {
+    response_type: Option<String>,
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+    scope: Option<String>,
+    state: Option<String>,
+    resource: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct AuthorizeForm {
+    #[serde(flatten)]
+    request: AuthorizeRequest,
+    username: String,
+    password: String,
+}
+
+struct ValidatedAuthorize {
+    client_id: String,
+    redirect_uri: String,
+    code_challenge: String,
+    scope: String,
+    state: Option<String>,
+    resource: Option<String>,
+}
+
+fn validate_authorize(
+    state: &OidcState,
+    request: AuthorizeRequest,
+) -> Result<ValidatedAuthorize, OidcError> {
+    if request.response_type.as_deref() != Some("code") {
+        return Err(OidcError::InvalidRequest(
+            "response_type must be 'code'".into(),
+        ));
+    }
+    let client_id = request
+        .client_id
+        .ok_or_else(|| OidcError::InvalidRequest("missing 'client_id' parameter".into()))?;
+    let redirect_uri = request
+        .redirect_uri
+        .ok_or_else(|| OidcError::InvalidRequest("missing 'redirect_uri' parameter".into()))?;
+    if !state
+        .client_registry
+        .accepts_redirect(&client_id, &redirect_uri)
+    {
+        return Err(OidcError::InvalidRequest(
+            "unregistered client or redirect_uri".into(),
+        ));
+    }
+    let code_challenge = request
+        .code_challenge
+        .filter(|challenge| valid_code_challenge(challenge))
+        .ok_or_else(|| OidcError::InvalidRequest("invalid S256 code_challenge".into()))?;
+    if request.code_challenge_method.as_deref() != Some("S256") {
+        return Err(OidcError::InvalidRequest(
+            "code_challenge_method must be 'S256'".into(),
+        ));
+    }
+    validate_resource(request.resource.as_deref(), &state.config.audience)?;
+    Ok(ValidatedAuthorize {
+        client_id,
+        redirect_uri,
+        code_challenge,
+        scope: normalize_scope(request.scope.as_deref(), DEFAULT_USER_SCOPE),
+        state: request.state,
+        resource: request.resource,
+    })
+}
+
+/// GET /oauth/authorize — a deliberately small local login/consent page.
+pub(crate) async fn authorize_form_handler(
+    State(state): State<Arc<OidcState>>,
+    Query(request): Query<AuthorizeRequest>,
+) -> Result<Response, OidcError> {
+    let request = validate_authorize(&state, request)?;
+    let hidden = [
+        ("response_type", "code".to_string()),
+        ("client_id", request.client_id),
+        ("redirect_uri", request.redirect_uri),
+        ("code_challenge", request.code_challenge),
+        ("code_challenge_method", "S256".to_string()),
+        ("scope", request.scope),
+    ]
+    .into_iter()
+    .chain(request.state.map(|value| ("state", value)))
+    .chain(request.resource.map(|value| ("resource", value)))
+    .map(|(name, value)| {
+        format!(
+            "<input type=\"hidden\" name=\"{name}\" value=\"{}\">",
+            html_escape(&value)
+        )
+    })
+    .collect::<String>();
+    let html = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>Sign in</title>\
+         <main><h1>Sign in</h1><form method=\"post\" action=\"authorize\">{hidden}\
+         <label>Username <input name=\"username\" autocomplete=\"username\" required></label>\
+         <label>Password <input type=\"password\" name=\"password\" \
+         autocomplete=\"current-password\" required></label><button>Authorize</button></form></main>"
+    );
+    Ok((
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+            ),
+        ],
+        Html(html),
+    )
+        .into_response())
+}
+
+/// POST /oauth/authorize — authenticate, mint a one-time code, redirect.
+pub(crate) async fn authorize_handler(
+    State(state): State<Arc<OidcState>>,
+    Form(form): Form<AuthorizeForm>,
+) -> Result<Response, OidcError> {
+    let request = validate_authorize(&state, form.request)?;
+    let _permit = state
+        .credential_verification_limiter
+        .acquire()
+        .await
+        .map_err(|_| OidcError::Internal("credential verification limiter closed".into()))?;
+    let user = state
+        .user_store
+        .authenticate(&form.username, &form.password)
+        .await
+        .map_err(|_| OidcError::Internal("user store authentication failed".into()))?
+        .ok_or_else(|| OidcError::InvalidGrant("invalid username or password".into()))?;
+
+    let code = state.authorization_codes.issue(AuthorizationGrant::new(
+        request.client_id,
+        request.redirect_uri.clone(),
+        request.code_challenge,
+        request.scope,
+        request.resource,
+        user,
+    ));
+    let mut redirect = url::Url::parse(&request.redirect_uri)
+        .map_err(|e| OidcError::Internal(format!("registered redirect URI is invalid: {e}")))?;
+    redirect.query_pairs_mut().append_pair("code", &code);
+    if let Some(value) = request.state {
+        redirect.query_pairs_mut().append_pair("state", &value);
+    }
+    Ok(Redirect::to(redirect.as_str()).into_response())
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 async fn handle_password_grant(

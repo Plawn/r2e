@@ -2,7 +2,10 @@
 
 `r2e-oidc` provides a local OAuth-style JWT issuer embedded directly in your application. It issues RS256 access tokens without requiring an external identity provider (Keycloak, Auth0, etc.). Ideal for development, prototyping, and monolithic applications.
 
-It is not a full browser-facing OpenID Connect Provider: it does not implement an authorization endpoint, Authorization Code + PKCE, redirects, nonces, or ID tokens. Use an external provider for SSO, federation, or multi-application login.
+It includes a local browser login and Authorization Code flow with mandatory
+PKCE S256 for registered public clients. It is still not a federated OpenID
+Provider: it does not issue ID tokens, implement upstream SSO, or dynamically
+register clients. Use an external provider for those cases.
 
 ## Installation
 
@@ -51,7 +54,7 @@ That's it. `AuthenticatedUser` works immediately — no need to manually configu
 
 1. **Generates an RSA-2048 key pair** for signing tokens
 2. **Creates a `JwtClaimsValidator`** with the public key and injects it into the bean graph
-3. **Registers token, metadata, JWKS, and userinfo endpoints** via a deferred action (after state construction)
+3. **Registers authorization, token, metadata, JWKS, and userinfo endpoints** via a deferred action (after state construction)
 
 Issued tokens are validated locally — no network requests, no JWKS cache.
 
@@ -88,11 +91,17 @@ AppBuilder::new()
 
 Using `OidcServer` directly as a plugin (without `.build()`) works. Persist a signing key with `.with_signing_key_pem(...)`, or build one `OidcRuntime` in setup, if tokens must survive reloads/restarts.
 
+`oidc.claims_validator()` exposes the same local validator for another
+in-process transport. Passing it to an MCP token validator with MCP discovery
+disabled keeps the whole development OAuth flow in one process, without a
+self-JWKS request or a Docker identity provider.
+
 ## Exposed endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/oauth/token` | Token issuance (`client_credentials`; optional development `password`) |
+| `GET` / `POST` | `/oauth/authorize` | Local login + one-time authorization code for registered public clients |
+| `POST` | `/oauth/token` | Token issuance (`authorization_code` + PKCE, `client_credentials`; optional development `password`) |
 | `GET` | `/.well-known/openid-configuration` | Local issuer metadata |
 | `GET` | `/.well-known/jwks.json` | Public key in JWKS format |
 | `GET` / `POST` | `/userinfo` | User information (requires a user Bearer token with `openid` scope) |
@@ -117,6 +126,33 @@ Response:
   "expires_in": 3600
 }
 ```
+
+### Authorization Code + PKCE
+
+Register a public client with an exact redirect allowlist. Plain PKCE and
+wildcard redirects are intentionally unsupported:
+
+```rust
+use r2e::r2e_oidc::ClientRegistry;
+
+let clients = ClientRegistry::new().add_public_client(
+    "mcp-client",
+    ["http://127.0.0.1:49152/callback"],
+);
+
+let oidc = OidcServer::new()
+    .audience("http://localhost:3000/mcp")
+    .with_client_registry(clients)
+    .with_user_store(users);
+```
+
+Discovery then advertises `/oauth/authorize`, the `authorization_code` grant,
+token endpoint auth method `none`, and `code_challenge_methods_supported:
+["S256"]`. The browser endpoint authenticates against the configured
+`UserStore`; issued codes expire after 300 seconds by default, are bound to
+the client, redirect URI, resource and challenge, and are consumed on the
+first redemption attempt. Override the lifetime with
+`.authorization_code_ttl(seconds)`.
 
 ### Using the token
 
@@ -151,6 +187,7 @@ let oidc = OidcServer::new()
     .issuer("https://myapp.example.com")   // `iss` claim (default: "http://localhost:3000")
     .audience("my-app")                     // `aud` claim (default: "r2e-app")
     .token_ttl(7200)                        // lifetime in seconds (default: 3600)
+    .authorization_code_ttl(300)            // one-time code lifetime
     .base_path("/auth")                     // endpoint prefix (default: "")
     .with_signing_key_pem(private_key_pem)   // persist keys across process restarts
     .max_credential_verifications(16)        // bound concurrent Argon2 work
@@ -160,6 +197,7 @@ let oidc = OidcServer::new()
 With `base_path("/auth")`, the endpoints become:
 
 - `POST /auth/oauth/token`
+- `GET|POST /auth/oauth/authorize`
 - `GET /auth/.well-known/openid-configuration`
 - `GET /auth/.well-known/jwks.json`
 - `GET /auth/userinfo`

@@ -104,12 +104,12 @@ impl<I: Identity> Guard<I> for ApiKeyGuard {
 
 // ── Tool argument / result DTOs ────────────────────────────────────────
 //
-// Arguments derive `Deserialize + JsonSchema` (the schema becomes the tool's
+// Arguments derive `Deserialize + JsonSchema + ObjectParams` (the schema becomes the tool's
 // `inputSchema`; doc comments become property descriptions). A `Json<T>`
 // return with `T: Serialize + JsonSchema` additionally advertises an
 // `outputSchema` and lands in `structuredContent`.
 
-#[derive(Deserialize, JsonSchema)]
+#[derive(Deserialize, JsonSchema, ObjectParams)]
 pub struct BinaryOperands {
     /// Left operand.
     pub a: f64,
@@ -150,7 +150,10 @@ impl MathTools {
     /// is zero.
     #[tool(name = "divide", read_only)]
     #[intercept(LogCalls::spec("tool"))]
-    async fn divide(&self, Params(p): Params<BinaryOperands>) -> Result<Json<CalcResult>, McpError> {
+    async fn divide(
+        &self,
+        Params(p): Params<BinaryOperands>,
+    ) -> Result<Json<CalcResult>, McpError> {
         self.calc
             .divide(p.a, p.b)
             .map(|value| Json(CalcResult { value }))

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
@@ -6,10 +6,13 @@ use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 
 use crate::store::UserStoreError;
 
-/// Registry of OAuth 2.0 clients for the `client_credentials` grant.
+/// Registry of confidential clients and public Authorization Code + PKCE
+/// clients.
 pub struct ClientRegistry {
     /// Map: client_id -> hashed_secret
     clients: HashMap<String, String>,
+    /// Public client id -> exact redirect URI allowlist.
+    public_clients: HashMap<String, HashSet<String>>,
     /// Dummy hash verified for unknown clients to reduce timing enumeration.
     dummy_hash: String,
 }
@@ -19,9 +22,64 @@ impl ClientRegistry {
     pub fn new() -> Self {
         Self {
             clients: HashMap::new(),
+            public_clients: HashMap::new(),
             dummy_hash: hash_secret("r2e-oidc-dummy-client-secret")
                 .expect("failed to hash dummy client secret"),
         }
+    }
+
+    /// Register a public client. Every redirect URI is matched exactly during
+    /// authorization; wildcards are deliberately unsupported.
+    pub fn add_public_client(
+        self,
+        client_id: impl Into<String>,
+        redirect_uris: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.try_add_public_client(client_id, redirect_uris)
+            .expect("invalid public OIDC client")
+    }
+
+    /// Fallible form of [`add_public_client`](Self::add_public_client).
+    pub fn try_add_public_client(
+        mut self,
+        client_id: impl Into<String>,
+        redirect_uris: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Result<Self, UserStoreError> {
+        let client_id = client_id.into();
+        if client_id.trim().is_empty() {
+            return Err(UserStoreError::new("client_id must not be empty"));
+        }
+        if self.clients.contains_key(&client_id) {
+            return Err(UserStoreError::new(
+                "client_id is already registered as a confidential client",
+            ));
+        }
+        let mut redirects = HashSet::new();
+        for redirect_uri in redirect_uris {
+            let redirect_uri = redirect_uri.into();
+            let url = url::Url::parse(&redirect_uri)
+                .map_err(|e| UserStoreError::new(format!("invalid redirect URI: {e}")))?;
+            if url.fragment().is_some() || !matches!(url.scheme(), "https" | "http") {
+                return Err(UserStoreError::new(
+                    "redirect URI must use http(s) and must not contain a fragment",
+                ));
+            }
+            if url.scheme() == "http"
+                && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1"))
+            {
+                return Err(UserStoreError::new(
+                    "http redirect URIs are only allowed for loopback clients",
+                ));
+            }
+            redirects.insert(redirect_uri);
+        }
+        if redirects.is_empty() {
+            return Err(UserStoreError::new(
+                "a public client needs at least one redirect URI",
+            ));
+        }
+        self.public_clients.insert(client_id, redirects);
+        Ok(self)
     }
 
     /// Register a client. The secret is hashed with argon2.
@@ -39,6 +97,11 @@ impl ClientRegistry {
         let client_id = client_id.into();
         if client_id.trim().is_empty() {
             return Err(UserStoreError::new("client_id must not be empty"));
+        }
+        if self.public_clients.contains_key(&client_id) {
+            return Err(UserStoreError::new(
+                "client_id is already registered as a public client",
+            ));
         }
         if client_secret.is_empty() {
             return Err(UserStoreError::new("client_secret must not be empty"));
@@ -84,6 +147,16 @@ impl ClientRegistry {
     /// Returns `true` if the registry has no clients.
     pub(crate) fn is_empty(&self) -> bool {
         self.clients.is_empty()
+    }
+
+    pub(crate) fn has_public_clients(&self) -> bool {
+        !self.public_clients.is_empty()
+    }
+
+    pub(crate) fn accepts_redirect(&self, client_id: &str, redirect_uri: &str) -> bool {
+        self.public_clients
+            .get(client_id)
+            .is_some_and(|uris| uris.contains(redirect_uri))
     }
 }
 

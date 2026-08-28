@@ -1,4 +1,4 @@
-error: #[intercept] on a bean method is only supported on #[scheduled]/#[consumer] methods — a plain method has no dispatch wrapper to run the interceptor chain
+error: #[intercept] on a bean method is only supported on #[scheduled]/#[consumer]/#[tool] methods — a plain method has no dispatch wrapper to run the interceptor chain
   --> cases/decorators/fail/bean_intercept_plain_method.rs:19:5
    |
 19 |     async fn helper(&self) {}

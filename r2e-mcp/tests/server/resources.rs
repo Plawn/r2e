@@ -3,11 +3,14 @@
 //! interceptors), and the resource error plane (JSON-RPC only — no
 //! `is_error` results).
 
+use http_body_util::BodyExt;
+use r2e_core::http::{Body, Request};
 use r2e_core::http::{Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
-use r2e_mcp::{AppBuilderMcpExt, McpServer};
-use serde_json::Value;
+use r2e_mcp::{AppBuilderMcpExt, McpResourceUpdates, McpServer, ResourceCall};
+use serde_json::{json, Value};
+use tower::ServiceExt;
 
 use crate::fixtures::fixture_app;
 use crate::support;
@@ -113,4 +116,128 @@ async fn domain_error_degrades_to_a_json_rpc_internal_error() {
     assert!(message.get("result").is_none(), "{message}");
     assert_eq!(message["error"]["code"], -32603, "{message}");
     assert_eq!(message["error"]["message"], "resource exploded");
+}
+
+#[controller]
+struct TemplateResources;
+
+#[mcp_routes]
+impl TemplateResources {
+    /// Read one user by URI.
+    #[resource(uri = "r2e://users/{id}{?view}", mime_type = "text/plain")]
+    async fn user(&self, call: ResourceCall) -> String {
+        format!("user:{}:{}", call.variables["id"], call.variables["view"])
+    }
+}
+
+async fn template_app() -> Router {
+    AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<TemplateResources>()
+        .build()
+}
+
+#[r2e_core::test]
+async fn uri_templates_are_listed_separately_and_capture_variables() {
+    let router = template_app().await;
+    let session = support::initialize(&router, "/mcp").await;
+
+    let fixed = support::resources_list(&router, "/mcp", &session).await;
+    assert_eq!(fixed["resources"], json!([]));
+
+    let response = support::post(
+        &router,
+        "/mcp",
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "resources/templates/list"
+        }),
+    )
+    .await;
+    let templates = &response.result()["resourceTemplates"];
+    assert_eq!(templates[0]["uriTemplate"], "r2e://users/{id}{?view}");
+    assert_eq!(templates[0]["name"], "user");
+
+    let read = support::resources_read(&router, "/mcp", &session, "r2e://users/42?view=full").await;
+    assert_eq!(
+        read["result"]["contents"][0]["uri"],
+        "r2e://users/42?view=full"
+    );
+    assert_eq!(read["result"]["contents"][0]["text"], "user:42:full");
+}
+
+#[r2e_core::test]
+async fn resource_capability_advertises_subscriptions() {
+    let router = template_app().await;
+    assert_eq!(
+        initialize_result(&router).await["capabilities"]["resources"]["subscribe"],
+        true
+    );
+}
+
+#[r2e_core::test]
+async fn legacy_resource_subscription_receives_published_updates() {
+    let updates = McpResourceUpdates::new(8);
+    let router = AppBuilder::new()
+        .plugin(McpServer::new().with_resource_updates(updates.clone()))
+        .build_state()
+        .await
+        .register_mcp_service::<TemplateResources>()
+        .build();
+    let session = support::initialize(&router, "/mcp").await;
+    let subscribed = support::post(
+        &router,
+        "/mcp",
+        Some(&session),
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "resources/subscribe",
+            "params": { "uri": "r2e://users/42?view=full" }
+        }),
+    )
+    .await;
+    assert!(
+        subscribed.message().get("error").is_none(),
+        "{}",
+        subscribed.raw_body
+    );
+
+    let stream = router
+        .oneshot(
+            Request::get("/mcp")
+                .header("host", "localhost")
+                .header("accept", "text/event-stream")
+                .header("mcp-session-id", &session)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut body = stream.into_body();
+    updates.notify("r2e://users/42?view=full");
+
+    let notification = r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let frame = body.frame().await.expect("SSE stream ended").unwrap();
+            let Some(data) = frame.data_ref() else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(data);
+            if text.contains("notifications/resources/updated") {
+                break text.into_owned();
+            }
+        }
+    })
+    .await
+    .expect("resource update notification timed out");
+    assert!(
+        notification.contains("r2e://users/42?view=full"),
+        "{notification}"
+    );
 }

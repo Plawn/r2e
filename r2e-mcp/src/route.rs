@@ -7,6 +7,7 @@
 //! dispatches `tools/call` to the closure.
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -174,6 +175,9 @@ impl std::fmt::Debug for ToolRoute {
 pub struct ResourceCall {
     /// The URI of the `resources/read` request.
     pub uri: String,
+    /// Variables captured from an RFC 6570 URI template. Empty for a fixed
+    /// resource URI.
+    pub variables: BTreeMap<String, String>,
     /// The HTTP request parts of the transport request carrying this call —
     /// same semantics as [`ToolCall::parts`].
     pub parts: Option<Arc<Parts>>,
@@ -206,8 +210,8 @@ pub type ResourceInvoke = Arc<dyn Fn(ResourceCall) -> ResourceFuture + Send + Sy
 /// also be built by hand for dynamic resources.
 #[derive(Clone)]
 pub struct ResourceRoute {
-    /// The resource URI (unique across ALL registered services — a duplicate
-    /// is a boot panic). Fixed — URI templates are not supported yet.
+    /// A fixed resource URI or RFC 6570 URI template (unique across all
+    /// registered services — a duplicate is a boot panic).
     pub uri: Cow<'static, str>,
     /// The programmatic resource name (defaults to the method name).
     pub name: Cow<'static, str>,
@@ -231,6 +235,20 @@ impl ResourceRoute {
     /// excluded).
     pub(crate) fn to_rmcp_resource(&self) -> rmcp::model::Resource {
         let mut resource = rmcp::model::Resource::new(self.uri.clone(), self.name.clone());
+        resource.title = self.title.clone();
+        resource.description = self.description.clone();
+        resource.mime_type = self.mime_type.clone();
+        resource
+    }
+
+    /// Whether this route is advertised through `resources/templates/list`.
+    pub fn is_template(&self) -> bool {
+        self.uri.contains('{')
+    }
+
+    pub(crate) fn to_rmcp_resource_template(&self) -> rmcp::model::ResourceTemplate {
+        let mut resource =
+            rmcp::model::ResourceTemplate::new(self.uri.to_string(), self.name.to_string());
         resource.title = self.title.clone();
         resource.description = self.description.clone();
         resource.mime_type = self.mime_type.clone();

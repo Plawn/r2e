@@ -19,7 +19,7 @@ use crate::extract::route::extract_intercept_fns;
 use crate::extract::scheduled::extract_scheduled;
 use crate::model::type_list_gen::build_tcons_type;
 use crate::model::types::ConsumerKind;
-use crate::util::crate_path::r2e_core_path;
+use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 use crate::util::hash_tokens::hash_token_stream;
 use crate::util::type_utils::{
     named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name,
@@ -164,13 +164,19 @@ fn expand_struct(mut item_struct: ItemStruct) -> syn::Result<TokenStream2> {
 }
 
 fn expand_impl(item_impl: ItemImpl, bean_args: &BeanArgs) -> TokenStream2 {
-    match generate(&item_impl, bean_args) {
+    let mcp = match crate::parsing::mcp_routes_parsing::parse_bean_tools(&item_impl) {
+        Ok(mcp) => mcp,
+        Err(err) => return err.to_compile_error(),
+    };
+    match generate(&item_impl, bean_args, mcp.as_ref()) {
         Ok(generated) => {
             let cleaned_impl = emit_cleaned_impl(&item_impl, &generated);
             let bean_impl = &generated.bean_impl;
+            let mcp_impl = &generated.mcp_impl;
             quote! {
                 #cleaned_impl
                 #bean_impl
+                #mcp_impl
             }
         }
         Err(err) => err.to_compile_error(),
@@ -188,9 +194,18 @@ struct GeneratedBean {
     async_exec: Vec<BeanAsyncExecMethod>,
     /// Whether the impl block carries an impl-level `#[intercept]`.
     impl_intercepts_present: bool,
+    /// Cleaned MCP tool methods, with member/decorator/identity attributes
+    /// consumed by the MCP parser.
+    mcp_methods: Vec<syn::ImplItemFn>,
+    /// Generated MCP wrapper/service surface for auto-collected bean tools.
+    mcp_impl: TokenStream2,
 }
 
-fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<GeneratedBean> {
+fn generate(
+    item_impl: &ItemImpl,
+    bean_args: &BeanArgs,
+    mcp: Option<&crate::parsing::mcp_routes_parsing::McpRoutesImplDef>,
+) -> syn::Result<GeneratedBean> {
     // Extract the Self type from the impl block.
     let self_ty = &item_impl.self_ty;
     let type_ident = type_ident(self_ty);
@@ -205,6 +220,21 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     let mut config_key_entries = Vec::new();
     let mut has_config = false;
     let mut has_live_config = false;
+
+    if mcp.is_some() {
+        if bean_args.lazy {
+            return Err(syn::Error::new_spanned(
+                &item_impl.self_ty,
+                "#[bean(lazy)] cannot auto-collect #[tool] methods because MCP routes are built at startup",
+            ));
+        }
+        let mcp_path = r2e_mcp_path();
+        dep_type_ids.push(quote! {
+            (std::any::TypeId::of::<#mcp_path::McpServiceRegistry>(),
+             std::any::type_name::<#mcp_path::McpServiceRegistry>())
+        });
+        dep_types.push(quote! { #mcp_path::McpServiceRegistry });
+    }
 
     let fn_name = &constructor.sig.ident;
     let type_name_str = quote!(#self_ty).to_string();
@@ -423,7 +453,11 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     // An impl-level `#[intercept]` applies only to scheduled/consumer methods;
     // with none present it is a silent no-op (and would force the constructor
     // literal rewrite without a matching wrapper). Fail loud on the attribute.
-    if !impl_intercepts.is_empty() && scheduled_methods.is_empty() && consumer_methods.is_empty() {
+    if !impl_intercepts.is_empty()
+        && scheduled_methods.is_empty()
+        && consumer_methods.is_empty()
+        && mcp.is_none()
+    {
         let attr = item_impl
             .attrs
             .iter()
@@ -440,6 +474,9 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     let mut deco_module_items: Vec<TokenStream2> = Vec::new();
     let mut intercepted: Vec<BeanInterceptedMethod> = Vec::new();
     let mut all_intercept_exprs: Vec<syn::Expr> = Vec::new();
+    if let Some(mcp) = mcp {
+        all_intercept_exprs.extend(mcp.decorator_exprs().into_iter().cloned());
+    }
 
     for sm in &scheduled_methods {
         if sm.intercept_fns.is_empty() {
@@ -641,6 +678,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         || !scheduled_methods.is_empty()
         || !consumer_methods.is_empty()
         || has_decos
+        || mcp.is_some()
     {
         let pc_hook = (!pc_methods.is_empty())
             .then(|| quote! { registry.register_post_construct::<Self>(); });
@@ -653,6 +691,18 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         let sub_hook = (!consumer_methods.is_empty())
             .then(|| quote! { registry.register_event_subscriber::<Self>(); });
         let deco_hook = has_decos.then(|| quote! { registry.register_deco_fill::<Self>(); });
+        let mcp_hook = mcp.map(|_| {
+            let mcp_path = r2e_mcp_path();
+            quote! {
+                registry.register_after_resolve::<Self>(|__ctx| {
+                    let __registry: #mcp_path::McpServiceRegistry = __ctx.get();
+                    __registry.add_service(
+                        <Self as #mcp_path::McpService>::service_name(),
+                        <Self as #mcp_path::McpService>::routes(__ctx),
+                    );
+                });
+            }
+        });
         quote! {
             fn after_register(registry: &mut #krate::beans::BeanRegistry) {
                 #pc_hook
@@ -661,6 +711,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 #sched_hook
                 #sub_hook
                 #deco_hook
+                #mcp_hook
             }
         }
     } else {
@@ -739,11 +790,30 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
         #scheduled_source_impl
     };
 
+    let mcp_impl = mcp
+        .map(crate::mcp_codegen::generate_for_bean)
+        .unwrap_or_default();
+    let mcp_methods = mcp
+        .map(|mcp| {
+            mcp.impl_block
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    syn::ImplItem::Fn(method) => Some(method.clone()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(GeneratedBean {
         bean_impl: out,
         intercepted,
         async_exec: async_exec_methods,
-        impl_intercepts_present: !impl_intercepts.is_empty(),
+        impl_intercepts_present: !impl_intercepts.is_empty()
+            && (!scheduled_methods.is_empty() || !consumer_methods.is_empty()),
+        mcp_methods,
+        mcp_impl,
     })
 }
 
@@ -783,8 +853,8 @@ fn consumer_event_param(item_impl: &ItemImpl, fn_name: &syn::Ident) -> Option<sy
     None
 }
 
-/// Reject `#[intercept]` on a `&self` method that is neither `#[scheduled]`
-/// nor `#[consumer]` — there is no dispatch wrapper to run the chain there.
+/// Reject `#[intercept]` on a `&self` method that has no generated dispatch
+/// wrapper (`#[scheduled]`, `#[consumer]` or an auto-collected `#[tool]`).
 fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
     for item in &item_impl.items {
         if let ImplItem::Fn(method) = item {
@@ -794,7 +864,8 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
             }
             let is_scheduled = method.attrs.iter().any(|a| a.path().is_ident("scheduled"));
             let is_consumer = method.attrs.iter().any(|a| a.path().is_ident("consumer"));
-            if !is_scheduled && !is_consumer {
+            let is_tool = method.attrs.iter().any(|a| a.path().is_ident("tool"));
+            if !is_scheduled && !is_consumer && !is_tool {
                 let is_async_exec = method.attrs.iter().any(|a| a.path().is_ident("async_exec"));
                 if is_async_exec {
                     // Shared message with the controller path; spanned on the
@@ -807,7 +878,7 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
                 }
                 return Err(syn::Error::new_spanned(
                     &method.sig,
-                    "#[intercept] on a bean method is only supported on #[scheduled]/#[consumer] \
+                    "#[intercept] on a bean method is only supported on #[scheduled]/#[consumer]/#[tool] \
                      methods — a plain method has no dispatch wrapper to run the interceptor chain",
                 ));
             }
@@ -1095,6 +1166,8 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
     let intercepted_by_name = |name: &syn::Ident| intercepted.iter().find(|im| &im.fn_name == name);
     let async_exec_by_name =
         |name: &syn::Ident| generated.async_exec.iter().find(|am| &am.fn_name == name);
+    let mcp_by_name =
+        |name: &syn::Ident| generated.mcp_methods.iter().find(|m| &m.sig.ident == name);
 
     let mut items: Vec<TokenStream2> = Vec::new();
 
@@ -1168,6 +1241,12 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                         }
                     },
                 ));
+            } else if let Some(mcp_method) = mcp_by_name(&method.sig.ident) {
+                let mut method = mcp_method.clone();
+                if has_intercepts {
+                    injector.visit_block_mut(&mut method.block);
+                }
+                items.push(quote! { #method });
             } else {
                 // Ordinary method (possibly a non-intercepted scheduled/consumer,
                 // or a helper): strip wiring attrs and rewrite any literals.
@@ -1198,11 +1277,16 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
     }
 
     let (impl_generics, _, where_clause) = item_impl.generics.split_for_impl();
-    // Strip `#[intercept]` from impl-level attrs (kept as a no-op otherwise).
+    // Strip MCP/bean decorator attrs from the emitted inherent impl. Their
+    // products were already captured by the generated dispatch surfaces.
     let attrs: Vec<_> = item_impl
         .attrs
         .iter()
-        .filter(|a| !a.path().is_ident("intercept"))
+        .filter(|a| {
+            !["intercept", "guard", "roles", "all_roles"]
+                .iter()
+                .any(|name| a.path().is_ident(name))
+        })
         .collect();
 
     quote! {

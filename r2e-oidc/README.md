@@ -8,7 +8,10 @@ Provides a local OAuth-style token issuer that runs inside your application. It 
 
 Ideal for development, testing, prototyping, and monolithic applications that don't need an external IdP.
 
-This crate is not a full OpenID Connect Provider: it does not implement the browser authorization endpoint, Authorization Code + PKCE, redirects, nonces, or ID tokens. Use an external IdP for SSO or multi-application login.
+The embedded login supports public clients through Authorization Code +
+mandatory PKCE S256. This is still a focused access-token issuer, not a full
+federated OpenID Provider: there are no ID tokens, upstream SSO, or dynamic
+client registration.
 
 ## Usage
 
@@ -85,7 +88,8 @@ Using `OidcServer` directly as a plugin (without `.build()`) still works. Persis
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/oauth/token` | Token issuance (`client_credentials`; optional development `password` grant) |
+| `GET` / `POST` | `/oauth/authorize` | Local login and Authorization Code + PKCE |
+| `POST` | `/oauth/token` | Token issuance (`authorization_code`, `client_credentials`; optional development `password`) |
 | `GET` | `/.well-known/openid-configuration` | Local issuer metadata |
 | `GET` | `/.well-known/jwks.json` | Public key in JWKS format |
 | `GET` / `POST` | `/userinfo` | User info (requires a user Bearer token with `openid` scope) |
@@ -97,6 +101,7 @@ OidcServer::new()
     .issuer("https://myapp.example.com")   // JWT `iss` claim (default: "http://localhost:3000")
     .audience("my-app")                     // JWT `aud` claim (default: "r2e-app")
     .token_ttl(7200)                        // Token TTL in seconds (default: 3600)
+    .authorization_code_ttl(300)            // One-time code TTL (default: 300)
     .base_path("/auth")                     // Endpoint prefix (default: "")
     .with_signing_key_pem(private_key_pem)   // Persist keys across process restarts
     .max_credential_verifications(16)        // Bound concurrent Argon2 work
@@ -112,6 +117,27 @@ let oidc = OidcServer::new()
     .enable_password_grant_for_development()
     .with_user_store(users);
 ```
+
+## Authorization Code + PKCE
+
+```rust
+use r2e::r2e_oidc::ClientRegistry;
+
+let clients = ClientRegistry::new().add_public_client(
+    "mcp-client",
+    ["http://127.0.0.1:49152/callback"],
+);
+
+let oidc = OidcServer::new()
+    .audience("http://localhost:3000/mcp")
+    .with_user_store(users)
+    .with_client_registry(clients);
+```
+
+Redirect URIs are exact-match only; non-loopback HTTP redirects are rejected.
+Discovery advertises only PKCE `S256`. Authorization codes expire after five
+minutes by default, are bound to client/redirect/resource/challenge, and are
+removed on the first redemption attempt.
 
 ## User store
 

@@ -83,6 +83,13 @@ references.
    sets are graph-built once (model:
    `examples/example-grpc/tests/grpc_intercept.rs`).
 
+MCP also has a compact bean-hosted path for tool-only services: `#[bean]`
+parses its `#[tool]` methods, folds their decorator deps plus the
+`McpServiceRegistry` into the normal bean dependency list, and contributes
+routes from a generic post-resolution hook. It reuses the same MCP codegen;
+it is not a second adapter implementation. Resources and prompts keep the
+explicit `#[mcp_routes]` registration path.
+
 ## Invariants (do not break)
 
 - Interceptors (`Interceptor<R>`) are transport-neutral — `Logged`, `Timed`

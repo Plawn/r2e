@@ -1,0 +1,5 @@
+error[E0080]: evaluation panicked: #[mcp_routes] does not support struct-level #[inject(identity)]: MCP identity is per member; move it to a #[tool], #[resource] or #[prompt] method parameter
+  --> cases/mcp/fail/mcp_struct_identity.rs:14:6
+   |
+14 | impl StructIdentityTools {
+   |      ^^^^^^^^^^^^^^^^^^^ evaluation of `_` failed here

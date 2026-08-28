@@ -144,7 +144,11 @@ fn add_mcp_enables_facade_feature_and_schemars() {
     let cargo = fs::read_to_string("Cargo.toml").unwrap();
     assert!(cargo.contains("r2e = { version = \"0.1\", features = [\"mcp\"] }"));
     assert!(cargo.contains("schemars = \"1\""));
+    assert!(cargo.contains("serde = { version = \"1\", features = [\"derive\"] }"));
     assert!(!cargo.contains("r2e-mcp"));
+    assert!(fs::read_to_string("application.yaml")
+        .unwrap()
+        .contains("mcp:\n  path: /mcp"));
 }
 
 #[test]
@@ -165,6 +169,33 @@ fn add_mcp_preserves_facade_features_and_is_idempotent() {
     assert_eq!(cargo.matches("\"mcp\"").count(), 1);
     assert!(cargo.contains("\"security\""));
     assert_eq!(cargo.matches("schemars").count(), 1);
+    assert_eq!(cargo.matches("serde").count(), 1);
+    assert_eq!(
+        fs::read_to_string("application.yaml")
+            .unwrap()
+            .matches("mcp:")
+            .count(),
+        1
+    );
+}
+
+#[test]
+#[serial]
+fn add_mcp_scaffolds_source_without_overwriting_it() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+
+    add::run("mcp").unwrap();
+    let source = fs::read_to_string("src/mcp.rs").unwrap();
+    assert!(source.contains("#[derive(Debug, Deserialize, JsonSchema, ObjectParams)]"));
+    assert!(source.contains("#[tool(read_only)]"));
+    assert!(source.contains("pub struct McpTools"));
+
+    fs::write("src/mcp.rs", "// user-owned\n").unwrap();
+    add::run("mcp").unwrap();
+    assert_eq!(fs::read_to_string("src/mcp.rs").unwrap(), "// user-owned\n");
 }
 
 #[test]
@@ -200,7 +231,31 @@ fn add_mcp_adds_direct_dependency_without_facade() {
 
     let cargo = fs::read_to_string("Cargo.toml").unwrap();
     assert!(cargo.contains("r2e-mcp = \"0.3\""));
+    assert!(cargo.contains("r2e-core = \"0.3\""));
     assert!(cargo.contains("schemars = \"1\""));
+}
+
+#[test]
+#[serial]
+fn add_mcp_direct_scaffold_uses_direct_crates() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"direct-app\"\nversion = \"0.1.0\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::create_dir("src").unwrap();
+
+    add::run("mcp").unwrap();
+
+    let source = fs::read_to_string("src/mcp.rs").unwrap();
+    assert!(source.contains("use r2e_core::prelude::{bean, tool, ObjectParams};"));
+    assert!(source.contains("use r2e_mcp::Params;"));
+    assert!(!source.contains("use r2e::"));
+    assert!(fs::read_to_string("application.yaml")
+        .unwrap()
+        .contains("name: direct-app"));
 }
 
 #[test]

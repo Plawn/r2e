@@ -23,7 +23,7 @@ Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime beh
 use r2e::prelude::*;
 use schemars::JsonSchema;
 
-#[derive(serde::Deserialize, JsonSchema)]
+#[derive(serde::Deserialize, JsonSchema, ObjectParams)]
 pub struct AddIn {
     /// Left operand.
     pub a: f64,
@@ -70,7 +70,7 @@ bad `#[config]` key is caught at `register_mcp_service` — a missing
 
 | parameter | meaning |
 |---|---|
-| `Params<T>` | Typed tool arguments. `T: Deserialize + JsonSchema`; the schema becomes the tool's `inputSchema` (doc comments → property descriptions, `Option<..>` fields → not required, nested types/enums kept as inline `$defs`). |
+| `Params<T>` | Typed tool arguments. `T: Deserialize + JsonSchema + ObjectParams`; derive all three on a named-field struct. The sealed marker rejects scalar/tuple/enum root schemas at compile time. The schema becomes the tool's `inputSchema` (doc comments → property descriptions, `Option<..>` fields → not required, nested types/enums kept as inline `$defs`). |
 | `ToolCall` | Everything about the call: `arguments` (raw JSON), `parts` (HTTP request parts of the transport request — headers, URI, extensions), `request_id`, `cancel` (`CancelToken`, fired on client abort / shutdown). |
 | `CancelToken` | Just the cancellation token. |
 | `#[inject(identity)] user: I` / `Option<I>` | The authenticated caller (wired by the MCP auth layer — see the Auth section). |
@@ -117,7 +117,7 @@ retry with better arguments. Everything else maps to JSON-RPC errors:
 ## Resources and prompts
 
 The same impl block can expose the two other MCP member families —
-`#[resource]` (fixed-URI readable data) and `#[prompt]` (reusable message
+`#[resource]` (fixed or templated readable data) and `#[prompt]` (reusable message
 templates). One method = one member; a method carries exactly one of the
 three markers. All members of a service share ONE core (built once from the
 bean graph) and the same prebuilt guard/interceptor sets.
@@ -129,6 +129,11 @@ impl MathTools {
     #[resource(uri = "r2e://calc/call-log", mime_type = "text/plain")]
     async fn call_log(&self) -> String { self.log.entries().join("\n") }
 
+    #[resource(uri = "r2e://users/{id}", mime_type = "application/json")]
+    async fn user(&self, call: ResourceCall) -> Json<User> {
+        Json(self.users.get(&call.variables["id"]).await?)
+    }
+
     /// Walk the agent through a division.
     #[prompt(name = "explain_division")]
     async fn explain(&self, Params(p): Params<BinaryOperands>) -> String {
@@ -137,14 +142,17 @@ impl MathTools {
 }
 ```
 
-- `#[resource(uri = "…")]` — the URI is **required** and fixed (URI templates
-  are not supported yet) and, like tool names, **global across services** (a
-  duplicate is a boot panic naming both). Optional keys: `name` (defaults to
+- `#[resource(uri = "…")]` — the URI is **required**. A value containing an
+  RFC 6570 expression such as `{id}` is advertised through
+  `resources/templates/list`; other values remain in `resources/list`.
+  Templates and fixed URIs are global across services (a duplicate is a boot
+  panic naming both). Optional keys: `name` (defaults to
   the method name), `title`, `description`, `mime_type` (advertised in
   `resources/list` and applied to text-shaped returns), `scopes`/`any_scopes`.
   Resource methods take **no `Params<T>`** (`resources/read` carries no
   arguments); `ResourceCall` replaces `ToolCall` (it adds the requested
-  `uri`). Return types (`IntoResourceResult`): `String`/`&str` (text contents
+  `uri` plus the captured template `variables`). Return types
+  (`IntoResourceResult`): `String`/`&str` (text contents
   with the declared MIME type), `Json<T>` (`application/json` unless
   overridden), `ResourceContents` / `Vec<ResourceContents>`, and `Result<_,
   E: Into<McpError>>`.
@@ -166,6 +174,14 @@ JSON-RPC `-32603` internal error (message preserved, structured data
 attached); everything else maps as in the table above. An unknown resource
 URI is `-32002` (`RESOURCE_NOT_FOUND`); an unknown prompt name is `-32602`
 (`invalid_params`, per the MCP spec).
+
+Resource subscriptions are enabled whenever resources exist. Inject the
+plugin-provided `McpResourceUpdates` bean and call `updates.notify(uri)` after
+changing a resource. R2E sends `notifications/resources/updated` only to
+sessions subscribed to that exact URI. Both legacy `resources/subscribe` /
+`resources/unsubscribe` and the current `subscriptions/listen` filter are
+handled; lagging sessions skip stale update hints (clients re-read the
+resource for the actual contents).
 
 Auth is uniform across families: `scopes`/`any_scopes` on the marker,
 `#[roles]`/`#[all_roles]`/`#[guard]` via the shared guard machinery, and
@@ -222,6 +238,35 @@ pub struct CalcController { #[inject] calc: CalcService } // HTTP adapter (#[rou
 
 `examples/example-mcp` is the worked example (HTTP + MCP + guards +
 interceptors + `TestApp` e2e tests).
+
+## Tool methods directly on beans
+
+When a service only exposes tools, put `#[tool]` directly in its `#[bean]`
+impl. Registration of the bean then collects the tools automatically — no
+dedicated controller or `.register_mcp_service` call:
+
+```rust
+#[derive(Clone)]
+pub struct SearchService { /* injected constructor fields */ }
+
+#[bean]
+impl SearchService {
+    pub fn new(/* bean deps */) -> Self { /* ... */ }
+
+    #[tool(read_only)]
+    async fn search(&self, Params(input): Params<SearchInput>) -> String { /* ... */ }
+}
+
+AppBuilder::new()
+    .plugin(McpServer::new())
+    .register::<SearchService>()
+    .build_state().await;
+```
+
+Tool guard/interceptor dependencies are folded into the bean graph, and a
+missing `McpServer` becomes a compile-time missing dependency. Resources and
+prompts stay on dedicated `#[mcp_routes]` types because they define a broader
+service surface rather than bean operations.
 
 ## Configuration (`mcp.*`)
 
@@ -463,13 +508,20 @@ the complete wiring pattern; protocol and auth edge cases live in
 `r2e-mcp/tests`.
 
 For a real RS256/JWKS path without Docker, run the embedded `r2e-oidc` plugin
-as the issuer: configure its audience to the MCP resource, then its
-`POST /oauth/token` honors `scope` and accepts the matching RFC 8707
+as the issuer: register the MCP client with
+`ClientRegistry::add_public_client`, configure the audience to the MCP
+resource, and the local `/oauth/authorize` + `/oauth/token` endpoints run
+Authorization Code + PKCE S256 end to end. The token endpoint honors `scope`
+and accepts the matching RFC 8707
 `resource` indicator (`resource=http://localhost:3000/mcp` → token `aud` =
 the configured MCP resource). Any other resource is rejected with
 `invalid_target`, so a shared issuer cannot mint tokens for arbitrary APIs. A
-password-grant token then validates against
-`mcp.auth.issuer: http://localhost:<port>` end to end.
+issued token then validates against `mcp.auth.issuer:
+http://localhost:<port>` end to end. For a same-process issuer, pass
+`oidc.claims_validator()` through `McpTokenValidator::jwt(...)` and set MCP
+discovery to `off`; a validator override needs no dummy `mcp.auth.jwks-url`.
+The explicitly enabled password grant remains available for non-browser
+fixtures.
 
 ### Testing against a real Keycloak (Docker)
 

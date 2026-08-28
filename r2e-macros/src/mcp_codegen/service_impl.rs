@@ -10,6 +10,12 @@ use crate::util::type_utils::{unwrap_json_type, unwrap_result_type};
 
 use super::McpDecoLayout;
 
+#[derive(Clone, Copy)]
+pub enum CoreConstruction {
+    ContextConstruct,
+    ResolvedBean,
+}
+
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
 /// one member exists), then per-member guards and interceptors.
@@ -46,12 +52,22 @@ pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
 }
 
 /// Generate `impl McpService for ControllerName`.
-pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
+pub fn generate_mcp_service_impl(
+    def: &McpRoutesImplDef,
+    deco: &McpDecoLayout,
+    construction: CoreConstruction,
+) -> TokenStream {
     let krate = r2e_core_path();
     let mcp = r2e_mcp_path();
     let controller_name = &def.controller_name;
     let controller_name_str = controller_name.to_string();
     let wrapper_name = super::wrapper_ident(controller_name);
+    let core = match construction {
+        CoreConstruction::ContextConstruct => quote! {
+            <#controller_name as #krate::ContextConstruct>::from_context(__ctx)
+        },
+        CoreConstruction::ResolvedBean => quote! { __ctx.get::<#controller_name>() },
+    };
 
     // Products are built once and stored directly beside the core in the
     // single Arc'd wrapper — no nested Arc/container and no per-member ctor.
@@ -64,6 +80,21 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
     let decorator_config_stmts =
         crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
+    let validate_config = match construction {
+        CoreConstruction::ContextConstruct => quote! {
+            fn validate_config(
+                __config: &#krate::config::R2eConfig,
+            ) -> ::std::vec::Vec<#krate::config::MissingKeyError> {
+                #[allow(unused_mut)]
+                let mut __errors = #meta_mod::validate_config(__config);
+                #(#decorator_config_stmts)*
+                __errors
+            }
+        },
+        // Bean constructor and decorator config is already part of the bean
+        // graph's aggregated validation before this auto-registration runs.
+        CoreConstruction::ResolvedBean => quote! {},
+    };
 
     let member_pushes: Vec<TokenStream> = def
         .members
@@ -81,21 +112,13 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
                 #controller_name_str
             }
 
-            fn validate_config(
-                __config: &#krate::config::R2eConfig,
-            ) -> ::std::vec::Vec<#krate::config::MissingKeyError> {
-                #[allow(unused_mut)]
-                let mut __errors = #meta_mod::validate_config(__config);
-                #(#decorator_config_stmts)*
-                __errors
-            }
+            #validate_config
 
             fn routes(
-                __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
+                __ctx: &#krate::beans::BeanContext,
             ) -> #mcp::__macro_support::McpRoutes {
                 let __wrapper = ::std::sync::Arc::new(#wrapper_name {
-                    core:
-                        <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
+                    core: #core,
                     #(#deco_field_inits,)*
                 });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();

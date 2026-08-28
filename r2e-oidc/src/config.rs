@@ -11,6 +11,8 @@ pub struct OidcServerConfig {
     pub audience: String,
     /// Token time-to-live in seconds.
     pub token_ttl_secs: u64,
+    /// Lifetime of a one-time authorization code.
+    pub authorization_code_ttl_secs: u64,
     /// Base path for OIDC endpoints (e.g. `""` for root, `"/auth"` for `/auth/oauth/token`).
     pub base_path: String,
     /// Key ID (`kid`) included in JWT headers and JWKS.
@@ -32,6 +34,7 @@ impl Default for OidcServerConfig {
             issuer: "http://localhost:3000".into(),
             audience: "r2e-app".into(),
             token_ttl_secs: 3600,
+            authorization_code_ttl_secs: 300,
             base_path: String::new(),
             kid: String::new(),
             password_grant_enabled: false,
@@ -79,6 +82,11 @@ impl OidcServerConfig {
         if self.token_ttl_secs == 0 {
             return Err(OidcError::Configuration(
                 "token TTL must be greater than zero".into(),
+            ));
+        }
+        if self.authorization_code_ttl_secs == 0 {
+            return Err(OidcError::Configuration(
+                "authorization code TTL must be greater than zero".into(),
             ));
         }
 

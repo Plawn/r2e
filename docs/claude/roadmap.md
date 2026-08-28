@@ -463,14 +463,13 @@ P3 (providers & dev) shipped on the same branch, in chunks:
   (RS256+ES256 default) once the key is known (`InvalidAlgorithm` on every
   token).
 
-Open follow-ups: targeted error for struct-level `#[inject(identity)]` on
-`#[mcp_routes]` types (points at the method-param form); bean-level `#[tool]`
-auto-collection (`after_register`, like `ScheduledSource`); r2e-oidc
-authorization-code + PKCE flow (Docker-free end-to-end MCP OAuth in `r2e
-dev`); full MCP service/config source scaffold beyond the shipped
-`r2e add mcp` facade-feature wiring; sealed `ObjectParams` marker making a
-non-object root schema a compile error; MCP resource URI templates (RFC 6570)
-+ `resources/subscribe`.
+SHIPPED 2026-08-28: the remaining MCP audit follow-ups — targeted
+struct-level identity diagnostic; sealed derive-only `ObjectParams` marker;
+bean `#[tool]` auto-collection through a generic post-resolution hook; full,
+idempotent `r2e add mcp` source/config scaffold; RFC 6570 resource templates
+with captured `ResourceCall::variables`; `McpResourceUpdates` plus legacy
+`resources/subscribe` and current `subscriptions/listen`; and r2e-oidc public
+clients with a Docker-free, one-time Authorization Code + PKCE S256 flow.
 
 ## Open items tracked in their own docs
 

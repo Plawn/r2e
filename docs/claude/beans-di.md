@@ -351,6 +351,15 @@ impl NotificationService {
 
 When `#[consumer]` methods are present, the `#[bean]` macro generates an `EventSubscriber` impl plus an `after_register` hook calling `BeanRegistry::register_event_subscriber::<Self>()`, so `.register::<NotificationService>()` alone is enough — same auto-collection as `#[scheduled]`. `build_state()` queues the subscription as a consumer registration, run at server startup (`serve` / `build_with_consumers`), the same point controller `#[consumer]` methods subscribe. There is no explicit registration call (`register_subscriber` was removed). A bean deposited via `.provide(instance)` does NOT auto-subscribe (no `after_register` runs — mirror of `#[scheduled]`): register the type instead, or wire it manually with `add_consumer_registration`.
 
+`#[tool]` follows the same registration-driven rule on `#[bean]` impls. The
+macro folds tool decorators and the `McpServiceRegistry` into the bean's typed
+dependencies, then queues a generic after-resolution hook that resolves the
+finished bean instance and contributes its routes. Consequently
+`.plugin(McpServer::new()).register::<SearchService>()` is sufficient and a
+missing MCP plugin is a compile-time missing dependency. Only tools are
+accepted on beans; resources/prompts remain explicit `#[mcp_routes]` service
+surfaces.
+
 Multiple buses of different types are supported — each `#[consumer]` references a different field by name.
 
 Both consumer kinds are supported, classified by return type (same rule as controllers):

@@ -1,8 +1,9 @@
 use super::{
     reuse_clone_of, AsyncBean, Bean, BeanContext, BeanRegistration, BeanRegistry,
-    LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct, PreDestroy,
-    Producer, ServiceSourceHook,
+    LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct, PreDestroy, Producer,
+    ServiceSourceHook,
 };
+use crate::beans::registry::AfterResolveHook;
 use std::any::{type_name, Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -25,6 +26,7 @@ impl BeanRegistry {
             service_sources: Vec::new(),
             service_config_keys: Vec::new(),
             deco_fills: Vec::new(),
+            after_resolve_hooks: Vec::new(),
             provided_reuse_clones: HashMap::new(),
             // Seeded with the two types `load_config` always re-provides, so
             // the never-pin rule holds even for a registry populated by hand
@@ -443,6 +445,33 @@ impl BeanRegistry {
                 bean.__r2e_fill_decos(ctx);
             }),
         ));
+    }
+
+    /// Register one hook associated with `T` that observes the fully resolved
+    /// bean graph.
+    ///
+    /// Generated transport adapters use this to auto-collect endpoints owned
+    /// by a bean. The hook is idempotent per bean type and is run once on every
+    /// build, including dev-reload graph cache hits.
+    #[doc(hidden)]
+    pub fn register_after_resolve<T: 'static>(
+        &mut self,
+        hook: impl FnOnce(&BeanContext) + Send + 'static,
+    ) {
+        let tid = TypeId::of::<T>();
+        if self.after_resolve_hooks.iter().any(|(t, _)| *t == tid) {
+            return;
+        }
+        self.after_resolve_hooks.push((tid, Box::new(hook)));
+    }
+
+    /// Drain post-resolution hooks. Builder-internal.
+    #[doc(hidden)]
+    pub fn take_after_resolve_hooks(&mut self) -> Vec<AfterResolveHook> {
+        std::mem::take(&mut self.after_resolve_hooks)
+            .into_iter()
+            .map(|(_, hook)| hook)
+            .collect()
     }
 
     /// Drain the scheduled-source hooks queued by

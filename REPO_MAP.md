@@ -356,9 +356,11 @@ src/
   config.rs                 McpConfig (`mcp.*`)
   handler.rs                McpRuntime (dispatch table, duplicate-name boot panic) + rmcp ServerHandler impl
   registry.rs               McpServiceRegistry (filled at registration, drained once at router build)
+  resource_updates.rs       Injectable resource-update publisher (legacy + current subscriptions)
+  uri_template.rs           RFC 6570 reverse matching and captured variables
   service.rs                McpService trait (what #[mcp_routes] implements)
   route.rs                  ToolRoute/ToolCall/ToolAnnotations/ToolInvoke
-  params.rs                 Params<T> + ToolParams (schemars → inputSchema)
+  params.rs                 Params<T> + sealed ObjectParams + ToolParams (schemars → object inputSchema)
   result.rs                 IntoToolResult (String/()/Json<T> dual encoding/CallToolResult/Result)
   error.rs                  McpError → CallToolResult{isError} or JSON-RPC ErrorData
   guard.rs                  GuardContext bridge: HTTP Guard<I> over transport request parts

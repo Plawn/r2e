@@ -45,11 +45,13 @@ pub mod handler;
 pub mod params;
 pub mod plugin;
 pub mod registry;
+pub mod resource_updates;
 pub mod result;
 pub mod route;
 pub mod service;
 #[cfg(feature = "testing")]
 pub mod testing;
+mod uri_template;
 
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
@@ -57,9 +59,10 @@ use r2e_core::EndpointDeps;
 pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements};
 pub use config::McpConfig;
 pub use error::McpError;
-pub use params::{Params, ToolParams};
+pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
+pub use resource_updates::McpResourceUpdates;
 pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 pub use route::{
     McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
@@ -179,6 +182,7 @@ pub mod __macro_support {
     pub use crate::auth::tools::{check_access, ToolRequirements};
     pub use crate::error::McpError;
     pub use crate::guard::{guard_response_to_error, member_guard_context};
+    pub use crate::params::private::Sealed as ObjectParamsSeal;
     pub use crate::params::{
         empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,
     };
@@ -196,8 +200,9 @@ pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
     pub use crate::auth::{McpAuthConfig, McpTokenValidator};
     pub use crate::error::McpError;
-    pub use crate::params::Params;
+    pub use crate::params::{ObjectParams, Params};
     pub use crate::plugin::McpServer;
+    pub use crate::resource_updates::McpResourceUpdates;
     pub use crate::route::{PromptCall, ResourceCall, ToolCall};
     pub use crate::service::McpService;
     pub use crate::AppBuilderMcpExt;

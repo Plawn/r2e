@@ -17,7 +17,7 @@ mod service_impl;
 mod tool_impl;
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{format_ident, quote, quote_spanned};
 
 use crate::codegen::decorators::{decorator_product_field, spec_type_of};
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
@@ -184,17 +184,51 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     let impl_block = generate_impl_block(def);
     let wrapper = generate_wrapper_struct(def, &deco);
     let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
-    let mcp_service_impl = service_impl::generate_mcp_service_impl(def, &deco);
+    let mcp_service_impl = service_impl::generate_mcp_service_impl(
+        def,
+        &deco,
+        service_impl::CoreConstruction::ContextConstruct,
+    );
     let endpoint_deps_impl = service_impl::generate_endpoint_deps_impl(def);
     let deco_items = &deco.items;
+    let meta_mod = format_ident!("__r2e_meta_{}", def.controller_name);
+    let identity_assert = quote_spanned! { def.controller_name.span() =>
+        const _: () = ::core::assert!(
+            !#meta_mod::HAS_STRUCT_IDENTITY,
+            "#[mcp_routes] does not support struct-level #[inject(identity)]: MCP identity is per member; move it to a #[tool], #[resource] or #[prompt] method parameter"
+        );
+    };
 
     quote! {
+        #identity_assert
         #impl_block
         #deco_items
         #wrapper
         #invoke_impl
         #mcp_service_impl
         #endpoint_deps_impl
+    }
+}
+
+/// Generate the MCP surface for `#[tool]` methods hosted by a `#[bean]` impl.
+/// The bean macro emits the inherent impl itself; this path only emits the
+/// wrapper/routes and reads the already-resolved bean from `BeanContext`.
+pub fn generate_for_bean(def: &McpRoutesImplDef) -> TokenStream {
+    let deco = build_deco_layout(def);
+    let wrapper = generate_wrapper_struct(def, &deco);
+    let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
+    let service_impl = service_impl::generate_mcp_service_impl(
+        def,
+        &deco,
+        service_impl::CoreConstruction::ResolvedBean,
+    );
+    let deco_items = &deco.items;
+
+    quote! {
+        #deco_items
+        #wrapper
+        #invoke_impl
+        #service_impl
     }
 }
 

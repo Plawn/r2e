@@ -1,24 +1,30 @@
 //! The rmcp `ServerHandler` implementation dispatching to registered R2E
 //! tools, resources and prompts.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 
 use r2e_core::http::Parts;
+use r2e_core::rt::sync::broadcast;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ErrorCode, ErrorData, GetPromptRequestParams,
-    GetPromptResponse, Implementation, ListPromptsResult, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, Prompt, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, Resource, ServerCapabilities, ServerInfo, Tool,
+    GetPromptResponse, Implementation, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, PaginatedRequestParams, Prompt,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, Resource,
+    ResourceTemplate, ResourceUpdatedNotificationParam, ServerCapabilities, ServerInfo,
+    SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
 };
-use rmcp::service::{RequestContext, RoleServer};
+use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
 
 use crate::auth::tools::{requirements_visible, ToolRequirements};
 use crate::auth::McpPrincipal;
 use crate::registry::RegisteredMcpService;
+use crate::resource_updates::McpResourceUpdates;
 use crate::route::{PromptCall, PromptRoute, ResourceCall, ResourceRoute, ToolCall, ToolRoute};
+use crate::uri_template::UriTemplate;
 
 /// Server identity/behavior settings resolved by the plugin (builder
 /// overrides > `mcp.*` config > defaults).
@@ -48,6 +54,85 @@ struct Family<R, W> {
 struct FamilyRoute<R> {
     route: R,
     wire_index: usize,
+}
+
+struct TemplateFamilyRoute {
+    matcher: UriTemplate,
+    route: ResourceRoute,
+}
+
+struct TemplateFamily {
+    routes: Vec<TemplateFamilyRoute>,
+    list: Vec<ResourceTemplate>,
+    reqs: Vec<ToolRequirements>,
+    filter: bool,
+}
+
+impl TemplateFamily {
+    fn build(
+        filter: bool,
+        members: Vec<(
+            &'static str,
+            ToolRequirements,
+            ResourceTemplate,
+            ResourceRoute,
+        )>,
+    ) -> Self {
+        let mut owners = HashMap::with_capacity(members.len());
+        let mut routes = Vec::with_capacity(members.len());
+        let mut list = Vec::with_capacity(members.len());
+        let mut reqs = Vec::with_capacity(members.len());
+        for (service, req, wire, route) in members {
+            let matcher = UriTemplate::parse(route.uri.as_ref()).unwrap_or_else(|error| {
+                panic!(
+                    "invalid MCP resource URI template `{}` in `{service}`: {error}",
+                    route.uri
+                )
+            });
+            if let Some(previous) = owners.insert(matcher.raw().to_string(), service) {
+                panic!(
+                    "duplicate MCP resource URI template `{}`: registered by both `{previous}` \
+                     and `{service}` — resource templates are global across services",
+                    matcher.raw()
+                );
+            }
+            routes.push(TemplateFamilyRoute { matcher, route });
+            list.push(wire);
+            reqs.push(req);
+        }
+        let filter = filter && reqs.iter().any(|r| !r.is_empty());
+        Self {
+            routes,
+            list,
+            reqs,
+            filter,
+        }
+    }
+
+    fn visible_list(&self, context: &RequestContext<RoleServer>) -> Vec<ResourceTemplate> {
+        if !self.filter {
+            return self.list.clone();
+        }
+        let principal = context
+            .extensions
+            .get::<Parts>()
+            .and_then(|parts| parts.extensions.get::<McpPrincipal>());
+        self.list
+            .iter()
+            .zip(self.reqs.iter())
+            .filter(|(_, req)| requirements_visible(principal, req))
+            .map(|(wire, _)| wire.clone())
+            .collect()
+    }
+
+    fn route(&self, uri: &str) -> Option<(&ResourceRoute, BTreeMap<String, String>)> {
+        self.routes.iter().find_map(|entry| {
+            entry
+                .matcher
+                .captures(uri)
+                .map(|variables| (&entry.route, variables))
+        })
+    }
 }
 
 impl<R, W: Clone> Family<R, W> {
@@ -118,6 +203,7 @@ pub(crate) struct McpRuntime {
     info: ServerInfo,
     tools: Family<ToolRoute, Tool>,
     resources: Family<ResourceRoute, Resource>,
+    resource_templates: TemplateFamily,
     prompts: Family<PromptRoute, Prompt>,
 }
 
@@ -137,6 +223,7 @@ impl McpRuntime {
     ) -> Self {
         let mut tool_members = Vec::new();
         let mut resource_members = Vec::new();
+        let mut resource_template_members = Vec::new();
         let mut prompt_members = Vec::new();
         for service in services {
             let name = service.name;
@@ -157,13 +244,22 @@ impl McpRuntime {
                     &resource.uri,
                     &resource.requirements,
                 );
-                resource_members.push((
-                    name,
-                    resource.uri.to_string(),
-                    resource.requirements,
-                    resource.to_rmcp_resource(),
-                    resource,
-                ));
+                if resource.is_template() {
+                    resource_template_members.push((
+                        name,
+                        resource.requirements,
+                        resource.to_rmcp_resource_template(),
+                        resource,
+                    ));
+                } else {
+                    resource_members.push((
+                        name,
+                        resource.uri.to_string(),
+                        resource.requirements,
+                        resource.to_rmcp_resource(),
+                        resource,
+                    ));
+                }
             }
             for prompt in service.routes.prompts {
                 require_auth_for_scopes(auth_enabled, "prompt", &prompt.name, &prompt.requirements);
@@ -178,6 +274,7 @@ impl McpRuntime {
         }
         let tools = Family::build("tool name", filter_members, tool_members);
         let resources = Family::build("resource URI", filter_members, resource_members);
+        let resource_templates = TemplateFamily::build(filter_members, resource_template_members);
         let prompts = Family::build("prompt name", filter_members, prompt_members);
 
         let mut info = ServerInfo::default();
@@ -185,8 +282,10 @@ impl McpRuntime {
         // resources/prompts only when at least one exists — the typestate
         // builder cannot enable conditionally, so set the pub fields.
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
-        if !resources.list.is_empty() {
-            capabilities.resources = Some(Default::default());
+        if !resources.list.is_empty() || !resource_templates.list.is_empty() {
+            let mut resource_capabilities = rmcp::model::ResourcesCapability::default();
+            resource_capabilities.subscribe = Some(true);
+            capabilities.resources = Some(resource_capabilities);
         }
         if !prompts.list.is_empty() {
             capabilities.prompts = Some(Default::default());
@@ -199,6 +298,7 @@ impl McpRuntime {
             info,
             tools,
             resources,
+            resource_templates,
             prompts,
         }
     }
@@ -208,11 +308,22 @@ impl McpRuntime {
     }
 
     pub(crate) fn resource_count(&self) -> usize {
-        self.resources.list.len()
+        self.resources.list.len() + self.resource_templates.list.len()
     }
 
     pub(crate) fn prompt_count(&self) -> usize {
         self.prompts.list.len()
+    }
+
+    fn resource_route(&self, uri: &str) -> Option<(&ResourceRoute, BTreeMap<String, String>)> {
+        self.resources
+            .route(uri)
+            .map(|route| (route, BTreeMap::new()))
+            .or_else(|| self.resource_templates.route(uri))
+    }
+
+    fn has_resource(&self, uri: &str) -> bool {
+        self.resource_route(uri).is_some()
     }
 }
 
@@ -241,14 +352,21 @@ fn take_parts(context: &mut RequestContext<RoleServer>) -> Option<Arc<Parts>> {
 
 /// The `ServerHandler` handed to rmcp's streamable-HTTP service. Cheap to
 /// clone (one `Arc`); the transport's session factory clones it per session.
-#[derive(Clone)]
 pub(crate) struct R2eMcpHandler {
     rt: Arc<McpRuntime>,
+    updates: McpResourceUpdates,
+    legacy_subscriptions: Arc<RwLock<HashSet<String>>>,
+    legacy_forwarder_started: AtomicBool,
 }
 
 impl R2eMcpHandler {
-    pub(crate) fn new(rt: Arc<McpRuntime>) -> Self {
-        R2eMcpHandler { rt }
+    pub(crate) fn new(rt: Arc<McpRuntime>, updates: McpResourceUpdates) -> Self {
+        R2eMcpHandler {
+            rt,
+            updates,
+            legacy_subscriptions: Arc::new(RwLock::new(HashSet::new())),
+            legacy_forwarder_started: AtomicBool::new(false),
+        }
     }
 }
 
@@ -317,12 +435,22 @@ impl ServerHandler for R2eMcpHandler {
         ))
     }
 
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        Ok(ListResourceTemplatesResult::with_all_items(
+            self.rt.resource_templates.visible_list(&context),
+        ))
+    }
+
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
-        let Some(route) = self.rt.resources.route(request.uri.as_str()) else {
+        let Some((route, variables)) = self.rt.resource_route(request.uri.as_str()) else {
             // Unknown resource URI has its own JSON-RPC code per the spec.
             return Err(ErrorData::new(
                 ErrorCode::RESOURCE_NOT_FOUND,
@@ -333,6 +461,7 @@ impl ServerHandler for R2eMcpHandler {
 
         let call = ResourceCall {
             uri: request.uri,
+            variables,
             parts: take_parts(&mut context),
             request_id: context.id.to_string(),
             cancel: context.ct.into(),
@@ -346,6 +475,118 @@ impl ServerHandler for R2eMcpHandler {
             // JSON-RPC error (`McpError::Tool` degrades to internal).
             Err(err) => Err(err.into_error_data()),
         }
+    }
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        let mut accepted = requested.supported_by(&self.rt.info.capabilities);
+        if let Some(uris) = accepted.resource_subscriptions.as_mut() {
+            uris.retain(|uri| self.rt.has_resource(uri));
+            if uris.is_empty() {
+                accepted.resource_subscriptions = None;
+            }
+        }
+        Some(accepted)
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        let mut updates = self.updates.subscribe();
+        loop {
+            r2e_core::rt::select! {
+                _ = context.cancelled() => return Ok(()),
+                update = updates.recv() => match update {
+                    Ok(uri) => {
+                        if context.accepted().resource_subscriptions.as_ref()
+                            .is_some_and(|uris| uris.contains(&uri))
+                            && context.sink().notify_resource_updated(uri).await.is_err()
+                        {
+                            return Ok(());
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return Ok(()),
+                }
+            }
+        }
+    }
+
+    #[allow(deprecated)]
+    async fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        if !self.rt.has_resource(&request.uri) {
+            return Err(ErrorData::new(
+                ErrorCode::RESOURCE_NOT_FOUND,
+                format!("unknown resource: {}", request.uri),
+                None,
+            ));
+        }
+        self.legacy_subscriptions
+            .write()
+            .expect("MCP subscription lock poisoned")
+            .insert(request.uri);
+
+        if !self.legacy_forwarder_started.swap(true, Ordering::AcqRel) {
+            let subscriptions = Arc::downgrade(&self.legacy_subscriptions);
+            let mut updates = self.updates.subscribe();
+            let peer = context.peer;
+            r2e_core::rt::spawn(async move {
+                loop {
+                    let update = r2e_core::rt::select! {
+                        update = updates.recv() => update,
+                        _ = r2e_core::rt::sleep(std::time::Duration::from_secs(30)) => {
+                            if subscriptions.strong_count() == 0 {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    match update {
+                        Ok(uri) => {
+                            let Some(subscriptions) = subscriptions.upgrade() else {
+                                break;
+                            };
+                            if subscriptions
+                                .read()
+                                .expect("MCP subscription lock poisoned")
+                                .contains(&uri)
+                            {
+                                #[allow(deprecated)]
+                                if peer
+                                    .notify_resource_updated(ResourceUpdatedNotificationParam::new(
+                                        uri,
+                                    ))
+                                    .await
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+        Ok(())
+    }
+
+    #[allow(deprecated)]
+    async fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.legacy_subscriptions
+            .write()
+            .expect("MCP subscription lock poisoned")
+            .remove(&request.uri);
+        Ok(())
     }
 
     async fn list_prompts(
