@@ -444,6 +444,53 @@ applies everywhere `#[config]` is accepted — `#[producer]`/`#[bean]` params,
 `#[derive(Bean)]`/`#[derive(DecoratorBean)]`/`#[derive(BackgroundService)]`
 fields, and `#[controller]` fields.
 
+### Async constructors are NOT `Send`-bound
+
+`AsyncBean::build` and `Producer::produce` return `impl Future<Output = _> + '_`
+— deliberately **without** `+ Send`. The bean graph is resolved in place on the
+boot thread (`build_state()` / `TestApp::boot` / `r2e::launch` await it, nothing
+spawns it), so a constructor may hold a `!Send` value across an `.await`:
+
+```rust
+#[bean]
+impl Svc {
+    pub async fn new(pool: PgPool) -> Self {
+        let mut tx = pool.begin().await.unwrap();
+        run_migration_step(&mut tx).await;   // generic over sqlx `Acquire` — fine
+        tx.commit().await.unwrap();
+        Self
+    }
+}
+```
+
+This used to be `+ Send`. Because an auto-trait bound on an RPITIT is checked
+for *all* lifetimes, it rejected ordinary sqlx bodies — anything reborrowing a
+transaction into an `Acquire`/`Executor`-generic helper — with:
+
+```
+error: lifetime bound not satisfied
+  --> src/beans.rs:18:1
+   |
+18 | #[producer]
+   | ^^^^^^^^^^^
+   |
+   = note: this is a known limitation that will be removed in the future
+           (see issue #100013 <https://github.com/rust-lang/rust/issues/100013>)
+```
+
+older rustc rendered the same thing as `implementation of `Executor` is not
+general enough … `Executor<'1>` would have to be implemented for the type
+`&'0 mut PgConnection`, for any two lifetimes `'0` and `'1``. If you see either
+message, you do **not** need a `spawn_blocking` + `block_on` workaround — write
+the body normally. `Plugin::build` has the same (unbounded) shape.
+
+The one place a constructor future still crosses threads is a **lazy** bean
+(`#[bean(lazy)]`) resolved from a sharded worker: its *factory closure* is
+`Send + Sync` and runs on a dedicated `r2e-lazy-bean` thread that enters the
+control-plane runtime, so the future itself stays `!Send`-friendly — but
+`rt::block_in_place` inside a lazy constructor panics there; use
+`rt::spawn_blocking`.
+
 ### Assembly — state is inferred
 
 ```rust
