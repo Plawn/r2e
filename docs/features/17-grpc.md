@@ -266,11 +266,26 @@ AppBuilder::new()
     .serve("0.0.0.0:3000")  // HTTP et gRPC sur :3000
 ```
 
-Requests with `content-type: application/grpc*` are routed to the gRPC services; others go to the Axum HTTP router. Routing is handled by `MultiplexService`, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.
+Requests with `content-type: application/grpc` (`+proto`, `+json`, …) are routed to the gRPC services; `application/grpc-web*` to the grpc-web arm (see below); others go to the Axum HTTP router. Routing is handled by `MultiplexService`, a Tower service that inspects the content-type header, mounted around the assembled HTTP router at build time.
 
 Since gRPC requires HTTP/2, plaintext clients must use h2c prior knowledge (tonic's default); the HTTP server accepts both HTTP/1.1 and h2c on the shared port.
 
 Use this when infrastructure constraints require a single port (e.g., certain PaaS environments).
+
+### grpc-web (browser clients)
+
+Browser clients (grpc-web, connect-web) speak grpc-web, not gRPC: HTTP/1.1 or HTTP/2, an optional base64 `-text` encoding, and the trailers folded into a final body frame. By default the multiplexer answers `application/grpc-web*` requests with `415 Unsupported Media Type` and logs a warning at boot — never a garbled raw-gRPC response.
+
+Enable it with the `grpc-web` feature (`web` on `r2e-grpc`) and `with_grpc_web()`:
+
+```rust
+AppBuilder::new()
+    .plugin(GrpcServer::multiplexed().with_grpc_web())
+```
+
+The grpc-web arm is `tonic-web` around the same registered routes (interceptors, guards, and reflection included), fronted by a CORS layer. The default policy allows any origin, `POST`/`OPTIONS`, mirrors the requested headers, exposes `grpc-status` / `grpc-message` / `grpc-status-details-bin`, and caches preflights for 24h. Bring your own with `with_grpc_web_cors(CorsLayer)` (a `tower_http::cors::CorsLayer`). grpc-web preflights — `OPTIONS` whose `access-control-request-headers` names `x-grpc-web` — are routed to that layer, so the app needs no `Cors` plugin for browser gRPC; other preflights keep going to the HTTP router.
+
+`with_grpc_web()` is only honoured by the multiplexed transport; on `on_port` it is ignored with a boot warning. With the feature off nothing changes (no `tonic-web` dependency, 415 as before).
 
 ## Combining HTTP and gRPC
 
@@ -378,6 +393,7 @@ After generation, you need to:
 |-------------|-------------|
 | `GrpcServer::on_port(addr)` | gRPC on a separate port |
 | `GrpcServer::multiplexed()` | gRPC and HTTP on the same port |
+| `.with_grpc_web()` / `.with_grpc_web_cors(cors)` | grpc-web (tonic-web) on the multiplexed port, feature `grpc-web` |
 
 | Method | Description |
 |--------|-------------|
