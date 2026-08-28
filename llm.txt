@@ -3125,6 +3125,13 @@ b.plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())  // separate po
  .register_grpc_service::<GreeterService>()       // deps + config keys checked here
 ```
 
+`GrpcServer::multiplexed()` serves gRPC and HTTP on the **same** port, routing
+by `content-type` (`application/grpc*` → tonic, everything else → the HTTP
+router). **grpc-web is NOT supported** in that mode: there is no `tonic-web`
+translation layer, so an `application/grpc-web*` request is answered with
+`415 Unsupported Media Type` (and the plugin logs a warning at boot). Use a
+native gRPC client, or put a grpc-web proxy (Envoy, …) in front.
+
 `register_grpc_service` panics on a missing key;
 `try_register_grpc_service::<S>()` (same trait) returns
 `Result<Self, ConfigValidationError>` for callers that want to report the
