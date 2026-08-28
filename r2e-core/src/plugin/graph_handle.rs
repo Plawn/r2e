@@ -34,7 +34,8 @@ use super::{Plugin, PluginBuildContext};
 ///   after an `.await` — or a streaming body producing frames long after the
 ///   handler returned — still sees it;
 /// - **every tracked task**: `ServeContext::track`, `spawn_service`, the
-///   scheduler driver and the QUIC drain move an `Arc` *into* the task.
+///   scheduler driver, the QUIC drain and every upgraded WebSocket session
+///   (through `WsSessions`) move an `Arc` *into* the task.
 ///   `run()` cancels the shutdown token and joins those handles on every exit
 ///   it controls — normal shutdown *and* the aborts (a startup hook returning
 ///   `Err`, a serve error) — but that join is still bounded by
@@ -52,9 +53,10 @@ use super::{Plugin, PluginBuildContext};
 ///   failed (see [`fill`](Self::fill));
 /// - **graph already dropped** — the app that owned it is gone (a handle kept
 ///   by hand past the app is the usual way to hit this);
-/// - **a WebSocket session still running after `run()` returned** — upgraded
-///   connections are detached from graceful shutdown and are not tracked, so
-///   resolve what a session needs before entering its socket loop;
+/// - **a WebSocket session on a router served outside `run()`** — a session on
+///   a served app is a tracked task and owns the graph like any other, but a
+///   router handed to `axum::serve` by hand (or a `TestApp`) never arms
+///   `WsSessions`, so such a session runs detached and untracked;
 /// - **an `r2e dev` hot patch, once the previous cycle has fully wound down** —
 ///   dropping the old `run()` future cancels that cycle's shutdown token, so
 ///   its tracked tasks stop; each keeps *its own* cycle's graph alive until it
