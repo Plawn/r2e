@@ -244,10 +244,11 @@ fn drain_timeout_unbounded_yields_no_bound() {
 }
 
 #[test]
-fn invalid_config_drain_timeout_falls_back_to_the_default() {
-    // An unparseable budget must never silently mean "unbounded".
-    let app = prepare_with_yaml("server:\n  drain-timeout: nonsense\n");
-    assert_eq!(app.drain_timeout(), Some(DEFAULT_DRAIN_TIMEOUT));
+#[should_panic(expected = "server.drain-timeout")]
+fn invalid_config_drain_timeout_fails_the_boot() {
+    // An unparseable budget is a boot error, never a silent default (and never
+    // "unbounded").
+    let _ = prepare_with_yaml("server:\n  drain-timeout: nonsense\n");
 }
 
 // ── `drain_timeout` bounds the HTTP drain ───────────────────────────────────

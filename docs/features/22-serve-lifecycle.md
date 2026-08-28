@@ -42,7 +42,7 @@ Consequences worth spelling out:
 - **`shutdown_grace_period` is per handle, not for the whole phase.** One service that ignores its token costs one grace period, not the budget of everything registered after it, and phase 4 as a whole still costs at most one grace period because the handles are joined concurrently.
 - **The warning names the culprit.** Handles carry a label: `spawn_service::<C>()` uses `C`'s type name, `ServeContext::track_named(name, fut)` uses the name you give, a generated `#[ws(...)]` session uses `ws:<Controller>::<method>`, plain `track(fut)` shows `<unnamed>`.
 - **`drain_timeout` is measured from cancellation**, not from `serve()` — the clock starts when the listener stops accepting.
-- **The drain is bounded by default (30s).** An app that never mentions `drain_timeout` still terminates: the default matches Spring's `spring.lifecycle.timeout-per-shutdown-phase`. Precedence is `.drain_timeout(d)` / `.drain_timeout_unbounded()` > `server.drain-timeout` > 30s, and an unparseable config value logs an error and falls back to 30s rather than becoming unbounded.
+- **The drain is bounded by default (30s).** An app that never mentions `drain_timeout` still terminates: the default matches Spring's `spring.lifecycle.timeout-per-shutdown-phase`. Precedence is `.drain_timeout(d)` / `.drain_timeout_unbounded()` > `server.drain-timeout` > 30s, and an unparseable config value fails the boot (like any other invalid `server.*` value) rather than silently becoming something else.
 
 ```yaml
 server:

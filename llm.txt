@@ -922,7 +922,8 @@ belongs. `drain_timeout` is measured from cancellation (the moment the listener
 stops accepting), not from `serve()`. It is **bounded by default (30 seconds)**
 — an app that never mentions it still finishes shutting down. Precedence:
 `.drain_timeout(d)` / `.drain_timeout_unbounded()` > the `server.drain-timeout`
-config key (a duration: `30`, `"30s"`, `"500ms"`, `"2m"`) > 30s. There is no
+config key (a duration: `30`, `"30s"`, `"500ms"`, `"2m"`; an unparseable
+value fails the boot) > 30s. There is no
 config value meaning "unbounded": dropping the bound (and accepting that one
 open SSE stream can hang the process forever) is a deliberate code decision,
 `.drain_timeout_unbounded()`. Under sharded serving (`server.workers`)
