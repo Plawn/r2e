@@ -55,7 +55,7 @@ use super::{Plugin, PluginBuildContext};
 ///   by hand past the app is the usual way to hit this);
 /// - **a WebSocket session on a router served outside `run()`** — a session on
 ///   a served app is a tracked task and owns the graph like any other, but a
-///   router handed to `axum::serve` by hand (or a `TestApp`) never arms
+///   router served by hand (or a `TestApp`) never arms
 ///   `WsSessions`, so such a session runs detached and untracked;
 /// - **an `r2e dev` hot patch, once the previous cycle has fully wound down** —
 ///   dropping the old `run()` future cancels that cycle's shutdown token, so

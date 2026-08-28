@@ -332,7 +332,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // (owner 2) — so a session holds the graph, is joined after the HTTP
         // drain under its own `shutdown_grace_period`, and is told to close by
         // the shutdown token. What is left is a session in an app served
-        // OUTSIDE `run()` (a bare router handed to `axum::serve`, a
+        // OUTSIDE `run()` (a bare router served by hand, a
         // `TestApp`): the registry is unarmed there, the session runs inline
         // in axum's detached task, and the old advice stands — resolve what it
         // needs before its socket loop. See `docs/claude/plugins.md`
