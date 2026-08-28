@@ -128,6 +128,7 @@ form_urlencoded = "1"
 chrono = "0.4"
 dashmap = "6"
 url = "2"
+percent-encoding = "2"
 base64 = "0.22"
 dotenvy = "0.15"
 

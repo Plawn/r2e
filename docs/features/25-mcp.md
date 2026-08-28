@@ -480,13 +480,16 @@ the complete wiring pattern; protocol and auth edge cases live in
 
 For a real RS256/JWKS path without Docker, run the embedded `r2e-oidc` plugin
 as the issuer: register the MCP client with
-`ClientRegistry::add_public_client`, configure the audience to the MCP
-resource, and the local `/oauth/authorize` + `/oauth/token` endpoints run
-Authorization Code + PKCE S256 end to end. The token endpoint honors `scope`
+`ClientRegistry::add_public_client(...).with_scopes([...])`, configure the
+audience to the MCP resource, and the local `/oauth/authorize` +
+`/oauth/token` endpoints run Authorization Code + PKCE S256 end to end.
+Clients are fail-closed — a client without `with_scopes` can only get an empty
+scope, and anything outside its allowlist is rejected with `invalid_scope`.
+The token endpoint honors the allowlisted `scope`
 and accepts the matching RFC 8707
 `resource` indicator (`resource=http://localhost:3000/mcp` → token `aud` =
 the configured MCP resource). Any other resource is rejected with
-`invalid_target`, so a shared issuer cannot mint tokens for arbitrary APIs. A
+`invalid_target`, so a shared issuer cannot mint tokens for arbitrary APIs. An
 issued token then validates against `mcp.auth.issuer:
 http://localhost:<port>` end to end. For a same-process issuer, pass
 `oidc.claims_validator()` through `McpTokenValidator::jwt(...)` and set MCP

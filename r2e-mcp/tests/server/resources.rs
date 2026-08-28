@@ -170,6 +170,113 @@ async fn uri_templates_are_listed_separately_and_capture_variables() {
     assert_eq!(read["result"]["contents"][0]["text"], "user:42:full");
 }
 
+#[controller]
+struct NestedTemplateResources;
+
+#[mcp_routes]
+impl NestedTemplateResources {
+    /// A more specific template registered AFTER the broad one.
+    #[resource(uri = "r2e://users/{id}/posts/{post}", mime_type = "text/plain")]
+    async fn post(&self, call: ResourceCall) -> String {
+        format!("post:{}:{}", call.variables["id"], call.variables["post"])
+    }
+
+    /// Reserved expansion: the only form that may span `/`.
+    #[resource(uri = "r2e://files/{+path}", mime_type = "text/plain")]
+    async fn file(&self, call: ResourceCall) -> String {
+        format!("file:{}", call.variables["path"])
+    }
+}
+
+async fn nested_template_app() -> Router {
+    AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<TemplateResources>()
+        .register_mcp_service::<NestedTemplateResources>()
+        .build()
+}
+
+#[r2e_core::test]
+async fn simple_template_variables_stop_at_reserved_characters() {
+    let router = nested_template_app().await;
+    let session = support::initialize(&router, "/mcp").await;
+
+    // `{id}` is a level-1 expansion: it never contains `/`, so the broad
+    // template does not shadow the nested one registered after it.
+    let read = support::resources_read(&router, "/mcp", &session, "r2e://users/1/posts/2").await;
+    assert_eq!(read["result"]["contents"][0]["text"], "post:1:2", "{read}");
+
+    // Trailing garbage after a simple variable is not swallowed either.
+    let read = support::resources_read(&router, "/mcp", &session, "r2e://users/1/x").await;
+    assert_eq!(read["error"]["code"], -32002, "{read}");
+
+    // `{+path}` is the reserved form: it does span segments.
+    let read = support::resources_read(&router, "/mcp", &session, "r2e://files/a/b/c.txt").await;
+    assert_eq!(read["result"]["contents"][0]["text"], "file:a/b/c.txt", "{read}");
+}
+
+#[r2e_core::test]
+async fn template_variables_are_percent_decoded() {
+    let router = template_app().await;
+    let session = support::initialize(&router, "/mcp").await;
+    let read = support::resources_read(
+        &router,
+        "/mcp",
+        &session,
+        "r2e://users/a%2Fb?view=caf%C3%A9",
+    )
+    .await;
+    assert_eq!(read["result"]["contents"][0]["text"], "user:a/b:café", "{read}");
+    // The echoed URI stays as the client sent it.
+    assert_eq!(
+        read["result"]["contents"][0]["uri"],
+        "r2e://users/a%2Fb?view=caf%C3%A9"
+    );
+}
+
+#[r2e_core::test]
+async fn form_style_template_variables_are_optional() {
+    let router = template_app().await;
+    let session = support::initialize(&router, "/mcp").await;
+    // RFC 6570: an undefined `{?view}` expands to nothing, so the bare URI
+    // matches with `view` captured as empty.
+    let read = support::resources_read(&router, "/mcp", &session, "r2e://users/42").await;
+    assert_eq!(read["result"]["contents"][0]["text"], "user:42:", "{read}");
+    // A query pair the template does not declare is foreign to it.
+    let read = support::resources_read(&router, "/mcp", &session, "r2e://users/42?page=2").await;
+    assert_eq!(read["error"]["code"], -32002, "{read}");
+}
+
+#[controller]
+struct RenamedTemplateResources;
+
+#[mcp_routes]
+impl RenamedTemplateResources {
+    /// Same shape as `TemplateResources::user` with the positional variable
+    /// renamed (`{?view}` stays: query names are part of the wire, so
+    /// `{?mode}` would be a genuinely different template).
+    #[resource(uri = "r2e://users/{uid}{?view}", mime_type = "text/plain")]
+    async fn user(&self, call: ResourceCall) -> String {
+        call.variables["uid"].clone()
+    }
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "duplicate MCP resource URI template")]
+async fn duplicate_template_shape_across_services_panics_at_boot() {
+    // `{id}` vs `{uid}` match exactly the same URIs: textual comparison
+    // would let the first registered silently shadow the second.
+    let _ = AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<TemplateResources>()
+        .register_mcp_service::<RenamedTemplateResources>()
+        .build();
+}
+
 #[r2e_core::test]
 async fn resource_capability_advertises_subscriptions() {
     let router = template_app().await;

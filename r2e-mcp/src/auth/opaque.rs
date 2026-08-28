@@ -173,16 +173,26 @@ impl TokenCache {
                 .and_then(Weak::upgrade)
                 .filter(|flight| flight.token == bearer)
             {
-                Some(flight) => flight,
+                Some(flight) => Some(flight),
+                // Hard bound: with `max_entries` distinct tokens genuinely in
+                // flight, a new one validates on its own instead of growing
+                // the table (it just loses coalescing).
+                None if flights.len() >= self.max_entries => None,
                 None => {
                     let flight = Arc::new(InFlight {
                         token: bearer.to_owned(),
                         result: OnceCell::new(),
                     });
                     flights.insert(hash, Arc::downgrade(&flight));
-                    flight
+                    Some(flight)
                 }
             }
+        };
+        let Some(flight) = flight else {
+            return match self.get(hash, bearer) {
+                Some(cached) => cached,
+                None => validate().await,
+            };
         };
 
         let result = flight

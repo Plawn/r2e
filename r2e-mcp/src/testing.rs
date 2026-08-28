@@ -35,8 +35,12 @@ use crate::auth::{McpTokenValidator, ScopePolicy};
 ///   [`override_bean`](AppBuilder::override_bean) is picked up, not shadowed).
 /// - `mcp.auth.issuer` / `mcp.auth.resource` — match the `TestJwt`'s claims
 ///   (call with `TestJwt::for_resource(resource)` so `aud` lines up).
-/// - `mcp.auth.discovery: off` — fixed metadata, with no discovery or JWKS
-///   network I/O because the pinned validator replaces the JWT backend.
+/// - `mcp.auth.discovery: off` + a dummy `mcp.auth.jwks-url` — fixed
+///   metadata, no discovery I/O. The plugin only sees validators passed via
+///   `McpServer::with_token_validator` at build time (a pinned bean is
+///   resolved later, in `after_build`), so the JWKS URL stays mandatory here;
+///   it points at `127.0.0.1:1` so an accidental fetch fails instantly
+///   instead of hanging.
 /// - `mcp.auth.allow-insecure: true` — the `r2e-test` issuer is not an
 ///   `https://` URL.
 ///
@@ -56,5 +60,8 @@ pub fn pin_mcp_validator<P, R, Mods>(
         .override_config_value("mcp.auth.issuer", jwt.issuer())
         .override_config_value("mcp.auth.resource", resource)
         .override_config_value("mcp.auth.discovery", "off")
+        // Never fetched (the pinned bean replaces the lazy JWT backend), but
+        // `discovery: off` + JWT validation requires it at build time.
+        .override_config_value("mcp.auth.jwks-url", "http://127.0.0.1:1/jwks")
         .override_config_value("mcp.auth.allow-insecure", true)
 }

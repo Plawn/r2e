@@ -1,12 +1,138 @@
-//! Per-tool authorization over the wire: `tools/list` filtering and denial shapes.
+//! Per-tool authorization: `check_access`/`requirements_visible` unit matrix,
+//! then the end-to-end story — `tools/list` filtering and denial shapes over
+//! the wire.
 
+use r2e_core::http::Extensions;
+use r2e_mcp::auth::tools::{check_access, requirements_visible};
 use r2e_mcp::auth::McpAuthConfig;
+use r2e_mcp::{McpError, McpPrincipal, ToolRequirements};
 use serde_json::json;
 
 use crate::fixtures::{
-    initialize_auth, offline_auth, rpc_auth, secured_app, secured_app_with, test_jwt, tool_names,
-    tools_call_auth, tools_list_auth,
+    initialize_auth, offline_auth, pinned, rpc_auth, secured_app, secured_app_with, test_jwt,
+    tool_names, tools_call_auth, tools_list_auth,
 };
+
+// ── Unit matrix ────────────────────────────────────────────────────────────
+
+/// A real principal (AuthenticatedUser is not literal-constructible): mint a
+/// token and run it through the pinned validator.
+async fn principal(scopes: &[&str], roles: &[&str]) -> McpPrincipal {
+    let jwt = test_jwt();
+    let token = jwt.token_builder("alice").scopes(scopes).roles(roles).build();
+    pinned(&jwt).validate(&token).await.expect("valid fixture token")
+}
+
+fn ext_with<T: Clone + Send + Sync + 'static>(value: T) -> Extensions {
+    let mut ext = Extensions::new();
+    ext.insert(value);
+    ext
+}
+
+const READ: ToolRequirements = ToolRequirements {
+    scopes: &["mcp:read"],
+    ..ToolRequirements::NONE
+};
+
+#[tokio::test]
+async fn check_access_unit_matrix() {
+    let ext = ext_with(principal(&["mcp:read"], &[]).await);
+
+    // No scope requirements → allowed with or without any extensions.
+    assert!(check_access(None, "tool", "t", &ToolRequirements::NONE).is_ok());
+    // Requirements but no principal (auth disabled or layer bypassed) → fail closed.
+    match check_access(Some(&Extensions::new()), "tool", "t", &READ) {
+        Err(McpError::Unauthorized(msg)) => {
+            assert_eq!(msg, "tool `t` requires an authenticated caller")
+        }
+        other => panic!("expected Unauthorized, got {other:?}"),
+    }
+    // Held scope → ok; the member kind only flavours the message.
+    assert!(check_access(Some(&ext), "tool", "t", &READ).is_ok());
+    // Missing scopes are named, joined, with re-authorize guidance.
+    let all = ToolRequirements {
+        scopes: &["mcp:read", "mcp:write", "mcp:admin"],
+        ..ToolRequirements::NONE
+    };
+    match check_access(Some(&ext), "resource", "r", &all) {
+        Err(McpError::Forbidden(msg)) => assert_eq!(
+            msg,
+            "resource `r` requires scope(s) `mcp:write, mcp:admin` that the token does not \
+             carry; re-authorize requesting them"
+        ),
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+    // any_scopes: one match suffices; none → denial names the alternatives.
+    let any = ToolRequirements {
+        any_scopes: &["mcp:admin", "mcp:read"],
+        ..ToolRequirements::NONE
+    };
+    assert!(check_access(Some(&ext), "tool", "t", &any).is_ok());
+    let any_miss = ToolRequirements {
+        any_scopes: &["mcp:admin", "mcp:write"],
+        ..ToolRequirements::NONE
+    };
+    match check_access(Some(&ext), "prompt", "p", &any_miss) {
+        Err(McpError::Forbidden(msg)) => assert_eq!(
+            msg,
+            "prompt `p` requires at least one of the scopes `mcp:admin, mcp:write`; \
+             re-authorize requesting one"
+        ),
+        other => panic!("expected Forbidden, got {other:?}"),
+    }
+    // Roles are NOT check_access's job (the shared guard enforces them):
+    // a role-only requirement passes here even without a principal.
+    let admin_req = ToolRequirements {
+        roles: &["admin"],
+        ..ToolRequirements::NONE
+    };
+    assert!(check_access(Some(&Extensions::new()), "tool", "t", &admin_req).is_ok());
+}
+
+#[tokio::test]
+async fn requirements_visible_covers_scopes_and_roles() {
+    let admin_req = ToolRequirements {
+        roles: &["admin"],
+        ..ToolRequirements::NONE
+    };
+    // Roles ARE part of visibility (unlike check_access, which leaves role
+    // enforcement to the guard).
+    let admin = principal(&[], &["admin"]).await;
+    let plain = principal(&["mcp:read"], &[]).await;
+    assert!(requirements_visible(Some(&admin), &admin_req));
+    assert!(!requirements_visible(Some(&plain), &admin_req));
+    assert!(requirements_visible(Some(&plain), &READ));
+    assert!(!requirements_visible(Some(&admin), &READ));
+    // Unrestricted → always visible; no principal → restricted members hidden.
+    assert!(requirements_visible(None, &ToolRequirements::NONE));
+    assert!(!requirements_visible(None, &admin_req));
+    assert!(!requirements_visible(None, &READ));
+    // any_scopes: one held scope suffices.
+    let any = ToolRequirements {
+        any_scopes: &["mcp:admin", "mcp:read"],
+        ..ToolRequirements::NONE
+    };
+    assert!(requirements_visible(Some(&plain), &any));
+    assert!(!requirements_visible(Some(&admin), &any));
+    // all_roles: every entry required.
+    let all_roles = ToolRequirements {
+        all_roles: &["admin", "auditor"],
+        ..ToolRequirements::NONE
+    };
+    assert!(!requirements_visible(Some(&admin), &all_roles));
+    let both = principal(&[], &["admin", "auditor"]).await;
+    assert!(requirements_visible(Some(&both), &all_roles));
+    // Scopes and roles combine with AND.
+    let scoped_admin = ToolRequirements {
+        scopes: &["mcp:read"],
+        roles: &["admin"],
+        ..ToolRequirements::NONE
+    };
+    assert!(!requirements_visible(Some(&admin), &scoped_admin));
+    assert!(!requirements_visible(Some(&plain), &scoped_admin));
+    let full = principal(&["mcp:read"], &["admin"]).await;
+    assert!(requirements_visible(Some(&full), &scoped_admin));
+}
 
 // ── End-to-end over the wire ───────────────────────────────────────────────
 

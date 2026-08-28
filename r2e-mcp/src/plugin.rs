@@ -401,7 +401,7 @@ impl Plugin for McpServer {
             transport_config.json_response = json_response;
             // The ONLY tokio-util seam: the field is a `CancellationToken`,
             // filled through `From<CancelToken>` without naming the type.
-            transport_config.cancellation_token = mcp_cancel.into();
+            transport_config.cancellation_token = mcp_cancel.clone().into();
             transport_config.allowed_origins = allowed_origins;
             if let Some(hosts) = allowed_hosts {
                 transport_config.allowed_hosts = hosts;
@@ -414,6 +414,7 @@ impl Plugin for McpServer {
                     Ok(R2eMcpHandler::new(
                         runtime.clone(),
                         resource_updates.clone(),
+                        mcp_cancel.clone(),
                     ))
                 },
                 session_manager,

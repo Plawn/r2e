@@ -149,3 +149,44 @@ async fn facade_testing_wiring_challenges_then_authenticates(app: TestApp) {
     let message = call_add(&app, &session, Some(&token)).await;
     assert_eq!(message["result"]["structuredContent"]["value"], 5.0);
 }
+
+async fn call_clear_log(app: &TestApp, session: &str, api_key: Option<&str>) -> Value {
+    let mut request = app
+        .post("/mcp")
+        .header("host", "localhost")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", session)
+        .json(&json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "clear_log", "arguments": {} }
+        }));
+    if let Some(api_key) = api_key {
+        request = request.header("x-api-key", api_key);
+    }
+    let response = request.send().await;
+    response.assert_ok();
+    response_message(response)
+}
+
+#[r2e::test(app = McpApp)]
+async fn method_level_http_guard_gates_the_tool(app: TestApp) {
+    // `clear_log` carries `#[guard(ApiKeyGuard)]`: the guard reads the HTTP
+    // headers of the transport request carrying the tool call, so the same
+    // guard type protects an MCP tool exactly like an HTTP route.
+    let (session, _) = initialize(&app, None).await;
+    call_add(&app, &session, None).await;
+
+    // Missing / wrong key → the guard's 403 surfaces as a JSON-RPC error,
+    // and the log is left untouched.
+    let denied = call_clear_log(&app, &session, None).await;
+    assert_eq!(denied["error"]["code"], -32600, "{denied}");
+    assert_eq!(denied["error"]["data"], "forbidden", "{denied}");
+    let denied = call_clear_log(&app, &session, Some("wrong")).await;
+    assert_eq!(denied["error"]["data"], "forbidden", "{denied}");
+
+    // Right key → the tool runs.
+    let cleared = call_clear_log(&app, &session, Some("letmein")).await;
+    assert!(cleared.get("error").is_none(), "{cleared}");
+    let text = cleared["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("cleared"), "{cleared}");
+}

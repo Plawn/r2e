@@ -134,16 +134,24 @@ fn build_deco_layout(def: &McpRoutesImplDef) -> McpDecoLayout {
         field
     };
 
+    // Impl-level sites are only built when at least one member exists —
+    // this MUST mirror `service_impl::site_exprs`, which feeds the
+    // `EndpointDeps` fold and `validate_config`: a product built here without
+    // its deps folded there turns a missing bean into a boot panic instead of
+    // a compile error at `register_mcp_service`.
+    let has_members = !def.members.is_empty();
     let controller_intercept_fields = def
         .controller_intercepts
         .iter()
         .enumerate()
+        .filter(|_| has_members)
         .map(|(i, expr)| add_site(format_ident!("__ctrl_i{}", i), expr))
         .collect();
     let controller_guard_fields = def
         .controller_guards
         .iter()
         .enumerate()
+        .filter(|_| has_members)
         .map(|(i, expr)| add_site(format_ident!("__ctrl_g{}", i), expr))
         .collect();
     let members = def

@@ -6088,6 +6088,7 @@ name = "r2e-mcp"
 version = "0.3.0"
 dependencies = [
  "http-body-util",
+ "percent-encoding",
  "r2e-core",
  "r2e-devservices",
  "r2e-security",

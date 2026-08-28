@@ -117,7 +117,8 @@ pub fn check_access(
 /// Visibility check when the caller principal has already been extracted.
 /// List handlers use this form so one request performs one extensions lookup,
 /// not one lookup per registered member.
-pub(crate) fn requirements_visible(
+#[doc(hidden)]
+pub fn requirements_visible(
     principal: Option<&McpPrincipal>,
     req: &ToolRequirements,
 ) -> bool {

@@ -25,6 +25,9 @@ r2e-security = { workspace = true }
 r2e-test = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["json", "form", "rustls"] }
 url = { workspace = true }
+# Reverse-matching RFC 6570 resource templates: captured variables are
+# percent-decoded before reaching `ResourceCall::variables`.
+percent-encoding = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 # `default-features = false`: rmcp's default `macros` feature is deliberately

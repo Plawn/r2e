@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 
 use r2e_core::http::Parts;
 use r2e_core::rt::sync::broadcast;
+use r2e_core::rt::CancelToken;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ErrorCode, ErrorData, GetPromptRequestParams,
@@ -89,10 +90,16 @@ impl TemplateFamily {
                     route.uri
                 )
             });
-            if let Some(previous) = owners.insert(matcher.raw().to_string(), service) {
+            // Keyed by shape, not text: `{id}` and `{uid}` match the same
+            // URIs and the first registered would silently shadow the other.
+            if let Some((previous_service, previous_raw)) =
+                owners.insert(matcher.shape(), (service, matcher.raw().to_string()))
+            {
                 panic!(
-                    "duplicate MCP resource URI template `{}`: registered by both `{previous}` \
-                     and `{service}` — resource templates are global across services",
+                    "duplicate MCP resource URI template `{}` (`{previous_raw}` in \
+                     `{previous_service}` matches the same URIs): registered by both \
+                     `{previous_service}` and `{service}` — resource templates are global \
+                     across services",
                     matcher.raw()
                 );
             }
@@ -355,17 +362,75 @@ fn take_parts(context: &mut RequestContext<RoleServer>) -> Option<Arc<Parts>> {
 pub(crate) struct R2eMcpHandler {
     rt: Arc<McpRuntime>,
     updates: McpResourceUpdates,
+    /// Transport-wide shutdown token (the plugin's `mcp_cancel`): ends the
+    /// legacy forwarder task with the sessions it serves.
+    shutdown: CancelToken,
     legacy_subscriptions: Arc<RwLock<HashSet<String>>>,
-    legacy_forwarder_started: AtomicBool,
+    /// Whether a forwarder task is currently alive for this session. Reset
+    /// by the task itself on exit, so a later `resources/subscribe` starts a
+    /// fresh one instead of silently succeeding with nothing delivering.
+    legacy_forwarder_alive: Arc<AtomicBool>,
 }
 
 impl R2eMcpHandler {
-    pub(crate) fn new(rt: Arc<McpRuntime>, updates: McpResourceUpdates) -> Self {
+    pub(crate) fn new(
+        rt: Arc<McpRuntime>,
+        updates: McpResourceUpdates,
+        shutdown: CancelToken,
+    ) -> Self {
         R2eMcpHandler {
             rt,
             updates,
+            shutdown,
             legacy_subscriptions: Arc::new(RwLock::new(HashSet::new())),
-            legacy_forwarder_started: AtomicBool::new(false),
+            legacy_forwarder_alive: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+/// Legacy (pre-2026-07-28) `resources/subscribe` delivery for one session:
+/// relays published updates whose URI is in the session's set to the peer.
+/// Ends with the transport (shutdown token / peer gone), when the session's
+/// handler is dropped, or on a delivery failure — never leaving a dead task
+/// counted as "alive".
+async fn forward_legacy_updates(
+    mut updates: broadcast::Receiver<String>,
+    subscriptions: std::sync::Weak<RwLock<HashSet<String>>>,
+    peer: rmcp::service::Peer<RoleServer>,
+    shutdown: CancelToken,
+) {
+    loop {
+        let update = r2e_core::rt::select! {
+            _ = shutdown.cancelled() => return,
+            update = updates.recv() => update,
+            _ = r2e_core::rt::sleep(std::time::Duration::from_secs(30)) => {
+                if subscriptions.strong_count() == 0 || peer.is_transport_closed() {
+                    return;
+                }
+                continue;
+            }
+        };
+        match update {
+            Ok(uri) => {
+                let Some(subscriptions) = subscriptions.upgrade() else {
+                    return;
+                };
+                let subscribed = subscriptions
+                    .read()
+                    .expect("MCP subscription lock poisoned")
+                    .contains(&uri);
+                #[allow(deprecated)]
+                if subscribed
+                    && peer
+                        .notify_resource_updated(ResourceUpdatedNotificationParam::new(uri))
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Closed) => return,
         }
     }
 }
@@ -530,47 +595,15 @@ impl ServerHandler for R2eMcpHandler {
             .expect("MCP subscription lock poisoned")
             .insert(request.uri);
 
-        if !self.legacy_forwarder_started.swap(true, Ordering::AcqRel) {
+        if !self.legacy_forwarder_alive.swap(true, Ordering::AcqRel) {
+            let alive = Arc::clone(&self.legacy_forwarder_alive);
             let subscriptions = Arc::downgrade(&self.legacy_subscriptions);
-            let mut updates = self.updates.subscribe();
+            let updates = self.updates.subscribe();
+            let shutdown = self.shutdown.clone();
             let peer = context.peer;
-            r2e_core::rt::spawn(async move {
-                loop {
-                    let update = r2e_core::rt::select! {
-                        update = updates.recv() => update,
-                        _ = r2e_core::rt::sleep(std::time::Duration::from_secs(30)) => {
-                            if subscriptions.strong_count() == 0 {
-                                break;
-                            }
-                            continue;
-                        }
-                    };
-                    match update {
-                        Ok(uri) => {
-                            let Some(subscriptions) = subscriptions.upgrade() else {
-                                break;
-                            };
-                            if subscriptions
-                                .read()
-                                .expect("MCP subscription lock poisoned")
-                                .contains(&uri)
-                            {
-                                #[allow(deprecated)]
-                                if peer
-                                    .notify_resource_updated(ResourceUpdatedNotificationParam::new(
-                                        uri,
-                                    ))
-                                    .await
-                                    .is_err()
-                                {
-                                    break;
-                                }
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => {}
-                        Err(broadcast::error::RecvError::Closed) => break,
-                    }
-                }
+            r2e_core::rt::spawn_ctl(async move {
+                forward_legacy_updates(updates, subscriptions, peer, shutdown).await;
+                alive.store(false, Ordering::Release);
             });
         }
         Ok(())
