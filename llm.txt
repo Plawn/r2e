@@ -22,7 +22,7 @@ No `tokio` entry: `r2e::main` / `r2e::app_main!` build the runtime through
 `select!`, `sync::*`, `CancelToken`, …) is re-exported there. See "Runtime
 facade" below.
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `mcp` (MCP server), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `grpc-web` (grpc-web on the multiplexed port via tonic-web), `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `mcp` (MCP server), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application — the `App` trait
 
@@ -3215,11 +3215,20 @@ b.plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())  // separate po
 ```
 
 `GrpcServer::multiplexed()` serves gRPC and HTTP on the **same** port, routing
-by `content-type` (`application/grpc*` → tonic, everything else → the HTTP
-router). **grpc-web is NOT supported** in that mode: there is no `tonic-web`
-translation layer, so an `application/grpc-web*` request is answered with
-`415 Unsupported Media Type` (and the plugin logs a warning at boot). Use a
-native gRPC client, or put a grpc-web proxy (Envoy, …) in front.
+by `content-type` (`application/grpc` → tonic, `application/grpc-web*` → the
+grpc-web arm, everything else → the HTTP router). By default the grpc-web arm
+answers `415 Unsupported Media Type` (+ a boot warning). Enable real grpc-web
+(feature `grpc-web` on `r2e`, `web` on `r2e-grpc`) with:
+
+```rust
+b.plugin(GrpcServer::multiplexed().with_grpc_web())                  // default CORS: any origin, POST/OPTIONS, grpc-status/-message exposed
+b.plugin(GrpcServer::multiplexed().with_grpc_web_cors(CorsLayer::new()./* … */))  // your own tower-http CorsLayer
+```
+
+That arm is `tonic-web` around the same routes: binary and `-text` (base64),
+HTTP/1.1 and HTTP/2, trailer frame included. grpc-web preflights (`OPTIONS`
+naming `x-grpc-web`) are routed to that arm's CORS layer, so no `Cors` plugin
+is needed for browser clients. Separate-port transport ignores it (warning).
 
 `register_grpc_service` panics on a missing key;
 `try_register_grpc_service::<S>()` (same trait) returns

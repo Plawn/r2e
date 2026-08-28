@@ -13,6 +13,8 @@ description = "gRPC server support for R2E framework"
 [features]
 default = []
 reflection = ["dep:tonic-reflection"]
+# grpc-web translation (`tonic-web`) for the multiplexed transport.
+web = ["dep:tonic-web", "dep:tower-http"]
 
 [dependencies]
 r2e-core = {workspace = true}
@@ -30,6 +32,8 @@ futures-util = {workspace = true}
 pin-project-lite = {workspace = true}
 
 tonic-reflection = {workspace = true, optional = true}
+tonic-web = {workspace = true, optional = true}
+tower-http = {workspace = true, features = ["cors"], optional = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["full"]}

@@ -36,7 +36,9 @@ pub use identity::{
     extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentityExtractor,
     JwtClaimsValidatorLike,
 };
-pub use multiplex::{GrpcContentType, MultiplexService, GRPC_WEB_UNSUPPORTED};
+pub use multiplex::{
+    GrpcContentType, MultiplexBody, MultiplexService, NoGrpcWeb, RejectedBody, GRPC_WEB_UNSUPPORTED,
+};
 pub use registry::{GrpcServiceRegistry, RegisteredServices};
 pub use server::{GrpcMarker, GrpcServer, GrpcTransport};
 pub use service::GrpcService;

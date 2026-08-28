@@ -12,7 +12,7 @@ description = "Quarkus-like ergonomic layer over Axum — declarative controller
 
 [features]
 default = ["security", "events", "utils"]
-full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "static", "tenant", "mcp"]
+full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "openfga", "observability", "ws", "multipart", "grpc", "grpc-reflection", "grpc-web", "static", "tenant", "mcp"]
 security = ["dep:r2e-security"]
 events = ["dep:r2e-events"]
 utils = ["dep:r2e-utils"]
@@ -53,6 +53,7 @@ mcp = ["dep:r2e-mcp"]
 # only (pulls r2e-test) — enable it from [dev-dependencies], not [dependencies].
 mcp-testing = ["mcp", "r2e-mcp/testing"]
 grpc-reflection = ["grpc", "r2e-grpc/reflection"]
+grpc-web = ["grpc", "r2e-grpc/web"]
 static = ["dep:r2e-static"]
 tenant = ["dep:r2e-tenant"]
 ws = ["r2e-core/ws"]
