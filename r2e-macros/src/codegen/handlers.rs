@@ -1235,6 +1235,15 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     // Guard contexts get the module-qualified name (bucket-key uniqueness).
     let controller_name_str = qualified_controller_name(controller_name);
 
+    // How a live session names itself in the `shutdown_grace_period` warning.
+    // `ws:` + the declaration site, mirroring `spawn_service`'s component type
+    // name — the route path is not usable here (it lives on `#[controller]`, as
+    // the `PATH_PREFIX` const, and `#[routes]` never sees its value).
+    let session_label = syn::LitStr::new(
+        &format!("ws:{controller_name}::{fn_name_str}"),
+        fn_name.span(),
+    );
+
     // Collect all typed params, excluding WsStream/WebSocket
     let extra_params = extract_sig_params(&wm.fn_item.sig);
 
@@ -1308,7 +1317,13 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             .collect();
 
         let ws_setup = if ws_p.is_ws_stream {
-            quote! { let __ws_stream = #krate::web::ws::WsStream::new(__socket); }
+            // `with_shutdown`, not `new`: this is what makes the session's
+            // receive loop end itself (1001 Going Away) when the app shuts
+            // down. A raw `WebSocket` param opts out — it is still tracked, but
+            // only its own loop can decide when to stop.
+            quote! {
+                let __ws_stream = #krate::web::ws::WsStream::with_shutdown(__socket, __shutdown);
+            }
         } else {
             quote! {}
         };
@@ -1341,7 +1356,10 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
         quote! {
             #call
-            #krate::web::ws::run_ws_handler(#krate::web::ws::WsStream::new(__socket), __handler).await;
+            #krate::web::ws::run_ws_handler(
+                #krate::web::ws::WsStream::with_shutdown(__socket, __shutdown),
+                __handler,
+            ).await;
         }
     };
 
@@ -1539,11 +1557,13 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         #predeco_items
 
         #[allow(non_snake_case)]
+        #[allow(unused_variables)]
         #[allow(clippy::too_many_arguments)]
         async fn #invocation_name(
             __ctrl: &#receiver_ty,
             #(#handler_extra_params,)*
             __socket: #krate::http::ws::WebSocket,
+            __shutdown: ::core::option::Option<#krate::rt::CancelToken>,
         ) {
             #invocation_body
         }
@@ -1556,6 +1576,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             __facade: #carrier_ty,
             #(#handler_extra_params,)*
             __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
+            __ws_sessions: #krate::builder::WsSessions,
         ) -> #krate::http::response::Response {
             // Guard checks borrow the façade; the upgrade callback then owns it
             // for the whole socket lifetime (façade owns its Arc + request data,
@@ -1564,11 +1585,19 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             #preflight_call
             #krate::http::response::IntoResponse::into_response(
                 __ws_upgrade.on_upgrade(move |__socket| async move {
-                    #invocation_name(
-                        &__facade,
-                        #(#forwarded_args,)*
-                        __socket,
-                    ).await
+                    // The session body does NOT run in this detached task when
+                    // the app is served through `run()`: `run_session` moves it
+                    // to the tracked lane, so shutdown joins it under
+                    // `shutdown_grace_period` instead of killing it with the
+                    // runtime. Unserved apps (`TestApp`) run it right here.
+                    __ws_sessions.run_session(#session_label, move |__shutdown| async move {
+                        #invocation_name(
+                            &__facade,
+                            #(#forwarded_args,)*
+                            __socket,
+                            __shutdown,
+                        ).await
+                    }).await
                 })
             )
         }
@@ -1995,6 +2024,10 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
     closure_params.extend(head_params);
     closure_params.push(quote! { __ws_upgrade: #krate::http::ws::WebSocketUpgrade });
     fwd_args.push(quote! { __ws_upgrade });
+    // Not an extractor: the registry is resolved ONCE here, at registration
+    // time, and cloned into every upgrade. It is a framework bean rather than
+    // part of the state HList, so it comes from the bean context.
+    fwd_args.push(quote! { __ws_sessions_capture.clone() });
 
     let md = data_marker();
     let prefix_len = if needs_preflight {
@@ -2010,6 +2043,9 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
         let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
     });
+    let ws_sessions_setup = quote! {
+        let __ws_sessions_capture = #krate::builder::WsSessions::from_context(__ctx);
+    };
     if wm.decorators.anonymous {
         // The anonymous WS adapter takes `Arc<Core>` where the facade path
         // takes a bound facade — same ownership shape across the upgrade.
@@ -2017,6 +2053,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
             {
                 let __core_capture = __ctrl.clone();
                 #deco_setup
+                #ws_sessions_setup
                 move |#(#closure_params),*| {
                     async move {
                         #inner(
@@ -2034,6 +2071,7 @@ pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenSt
             let __core_capture = __ctrl.clone();
             #ctrl_setup
             #deco_setup
+            #ws_sessions_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     #inner(

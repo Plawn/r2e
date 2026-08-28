@@ -6,6 +6,8 @@
 //!   layers, hooks, `build()` / `prepare()` / `serve()`.
 //! - [`prepared`]: [`PreparedApp`] + the serving lifecycle (`run()`).
 //! - [`task_registry`]: [`TaskRegistryHandle`] shared by scheduler/gRPC/plugins.
+//! - [`ws_sessions`]: [`WsSessions`] — the tracked lane upgraded WebSocket
+//!   sessions run on, so they participate in `shutdown_grace_period`.
 
 mod app;
 mod bootable;
@@ -14,12 +16,16 @@ mod prepared;
 mod registration;
 mod task_registry;
 mod typed;
+#[cfg(feature = "ws")]
+mod ws_sessions;
 
 pub use app::{launch, App};
 pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
+#[cfg(feature = "ws")]
+pub use ws_sessions::WsSessions;
 
 use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
@@ -265,8 +271,37 @@ impl ServiceHandles {
         });
     }
 
+    /// [`spawn_owning`](Self::spawn_owning) on the **control plane**.
+    ///
+    /// Same ownership rule; the difference is which runtime the task lands on.
+    /// Used for work started from inside a request handler — today, upgraded
+    /// WebSocket sessions ([`WsSessions`]). Under SO_REUSEPORT sharded serving
+    /// a handler runs on a worker's `current_thread` runtime, torn down when
+    /// that worker leaves its serve loop, i.e. *before* these handles are
+    /// joined; `spawn_ctl` puts the task on the main runtime, which outlives
+    /// the workers. On the single-listener path it is a plain `spawn`.
+    #[cfg(feature = "ws")]
+    fn spawn_owning_ctl<F>(&self, label: &'static str, graph: Arc<crate::beans::BeanContext>, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.push(TrackedHandle {
+            label,
+            handle: crate::rt::spawn_ctl(async move {
+                let _graph_keepalive = graph;
+                fut.await;
+            }),
+        });
+    }
+
     fn push(&self, handle: TrackedHandle) {
-        self.0.lock().unwrap().push(handle);
+        let mut handles = self.0.lock().unwrap();
+        // Drop what has already finished. Services and serve-hook tasks are
+        // registered once at boot, but WebSocket sessions push one handle per
+        // connection: without this the vector would grow for the lifetime of
+        // the process on a long-running server.
+        handles.retain(|h| !h.handle.is_finished());
+        handles.push(handle);
     }
 
     fn drain(&self) -> Vec<TrackedHandle> {

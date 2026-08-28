@@ -294,8 +294,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         //      response bodies (they outlive the service value, and the body
         //      outlives the head);
         //   2. each TRACKED TASK — `ServeContext::track`, `spawn_service`, the
-        //      scheduler driver and the QUIC drain all spawn through
-        //      `ServiceHandles::spawn_owning`, which moves an `Arc` INTO the
+        //      scheduler driver, the QUIC drain and every upgraded WebSocket
+        //      session all spawn through `ServiceHandles::spawn_owning{,_ctl}`,
+        //      which moves an `Arc` INTO the
         //      task. Every exit this function controls cancels the token and
         //      joins those handles (normal shutdown below, and both aborts via
         //      `abort_started_work`), but the join is still best-effort: an
@@ -320,16 +321,21 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // `GraphHandle` can observe `None`, and only after the last owner is
         // gone.
         //
-        // Residual window, derived — not assumed: a WebSocket session still
-        // running AFTER `run()` returns. On upgrade, hyper's
-        // `UpgradeableConnection::poll` hands the IO to the upgrade and
-        // immediately returns `Ready(Ok(()))`, so the connection counts as
-        // finished and axum's `on_upgrade` task (detached, spawned by axum itself, empty
-        // 101 body) is watched by neither graceful shutdown nor the tracked
-        // set. In a normal binary that window closes immediately (the runtime
-        // is dropped right after `run()`, taking detached tasks with it); an
-        // embedder that keeps the runtime alive past `run()` must resolve what
-        // a session needs BEFORE its socket loop. See `docs/claude/plugins.md`
+        // WebSocket sessions used to be the residual window here, derived from
+        // hyper: on upgrade, `UpgradeableConnection::poll` hands the IO over
+        // and immediately returns `Ready(Ok(()))`, so the connection counts as
+        // finished (the HTTP drain does not wait for it) and axum's
+        // `on_upgrade` task is detached (the tracked set never saw it). A
+        // session therefore outlived `run()` and died with the runtime. It is
+        // closed since #979: generated `#[ws]` handlers run the session
+        // through `WsSessions::run_session`, which puts it on the tracked lane
+        // (owner 2) — so a session holds the graph, is joined after the HTTP
+        // drain under its own `shutdown_grace_period`, and is told to close by
+        // the shutdown token. What is left is a session in an app served
+        // OUTSIDE `run()` (a bare router handed to `axum::serve`, a
+        // `TestApp`): the registry is unarmed there, the session runs inline
+        // in axum's detached task, and the old advice stands — resolve what it
+        // needs before its socket loop. See `docs/claude/plugins.md`
         // § "The graph outlives the router".
         let serve_scope_graph = self.graph;
 
@@ -376,6 +382,21 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             .downcast_ref::<ServiceHandles>()
             .expect("ServiceHandles type mismatch in plugin_data")
             .clone();
+
+        // Claim the WebSocket session registry for this run, BEFORE anything
+        // can accept a connection. Until this line every `#[ws]` route runs
+        // its session inline (the `TestApp` / `build_with_consumers`
+        // behaviour); from here on sessions land on the tracked lane above.
+        // Re-armed on every `run()` because `r2e dev` carries one graph — and
+        // with it one registry — across hot-patch cycles.
+        #[cfg(feature = "ws")]
+        if let Some(ws_sessions) = serve_scope_graph.try_get::<super::WsSessions>() {
+            ws_sessions.arm(
+                service_handles.clone(),
+                cancel_token.clone(),
+                &serve_scope_graph,
+            );
+        }
 
         if !skip_lifecycle {
             // Controller-core `#[post_construct]` hooks run before consumers
@@ -722,6 +743,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 "serve failed",
             )
             .await;
+            #[cfg(feature = "ws")]
+            disarm_ws_sessions(&serve_scope_graph);
             return Err(e);
         }
 
@@ -734,6 +757,11 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // abandoned (with a warning naming it) without eating the budget of the
         // others, so this whole phase costs at most one grace period.
         drain_tracked_handles(&service_handles, self.shutdown_grace_period).await;
+
+        // The tracked lane is closed: nothing pushed from here on would ever
+        // be joined, so any late WebSocket upgrade runs inline instead.
+        #[cfg(feature = "ws")]
+        disarm_ws_sessions(&serve_scope_graph);
 
         // ── Post-drain phase 2: user `on_stop` hooks ────────────────────────
         // MUST-RUN, outside every budget. These hooks carry application-state
@@ -822,11 +850,22 @@ impl PluginShutdownCell {
     }
 }
 
+/// Release the WebSocket session registry claimed at the start of this run, so
+/// later upgrades go back to running inline instead of pushing handles nobody
+/// will join. A no-op when the app has no `WsSessions` bean (a `with_state()`
+/// app, whose graph is empty).
+#[cfg(feature = "ws")]
+fn disarm_ws_sessions(graph: &Arc<crate::beans::BeanContext>) {
+    if let Some(sessions) = graph.try_get::<super::WsSessions>() {
+        sessions.disarm();
+    }
+}
+
 /// Await every tracked task handle, logging join failures.
 ///
 /// The tracked set is the union of `spawn_service` tasks, `ServeContext::track`
-/// tasks (gRPC server drain, scheduler driver, tenant sweeper, …) and the QUIC
-/// endpoint drain.
+/// tasks (gRPC server drain, scheduler driver, tenant sweeper, …), upgraded
+/// WebSocket sessions and the QUIC endpoint drain.
 ///
 /// `grace` is applied **per handle**, not to the phase: the handles are joined
 /// concurrently and each gets its own budget, so a service that ignores its
