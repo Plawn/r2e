@@ -910,14 +910,20 @@ covering exactly one phase; the phases run in this order:
 |---|---|---|---|
 | `on_drain` hooks | — | — | — |
 | plugin sync + async shutdown hooks (incl. `#[pre_destroy]`) | — | — | — |
-| HTTP drain (in-flight requests, listener no longer accepting) | `.drain_timeout(Duration)` | unbounded (plain-axum behaviour) | `warn!(phase = "http drain", ..)`, remaining connections abandoned, shutdown continues |
+| HTTP drain (in-flight requests, listener no longer accepting) | `.drain_timeout(Duration)` or `server.drain-timeout` | **30s** (`.drain_timeout_unbounded()` opts out) | `warn!(phase = "http drain", ..)`, remaining connections abandoned, shutdown continues |
 | tracked-handle join (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains) | `.shutdown_grace_period(Duration)`, applied **per handle** | unbounded | `warn!(phase = "tracked-handle join", service = <label>, ..)`, that handle detached (never aborted), others keep their own budget |
 | `on_stop` hooks | — **always run** | — | — |
 
 `on_stop` is **must-run**: it executes even when the drain timed out and every
 tracked handle blew its grace period — that is where state reconciliation
 belongs. `drain_timeout` is measured from cancellation (the moment the listener
-stops accepting), not from `serve()`. Under sharded serving (`server.workers`)
+stops accepting), not from `serve()`. It is **bounded by default (30 seconds)**
+— an app that never mentions it still finishes shutting down. Precedence:
+`.drain_timeout(d)` / `.drain_timeout_unbounded()` > the `server.drain-timeout`
+config key (a duration: `30`, `"30s"`, `"500ms"`, `"2m"`) > 30s. There is no
+config value meaning "unbounded": dropping the bound (and accepting that one
+open SSE stream can hang the process forever) is a deliberate code decision,
+`.drain_timeout_unbounded()`. Under sharded serving (`server.workers`)
 each worker bounds its own drain on its own child token, so both strategies
 behave identically. The grace-period warning names the handle:
 `spawn_service::<C>()` uses `C`'s type name, `ServeContext::track_named(name,
@@ -1111,7 +1117,10 @@ and is never reported as missing.
 
 `server.host` (default `0.0.0.0`), `server.port` (default `3000`) — read by
 `serve_auto()`. `server.workers` (`N` or `"per-core"`) — SO_REUSEPORT sharded
-serving (required by `per_worker_service`). `server.quic.*` — HTTP/3.
+serving (required by `per_worker_service`). `server.drain-timeout` (duration,
+default `30s`) — HTTP drain budget at shutdown; `.drain_timeout(d)` /
+`.drain_timeout_unbounded()` on the builder win over it. `server.tcp_nodelay`
+(default `true`). `server.quic.*` — HTTP/3.
 
 ---
 
@@ -4042,7 +4051,8 @@ Alongside `&self`:
 | `.merge_router(r)` / `.with_layer_fn(f)` | app | Raw axum escape hatches (last resort) |
 | `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks (`on_stop` always runs at shutdown, outside every budget) |
 | `.on_drain(f)` | app | Awaited hooks run at shutdown trigger, BEFORE the listener stops accepting |
-| `.drain_timeout(d)` | app | Bound the HTTP drain (in-flight requests after the listener stops). Default: unbounded |
+| `.drain_timeout(d)` | app | Bound the HTTP drain (in-flight requests after the listener stops). Default: 30s, or `server.drain-timeout` |
+| `.drain_timeout_unbounded()` | app | Opt out of the drain bound entirely (plain-axum behaviour); wins over config |
 | `.shutdown_grace_period(d)` | app | Bound the tracked-handle join, PER handle (`spawn_service`, `ServeContext::track`). Default: unbounded |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
 | `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |

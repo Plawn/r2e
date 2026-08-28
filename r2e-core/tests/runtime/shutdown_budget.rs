@@ -7,7 +7,7 @@
 //! |---|---|
 //! | `on_drain` hooks + plugin sync shutdown | nothing |
 //! | async shutdown hooks / `#[pre_destroy]` | nothing |
-//! | HTTP drain (in-flight requests) | `drain_timeout` |
+//! | HTTP drain (in-flight requests) | `drain_timeout` (30s by default) |
 //! | tracked-handle join (`spawn_service`, `track`) | `shutdown_grace_period`, per handle |
 //! | `on_stop` hooks | nothing — they **always** run |
 //!
@@ -22,9 +22,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use r2e_core::builder::{AppBuilder, SpawnService};
+use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
 use r2e_core::http::Router;
 use r2e_core::rt::CancelToken;
+use r2e_core::runtime::drain::DEFAULT_DRAIN_TIMEOUT;
 use r2e_core::runtime::service::ServiceComponent;
 use r2e_core::type_list::TNil;
 
@@ -154,6 +156,98 @@ impl ServiceComponent for CooperativeService {
             COOPERATIVE_STOPPED.store(true, Ordering::SeqCst);
         }
     }
+}
+
+// ── Resolving the drain budget: builder > config > 30s default ──────────────
+
+/// Build a stateless app on top of a YAML config and read back the budget it
+/// resolved — the same trick `runtime::tcp_nodelay` uses, so no test here has
+/// to sit out a real 30-second drain.
+fn prepare_with_yaml(yaml: &str) -> r2e_core::builder::PreparedApp<()> {
+    // `load_config` mutates process-global dev-reload state (see dev_serial).
+    let _serial = crate::dev_serial::dev_serial();
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .with_state(())
+        .prepare("0.0.0.0:0")
+}
+
+#[test]
+fn drain_is_bounded_at_thirty_seconds_by_default() {
+    assert_eq!(DEFAULT_DRAIN_TIMEOUT, Duration::from_secs(30));
+
+    let app = AppBuilder::new().with_state(()).prepare("0.0.0.0:0");
+    assert_eq!(
+        app.drain_timeout(),
+        Some(Duration::from_secs(30)),
+        "an app that never heard of drain_timeout must still be bounded"
+    );
+}
+
+#[test]
+fn drain_timeout_defaults_when_the_config_key_is_absent() {
+    let app = prepare_with_yaml("server:\n  port: 3000\n");
+    assert_eq!(app.drain_timeout(), Some(DEFAULT_DRAIN_TIMEOUT));
+}
+
+#[test]
+fn config_drain_timeout_is_honored() {
+    let app = prepare_with_yaml("server:\n  drain-timeout: 5s\n");
+    assert_eq!(app.drain_timeout(), Some(Duration::from_secs(5)));
+
+    // The plain-integer form is seconds, like every other duration key.
+    let app = prepare_with_yaml("server:\n  drain-timeout: 7\n");
+    assert_eq!(app.drain_timeout(), Some(Duration::from_secs(7)));
+
+    // …and sub-second units survive the round trip.
+    let app = prepare_with_yaml("server:\n  drain-timeout: 250ms\n");
+    assert_eq!(app.drain_timeout(), Some(Duration::from_millis(250)));
+}
+
+#[test]
+fn builder_drain_timeout_wins_over_config() {
+    let _serial = crate::dev_serial::dev_serial();
+    let config = R2eConfig::from_yaml_str("server:\n  drain-timeout: 5s\n").unwrap();
+    let app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .with_state(())
+        .drain_timeout(Duration::from_secs(11))
+        .prepare("0.0.0.0:0");
+    assert_eq!(app.drain_timeout(), Some(Duration::from_secs(11)));
+}
+
+#[test]
+fn drain_timeout_unbounded_yields_no_bound() {
+    let app = AppBuilder::new()
+        .with_state(())
+        .drain_timeout_unbounded()
+        .prepare("0.0.0.0:0");
+    assert_eq!(
+        app.drain_timeout(),
+        None,
+        "the explicit opt-out is the only way back to an unbounded drain"
+    );
+
+    // It also wins over a configured budget: unbounded is a code decision.
+    let _serial = crate::dev_serial::dev_serial();
+    let config = R2eConfig::from_yaml_str("server:\n  drain-timeout: 5s\n").unwrap();
+    let app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .with_state(())
+        .drain_timeout_unbounded()
+        .prepare("0.0.0.0:0");
+    assert_eq!(app.drain_timeout(), None);
+}
+
+#[test]
+fn invalid_config_drain_timeout_falls_back_to_the_default() {
+    // An unparseable budget must never silently mean "unbounded".
+    let app = prepare_with_yaml("server:\n  drain-timeout: nonsense\n");
+    assert_eq!(app.drain_timeout(), Some(DEFAULT_DRAIN_TIMEOUT));
 }
 
 // ── `drain_timeout` bounds the HTTP drain ───────────────────────────────────

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A real shutdown contract without hand-rolled drain plumbing. `StopHandle::stop()` triggers the same graceful shutdown as Ctrl-C / SIGTERM — provide it as a bean for an admin/stop endpoint, or get it from `prepared.stop_handle()`. `on_drain` hooks are awaited *before* the listener stops accepting (flip readiness, wait for load-balancer deregistration); `ServeContext::track()` lets serve hooks have spawned tasks (gRPC, QUIC) drained rather than cancelled, bounded by `shutdown_grace_period`. Sequence: on_drain → plugin shutdown → stop accepting (in-flight finish, bounded by `drain_timeout`) → await tracked tasks (bounded by `shutdown_grace_period`, per handle) → on_stop (always runs).
+A real shutdown contract without hand-rolled drain plumbing. `StopHandle::stop()` triggers the same graceful shutdown as Ctrl-C / SIGTERM — provide it as a bean for an admin/stop endpoint, or get it from `prepared.stop_handle()`. `on_drain` hooks are awaited *before* the listener stops accepting (flip readiness, wait for load-balancer deregistration); `ServeContext::track()` lets serve hooks have spawned tasks (gRPC, QUIC) drained rather than cancelled, bounded by `shutdown_grace_period`. Sequence: on_drain → plugin shutdown → stop accepting (in-flight finish, bounded by `drain_timeout` — 30s by default, `server.drain-timeout` to tune) → await tracked tasks (bounded by `shutdown_grace_period`, per handle) → on_stop (always runs).
 
 
 ## Goal
@@ -32,7 +32,7 @@ Two independent budgets, each covering exactly one phase:
 |---|---|---|---|
 | 1. `on_drain` hooks | — | — | — |
 | 2. plugin sync + async shutdown hooks (incl. `#[pre_destroy]`) | — | — | — |
-| 3. HTTP drain — in-flight requests after the listener stops accepting | **`drain_timeout`** | `None` (unbounded, plain-axum behaviour) | `warn!(phase = "http drain", …)`, remaining connections abandoned, shutdown continues |
+| 3. HTTP drain — in-flight requests after the listener stops accepting | **`drain_timeout`** (builder) or **`server.drain-timeout`** (config) | **30s** — `drain_timeout_unbounded()` is the explicit opt-out | `warn!(phase = "http drain", …)`, remaining connections abandoned, shutdown continues |
 | 4. tracked-handle join (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains) | **`shutdown_grace_period`**, applied **per handle** | `None` (wait indefinitely) | `warn!(phase = "tracked-handle join", service = <name>, …)`, that handle abandoned (detached, not aborted), the others keep their own budget |
 | 5. `on_stop` hooks | — **always run** | — | — |
 
@@ -42,6 +42,20 @@ Consequences worth spelling out:
 - **`shutdown_grace_period` is per handle, not for the whole phase.** One service that ignores its token costs one grace period, not the budget of everything registered after it, and phase 4 as a whole still costs at most one grace period because the handles are joined concurrently.
 - **The warning names the culprit.** Handles carry a label: `spawn_service::<C>()` uses `C`'s type name, `ServeContext::track_named(name, fut)` uses the name you give, plain `track(fut)` shows `<unnamed>`.
 - **`drain_timeout` is measured from cancellation**, not from `serve()` — the clock starts when the listener stops accepting.
+- **The drain is bounded by default (30s).** An app that never mentions `drain_timeout` still terminates: the default matches Spring's `spring.lifecycle.timeout-per-shutdown-phase`. Precedence is `.drain_timeout(d)` / `.drain_timeout_unbounded()` > `server.drain-timeout` > 30s, and an unparseable config value logs an error and falls back to 30s rather than becoming unbounded.
+
+```yaml
+server:
+  drain-timeout: 10s      # integer = seconds; "500ms" / "2m" / "1h" also parse
+```
+
+```rust
+AppBuilder::new()
+    .drain_timeout(Duration::from_secs(10))   // wins over server.drain-timeout
+    // .drain_timeout_unbounded()             // …or opt out of the bound entirely
+```
+
+- **Unbounded is code-only.** No config value means "unbounded" — `server.drain-timeout` always sets a bound. Waiting forever (one open SSE stream can keep the process alive indefinitely, and no other budget rescues it) is a deliberate decision, spelled `drain_timeout_unbounded()`.
 - **Both strategies behave identically.** Under SO_REUSEPORT sharded serving (`server.workers`) each worker bounds its own drain on its own child token; since all child tokens are cancelled by the same parent, the whole set still finishes within `drain_timeout` of the signal.
 
 ## `StopHandle`
@@ -148,14 +162,15 @@ It takes the **future**, not a `JobHandle` (breaking — pass the `async` block 
 - **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation. A cancel-on-drop guard inside the shutdown future guarantees the token fires even if a drain/plugin hook panics. `drain_timeout` is applied by each worker to its own drain, on its own child token, so the sharded and single-listener strategies bound the drain the same way.
 - **QUIC**: the HTTP/3 endpoint drains on the same token; its task handle joins the tracked set (label `quic endpoint drain`), so the QUIC drain is awaited in step 4 and bounded by `shutdown_grace_period`.
 - **`shutdown_grace_period`**: bounds step 4 only (the tracked-handle join), per handle. Without one, shutdown waits indefinitely for tracked drains — a client holding a server-streaming gRPC call open holds the tracked drain. It does **not** bound `on_drain` (step 1, before the drain begins), the HTTP drain (step 3 — that is `drain_timeout`), or `on_stop` (step 5, which always runs).
-- **`drain_timeout`**: bounds step 3 only. Without one, an open HTTP SSE/streaming response or a slow handler holds the drain forever, exactly like plain axum. With one, the remaining connections are abandoned when the budget elapses and shutdown proceeds to steps 4 and 5.
+- **`drain_timeout`**: bounds step 3 only, and does so by default (30s, or `server.drain-timeout`). When the budget elapses the remaining connections are abandoned and shutdown proceeds to steps 4 and 5. Only `drain_timeout_unbounded()` removes the bound — then an open HTTP SSE/streaming response or a slow handler holds the drain forever, exactly like plain axum.
 - **dev-reload**: a hot patch **drops** the previous `run()` future instead of stopping it, so no shutdown sequence runs for that cycle at all — no `on_drain`, no plugin `on_shutdown*`, no `on_stop`, no `#[pre_destroy]`. What does happen is cancellation: the dropped future's guard cancels that cycle's shutdown token, and every token derived from it (each `spawn_service` task, the relayed scheduler driver) is cancelled with it, so the cycle's background work stops even though nothing joins it. Hooks registered on re-entry are likewise skipped for cycles ≥ 2 (serve/startup lifecycle runs once). The full sequence above applies to a real stop: signal, `StopHandle::stop()`, or `r2e dev` exiting.
 
 ## Files
 
 - `r2e-core/src/lifecycle.rs` — `StopHandle`, `DrainHook`
 - `r2e-core/src/builder/mod.rs` — `ServeContext`, `with_stop_handle`
-- `r2e-core/src/builder/typed.rs` — `on_drain`
+- `r2e-core/src/builder/typed.rs` — `on_drain`, `drain_timeout`, `drain_timeout_unbounded`
+- `r2e-core/src/runtime/drain.rs` — `bounded_http_drain`, `DEFAULT_DRAIN_TIMEOUT`, `resolve_drain_timeout`
 - `r2e-core/src/builder/prepared.rs` — `stop_handle()`, shutdown sequencing in `run_inner`
 - `r2e-grpc/src/server.rs` — tracked gRPC drain
 - `r2e-core/tests/builder_prepared.rs`, `examples/example-grpc/tests/grpc_serve.rs` — proof

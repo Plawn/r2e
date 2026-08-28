@@ -377,10 +377,14 @@ struct BuilderConfig {
     /// Maximum time allowed for the tracked-handle join phase, applied to each
     /// handle on its own. `None` means wait indefinitely (default).
     shutdown_grace_period: Option<Duration>,
-    /// Maximum time the HTTP drain (in-flight requests finishing after the
-    /// listener stopped accepting) may take. `None` means unbounded (default,
-    /// the plain-axum behavior).
-    drain_timeout: Option<Duration>,
+    /// Explicit HTTP-drain budget set on the builder, as a two-level option:
+    /// the outer `None` means "not set — resolve from `server.drain-timeout`
+    /// or the 30s default"; `Some(Some(d))` is
+    /// [`AppBuilder::drain_timeout`]; `Some(None)` is the deliberate
+    /// [`AppBuilder::drain_timeout_unbounded`] opt-out. Resolved once in
+    /// `build_inner` via
+    /// [`resolve_drain_timeout`](crate::runtime::drain::resolve_drain_timeout).
+    drain_timeout: Option<Option<Duration>>,
     /// Active profile name, resolved from the forced profile
     /// ([`AppBuilder::with_profile`]), `R2E_PROFILE` env var, `r2e.profile`
     /// config key, or `"default"`.
