@@ -493,7 +493,12 @@ Kept where the context lives rather than duplicated here:
 ## Decisions log — do NOT re-propose
 
 - **Qualifiers / named beans: REJECTED.** Newtypes are the chosen pattern for
-  same-typed beans (runtime `DuplicateBean` backstop).
+  same-typed beans (runtime `DuplicateBean` backstop). Note: what "rejected"
+  means is *runtime* qualifier resolution — the `#[producer(name = "…")]` /
+  `#[inject(name = "…")]` shorthand that already exists is pure compile-time
+  sugar that generates a newtype and registers it by type (unsupported in
+  `#[controller]` and `#[derive(BackgroundService)]` fields, and on named
+  producers returning `Option<T>`). Newtypes stay the recommended form.
 - **`#[transactional]`: REMOVED (W10 phase 4, 2026-07-16, user-approved).**
   `#[managed]` is the single transaction story. The body wrapper had zero
   usage, relied on an unhygienic magic `tx` variable injected into the body

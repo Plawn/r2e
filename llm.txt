@@ -802,8 +802,49 @@ you must still `.register_module::<OtherModule>()` yourself.
 
 ### Same-typed beans
 
-Qualifiers/named beans do not exist — use **newtypes** (`struct ReadPool(PgPool)`)
-for multiple beans of the same underlying type.
+The bean graph is keyed by **type**, so two beans of the same underlying type
+need two distinct types. **Newtypes are the recommended way, in every case**:
+
+```rust
+#[derive(Clone)] pub struct ReadPool(pub PgPool);
+#[derive(Clone)] pub struct WritePool(pub PgPool);
+// provide/inject them like any other bean — `#[inject] pool: ReadPool`
+```
+
+A newtype is typed, compiler-checked, works in **every** injection site
+(controllers, beans, decorator beans, background services, plugins, guards) and
+is the one form the whole framework understands. Prefer it.
+
+A `name = "..."` shorthand also exists, but it is **sugar that generates exactly
+such a newtype** — not a runtime qualifier, and not a second resolution
+mechanism:
+
+```rust
+#[producer(name = "primary")]
+fn primary_pool() -> SqlitePool { ... }     // generates `PrimarySqlitePool(pub SqlitePool)`
+                                            // (Deref to SqlitePool) and registers THAT type
+
+#[derive(Bean)]
+struct Repo {
+    #[inject(name = "primary")] pool: SqlitePool,   // resolves `ctx.get::<PrimarySqlitePool>().0`
+}
+```
+
+The generated name is `PascalCase(name) + <type base name>` (`"primary"` +
+`SqlitePool` → `PrimarySqlitePool`), and both sides must spell the same
+`name` + type or the generated identifiers differ and the bean is missing.
+
+Where `#[inject(name = "...")]` is accepted: `#[bean]` constructor params,
+`#[producer]` params, `#[derive(Bean)]` fields, `#[derive(DecoratorBean)]`
+fields. Real limits (all compile-time):
+
+- **`#[controller]` fields do NOT accept it** — `#[inject(...)]` there only takes
+  `identity` / `request`; `#[inject(name = "…")]` is a compile error. Declare the
+  newtype yourself and inject it by type.
+- **`#[derive(BackgroundService)]` fields do NOT accept it** — same fix.
+- **Named `#[producer]`s returning `Option<T>` are not supported** — named
+  resolution goes through the newtype wrapper, which does not compose with
+  `Option<T>`. Use an unnamed producer for the conditional-availability pattern.
 
 ---
 
