@@ -112,7 +112,12 @@ impl App for OidcApp {
             );
 
         // -- Client registry (for client_credentials grant) -----------------
-        let clients = ClientRegistry::new().add_client("my-service", "service-secret");
+        // Every client is fail-closed: it can only be granted the scopes it
+        // declares here. Omitting `scope` on the token request grants the
+        // whole allowlist.
+        let clients = ClientRegistry::new()
+            .add_client("my-service", "service-secret")
+            .with_scopes(["jobs:read", "jobs:run"]);
 
         // -- Build OidcRuntime (RSA keygen happens here, once) ---------------
         let oidc = OidcServer::new()

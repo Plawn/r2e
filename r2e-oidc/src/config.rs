@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
 use url::Url;
 
 use crate::error::OidcError;
+use crate::token::{valid_scope_token, DEFAULT_USER_SCOPE};
 
 /// Configuration for the embedded OAuth/JWT issuer.
 #[derive(Clone, Debug)]
@@ -26,6 +29,13 @@ pub struct OidcServerConfig {
     pub password_grant_enabled: bool,
     /// Maximum concurrent Argon2 password/secret verifications.
     pub max_credential_verifications: usize,
+    /// Scope allowlist of the development password grant.
+    ///
+    /// The password grant is not tied to a registered client, so it cannot use
+    /// a client allowlist: an unauthenticated `client_id` parameter must never
+    /// widen a grant. A `scope` parameter naming anything outside this set is
+    /// rejected with `invalid_scope`; omitting `scope` grants the whole set.
+    pub password_grant_scopes: BTreeSet<String>,
 }
 
 impl Default for OidcServerConfig {
@@ -39,6 +49,10 @@ impl Default for OidcServerConfig {
             kid: String::new(),
             password_grant_enabled: false,
             max_credential_verifications: 32,
+            password_grant_scopes: DEFAULT_USER_SCOPE
+                .split_whitespace()
+                .map(String::from)
+                .collect(),
         }
     }
 }
@@ -94,6 +108,14 @@ impl OidcServerConfig {
             return Err(OidcError::Configuration(
                 "max credential verifications must be greater than zero".into(),
             ));
+        }
+
+        for scope in &self.password_grant_scopes {
+            if !valid_scope_token(scope) {
+                return Err(OidcError::Configuration(format!(
+                    "invalid password grant scope token: `{scope}`"
+                )));
+            }
         }
 
         validate_base_path(&self.base_path)?;

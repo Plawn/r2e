@@ -53,6 +53,47 @@ impl AuthorizationCodeStore {
     }
 }
 
+/// Lifetime of the one-time CSRF token embedded in a rendered login form.
+pub(crate) const LOGIN_FORM_TTL: Duration = Duration::from_secs(600);
+
+/// One-time CSRF tokens handed to rendered login forms.
+///
+/// `GET /oauth/authorize` issues one per page; `POST /oauth/authorize` must
+/// echo it back, and consuming it invalidates it. Without this, any site could
+/// post credentials — or a silent authorization — to the local login endpoint.
+#[derive(Clone)]
+pub(crate) struct LoginFormStore {
+    tokens: Arc<DashMap<String, Instant>>,
+    ttl: Duration,
+}
+
+impl LoginFormStore {
+    pub(crate) fn new(ttl: Duration) -> Self {
+        Self {
+            tokens: Arc::new(DashMap::new()),
+            ttl,
+        }
+    }
+
+    pub(crate) fn issue(&self) -> String {
+        self.tokens
+            .retain(|_, expires_at| *expires_at > Instant::now());
+        let mut bytes = [0_u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let token = URL_SAFE_NO_PAD.encode(bytes);
+        self.tokens.insert(token.clone(), Instant::now() + self.ttl);
+        token
+    }
+
+    /// Consume a token: `true` only for a token issued here, still valid, and
+    /// not yet used.
+    pub(crate) fn consume(&self, token: &str) -> bool {
+        self.tokens
+            .remove(token)
+            .is_some_and(|(_, expires_at)| expires_at > Instant::now())
+    }
+}
+
 impl AuthorizationGrant {
     pub(crate) fn new(
         client_id: String,
@@ -97,6 +138,8 @@ pub(crate) fn verify_s256(verifier: &str, expected: &str) -> bool {
         && actual
             .bytes()
             .zip(expected.bytes())
-            .fold(0_u8, |difference, (left, right)| difference | (left ^ right))
+            .fold(0_u8, |difference, (left, right)| {
+                difference | (left ^ right)
+            })
             == 0
 }

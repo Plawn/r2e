@@ -157,6 +157,21 @@ impl OidcServer {
         self
     }
 
+    /// Restrict the scopes the development password grant may issue.
+    ///
+    /// Defaults to [`DEFAULT_USER_SCOPE`](token::DEFAULT_USER_SCOPE)
+    /// (`openid profile email roles`). A `scope` parameter naming anything
+    /// outside this set is rejected with `invalid_scope`; omitting `scope`
+    /// grants the whole set. Client-bound grants use their client's own
+    /// allowlist instead — see [`ClientRegistry::with_scopes`].
+    pub fn password_grant_scopes(
+        mut self,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.config.password_grant_scopes = scopes.into_iter().map(Into::into).collect();
+        self
+    }
+
     /// Limit concurrent Argon2 password/client-secret verifications.
     pub fn max_credential_verifications(mut self, max: usize) -> Self {
         self.config.max_credential_verifications = max;

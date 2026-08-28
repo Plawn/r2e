@@ -123,10 +123,9 @@ let oidc = OidcServer::new()
 ```rust
 use r2e::r2e_oidc::ClientRegistry;
 
-let clients = ClientRegistry::new().add_public_client(
-    "mcp-client",
-    ["http://127.0.0.1:49152/callback"],
-);
+let clients = ClientRegistry::new()
+    .add_public_client("mcp-client", ["http://127.0.0.1:49152/callback"])
+    .with_scopes(["openid", "profile", "mcp:read"]);
 
 let oidc = OidcServer::new()
     .audience("http://localhost:3000/mcp")
@@ -134,10 +133,70 @@ let oidc = OidcServer::new()
     .with_client_registry(clients);
 ```
 
-Redirect URIs are exact-match only; non-loopback HTTP redirects are rejected.
+Redirect URIs are exact-match only; non-loopback HTTP redirects are rejected
+(`localhost`, `127.0.0.1` and `[::1]` are all recognized as loopback).
 Discovery advertises only PKCE `S256`. Authorization codes expire after five
 minutes by default, are bound to client/redirect/resource/challenge, and are
 removed on the first redemption attempt.
+
+### Authorization errors
+
+Once `client_id` is registered **and** `redirect_uri` matches the allowlist
+exactly, `/oauth/authorize` reports protocol errors by redirecting back to the
+client (RFC 6749 §4.1.2.1) — `303` to
+`redirect_uri?error=...&error_description=...&state=...`:
+
+| Condition | `error` |
+|---|---|
+| `response_type` other than `code` | `unsupported_response_type` |
+| missing `code_challenge`, or `code_challenge_method` != `S256` | `invalid_request` |
+| `resource` that is not the configured audience | `invalid_target` |
+| a scope outside the client allowlist | `invalid_scope` |
+| wrong username/password on the login POST | `access_denied` |
+
+When the client or the redirect URI cannot be validated, the request is
+answered with a `400` JSON error instead — never a redirect (no open redirect).
+All authorize responses that carry a code or an error are sent with
+`Cache-Control: no-store` and `Pragma: no-cache`.
+
+### Login CSRF protection
+
+The login page embeds a one-time `csrf_token` hidden field (random, server-side,
+10-minute TTL). `POST /oauth/authorize` requires it and consumes it before any
+credential check; a missing, forged, expired or replayed token is rejected with
+`400 invalid_request`. Reload the sign-in page to get a fresh one.
+
+## Scopes
+
+Every client carries a **scope allowlist** and starts empty (fail closed): a
+client with no `.with_scopes(...)` can only receive an empty scope.
+
+```rust
+let clients = ClientRegistry::new()
+    .add_public_client("mcp-client", ["http://127.0.0.1:49152/callback"])
+    .with_scopes(["openid", "mcp:read"])   // applies to `mcp-client`
+    .add_client("worker", "worker-secret")
+    .with_scopes(["jobs:run"]);            // applies to `worker`
+```
+
+`with_scopes` applies to the **most recently registered** client and replaces
+any previous allowlist (`try_with_scopes` returns an error instead of
+panicking). A requested scope outside the allowlist is rejected with
+`invalid_scope` (RFC 6749 §5.2) on `/oauth/authorize`, `client_credentials` and
+the development password grant. A request that omits `scope` is granted the
+whole applicable allowlist. `scopes_supported` in the discovery document is the
+union of every registered allowlist.
+
+The password grant is not client-authenticated, so it cannot borrow a client's
+allowlist; it is bounded by a server-level list instead (default
+`openid profile email roles`):
+
+```rust
+OidcServer::new()
+    .enable_password_grant_for_development()
+    .password_grant_scopes(["openid", "profile"])
+    .with_user_store(users);
+```
 
 ## User store
 
@@ -182,7 +241,8 @@ For service-to-service communication, register OAuth clients:
 use r2e::r2e_oidc::ClientRegistry;
 
 let clients = ClientRegistry::new()
-    .add_client("my-service", "service-secret");
+    .add_client("my-service", "service-secret")
+    .with_scopes(["jobs:read", "jobs:run"]);
 
 let oidc = OidcServer::new()
     .with_user_store(users)
@@ -234,6 +294,10 @@ Follows RFC 6749 OAuth 2.0 error format:
   "error_description": "invalid username or password"
 }
 ```
+
+`/oauth/token` always answers with JSON. `/oauth/authorize` answers with a
+redirect once the client and redirect URI are validated — see
+[Authorization errors](#authorization-errors).
 
 ## License
 
