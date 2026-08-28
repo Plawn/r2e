@@ -6,6 +6,7 @@ use r2e_core::http::labels::{method_label, route_label};
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Instant,
 };
@@ -38,12 +39,14 @@ impl Drop for InFlightGuard {
 /// Tower layer that tracks HTTP request metrics.
 #[derive(Clone)]
 pub struct PrometheusLayer {
-    config: MetricsConfig,
+    config: Arc<MetricsConfig>,
 }
 
 impl PrometheusLayer {
     pub fn new(config: MetricsConfig) -> Self {
-        Self { config }
+        Self {
+            config: Arc::new(config),
+        }
     }
 }
 
@@ -62,7 +65,7 @@ impl<S> Layer<S> for PrometheusLayer {
 #[derive(Clone)]
 pub struct PrometheusService<S> {
     inner: S,
-    config: MetricsConfig,
+    config: Arc<MetricsConfig>,
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for PrometheusService<S>
