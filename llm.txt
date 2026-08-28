@@ -927,7 +927,9 @@ config value meaning "unbounded": dropping the bound (and accepting that one
 open SSE stream can hang the process forever) is a deliberate code decision,
 `.drain_timeout_unbounded()`. Under sharded serving (`server.workers`)
 each worker bounds its own drain on its own child token, so both strategies
-behave identically. The grace-period warning names the handle:
+behave identically; worker runtimes are dropped only after the tracked-handle
+join, so tracked work owning a socket a worker accepted (a WebSocket session)
+keeps a live I/O driver for its whole grace period. The grace-period warning names the handle:
 `spawn_service::<C>()` uses `C`'s type name, `ServeContext::track_named(name,
 fut)` the name you give, a `#[ws(...)]` session
 `ws:<Controller>::<method>`, plain `track(fut)` shows `<unnamed>`.
@@ -2477,7 +2479,8 @@ async fn chat(&self, mut ws: WsStream) {
 
 - `ws.shutdown_requested().await` — the same signal as a bare future (pending
   forever when the app is not served through `run()`), for a `select!` on the
-  send side.
+  send side. It borrows nothing (`impl Future<Output = ()> + Send + 'static`),
+  so it can be held across awaits without making the session future non-`Send`.
 - `ws.shutdown_token() -> Option<&CancelToken>` — the token itself.
 - `r2e::web::ws::CLOSE_GOING_AWAY` — the `1001` constant.
 
@@ -2485,6 +2488,11 @@ A handler that ignores the signal is abandoned (detached, not aborted) once
 `shutdown_grace_period` elapses, with the named warning; `on_stop` still runs.
 Under `TestApp` / `build_with_consumers()` (never served through `run()`)
 sessions run untracked with `shutdown_token() == None`, exactly as before.
+
+Sharded serving (`server.workers`) behaves identically: worker runtimes are
+kept alive until the tracked-handle join is over, so a session's socket stays
+writable for its whole grace period even though it was accepted by a worker and
+runs on the control plane.
 
 ---
 

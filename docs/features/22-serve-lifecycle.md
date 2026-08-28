@@ -180,19 +180,21 @@ async fn chat(&self, mut ws: WsStream) {
 }
 ```
 
-When shutdown is triggered, `WsStream::next()` sends the peer a close frame with code **1001 Going Away** and returns `None` — the loop exits, the handler returns, the handle is joined. `ws.shutdown_requested().await` is the same signal as a bare future (for a `select!` on the send side), and `ws.shutdown_token()` exposes the token itself.
+When shutdown is triggered, `WsStream::next()` sends the peer a close frame with code **1001 Going Away** and returns `None` — the loop exits, the handler returns, the handle is joined. `ws.shutdown_requested().await` is the same signal as a bare future (for a `select!` on the send side — it borrows nothing, so holding it across an await keeps the session `Send`), and `ws.shutdown_token()` exposes the token itself.
 
 A handler that never touches the receive side (or ignores the end-of-stream) gets nothing worse than any other stubborn task: after `shutdown_grace_period` it is abandoned — detached, not aborted — with `warn!(phase = "tracked-handle join", service = "ws:MyController::my_method", …)`, and shutdown proceeds to `on_stop`. With no grace period configured, shutdown waits for it indefinitely.
 
 An app that is never served through `run()` — `build_with_consumers()`, `TestApp`, or a router handed to `axum::serve` by hand — has no tracked lane to arm, and sessions there run detached exactly as they always did. Nothing panics; there is simply nothing to join them against.
 
+Under sharded serving (`server.workers`) the guarantee is the same, and it is not free: the socket was accepted by a *worker* runtime while the session runs on the control plane, so the worker's I/O driver has to outlive the session. Workers therefore **park** once their HTTP drain is over and their per-worker services are down — they stay inside `block_on`, driving that I/O driver — until the control plane has finished step 4, and only then drop their runtime. Without that handshake a session that reacted slowly (anything past the first poll after cancellation) would find its socket dead well inside its own grace period, and the peer would see a TCP reset instead of the close frame.
+
 ## Interactions
 
-- **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation. A cancel-on-drop guard inside the shutdown future guarantees the token fires even if a drain/plugin hook panics. `drain_timeout` is applied by each worker to its own drain, on its own child token, so the sharded and single-listener strategies bound the drain the same way.
+- **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation. A cancel-on-drop guard inside the shutdown future guarantees the token fires even if a drain/plugin hook panics. `drain_timeout` is applied by each worker to its own drain, on its own child token, so the sharded and single-listener strategies bound the drain the same way. Worker runtimes are dropped **after** step 4, not at the end of their serve loop, so tracked work that owns a socket a worker accepted (a WebSocket session) still has a live I/O driver for its whole grace period.
 - **QUIC**: the HTTP/3 endpoint drains on the same token; its task handle joins the tracked set (label `quic endpoint drain`), so the QUIC drain is awaited in step 4 and bounded by `shutdown_grace_period`.
 - **`shutdown_grace_period`**: bounds step 4 only (the tracked-handle join), per handle. Without one, shutdown waits indefinitely for tracked drains — a client holding a server-streaming gRPC call open holds the tracked drain. It does **not** bound `on_drain` (step 1, before the drain begins), the HTTP drain (step 3 — that is `drain_timeout`), or `on_stop` (step 5, which always runs).
 - **`drain_timeout`**: bounds step 3 only, and does so by default (30s, or `server.drain-timeout`). When the budget elapses the remaining connections are abandoned and shutdown proceeds to steps 4 and 5. Only `drain_timeout_unbounded()` removes the bound — then an open HTTP SSE/streaming response or a slow handler holds the drain forever, exactly like plain axum.
-- **WebSockets**: sessions from `#[ws(...)]` routes are tracked (see above), so they hold step 4 rather than escaping shutdown — bounded per session by `shutdown_grace_period`. They do **not** hold the HTTP drain (step 3): for hyper the connection ended at the upgrade.
+- **WebSockets**: sessions from `#[ws(...)]` routes are tracked (see above), so they hold step 4 rather than escaping shutdown — bounded per session by `shutdown_grace_period`. They do **not** hold the HTTP drain (step 3): for hyper the connection ended at the upgrade. Under `server.workers` they also hold their worker's runtime open for the length of step 4 (see above).
 - **dev-reload**: a hot patch **drops** the previous `run()` future instead of stopping it, so no shutdown sequence runs for that cycle at all — no `on_drain`, no plugin `on_shutdown*`, no `on_stop`, no `#[pre_destroy]`. What does happen is cancellation: the dropped future's guard cancels that cycle's shutdown token, and every token derived from it (each `spawn_service` task, the relayed scheduler driver) is cancelled with it, so the cycle's background work stops even though nothing joins it. Hooks registered on re-entry are likewise skipped for cycles ≥ 2 (serve/startup lifecycle runs once). The full sequence above applies to a real stop: signal, `StopHandle::stop()`, or `r2e dev` exiting.
 
 ## Files
@@ -202,7 +204,8 @@ An app that is never served through `run()` — `build_with_consumers()`, `TestA
 - `r2e-core/src/builder/typed.rs` — `on_drain`, `drain_timeout`, `drain_timeout_unbounded`
 - `r2e-core/src/runtime/drain.rs` — `bounded_http_drain`, `DEFAULT_DRAIN_TIMEOUT`, `resolve_drain_timeout`
 - `r2e-core/src/builder/prepared.rs` — `stop_handle()`, shutdown sequencing in `run_inner`
-- `r2e-core/src/builder/ws_sessions.rs` — `WsSessions`, the tracked lane for upgraded sockets
+- `r2e-core/src/builder/ws_sessions.rs` — `WsSessions`, the tracked lane for upgraded sockets (§ "Sharded serving" holds the worker-parking invariant)
+- `r2e-core/src/runtime/sharded.rs` — `WorkerPark`: workers outlive the tracked-handle join
 - `r2e-core/src/web/ws.rs` — `WsStream` shutdown observation + the `1001 Going Away` frame
 - `r2e-grpc/src/server.rs` — tracked gRPC drain
 - `r2e-core/tests/runtime/shutdown_budget.rs`, `r2e-core/tests/runtime/ws_shutdown.rs`, `examples/example-grpc/tests/grpc_serve.rs` — proof
