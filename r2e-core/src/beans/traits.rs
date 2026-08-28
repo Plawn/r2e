@@ -153,7 +153,16 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     const BUILD_VERSION: u64 = 0;
 
     /// Construct the bean asynchronously from a fully resolved context.
-    fn build(ctx: &BeanContext) -> impl Future<Output = Self> + Send + '_;
+    ///
+    /// **The returned future is deliberately not required to be `Send`.** The
+    /// bean graph is built and awaited in place on the boot thread, so nothing
+    /// moves a constructor future across threads. A `+ Send` bound here would
+    /// be checked for *all* lifetimes and break perfectly ordinary bodies —
+    /// notably sqlx's `&mut *tx` executors, which fail with
+    /// `error: lifetime bound not satisfied` / `implementation of Executor is
+    /// not general enough` (rust-lang/rust#100013). See the "async
+    /// constructors are not `Send`-bound" note in `llm.txt`.
+    fn build(ctx: &BeanContext) -> impl Future<Output = Self> + '_;
 
     /// Called after registration to allow post-processing (e.g., registering
     /// post-construct hooks). The default is a no-op.
@@ -222,7 +231,10 @@ pub trait Producer: Send + 'static {
     /// present depending on config), declare `type Output = Option<T>` and
     /// return `Some(...)` / `None`. The whole `Option<T>` is registered as
     /// a bean — consumers inject `Option<T>` as a hard dependency.
-    fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + Send + '_;
+    ///
+    /// **The returned future is deliberately not required to be `Send`** —
+    /// same reasoning as [`AsyncBean::build`].
+    fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + '_;
 
     /// Called after registration to allow post-processing.
     fn after_register(_registry: &mut BeanRegistry) {}

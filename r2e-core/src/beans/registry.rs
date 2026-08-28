@@ -13,14 +13,18 @@ use std::sync::Arc;
 /// Fallible: a plugin `build` node surfaces its error as
 /// [`BeanError::PluginBuild`]; ordinary bean factories are infallible and
 /// always return `Ok`.
+///
+/// The **closure** is `Send` (a `BeanRegistry` is moved around before it is
+/// resolved), but the **future it returns is not**: the graph is constructed
+/// by `BeanRegistry::resolve`, which is awaited in place on the boot thread
+/// and never spawned. Keeping the future `!Send` is what lets ordinary
+/// constructor bodies — sqlx's `&mut *tx` executors above all — compile at
+/// all (see [`AsyncBean::build`](super::AsyncBean::build)).
 pub(super) type Factory = Box<
     dyn FnOnce(
             BeanContext,
         ) -> Pin<
-            Box<
-                dyn Future<Output = Result<(BeanContext, Box<dyn Any + Send + Sync>), BeanError>>
-                    + Send,
-            >,
+            Box<dyn Future<Output = Result<(BeanContext, Box<dyn Any + Send + Sync>), BeanError>>>,
         > + Send,
 >;
 
