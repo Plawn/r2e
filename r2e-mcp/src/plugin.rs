@@ -355,7 +355,7 @@ impl Plugin for McpServer {
         let relay = mcp_cancel.clone();
         ctx.on_serve(move |serve_ctx| {
             let app = serve_ctx.shutdown_token();
-            serve_ctx.track(async move {
+            serve_ctx.track_named("mcp shutdown relay", async move {
                 app.cancelled().await;
                 relay.cancel();
             });

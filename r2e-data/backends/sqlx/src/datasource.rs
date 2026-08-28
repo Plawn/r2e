@@ -259,7 +259,7 @@ where
         let watcher = pool.clone();
         ctx.on_serve(move |serve| {
             let shutdown = serve.shutdown_token();
-            serve.track(async move {
+            serve.track_named("sqlx pool health watcher", async move {
                 r2e_core::ServiceComponent::start(watcher, shutdown).await;
             });
         });

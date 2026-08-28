@@ -148,10 +148,13 @@ type ServeHook = Box<dyn FnOnce(ServeContext) + Send>;
 /// - [`shutdown_token`](Self::shutdown_token) — cancelled when graceful
 ///   shutdown begins (after drain hooks), while in-flight HTTP requests are
 ///   still finishing. Use it to stop accepting new work.
-/// - [`track`](Self::track) — spawn a task whose completion is
-///   awaited after the HTTP drain, before user shutdown hooks (bounded by
+/// - [`track`](Self::track) / [`track_named`](Self::track_named) — spawn a task
+///   whose completion is awaited after the HTTP drain, before user shutdown
+///   hooks (bounded **per handle** by
 ///   [`AppBuilder::shutdown_grace_period`]). Track any server-like task that
 ///   drains on the shutdown token so the process doesn't exit mid-drain.
+///   Prefer `track_named`: the label is what the grace-period warning names
+///   when that task is the one holding shutdown up.
 pub struct ServeContext {
     tasks: TaskRegistryHandle,
     shutdown: CancelToken,
@@ -191,24 +194,55 @@ impl ServeContext {
     /// the exits where nothing joins it (the grace period elapsing, or the
     /// whole `run()` future being dropped by an `r2e dev` hot patch). A
     /// pre-spawned handle could not be given that ownership after the fact.
+    ///
+    /// Prefer [`track_named`](Self::track_named): an unnamed task that eats the
+    /// grace period is reported as `<unnamed>` and tells the operator nothing.
     pub fn track<F>(&self, fut: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.handles.spawn_owning(Arc::clone(&self.graph), fut);
+        self.track_named(UNNAMED_TRACKED_TASK, fut);
     }
+
+    /// [`track`](Self::track), with a label used in shutdown diagnostics.
+    ///
+    /// `name` identifies the task in the `shutdown_grace_period` warning that
+    /// fires when *this* handle is the one that did not finish in time —
+    /// without it the operator only learns that "a background task" hung.
+    /// Use a stable, human-readable name (`"grpc server"`,
+    /// `"scheduler driver"`, …).
+    pub fn track_named<F>(&self, name: &'static str, fut: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.handles
+            .spawn_owning(name, Arc::clone(&self.graph), fut);
+    }
+}
+
+/// Label used for tracked tasks registered through the unnamed
+/// [`ServeContext::track`].
+pub(super) const UNNAMED_TRACKED_TASK: &str = "<unnamed>";
+
+/// A tracked task handle plus the name shutdown diagnostics report it under.
+pub(super) struct TrackedHandle {
+    /// Human-readable name of the task, from `track_named` /
+    /// `spawn_service`'s component type name. [`UNNAMED_TRACKED_TASK`] when
+    /// the caller did not give one.
+    pub(super) label: &'static str,
+    pub(super) handle: crate::rt::JobHandle<()>,
 }
 
 /// Shared collection of JobHandles awaited after the HTTP drain: services
 /// spawned via [`AppBuilder::spawn_service`] and serve-hook tasks registered
-/// through [`ServeContext::track`]. Shutdown awaits their completion
-/// with a grace deadline before returning.
+/// through [`ServeContext::track`]. Shutdown awaits their completion, each
+/// handle bounded on its own by `shutdown_grace_period`, before returning.
 #[derive(Clone, Default)]
-struct ServiceHandles(Arc<Mutex<Vec<crate::rt::JobHandle<()>>>>);
+struct ServiceHandles(Arc<Mutex<Vec<TrackedHandle>>>);
 
 impl ServiceHandles {
     /// Spawn `fut` as a tracked task that **owns the bean graph while it
-    /// runs**.
+    /// runs**, under the diagnostic name `label`.
     ///
     /// The single constructor for tracked work (`ServeContext::track`,
     /// `spawn_service`, the QUIC endpoint drain), so the ownership rule holds
@@ -216,23 +250,26 @@ impl ServiceHandles {
     /// `shutdown_grace_period` elapses, and skipped entirely when the `run()`
     /// future itself is dropped — but the graph reference travels *inside* the
     /// task and is released only when the task itself ends.
-    fn spawn_owning<F>(&self, graph: Arc<crate::beans::BeanContext>, fut: F)
+    fn spawn_owning<F>(&self, label: &'static str, graph: Arc<crate::beans::BeanContext>, fut: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        self.push(crate::rt::spawn(async move {
-            // Named binding: lives until the end of this block, i.e. until the
-            // wrapped future has completed.
-            let _graph_keepalive = graph;
-            fut.await;
-        }));
+        self.push(TrackedHandle {
+            label,
+            handle: crate::rt::spawn(async move {
+                // Named binding: lives until the end of this block, i.e. until
+                // the wrapped future has completed.
+                let _graph_keepalive = graph;
+                fut.await;
+            }),
+        });
     }
 
-    fn push(&self, handle: crate::rt::JobHandle<()>) {
+    fn push(&self, handle: TrackedHandle) {
         self.0.lock().unwrap().push(handle);
     }
 
-    fn drain(&self) -> Vec<crate::rt::JobHandle<()>> {
+    fn drain(&self) -> Vec<TrackedHandle> {
         std::mem::take(&mut *self.0.lock().unwrap())
     }
 }
@@ -337,9 +374,13 @@ struct BuilderConfig {
     normalize_path: bool,
     /// Whether the DevReload plugin has been applied (prevents double-install).
     dev_reload_applied: bool,
-    /// Maximum time allowed for shutdown hooks to complete before force-exiting.
-    /// `None` means wait indefinitely (default).
+    /// Maximum time allowed for the tracked-handle join phase, applied to each
+    /// handle on its own. `None` means wait indefinitely (default).
     shutdown_grace_period: Option<Duration>,
+    /// Maximum time the HTTP drain (in-flight requests finishing after the
+    /// listener stopped accepting) may take. `None` means unbounded (default,
+    /// the plain-axum behavior).
+    drain_timeout: Option<Duration>,
     /// Active profile name, resolved from the forced profile
     /// ([`AppBuilder::with_profile`]), `R2E_PROFILE` env var, `r2e.profile`
     /// config key, or `"default"`.

@@ -573,7 +573,7 @@ impl Plugin for Scheduler {
                     executor,
                     commands,
                 ) {
-                    serve_ctx.track(driver);
+                    serve_ctx.track_named("scheduler driver", driver);
                 }
             });
         });

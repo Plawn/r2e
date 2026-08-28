@@ -483,9 +483,10 @@ resolve beans at request time).
   deliberately stops there: user `on_drain`/`on_stop` hooks and the async
   disposers do **not** run for a boot that never served.
   Two consequences worth knowing. (1) A tracked task that ignores the shutdown
-  token holds up shutdown — the join is bounded only by `shutdown_grace_period`
-  when one is set — and keeps its graph alive for as long as it runs; write
-  tasks that observe the token. (2) Under `r2e dev` nothing joins anything: the
+  token holds up shutdown — the join is bounded by `shutdown_grace_period` when
+  one is set, applied **per handle**, after which that task is abandoned with a
+  `warn!` naming it (use `track_named` so the name is useful) — and keeps its
+  graph alive for as long as it runs; write tasks that observe the token. (2) Under `r2e dev` nothing joins anything: the
   patch drops the previous `run()` future, whose drop guard cancels that cycle's
   token, so its tracked tasks stop on their own while each keeps *its own*
   cycle's graph alive until it returns — the old graph is released when the last

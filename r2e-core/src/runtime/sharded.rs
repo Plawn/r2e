@@ -204,8 +204,19 @@ mod imp {
     /// worker, cancellation drains HTTP first, then shuts down the services in
     /// reverse start order, then drops the runtime.
     ///
+    /// `drain_timeout` ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout))
+    /// bounds each worker's HTTP drain **individually**, measured from the
+    /// worker's own cancellation. Since every worker's child token is cancelled
+    /// by the same parent, the whole set still finishes within `drain_timeout`
+    /// of the shutdown signal — matching the single-listener strategy exactly.
+    /// A worker whose drain times out still shuts its per-worker services down.
+    ///
     /// Returns the first worker error, if any. Worker panics are logged via
     /// `tracing::error!`.
+    // One more than clippy's default: `drain_timeout` joins the existing
+    // router/addrs/workers/nodelay/control-plane/token/services set. Bundling
+    // them into a struct would only move the same seven values one level down.
+    #[allow(clippy::too_many_arguments)]
     pub fn serve_sharded(
         router: crate::http::Router,
         addrs: &[SocketAddr],
@@ -213,6 +224,7 @@ mod imp {
         tcp_nodelay: bool,
         control_plane: crate::rt::RuntimeHandle,
         cancel_token: CancelToken,
+        drain_timeout: Option<std::time::Duration>,
         services: &[PerWorkerServiceFactory],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Pre-create the listeners on the main thread so that a bind failure
@@ -329,27 +341,44 @@ mod imp {
                         }
 
                         // ── Serve ────────────────────────────────────────
+                        // Wrapped in `bounded_http_drain` exactly like the
+                        // single-listener path: the budget starts when this
+                        // worker's `child_token` is cancelled — the same
+                        // instant its graceful shutdown begins — and on
+                        // overflow the serve future is dropped, abandoning
+                        // whatever connections this worker still holds.
                         let svc = router.into_make_service_with_connect_info::<SocketAddr>();
                         let shutdown = child_token.clone().cancelled_owned();
+                        use std::future::IntoFuture as _;
                         let serve_result = if tcp_nodelay {
                             use crate::http::ListenerExt as _;
-                            crate::http::serve(
-                                listener.tap_io(|stream| {
-                                    if let Err(e) = stream.set_nodelay(true) {
-                                        tracing::warn!(
-                                            error = %e,
-                                            "failed to set TCP_NODELAY on accepted connection"
-                                        );
-                                    }
-                                }),
-                                svc,
+                            crate::runtime::drain::bounded_http_drain(
+                                crate::http::serve(
+                                    listener.tap_io(|stream| {
+                                        if let Err(e) = stream.set_nodelay(true) {
+                                            tracing::warn!(
+                                                error = %e,
+                                                "failed to set TCP_NODELAY on accepted connection"
+                                            );
+                                        }
+                                    }),
+                                    svc,
+                                )
+                                .with_graceful_shutdown(shutdown)
+                                .into_future(),
+                                child_token.clone(),
+                                drain_timeout,
                             )
-                            .with_graceful_shutdown(shutdown)
                             .await
                         } else {
-                            crate::http::serve(listener, svc)
-                                .with_graceful_shutdown(shutdown)
-                                .await
+                            crate::runtime::drain::bounded_http_drain(
+                                crate::http::serve(listener, svc)
+                                    .with_graceful_shutdown(shutdown)
+                                    .into_future(),
+                                child_token.clone(),
+                                drain_timeout,
+                            )
+                            .await
                         };
 
                         // ── Shutdown: HTTP drained, now the services ─────

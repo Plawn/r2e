@@ -155,7 +155,7 @@ impl Plugin for GrpcServer {
                     // the seam hands out the raw tokio-util token, which tonic's
                     // `serve_with_incoming_shutdown` needs for `cancelled_owned()`.
                     let cancel = serve_ctx.shutdown_token().into_inner();
-                    serve_ctx.track(async move {
+                    serve_ctx.track_named("grpc server", async move {
                         // Bind explicitly (instead of tonic's internal bind)
                         // so the resolved address — including an OS-assigned
                         // port for `:0` — is logged.

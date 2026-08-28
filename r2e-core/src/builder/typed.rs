@@ -12,7 +12,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ) -> Self {
         for (name, hook) in service_sources {
             let ctx = Arc::clone(&self.bean_context);
-            self = self.register_service(move |token| {
+            self = self.register_service(name, move |token| {
                 tracing::debug!(service = name, "started bean service");
                 hook(&ctx, token)
             });
@@ -25,7 +25,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// [`spawn_service`](Self::spawn_service) and
     /// [`collect_service_sources`](Self::collect_service_sources); `run`
     /// receives the [`CancelToken`] and returns the service future.
-    fn register_service<F, Fut>(mut self, run: F) -> Self
+    ///
+    /// `name` labels the tracked handle: it is what the `shutdown_grace_period`
+    /// warning names when this service is the one that did not stop in time.
+    fn register_service<F, Fut>(mut self, name: &'static str, run: F) -> Self
     where
         F: FnOnce(CancelToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
@@ -58,7 +61,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // must not see a dead graph on those paths.
         let graph = Arc::clone(&self.bean_context);
         self = self.on_start(move |_state| async move {
-            handles.spawn_owning(graph, run(token));
+            handles.spawn_owning(name, graph, run(token));
             Ok(())
         });
         self.plugin_shutdown_hooks.push(Box::new(move || {
@@ -338,23 +341,32 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Set a maximum grace period for the post-drain shutdown phase.
+    /// Bound the **tracked-handle join** phase of shutdown, per handle.
     ///
-    /// After the listener has stopped accepting and in-flight requests have
-    /// finished, tracked background tasks (`spawn_service`, gRPC/QUIC drains,
-    /// [`ServeContext::track`](crate::builder::ServeContext::track)) are
-    /// awaited and [`on_stop`](Self::on_stop) hooks run. `duration` bounds
-    /// those two together: if they do not complete in time, they are
-    /// abandoned with a warning and `run()` returns.
+    /// After the HTTP drain, tracked background tasks (`spawn_service`,
+    /// gRPC/QUIC drains, [`ServeContext::track`](crate::builder::ServeContext::track))
+    /// are joined. `duration` is the budget of **each handle separately**, and
+    /// the handles are joined concurrently — one service ignoring its
+    /// `CancelToken` is abandoned after `duration` with a warning naming it,
+    /// and does not eat the budget of the others. The whole phase therefore
+    /// takes at most `duration`, not `duration × services`.
+    ///
+    /// What it does **not** cover:
+    ///
+    /// | Phase | Bound by |
+    /// |---|---|
+    /// | [`on_drain`](Self::on_drain) hooks | nothing (they run before the drain) |
+    /// | HTTP drain (in-flight requests) | [`drain_timeout`](Self::drain_timeout) |
+    /// | tracked-handle join | **this**, per handle |
+    /// | [`on_stop`](Self::on_stop) hooks | nothing — they **always** run |
+    ///
+    /// `on_stop` hooks used to share this budget and could be skipped entirely
+    /// when a stuck service exhausted it. They no longer are: they carry
+    /// application-state reconciliation (marking interrupted runs cancelled,
+    /// releasing an advisory lock) and are treated as must-run.
     ///
     /// By default there is **no** grace period — shutdown waits indefinitely
-    /// for tracked tasks and hooks. A long-lived in-flight connection keeps
-    /// its drain open: a server-streaming gRPC call holds the (tracked, thus
-    /// grace-boundable) gRPC drain, while an open HTTP SSE/streaming response
-    /// holds the HTTP drain itself, which runs *before* this phase and is not
-    /// bounded by it. [`on_drain`](Self::on_drain) hooks are also **not**
-    /// covered — they run before the drain begins, while the server is still
-    /// serving.
+    /// for tracked tasks.
     ///
     /// # Example
     ///
@@ -365,6 +377,36 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// ```
     pub fn shutdown_grace_period(mut self, duration: Duration) -> Self {
         self.shared.shutdown_grace_period = Some(duration);
+        self
+    }
+
+    /// Bound the **HTTP drain**: how long in-flight requests may keep running
+    /// after the listener has stopped accepting.
+    ///
+    /// Without it the drain is unbounded (plain axum behavior): a single client
+    /// holding a request — or an open SSE / streaming response — keeps the
+    /// process alive forever, and `shutdown_grace_period` cannot help because
+    /// it only starts once the drain is over.
+    ///
+    /// When the timeout elapses, a `warn!` names it and the remaining
+    /// connections are abandoned (the serve future is dropped, closing them).
+    /// Shutdown then continues normally: the tracked-handle join and the
+    /// `on_stop` hooks still run.
+    ///
+    /// Applies identically to both serving strategies — under sharded serving
+    /// (`server.workers`) each worker bounds its own drain, so the whole set
+    /// still finishes within `duration` of the shutdown signal.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .drain_timeout(Duration::from_secs(10))       // in-flight requests
+    ///     .shutdown_grace_period(Duration::from_secs(5)) // background services
+    ///     .serve("0.0.0.0:3000").await
+    /// ```
+    pub fn drain_timeout(mut self, duration: Duration) -> Self {
+        self.shared.drain_timeout = Some(duration);
         self
     }
 
@@ -430,7 +472,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
         let service = C::from_context(&self.bean_context);
-        Ok(self.register_service(move |token| service.start(token)))
+        Ok(self.register_service(std::any::type_name::<C>(), move |token| {
+            service.start(token)
+        }))
     }
 
     /// Get plugin data by type.
@@ -876,6 +920,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_data: self.shared.plugin_data,
             state,
             shutdown_grace_period: self.shared.shutdown_grace_period,
+            drain_timeout: self.shared.drain_timeout,
         }
     }
 
@@ -976,6 +1021,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_data,
             state,
             shutdown_grace_period,
+            drain_timeout,
         } = this.build_inner();
 
         #[cfg(feature = "quic")]
@@ -1002,6 +1048,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             async_shutdown_hooks,
             plugin_data,
             shutdown_grace_period,
+            drain_timeout,
             tcp_nodelay,
             workers,
             per_worker_services,
@@ -1062,6 +1109,7 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     state: T,
     shutdown_grace_period: Option<Duration>,
+    drain_timeout: Option<Duration>,
 }
 
 /// Sort the collected `#[on_start]` hooks by their declared `order`, ascending.
