@@ -1,6 +1,6 @@
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::{InMemorySpanExporter, Sampler, SdkTracerProvider};
 use r2e_observability::{inject_current_context, traced_reqwest_client};
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -37,6 +37,21 @@ fn injection_is_a_noop_without_an_otel_span() {
     assert!(!headers.contains_key("traceparent"));
 
     let _client = traced_reqwest_client(reqwest::Client::builder().build().unwrap());
+}
+
+/// Tracer provider for tests that assert on **exported** spans.
+///
+/// `SdkTracerProvider::builder().build()` reads `OTEL_TRACES_SAMPLER` /
+/// `OTEL_TRACES_SAMPLER_ARG` from the process environment, and `config::`
+/// tests in this binary set those to `parentbased_traceidratio` / `0.25`
+/// while they run. Tests run in parallel, so a provider built at the wrong
+/// moment silently dropped 75% of root spans (task #981). Pin the sampler
+/// so the process environment can never influence what gets exported.
+fn test_provider(exporter: InMemorySpanExporter) -> SdkTracerProvider {
+    SdkTracerProvider::builder()
+        .with_sampler(Sampler::AlwaysOn)
+        .with_simple_exporter(exporter)
+        .build()
 }
 
 /// One-shot HTTP/1 server: accepts a single connection, returns the raw
@@ -77,14 +92,11 @@ fn header_value<'a>(head: &'a str, name: &str) -> Option<&'a str> {
 #[tokio::test]
 async fn middleware_opens_a_client_span_and_propagates_its_id() {
     use opentelemetry::trace::SpanKind;
-    use opentelemetry_sdk::trace::InMemorySpanExporter;
     use tracing::Instrument;
 
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     let exporter = InMemorySpanExporter::default();
-    let provider = SdkTracerProvider::builder()
-        .with_simple_exporter(exporter.clone())
-        .build();
+    let provider = test_provider(exporter.clone());
     let tracer = provider.tracer("client-test");
     let subscriber = tracing_subscriber::Registry::default()
         .with(tracing_opentelemetry::layer().with_tracer(tracer));
@@ -142,12 +154,9 @@ async fn middleware_opens_a_client_span_and_propagates_its_id() {
 #[tokio::test]
 async fn middleware_records_failures_on_the_client_span() {
     use opentelemetry::trace::{SpanKind, Status};
-    use opentelemetry_sdk::trace::InMemorySpanExporter;
 
     let exporter = InMemorySpanExporter::default();
-    let provider = SdkTracerProvider::builder()
-        .with_simple_exporter(exporter.clone())
-        .build();
+    let provider = test_provider(exporter.clone());
     let tracer = provider.tracer("client-test");
     let subscriber = tracing_subscriber::Registry::default()
         .with(tracing_opentelemetry::layer().with_tracer(tracer));
