@@ -571,14 +571,20 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
             if f.is_option {
                 let inner_ty = option_inner_type(&f.ty).unwrap();
 
+                // `Option<T>` fields resolve through `R2eConfig::get_opt`: an
+                // absent key AND an explicit `null` (YAML `key:` / `key: null`)
+                // both mean "no value", so a `null` falls back to the env var /
+                // default like an absent key instead of exploding as a type
+                // mismatch. A present, mistyped value is still a loud error.
+
                 // Option<T> — env + default
                 if let (Some(env_name), Some(default_expr)) = (&f.env_var, &f.default_expr) {
                     quote! {
                         #field_name: {
                             let __key: &str = #key_expr;
-                            match __config.get::<#inner_ty>(__key) {
-                                Ok(v) => Some(v),
-                                Err(#krate::config::ConfigError::NotFound(_)) => {
+                            match __config.get_opt::<#inner_ty>(__key)? {
+                                Some(v) => Some(v),
+                                None => {
                                     match std::env::var(#env_name) {
                                         Ok(__env_val) => {
                                             let __cv = #krate::config::ConfigValue::String(__env_val);
@@ -587,7 +593,6 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                                         Err(_) => { let __d: #inner_ty = #default_expr; Some(__d) }
                                     }
                                 }
-                                Err(e) => return Err(e),
                             }
                         }
                     }
@@ -597,9 +602,9 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                     quote! {
                         #field_name: {
                             let __key: &str = #key_expr;
-                            match __config.get::<#inner_ty>(__key) {
-                                Ok(v) => Some(v),
-                                Err(#krate::config::ConfigError::NotFound(_)) => {
+                            match __config.get_opt::<#inner_ty>(__key)? {
+                                Some(v) => Some(v),
+                                None => {
                                     match std::env::var(#env_name) {
                                         Ok(__env_val) => {
                                             let __cv = #krate::config::ConfigValue::String(__env_val);
@@ -608,7 +613,6 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                                         Err(_) => None,
                                     }
                                 }
-                                Err(e) => return Err(e),
                             }
                         }
                     }
@@ -618,10 +622,9 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                     quote! {
                         #field_name: {
                             let __key: &str = #key_expr;
-                            match __config.get::<#inner_ty>(__key) {
-                                Ok(v) => Some(v),
-                                Err(#krate::config::ConfigError::NotFound(_)) => { let __d: #inner_ty = #default_expr; Some(__d) }
-                                Err(e) => return Err(e),
+                            match __config.get_opt::<#inner_ty>(__key)? {
+                                Some(v) => Some(v),
+                                None => { let __d: #inner_ty = #default_expr; Some(__d) }
                             }
                         }
                     }
@@ -631,11 +634,7 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                     quote! {
                         #field_name: {
                             let __key: &str = #key_expr;
-                            match __config.get::<#inner_ty>(__key) {
-                                Ok(v) => Some(v),
-                                Err(#krate::config::ConfigError::NotFound(_)) => None,
-                                Err(e) => return Err(e),
-                            }
+                            __config.get_opt::<#inner_ty>(__key)?
                         }
                     }
                 }

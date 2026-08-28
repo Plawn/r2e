@@ -442,7 +442,9 @@ resolves to `None` (not a startup error), an explicit `null` also yields `None`,
 and a present value yields `Some(v)` (a type mismatch still fails loudly). This
 applies everywhere `#[config]` is accepted — `#[producer]`/`#[bean]` params,
 `#[derive(Bean)]`/`#[derive(DecoratorBean)]`/`#[derive(BackgroundService)]`
-fields, and `#[controller]` fields.
+fields, `#[controller]` fields, and `#[derive(ConfigProperties)]` fields (where
+an explicit `null` also falls back to `#[config(env = …)]` / `#[config(default
+= …)]`, exactly like an absent key).
 
 ### Assembly — state is inferred
 
@@ -800,8 +802,18 @@ you must still `.register_module::<OtherModule>()` yourself.
 
 ### Same-typed beans
 
-Qualifiers/named beans do not exist — use **newtypes** (`struct ReadPool(PgPool)`)
-for multiple beans of the same underlying type.
+Qualifiers/named beans **do not exist** — there is no `name = "..."` on
+`#[producer]` or `#[inject]`, and using one is a compile error. The bean graph is
+keyed by type, so two beans of the same underlying type need two **newtypes**:
+
+```rust
+#[derive(Clone)] pub struct ReadPool(pub PgPool);
+#[derive(Clone)] pub struct WritePool(pub PgPool);
+// provide/produce/inject them like any other bean — `#[inject] pool: ReadPool`
+```
+
+A newtype is typed, compiler-checked, and works at **every** injection site
+(controllers, beans, decorator beans, background services, plugins, guards).
 
 ---
 
@@ -3081,6 +3093,13 @@ b.plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())  // separate po
  .build_state().await
  .register_grpc_service::<GreeterService>()       // deps + config keys checked here
 ```
+
+`GrpcServer::multiplexed()` serves gRPC and HTTP on the **same** port, routing
+by `content-type` (`application/grpc*` → tonic, everything else → the HTTP
+router). **grpc-web is NOT supported** in that mode: there is no `tonic-web`
+translation layer, so an `application/grpc-web*` request is answered with
+`415 Unsupported Media Type` (and the plugin logs a warning at boot). Use a
+native gRPC client, or put a grpc-web proxy (Envoy, …) in front.
 
 `register_grpc_service` panics on a missing key;
 `try_register_grpc_service::<S>()` (same trait) returns

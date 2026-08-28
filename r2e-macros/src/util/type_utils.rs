@@ -115,74 +115,82 @@ pub fn to_pascal_case(s: &str) -> String {
         .collect()
 }
 
-/// Extract the base name of a type (e.g., `SqlitePool` from `sqlx::SqlitePool`).
-pub fn type_base_name(ty: &Type) -> String {
-    match ty {
-        Type::Path(type_path) => {
-            if let Some(last) = type_path.path.segments.last() {
-                last.ident.to_string()
-            } else {
-                quote!(#ty).to_string()
-            }
+/// The single diagnostic every host emits for a `name = "..."` bean qualifier.
+///
+/// R2E has no named beans: the graph is keyed by type, and the only way to have
+/// two beans of the same underlying type is to give them two types. Emitted
+/// verbatim by `#[inject(name = ...)]` (every host) and by
+/// `#[producer(name = ...)]`, so the fix reads identically everywhere.
+pub const NAMED_BEAN_MSG: &str = "named beans are not supported: R2E has no bean qualifiers — the bean graph is keyed by type\n\
+     \n  declare a newtype instead, and inject it by type:\
+     \n\
+     \n    #[derive(Clone)]\
+     \n    pub struct ReadPool(pub PgPool);\
+     \n\
+     \n    #[producer] fn read_pool(..) -> ReadPool { .. }\
+     \n    #[inject] pool: ReadPool,";
+
+/// True when an `#[inject(...)]` attribute carries a `name = "..."` argument.
+///
+/// Parse failures answer `false`: the host's own argument validation reports
+/// them, and a malformed attribute is not a named-bean declaration.
+fn inject_has_name(attr: &syn::Attribute) -> bool {
+    let syn::Meta::List(list) = &attr.meta else {
+        return false;
+    };
+    let mut found = false;
+    let _ = list.parse_nested_meta(|meta| {
+        if meta.path.is_ident("name") {
+            found = true;
         }
-        _ => quote!(#ty).to_string(),
-    }
+        // Consume `= <value>` so parsing reaches every argument.
+        if meta.input.peek(syn::Token![=]) {
+            let _: syn::Expr = meta.value()?.parse()?;
+        }
+        Ok(())
+    });
+    found
 }
 
-/// Build the newtype identifier for a named bean: `PascalName` + type base name.
+/// Reject `#[inject(name = "...")]` on any host — fields or parameters.
 ///
-/// E.g., `name = "primary"` on `SqlitePool` → `PrimarySqlitePool`.
-pub fn named_bean_newtype_ident(name: &str, ty: &Type) -> syn::Ident {
-    let pascal_name = to_pascal_case(name);
-    let base = type_base_name(ty);
-    syn::Ident::new(
-        &format!("{}{}", pascal_name, base),
-        proc_macro2::Span::call_site(),
-    )
-}
-
-/// Parse `#[inject(name = "...")]` from attributes, returning the name if present.
-///
-/// Returns `Ok(None)` if no `#[inject(name = "...")]` is found.
-/// Returns `Ok(Some(name))` if found. Bare `#[inject]` is accepted.
-/// Any other argument (including `identity`, unknown keys) is rejected — for
-/// controller fields the identity qualifier is parsed by `has_identity_qualifier`
-/// before `parse_inject_name` is called; beans/producers have no identity.
-pub fn parse_inject_name(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+/// The single shared rejection: controllers, `#[bean]` / `#[producer]` params,
+/// `#[derive(Bean)]`, `#[derive(DecoratorBean)]` and
+/// `#[derive(BackgroundService)]` fields all call it, so the message is the same
+/// wherever a user reaches for a qualifier.
+pub fn reject_named_inject(attrs: &[syn::Attribute]) -> syn::Result<()> {
     for attr in attrs {
-        if attr.path().is_ident("inject") {
-            if let syn::Meta::List(_) = &attr.meta {
-                // `#[inject(identity)]` is the controller-only bare-ident form
-                // and is consumed by `has_identity_qualifier` before this
-                // function runs. In bean/producer contexts we must still let
-                // the controller-parsing path reach it, so accept it silently
-                // here and let the caller decide whether it is valid.
-                if let Ok(ident) = attr.parse_args::<syn::Ident>() {
-                    if ident == "identity" {
-                        continue;
-                    }
-                }
-
-                let mut name = None;
-                attr.parse_nested_meta(|meta| {
-                    if meta.path.is_ident("name") {
-                        let value = meta.value()?;
-                        let lit: syn::LitStr = value.parse()?;
-                        name = Some(lit.value());
-                        Ok(())
-                    } else {
-                        Err(meta.error(
-                            "unknown `#[inject]` argument; expected `identity` or `name = \"...\"`",
-                        ))
-                    }
-                })?;
-                if let Some(n) = name {
-                    return Ok(Some(n));
-                }
-            }
+        if attr.path().is_ident("inject") && inject_has_name(attr) {
+            return Err(syn::Error::new_spanned(attr, NAMED_BEAN_MSG));
         }
     }
-    Ok(None)
+    Ok(())
+}
+
+/// Validate `#[inject(...)]` arguments on a **bean-like** host: `#[bean]` and
+/// `#[producer]` parameters, `#[derive(Bean)]` / `#[derive(DecoratorBean)]` /
+/// `#[derive(BackgroundService)]` fields.
+///
+/// These hosts are app-scoped only, so `#[inject]` takes no arguments at all —
+/// `identity` / `request` are `#[controller]`-only request scopes and
+/// `name = "..."` does not exist anywhere.
+pub fn check_bean_inject_args(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    reject_named_inject(attrs)?;
+    for attr in attrs {
+        if !attr.path().is_ident("inject") {
+            continue;
+        }
+        if matches!(attr.meta, syn::Meta::List(_)) {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "`#[inject(...)]` takes no arguments here: this host is app-scoped\n\
+                 \n  #[inject]  — clone an app-scoped bean\
+                 \n\
+                 \n`identity` / `request` are request scopes, available on `#[controller]` fields only.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Parse a `#[config("app.key")]` attribute against its declared type, producing

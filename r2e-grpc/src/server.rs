@@ -212,6 +212,16 @@ impl Plugin for GrpcServer {
                             "Multiplexing gRPC services onto the HTTP port \
                              (content-type routing)"
                         );
+                        // Said once at boot so it is not a surprise at the
+                        // first browser call: the multiplexer has no
+                        // `tonic-web` layer, so `application/grpc-web*`
+                        // requests are answered with 415, not proxied.
+                        tracing::warn!(
+                            "{} — `application/grpc-web*` requests are answered with \
+                             415 Unsupported Media Type. Use a native gRPC client, or \
+                             put a grpc-web proxy (Envoy, …) in front.",
+                            crate::multiplex::GRPC_WEB_UNSUPPORTED
+                        );
                         let mux = MultiplexService::new(routes.prepare(), router);
                         r2e_core::http::Router::new().fallback_service(mux)
                     }

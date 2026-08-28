@@ -17,7 +17,7 @@
 | `params_derive.rs` | 195 | 278 | 70.1% | 83 | `PrefixedExtract`/`FromRequestParts` impls; `ParamsMetadata` codegen; per-field extraction: optional path params, query with default expr, query required, header optional/required (full branch matrix) |
 | `lib.rs` | 55 | 133 | 41.4% | 78 | Attribute-macro entry points (`#[controller]`, `#[routes]`, `#[bean]`, `#[grpc_routes]`, `#[main]`, `#[test]`) — thin dispatch, covered indirectly |
 | `codegen/handlers.rs` | 845 | 911 | 92.8% | 66 | `generate_single_handler` case matrix; WebSocket handler codegen (pattern 2: method returns `impl WsHandler`, guard preflight, upgrade closure, deco items); handler-level extra params |
-| `type_utils.rs` | 95 | 147 | 64.6% | 52 | `type_base_name` (non-Path fallback); `named_bean_newtype_ident`; `parse_inject_name` (bare `#[inject]`, `#[inject(identity)]` skip, `#[inject(name = "...")]`, unknown-arg error) |
+| `type_utils.rs` | 95 | 147 | 64.6% | 52 | `reject_named_inject` / `check_bean_inject_args` (bare `#[inject]`, `#[inject(name = "...")]` rejection, unknown-arg error) |
 | `grpc_routes_parsing.rs` | 75 | 118 | 63.6% | 43 | `GrpcRoutesArgs` parsing (descriptor, unknown arg error); `GrpcRoutesImplDef` fields; `extract_identity_param` (duplicate identity error, optional identity, attr stripping) |
 | `bg_service_derive.rs` | 33 | 75 | 44.0% | 42 | `#[service(state)]` removed-attr error; unit struct vs named struct branches; field classification (#[inject]/#[config]/#[config_section]); `ServiceComponent` impl codegen; `generate_unit_impl` |
 | `extract/scheduled.rs` | 95 | 133 | 71.4% | 38 | Overlap policy parsing; skip_if parsing; `ScheduledConfig` struct construction from attrs |
@@ -76,8 +76,7 @@
 
 **8. `type_utils.rs` (52 uncov)** — unit tests for:
 - `type_base_name` with path type, non-path type
-- `named_bean_newtype_ident` → PascalCase composition
-- `parse_inject_name` all branches: bare `#[inject]`, `#[inject(identity)]`, `#[inject(name = "x")]`, unknown arg error
+- `check_bean_inject_args` all branches: bare `#[inject]`, `#[inject(name = "x")]` rejection, unknown arg error
 
 **9. `grpc_routes_parsing.rs` (43 uncov)** — unit/compile tests for:
 - `GrpcRoutesArgs` with `descriptor = expr`

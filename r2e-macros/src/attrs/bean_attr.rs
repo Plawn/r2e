@@ -22,7 +22,7 @@ use crate::model::types::ConsumerKind;
 use crate::util::crate_path::r2e_core_path;
 use crate::util::hash_tokens::hash_token_stream;
 use crate::util::type_utils::{
-    named_bean_newtype_ident, parse_config_field, parse_config_section_prefix, parse_inject_name,
+    check_bean_inject_args, parse_config_field, parse_config_section_prefix,
 };
 
 /// Parsed `#[bean(...)]` arguments.
@@ -223,7 +223,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 let arg_name =
                     syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
 
-                let inject_name = parse_inject_name(&pat_type.attrs)?;
+                check_bean_inject_args(&pat_type.attrs)?;
 
                 let config_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config"));
                 let config_section_attr = pat_type
@@ -255,11 +255,6 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     );
                     build_args.push(quote! { let #arg_name: #ty = #expr; });
                     has_live_config = true;
-                } else if let Some(name) = inject_name {
-                    let newtype_ident = named_bean_newtype_ident(&name, ty);
-                    dep_type_ids.push(quote! { (std::any::TypeId::of::<#newtype_ident>(), std::any::type_name::<#newtype_ident>()) });
-                    dep_types.push(quote! { #newtype_ident });
-                    build_args.push(quote! { let #arg_name: #ty = ctx.get::<#newtype_ident>().0; });
                 } else if let Some(attr) = config_section_attr {
                     let prefix_str = parse_config_section_prefix(attr)?;
                     let krate = r2e_core_path();

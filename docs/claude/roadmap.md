@@ -493,7 +493,8 @@ Kept where the context lives rather than duplicated here:
 ## Decisions log — do NOT re-propose
 
 - **Qualifiers / named beans: REJECTED.** Newtypes are the chosen pattern for
-  same-typed beans (runtime `DuplicateBean` backstop).
+  same-typed beans (runtime `DuplicateBean` backstop) (the `name = "…"`
+  shorthand was removed 2026-08-28).
 - **`#[transactional]`: REMOVED (W10 phase 4, 2026-07-16, user-approved).**
   `#[managed]` is the single transaction story. The body wrapper had zero
   usage, relied on an unhygienic magic `tx` variable injected into the body

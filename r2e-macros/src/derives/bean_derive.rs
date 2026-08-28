@@ -7,7 +7,6 @@ use crate::model::field_resolver::{classify_fields, ClassifyOpts, FieldKind};
 use crate::model::type_list_gen::build_tcons_type;
 use crate::util::crate_path::r2e_core_path;
 use crate::util::hash_tokens::hash_token_stream;
-use crate::util::type_utils::named_bean_newtype_ident;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -44,7 +43,6 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let classified = classify_fields(
         fields.iter(),
         &ClassifyOpts {
-            allow_named_inject: true,
             allow_default: true,
             context_label: "bean",
         },
@@ -62,12 +60,6 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let field_type = cf.ty;
 
         match &cf.kind {
-            FieldKind::InjectNamed { name } => {
-                let newtype_ident = named_bean_newtype_ident(name, field_type);
-                dep_type_ids.push(quote! { (std::any::TypeId::of::<#newtype_ident>(), std::any::type_name::<#newtype_ident>()) });
-                dep_types.push(quote! { #newtype_ident });
-                field_inits.push(quote! { #field_name: ctx.get::<#newtype_ident>().0 });
-            }
             FieldKind::Inject => {
                 dep_type_ids.push(quote! { (std::any::TypeId::of::<#field_type>(), std::any::type_name::<#field_type>()) });
                 dep_types.push(quote! { #field_type });

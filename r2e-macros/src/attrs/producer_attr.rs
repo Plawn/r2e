@@ -7,39 +7,33 @@ use crate::model::type_list_gen::build_tcons_type;
 use crate::util::crate_path::r2e_core_path;
 use crate::util::hash_tokens::hash_token_stream;
 use crate::util::type_utils::{
-    parse_config_field, parse_config_section_prefix, parse_live_config_field, to_pascal_case,
-    type_base_name,
+    check_bean_inject_args, parse_config_field, parse_config_section_prefix,
+    parse_live_config_field, to_pascal_case, NAMED_BEAN_MSG,
 };
 
 /// Parsed `#[producer(...)]` arguments.
 struct ProducerArgs {
-    /// If present, the `name = "..."` qualifier for named beans.
-    name: Option<String>,
     /// Whether the produced output should be started as a lifecycle service.
     start: bool,
 }
 
 impl ProducerArgs {
     fn parse(args: TokenStream) -> syn::Result<Self> {
-        let mut name = None;
         let mut start = false;
         if !args.is_empty() {
             let parser = syn::meta::parser(|meta| {
-                if meta.path.is_ident("name") {
-                    let value = meta.value()?;
-                    let lit: syn::LitStr = value.parse()?;
-                    name = Some(lit.value());
-                    Ok(())
-                } else if meta.path.is_ident("start") {
+                if meta.path.is_ident("start") {
                     start = true;
                     Ok(())
+                } else if meta.path.is_ident("name") {
+                    Err(meta.error(NAMED_BEAN_MSG))
                 } else {
-                    Err(meta.error("expected `name = \"...\"` or `start`"))
+                    Err(meta.error("expected `start`"))
                 }
             });
             syn::parse::Parser::parse(parser, args)?;
         }
-        Ok(Self { name, start })
+        Ok(Self { start })
     }
 }
 
@@ -122,6 +116,8 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                 let ty = &*pat_type.ty;
                 let arg_name =
                     syn::Ident::new(&format!("__arg_{}", i), proc_macro2::Span::call_site());
+
+                check_bean_inject_args(&pat_type.attrs)?;
 
                 // Check for #[config("key")] or #[config_section(prefix = "...")] attribute
                 let config_attr = pat_type.attrs.iter().find(|a| a.path().is_ident("config"));
@@ -284,37 +280,11 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     let fn_asyncness = &item_fn.sig.asyncness;
     let ret_ty = &item_fn.sig.output;
 
-    // If `name = "..."` is specified, generate a newtype wrapper around the
-    // output type. The newtype is what gets registered in the bean context,
-    // and consumers using `#[inject(name = "...")] field: T` resolve via
-    // the newtype.
-    //
-    // Note: named producers returning `Option<T>` are not supported — named
-    // resolution goes through the newtype wrapper, which doesn't compose with
-    // `Option<T>`. Use an unnamed producer for the conditional-availability
-    // pattern.
-    let (effective_output_ty, newtype_decl, produce_expr) = if let Some(ref name) = args.name {
-        let newtype_name = format!("{}{}", to_pascal_case(name), type_base_name(&output_ty));
-        let newtype_ident = syn::Ident::new(&newtype_name, fn_name.span());
-        let doc = format!("Generated newtype for named bean `{}`.", name);
-        let newtype = quote! {
-            #[doc = #doc]
-            #[derive(Clone)]
-            #vis struct #newtype_ident(pub #output_ty);
-
-            impl ::std::ops::Deref for #newtype_ident {
-                type Target = #output_ty;
-                fn deref(&self) -> &Self::Target {
-                    &self.0
-                }
-            }
-        };
-        let wrapped_ty: TokenStream2 = quote! { #newtype_ident };
-        let expr = quote! { #newtype_ident(#call) };
-        (wrapped_ty, newtype, expr)
-    } else {
-        (quote! { #output_ty }, quote! {}, quote! { #call })
-    };
+    // The produced type IS the bean key: R2E has no qualifiers, so a producer
+    // that needs to coexist with another of the same underlying type returns a
+    // newtype the user declares (`struct ReadPool(PgPool)`).
+    let effective_output_ty: TokenStream2 = quote! { #output_ty };
+    let produce_expr = quote! { #call };
 
     let config_keys_ret_ty = crate::model::field_resolver::config_keys_ret_ty(&krate);
 
@@ -324,8 +294,8 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     // takes as parameters. Without this fold, a derived service with a missing
     // `#[inject]` bean compiled fine and panicked in `ctx.get()` at serve time.
     //
-    // The output type is registered verbatim (bare `T`, `Option<T>`, or the
-    // `name = "..."` newtype), and `register_service_source::<Self::Output>()`
+    // The output type is registered verbatim (bare `T` or `Option<T>`), and
+    // `register_service_source::<Self::Output>()`
     // already requires exactly that type to be the `ServiceComponent`, so the
     // same type is the one to ask for `Deps`. Both lists are concrete, so the
     // `TAppend` projection normalizes without extra bounds.
@@ -342,9 +312,6 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     Ok(quote! {
         // Emit the original function with cleaned params
         #vis #fn_asyncness fn #fn_name(#(#clean_params),*) #ret_ty #fn_body
-
-        // Generated newtype (if named)
-        #newtype_decl
 
         // Generated producer struct
         #vis struct #struct_ident;
