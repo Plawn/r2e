@@ -55,7 +55,7 @@ AppBuilder::new()
 
 `.shutdown_grace_period(Duration)` — optional maximum time for **each tracked handle** (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains) to finish after the HTTP drain. Without it, shutdown waits indefinitely. It does NOT bound the HTTP drain (that is `.drain_timeout(Duration)`) nor the `on_stop` hooks, which always run.
 
-`.drain_timeout(Duration)` — optional maximum time for the HTTP drain itself (in-flight requests finishing after the listener stopped accepting), measured from cancellation. Default `None` = unbounded, as in plain axum. On overflow the remaining connections are abandoned with a `warn!` and shutdown continues to the tracked-handle join and the `on_stop` hooks. Applied per worker under sharded serving. See `docs/features/22-serve-lifecycle.md`.
+`.drain_timeout(Duration)` — maximum time for the HTTP drain itself (in-flight requests finishing after the listener stopped accepting), measured from cancellation. **Default 30s** (`runtime::drain::DEFAULT_DRAIN_TIMEOUT`); the `server.drain-timeout` config key sets it without code, and the builder call wins over the key. `.drain_timeout_unbounded()` is the only way back to the plain-axum unbounded drain. On overflow the remaining connections are abandoned with a `warn!` and shutdown continues to the tracked-handle join and the `on_stop` hooks. Applied per worker under sharded serving. See `docs/features/22-serve-lifecycle.md`.
 
 `.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. Used by `Tracing::from_config()` to read tracing settings from YAML.
 

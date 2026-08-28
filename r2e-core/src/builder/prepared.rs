@@ -52,11 +52,11 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     /// Per-handle bound on the tracked-handle join phase
     /// ([`AppBuilder::shutdown_grace_period`](crate::builder::AppBuilder::shutdown_grace_period)).
     pub(super) shutdown_grace_period: Option<Duration>,
-    /// Resolved bound on the HTTP drain itself: builder call
+    /// Resolved bound on the HTTP drain itself. Precedence: the builder call
     /// ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout)
-    /// / [`drain_timeout_unbounded`](crate::builder::AppBuilder::drain_timeout_unbounded))
-    /// > `server.drain-timeout` > the 30s default. `None` here therefore means
-    /// the app opted out explicitly.
+    /// or [`drain_timeout_unbounded`](crate::builder::AppBuilder::drain_timeout_unbounded)),
+    /// then `server.drain-timeout`, then the 30s default. `None` here therefore
+    /// means the app opted out explicitly.
     pub(super) drain_timeout: Option<Duration>,
     pub(super) tcp_nodelay: bool,
     /// Parsed `server.workers` config. `Ok(None)` → single-listener (default).
@@ -154,10 +154,10 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
 
     /// The resolved HTTP-drain budget this app will serve with.
     ///
-    /// Builder call
+    /// Precedence: the builder call
     /// ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout)
-    /// / [`drain_timeout_unbounded`](crate::builder::AppBuilder::drain_timeout_unbounded))
-    /// > the `server.drain-timeout` config key >
+    /// or [`drain_timeout_unbounded`](crate::builder::AppBuilder::drain_timeout_unbounded)),
+    /// then the `server.drain-timeout` config key, then
     /// [`DEFAULT_DRAIN_TIMEOUT`](crate::runtime::drain::DEFAULT_DRAIN_TIMEOUT).
     /// `None` means the app explicitly opted out and the drain is unbounded.
     pub fn drain_timeout(&self) -> Option<Duration> {
