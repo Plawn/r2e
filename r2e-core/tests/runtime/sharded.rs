@@ -248,6 +248,7 @@ mod integration {
                 token,
                 None,
                 &[],
+                r2e_core::runtime::sharded::WorkerPark::unparked(),
             )
         });
         std::thread::sleep(Duration::from_millis(300));

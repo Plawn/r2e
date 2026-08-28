@@ -19,7 +19,7 @@
 //! subscriber.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -56,6 +56,20 @@ impl WsShutdownController {
         STUBBORN_SESSION_STARTED.store(true, Ordering::SeqCst);
         ws.send_text("hello").await.ok();
         r2e_core::rt::sleep(Duration::from_secs(60)).await;
+    }
+
+    /// Deliberately slow to react: it waits for the shutdown signal, then
+    /// spends ~800ms "reconciling" before saying goodbye — long after a
+    /// sharded worker would have left its serve loop. The socket must still be
+    /// usable: the session holds the grace period, so it holds the socket.
+    #[ws("/slow-goodbye")]
+    async fn slow_goodbye(&self, mut ws: WsStream) {
+        ws.shutdown_requested().await;
+        r2e_core::rt::sleep(Duration::from_millis(800)).await;
+        match ws.send_text("bye").await {
+            Ok(()) => record("goodbye-sent"),
+            Err(_) => record("goodbye-failed"),
+        }
     }
 
     /// The ordinary loop shape. `next()` reports end-of-stream when the app
@@ -110,6 +124,13 @@ async fn serve_and_connect(
     (client, stop, server)
 }
 
+/// The fixture's statics (`ORDER`, `STUBBORN_SESSION_STARTED`) are shared by
+/// every test in this module, so they run one at a time.
+fn ws_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn reset() {
     STUBBORN_SESSION_STARTED.store(false, Ordering::SeqCst);
     ORDER.lock().unwrap().clear();
@@ -123,6 +144,7 @@ fn order() -> Vec<&'static str> {
 
 #[test]
 fn grace_period_bounds_a_stubborn_ws_session_and_names_it() {
+    let _serial = ws_serial();
     reset();
     let (captured, subscriber) = capturing();
 
@@ -185,6 +207,7 @@ fn assert_warns(captured: &Captured, needle: &str, what: &str) {
 
 #[test]
 fn cooperative_ws_session_is_closed_with_going_away_before_on_stop() {
+    let _serial = ws_serial();
     reset();
     let (captured, subscriber) = capturing();
 
@@ -244,6 +267,7 @@ fn cooperative_ws_session_is_closed_with_going_away_before_on_stop() {
 
 #[test]
 fn unserved_app_leaves_sessions_untracked_and_working() {
+    let _serial = ws_serial();
     reset();
 
     current_thread_rt().block_on(async {
@@ -284,4 +308,278 @@ fn unserved_app_leaves_sessions_untracked_and_working() {
             other => panic!("expected the echo, got {other:?}"),
         }
     });
+}
+
+// ── 4. Sharded serving (SO_REUSEPORT): same guarantees ──────────────────────
+//
+// Under `server.workers` the upgraded socket was accepted by a **worker**
+// runtime (a `current_thread` runtime on its own thread) while the session
+// itself runs on the control plane. The worker's I/O driver must therefore
+// still be alive when the session is joined, or the going-away frame would be
+// written into a dead reactor. See `builder/ws_sessions.rs` § "Sharded
+// serving" for the invariant these tests pin down.
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
+))]
+mod sharded {
+    use super::*;
+    use r2e_core::config::R2eConfig;
+
+    fn free_port() -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        drop(l);
+        port
+    }
+
+    /// A `current_thread` control plane on purpose: `serve_sharded` blocks on
+    /// a *blocking* thread, so nothing here needs worker threads — and with a
+    /// single thread every shutdown-phase `tracing` event (including the ones
+    /// `drain_tracked_handles` emits from its `JoinSet`) lands on the thread
+    /// holding the capturing subscriber. `run()` logs one warning about the
+    /// non-multi-thread control plane, which is fine in a test.
+    fn control_plane_rt() -> r2e_core::rt::Runtime {
+        current_thread_rt()
+    }
+
+    async fn connect_retry(url: &str) -> ClientStream {
+        for _ in 0..200 {
+            if let Ok((client, _)) = tokio_tungstenite::connect_async(url).await {
+                return client;
+            }
+            r2e_core::rt::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("sharded server never accepted a websocket connection on {url}");
+    }
+
+    /// Stops the app even when the client task unwinds, so a failing assertion
+    /// surfaces as that assertion instead of a hung `run()`.
+    struct StopOnDrop(r2e_core::StopHandle);
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.0.stop();
+        }
+    }
+
+    /// Build the fixture app on `port` with `workers: 2`.
+    async fn sharded_app(
+        port: u16,
+        grace: Duration,
+    ) -> r2e_core::builder::PreparedApp<
+        impl Clone + Send + Sync + 'static + BeanLookup,
+    > {
+        let yaml = format!("server:\n  workers: 2\n  port: {port}\n");
+        let config = R2eConfig::from_yaml_str(&yaml).unwrap();
+        let serial = crate::dev_serial::dev_serial();
+        let builder = AppBuilder::new().override_config(config).load_config::<()>();
+        drop(serial);
+        builder
+            .build_state()
+            .await
+            .register_controller::<WsShutdownController>()
+            .shutdown_grace_period(grace)
+            .on_stop(|_state| async {
+                record("on-stop");
+            })
+            .prepare(&format!("127.0.0.1:{port}"))
+    }
+
+    /// (c) Sanity: a session on a sharded worker exchanges messages normally.
+    #[test]
+    fn sharded_ws_session_echoes_while_served() {
+        let _serial = ws_serial();
+        reset();
+
+        control_plane_rt().block_on(async {
+            let port = free_port();
+            let app = sharded_app(port, Duration::from_secs(30)).await;
+            let stop = app.stop_handle();
+
+            let client = r2e_core::rt::spawn(async move {
+                let _stop_on_drop = StopOnDrop(stop);
+                let mut client = connect_retry(&format!("ws://127.0.0.1:{port}/polite")).await;
+                for i in 0..3 {
+                    let payload = format!("msg-{i}");
+                    client
+                        .send(ClientMessage::text(payload.clone()))
+                        .await
+                        .expect("send");
+                    let echoed = r2e_core::rt::timeout(Duration::from_secs(5), client.next())
+                        .await
+                        .expect("no echo before timeout");
+                    match echoed {
+                        Some(Ok(ClientMessage::Text(t))) => assert_eq!(t.as_str(), payload),
+                        other => panic!("expected the echo, got {other:?}"),
+                    }
+                }
+            });
+
+            app.run().await.expect("sharded server failed");
+            client.await.expect("client task panicked");
+        });
+
+        assert_eq!(
+            order(),
+            vec!["session-ended", "on-stop"],
+            "the sharded session must end on its own, before on_stop"
+        );
+    }
+
+    /// (a) A cooperative session on a worker still gets its `1001 Going Away`
+    /// frame — i.e. the socket is still writable when the session is joined.
+    #[test]
+    fn sharded_cooperative_ws_session_is_closed_with_going_away_before_on_stop() {
+        let _serial = ws_serial();
+        reset();
+        let (captured, subscriber) = capturing();
+
+        tracing::subscriber::with_default(subscriber, || {
+            control_plane_rt().block_on(async {
+                let port = free_port();
+                let app = sharded_app(port, Duration::from_secs(30)).await;
+                let stop = app.stop_handle();
+
+                let client = r2e_core::rt::spawn(async move {
+                    let _stop_on_drop = StopOnDrop(stop);
+                    let mut client = connect_retry(&format!("ws://127.0.0.1:{port}/polite")).await;
+                    client
+                        .send(ClientMessage::text("ping"))
+                        .await
+                        .expect("send ping");
+                    let echoed = r2e_core::rt::timeout(Duration::from_secs(5), client.next())
+                        .await
+                        .expect("no echo before timeout");
+                    match echoed {
+                        Some(Ok(ClientMessage::Text(t))) => assert_eq!(t.as_str(), "ping"),
+                        other => panic!("expected the echo, got {other:?}"),
+                    }
+
+                    _stop_on_drop.0.stop();
+
+                    let closed = r2e_core::rt::timeout(Duration::from_secs(10), client.next())
+                        .await
+                        .expect("no close frame before timeout");
+                    match closed {
+                        Some(Ok(ClientMessage::Close(Some(frame)))) => {
+                            assert_eq!(u16::from(frame.code), 1001, "expected 1001 Going Away");
+                        }
+                        other => panic!("expected a close frame, got {other:?}"),
+                    }
+                });
+
+                app.run().await.expect("sharded server failed");
+                client.await.expect("client task panicked");
+            })
+        });
+
+        assert_eq!(
+            order(),
+            vec!["session-ended", "on-stop"],
+            "the sharded session must be joined BEFORE on_stop"
+        );
+        assert!(
+            !captured.contains("shutdown_grace_period elapsed"),
+            "a cooperative sharded session must not consume the grace period, got:\n{}",
+            captured.dump()
+        );
+    }
+
+    /// (b) A stubborn session on a worker is bounded by the grace period and
+    /// named, exactly like on the single-listener path.
+    #[test]
+    fn sharded_grace_period_bounds_a_stubborn_ws_session_and_names_it() {
+        let _serial = ws_serial();
+        reset();
+        let (captured, subscriber) = capturing();
+
+        let elapsed = tracing::subscriber::with_default(subscriber, || {
+            control_plane_rt().block_on(async {
+                let port = free_port();
+                let app = sharded_app(port, Duration::from_millis(300)).await;
+                let stop = app.stop_handle();
+
+                let stopped_at = Arc::new(Mutex::new(None::<Instant>));
+                let stopped_at_client = stopped_at.clone();
+                let client = r2e_core::rt::spawn(async move {
+                    let _stop_on_drop = StopOnDrop(stop);
+                    let mut client = connect_retry(&format!("ws://127.0.0.1:{port}/stubborn")).await;
+                    let greeting = r2e_core::rt::timeout(Duration::from_secs(5), client.next())
+                        .await
+                        .expect("no greeting before timeout");
+                    assert!(matches!(greeting, Some(Ok(ClientMessage::Text(_)))));
+                    assert!(STUBBORN_SESSION_STARTED.load(Ordering::SeqCst));
+                    *stopped_at_client.lock().unwrap() = Some(Instant::now());
+                });
+
+                app.run().await.expect("sharded server failed");
+                client.await.expect("client task panicked");
+                let stopped_at = stopped_at.lock().unwrap().expect("client never stopped");
+                stopped_at.elapsed()
+            })
+        });
+
+        assert!(
+            elapsed < Duration::from_secs(10),
+            "sharded shutdown must not wait for the 60s session: took {elapsed:?}"
+        );
+        assert_eq!(
+            order(),
+            vec!["on-stop"],
+            "on_stop must run even though the sharded session was abandoned"
+        );
+        assert_warns(
+            &captured,
+            "shutdown_grace_period elapsed",
+            "the grace-period warning",
+        );
+        assert_warns(
+            &captured,
+            "ws:WsShutdownController::stubborn",
+            "the ws:<Controller>::<method> label",
+        );
+    }
+
+    /// The hazard this module exists to pin down: the session runs on the
+    /// control plane, but its socket was accepted by a **worker** runtime whose
+    /// I/O driver dies with it. Before the worker-parking handshake this test
+    /// failed with `ResetWithoutClosingHandshake` — the worker had dropped its
+    /// runtime as soon as its serve loop ended, and the session's socket died
+    /// under it 800ms into a 30s grace period.
+    #[test]
+    fn sharded_slow_session_still_owns_a_writable_socket_during_the_grace_period() {
+        let _serial = ws_serial();
+        reset();
+
+        control_plane_rt().block_on(async {
+            let port = free_port();
+            let app = sharded_app(port, Duration::from_secs(30)).await;
+            let stop = app.stop_handle();
+
+            let client = r2e_core::rt::spawn(async move {
+                let _stop_on_drop = StopOnDrop(stop);
+                let mut client =
+                    connect_retry(&format!("ws://127.0.0.1:{port}/slow-goodbye")).await;
+                _stop_on_drop.0.stop();
+                let goodbye = r2e_core::rt::timeout(Duration::from_secs(10), client.next())
+                    .await
+                    .expect("no goodbye before timeout");
+                match goodbye {
+                    Some(Ok(ClientMessage::Text(t))) => assert_eq!(t.as_str(), "bye"),
+                    other => panic!("expected the late goodbye, got {other:?}"),
+                }
+            });
+
+            app.run().await.expect("sharded server failed");
+            client.await.expect("client task panicked");
+        });
+
+        assert_eq!(
+            order(),
+            vec!["goodbye-sent", "on-stop"],
+            "a slow session must still own a writable socket, and be joined \
+             before on_stop"
+        );
+    }
 }

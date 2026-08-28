@@ -60,7 +60,7 @@ mod lifecycle {
 
     use r2e_core::config::R2eConfig;
     use r2e_core::rt::CancelToken;
-    use r2e_core::runtime::sharded::serve_sharded;
+    use r2e_core::runtime::sharded::{serve_sharded, WorkerPark};
     use r2e_core::runtime::worker::{
         BoxError, LocalBoxFuture, PerWorkerServiceFactory, WorkerContext, WorkerService,
     };
@@ -143,6 +143,7 @@ mod lifecycle {
                 token,
                 None,
                 &factories,
+                WorkerPark::unparked(),
             )
             .map_err(|e| e.to_string())
         });
