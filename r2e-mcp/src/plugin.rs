@@ -204,7 +204,7 @@ impl Plugin for McpServer {
     /// data. [`McpTokenValidator`] is a real bean so tests can pin it
     /// (`override_bean`) — auth off provides the inert
     /// [`McpTokenValidator::disabled`].
-    type Provided = (McpTokenValidator, McpServiceRegistry, McpResourceUpdates);
+    type Provided = (McpTokenValidator, McpResourceUpdates);
     type Deps = ();
     type Config = McpConfig;
     type Controllers = ();
@@ -226,11 +226,7 @@ impl Plugin for McpServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         if !ctx.enabled() {
             tracing::info!("MCP server disabled (mcp.enabled = false); endpoint not mounted");
-            return Ok((
-                McpTokenValidator::disabled(),
-                self.registry,
-                self.resource_updates,
-            ));
+            return Ok((McpTokenValidator::disabled(), self.resource_updates));
         }
         let cfg = config.unwrap_or_default();
 
@@ -371,7 +367,7 @@ impl Plugin for McpServer {
         // `register_mcp_service` call filled the registry, and BEFORE the
         // sharded server clones the router per worker — so the session
         // manager, dispatch table and token below are shared by all workers.
-        let registry = self.registry.clone();
+        let registry = self.registry;
         let resource_updates = self.resource_updates.clone();
         ctx.wrap_router(move |router| {
             let Some(services) = registry.take() else {
@@ -440,6 +436,6 @@ impl Plugin for McpServer {
             }
         });
 
-        Ok((provided_validator, self.registry, self.resource_updates))
+        Ok((provided_validator, self.resource_updates))
     }
 }

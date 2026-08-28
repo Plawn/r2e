@@ -834,7 +834,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let event_subscribers = registry.take_event_subscribers();
         let service_sources = registry.take_service_sources();
         let on_start_hooks = registry.take_on_start_hooks();
-        let after_resolve_hooks = registry.take_after_resolve_hooks();
         // Grab the deferred-fill graph handle before `resolve()` consumes the
         // registry; filled on every **successful** exit path below, right after
         // the resolved context lands in its final `Arc`. Plugin build factories
@@ -871,9 +870,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                         "dev-reload: graph fingerprint unchanged, reusing cached state"
                     );
                     graph_handle.fill(&cached_ctx);
-                    for hook in after_resolve_hooks {
-                        hook(&cached_ctx);
-                    }
                     // Bean scheduled tasks and subscriptions are re-collected
                     // against the cached graph: the task registry and consumer
                     // registrations are fresh per build (plugins re-install),
@@ -934,9 +930,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             let state = <P as BuildHList>::build_hlist(&ctx);
             let ctx = Arc::new(ctx);
             graph_handle.fill(&ctx);
-            for hook in after_resolve_hooks {
-                hook(&ctx);
-            }
 
             crate::runtime::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
             crate::runtime::dev::cache_ctx(&ctx);
@@ -957,9 +950,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let state = <P as BuildHList>::build_hlist(&ctx);
         let ctx = Arc::new(ctx);
         graph_handle.fill(&ctx);
-        for hook in after_resolve_hooks {
-            hook(&ctx);
-        }
 
         Ok(Mods::register_controllers(
             AppBuilder::from_pre(self.shared, state, ctx)

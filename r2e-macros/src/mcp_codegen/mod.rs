@@ -184,11 +184,7 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     let impl_block = generate_impl_block(def);
     let wrapper = generate_wrapper_struct(def, &deco);
     let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
-    let mcp_service_impl = service_impl::generate_mcp_service_impl(
-        def,
-        &deco,
-        service_impl::CoreConstruction::ContextConstruct,
-    );
+    let mcp_service_impl = service_impl::generate_mcp_service_impl(def, &deco);
     let endpoint_deps_impl = service_impl::generate_endpoint_deps_impl(def);
     let deco_items = &deco.items;
     let meta_mod = format_ident!("__r2e_meta_{}", def.controller_name);
@@ -207,28 +203,6 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
         #invoke_impl
         #mcp_service_impl
         #endpoint_deps_impl
-    }
-}
-
-/// Generate the MCP surface for `#[tool]` methods hosted by a `#[bean]` impl.
-/// The bean macro emits the inherent impl itself; this path only emits the
-/// wrapper/routes and reads the already-resolved bean from `BeanContext`.
-pub fn generate_for_bean(def: &McpRoutesImplDef) -> TokenStream {
-    let deco = build_deco_layout(def);
-    let wrapper = generate_wrapper_struct(def, &deco);
-    let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
-    let service_impl = service_impl::generate_mcp_service_impl(
-        def,
-        &deco,
-        service_impl::CoreConstruction::ResolvedBean,
-    );
-    let deco_items = &deco.items;
-
-    quote! {
-        #deco_items
-        #wrapper
-        #invoke_impl
-        #service_impl
     }
 }
 

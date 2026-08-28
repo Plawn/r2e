@@ -232,14 +232,14 @@ fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!();
-    println!("Wire the generated bean into your App (src/app.rs):");
+    println!("Wire the generated MCP adapter into your App (src/app.rs):");
     println!();
     println!("  mod mcp;");
     println!("  use mcp::McpTools;");
     println!();
     println!("  b.plugin(McpServer::new())");
-    println!("      .register::<McpTools>()");
     println!("      .build_state().await");
+    println!("      .register_mcp_service::<McpTools>()");
     println!();
     println!("  Then: cargo build");
     Ok(())

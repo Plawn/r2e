@@ -190,6 +190,8 @@ fn add_mcp_scaffolds_source_without_overwriting_it() {
     add::run("mcp").unwrap();
     let source = fs::read_to_string("src/mcp.rs").unwrap();
     assert!(source.contains("#[derive(Debug, Deserialize, JsonSchema, ObjectParams)]"));
+    assert!(source.contains("#[controller]"));
+    assert!(source.contains("#[mcp_routes]"));
     assert!(source.contains("#[tool(read_only)]"));
     assert!(source.contains("pub struct McpTools"));
 
@@ -250,7 +252,7 @@ fn add_mcp_direct_scaffold_uses_direct_crates() {
     add::run("mcp").unwrap();
 
     let source = fs::read_to_string("src/mcp.rs").unwrap();
-    assert!(source.contains("use r2e_core::prelude::{bean, tool, ObjectParams};"));
+    assert!(source.contains("use r2e_core::prelude::{controller, mcp_routes, tool, ObjectParams};"));
     assert!(source.contains("use r2e_mcp::Params;"));
     assert!(!source.contains("use r2e::"));
     assert!(fs::read_to_string("application.yaml")

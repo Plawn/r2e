@@ -239,35 +239,6 @@ pub struct CalcController { #[inject] calc: CalcService } // HTTP adapter (#[rou
 `examples/example-mcp` is the worked example (HTTP + MCP + guards +
 interceptors + `TestApp` e2e tests).
 
-## Tool methods directly on beans
-
-When a service only exposes tools, put `#[tool]` directly in its `#[bean]`
-impl. Registration of the bean then collects the tools automatically — no
-dedicated controller or `.register_mcp_service` call:
-
-```rust
-#[derive(Clone)]
-pub struct SearchService { /* injected constructor fields */ }
-
-#[bean]
-impl SearchService {
-    pub fn new(/* bean deps */) -> Self { /* ... */ }
-
-    #[tool(read_only)]
-    async fn search(&self, Params(input): Params<SearchInput>) -> String { /* ... */ }
-}
-
-AppBuilder::new()
-    .plugin(McpServer::new())
-    .register::<SearchService>()
-    .build_state().await;
-```
-
-Tool guard/interceptor dependencies are folded into the bean graph, and a
-missing `McpServer` becomes a compile-time missing dependency. Resources and
-prompts stay on dedicated `#[mcp_routes]` types because they define a broader
-service surface rather than bean operations.
-
 ## Configuration (`mcp.*`)
 
 All keys optional; builder methods (`McpServer::new().with_path(...)` etc.)

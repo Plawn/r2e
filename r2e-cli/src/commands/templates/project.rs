@@ -118,14 +118,12 @@ r2e-test = {{ git = "{R2E_GIT}" }}
     )
 }
 
-/// A small MCP bean that is collected automatically when the application
-/// registers it. Keeping this as a bean avoids a second, transport-specific
-/// registration chain in the generated `App::build`.
+/// A small dedicated MCP adapter registered after the bean graph is built.
 pub fn mcp_service_rs(facade: bool) -> String {
     let imports = if facade {
         "use r2e::prelude::*;"
     } else {
-        "use r2e_core::prelude::{bean, tool, ObjectParams};\nuse r2e_mcp::Params;"
+        "use r2e_core::prelude::{controller, mcp_routes, tool, ObjectParams};\nuse r2e_mcp::Params;"
     };
     format!(
         "{imports}\n{}",
@@ -138,15 +136,11 @@ pub struct EchoInput {
     pub message: String,
 }
 
-#[derive(Clone)]
+#[controller]
 pub struct McpTools;
 
-#[bean]
+#[mcp_routes]
 impl McpTools {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Echo text back to the MCP client.
     #[tool(read_only)]
     async fn echo(&self, Params(input): Params<EchoInput>) -> String {

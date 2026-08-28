@@ -1,5 +1,7 @@
 //! The [`McpService`] trait — what `#[mcp_routes]` implements.
 
+use std::sync::Arc;
+
 use r2e_core::beans::BeanContext;
 use r2e_core::config::{MissingKeyError, R2eConfig};
 
@@ -27,7 +29,7 @@ use crate::route::McpRoutes;
 /// impl McpService for MathTools {
 ///     fn service_name() -> &'static str { "MathTools" }
 ///
-///     fn routes(ctx: &BeanContext) -> McpRoutes {
+///     fn routes(ctx: &Arc<BeanContext>) -> McpRoutes {
 ///         let wrapper = Arc::new(__R2eMcpMathTools {
 ///             core: <MathTools as ContextConstruct>::from_context(ctx),
 ///             // plus prebuilt interceptor/guard products when decorated
@@ -57,5 +59,5 @@ pub trait McpService: 'static {
     /// Build this service's routes (tools, resources, prompts) from the
     /// resolved bean graph — one wrapper core, one set of prebuilt
     /// decorators, shared by every member's dispatch closure.
-    fn routes(ctx: &BeanContext) -> McpRoutes;
+    fn routes(ctx: &Arc<BeanContext>) -> McpRoutes;
 }

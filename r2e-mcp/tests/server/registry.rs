@@ -4,10 +4,9 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use r2e_core::prelude::*;
-use r2e_mcp::{IntoToolResult, McpRoutes, McpServiceRegistry, Params, ToolRequirements, ToolRoute};
-use serde_json::json;
+use r2e_mcp::{IntoToolResult, McpRoutes, McpServiceRegistry, ToolRequirements, ToolRoute};
 
-use crate::fixtures::{fixture_app, BinaryOperands, Calc, CalcResult, FixtureTools};
+use crate::fixtures::{fixture_app, FixtureTools};
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 
@@ -32,25 +31,6 @@ impl ScopedWithoutAuth {
     #[tool(scopes = "mcp:read")]
     async fn restricted(&self) -> String {
         "secret".to_string()
-    }
-}
-
-#[derive(Clone)]
-struct BeanTools {
-    calc: Calc,
-}
-
-#[bean]
-impl BeanTools {
-    fn new(calc: Calc) -> Self {
-        Self { calc }
-    }
-
-    #[tool(name = "bean_add", read_only)]
-    async fn add(&self, Params(p): Params<BinaryOperands>) -> Json<CalcResult> {
-        Json(CalcResult {
-            value: self.calc.add(p.a, p.b),
-        })
     }
 }
 
@@ -134,29 +114,4 @@ async fn service_tools_are_all_mounted() {
         names,
         vec!["add", "add_with_id", "div", "echo_id", "locked", "rich"]
     );
-}
-
-#[r2e_core::test]
-async fn bean_tools_are_collected_without_explicit_service_registration() {
-    let router = AppBuilder::new()
-        .plugin(McpServer::new())
-        .provide(Calc)
-        .register::<BeanTools>()
-        .build_state()
-        .await
-        .build();
-
-    let session = crate::support::initialize(&router, "/mcp").await;
-    let list = crate::support::tools_list(&router, "/mcp", &session).await;
-    assert_eq!(crate::support::tool(&list, "bean_add")["name"], "bean_add");
-
-    let call = crate::support::tools_call(
-        &router,
-        "/mcp",
-        &session,
-        "bean_add",
-        json!({ "a": 2.0, "b": 5.0 }),
-    )
-    .await;
-    assert_eq!(call["result"]["structuredContent"]["value"], 7.0);
 }

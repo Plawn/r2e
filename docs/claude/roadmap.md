@@ -465,11 +465,11 @@ P3 (providers & dev) shipped on the same branch, in chunks:
 
 SHIPPED 2026-08-28: the remaining MCP audit follow-ups — targeted
 struct-level identity diagnostic; sealed derive-only `ObjectParams` marker;
-bean `#[tool]` auto-collection through a generic post-resolution hook; full,
-idempotent `r2e add mcp` source/config scaffold; RFC 6570 resource templates
-with captured `ResourceCall::variables`; `McpResourceUpdates` plus legacy
-`resources/subscribe` and current `subscriptions/listen`; and r2e-oidc public
-clients with a Docker-free, one-time Authorization Code + PKCE S256 flow.
+full, idempotent `r2e add mcp` source/config scaffold; RFC 6570 resource
+templates with captured `ResourceCall::variables`; `McpResourceUpdates` plus
+legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
+public clients with a Docker-free, one-time Authorization Code + PKCE S256
+flow.
 
 ## Open items tracked in their own docs
 
