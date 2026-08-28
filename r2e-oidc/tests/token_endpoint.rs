@@ -1,7 +1,9 @@
 use r2e_core::http::body::to_bytes;
 use r2e_core::http::{Body, Request, Response, Router, StatusCode};
-use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
+use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
+
+const AUDIENCE: &str = "http://localhost:3000/mcp";
 
 async fn build_app() -> Router {
     let users = InMemoryUserStore::new()
@@ -27,7 +29,7 @@ async fn build_app() -> Router {
 
     let oidc = OidcServer::new()
         .issuer("http://localhost:3000")
-        .audience("test-app")
+        .audience(AUDIENCE)
         .enable_password_grant_for_development()
         .with_user_store(users);
 
@@ -178,4 +180,288 @@ async fn password_grant_disabled_by_default() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let json = body_json(resp).await;
     assert_eq!(json["error"], "unsupported_grant_type");
+}
+
+// ── RFC 8707 `resource` indicator ──────────────────────────────────────────
+
+/// Decode the (unverified) JWT payload — enough to observe issued claims.
+fn jwt_payload(token: &str) -> serde_json::Value {
+    use base64::Engine;
+    let part = token.split('.').nth(1).unwrap();
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(part)
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[r2e_core::test]
+async fn resource_indicator_becomes_the_audience() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123\
+             &resource=http%3A%2F%2Flocalhost%3A3000%2Fmcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["aud"], AUDIENCE);
+}
+
+#[r2e_core::test]
+async fn no_resource_keeps_the_configured_audience() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["aud"], AUDIENCE);
+}
+
+#[r2e_core::test]
+async fn unconfigured_resource_is_invalid_target() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123\
+             &resource=https%3A%2F%2Fevil.example%2Fmcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_target");
+}
+
+#[r2e_core::test]
+async fn relative_resource_is_invalid_target() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123&resource=mcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_target");
+}
+
+#[r2e_core::test]
+async fn fragment_bearing_resource_is_invalid_target() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123\
+             &resource=http%3A%2F%2Flocalhost%2Fmcp%23frag",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_target");
+}
+
+#[r2e_core::test]
+async fn client_credentials_honors_the_resource_indicator() {
+    let clients = ClientRegistry::new().add_client("svc", "secret");
+    let app = r2e_core::AppBuilder::new()
+        .plugin(
+            OidcServer::new()
+                .issuer("http://localhost:3000")
+                .audience("https://api.example.com/mcp")
+                .with_user_store(InMemoryUserStore::new())
+                .with_client_registry(clients),
+        )
+        .build_state()
+        .await
+        .build();
+
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret\
+             &resource=https%3A%2F%2Fapi.example.com%2Fmcp",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["aud"], "https://api.example.com/mcp");
+}
+
+// ── Scope allowlists (RFC 6749 §4.1.2.1 / §5.2) ───────────────────────────
+
+#[r2e_core::test]
+async fn password_grant_defaults_to_the_configured_scopes() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let claims = jwt_payload(json["access_token"].as_str().unwrap());
+    assert_eq!(claims["scope"], "email openid profile roles");
+}
+
+#[r2e_core::test]
+async fn password_grant_rejects_a_scope_outside_the_allowlist() {
+    let app = build_app().await;
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123&scope=openid+mcp%3Aadmin",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"], "invalid_scope");
+}
+
+#[r2e_core::test]
+async fn password_grant_scopes_can_be_narrowed() {
+    let users = InMemoryUserStore::new().add_user(
+        "alice",
+        "password123",
+        OidcUser {
+            sub: "user-1".into(),
+            ..Default::default()
+        },
+    );
+    let app = r2e_core::AppBuilder::new()
+        .plugin(
+            OidcServer::new()
+                .audience(AUDIENCE)
+                .enable_password_grant_for_development()
+                .password_grant_scopes(["openid"])
+                .with_user_store(users),
+        )
+        .build_state()
+        .await
+        .build();
+
+    let resp = app
+        .clone()
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123&scope=openid",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let claims = jwt_payload(body_json(resp).await["access_token"].as_str().unwrap());
+    assert_eq!(claims["scope"], "openid");
+
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=password&username=alice&password=password123&scope=profile",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_scope");
+}
+
+async fn client_credentials_app(clients: ClientRegistry) -> Router {
+    r2e_core::AppBuilder::new()
+        .plugin(
+            OidcServer::new()
+                .issuer("http://localhost:3000")
+                .audience(AUDIENCE)
+                .with_user_store(InMemoryUserStore::new())
+                .with_client_registry(clients),
+        )
+        .build_state()
+        .await
+        .build()
+}
+
+#[r2e_core::test]
+async fn client_credentials_honors_the_client_scope_allowlist() {
+    let app = client_credentials_app(
+        ClientRegistry::new()
+            .add_client("svc", "secret")
+            .with_scopes(["jobs:run", "jobs:read"]),
+    )
+    .await;
+
+    // Within the allowlist.
+    let resp = app
+        .clone()
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret&scope=jobs%3Arun",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let claims = jwt_payload(body_json(resp).await["access_token"].as_str().unwrap());
+    assert_eq!(claims["scope"], "jobs:run");
+
+    // Omitting `scope` grants the whole allowlist, never more.
+    let resp = app
+        .clone()
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let claims = jwt_payload(body_json(resp).await["access_token"].as_str().unwrap());
+    assert_eq!(claims["scope"], "jobs:read jobs:run");
+
+    // Outside the allowlist.
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret&scope=mcp%3Aadmin",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_scope");
+}
+
+/// A client that declares no scopes is fail-closed: only an empty scope.
+#[r2e_core::test]
+async fn client_without_scopes_gets_none() {
+    let app = client_credentials_app(ClientRegistry::new().add_client("svc", "secret")).await;
+
+    let resp = app
+        .clone()
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let claims = jwt_payload(body_json(resp).await["access_token"].as_str().unwrap());
+    assert!(
+        claims.get("scope").is_none(),
+        "a client with no allowlist must receive no scope, got {claims}"
+    );
+
+    let resp = app
+        .oneshot(token_request(
+            "grant_type=client_credentials&client_id=svc&client_secret=secret&scope=mcp%3Aadmin",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(body_json(resp).await["error"], "invalid_scope");
 }

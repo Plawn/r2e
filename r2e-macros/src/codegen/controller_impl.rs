@@ -7,7 +7,7 @@ use quote::{format_ident, quote};
 use crate::codegen::transverse::{self, ConsumerMethodDef, DecoFieldDef, ScheduledSourceMethod};
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
-use crate::util::type_utils::type_last_segment_is;
+use crate::util::type_utils::{type_last_segment_is, unwrap_json_type, unwrap_result_type};
 
 /// Generate the `Controller<State>` trait implementation.
 pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
@@ -369,7 +369,7 @@ fn generate_route_metadata(
                         let mut __p: Vec<#krate::di::meta::ParamInfo> = vec![#(#path_params),*];
                         #(#probe_blocks)*
                         // Deduplicate params by (name, location) — possible when
-                        // a Params struct includes #[path] fields alongside Path<T>.
+                        // a Params struct includes #[param(path)] fields alongside Path<T>.
                         {
                             let mut seen = ::std::collections::HashSet::new();
                             __p.retain(|p| seen.insert((p.name.clone(), format!("{:?}", p.location))));
@@ -580,39 +580,6 @@ fn has_json_type(ty: &syn::Type) -> bool {
         }
     }
     false
-}
-
-/// Unwrap `Result<T, E>` → `T`, leaving non-Result types unchanged.
-fn unwrap_result_type(ty: &syn::Type) -> &syn::Type {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident_str = segment.ident.to_string();
-            if ident_str == "Result" || ident_str == "ApiResult" || ident_str == "JsonResult" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return inner;
-                    }
-                }
-            }
-        }
-    }
-    ty
-}
-
-/// Extract the inner type from `Json<T>` → `T`.
-fn unwrap_json_type(ty: &syn::Type) -> Option<&syn::Type> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Json" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return Some(inner);
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Check if a type is a "no body" type (StatusCode, StatusResult, ()).

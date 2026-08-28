@@ -101,6 +101,9 @@ pub use r2e_openfga;
 #[cfg(feature = "grpc")]
 pub use r2e_grpc;
 
+#[cfg(feature = "mcp")]
+pub use r2e_mcp;
+
 #[cfg(feature = "static")]
 pub use r2e_static;
 
@@ -282,6 +285,9 @@ pub mod prelude {
 
     #[cfg(feature = "grpc")]
     pub use r2e_grpc::prelude::*;
+
+    #[cfg(feature = "mcp")]
+    pub use r2e_mcp::prelude::*;
 
     #[cfg(feature = "openapi")]
     pub use r2e_openapi::schemars::JsonSchema;

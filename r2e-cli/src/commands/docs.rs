@@ -159,6 +159,12 @@ static DOCS: &[DocEntry] = &[
         crates: &["r2e-openfga"],
         body: include_str!("../../../docs/features/23-openfga.md"),
     },
+    DocEntry {
+        slug: "mcp",
+        title: "MCP Server (Model Context Protocol)",
+        crates: &["r2e-mcp"],
+        body: include_str!("../../../docs/features/25-mcp.md"),
+    },
 ];
 
 /// Extract the `## TL;DR` section from a document body: everything from the

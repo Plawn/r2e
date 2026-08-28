@@ -400,6 +400,77 @@ Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
 existing store's model into a local `.fga`), plus tuple seed fixtures for
 dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
 
+## W16 — MCP server (r2e-mcp) — P1+P2+P3 SHIPPED 2026-08-27
+
+P1 (server core) shipped on `feat/mcp-server`: `r2e-mcp` crate + `McpServer`
+plugin (streamable HTTP, shared sessions across SO_REUSEPORT workers,
+shutdown-token relay), `#[mcp_routes]` + `#[tool]` (schemars schemas, guards
+SHARED with HTTP via `Guard<I>`, prebuilt interceptors, `EndpointDeps` compile
+check), example-mcp, full test target + compile-fail cases. References:
+`docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
+(guards rule-of-three reversal).
+
+P2 (auth) shipped on the same branch: IdP-agnostic OAuth 2.1 resource server
+(`mcp.auth.*`) — jwt backend over discovery (RFC 8414 incl. path-insertion,
+TTL + stale-if-error), `McpAuthLayer` (401/403/503 + exact `WWW-Authenticate`
+challenges), RFC 9728 protected-resource metadata, static DCR shim
+(`public-client-id` + redirect allowlist + mirrored AS metadata), per-tool
+`#[tool(scopes/any_scopes)]` + shared `#[roles]` guards + `tools/list`
+filtering, `ScopePolicy` (scope/scp/permissions ladder, Keycloak realm/client
+roles), `server.public-url` convention key, `TestJwt::for_resource` +
+`TokenBuilder::{scopes,audiences,realm_roles,client_roles}` +
+`pin_mcp_validator` (feature `testing` / facade `mcp-testing`), r2e-security
+`audiences`/`skip_audience_validation`/`with_leeway`. Auth test target (96
+tests: 94 normal + 2 Docker-gated) + example-mcp auth e2e; provider matrix +
+Keycloak walkthrough in `docs/features/25-mcp.md`.
+
+P3 (providers & dev) shipped on the same branch, in chunks:
+
+- SHIPPED 2026-08-27 (chunk 5): MCP **resources + prompts** — `#[resource]` /
+  `#[prompt]` markers on `#[mcp_routes]` methods, `McpService::routes(ctx)
+  -> McpRoutes { tools, resources, prompts }` (breaking, replaces `tools()`;
+  `McpRoutes::from_tools` for hand-built services), one wrapper/deco-set
+  build per service, duplicate resource URI / prompt name across services =
+  boot panic. v1 = fixed URIs (no templates); resources take no `Params<T>`
+  (compile error); prompt arguments derived from the Params schema.
+  `IntoResourceResult` (String/&str/Json honoring the declared MIME) +
+  `IntoPromptResult` (String → one `user` message; doc text as description).
+  Errors stay JSON-RPC on these families: `Tool` degrades to `-32603`,
+  unknown URI = `-32002` RESOURCE_NOT_FOUND, unknown prompt = `-32602`;
+  scope/guard filtering + denials uniform with tools. Capabilities advertised
+  only when a family is non-empty. Tests: server target (resources/prompts
+  modules), auth filtering/denials, 3 compile-fail cases, example-mcp e2e.
+- SHIPPED 2026-08-27: the `introspection` (RFC 7662) + `userinfo` (Google)
+  validation backends (`token-validation: introspection|userinfo`,
+  opaque-token cache `opaque-cache-ttl-secs`/`opaque-cache-max-entries`,
+  `r2e_mcp::auth::{IntrospectionBackend, UserinfoBackend}`) and the
+  authorize-redirect shim (`extra-authorize-params` → mirror rewrites
+  `authorization_endpoint` to `{mcp.path}/oauth/authorize`, 302 to the IdP,
+  server params win; requires the DCR shim, boot error otherwise); r2e-oidc
+  RFC 8707 `resource` support (the form value must equal the configured
+  audience; invalid or unowned URI = 400 `invalid_target`; `scope`
+  pass-through already existed);
+  `DevKeycloak` (r2e-devservices feature `keycloak`: `start-dev
+  --import-realm`, bundled `r2e-mcp` realm with audience-mapped `mcp` scope,
+  `password_token`/`client_token`/`admin_token`; realm JSON is part of the
+  shared-container identity — copy sources are digested, no discriminator
+  needed) + Docker-gated e2e in `r2e-mcp/tests/auth/keycloak.rs`. Two fixes
+  the real container surfaced: a full realm import creates ONLY the client
+  scopes listed in the JSON (Keycloak's built-ins `basic` → `sub` and
+  `roles` → `realm_access` must be defined explicitly or tokens carry
+  neither), and r2e-security narrowed `Validation.algorithms` to the token's
+  algorithm at decode — jsonwebtoken 10 rejects any list mixing key families
+  (RS256+ES256 default) once the key is known (`InvalidAlgorithm` on every
+  token).
+
+SHIPPED 2026-08-28: the remaining MCP audit follow-ups — targeted
+struct-level identity diagnostic; sealed derive-only `ObjectParams` marker;
+full, idempotent `r2e add mcp` source/config scaffold; RFC 6570 resource
+templates with captured `ResourceCall::variables`; `McpResourceUpdates` plus
+legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
+public clients with a Docker-free, one-time Authorization Code + PKCE S256
+flow.
+
 ## Open items tracked in their own docs
 
 Kept where the context lives rather than duplicated here:

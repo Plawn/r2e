@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,7 +26,7 @@ impl TokenService {
         }
     }
 
-    /// Issue a JWT for the given user.
+    /// Issue a JWT for the given user and the server's configured audience.
     pub fn issue_user_token(&self, user: &OidcUser, scope: &str) -> Result<String, OidcError> {
         let (iat, exp) = self.timestamps()?;
 
@@ -122,17 +123,41 @@ impl r2e_security::jwt::JwtClaimSet for AccessTokenClaims {
     }
 }
 
-pub(crate) const DEFAULT_USER_SCOPE: &str = "openid profile email roles";
+/// Scopes granted by default to the development password grant, unless
+/// narrowed with `OidcServer::password_grant_scopes`.
+pub const DEFAULT_USER_SCOPE: &str = "openid profile email roles";
 
-pub(crate) fn normalize_scope(scope: Option<&str>, default_scope: &str) -> String {
-    let mut scopes = scope
-        .unwrap_or(default_scope)
-        .split_whitespace()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>();
+/// RFC 6749 §3.3 `scope-token`: `%x21 / %x23-5B / %x5D-7E`, at least one char.
+pub(crate) fn valid_scope_token(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope
+            .bytes()
+            .all(|b| matches!(b, 0x21 | 0x23..=0x5B | 0x5D..=0x7E))
+}
+
+/// Resolve the granted scope against a client's allowlist.
+///
+/// A request that omits `scope` receives the whole allowlist (empty when the
+/// client declares none — fail closed). A request that names a scope outside
+/// the allowlist is rejected with `invalid_scope` (RFC 6749 §4.1.2.1 / §5.2).
+pub(crate) fn resolve_scope(
+    requested: Option<&str>,
+    allowed: &BTreeSet<String>,
+) -> Result<String, OidcError> {
+    let Some(requested) = requested else {
+        return Ok(allowed.iter().cloned().collect::<Vec<_>>().join(" "));
+    };
+
+    let mut scopes = requested.split_whitespace().collect::<Vec<_>>();
     scopes.sort_unstable();
     scopes.dedup();
-    scopes.join(" ")
+
+    if let Some(rejected) = scopes.iter().find(|scope| !allowed.contains(**scope)) {
+        return Err(OidcError::InvalidScope(format!(
+            "scope `{rejected}` is not allowed for this client"
+        )));
+    }
+    Ok(scopes.join(" "))
 }
 
 pub(crate) fn has_scope(scope: &str, required: &str) -> bool {

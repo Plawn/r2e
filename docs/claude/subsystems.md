@@ -157,7 +157,7 @@ Config sections registered via `load_config` are available as bean dependencies 
 
 ## Embedded OIDC (r2e-oidc)
 
-`OidcServer` — embedded OAuth 2.0 / OIDC server plugin. Generates RSA-2048 keys, issues JWT tokens, exposes standard endpoints (`/oauth/token`, `/.well-known/openid-configuration`, `/.well-known/jwks.json`, `/userinfo`). Implements `Plugin` and provides `Arc<JwtClaimsValidator>` to the bean graph.
+`OidcServer` — embedded OAuth 2.0 access-token issuer plugin. Generates RSA-2048 keys, issues JWT tokens, and exposes `/oauth/authorize`, `/oauth/token`, discovery, JWKS and `/userinfo`. `ClientRegistry::add_public_client` enables local browser login plus Authorization Code with mandatory PKCE S256: exact redirect allowlist, one-time expiring codes bound to client/redirect/resource/challenge, public token endpoint auth (`none`). It does not issue ID tokens or provide federation/SSO. Implements `Plugin` and provides `Arc<JwtClaimsValidator>` to the bean graph.
 
 `OidcRuntime` — pre-built OIDC runtime (`Clone`). Created via `OidcServer::build()`. Holds all expensive state (`Arc`-wrapped RSA keys, user store, client registry). Reusable across hot-reload cycles — only re-registers routes without regenerating keys. Also implements `Plugin`.
 

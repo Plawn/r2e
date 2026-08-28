@@ -610,6 +610,7 @@ Manual: `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKe
 |-----|------|---------|-------------|
 | `server.host` | `String` | `"0.0.0.0"` | Bind host for TCP and QUIC |
 | `server.port` | `u16` | `3000` | TCP port |
+| `server.public-url` | `String` | — | The app's canonical external origin (`https://api.example.com` — scheme + host, no trailing slash). Framework-wide convention key read as a plain config value (no r2e-core code binds it); consumers: `r2e-mcp` derives the OAuth resource URI (`{server.public-url}{mcp.path}`) and the DCR-shim registration endpoint from it. Never derived from `Host`/`X-Forwarded-*` headers (attacker-controlled). |
 | `server.tcp_nodelay` | `bool` | `true` | Set `TCP_NODELAY` on every accepted TCP connection. Disabling Nagle's algorithm reduces latency on small responses at the cost of slightly higher network overhead. |
 | `server.workers` | `usize` \| `"per-core"` | *(absent → single listener)* | SO_REUSEPORT sharded serving: `N` worker threads, each a `current_thread` runtime with its own listener on the same address. `"per-core"` = `available_parallelism()`. `0`/negative/unknown string → error. Unix only (excl. solaris/illumos/cygwin). Unsupported with `dev-reload` (ignored, warns). See `docs/features/19-sharded-serving.md`. |
 | `server.quic.port` | `u16` | — | UDP port for QUIC/HTTP3 (enables QUIC when set) |

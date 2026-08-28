@@ -9,8 +9,25 @@ pub struct SecurityConfig {
     /// Expected issuer in the "iss" claim
     pub issuer: String,
 
-    /// Expected audience in the "aud" claim
-    pub audience: String,
+    /// Accepted audiences for the "aud" claim (a token passes when its `aud`
+    /// contains ANY of these — `jsonwebtoken` performs a membership test, so
+    /// array-shaped `aud` values as sent by Keycloak/Auth0 work out of the
+    /// box).
+    pub audiences: Vec<String>,
+
+    /// Validate the "aud" claim at all (default: `true`).
+    ///
+    /// Disable ONLY when the token deliberately carries no usable audience
+    /// (e.g. opaque-token flows validated upstream) — an unchecked audience
+    /// lets any token minted by the issuer for another service replay here.
+    pub validate_audience: bool,
+
+    /// Clock-skew leeway in seconds applied to `exp` and `nbf` (default: 0).
+    ///
+    /// Fresh tokens minted by a slightly-ahead IdP clock (common with
+    /// containerised IdPs) fail `nbf` without a small leeway; 60 is a
+    /// typical production value.
+    pub leeway_secs: u64,
 
     /// JWKS cache TTL in seconds (default: 3600)
     pub jwks_cache_ttl_secs: u64,
@@ -57,7 +74,9 @@ impl SecurityConfig {
         Self {
             jwks_url: jwks_url.into(),
             issuer: issuer.into(),
-            audience: audience.into(),
+            audiences: vec![audience.into()],
+            validate_audience: true,
+            leeway_secs: 0,
             jwks_cache_ttl_secs: 3600,
             jwks_max_stale_secs: 3600,
             jwks_min_refresh_interval_secs: 10,
@@ -67,6 +86,31 @@ impl SecurityConfig {
             allow_insecure_jwks_url: false,
             allowed_algorithms: vec![Algorithm::RS256],
         }
+    }
+
+    /// The first accepted audience (compat accessor for the common
+    /// single-audience configuration).
+    pub fn audience(&self) -> &str {
+        self.audiences.first().map(String::as_str).unwrap_or("")
+    }
+
+    /// Replace the accepted audiences (ANY match passes).
+    pub fn with_audiences(mut self, audiences: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.audiences = audiences.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Disable `aud` validation. See [`SecurityConfig::validate_audience`]
+    /// for why this is almost never what you want.
+    pub fn skip_audience_validation(mut self) -> Self {
+        self.validate_audience = false;
+        self
+    }
+
+    /// Set the clock-skew leeway in seconds applied to `exp`/`nbf`.
+    pub fn with_leeway(mut self, leeway_secs: u64) -> Self {
+        self.leeway_secs = leeway_secs;
+        self
     }
 
     /// Set the JWKS cache TTL in seconds.

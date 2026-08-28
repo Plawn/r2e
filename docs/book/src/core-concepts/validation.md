@@ -125,7 +125,7 @@ use garde::Validate;
 
 #[derive(Params, Validate)]
 pub struct GetUserParams {
-    #[path]
+    #[param(path)]
     #[garde(skip)]
     pub id: u64,
 
@@ -147,8 +147,8 @@ pub struct GetUserParams {
 
 | Attribute | Source | Default name |
 |-----------|--------|-------------|
-| `#[path]` | URL path segments | Field name |
-| `#[path(name = "userId")]` | URL path segments | Custom name |
+| `#[param(path)]` | URL path segments | Field name |
+| `#[param(path, name = "userId")]` | URL path segments | Custom name |
 | `#[query]` | Query string | Field name |
 | `#[query(name = "q")]` | Query string | Custom name |
 | `#[header("X-Custom")]` | HTTP headers | Explicit (required) |

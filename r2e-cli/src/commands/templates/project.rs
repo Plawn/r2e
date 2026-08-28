@@ -118,6 +118,39 @@ r2e-test = {{ git = "{R2E_GIT}" }}
     )
 }
 
+/// A small dedicated MCP adapter registered after the bean graph is built.
+pub fn mcp_service_rs(facade: bool) -> String {
+    let imports = if facade {
+        "use r2e::prelude::*;"
+    } else {
+        "use r2e_core::prelude::{controller, mcp_routes, tool, ObjectParams};\nuse r2e_mcp::Params;"
+    };
+    format!(
+        "{imports}\n{}",
+        r#"use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, JsonSchema, ObjectParams)]
+pub struct EchoInput {
+    /// Text returned by the example tool.
+    pub message: String,
+}
+
+#[controller]
+pub struct McpTools;
+
+#[mcp_routes]
+impl McpTools {
+    /// Echo text back to the MCP client.
+    #[tool(read_only)]
+    async fn echo(&self, Params(input): Params<EchoInput>) -> String {
+        input.message
+    }
+}
+"#
+    )
+}
+
 /// The canonical application source (`app.rs`). Both `lib.rs` (tests) and the
 /// binary tip crate (via `app_main!`) compile this exact source so there
 /// is one `App` declaration without hiding hot code behind a library boundary.
@@ -334,6 +367,9 @@ pub fn application_yaml(opts: &ProjectOptions) -> String {
 # Read by serve_auto()
 server:
   port: 3000
+  # The app's external origin — used to derive OAuth resource URIs (e.g. by
+  # the MCP auth layer). Uncomment when deployed behind a public hostname.
+  # public-url: https://api.example.com
 "#
     );
 

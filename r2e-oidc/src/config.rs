@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
 use url::Url;
 
 use crate::error::OidcError;
+use crate::token::{valid_scope_token, DEFAULT_USER_SCOPE};
 
 /// Configuration for the embedded OAuth/JWT issuer.
 #[derive(Clone, Debug)]
@@ -11,6 +14,8 @@ pub struct OidcServerConfig {
     pub audience: String,
     /// Token time-to-live in seconds.
     pub token_ttl_secs: u64,
+    /// Lifetime of a one-time authorization code.
+    pub authorization_code_ttl_secs: u64,
     /// Base path for OIDC endpoints (e.g. `""` for root, `"/auth"` for `/auth/oauth/token`).
     pub base_path: String,
     /// Key ID (`kid`) included in JWT headers and JWKS.
@@ -24,6 +29,13 @@ pub struct OidcServerConfig {
     pub password_grant_enabled: bool,
     /// Maximum concurrent Argon2 password/secret verifications.
     pub max_credential_verifications: usize,
+    /// Scope allowlist of the development password grant.
+    ///
+    /// The password grant is not tied to a registered client, so it cannot use
+    /// a client allowlist: an unauthenticated `client_id` parameter must never
+    /// widen a grant. A `scope` parameter naming anything outside this set is
+    /// rejected with `invalid_scope`; omitting `scope` grants the whole set.
+    pub password_grant_scopes: BTreeSet<String>,
 }
 
 impl Default for OidcServerConfig {
@@ -32,10 +44,15 @@ impl Default for OidcServerConfig {
             issuer: "http://localhost:3000".into(),
             audience: "r2e-app".into(),
             token_ttl_secs: 3600,
+            authorization_code_ttl_secs: 300,
             base_path: String::new(),
             kid: String::new(),
             password_grant_enabled: false,
             max_credential_verifications: 32,
+            password_grant_scopes: DEFAULT_USER_SCOPE
+                .split_whitespace()
+                .map(String::from)
+                .collect(),
         }
     }
 }
@@ -81,11 +98,24 @@ impl OidcServerConfig {
                 "token TTL must be greater than zero".into(),
             ));
         }
+        if self.authorization_code_ttl_secs == 0 {
+            return Err(OidcError::Configuration(
+                "authorization code TTL must be greater than zero".into(),
+            ));
+        }
 
         if self.max_credential_verifications == 0 {
             return Err(OidcError::Configuration(
                 "max credential verifications must be greater than zero".into(),
             ));
+        }
+
+        for scope in &self.password_grant_scopes {
+            if !valid_scope_token(scope) {
+                return Err(OidcError::Configuration(format!(
+                    "invalid password grant scope token: `{scope}`"
+                )));
+            }
         }
 
         validate_base_path(&self.base_path)?;

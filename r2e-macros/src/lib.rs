@@ -6,6 +6,7 @@ pub(crate) mod codegen;
 pub(crate) mod derives;
 pub(crate) mod extract;
 pub(crate) mod grpc_codegen;
+pub(crate) mod mcp_codegen;
 pub(crate) mod model;
 pub(crate) mod parsing;
 pub(crate) mod util;
@@ -15,9 +16,10 @@ use attrs::{
 };
 use derives::{
     api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
-    decorator_bean_derive, from_config_value_derive, from_multipart, params_derive,
+    decorator_bean_derive, from_config_value_derive, from_multipart, object_params_derive,
+    params_derive,
 };
-use parsing::grpc_routes_parsing;
+use parsing::{grpc_routes_parsing, mcp_routes_parsing};
 
 /// Safety net for the controller-level decorator family (`#[guard]`,
 /// `#[pre_guard]`, `#[roles]`, `#[all_roles]`, `#[intercept]`): these
@@ -39,16 +41,18 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
         return input;
     };
     let has_transformer = item.attrs.iter().any(|a| {
-        a.path()
-            .segments
-            .last()
-            .is_some_and(|s| s.ident == "routes" || s.ident == "bean" || s.ident == "grpc_routes")
+        a.path().segments.last().is_some_and(|s| {
+            s.ident == "routes"
+                || s.ident == "bean"
+                || s.ident == "grpc_routes"
+                || s.ident == "mcp_routes"
+        })
     });
     let msg = if has_transformer {
         format!(
             "#[{name}] is placed above the transforming macro — attribute macros expand \
              top-down, so the macro below never sees it and the decorator would be silently \
-             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]."
+             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]/#[mcp_routes]."
         )
     } else {
         format!(
@@ -1386,6 +1390,101 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
+/// Attribute macro turning `#[tool]`-marked methods of an impl block into MCP
+/// tools.
+///
+/// The struct must use [`macro@controller`] (for `#[inject]`, `#[config]`,
+/// and the metadata module). Only `#[tool]`-marked `async fn(&self, ...)`
+/// methods become tools; other methods pass through unchanged.
+///
+/// Tool parameters (any order, each at most once):
+/// - `Params(p): Params<T>` — the deserialized tool arguments (`T:
+///   Deserialize + JsonSchema + ObjectParams`, drives the input schema)
+/// - `#[inject(identity)] user: I` (or `Option<I>`) — the authenticated
+///   caller, read from the transport request extensions
+/// - `call: ToolCall` — raw call metadata (arguments, HTTP parts, request id)
+/// - `cancel: CancelToken` — cancelled on client abort / shutdown
+///
+/// Guards (`#[roles]`, `#[all_roles]`, `#[guard]`) and interceptors
+/// (`#[intercept]`) are supported per method and on the impl block (applied
+/// to every tool) — the same `Guard<I>`/`Interceptor` machinery as HTTP
+/// routes, prebuilt once at registration.
+///
+/// # Example
+///
+/// ```ignore
+/// #[controller]
+/// pub struct MathTools {
+///     #[inject] calc: CalcService,
+/// }
+///
+/// #[mcp_routes]
+/// impl MathTools {
+///     /// Add two numbers.
+///     #[tool(name = "add", read_only)]
+///     async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
+///         Json(self.calc.add(p.a, p.b))
+///     }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn mcp_routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    if !args.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[mcp_routes] takes no arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+    let item = syn::parse_macro_input!(input as syn::ItemImpl);
+    match mcp_routes_parsing::parse(item) {
+        Ok(def) => mcp_codegen::generate(&def).into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Marker attribute declaring an MCP tool method inside `#[mcp_routes]`.
+///
+/// Arguments: `name = "..."`, `title = "..."`, `description = "..."` and the
+/// annotation flags `read_only`, `destructive`, `idempotent`, `open_world`
+/// (bare or `= <bool>`). This is a no-op on its own — it is consumed by
+/// `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn tool(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marker attribute declaring an MCP resource method inside `#[mcp_routes]`.
+///
+/// Arguments: `uri = "..."` (required), `name = "..."`, `title = "..."`,
+/// `description = "..."`, `mime_type = "..."`, plus `scopes`/`any_scopes`.
+/// This is a no-op on its own — it is consumed by `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn resource(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Marker attribute declaring an MCP prompt method inside `#[mcp_routes]`.
+///
+/// Arguments: `name = "..."`, `title = "..."`, `description = "..."`, plus
+/// `scopes`/`any_scopes`. Prompt arguments are derived from the method's
+/// `Params<T>` schema. This is a no-op on its own — it is consumed by
+/// `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
+/// Mark an MCP `Params<T>` type as an object-shaped argument structure.
+///
+/// Only structs with named fields are accepted. Combine this derive with
+/// `serde::Deserialize` and `schemars::JsonSchema`.
+#[proc_macro_derive(ObjectParams)]
+pub fn derive_object_params(input: TokenStream) -> TokenStream {
+    object_params_derive::expand(input)
+}
+
 // ---------------------------------------------------------------------------
 // Params derive
 // ---------------------------------------------------------------------------
@@ -1393,16 +1492,17 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Derive macro for aggregating path, query, and header parameters into a
 /// single struct.
 ///
-/// Fields are annotated with `#[path]`, `#[query]`, or `#[header("Name")]`
-/// to indicate their extraction source. The generated `FromRequestParts`
-/// implementation extracts and parses each field automatically.
+/// Fields are annotated with `#[param(path)]`, `#[query]`, or
+/// `#[header("Name")]` to indicate their extraction source. The generated
+/// `FromRequestParts` implementation extracts and parses each field
+/// automatically.
 ///
 /// # Attributes
 ///
 /// | Attribute | Source | Default name |
 /// |---|---|---|
-/// | `#[path]` | URL path segments | field name |
-/// | `#[path(name = "userId")]` | URL path segments | custom name |
+/// | `#[param(path)]` | URL path segments | field name |
+/// | `#[param(path, name = "userId")]` | URL path segments | custom name |
 /// | `#[query]` | Query string | field name |
 /// | `#[query(name = "q")]` | Query string | custom name |
 /// | `#[header("X-Custom")]` | HTTP headers | explicit name |
@@ -1416,7 +1516,7 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```ignore
 /// #[derive(Params, garde::Validate)]
 /// struct GetUserParams {
-///     #[path]
+///     #[param(path)]
 ///     id: u64,
 ///
 ///     #[query]
@@ -1433,7 +1533,7 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     // params.id, params.page, params.tenant_id extracted and validated
 /// }
 /// ```
-#[proc_macro_derive(Params, attributes(path, query, header, param, params))]
+#[proc_macro_derive(Params, attributes(query, header, param, params))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     params_derive::expand(input)
 }

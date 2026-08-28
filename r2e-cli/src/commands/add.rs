@@ -17,13 +17,15 @@ const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("utils", "r2e-utils"),
     ("prometheus", "r2e-prometheus"),
     ("grpc", "r2e-grpc"),
+    ("mcp", "r2e-mcp"),
     ("test", "r2e-test"),
 ];
 
 /// Add an R2E extension crate to the project's `Cargo.toml`.
 ///
-/// Looks up `extension` in the known extensions map, parses `Cargo.toml`
-/// with `toml_edit`, and inserts the dependency with version [`R2E_DEP_VERSION`].
+/// Looks up `extension` in the known extensions map and updates `Cargo.toml`
+/// with `toml_edit`. Most extensions insert a dependency with version
+/// [`R2E_DEP_VERSION`]; MCP and gRPC have facade-aware setup paths.
 ///
 /// Returns an error if:
 /// - `Cargo.toml` does not exist
@@ -40,6 +42,9 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     // not just a dependency insert.
     if extension == "grpc" {
         return scaffold_grpc(cargo_path);
+    }
+    if extension == "mcp" {
+        return add_mcp(cargo_path);
     }
 
     let (_, crate_name) = KNOWN_EXTENSIONS
@@ -76,7 +81,7 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     deps.insert(crate_name, toml_edit::value(R2E_DEP_VERSION));
 
     // Add companion dependencies for extensions that require them
-    if extension == "openapi" && !deps.contains_key("schemars") {
+    if matches!(extension, "openapi" | "mcp") && !deps.contains_key("schemars") {
         deps.insert("schemars", toml_edit::value("1"));
     }
 
@@ -87,7 +92,7 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
         "✓".green(),
         crate_name.cyan()
     );
-    if extension == "openapi" {
+    if matches!(extension, "openapi" | "mcp") {
         println!(
             "{} Also added {} (required for #[derive(JsonSchema)])",
             "✓".green(),
@@ -97,6 +102,213 @@ pub fn run(extension: &str) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Run `cargo build` to fetch the new dependency.");
 
     Ok(())
+}
+
+/// `r2e add mcp` — dependencies plus an idempotent MCP bean/config scaffold.
+fn add_mcp(cargo_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let content = std::fs::read_to_string(cargo_path)?;
+    let mut doc = content.parse::<toml_edit::DocumentMut>()?;
+
+    let package_name = doc
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml_edit::Item::as_str)
+        .unwrap_or("app")
+        .to_string();
+    let deps = doc
+        .entry("dependencies")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .ok_or("dependencies is not a table")?;
+
+    let uses_facade = deps.contains_key("r2e");
+    if let Some(r2e_dep) = deps.get_mut("r2e") {
+        if add_dep_feature(r2e_dep, "mcp")? {
+            println!(
+                "{} Enabled feature {} on the {} dependency",
+                "✓".green(),
+                "mcp".cyan(),
+                "r2e".cyan()
+            );
+        } else {
+            println!(
+                "{} Feature {} is already enabled on the {} dependency",
+                "!".yellow(),
+                "mcp".cyan(),
+                "r2e".cyan()
+            );
+        }
+    } else if !deps.contains_key("r2e-mcp") {
+        deps.insert("r2e-mcp", toml_edit::value(R2E_DEP_VERSION));
+        println!(
+            "{} Added {} to Cargo.toml dependencies",
+            "✓".green(),
+            "r2e-mcp".cyan()
+        );
+    } else {
+        println!(
+            "{} Extension '{}' is already in Cargo.toml",
+            "!".yellow(),
+            "mcp".cyan()
+        );
+    }
+
+    if !uses_facade && !deps.contains_key("r2e-core") {
+        deps.insert("r2e-core", toml_edit::value(R2E_DEP_VERSION));
+        println!(
+            "{} Added {} for the direct-crate scaffold",
+            "✓".green(),
+            "r2e-core".cyan()
+        );
+    }
+
+    if !deps.contains_key("schemars") {
+        deps.insert("schemars", toml_edit::value("1"));
+        println!(
+            "{} Also added {} (required for #[derive(JsonSchema)])",
+            "✓".green(),
+            "schemars".cyan()
+        );
+    }
+
+    if !deps.contains_key("serde") {
+        let mut serde = toml_edit::InlineTable::new();
+        serde.insert("version", "1".into());
+        let mut features = toml_edit::Array::new();
+        features.push("derive");
+        serde.insert("features", features.into());
+        deps.insert("serde", toml_edit::value(serde));
+        println!(
+            "{} Also added {} with derive support",
+            "✓".green(),
+            "serde".cyan()
+        );
+    } else if add_dep_feature(deps.get_mut("serde").expect("checked above"), "derive")? {
+        println!(
+            "{} Enabled feature {} on the {} dependency",
+            "✓".green(),
+            "derive".cyan(),
+            "serde".cyan()
+        );
+    }
+
+    std::fs::write(cargo_path, doc.to_string())?;
+
+    let src = Path::new("src");
+    let mcp_rs = src.join("mcp.rs");
+    let has_mcp_module = mcp_rs.exists() || src.join("mcp/mod.rs").exists();
+    if src.exists() && !has_mcp_module {
+        std::fs::write(
+            &mcp_rs,
+            super::templates::project::mcp_service_rs(uses_facade),
+        )?;
+        println!("{} Created {}", "✓".green(), "src/mcp.rs".cyan());
+        if let Some(root) = declare_module(src, "mcp")? {
+            println!(
+                "{} Declared {} in {}",
+                "✓".green(),
+                "mod mcp;".cyan(),
+                root.display().to_string().cyan()
+            );
+        }
+    } else if has_mcp_module {
+        println!(
+            "{} MCP source module already exists — left it unchanged",
+            "!".yellow()
+        );
+    }
+
+    let config_path = Path::new("application.yaml");
+    let mut config = if config_path.exists() {
+        std::fs::read_to_string(config_path)?
+    } else {
+        String::new()
+    };
+    let has_mcp_config = config
+        .lines()
+        .any(|line| !line.starts_with(char::is_whitespace) && line.trim_end() == "mcp:");
+    if !has_mcp_config {
+        if !config.is_empty() && !config.ends_with('\n') {
+            config.push('\n');
+        }
+        if !config.is_empty() {
+            config.push('\n');
+        }
+        config.push_str(&format!("mcp:\n  path: /mcp\n  name: {package_name}\n"));
+        std::fs::write(config_path, config)?;
+        println!("{} Configured {}", "✓".green(), "application.yaml".cyan());
+    }
+
+    println!();
+    println!("Wire the generated MCP adapter into your App (src/app.rs):");
+    println!();
+    println!("  use crate::mcp::McpTools;");
+    println!();
+    println!("  b.plugin(McpServer::new())");
+    println!("      .build_state().await");
+    println!("      .register_mcp_service::<McpTools>()");
+    println!();
+    println!("  Then: cargo build");
+    Ok(())
+}
+
+/// Declare `mod <name>;` in the crate root (`src/lib.rs`, else `src/main.rs`)
+/// so a freshly scaffolded `src/<name>.rs` compiles without a manual edit.
+/// Returns the root that was edited, `None` when there is no root or the
+/// module is already declared (`mod x;` / `pub mod x;`, possibly attributed).
+fn declare_module(
+    src: &Path,
+    name: &str,
+) -> Result<Option<std::path::PathBuf>, Box<dyn std::error::Error>> {
+    let Some(root) = ["lib.rs", "main.rs"]
+        .into_iter()
+        .map(|file| src.join(file))
+        .find(|path| path.exists())
+    else {
+        return Ok(None);
+    };
+    let content = std::fs::read_to_string(&root)?;
+    let declares = |line: &str| {
+        let line = line.trim();
+        let line = line.strip_prefix("pub ").unwrap_or(line);
+        line.strip_prefix("mod ")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .is_some_and(|declared| declared.trim() == name)
+    };
+    if content.lines().any(declares) {
+        return Ok(None);
+    }
+    let declaration = format!("mod {name};\n");
+    // Group with the existing module declarations when there are any (right
+    // after the last one), otherwise lead the file (after inner attributes).
+    let lines: Vec<&str> = content.lines().collect();
+    let after_last_mod = lines
+        .iter()
+        .rposition(|line| {
+            let line = line.trim();
+            let line = line.strip_prefix("pub ").unwrap_or(line);
+            line.starts_with("mod ") && line.ends_with(';')
+        })
+        .map(|index| index + 1);
+    let insert_at = after_last_mod.unwrap_or_else(|| {
+        lines
+            .iter()
+            .take_while(|line| line.trim_start().starts_with("#!"))
+            .count()
+    });
+    let mut updated = String::with_capacity(content.len() + declaration.len());
+    for (index, line) in lines.iter().enumerate() {
+        if index == insert_at {
+            updated.push_str(&declaration);
+        }
+        updated.push_str(line);
+        updated.push('\n');
+    }
+    if insert_at >= lines.len() {
+        updated.push_str(&declaration);
+    }
+    std::fs::write(&root, updated)?;
+    Ok(Some(root))
 }
 
 /// `r2e add grpc` — full gRPC setup: enable the `grpc`/`grpc-reflection`

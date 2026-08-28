@@ -1,0 +1,7 @@
+error[E0277]: the trait bound `u32: ToolParams` is not satisfied
+  --> cases/mcp/fail/mcp_params_not_object.rs:12:50
+   |
+12 |     async fn broken(&self, Params(value): Params<u32>) -> String {
+   |                                                  ^^^ the trait `ObjectParams` is not implemented for `u32`
+   |
+   = note: required for `u32` to implement `ToolParams`

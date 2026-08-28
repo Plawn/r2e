@@ -44,7 +44,7 @@ impl UserController {
 - **Prometheus metrics** — Request metrics with configurable namespace and path exclusions
 - **OpenTelemetry** — Distributed tracing and context propagation via OTLP exporter
 - **gRPC** — Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports
-- **Embedded OIDC** — Built-in OIDC server issuing JWTs (password + client_credentials grants) without an external IdP
+- **Embedded OIDC** — Local RS256 issuer with Authorization Code + PKCE, client credentials, and an optional development password grant
 - **Configuration** — YAML + env var overlay with typed `ConfigProperties` sections
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication
 - **Multipart** — Multipart form/file upload support
@@ -496,7 +496,7 @@ R2E ships with built-in plugins. There is one plugin kind and one install call �
 | `Prometheus` | Prometheus metrics at `/metrics` |
 | `Observability` | OpenTelemetry distributed tracing (OTLP exporter) |
 | `GrpcServer` | gRPC server on a dedicated port |
-| `OidcServer` | Embedded OIDC server (`/oauth/token`, JWKS endpoints) |
+| `OidcServer` | Embedded issuer (`/oauth/authorize`, `/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
 | `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install after other router plugins) |
 | `Scheduler` | Background task scheduling — requires `Executor`; ticks run on its pool |
@@ -519,7 +519,7 @@ r2e-openapi       OpenAPI 3.1.0 spec generation + docs UI
 r2e-prometheus    Prometheus metrics middleware
 r2e-observability OpenTelemetry distributed tracing + context propagation (OTLP)
 r2e-grpc          gRPC server support via Tonic, multiplexed with HTTP
-r2e-oidc          Embedded OIDC server: JWT issuance, password + client_credentials grants
+r2e-oidc          Embedded issuer: JWT, Authorization Code + PKCE, client credentials
 r2e-openfga       OpenFGA fine-grained authorization (Zanzibar-style)
 r2e-utils         Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
 r2e-test          TestApp, TestJwt for integration testing
@@ -542,7 +542,7 @@ The `examples/` directory contains runnable demo apps:
 | `example-websocket-chat` | Real-time chat using `WsRooms` and event-driven persistence |
 | `example-grpc` | HTTP + gRPC multiplexing on separate ports |
 | `example-microservice` | Two services with inter-service HTTP calls and shared types |
-| `example-oidc` | Embedded OIDC server with password and client_credentials grants |
+| `example-oidc` | Embedded issuer with password and client_credentials grants |
 
 ```bash
 cargo run -p example-app             # port 3000

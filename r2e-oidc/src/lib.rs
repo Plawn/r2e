@@ -3,8 +3,10 @@
 //! Provides local RS256 access-token issuance without an external identity provider.
 //! Install as a `Plugin` and `AuthenticatedUser` works out-of-the-box.
 //!
-//! This crate is not a full browser-facing OpenID Connect Provider: it does not
-//! implement an authorization endpoint, Authorization Code + PKCE, or ID tokens.
+//! Public clients can use the browser Authorization Code flow with mandatory
+//! PKCE S256. This remains a focused OAuth access-token issuer rather than a
+//! complete federated OpenID Provider: it does not issue ID tokens or provide
+//! upstream SSO/federation.
 //!
 //! # Quick start
 //!
@@ -60,6 +62,7 @@ pub mod keys;
 pub mod store;
 pub mod token;
 
+mod authorization;
 mod handlers;
 mod state;
 
@@ -118,6 +121,12 @@ impl OidcServer {
         self
     }
 
+    /// Set the lifetime of one-time authorization codes (default 300s).
+    pub fn authorization_code_ttl(mut self, secs: u64) -> Self {
+        self.config.authorization_code_ttl_secs = secs;
+        self
+    }
+
     /// Set the base path for OIDC endpoints.
     pub fn base_path(mut self, path: impl Into<String>) -> Self {
         self.config.base_path = path.into();
@@ -145,6 +154,21 @@ impl OidcServer {
     /// This grant is intended for local development fixtures only.
     pub fn enable_password_grant_for_development(mut self) -> Self {
         self.config.password_grant_enabled = true;
+        self
+    }
+
+    /// Restrict the scopes the development password grant may issue.
+    ///
+    /// Defaults to [`DEFAULT_USER_SCOPE`](token::DEFAULT_USER_SCOPE)
+    /// (`openid profile email roles`). A `scope` parameter naming anything
+    /// outside this set is rejected with `invalid_scope`; omitting `scope`
+    /// grants the whole set. Client-bound grants use their client's own
+    /// allowlist instead — see [`ClientRegistry::with_scopes`].
+    pub fn password_grant_scopes(
+        mut self,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.config.password_grant_scopes = scopes.into_iter().map(Into::into).collect();
         self
     }
 
@@ -258,6 +282,16 @@ pub struct OidcRuntime {
     base_path: String,
 }
 
+impl OidcRuntime {
+    /// Return the local validator backed by this runtime's signing key.
+    ///
+    /// This is the zero-network bridge for protecting another in-process
+    /// transport, such as `McpServer::with_token_validator`.
+    pub fn claims_validator(&self) -> Arc<JwtClaimsValidator> {
+        Arc::clone(&self.claims_validator)
+    }
+}
+
 impl Plugin for OidcRuntime {
     type Provided = (Arc<JwtClaimsValidator>,);
     type Deps = ();
@@ -303,6 +337,10 @@ impl Plugin for OidcServer {
 fn oidc_routes(state: Arc<state::OidcState>, base_path: &str) -> Router {
     let router = Router::new()
         .route("/oauth/token", post(handlers::token_handler))
+        .route(
+            "/oauth/authorize",
+            get(handlers::authorize_form_handler).post(handlers::authorize_handler),
+        )
         .route(
             "/.well-known/openid-configuration",
             get(handlers::discovery_handler),

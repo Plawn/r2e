@@ -18,8 +18,8 @@ pub use async_exec::*;
 pub use consumer::*;
 pub use managed::*;
 pub use plugins::{
-    parse_decorators, parse_grpc_decorators, strip_known_attrs, validate_grpc_attrs,
-    validate_grpc_impl_attrs,
+    parse_decorators, parse_grpc_decorators, parse_mcp_decorators, strip_known_attrs,
+    validate_grpc_attrs, validate_grpc_impl_attrs, validate_mcp_attrs, validate_mcp_impl_attrs,
 };
 pub use route::*;
 pub use scheduled::*;

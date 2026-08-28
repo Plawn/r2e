@@ -2,7 +2,7 @@
 
 use crate::extract::*;
 use crate::model::types::{IdentityParam, MethodDecorators};
-use crate::parsing::controller_parsing::has_identity_qualifier;
+use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
 
 /// Parsed arguments of the `#[grpc_routes(...)]` attribute:
 /// `TraitPath` optionally followed by `, descriptor = <expr>`.
@@ -77,8 +77,6 @@ pub struct GrpcMethod {
     pub fn_item: syn::ImplItemFn,
 }
 
-use crate::util::type_utils::unwrap_option_type;
-
 /// Detect `#[inject(identity)]` on handler parameters.
 fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<IdentityParam>> {
     let mut identity_param = None;
@@ -86,33 +84,15 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
 
     for arg in method.sig.inputs.iter_mut() {
         if let syn::FnArg::Typed(pat_type) = arg {
-            let is_identity = pat_type.attrs.iter().any(|a| {
-                (a.path().is_ident("inject") && has_identity_qualifier(a))
-                    || a.path().is_ident("identity")
-            });
-
-            if is_identity {
+            if let Some(identity) = parse_identity_param(pat_type, param_idx, true)? {
                 if identity_param.is_some() {
                     return Err(syn::Error::new_spanned(
                         pat_type,
                         "only one #[inject(identity)] parameter is allowed per gRPC handler",
                     ));
                 }
-                let declared_ty = (*pat_type.ty).clone();
-                let (inner_ty, is_optional) = match unwrap_option_type(&declared_ty) {
-                    Some(inner) => (inner.clone(), true),
-                    None => (declared_ty, false),
-                };
-                identity_param = Some(IdentityParam {
-                    index: param_idx,
-                    ty: inner_ty,
-                    is_optional,
-                });
-                // Strip the identity attribute
-                pat_type.attrs.retain(|a| {
-                    !((a.path().is_ident("inject") && has_identity_qualifier(a))
-                        || a.path().is_ident("identity"))
-                });
+                strip_identity_param_attrs(pat_type, true);
+                identity_param = Some(identity);
             }
             param_idx += 1;
         }
@@ -153,41 +133,39 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
     let mut other_methods = Vec::new();
 
     for impl_item in item.items {
-        match impl_item {
-            syn::ImplItem::Fn(mut method) => {
-                let all_attrs = std::mem::take(&mut method.attrs);
+        let syn::ImplItem::Fn(mut method) = impl_item else {
+            continue;
+        };
+        let all_attrs = std::mem::take(&mut method.attrs);
 
-                // Every async method in the impl block is considered a gRPC method
-                // (matching the tonic trait). Non-async or methods without &self are helpers.
-                let is_receiver = method
-                    .sig
-                    .inputs
-                    .first()
-                    .map_or(false, |arg| matches!(arg, syn::FnArg::Receiver(_)));
+        // Every async method in the impl block is considered a gRPC method
+        // (matching the tonic trait). Non-async or methods without &self are helpers.
+        let is_receiver = method
+            .sig
+            .inputs
+            .first()
+            .is_some_and(|arg| matches!(arg, syn::FnArg::Receiver(_)));
 
-                if method.sig.asyncness.is_some() && is_receiver {
-                    let decorators = parse_grpc_decorators(&all_attrs)?;
+        if method.sig.asyncness.is_some() && is_receiver {
+            let decorators = parse_grpc_decorators(&all_attrs)?;
 
-                    method.attrs = strip_known_attrs(all_attrs);
-                    let identity_param = extract_identity_param(&mut method)?;
-                    let name = method.sig.ident.clone();
+            method.attrs = strip_known_attrs(all_attrs);
+            let identity_param = extract_identity_param(&mut method)?;
+            let name = method.sig.ident.clone();
 
-                    methods.push(GrpcMethod {
-                        name,
-                        decorators,
-                        identity_param,
-                        fn_item: method,
-                    });
-                } else {
-                    // Pass-through helpers still can't carry gRPC-disallowed
-                    // markers: a sync `#[pre_destroy] fn close(&self)` would
-                    // otherwise be re-emitted verbatim and silently never run.
-                    validate_grpc_attrs(&all_attrs)?;
-                    method.attrs = all_attrs;
-                    other_methods.push(method);
-                }
-            }
-            _ => {} // skip non-method items
+            methods.push(GrpcMethod {
+                name,
+                decorators,
+                identity_param,
+                fn_item: method,
+            });
+        } else {
+            // Pass-through helpers still can't carry gRPC-disallowed
+            // markers: a sync `#[pre_destroy] fn close(&self)` would
+            // otherwise be re-emitted verbatim and silently never run.
+            validate_grpc_attrs(&all_attrs)?;
+            method.attrs = all_attrs;
+            other_methods.push(method);
         }
     }
 

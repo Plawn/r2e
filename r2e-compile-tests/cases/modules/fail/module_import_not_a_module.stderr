@@ -1,3 +1,18 @@
+error[E0271]: type mismatch resolving `<BadModule as FeatureModule>::Imports == _`
+  --> cases/modules/fail/module_import_not_a_module.rs:26:1
+   |
+26 | / #[module(
+27 | |     providers(Svc),
+28 | |     exports(Svc),
+29 | |     imports(module(NotAModule))
+30 | | )]
+   | |  ^
+   | |  |
+   | |__types differ
+   |    type mismatch resolving `<BadModule as FeatureModule>::Imports == _`
+   |
+   = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0277]: the trait bound `NotAModule: FeatureModule` is not satisfied
   --> cases/modules/fail/module_import_not_a_module.rs:26:1
    |
@@ -24,18 +39,44 @@ help: the trait `FeatureModule` is implemented for `BadModule`
    | |__^
    = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: the trait bound `NotAModule: FeatureModule` is not satisfied
+error: the type `<TNil as TAppend<<NotAModule as FeatureModule>::Exports>>::Output` is not well-formed
+  --> cases/modules/fail/module_import_not_a_module.rs:26:1
+   |
+26 | / #[module(
+27 | |     providers(Svc),
+28 | |     exports(Svc),
+29 | |     imports(module(NotAModule))
+30 | | )]
+   | |__^
+   |
+   = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<BadModule as FeatureModule>::Imports == _`
   --> cases/modules/fail/module_import_not_a_module.rs:37:14
    |
 37 |             .register_module::<BadModule>()
-   |              ^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |              ^^^^^^^^^^^^^^^ type mismatch resolving `<BadModule as FeatureModule>::Imports == _`
    |
-help: the trait `FeatureModule` is not implemented for `NotAModule`
-  --> cases/modules/fail/module_import_not_a_module.rs:24:1
+note: types differ
+  --> cases/modules/fail/module_import_not_a_module.rs:26:1
    |
-24 | pub struct NotAModule;
-   | ^^^^^^^^^^^^^^^^^^^^^
-help: the trait `FeatureModule` is implemented for `BadModule`
+26 | / #[module(
+27 | |     providers(Svc),
+28 | |     exports(Svc),
+29 | |     imports(module(NotAModule))
+30 | | )]
+   | |__^
+   = note: this error originates in the attribute macro `module` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0271]: type mismatch resolving `<BadModule as FeatureModule>::Imports == _`
+  --> cases/modules/fail/module_import_not_a_module.rs:35:9
+   |
+35 | /         r2e::AppBuilder::new()
+36 | |             .provide(Pool)
+37 | |             .register_module::<BadModule>()
+   | |___________________________________________^ type mismatch resolving `<BadModule as FeatureModule>::Imports == _`
+   |
+note: types differ
   --> cases/modules/fail/module_import_not_a_module.rs:26:1
    |
 26 | / #[module(

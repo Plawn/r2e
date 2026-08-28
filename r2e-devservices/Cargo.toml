@@ -15,6 +15,7 @@ default = []
 postgres = ["testcontainers-modules/postgres"]
 redis = ["testcontainers-modules/redis"]
 openfga = ["testcontainers/http_wait", "dep:reqwest", "dep:serde_json"]
+keycloak = ["testcontainers/http_wait", "dep:reqwest", "reqwest/form", "dep:serde_json"]
 
 [dependencies]
 # `device-requests` is enabled unconditionally, not passed through a feature of

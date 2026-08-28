@@ -134,6 +134,186 @@ fn add_openapi_includes_schemars() {
 
 #[test]
 #[serial]
+fn add_mcp_enables_facade_feature_and_schemars() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert!(cargo.contains("r2e = { version = \"0.1\", features = [\"mcp\"] }"));
+    assert!(cargo.contains("schemars = \"1\""));
+    assert!(cargo.contains("serde = { version = \"1\", features = [\"derive\"] }"));
+    assert!(!cargo.contains("r2e-mcp"));
+    assert!(fs::read_to_string("application.yaml")
+        .unwrap()
+        .contains("mcp:\n  path: /mcp"));
+}
+
+#[test]
+#[serial]
+fn add_mcp_preserves_facade_features_and_is_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e = { version = \"0.1\", features = [\"security\"] }\n",
+    )
+    .unwrap();
+
+    add::run("mcp").unwrap();
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert_eq!(cargo.matches("\"mcp\"").count(), 1);
+    assert!(cargo.contains("\"security\""));
+    assert_eq!(cargo.matches("schemars").count(), 1);
+    assert_eq!(cargo.matches("serde").count(), 1);
+    assert_eq!(
+        fs::read_to_string("application.yaml")
+            .unwrap()
+            .matches("mcp:")
+            .count(),
+        1
+    );
+}
+
+#[test]
+#[serial]
+fn add_mcp_scaffolds_source_without_overwriting_it() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+
+    add::run("mcp").unwrap();
+    let source = fs::read_to_string("src/mcp.rs").unwrap();
+    assert!(source.contains("#[derive(Debug, Deserialize, JsonSchema, ObjectParams)]"));
+    assert!(source.contains("#[controller]"));
+    assert!(source.contains("#[mcp_routes]"));
+    assert!(source.contains("#[tool(read_only)]"));
+    assert!(source.contains("pub struct McpTools"));
+
+    fs::write("src/mcp.rs", "// user-owned\n").unwrap();
+    add::run("mcp").unwrap();
+    assert_eq!(fs::read_to_string("src/mcp.rs").unwrap(), "// user-owned\n");
+}
+
+#[test]
+#[serial]
+fn add_mcp_declares_the_module_in_the_crate_root() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+    // lib.rs wins over main.rs; the declaration joins the existing `mod`s.
+    fs::write("src/lib.rs", "mod app;\n\npub use app::App;\n").unwrap();
+    fs::write("src/main.rs", "fn main() {}\n").unwrap();
+
+    add::run("mcp").unwrap();
+    assert_eq!(
+        fs::read_to_string("src/lib.rs").unwrap(),
+        "mod app;\nmod mcp;\n\npub use app::App;\n"
+    );
+    assert_eq!(fs::read_to_string("src/main.rs").unwrap(), "fn main() {}\n");
+
+    // Idempotent: a second run (module already scaffolded) leaves it alone.
+    add::run("mcp").unwrap();
+    assert_eq!(fs::read_to_string("src/lib.rs").unwrap().matches("mod mcp;").count(), 1);
+}
+
+#[test]
+#[serial]
+fn add_mcp_declares_the_module_after_inner_attributes_in_main() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+    fs::write("src/main.rs", "#![recursion_limit = \"512\"]\n\nfn main() {}\n").unwrap();
+
+    add::run("mcp").unwrap();
+    assert_eq!(
+        fs::read_to_string("src/main.rs").unwrap(),
+        "#![recursion_limit = \"512\"]\nmod mcp;\n\nfn main() {}\n"
+    );
+}
+
+#[test]
+#[serial]
+fn add_mcp_keeps_an_existing_pub_mod_declaration() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write("Cargo.toml", minimal_cargo_toml()).unwrap();
+    fs::create_dir("src").unwrap();
+    fs::write("src/lib.rs", "pub mod mcp;\n").unwrap();
+
+    add::run("mcp").unwrap();
+    assert_eq!(fs::read_to_string("src/lib.rs").unwrap(), "pub mod mcp;\n");
+}
+
+#[test]
+#[serial]
+fn add_mcp_repairs_missing_schemars_for_direct_dependency() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e-mcp = \"0.3\"\n",
+    )
+    .unwrap();
+
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert_eq!(cargo.matches("r2e-mcp").count(), 1);
+    assert!(cargo.contains("schemars = \"1\""));
+}
+
+#[test]
+#[serial]
+fn add_mcp_adds_direct_dependency_without_facade() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+
+    add::run("mcp").unwrap();
+
+    let cargo = fs::read_to_string("Cargo.toml").unwrap();
+    assert!(cargo.contains("r2e-mcp = \"0.3\""));
+    assert!(cargo.contains("r2e-core = \"0.3\""));
+    assert!(cargo.contains("schemars = \"1\""));
+}
+
+#[test]
+#[serial]
+fn add_mcp_direct_scaffold_uses_direct_crates() {
+    let tmp = TempDir::new().unwrap();
+    let _cwd = CwdGuard::new(tmp.path());
+    fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"direct-app\"\nversion = \"0.1.0\"\n\n[dependencies]\n",
+    )
+    .unwrap();
+    fs::create_dir("src").unwrap();
+
+    add::run("mcp").unwrap();
+
+    let source = fs::read_to_string("src/mcp.rs").unwrap();
+    assert!(source.contains("use r2e_core::prelude::{controller, mcp_routes, tool, ObjectParams};"));
+    assert!(source.contains("use r2e_mcp::Params;"));
+    assert!(!source.contains("use r2e::"));
+    assert!(fs::read_to_string("application.yaml")
+        .unwrap()
+        .contains("name: direct-app"));
+}
+
+#[test]
+#[serial]
 fn add_all_known_extensions() {
     let known = [
         "security",

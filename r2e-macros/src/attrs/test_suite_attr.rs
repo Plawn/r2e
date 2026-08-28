@@ -110,7 +110,7 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 fn expand_inner(args: SuiteArgs, item_impl: ItemImpl) -> syn::Result<TokenStream2> {
     if item_impl.trait_.is_some() {
         return Err(syn::Error::new_spanned(
-            &item_impl.impl_token,
+            item_impl.impl_token,
             "#[r2e::test_suite] only supports inherent impl blocks",
         ));
     }
@@ -125,7 +125,7 @@ fn expand_inner(args: SuiteArgs, item_impl: ItemImpl) -> syn::Result<TokenStream
     }
     if args.app_ty.is_none() && (args.with_expr.is_some() || !args.jwt) {
         return Err(syn::Error::new_spanned(
-            &item_impl.impl_token,
+            item_impl.impl_token,
             "`with = ...` and `jwt = ...` require `app = <App type>`",
         ));
     }
@@ -207,7 +207,7 @@ fn parse_suite(item_impl: ItemImpl) -> syn::Result<SuiteDef> {
 fn validate_suite(def: &SuiteDef) -> syn::Result<()> {
     if def.cases.is_empty() {
         return Err(syn::Error::new_spanned(
-            &def.item_impl.impl_token,
+            def.item_impl.impl_token,
             "#[r2e::test_suite] requires at least one #[case] method",
         ));
     }

@@ -17,8 +17,8 @@ async fn panicking_tick_increments_panic_count() {
     let registry = ScheduledJobRegistry::new();
     let cancel = CancelToken::new();
 
-    // Struct-literal form with the future cast to `Output = ()` so the
-    // diverging (`panic!`) body doesn't trip never-type inference.
+    // Struct-literal form; the diverging (`panic!`) body ends in an explicit
+    // `()` so never-type inference keeps `Output = ()`.
     let task = ScheduledTaskDef {
         overlap: OverlapPolicy::Skip,
         skip: None,
@@ -30,6 +30,8 @@ async fn panicking_tick_increments_panic_count() {
         task: Box::new(|()| {
             Box::pin(async move {
                 panic!("intentional panic in tick");
+                #[allow(unreachable_code)]
+                ()
             }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
         }),
     };

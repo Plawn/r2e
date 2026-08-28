@@ -33,6 +33,30 @@ impl TestJwt {
         }
     }
 
+    /// Create a `TestJwt` whose audience is an OAuth resource identifier.
+    ///
+    /// The MCP fast path (RFC 8707: `aud` = canonical resource URI): default
+    /// secret, issuer `r2e-test`, audience = `resource`. Pair it with
+    /// `r2e_mcp::testing::pin_mcp_validator` to boot an authenticated MCP
+    /// server with zero network I/O.
+    pub fn for_resource(resource: &str) -> Self {
+        Self {
+            secret: b"r2e-test-secret-do-not-use-in-production".to_vec(),
+            issuer: "r2e-test".to_string(),
+            audience: resource.to_string(),
+        }
+    }
+
+    /// The issuer this `TestJwt` signs tokens for.
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    /// The default audience this `TestJwt` signs tokens for.
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
     /// Generate a signed JWT token for the given subject and roles.
     pub fn token(&self, sub: &str, roles: &[&str]) -> String {
         self.token_with_claims(sub, roles, None)
@@ -119,7 +143,7 @@ pub struct TokenBuilder<'a> {
     extra_claims: serde_json::Map<String, Value>,
     expiration: Expiration,
     issuer_override: Option<String>,
-    audience_override: Option<String>,
+    audience_override: Option<Value>,
     algorithm_override: Option<Algorithm>,
     omit_claims: HashSet<String>,
 }
@@ -171,7 +195,50 @@ impl<'a> TokenBuilder<'a> {
 
     /// Override the audience claim (for testing wrong-audience rejection).
     pub fn audience(mut self, audience: &str) -> Self {
-        self.audience_override = Some(audience.to_string());
+        self.audience_override = Some(Value::String(audience.to_string()));
+        self
+    }
+
+    /// Set an array-shaped `aud` claim — the multi-audience form Keycloak and
+    /// Auth0 emit (`aud: ["account", "https://api…"]`). Validators using a
+    /// membership test (e.g. the MCP resource check) accept the token when
+    /// any entry matches.
+    pub fn audiences(mut self, audiences: &[&str]) -> Self {
+        self.audience_override = Some(Value::Array(
+            audiences.iter().map(|a| Value::String(a.to_string())).collect(),
+        ));
+        self
+    }
+
+    /// Set the OAuth `scope` claim (space-joined, RFC 8693 shape).
+    pub fn scopes(mut self, scopes: &[&str]) -> Self {
+        self.extra_claims
+            .insert("scope".to_string(), Value::String(scopes.join(" ")));
+        self
+    }
+
+    /// Set Keycloak-shaped realm roles: `realm_access: { roles: [...] }`.
+    pub fn realm_roles(mut self, roles: &[&str]) -> Self {
+        self.extra_claims.insert(
+            "realm_access".to_string(),
+            serde_json::json!({ "roles": roles }),
+        );
+        self
+    }
+
+    /// Add Keycloak-shaped client roles:
+    /// `resource_access: { <client>: { roles: [...] } }`.
+    ///
+    /// Calling it again with a different client id merges into the same
+    /// `resource_access` object.
+    pub fn client_roles(mut self, client: &str, roles: &[&str]) -> Self {
+        let entry = self
+            .extra_claims
+            .entry("resource_access".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Value::Object(map) = entry {
+            map.insert(client.to_string(), serde_json::json!({ "roles": roles }));
+        }
         self
     }
 
@@ -209,8 +276,8 @@ impl<'a> TokenBuilder<'a> {
         let iss = self.issuer_override.as_deref().unwrap_or(&self.jwt.issuer);
         let aud = self
             .audience_override
-            .as_deref()
-            .unwrap_or(&self.jwt.audience);
+            .clone()
+            .unwrap_or_else(|| Value::String(self.jwt.audience.clone()));
 
         let mut claims = serde_json::json!({
             "sub": self.sub,

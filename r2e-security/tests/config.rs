@@ -13,7 +13,10 @@ fn config_new_required_fields() {
         "https://auth.example.com/.well-known/jwks.json"
     );
     assert_eq!(config.issuer, "my-issuer");
-    assert_eq!(config.audience, "my-audience");
+    assert_eq!(config.audiences, vec!["my-audience".to_string()]);
+    assert_eq!(config.audience(), "my-audience");
+    assert!(config.validate_audience);
+    assert_eq!(config.leeway_secs, 0);
     assert_eq!(config.jwks_cache_ttl_secs, 3600); // default
     assert_eq!(config.jwks_max_stale_secs, 3600); // default
     assert_eq!(config.jwks_min_refresh_interval_secs, 10); // default
@@ -43,7 +46,7 @@ fn config_fields_accessible() {
     let cloned = config.clone();
     assert_eq!(cloned.jwks_url, "u");
     assert_eq!(cloned.issuer, "i");
-    assert_eq!(cloned.audience, "a");
+    assert_eq!(cloned.audience(), "a");
     assert_eq!(cloned.jwks_cache_ttl_secs, 60);
     assert_eq!(cloned.jwks_max_stale_secs, 30);
     assert_eq!(cloned.jwks_min_refresh_interval_secs, 5);

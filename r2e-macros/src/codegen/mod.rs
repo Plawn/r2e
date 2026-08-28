@@ -240,29 +240,15 @@ fn generate_fga_path_param_asserts(def: &RoutesImplDef) -> TokenStream {
     // Collect (method path, referenced param literal) for every literal FGA
     // `from_path` in a guard/pre-guard expression on any HTTP/SSE/WS method.
     let mut refs: Vec<(String, syn::LitStr)> = Vec::new();
-    let mut collect = |path: &str, decorators: &MethodDecorators| {
-        for expr in decorators
-            .guard_fns
-            .iter()
-            .chain(decorators.pre_auth_guard_fns.iter())
-        {
-            let mut lits = Vec::new();
-            collect_fga_path_refs(expr, &mut lits);
-            for lit in lits {
-                refs.push((path.to_string(), lit));
-            }
-        }
-    };
     for m in &def.route_methods {
-        collect(&m.path, &m.decorators);
+        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.decorators);
     }
     for m in &def.sse_methods {
-        collect(&m.path, &m.decorators);
+        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.decorators);
     }
     for m in &def.ws_methods {
-        collect(&m.path, &m.decorators);
+        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.decorators);
     }
-    drop(collect);
 
     if refs.is_empty() {
         return TokenStream::new();
@@ -307,6 +293,22 @@ fn generate_fga_path_param_asserts(def: &RoutesImplDef) -> TokenStream {
         .collect();
 
     quote! { #(#asserts)* }
+}
+
+fn collect_decorator_fga_path_refs(
+    refs: &mut Vec<(String, syn::LitStr)>,
+    path: &str,
+    decorators: &MethodDecorators,
+) {
+    for expr in decorators
+        .guard_fns
+        .iter()
+        .chain(decorators.pre_auth_guard_fns.iter())
+    {
+        let mut lits = Vec::new();
+        collect_fga_path_refs(expr, &mut lits);
+        refs.extend(lits.into_iter().map(|lit| (path.to_string(), lit)));
+    }
 }
 
 /// The const-eval helpers used by [`generate_fga_path_param_asserts`]: scan an

@@ -406,6 +406,7 @@ r2e add cache       # adds r2e-cache
 r2e add rate-limit  # adds r2e-rate-limit
 r2e add utils       # adds r2e-utils (Logged, Timed, Cache interceptors)
 r2e add grpc        # adds r2e-grpc
+r2e add mcp         # enables r2e's mcp feature (+ schemars)
 r2e add test        # adds r2e-test (TestApp, TestJwt)
 ```
 

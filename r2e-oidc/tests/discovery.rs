@@ -81,7 +81,7 @@ async fn discovery_document() {
     assert!(json.get("id_token_signing_alg_values_supported").is_none());
     assert_eq!(
         json["token_endpoint_auth_methods_supported"],
-        serde_json::json!(["client_secret_basic", "client_secret_post"])
+        serde_json::json!(["none"])
     );
 }
 

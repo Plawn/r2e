@@ -15,7 +15,7 @@ help: the following other types implement trait `ProvidedByModule<H, Idx>`
    | impl<H, X, T, I> ProvidedByModule<H, There<I>> for TCons<X, T> where T: ProvidedByModule<H, I> {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `ProvidedByModule<H, There<I>>`
    = note: required for `TCons<Svc, TNil>` to implement `ProvidedByModule<Pool, There<_>>`
-   = note: required for `TCons<Pool, TNil>` to implement `ExportsProvided<TCons<Svc, TNil>, (There<_>, ())>`
+   = note: required for `TCons<Pool, TNil>` to implement `ExportsProvided<TCons<Svc, TNil>, (There<_>, _)>`
 note: required by a bound in `register_module`
   --> $WORKSPACE/r2e-core/src/builder/registration.rs
    |

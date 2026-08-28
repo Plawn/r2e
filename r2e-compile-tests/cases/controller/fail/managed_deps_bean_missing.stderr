@@ -19,7 +19,7 @@ help: the following other types implement trait `Contains<H, Idx>`
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, T>` implements `Contains<H, Here>`
    | impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<X, T>` implements `Contains<H, There<I>>`
-   = note: required for `TCons<Pool, TNil>` to implement `AllSatisfied<HNil, (_, ())>`
+   = note: required for `TCons<Pool, TNil>` to implement `AllSatisfied<HNil, (_, _)>`
 note: required by a bound in `register_controller`
   --> $WORKSPACE/r2e-core/src/builder/registration.rs
    |

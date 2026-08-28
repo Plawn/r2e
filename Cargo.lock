@@ -762,6 +762,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2560,6 +2566,18 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-reflection",
+ "tracing",
+]
+
+[[package]]
+name = "example-mcp"
+version = "0.1.0"
+dependencies = [
+ "r2e",
+ "r2e-test",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 
@@ -5051,6 +5069,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "pastey"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4"
+
+[[package]]
 name = "pbkdf2"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5764,6 +5788,7 @@ dependencies = [
  "r2e-executor",
  "r2e-grpc",
  "r2e-macros",
+ "r2e-mcp",
  "r2e-observability",
  "r2e-oidc",
  "r2e-openapi",
@@ -6059,6 +6084,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "r2e-mcp"
+version = "0.3.0"
+dependencies = [
+ "http-body-util",
+ "percent-encoding",
+ "r2e-core",
+ "r2e-devservices",
+ "r2e-security",
+ "r2e-test",
+ "reqwest 0.13.4",
+ "rmcp",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "r2e-observability"
 version = "0.3.0"
 dependencies = [
@@ -6099,6 +6146,7 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tower",
  "tracing",
@@ -6731,6 +6779,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "rmcp"
+version = "3.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a15bc53261a9dc37e105df006e4656c598379a8f9581f8950debb130f27a7cf"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "indexmap 2.14.0",
+ "pastey",
+ "pin-project-lite",
+ "rand 0.10.1",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sse-stream",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7049,6 +7128,7 @@ version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
@@ -7776,6 +7856,19 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "sse-stream"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c123f296ade4ec4b8b0f6162116e6629f5146922ca5ab40ca9d3c2e73ab4761e"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http-body",
+ "http-body-util",
+ "pin-project-lite",
 ]
 
 [[package]]

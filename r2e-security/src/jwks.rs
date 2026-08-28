@@ -450,11 +450,13 @@ pub fn validate_jwks_url(url: &str, allow_insecure: bool) -> Result<(), Security
     }
 }
 
-/// Build the HTTP client used for JWKS retrieval.
+/// Build the HTTP client used for JWKS retrieval — and, by extension, any
+/// OAuth metadata endpoint of the same issuer (r2e-mcp reuses it as
+/// `build_oauth_http_client` for discovery/introspection so timeouts and the
+/// HTTPS-only policy stay in one place).
 ///
-/// Exposed for integration tests. HTTPS-only mode applies both to initial
-/// requests and every redirect followed by reqwest.
-#[doc(hidden)]
+/// HTTPS-only mode applies both to initial requests and every redirect
+/// followed by reqwest.
 pub fn build_jwks_client(config: &SecurityConfig) -> Result<reqwest::Client, SecurityError> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(config.jwks_request_timeout_secs))
@@ -501,7 +503,9 @@ async fn read_body_limited(
     Ok(body)
 }
 
-#[doc(hidden)]
+/// Whether a cache entry needs a refresh (never fetched, or TTL elapsed).
+///
+/// `pub` freshness primitive shared with r2e-mcp's discovery cache.
 pub fn is_stale(last_refresh: Option<Instant>, ttl: Duration) -> bool {
     match last_refresh {
         None => true,
@@ -509,7 +513,8 @@ pub fn is_stale(last_refresh: Option<Instant>, ttl: Duration) -> bool {
     }
 }
 
-#[doc(hidden)]
+/// Whether enough time has passed since the last refresh attempt
+/// (refresh-storm protection). Shared with r2e-mcp's discovery cache.
 pub fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> bool {
     match last_attempt {
         None => true,
@@ -517,8 +522,8 @@ pub fn can_attempt(last_attempt: Option<Instant>, min_interval: Duration) -> boo
     }
 }
 
-/// Whether an expired cache entry is still within its configured grace period.
-#[doc(hidden)]
+/// Whether an expired cache entry is still within its configured grace
+/// period (stale-if-error). Shared with r2e-mcp's discovery cache.
 pub fn can_use_stale(last_refresh: Option<Instant>, ttl: Duration, max_stale: Duration) -> bool {
     match last_refresh {
         None => false,

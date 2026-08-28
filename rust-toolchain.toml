@@ -1,0 +1,6 @@
+# Pinned so `r2e-compile-tests` (trybuild `.stderr` expectations) and local
+# builds agree on one rustc. Bump this and re-bless the `.stderr` files
+# together (`TRYBUILD=overwrite cargo test -p r2e-compile-tests`).
+[toolchain]
+channel = "nightly-2026-08-27"
+components = ["rustfmt", "clippy"]

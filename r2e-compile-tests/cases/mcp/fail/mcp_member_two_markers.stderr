@@ -1,0 +1,5 @@
+error: a method cannot be both #[tool] and #[prompt] — pick one member family
+  --> cases/mcp/fail/mcp_member_two_markers.rs:13:5
+   |
+13 |     #[prompt]
+   |     ^^^^^^^^^

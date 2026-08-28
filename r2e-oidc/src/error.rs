@@ -17,6 +17,15 @@ pub enum OidcError {
     InvalidRequest(String),
     /// Invalid username/password or client credentials.
     InvalidGrant(String),
+    /// RFC 8707: the requested `resource` is invalid (`invalid_target`).
+    InvalidTarget(String),
+    /// RFC 6749 §5.2: a requested scope is outside the client's allowlist.
+    InvalidScope(String),
+    /// RFC 6749 §4.1.2.1: the resource owner denied the request, or the local
+    /// login failed.
+    AccessDenied(String),
+    /// RFC 6749 §4.1.2.1: `response_type` is not supported by this issuer.
+    UnsupportedResponseType(String),
     /// Unsupported grant type.
     UnsupportedGrantType(String),
     /// Invalid client credentials.
@@ -34,10 +43,16 @@ pub enum OidcError {
 }
 
 impl OidcError {
-    fn error_code(&self) -> &'static str {
+    /// The RFC 6749 error code carried by this error, both in JSON bodies and
+    /// in `error=` redirect parameters.
+    pub(crate) fn error_code(&self) -> &'static str {
         match self {
             OidcError::InvalidRequest(_) => "invalid_request",
             OidcError::InvalidGrant(_) => "invalid_grant",
+            OidcError::InvalidTarget(_) => "invalid_target",
+            OidcError::InvalidScope(_) => "invalid_scope",
+            OidcError::AccessDenied(_) => "access_denied",
+            OidcError::UnsupportedResponseType(_) => "unsupported_response_type",
             OidcError::UnsupportedGrantType(_) => "unsupported_grant_type",
             OidcError::InvalidClient(_) => "invalid_client",
             OidcError::Unauthorized(_) => "invalid_token",
@@ -52,6 +67,10 @@ impl OidcError {
         match self {
             OidcError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             OidcError::InvalidGrant(_) => StatusCode::BAD_REQUEST,
+            OidcError::InvalidTarget(_) => StatusCode::BAD_REQUEST,
+            OidcError::InvalidScope(_) => StatusCode::BAD_REQUEST,
+            OidcError::AccessDenied(_) => StatusCode::FORBIDDEN,
+            OidcError::UnsupportedResponseType(_) => StatusCode::BAD_REQUEST,
             OidcError::UnsupportedGrantType(_) => StatusCode::BAD_REQUEST,
             OidcError::InvalidClient(_) => StatusCode::UNAUTHORIZED,
             OidcError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
@@ -62,10 +81,14 @@ impl OidcError {
         }
     }
 
-    fn public_description(&self) -> &str {
+    pub(crate) fn public_description(&self) -> &str {
         match self {
             OidcError::InvalidRequest(s)
             | OidcError::InvalidGrant(s)
+            | OidcError::InvalidTarget(s)
+            | OidcError::InvalidScope(s)
+            | OidcError::AccessDenied(s)
+            | OidcError::UnsupportedResponseType(s)
             | OidcError::UnsupportedGrantType(s)
             | OidcError::InvalidClient(s)
             | OidcError::Unauthorized(s)
@@ -112,6 +135,10 @@ impl std::fmt::Display for OidcError {
         let description = match self {
             OidcError::InvalidRequest(s)
             | OidcError::InvalidGrant(s)
+            | OidcError::InvalidTarget(s)
+            | OidcError::InvalidScope(s)
+            | OidcError::AccessDenied(s)
+            | OidcError::UnsupportedResponseType(s)
             | OidcError::UnsupportedGrantType(s)
             | OidcError::InvalidClient(s)
             | OidcError::Unauthorized(s)

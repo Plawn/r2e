@@ -1,17 +1,20 @@
 error[E0425]: cannot find value `viwer` in module `authz::document`
   --> cases/openfga/fail/fga_typo_relation.rs:28:44
    |
+28 |     #[guard(FgaCheck::has(authz::document::viwer).from_path(path::doc_id))]
+   |                                            ^^^^^ not found in `authz::document`
+   |
+note: similarly named constant `viewer` defined here
+  --> cases/openfga/fail/fga_typo_relation.rs:8:1
+   |
  8 | / r2e::r2e_openfga::model!(pub mod authz = inline r#"
  9 | | model
 10 | |   schema 1.1
 ...  |
 16 | |     define viewer: [user]
 17 | | "#);
-   | |___- similarly named constant `viewer` defined here
-...
-28 |       #[guard(FgaCheck::has(authz::document::viwer).from_path(path::doc_id))]
-   |                                              ^^^^^
-   |
+   | |___^
+   = note: this error originates in the macro `r2e::r2e_openfga::model` (in Nightly builds, run with -Z macro-backtrace for more info)
 help: a constant with a similar name exists
    |
 28 |     #[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]
