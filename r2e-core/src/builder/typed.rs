@@ -383,10 +383,17 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Bound the **HTTP drain**: how long in-flight requests may keep running
     /// after the listener has stopped accepting.
     ///
-    /// Without it the drain is unbounded (plain axum behavior): a single client
-    /// holding a request — or an open SSE / streaming response — keeps the
-    /// process alive forever, and `shutdown_grace_period` cannot help because
-    /// it only starts once the drain is over.
+    /// The drain is bounded **by default** —
+    /// [`DEFAULT_DRAIN_TIMEOUT`](crate::runtime::drain::DEFAULT_DRAIN_TIMEOUT)
+    /// (30s, Spring's `timeout-per-shutdown-phase`). This method overrides that
+    /// default, and wins over the `server.drain-timeout` config key.
+    ///
+    /// Unbounded is the plain-axum behavior and is reachable only on purpose,
+    /// through [`drain_timeout_unbounded`](Self::drain_timeout_unbounded):
+    /// with no bound, a single client holding a request — or an open SSE /
+    /// streaming response — keeps the process alive forever, and
+    /// `shutdown_grace_period` cannot help because it only starts once the
+    /// drain is over.
     ///
     /// When the timeout elapses, a `warn!` names it and the remaining
     /// connections are abandoned (the serve future is dropped, closing them).
@@ -406,7 +413,24 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///     .serve("0.0.0.0:3000").await
     /// ```
     pub fn drain_timeout(mut self, duration: Duration) -> Self {
-        self.shared.drain_timeout = Some(duration);
+        self.shared.drain_timeout = Some(Some(duration));
+        self
+    }
+
+    /// Opt out of the HTTP-drain bound entirely: wait for every in-flight
+    /// request, however long it takes (the plain-axum behavior).
+    ///
+    /// This is the explicit escape hatch from the 30s default
+    /// ([`DEFAULT_DRAIN_TIMEOUT`](crate::runtime::drain::DEFAULT_DRAIN_TIMEOUT)),
+    /// for apps whose in-flight work must never be abandoned. It wins over the
+    /// `server.drain-timeout` config key, and there is no config value that
+    /// means "unbounded" — dropping the bound is a code decision.
+    ///
+    /// Be aware of what it costs: one client holding a request or a long-lived
+    /// SSE/streaming response open keeps the process alive indefinitely, and
+    /// no other shutdown budget can rescue it.
+    pub fn drain_timeout_unbounded(mut self) -> Self {
+        self.shared.drain_timeout = Some(None);
         self
     }
 
@@ -920,7 +944,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             plugin_data: self.shared.plugin_data,
             state,
             shutdown_grace_period: self.shared.shutdown_grace_period,
-            drain_timeout: self.shared.drain_timeout,
+            // Builder call > `server.drain-timeout` > 30s default.
+            drain_timeout: crate::runtime::drain::resolve_drain_timeout(
+                self.shared.drain_timeout,
+                self.shared.config.as_ref(),
+            ),
         }
     }
 

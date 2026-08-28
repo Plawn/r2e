@@ -52,8 +52,11 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     /// Per-handle bound on the tracked-handle join phase
     /// ([`AppBuilder::shutdown_grace_period`](crate::builder::AppBuilder::shutdown_grace_period)).
     pub(super) shutdown_grace_period: Option<Duration>,
-    /// Bound on the HTTP drain itself
-    /// ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout)).
+    /// Resolved bound on the HTTP drain itself: builder call
+    /// ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout)
+    /// / [`drain_timeout_unbounded`](crate::builder::AppBuilder::drain_timeout_unbounded))
+    /// > `server.drain-timeout` > the 30s default. `None` here therefore means
+    /// the app opted out explicitly.
     pub(super) drain_timeout: Option<Duration>,
     pub(super) tcp_nodelay: bool,
     /// Parsed `server.workers` config. `Ok(None)` → single-listener (default).
@@ -147,6 +150,18 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// [`run()`](Self::run).
     pub fn workers(&self) -> Result<Option<usize>, &str> {
         self.workers.as_ref().copied().map_err(|s| s.as_str())
+    }
+
+    /// The resolved HTTP-drain budget this app will serve with.
+    ///
+    /// Builder call
+    /// ([`AppBuilder::drain_timeout`](crate::builder::AppBuilder::drain_timeout)
+    /// / [`drain_timeout_unbounded`](crate::builder::AppBuilder::drain_timeout_unbounded))
+    /// > the `server.drain-timeout` config key >
+    /// [`DEFAULT_DRAIN_TIMEOUT`](crate::runtime::drain::DEFAULT_DRAIN_TIMEOUT).
+    /// `None` means the app explicitly opted out and the drain is unbounded.
+    pub fn drain_timeout(&self) -> Option<Duration> {
+        self.drain_timeout
     }
 
     /// Start listening and serving requests.
@@ -586,8 +601,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 // drain budget starts when `cancel_token` fires (i.e. when the
                 // shutdown future resolves and the listener stops accepting),
                 // and on overflow the serve future is dropped, abandoning the
-                // connections still open. `drain_timeout: None` keeps the
-                // future unbounded, exactly as before.
+                // connections still open. `drain_timeout: None` (only reachable
+                // through `drain_timeout_unbounded`) keeps the future
+                // unbounded, exactly like plain axum.
                 use std::future::IntoFuture as _;
                 let drain_bound = self.drain_timeout;
                 let cancel_for_drain = cancel_token.clone();

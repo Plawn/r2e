@@ -1,7 +1,7 @@
 //! Serving runtime and lifecycle: sharded serving, shutdown, tracing, dev mode.
 
 pub mod dev;
-pub(crate) mod drain;
+pub mod drain;
 pub mod layers;
 pub mod lifecycle;
 pub mod service;
