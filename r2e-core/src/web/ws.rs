@@ -172,10 +172,18 @@ impl WsStream {
     /// against your own work and end the session when it wins. Pending forever
     /// when there is no token (a hand-built stream, or a `TestApp` that never
     /// shuts down), so it is safe to select on unconditionally.
-    pub async fn shutdown_requested(&self) {
-        match &self.shutdown {
-            Some(token) => token.cancelled().await,
-            None => std::future::pending::<()>().await,
+    ///
+    /// The returned future borrows nothing: `WsStream` is `Send` but not
+    /// `Sync`, so a future holding `&self` across an await would make the whole
+    /// session future non-`Send` — and a session must be `Send` to be spawned
+    /// and tracked.
+    pub fn shutdown_requested(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let token = self.shutdown.clone();
+        async move {
+            match token {
+                Some(token) => token.cancelled_owned().await,
+                None => std::future::pending::<()>().await,
+            }
         }
     }
 

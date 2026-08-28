@@ -690,10 +690,30 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                          a multi-thread runtime (use #[r2e::main])"
                     );
                 }
+                // ── Worker parking ──────────────────────────────────
+                // A worker runtime owns the I/O driver of every socket that
+                // worker accepted, upgraded WebSocket sockets included — and
+                // those sessions run on the control plane, outliving the HTTP
+                // drain by design. Dropping the worker runtime at the end of
+                // its serve loop would kill their driver mid-shutdown, so the
+                // workers park after draining and we release them only once
+                // the tracked handles are joined. `_park_guard` cancels the
+                // release token on every exit path (including a panic or a
+                // dropped `run()` future), so a parked worker can never
+                // outlive this function.
+                let (park_drained, mut park_drained_rx) =
+                    crate::rt::sync::mpsc::unbounded_channel::<()>();
+                let park_release = CancelToken::new();
+                let _park_guard = park_release.clone().drop_guard();
+                let park = crate::runtime::sharded::WorkerPark {
+                    drained: park_drained,
+                    release: park_release.clone(),
+                };
+
                 // `serve_sharded` blocks the calling thread joining the worker
                 // threads, so run it on a blocking task to avoid stalling the
                 // main runtime (which must keep driving the shutdown future).
-                let join = crate::rt::spawn_blocking(move || {
+                let serve_task = crate::rt::spawn_blocking(move || {
                     crate::runtime::sharded::serve_sharded(
                         router,
                         &addrs,
@@ -703,9 +723,36 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                         cancel_for_workers,
                         drain_bound,
                         &per_worker_services,
+                        park,
                     )
-                })
-                .await;
+                });
+
+                // Wait for every worker to report "HTTP drained, services
+                // down". `recv()` yields `None` once all senders are gone —
+                // i.e. once every worker has reported or died — so a worker
+                // panic (or an aborted startup, where no worker ever serves)
+                // cannot hang this.
+                let mut parked_workers = 0usize;
+                while park_drained_rx.recv().await.is_some() {
+                    parked_workers += 1;
+                    if parked_workers == workers {
+                        break;
+                    }
+                }
+
+                if parked_workers > 0 {
+                    // Sharded shutdown order: the workers' HTTP drain is over
+                    // and their runtimes are still turning, so this is where
+                    // the tracked-handle join belongs — the WebSocket sessions
+                    // in it still have a live I/O driver and can write their
+                    // going-away frames. The unconditional call further down
+                    // then finds an empty set (`ServiceHandles::drain` takes
+                    // the vec) and is a no-op.
+                    drain_tracked_handles(&service_handles, self.shutdown_grace_period).await;
+                }
+                // Release the parked workers; their runtimes drop from here.
+                park_release.cancel();
+                let join = serve_task.await;
 
                 // Ensure the shutdown future's task is wound down. By now it
                 // has already fired: workers only leave their serve loop on

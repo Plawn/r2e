@@ -25,6 +25,38 @@
 //! `with_state()` app that has no bean graph, or any router served outside
 //! `run()` — the body simply runs inline in axum's detached task, exactly as
 //! before this module existed. Nothing panics and nothing changes.
+//!
+//! # Sharded serving
+//!
+//! **Invariant: a worker runtime outlives the tracked-handle join.**
+//!
+//! Under `server.workers` (SO_REUSEPORT) the socket was accepted by a *worker*
+//! runtime — a `current_thread` runtime on its own thread — while the session
+//! runs on the *control plane* (`run_session` spawns through `rt::spawn_ctl`,
+//! like every other tracked task). The task is therefore polled by one runtime
+//! while its socket is registered with another runtime's I/O driver. That
+//! works only for as long as the worker's driver is still being driven: drop
+//! the worker runtime and the session's next read or write fails, the peer
+//! seeing a reset instead of the close frame.
+//!
+//! Workers used to drop their runtime the moment their serve loop ended, which
+//! is *before* `PreparedApp::run()` joins the tracked handles — so a session
+//! that reacted slowly (anything past the first poll after cancellation) lost
+//! its socket inside its own grace period. Since #979 a worker parks instead:
+//! it reports "HTTP drained, services down" through
+//! [`WorkerPark`](crate::runtime::sharded::WorkerPark) and stays inside
+//! `block_on` — keeping its I/O driver turning — until the control plane has
+//! joined the tracked handles and cancels the release token. The session's
+//! socket is therefore alive for the whole `shutdown_grace_period`, exactly as
+//! on the single-listener path.
+//!
+//! Sessions are *not* spawned on the worker runtime itself: that would tie a
+//! `LocalSet`-shaped lifetime to a handle the shared `ServiceHandles` has to
+//! join, and would move session work back onto the data plane. The parking
+//! handshake keeps the control-plane/data-plane split intact and costs a
+//! worker thread nothing but a park until the join it was already waiting on.
+//! `r2e-core/tests/runtime/ws_shutdown.rs` § `mod sharded` pins all of this
+//! down, including the slow-session case that fails without the handshake.
 
 use std::future::Future;
 use std::sync::{Arc, RwLock, Weak};
