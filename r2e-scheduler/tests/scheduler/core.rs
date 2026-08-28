@@ -226,6 +226,8 @@ async fn interval_task_panic_isolation() {
             Box::pin(async move {
                 a.fetch_add(1, Ordering::SeqCst);
                 panic!("intentional panic");
+                #[allow(unreachable_code)]
+                ()
             }) as Pin<Box<dyn Future<Output = ()> + Send>>
         }),
     };
