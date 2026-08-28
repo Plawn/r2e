@@ -1,0 +1,13 @@
+error: named beans are not supported: R2E has no bean qualifiers — the bean graph is keyed by type
+
+         declare a newtype instead, and inject it by type:
+
+           #[derive(Clone)]
+           pub struct ReadPool(pub PgPool);
+
+           #[producer] fn read_pool(..) -> ReadPool { .. }
+           #[inject] pool: ReadPool,
+  --> cases/beans/fail/inject_named_bean_ctor.rs:14:12
+   |
+14 |     fn new(#[inject(name = "primary")] pool: DbPool) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -191,6 +191,9 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
                     ty: field_type,
                 });
             } else if matches!(attr.meta, syn::Meta::List(_)) {
+                // `#[inject(name = "...")]` gets the shared named-bean rejection
+                // so the fix reads identically on every host.
+                crate::util::type_utils::reject_named_inject(std::slice::from_ref(attr))?;
                 // #[inject(something_else)] -> error
                 return Err(syn::Error::new_spanned(
                     attr,

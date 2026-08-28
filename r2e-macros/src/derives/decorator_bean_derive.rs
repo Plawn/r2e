@@ -4,8 +4,8 @@
 //! The derived struct is the **product** (the type implementing `Guard<I>` /
 //! `Interceptor<R>`). Fields are split by attribute:
 //!
-//! - `#[inject]` — resolved from the bean graph at wiring time (also
-//!   `#[inject(name = "...")]` for newtype-named beans);
+//! - `#[inject]` — resolved from the bean graph at wiring time (app-scoped,
+//!   by type);
 //! - `#[config("key")]` / `#[config_section(prefix = "...")]` — resolved
 //!   from `R2eConfig`;
 //! - plain fields — **config, set at the attribute site** through a
@@ -47,7 +47,6 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields};
 use crate::model::field_resolver::{classify_fields, ClassifyOpts, FieldKind};
 use crate::model::type_list_gen::build_tcons_type;
 use crate::util::crate_path::r2e_core_path;
-use crate::util::type_utils::named_bean_newtype_ident;
 
 pub fn expand(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -105,7 +104,6 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let classified = classify_fields(
         resolved.into_iter(),
         &ClassifyOpts {
-            allow_named_inject: true,
             allow_default: false,
             context_label: "decorator bean",
         },
@@ -130,11 +128,6 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let field_type = cf.ty;
 
         match &cf.kind {
-            FieldKind::InjectNamed { name } => {
-                let newtype_ident = named_bean_newtype_ident(name, field_type);
-                dep_types.push(quote! { #newtype_ident });
-                resolved_inits.push(quote! { #field_name: __ctx.get::<#newtype_ident>().0 });
-            }
             FieldKind::Inject => {
                 dep_types.push(quote! { #field_type });
                 resolved_inits.push(quote! { #field_name: __ctx.get::<#field_type>() });

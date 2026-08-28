@@ -3,15 +3,12 @@ use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::util::type_utils::{
-    config_hint_sentence, parse_config_field, parse_config_section_prefix, parse_inject_name,
+    check_bean_inject_args, config_hint_sentence, parse_config_field, parse_config_section_prefix,
     parse_live_config_field,
 };
 
 pub enum FieldKind {
     Inject,
-    InjectNamed {
-        name: String,
-    },
     Config {
         key: String,
         ty_name: String,
@@ -36,7 +33,6 @@ pub struct ClassifiedField<'a> {
 }
 
 pub struct ClassifyOpts {
-    pub allow_named_inject: bool,
     pub allow_default: bool,
     pub context_label: &'static str,
 }
@@ -73,19 +69,11 @@ pub fn classify_fields<'a>(
                 kind: FieldKind::LiveConfig { key, ty_name },
             });
         } else if is_inject {
-            let named = if opts.allow_named_inject {
-                parse_inject_name(&field.attrs)?
-            } else {
-                None
-            };
-            let kind = match named {
-                Some(name) => FieldKind::InjectNamed { name },
-                None => FieldKind::Inject,
-            };
+            check_bean_inject_args(&field.attrs)?;
             result.push(ClassifiedField {
                 name: field_name,
                 ty: field_type,
-                kind,
+                kind: FieldKind::Inject,
             });
         } else if let Some(attr) = config_section_attr {
             let prefix = parse_config_section_prefix(attr)?;
@@ -109,9 +97,6 @@ pub fn classify_fields<'a>(
             });
         } else {
             let mut hints = vec!["#[inject]                           — clone from app state"];
-            if opts.allow_named_inject {
-                hints.push("#[inject(name = \"...\")]             — named injection via newtype");
-            }
             hints.push("#[config(\"app.key\")]                — resolve from R2eConfig");
             hints.push(
                 "#[live_config(\"app.key\")]           — runtime-updatable LiveConfig<T> handle",

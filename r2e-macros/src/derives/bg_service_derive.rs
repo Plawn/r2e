@@ -72,7 +72,6 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let classified = classify_fields(
         fields.iter(),
         &ClassifyOpts {
-            allow_named_inject: false,
             allow_default: false,
             context_label: "background service",
         },
@@ -139,7 +138,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 field_inits.push(quote! { #field_name: #expr });
                 has_live_config = true;
             }
-            FieldKind::InjectNamed { .. } | FieldKind::Default => unreachable!(),
+            FieldKind::Default => unreachable!(),
         }
     }
 
