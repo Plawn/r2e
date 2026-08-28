@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
-use http::{HeaderValue, Request, Response, StatusCode};
+use http::{HeaderValue, Method, Request, Response, StatusCode};
 use r2e_grpc::multiplex::{GrpcContentType, MultiplexService, GRPC_WEB_UNSUPPORTED};
 use tower::Service;
 
@@ -167,4 +167,65 @@ async fn grpc_web_is_rejected_with_415_instead_of_reaching_tonic() {
         let body = collect(resp.into_body()).await;
         assert_eq!(body, Bytes::from_static(GRPC_WEB_UNSUPPORTED.as_bytes()));
     }
+}
+
+// --- grpc-web arm + preflight routing -----------------------------------
+
+fn preflight() -> Request<StubBody> {
+    let mut req = request(None);
+    *req.method_mut() = Method::OPTIONS;
+    req.headers_mut().insert(
+        http::header::ACCESS_CONTROL_REQUEST_HEADERS,
+        HeaderValue::from_static("Content-Type, X-Grpc-Web, x-user-agent"),
+    );
+    req
+}
+
+#[r2e_core::test]
+async fn grpc_web_content_types_go_to_the_installed_web_arm() {
+    let mut mux = mux().with_grpc_web(MarkerService("web"));
+    for ct in [
+        "application/grpc-web",
+        "application/grpc-web+proto",
+        "application/grpc-web-text",
+    ] {
+        let resp = mux.call(request(Some(ct))).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "content-type: {ct}");
+        assert_eq!(&collect(resp.into_body()).await[..], b"web", "{ct}");
+    }
+    // Native gRPC and HTTP are untouched by the extra arm.
+    let resp = mux.call(request(Some("application/grpc"))).await.unwrap();
+    assert_eq!(&collect(resp.into_body()).await[..], b"grpc");
+    let resp = mux.call(request(Some("application/json"))).await.unwrap();
+    assert_eq!(&collect(resp.into_body()).await[..], b"http");
+}
+
+#[r2e_core::test]
+async fn grpc_web_preflight_goes_to_the_web_arm_only_when_installed() {
+    let resp = mux()
+        .with_grpc_web(MarkerService("web"))
+        .call(preflight())
+        .await
+        .unwrap();
+    assert_eq!(&collect(resp.into_body()).await[..], b"web");
+
+    // Without an arm the preflight is an ordinary HTTP request (a `Cors`
+    // plugin on the router may answer it), never a 415.
+    let resp = mux().call(preflight()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(&collect(resp.into_body()).await[..], b"http");
+
+    // A preflight that does not name `x-grpc-web` is not a grpc-web one.
+    let mut req = request(None);
+    *req.method_mut() = Method::OPTIONS;
+    req.headers_mut().insert(
+        http::header::ACCESS_CONTROL_REQUEST_HEADERS,
+        HeaderValue::from_static("content-type"),
+    );
+    let resp = mux()
+        .with_grpc_web(MarkerService("web"))
+        .call(req)
+        .await
+        .unwrap();
+    assert_eq!(&collect(resp.into_body()).await[..], b"http");
 }

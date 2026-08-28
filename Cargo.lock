@@ -2560,6 +2560,12 @@ dependencies = [
 name = "example-grpc"
 version = "0.3.0"
 dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "prost 0.14.4",
  "r2e",
  "r2e-grpc-build",
@@ -6033,7 +6039,9 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-reflection",
+ "tonic-web",
  "tower",
+ "tower-http 0.7.0",
  "tracing",
 ]
 
@@ -8553,6 +8561,24 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-prost",
+]
+
+[[package]]
+name = "tonic-web"
+version = "0.14.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5e6a1b6319ca4b61a4c0f0c94d439c8f3ed344cca56fe0df40e1fe4be11380b"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "http",
+ "http-body",
+ "pin-project",
+ "tokio-stream",
+ "tonic",
+ "tower-layer",
+ "tower-service",
+ "tracing",
 ]
 
 [[package]]

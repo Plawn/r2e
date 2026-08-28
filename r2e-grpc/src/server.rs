@@ -48,6 +48,10 @@ pub struct GrpcServer {
     /// cannot desync.
     #[cfg(feature = "reflection")]
     reflection: Option<Vec<&'static [u8]>>,
+    /// `Some(cors)` when the multiplexed transport should serve grpc-web
+    /// through a `tonic-web` arm, with that CORS policy in front of it.
+    #[cfg(feature = "web")]
+    grpc_web: Option<tower_http::cors::CorsLayer>,
 }
 
 impl GrpcServer {
@@ -56,6 +60,8 @@ impl GrpcServer {
             transport,
             #[cfg(feature = "reflection")]
             reflection: None,
+            #[cfg(feature = "web")]
+            grpc_web: None,
         }
     }
 
@@ -67,6 +73,34 @@ impl GrpcServer {
     /// Create a gRPC server plugin that multiplexes with HTTP on the same port.
     pub fn multiplexed() -> Self {
         Self::new(GrpcTransport::Multiplexed)
+    }
+
+    /// Serve grpc-web (`application/grpc-web*`, binary and `-text`, over
+    /// HTTP/1.1 and HTTP/2) on the multiplexed port, translated by
+    /// `tonic-web`, with [`web::default_cors`](crate::multiplex::web::default_cors)
+    /// in front of it (any origin, gRPC status trailers exposed) so browser
+    /// clients work without any other CORS setup. Use
+    /// [`with_grpc_web_cors`](Self::with_grpc_web_cors) to bring your own
+    /// policy.
+    ///
+    /// Only meaningful with [`multiplexed`](Self::multiplexed); on the
+    /// separate-port transport it is ignored with a boot warning. Requires
+    /// the `web` feature on `r2e-grpc` (`grpc-web` on the `r2e` facade).
+    #[cfg(feature = "web")]
+    pub fn with_grpc_web(self) -> Self {
+        self.with_grpc_web_cors(crate::multiplex::web::default_cors())
+    }
+
+    /// Like [`with_grpc_web`](Self::with_grpc_web), with an explicit CORS
+    /// policy for the grpc-web arm. It also answers grpc-web preflights
+    /// (`OPTIONS` naming `x-grpc-web`), so remember to allow `POST`, the
+    /// `content-type` / `x-grpc-web` / `x-user-agent` / `grpc-timeout`
+    /// request headers, and to expose `grpc-status` / `grpc-message` /
+    /// `grpc-status-details-bin`.
+    #[cfg(feature = "web")]
+    pub fn with_grpc_web_cors(mut self, cors: tower_http::cors::CorsLayer) -> Self {
+        self.grpc_web = Some(cors);
+        self
     }
 
     /// Enable gRPC server reflection (v1 + v1alpha), served alongside the
@@ -127,12 +161,21 @@ impl Plugin for GrpcServer {
         let transport = self.transport;
         #[cfg(feature = "reflection")]
         let reflection = self.reflection;
+        #[cfg(feature = "web")]
+        let grpc_web = self.grpc_web;
 
         // Store the registry for register_grpc_service to find.
         ctx.store_data(registry.clone());
 
         match transport {
             GrpcTransport::SeparatePort(addr) => {
+                #[cfg(feature = "web")]
+                if grpc_web.is_some() {
+                    tracing::warn!(
+                        "GrpcServer::with_grpc_web is only honoured by the multiplexed \
+                         transport; the separate-port gRPC server serves native gRPC only"
+                    );
+                }
                 // Drain the registry when the server starts and spawn the
                 // tonic server next to the HTTP one. Serve hooks run before
                 // the HTTP listener binds. The task observes the app
@@ -212,14 +255,28 @@ impl Plugin for GrpcServer {
                             "Multiplexing gRPC services onto the HTTP port \
                              (content-type routing)"
                         );
+                        #[cfg(feature = "web")]
+                        if let Some(cors) = grpc_web {
+                            tracing::info!(
+                                "grpc-web enabled on the multiplexed port (tonic-web arm, \
+                                 HTTP/1.1 + HTTP/2, binary and -text)"
+                            );
+                            let web =
+                                crate::multiplex::web::grpc_web_arm(routes.clone().prepare(), cors);
+                            let mux =
+                                MultiplexService::new(routes.prepare(), router).with_grpc_web(web);
+                            return r2e_core::http::Router::new().fallback_service(mux);
+                        }
                         // Said once at boot so it is not a surprise at the
-                        // first browser call: the multiplexer has no
-                        // `tonic-web` layer, so `application/grpc-web*`
-                        // requests are answered with 415, not proxied.
+                        // first browser call: without a grpc-web arm,
+                        // `application/grpc-web*` requests are answered
+                        // with 415, not proxied.
                         tracing::warn!(
                             "{} — `application/grpc-web*` requests are answered with \
-                             415 Unsupported Media Type. Use a native gRPC client, or \
-                             put a grpc-web proxy (Envoy, …) in front.",
+                             415 Unsupported Media Type. Enable it with \
+                             `GrpcServer::multiplexed().with_grpc_web()` (feature \
+                             `grpc-web`), use a native gRPC client, or put a grpc-web \
+                             proxy (Envoy, …) in front.",
                             crate::multiplex::GRPC_WEB_UNSUPPORTED
                         );
                         let mux = MultiplexService::new(routes.prepare(), router);

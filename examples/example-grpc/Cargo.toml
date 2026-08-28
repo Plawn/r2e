@@ -8,13 +8,20 @@ publish = false
 dev-reload = ["r2e/dev-reload"]
 
 [dependencies]
-r2e = {workspace = true, features = ["grpc", "grpc-reflection"]}
+r2e = {workspace = true, features = ["grpc", "grpc-reflection", "grpc-web"]}
 tonic = {workspace = true, default-features = true}
 tonic-prost = {workspace = true}
 prost = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+# grpc-web e2e test: raw h1 framing + an h2 client (hyper) + base64 (-text).
+hyper = {workspace = true, features = ["client", "http2"]}
+hyper-util = {workspace = true, features = ["client-legacy", "http2", "tokio"]}
+http-body-util = {workspace = true}
+http = {workspace = true}
+bytes = {workspace = true}
+base64 = {workspace = true}
 # Reflection client (pb types + generated client stub) for the e2e test.
 tonic-reflection = {workspace = true}
 
