@@ -28,7 +28,6 @@ use sqlx::{AssertSqlSafe, Connection};
 /// `SqlxDataSource` plugin reads.
 ///
 /// Migrations are the plugin's job now: it runs them inside `build_state()`,
-/// which `TestApp` does execute (unlike the old serve-only `on_start` hook),
 /// so the isolated database gets its schema without any help from the test.
 async fn boot() -> TestApp {
     static COUNTER: AtomicU32 = AtomicU32::new(0);

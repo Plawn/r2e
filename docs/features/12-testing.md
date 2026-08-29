@@ -122,6 +122,54 @@ async fn lists_created_user(app: TestApp) {
   `#[r2e::main]`. Using `order` requires the `r2e-test` dev-dependency (already
   present whenever you use `app = …`).
 
+## Lifecycle: what a test boot runs
+
+`TestApp::boot` is a **real startup**, not a router build. It runs the same
+startup phase `serve()` does:
+
+1. controller `#[post_construct]` hooks,
+2. consumer registrations (`#[consumer]` methods, subscriber beans, EventBus
+   bridges),
+3. bean and controller `#[on_start]` hooks,
+4. the builder's `.on_start(…)` closures — which is what starts
+   `spawn_service` / `#[derive(BackgroundService)]` tasks.
+
+An error from any of them fails the test (`try_boot*` returns it instead).
+
+`app.shutdown().await` runs the matching shutdown sequence, under the app's own
+budgets:
+
+```rust
+#[r2e::test(app = my_app::MyApp)]
+async fn flushes_on_shutdown(app: TestApp) {
+    app.post("/orders").json(&order).send().await.assert_created();
+
+    app.shutdown().await;
+
+    // #[pre_destroy] disposers and .on_stop(…) hooks have run by here.
+}
+```
+
+1. `StopHandle::stop()` — readiness flips, as in production;
+2. the builder's `.on_drain(…)` hooks, while still serving;
+3. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks
+   first, then bean hooks, each in reverse registration order);
+4. the app shutdown token is cancelled and the tracked handles are joined under
+   `shutdown_grace_period` — in-flight HTTP requests drain under
+   `drain_timeout`, and a server from `app.serve()` drains with them;
+5. the builder's `.on_stop(…)` hooks, outside every budget.
+
+Shutdown is explicit because `Drop` cannot await: dropping a `TestApp` cancels
+the token — nothing keeps running — but the hooks do not get to run, and a
+warning names the app if any were pending. Call `shutdown()` in tests that
+assert on disposal or on a background task's cleanup. An app with no hooks has
+nothing to run; `app.has_shutdown_work()` tells you which case you are in.
+
+**What a test boot skips:** the plugin *serve hooks*, which bind ports
+(separate-port gRPC, MCP) and start the scheduler driver. So `#[scheduled]`
+tasks do not tick under `TestApp`, and WebSocket sessions run untracked
+(`ws.shutdown_token()` is `None`).
+
 ## Usage
 
 ### 1. Adding the Dependency
@@ -376,6 +424,9 @@ async fn test_response_structure() {
 | `delete(path)` | Start a DELETE request |
 | `request(method, path)` | Start a request with any HTTP method |
 | `session()` | Create a `TestSession` with cookie persistence |
+| `serve()` | Spawn a live `TestServer` on a random port (attached to a booted app's lifecycle) |
+| `shutdown()` | Run the production shutdown sequence (`on_drain` → disposers → drain → join → `on_stop`) |
+| `has_shutdown_work()` | Whether any shutdown hook is registered |
 
 ### TestRequest Builder Methods
 
@@ -480,7 +531,7 @@ Beyond the in-process client, `r2e-test` re-exports a few specialized helpers:
 
 - **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects; the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, and `assert_no_message`.
 - **`FiniteStream` / `ParsedSseEvent`** — consume and parse SSE responses; `TestResponse` also has `sse_events`, `assert_sse_event`, and `assert_sse_data`.
-- **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch.
+- **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch. On a booted `TestApp` it runs on the app's tracked lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the `TestServer` first stops it on its own.
 - **`SetCookie`** — parsed `Set-Cookie` attributes, with `TestResponse` helpers `assert_cookie_secure`, `assert_cookie_http_only`, `assert_cookie_same_site`, `assert_cookie_path`.
 
 ## Dev Services (real infrastructure)
