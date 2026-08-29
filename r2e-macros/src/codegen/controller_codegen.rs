@@ -28,6 +28,11 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
     let request_data = generate_request_data(def);
     let facade = generate_facade(def);
     let context_construct = generate_context_construct(def);
+    // Recoverable diagnostics (an attribute the macro cannot honour) ride
+    // ALONGSIDE the full expansion: bailing out would leave `#[routes]` without
+    // `ContextConstruct`/`EndpointDeps` and bury the real message under two
+    // unrelated trait errors (task #985).
+    let deferred_errors = def.deferred_errors.iter().map(syn::Error::to_compile_error);
 
     quote! {
         #physical_struct
@@ -35,6 +40,7 @@ pub fn generate(def: &ControllerStructDef, physical_struct: &syn::ItemStruct) ->
         #request_data
         #facade
         #context_construct
+        #(#deferred_errors)*
     }
 }
 
@@ -95,6 +101,9 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         (
             quote! { pub type IdentityType = #inner_ty; },
             quote! {
+                // A `#[deprecated]` identity field warns where the user reads
+                // it, never from this generated accessor (task #985).
+                #[allow(deprecated)]
                 pub fn guard_identity(__facade: &super::#facade_name) -> Option<&super::#inner_ty> {
                     #identity_expr
                 }
@@ -122,6 +131,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         .collect();
     let bind_request_fn = quote! {
         #[inline]
+        #[allow(deprecated)]
         pub fn bind_request<__M>(
             __core: ::std::sync::Arc<super::#name>,
             __data: super::#data_name<__M>,
@@ -307,13 +317,20 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
 
     quote! {
         #[doc(hidden)]
-        #[allow(non_camel_case_types, dead_code)]
+        #[allow(non_camel_case_types, dead_code, deprecated)]
         struct #data_name<__M> {
             #(#field_decls,)*
             __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
         }
 
         // Named bridge point (plan §5.3b) — see the marker-free variant above.
+        // The generated extraction binds one `let <field name>` per field and
+        // then constructs the struct, so a lint the user turned on for their
+        // own field must not fire in framework code: `#[deprecated]` has to
+        // warn where the USER reads the field, and a field name the user
+        // allowed `non_snake_case` for must not re-trip it as a local binding
+        // (task #985).
+        #[allow(deprecated, non_snake_case)]
         impl<__R2eS, #(#marker_idents),*> #krate::http::extract::FromRequestParts<__R2eS>
             for #data_name<(#(#marker_idents,)*)>
         where
@@ -358,7 +375,7 @@ fn generate_facade(def: &ControllerStructDef) -> TokenStream {
 
     quote! {
         #[doc(hidden)]
-        #[allow(non_camel_case_types, dead_code)]
+        #[allow(non_camel_case_types, dead_code, deprecated)]
         struct #facade_name {
             __core: ::std::sync::Arc<#name>,
             #(#field_decls,)*

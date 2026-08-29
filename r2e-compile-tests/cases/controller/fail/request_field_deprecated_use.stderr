@@ -1,0 +1,11 @@
+error: use of deprecated field `__R2eRequest_AttrController::legacy_trace`: use the trace header instead
+  --> cases/controller/fail/request_field_deprecated_use.rs:38:9
+   |
+38 |         self.legacy_trace.0.clone()
+   |         ^^^^^^^^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> cases/controller/fail/request_field_deprecated_use.rs:5:9
+   |
+ 5 | #![deny(deprecated)]
+   |         ^^^^^^^^^^
