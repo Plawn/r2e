@@ -101,6 +101,9 @@ impl MainArgs {
         });
 
         syn::parse::Parser::parse(parser, args)?;
+        // Knob combinations the builder panics on are compile errors here, not
+        // an anonymous tokio panic at test time.
+        this.runtime.validate()?;
         Ok(this)
     }
 }

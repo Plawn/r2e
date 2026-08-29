@@ -66,6 +66,10 @@ impl SuiteArgs {
         });
 
         syn::parse::Parser::parse(parser, args)?;
+        // Knob combinations the builder panics on are compile errors here: the
+        // suite runtime is built lazily inside the first case, so a panicking
+        // builder would otherwise show up as an unattributed tokio panic.
+        this.runtime.validate()?;
         Ok(this)
     }
 }
