@@ -215,6 +215,29 @@ fn validate_suite(def: &SuiteDef) -> syn::Result<()> {
     let mut seen_orders = std::collections::BTreeMap::<u32, &syn::Ident>::new();
     for case in &def.cases {
         validate_receiver_only(&case.method, "#[case]")?;
+        // A suite is torn down by whichever case finishes last, counted against
+        // the number of generated cases — libtest never tells us which ones it
+        // selected. `#[ignore]` breaks that count in both directions: under a
+        // plain `cargo test` the ignored case never runs, so `#[after_all]` and
+        // the runtime shutdown never happen; under `--include-ignored` the
+        // count can be reached before the ignored case runs, which would leave
+        // it facing a torn-down suite. So it is rejected rather than silently
+        // half-working.
+        if let Some(attr) = case
+            .method
+            .attrs
+            .iter()
+            .find(|attr| attr.path().is_ident("ignore"))
+        {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "#[ignore] is not supported on a #[case]: the suite is torn down by the last \
+                 case to finish (that is what runs #[after_all], drops the suite value and shuts \
+                 the suite runtime down), and libtest does not say which cases it selected, so an \
+                 ignored case would either skip teardown entirely or arrive after it. Skip inside \
+                 the case body, or move the test out of the suite",
+            ));
+        }
         if let Some(order) = case.order {
             if let Some(first) = seen_orders.insert(order, &case.method.sig.ident) {
                 return Err(syn::Error::new_spanned(

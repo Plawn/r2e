@@ -1,0 +1,5 @@
+error: #[ignore] is not supported on a #[case]: the suite is torn down by the last case to finish (that is what runs #[after_all], drops the suite value and shuts the suite runtime down), and libtest does not say which cases it selected, so an ignored case would either skip teardown entirely or arrive after it. Skip inside the case body, or move the test out of the suite
+  --> cases/testing/fail/test_suite_ignored_case.rs:13:5
+   |
+13 |     #[ignore]
+   |     ^^^^^^^^^
