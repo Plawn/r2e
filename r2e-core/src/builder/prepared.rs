@@ -464,7 +464,13 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // (mirroring bean post_construct at `build_state`, before
             // subscribers). A failure aborts startup.
             for pc in std::mem::take(&mut self.post_construct_registrations) {
-                pc.await.map_err(|e| -> crate::beans::BootError { e })?;
+                // Name the phase: a boot report that only says "cache priming
+                // failed" leaves the reader guessing which lifecycle step ran
+                // it. Same wording as `try_build_with_consumers`, so the two
+                // in-process entry points render identically.
+                pc.await.map_err(|e| -> crate::beans::BootError {
+                    format!("Controller #[post_construct] hook failed: {e}").into()
+                })?;
             }
 
             // Register event consumers
@@ -496,7 +502,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     "#[on_start] hook failed",
                 )
                 .await;
-                return Err(e);
+                return Err(format!("#[on_start] hook failed: {e}").into());
             }
 
             // Call serve hooks (e.g., scheduler starts tasks).
