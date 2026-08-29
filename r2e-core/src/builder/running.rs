@@ -28,9 +28,40 @@ use crate::plugin::AsyncShutdownHook;
 /// 4. tracked handles are joined, each bounded by `shutdown_grace_period`;
 /// 5. `on_stop` hooks — outside every budget, always.
 ///
-/// Dropping without calling `shutdown()` cancels the token (so no background
-/// service is stranded) but runs **no** hook: `Drop` cannot await. A drop with
-/// hooks still pending logs a warning naming the missing call.
+/// # `StopHandle`: the signal path, not the programmatic one
+///
+/// [`shutdown`](Self::shutdown) does **not** call [`StopHandle::stop`]. That
+/// mirrors production: `run()`'s shutdown future is
+/// `select!(shutdown_signal(), stop_handle.stopped())`, so on SIGTERM/SIGINT
+/// the handle is never fired and `StopHandle::is_stopped()` reads `false`
+/// throughout the sequence. A default `shutdown()` is therefore the OS-signal
+/// path, and a hook or service that reads the handle behaves in a test exactly
+/// as it does under an orchestrator's TERM.
+///
+/// To exercise the *programmatic* path instead — what an admin `/shutdown`
+/// endpoint triggers — fire it yourself before running the sequence:
+/// `app.stop_handle().stop();` then `app.shutdown().await`. Both paths are
+/// then reachable, and neither is silently substituted for the other.
+///
+/// # Dropping without `shutdown()`
+///
+/// `Drop` cannot await, so it cannot run the sequence. It does the one thing
+/// that keeps the app from outliving the value: it cancels the app token and
+/// then **aborts** every tracked task (`spawn_service` /
+/// `#[derive(BackgroundService)]` tasks, an attached
+/// [`serve_tracked`](Self::serve_tracked) server). Nothing joins those handles
+/// afterwards — the value that owned them is gone — so dropping them alone
+/// would *detach* the tasks: a service that ignores its token, or that does
+/// slow cleanup after seeing it, would keep running against a graph the caller
+/// believes is released. Abort is the honest semantics for a handle nobody
+/// will ever await.
+///
+/// Cancellation is issued before the abort, so a task that is already at a
+/// cancellation point may still finish; a task that needs its cleanup to
+/// *complete* must be given the chance by calling `shutdown().await`, which
+/// cancels and then joins under `shutdown_grace_period`. A drop with work
+/// still pending ([`has_shutdown_work`](Self::has_shutdown_work)) logs a
+/// warning saying so.
 pub struct RunningApp {
     pub(super) router: crate::http::Router,
     /// Strong reference to the resolved graph for the whole in-process
@@ -66,9 +97,20 @@ impl RunningApp {
         Arc::clone(&self.graph)
     }
 
-    /// The app's [`StopHandle`] — the same one a `StopHandle` bean resolves to.
-    /// [`shutdown`](Self::shutdown) fires it, so anything awaiting
-    /// [`StopHandle::stopped`] observes a real stop.
+    /// The app's [`StopHandle`] — the same one a `StopHandle` bean resolves
+    /// to, and the way to exercise the **programmatic** stop path in a test.
+    ///
+    /// [`shutdown`](Self::shutdown) does *not* fire it (that is the OS-signal
+    /// path; see the type documentation). Calling `.stop()` on this handle is
+    /// what an admin `/shutdown` endpoint does, so a test that wants
+    /// `StopHandle::is_stopped()` to read `true` inside its `on_drain` hook —
+    /// or a service awaiting [`StopHandle::stopped`] to wake — calls it
+    /// itself, exactly as production code would:
+    ///
+    /// ```ignore
+    /// app.stop_handle().stop();   // the programmatic stop
+    /// app.shutdown().await;       // then run the sequence it would trigger
+    /// ```
     pub fn stop_handle(&self) -> StopHandle {
         self.stop_handle.clone()
     }
@@ -185,11 +227,8 @@ impl RunningApp {
     /// signal, in the same order and under the same budgets (see the type
     /// documentation for the five phases).
     pub async fn shutdown(mut self) {
-        // Fire the stop handle first: anything watching it (an admin endpoint,
-        // a service awaiting `StopHandle::stopped`) sees the same trigger a
-        // production stop fires, and it happens before the drain hooks, just
-        // like the `select!` in `run_inner`'s shutdown future.
-        self.stop_handle.stop();
+        // The `StopHandle` is deliberately NOT fired here — see the type
+        // documentation. This is the OS-signal path.
 
         // 1. Drain hooks — still "accepting", nothing cancelled yet.
         for hook in std::mem::take(&mut self.drain_hooks) {
