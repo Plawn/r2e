@@ -34,7 +34,8 @@ pub struct MultiTenantDbApp;
 impl App for MultiTenantDbApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
+        Ok({
         let dir = directory::data_dir();
         let master = directory::provision(&dir).await;
 
@@ -50,9 +51,11 @@ impl App for MultiTenantDbApp {
         println!();
 
         AppEnv { master }
+    })
     }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok({
         // The DSN lookup: one closure over the master directory. Its three
         // answers are the three the SPI defines — `Ok(Some(dsn))` provisioned,
         // `Ok(None)` unknown tenant (404, negatively cached), `Err` directory
@@ -102,5 +105,6 @@ impl App for MultiTenantDbApp {
                 BrandingController,
                 AdminController,
             )>()
+    })
     }
 }

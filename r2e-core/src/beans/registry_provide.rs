@@ -1,13 +1,40 @@
 use super::{
     reuse_clone_of, AsyncBean, Bean, BeanContext, BeanRegistration, BeanRegistry,
-    LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct, PreDestroy,
-    Producer, ServiceSourceHook,
+    LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct, PreDestroy, Producer,
+    ServiceSourceHook,
 };
 use std::any::{type_name, Any, TypeId};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+
+/// Wrap a constructor/producer error into the graph-level
+/// [`BeanError::BeanBuild`](super::BeanError::BeanBuild), naming the type the
+/// graph knows the value by (`Self` for a bean, `Output` for a producer).
+///
+/// Generic over the error so an infallible bean's `Infallible` never has to be
+/// boxed: the branch is unreachable and optimizes out.
+fn build_error<T: 'static, E: Into<crate::beans::BootError>>(err: E) -> super::BeanError {
+    super::BeanError::BeanBuild {
+        bean: type_name::<T>(),
+        source: err.into(),
+    }
+}
+
+/// Unwrap a **lazy** bean's construction result.
+///
+/// A lazy bean is built on its first injection — inside `ctx.get::<T>()`,
+/// which has no error channel (its callers are request handlers and bean
+/// bodies, not the boot path). A failing lazy constructor therefore panics
+/// with the same message `build_state()` would have reported. Register the
+/// bean eagerly (drop `#[bean(lazy)]`) if its failure must abort boot instead.
+fn unwrap_lazy<T: 'static, E: Into<crate::beans::BootError>>(result: Result<T, E>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => panic!("{}", build_error::<T, E>(err)),
+    }
+}
 
 impl BeanRegistry {
     /// Create a new, empty registry.
@@ -157,7 +184,7 @@ impl BeanRegistry {
                 build_version: T::BUILD_VERSION,
                 slot_factory: Box::new(|ctx| {
                     Arc::new(crate::di::lazy::LazySlot::new(move || {
-                        Box::pin(async move { T::build(&ctx) })
+                        Box::pin(async move { unwrap_lazy::<T, _>(T::build(&ctx)) })
                     })) as Arc<dyn crate::di::lazy::LazyResolve>
                 }),
                 overridable,
@@ -171,7 +198,7 @@ impl BeanRegistry {
                 build_version: T::BUILD_VERSION,
                 factory: Box::new(|ctx| {
                     Box::pin(async move {
-                        let bean = T::build(&ctx);
+                        let bean = T::build(&ctx).map_err(build_error::<T, _>)?;
                         let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
                         Ok((ctx, boxed))
                     })
@@ -211,7 +238,7 @@ impl BeanRegistry {
                 build_version: T::BUILD_VERSION,
                 slot_factory: Box::new(|ctx| {
                     Arc::new(crate::di::lazy::LazySlot::new(move || {
-                        Box::pin(async move { T::build(&ctx).await })
+                        Box::pin(async move { unwrap_lazy::<T, _>(T::build(&ctx).await) })
                     })) as Arc<dyn crate::di::lazy::LazyResolve>
                 }),
                 overridable,
@@ -225,7 +252,7 @@ impl BeanRegistry {
                 build_version: T::BUILD_VERSION,
                 factory: Box::new(|ctx| {
                     Box::pin(async move {
-                        let bean = T::build(&ctx).await;
+                        let bean = T::build(&ctx).await.map_err(build_error::<T, _>)?;
                         let boxed: Box<dyn Any + Send + Sync> = Box::new(bean);
                         Ok((ctx, boxed))
                     })
@@ -586,7 +613,9 @@ impl BeanRegistry {
             build_version: P::BUILD_VERSION,
             factory: Box::new(|ctx| {
                 Box::pin(async move {
-                    let output = P::produce(&ctx).await;
+                    let output = P::produce(&ctx)
+                        .await
+                        .map_err(build_error::<P::Output, _>)?;
                     let boxed: Box<dyn Any + Send + Sync> = Box::new(output);
                     Ok((ctx, boxed))
                 })

@@ -178,7 +178,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// Registers event consumers, runs startup hooks, binds the TCP listener,
     /// and serves with graceful shutdown. After shutdown, runs plugin and user
     /// shutdown hooks.
-    pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run(self) -> Result<(), crate::beans::BootError> {
         // Resolve the `server.workers` config; an invalid value is a hard error.
         let workers = self.workers.clone()?;
         // Per-worker services need worker runtimes to live on; the
@@ -234,7 +234,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// Sharded SO_REUSEPORT serving. Resolves the bind address once, then
     /// delegates to [`run_inner`](Self::run_inner) with the sharded strategy.
     #[cfg(not(feature = "dev-reload"))]
-    async fn run_sharded(self, workers: usize) -> Result<(), Box<dyn std::error::Error>> {
+    async fn run_sharded(self, workers: usize) -> Result<(), crate::beans::BootError> {
         #[cfg(all(
             unix,
             not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
@@ -264,7 +264,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     pub async fn run_with_listener(
         self,
         listener: crate::rt::TcpListener,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(), crate::beans::BootError> {
         // Sharding is unsupported on the explicit-listener path: the caller
         // owns the (single) listener. If `server.workers` was configured, warn
         // and proceed single-listener.
@@ -291,10 +291,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// QUIC spawn, shutdown-future composition, the serve call (single or
     /// sharded), QUIC drain, and the shutdown phase. Only the "bind + serve"
     /// middle differs between strategies.
-    async fn run_inner(
-        mut self,
-        strategy: ServeStrategy,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn run_inner(mut self, strategy: ServeStrategy) -> Result<(), crate::beans::BootError> {
         // ── Serve-scope graph ownership ─────────────────────────────────────
         // The graph has three owners, each covering what the others cannot.
         // NOT a chain of trust in one exit path — every owner stands alone:
@@ -412,7 +409,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // (mirroring bean post_construct at `build_state`, before
             // subscribers). A failure aborts startup.
             for pc in self.post_construct_registrations {
-                pc.await.map_err(|e| -> Box<dyn std::error::Error> { e })?;
+                pc.await.map_err(|e| -> crate::beans::BootError { e })?;
             }
 
             // Register event consumers

@@ -15,12 +15,13 @@ struct InMemoryCache {
 }
 
 impl Bean for InMemoryCache {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        Self { kind: "in-memory" }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ Self { kind: "in-memory" } })
     }
 }
 
@@ -33,26 +34,28 @@ struct CacheImpl {
 // A "default" version that produces CacheImpl
 struct DefaultCacheProducer;
 impl Producer for DefaultCacheProducer {
+    type Error = ::std::convert::Infallible;
     type Output = CacheImpl;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn produce(_ctx: &BeanContext) -> CacheImpl {
-        CacheImpl { kind: "in-memory" }
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok({ CacheImpl { kind: "in-memory" } })
     }
 }
 
 // An "alternative" version that also produces CacheImpl
 struct RedisCacheProducer;
 impl Producer for RedisCacheProducer {
+    type Error = ::std::convert::Infallible;
     type Output = CacheImpl;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn produce(_ctx: &BeanContext) -> CacheImpl {
-        CacheImpl { kind: "redis" }
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok({ CacheImpl { kind: "redis" } })
     }
 }
 
@@ -99,15 +102,18 @@ async fn default_bean_with_dependencies() {
     }
 
     impl Bean for DefaultService {
+        type Error = ::std::convert::Infallible;
         type Deps = TNil;
         fn dependencies() -> Vec<(TypeId, &'static str)> {
             vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
         }
-        fn build(ctx: &BeanContext) -> Self {
-            Self {
-                dep: ctx.get::<Dep>(),
-                kind: "default",
-            }
+        fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+            ::std::result::Result::Ok({
+                Self {
+                    dep: ctx.get::<Dep>(),
+                    kind: "default",
+                }
+            })
         }
     }
 

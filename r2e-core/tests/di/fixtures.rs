@@ -19,14 +19,17 @@ pub struct ServiceA {
 }
 
 impl Bean for ServiceA {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        Self {
-            dep: ctx.get::<Dep>(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Self {
+                dep: ctx.get::<Dep>(),
+            }
+        })
     }
 }
 
@@ -37,6 +40,7 @@ pub struct ServiceB {
 }
 
 impl Bean for ServiceB {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![
@@ -44,10 +48,12 @@ impl Bean for ServiceB {
             (TypeId::of::<Dep>(), type_name::<Dep>()),
         ]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        Self {
-            a: ctx.get::<ServiceA>(),
-            dep: ctx.get::<Dep>(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Self {
+                a: ctx.get::<ServiceA>(),
+                dep: ctx.get::<Dep>(),
+            }
+        })
     }
 }

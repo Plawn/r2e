@@ -18,23 +18,23 @@
 //!     // Resources built once; in dev mode they survive hot-patches.
 //!     type Env = DbPool;
 //!
-//!     async fn setup() -> DbPool {
-//!         DbPool::connect().await
+//!     async fn setup() -> Result<DbPool, BootError> {
+//!         Ok(DbPool::connect().await?)
 //!     }
 //!
-//!     async fn build(b: AppBuilder, env: DbPool) -> impl BootableApp {
-//!         b.provide(env)
+//!     async fn build(b: AppBuilder, env: DbPool) -> Result<impl BootableApp, BootError> {
+//!         Ok(b.provide(env)
 //!             .load_config::<AppConfig>()
 //!             .register::<UserService>()
 //!             .plugin(Health)
-//!             .build_state().await
-//!             .register_controllers::<(UserController,)>()
+//!             .try_build_state().await?
+//!             .register_controllers::<(UserController,)>())
 //!     }
 //! }
 //!
 //! // Simple apps with no long-lived resources:
 //! //   type Env = ();
-//! //   async fn setup() {}
+//! //   async fn setup() -> Result<(), BootError> { Ok(()) }
 //!
 //! // ── lib.rs ─────────────────────────────────────────────────────────
 //! include!("app.rs");
@@ -52,6 +52,7 @@
 use std::future::Future;
 
 use super::{AppBuilder, BootableApp};
+use crate::beans::BootError;
 
 /// The canonical declaration of an R2E application.
 ///
@@ -69,12 +70,38 @@ pub trait App {
 
     /// Build the long-lived environment. Called once per process (once per
     /// `TestApp::boot` in tests), before [`build`](App::build).
-    fn setup() -> impl Future<Output = Self::Env>;
+    ///
+    /// Fallible: connecting a pool, taking an instance lock, reading a secret.
+    /// An `Err` aborts boot — [`launch`] prints it and exits non-zero,
+    /// `TestApp::boot` turns it into a failing test naming the cause. **Never
+    /// call [`std::process::exit`] here**: `setup` is library code that the
+    /// test harness links, and an `exit` there kills the whole test binary
+    /// (no attributable failure, no `Drop` for anything already built).
+    ///
+    /// An app that cannot fail returns `Ok(..)`; the error type is
+    /// [`BootError`], so `?` accepts any `std` error.
+    fn setup() -> impl Future<Output = Result<Self::Env, BootError>>;
 
     /// Assemble the application from a fresh [`AppBuilder`] and the environment
     /// produced by [`setup`](App::setup). This is the app's single assembly
     /// path, shared by production, dev-reload, and tests.
-    fn build(b: AppBuilder, env: Self::Env) -> impl Future<Output = impl BootableApp>;
+    ///
+    /// Fallible for the same reason as [`setup`](App::setup). Pair it with
+    /// [`try_build_state`](AppBuilder::try_build_state) to surface a bean
+    /// graph failure as an error instead of a panic:
+    ///
+    /// ```ignore
+    /// async fn build(b: AppBuilder, env: DbPool) -> Result<impl BootableApp, BootError> {
+    ///     Ok(b.provide(env)
+    ///         .register::<UserService>()
+    ///         .try_build_state().await?
+    ///         .register_controllers::<(UserController,)>())
+    /// }
+    /// ```
+    fn build(
+        b: AppBuilder,
+        env: Self::Env,
+    ) -> impl Future<Output = Result<impl BootableApp, BootError>>;
 }
 
 /// Run an [`App`] to completion: `setup`, `build`, then serve (reading
@@ -107,7 +134,13 @@ pub trait App {
 /// `build`'s `load_config` re-reads `application.yaml` per patch so config
 /// edits are picked up on the next patch. Without `dev-reload` the macro just
 /// calls this function.
-pub async fn launch<A: App>() -> Result<(), Box<dyn std::error::Error>> {
-    let env = A::setup().await;
-    A::build(AppBuilder::new(), env).await.serve_auto().await
+/// # Errors
+///
+/// Returns the first boot failure — [`App::setup`], [`App::build`] (bean
+/// construction included, when the app uses
+/// [`try_build_state`](AppBuilder::try_build_state)) or serving itself. The
+/// caller decides the exit status; `app_main!` prints one line and exits `1`.
+pub async fn launch<A: App>() -> Result<(), BootError> {
+    let env = A::setup().await?;
+    A::build(AppBuilder::new(), env).await?.serve_auto().await
 }

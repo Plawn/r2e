@@ -16,14 +16,17 @@ struct Greeter {
 }
 
 impl Bean for Greeter {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        Greeter {
-            salutation: "hello".into(),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Greeter {
+                salutation: "hello".into(),
+            }
+        })
     }
 }
 
@@ -40,12 +43,13 @@ impl Registrable for Greeter {
 struct LoudGreeter;
 
 impl Bean for LoudGreeter {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        LoudGreeter
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ LoudGreeter })
     }
 }
 
@@ -98,10 +102,11 @@ async fn register_override_replaces_default_without_growing_the_state() {
         fn dependencies() -> Vec<(TypeId, &'static str)> {
             vec![]
         }
-        async fn produce(_ctx: &BeanContext) -> Greeter {
-            Greeter {
+        type Error = ::std::convert::Infallible;
+        async fn produce(_ctx: &BeanContext) -> Result<Greeter, Self::Error> {
+            Ok(Greeter {
                 salutation: "LOUD HELLO".into(),
-            }
+            })
         }
     }
     impl Registrable for OverrideGreeter {
@@ -206,15 +211,18 @@ struct AsyncGreeter {
 }
 
 impl AsyncBean for AsyncGreeter {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn build(_ctx: &BeanContext) -> Self {
-        tokio::task::yield_now().await;
-        AsyncGreeter {
-            salutation: "async hello".into(),
-        }
+    async fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            tokio::task::yield_now().await;
+            AsyncGreeter {
+                salutation: "async hello".into(),
+            }
+        })
     }
 }
 
@@ -230,15 +238,18 @@ async fn with_default_async_bean_builds() {
 struct GreeterProducer;
 
 impl Producer for GreeterProducer {
+    type Error = ::std::convert::Infallible;
     type Output = Greeter;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn produce(_ctx: &BeanContext) -> Greeter {
-        Greeter {
-            salutation: "produced".into(),
-        }
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok({
+            Greeter {
+                salutation: "produced".into(),
+            }
+        })
     }
 }
 

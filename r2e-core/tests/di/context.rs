@@ -50,14 +50,17 @@ struct CtxHolder {
 }
 
 impl Bean for CtxHolder {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        // Holding a context clone (as a lazy-factory snapshot would) forces
-        // later insertions onto the overlay instead of the shared base.
-        CtxHolder { snap: ctx.clone() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            // Holding a context clone (as a lazy-factory snapshot would) forces
+            // later insertions onto the overlay instead of the shared base.
+            CtxHolder { snap: ctx.clone() }
+        })
     }
 }
 
@@ -65,13 +68,16 @@ impl Bean for CtxHolder {
 struct AfterHolder;
 
 impl Bean for AfterHolder {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<CtxHolder>(), type_name::<CtxHolder>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let _ = ctx.get::<CtxHolder>();
-        AfterHolder
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let _ = ctx.get::<CtxHolder>();
+            AfterHolder
+        })
     }
 }
 

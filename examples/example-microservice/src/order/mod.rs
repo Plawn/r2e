@@ -15,27 +15,31 @@ pub struct OrderApp;
 impl App for OrderApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        // `serve_auto` (called by `launch`) reads `server.port` (3002) and the
-        // `services.product.url` used by `ProductClient` from this service's
-        // own config file.
-        b.with_config_file("application-order.yaml")
-            .load_config::<()>()
-            .register::<services::ProductClient>()
-            .register::<services::OrderService>()
-            .plugin(Health)
-            .plugin(Cors::permissive())
-            .plugin(Tracing)
-            .plugin(ErrorHandling)
-            .plugin(OpenApiPlugin::new(
-                OpenApiConfig::new("Order Service", "1.0.0")
-                    .with_description("Order management microservice")
-                    .with_docs_ui(true),
-            ))
-            .build_state()
-            .await
-            .register_controller::<OrderController>()
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
+            // `serve_auto` (called by `launch`) reads `server.port` (3002) and the
+            // `services.product.url` used by `ProductClient` from this service's
+            // own config file.
+            b.with_config_file("application-order.yaml")
+                .load_config::<()>()
+                .register::<services::ProductClient>()
+                .register::<services::OrderService>()
+                .plugin(Health)
+                .plugin(Cors::permissive())
+                .plugin(Tracing)
+                .plugin(ErrorHandling)
+                .plugin(OpenApiPlugin::new(
+                    OpenApiConfig::new("Order Service", "1.0.0")
+                        .with_description("Order management microservice")
+                        .with_docs_ui(true),
+                ))
+                .build_state()
+                .await
+                .register_controller::<OrderController>()
+        })
     }
 }

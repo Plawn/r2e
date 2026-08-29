@@ -61,7 +61,8 @@ pub struct MultiTenantApp;
 impl App for MultiTenantApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
+        Ok({
         // Print test tokens for curl usage
         println!("=== Test JWTs (valid 1h) ===");
         println!(
@@ -121,9 +122,11 @@ impl App for MultiTenantApp {
             pool,
             claims_validator: Arc::new(claims_validator),
         }
+    })
     }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok({
         b.load_config::<()>()
             .provide(env.pool)
             .provide(env.claims_validator)
@@ -140,5 +143,6 @@ impl App for MultiTenantApp {
             .build_state()
             .await
             .register_controllers::<(TenantController, AdminController)>()
+    })
     }
 }

@@ -16,16 +16,23 @@ struct DemoApp;
 impl App for DemoApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        let mut config = R2eConfig::empty();
-        config.set("app.greeting", ConfigValue::String("prod".into()));
-        b.override_config(config)
-            .load_config::<()>()
-            .provide(Greeter { origin: "real" })
-            .build_state()
-            .await
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok({
+            let mut config = R2eConfig::empty();
+            config.set("app.greeting", ConfigValue::String("prod".into()));
+            b.override_config(config)
+                .load_config::<()>()
+                .provide(Greeter { origin: "real" })
+                .build_state()
+                .await
+        })
     }
 }
 
@@ -35,11 +42,18 @@ struct ProfileApp;
 impl App for ProfileApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        let profile = b.active_profile().to_string();
-        b.provide(profile).build_state().await
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok({
+            let profile = b.active_profile().to_string();
+            b.provide(profile).build_state().await
+        })
     }
 }
 
@@ -114,11 +128,18 @@ struct WarmApp;
 impl App for WarmApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        let log = std::sync::Arc::clone(BOOT_LOG.get().expect("BOOT_LOG set by the test"));
-        b.provide(log).register::<Warmer>().build_state().await
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok({
+            let log = std::sync::Arc::clone(BOOT_LOG.get().expect("BOOT_LOG set by the test"));
+            b.provide(log).register::<Warmer>().build_state().await
+        })
     }
 }
 

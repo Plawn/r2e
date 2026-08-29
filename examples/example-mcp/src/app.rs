@@ -227,9 +227,12 @@ pub struct McpApp;
 impl App for McpApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
         // Raw config load: honors `application.yaml` (none here), the profile
         // overlay and `R2E_*` env vars — e.g. `R2E_MCP_PATH=/tools` or
         // `R2E_SERVER_WORKERS=4` (SO_REUSEPORT sharded serving; the MCP
@@ -250,5 +253,6 @@ impl App for McpApp {
             })
             .register_mcp_service::<MathTools>()
             .register_controller::<CalcController>()
+    })
     }
 }

@@ -96,7 +96,7 @@ fn parse_port(addr: &str) -> Option<u16> {
 #[cfg(feature = "dev-reload")]
 pub(crate) fn get_or_bind_listener(
     addr: &str,
-) -> Result<crate::rt::TcpListener, Box<dyn std::error::Error>> {
+) -> Result<crate::rt::TcpListener, crate::beans::BootError> {
     // Guard: prevent binding to the Dioxus devserver port.
     if let Some(port) = parse_port(addr) {
         if port == DIOXUS_DEVSERVER_PORT {

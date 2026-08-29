@@ -149,7 +149,18 @@ macro_rules! app_main {
 
         #[$crate::main]
         async fn main() {
-            $crate::launch!($app).await.unwrap();
+            // A boot failure is an operational error, not a bug: print one
+            // line (plus the `source()` chain) and exit non-zero, rather than
+            // the panic + backtrace + exit code 101 that `unwrap` would give.
+            if let ::core::result::Result::Err(__e) = $crate::launch!($app).await {
+                ::std::eprintln!("error: {}", __e);
+                let mut __src = ::std::error::Error::source(__e.as_ref());
+                while let ::core::option::Option::Some(__c) = __src {
+                    ::std::eprintln!("  caused by: {}", __c);
+                    __src = ::std::error::Error::source(__c);
+                }
+                ::std::process::exit(1);
+            }
         }
     };
 }
@@ -164,8 +175,8 @@ macro_rules! app_main {
 /// ```
 ///
 /// Expands to an `async` block that yields the same
-/// `Result<(), Box<dyn std::error::Error>>` as [`launch`](r2e_core::launch), so
-/// it is awaited exactly like the function form.
+/// `Result<(), BootError>` as [`launch`](r2e_core::launch), so it is awaited
+/// exactly like the function form.
 ///
 /// # Why this is a macro and not just `launch::<A>()`
 ///
@@ -203,8 +214,17 @@ macro_rules! launch {
                 // through the jump table.
                 async fn __r2e_server(__env: <$app as $crate::App>::Env) {
                     ::std::eprintln!("[r2e dev-reload] (re)building app");
-                    let __app =
-                        <$app as $crate::App>::build($crate::AppBuilder::new(), __env).await;
+                    // A failing `build` must not kill the loop: report it and
+                    // wait for the next hot-patch to fix it.
+                    let __app = match <$app as $crate::App>::build($crate::AppBuilder::new(), __env)
+                        .await
+                    {
+                        ::core::result::Result::Ok(__a) => __a,
+                        ::core::result::Result::Err(__e) => {
+                            ::std::eprintln!("[r2e dev-reload] build failed: {}", __e);
+                            return;
+                        }
+                    };
                     if let ::core::result::Result::Err(__e) =
                         $crate::BootableApp::serve_auto(__app).await
                     {
@@ -212,14 +232,19 @@ macro_rules! launch {
                     }
                 }
 
-                let __env = <$app as $crate::App>::setup().await;
+                // `setup` runs once, before the loop — a failure there is
+                // fatal and propagates out of `launch!` like the non-dev arm.
+                let __env = match <$app as $crate::App>::setup().await {
+                    ::core::result::Result::Ok(__e) => __e,
+                    ::core::result::Result::Err(__e) => return ::core::result::Result::Err(__e),
+                };
                 // Enable the process-global dev-reload caches (bean-graph
                 // fingerprinting, instance reuse, lifecycle skip): they must
                 // engage only under the actual hot-patch loop, never in a
                 // process that merely compiled the feature.
                 $crate::devtools::mark_hot_reload_loop();
                 $crate::devtools::serve_with_hotreload_env(__env, |__e| __r2e_server(__e)).await;
-                ::core::result::Result::<(), ::std::boxed::Box<dyn ::std::error::Error>>::Ok(())
+                ::core::result::Result::<(), $crate::BootError>::Ok(())
             }
         }
     };

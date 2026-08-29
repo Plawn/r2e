@@ -65,9 +65,12 @@ pub struct OpenFgaApp;
 impl App for OpenFgaApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
         b.load_config::<()>()
             .provide(demo_validator())
             // Store lifecycle owned by the plugin: connects, ensures the
@@ -86,5 +89,6 @@ impl App for OpenFgaApp {
             .build_state()
             .await
             .register_controller::<DocumentController>()
+    })
     }
 }

@@ -72,7 +72,8 @@ pub struct BenchApp;
 impl App for BenchApp {
     type Env = sqlx::SqlitePool;
 
-    async fn setup() -> sqlx::SqlitePool {
+    async fn setup() -> Result<sqlx::SqlitePool, BootError> {
+        Ok({
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -81,9 +82,11 @@ impl App for BenchApp {
             .init();
 
         make_pool().await
+    })
     }
 
-    async fn build(b: AppBuilder, pool: sqlx::SqlitePool) -> impl BootableApp {
+    async fn build(b: AppBuilder, pool: sqlx::SqlitePool) -> Result<impl BootableApp, BootError> {
+        Ok({
         // Config: application.yaml (host/port) overlaid with R2E_-prefixed env
         // vars. `R2E_SERVER_WORKERS` maps to `server.workers` and selects the
         // serve mode (read by `serve_auto`, which `launch` calls).
@@ -92,5 +95,6 @@ impl App for BenchApp {
             .build_state()
             .await
             .register_controller::<BenchController>()
+    })
     }
 }

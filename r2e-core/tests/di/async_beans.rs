@@ -15,16 +15,19 @@ struct AsyncService {
 }
 
 impl AsyncBean for AsyncService {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
-    async fn build(ctx: &BeanContext) -> Self {
-        // Simulate async init
-        tokio::task::yield_now().await;
-        Self {
-            dep: ctx.get::<Dep>(),
-        }
+    async fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            // Simulate async init
+            tokio::task::yield_now().await;
+            Self {
+                dep: ctx.get::<Dep>(),
+            }
+        })
     }
 }
 
@@ -68,14 +71,17 @@ struct NotSendCtorBean {
 }
 
 impl AsyncBean for NotSendCtorBean {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
-    async fn build(ctx: &BeanContext) -> Self {
-        let local = std::rc::Rc::new(ctx.get::<Dep>().value);
-        r2e_core::rt::yield_now().await;
-        Self { value: *local + 1 }
+    async fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let local = std::rc::Rc::new(ctx.get::<Dep>().value);
+            r2e_core::rt::yield_now().await;
+            Self { value: *local + 1 }
+        })
     }
 }
 
@@ -90,10 +96,11 @@ impl r2e_core::beans::Producer for NotSendProducer {
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
-    async fn produce(ctx: &BeanContext) -> Self::Output {
+    type Error = ::std::convert::Infallible;
+    async fn produce(ctx: &BeanContext) -> Result<Self::Output, Self::Error> {
         let local = std::rc::Rc::new(ctx.get::<Dep>().value);
         r2e_core::rt::yield_now().await;
-        NotSendProduced(*local + 2)
+        Ok(NotSendProduced(*local + 2))
     }
 }
 

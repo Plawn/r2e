@@ -20,12 +20,13 @@ use crate::support::send_get as get_route;
 struct FactoryBean(u32);
 
 impl Bean for FactoryBean {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        FactoryBean(99)
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ FactoryBean(99) })
     }
 }
 
@@ -166,12 +167,13 @@ async fn deps_see_pinned_override_not_the_producing_plugin() {
 struct NeedsAlpha(u32);
 
 impl Bean for NeedsAlpha {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Alpha>(), "Alpha")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        NeedsAlpha(ctx.get::<Alpha>().0 + 1)
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ NeedsAlpha(ctx.get::<Alpha>().0 + 1) })
     }
 }
 

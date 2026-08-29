@@ -31,12 +31,13 @@ async fn pin_provide_wins_over_later_register() {
     }
 
     impl Bean for Marked {
+        type Error = ::std::convert::Infallible;
         type Deps = TNil;
         fn dependencies() -> Vec<(TypeId, &'static str)> {
             vec![]
         }
-        fn build(_ctx: &BeanContext) -> Self {
-            Self { origin: "real" }
+        fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+            ::std::result::Result::Ok({ Self { origin: "real" } })
         }
     }
 

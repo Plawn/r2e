@@ -55,11 +55,11 @@ pub trait BootableApp: Sized {
     fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router>;
 
     /// Build and serve on an explicit address.
-    fn serve(self, addr: &str) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>>;
+    fn serve(self, addr: &str) -> impl Future<Output = Result<(), crate::beans::BootError>>;
 
     /// Build and serve, reading `server.host`/`server.port` from config
     /// (production entry point).
-    fn serve_auto(self) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>>;
+    fn serve_auto(self) -> impl Future<Output = Result<(), crate::beans::BootError>>;
 }
 
 impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
@@ -79,11 +79,11 @@ impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
         self.build_with_consumers()
     }
 
-    fn serve(self, addr: &str) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>> {
+    fn serve(self, addr: &str) -> impl Future<Output = Result<(), crate::beans::BootError>> {
         AppBuilder::serve(self, addr)
     }
 
-    fn serve_auto(self) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>> {
+    fn serve_auto(self) -> impl Future<Output = Result<(), crate::beans::BootError>> {
         AppBuilder::serve_auto(self)
     }
 }

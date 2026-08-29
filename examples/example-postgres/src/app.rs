@@ -24,9 +24,12 @@ pub struct PostgresApp;
 impl App for PostgresApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
         b.load_config::<()>()
             // Connects the pool from `datasource.*`, runs the migrations, and
             // closes the pool on shutdown — no producer, no `on_start` hook.
@@ -44,5 +47,6 @@ impl App for PostgresApp {
             .build_state()
             .await
             .register_controller::<ArticleController>()
+    })
     }
 }

@@ -196,7 +196,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     let type_ident = type_ident(self_ty);
 
     // Find the constructor: a method that returns Self and has no self receiver.
-    let (constructor, is_async) = find_constructor(item_impl)?;
+    let (constructor, is_async, ctor_error_ty) = find_constructor(item_impl)?;
 
     // Extract parameter types and generate dependency list + build args.
     let mut dep_type_ids = Vec::new();
@@ -664,9 +664,31 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
 
     let lazy_const = bean_args.lazy;
 
+    let (error_ty, ctor_call_async, ctor_call_sync) = match &ctor_error_ty {
+        Some(err) => (
+            quote! { #err },
+            quote! { Self::#fn_name(#(#arg_forwards),*).await },
+            quote! { Self::#fn_name(#(#arg_forwards),*) },
+        ),
+        None => (
+            quote! { ::std::convert::Infallible },
+            quote! {
+                ::std::result::Result::<_, ::std::convert::Infallible>::Ok(
+                    Self::#fn_name(#(#arg_forwards),*).await
+                )
+            },
+            quote! {
+                ::std::result::Result::<_, ::std::convert::Infallible>::Ok(
+                    Self::#fn_name(#(#arg_forwards),*)
+                )
+            },
+        ),
+    };
+
     let bean_impl = if is_async {
         quote! {
             impl #krate::beans::AsyncBean for #self_ty {
+                type Error = #error_ty;
                 type Deps = #deps_type;
                 const LAZY: bool = #lazy_const;
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
@@ -674,11 +696,13 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 }
                 #config_keys_fn
                 const BUILD_VERSION: u64 = #build_version;
-                async fn build(ctx: &#krate::beans::BeanContext) -> Self {
+                async fn build(
+                    ctx: &#krate::beans::BeanContext,
+                ) -> ::std::result::Result<Self, Self::Error> {
                     #config_prelude
                     #live_config_prelude
                     #(#build_args)*
-                    Self::#fn_name(#(#arg_forwards),*).await
+                    #ctor_call_async
                 }
                 #after_register_fn
             }
@@ -686,6 +710,7 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
     } else {
         quote! {
             impl #krate::beans::Bean for #self_ty {
+                type Error = #error_ty;
                 type Deps = #deps_type;
                 const LAZY: bool = #lazy_const;
                 fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
@@ -693,11 +718,13 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                 }
                 #config_keys_fn
                 const BUILD_VERSION: u64 = #build_version;
-                fn build(ctx: &#krate::beans::BeanContext) -> Self {
+                fn build(
+                    ctx: &#krate::beans::BeanContext,
+                ) -> ::std::result::Result<Self, Self::Error> {
                     #config_prelude
                     #live_config_prelude
                     #(#build_args)*
-                    Self::#fn_name(#(#arg_forwards),*)
+                    #ctor_call_sync
                 }
                 #after_register_fn
             }
@@ -977,7 +1004,11 @@ fn scan_scheduled_methods(
 }
 
 /// Find the constructor method in the impl block.
-fn find_constructor(item_impl: &ItemImpl) -> syn::Result<(&syn::ImplItemFn, bool)> {
+///
+/// A constructor returns `Self` (infallible) or `Result<Self, E>` (fallible —
+/// `E` becomes `Bean::Error` / `AsyncBean::Error`, and the failure aborts
+/// `build_state()` naming the bean).
+fn find_constructor(item_impl: &ItemImpl) -> syn::Result<(&syn::ImplItemFn, bool, Option<Type>)> {
     for item in &item_impl.items {
         if let ImplItem::Fn(method) = item {
             if method
@@ -988,17 +1019,29 @@ fn find_constructor(item_impl: &ItemImpl) -> syn::Result<(&syn::ImplItemFn, bool
             {
                 continue;
             }
+            let is_async = method.sig.asyncness.is_some();
             if returns_self(&method.sig.output, &item_impl.self_ty) {
-                let is_async = method.sig.asyncness.is_some();
-                return Ok((method, is_async));
+                return Ok((method, is_async, None));
+            }
+            if let ReturnType::Type(_, ty) = &method.sig.output {
+                if let Some((ok, err)) = crate::util::type_utils::result_ok_err_types(ty) {
+                    if returns_self(
+                        &ReturnType::Type(syn::token::RArrow::default(), Box::new(ok.clone())),
+                        &item_impl.self_ty,
+                    ) {
+                        return Ok((method, is_async, Some(err.clone())));
+                    }
+                }
             }
         }
     }
 
     Err(syn::Error::new_spanned(
         &item_impl.self_ty,
-        "#[bean] requires a constructor — a static method returning Self:\n\
-         \n  #[bean]\n  impl MyService {\n      fn new(dep: OtherService) -> Self {\n          Self { dep }\n      }\n  }",
+        "#[bean] requires a constructor — a static method returning `Self` or `Result<Self, E>`:\n\
+         \n  #[bean]\n  impl MyService {\n      fn new(dep: OtherService) -> Self {\n          Self { dep }\n      }\n  }\n\
+         \nA fallible one aborts boot naming the bean:\n\
+         \n      fn new(dep: OtherService) -> Result<Self, BootError> { ... }",
     ))
 }
 

@@ -64,10 +64,12 @@ struct SuiteApp;
 impl r2e::App for SuiteApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), r2e::BootError> {
+        Ok(())
+    }
 
-    async fn build(b: r2e::AppBuilder, _env: ()) -> impl r2e::BootableApp {
-        b.provide(SuiteGreeter("real")).build_state().await
+    async fn build(b: r2e::AppBuilder, _env: ()) -> Result<impl r2e::BootableApp, r2e::BootError> {
+        Ok(b.provide(SuiteGreeter("real")).try_build_state().await?)
     }
 }
 

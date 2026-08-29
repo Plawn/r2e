@@ -27,7 +27,7 @@ mod reuse;
 mod traits;
 
 pub use context::BeanContext;
-pub use error::BeanError;
+pub use error::{BeanError, BootError};
 pub use registry::BeanRegistry;
 pub use reuse::ReusePlan;
 #[cfg(feature = "dev-reload")]

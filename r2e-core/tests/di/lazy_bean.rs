@@ -23,15 +23,18 @@ pub struct LazyCounter {
 }
 
 impl Bean for LazyCounter {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Probe>(), type_name::<Probe>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let probe = ctx.get::<Probe>();
-        probe.calls.fetch_add(1, Ordering::SeqCst);
-        LazyCounter { n: 5 }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let probe = ctx.get::<Probe>();
+            probe.calls.fetch_add(1, Ordering::SeqCst);
+            LazyCounter { n: 5 }
+        })
     }
 }
 
@@ -72,15 +75,18 @@ struct LazyOuter {
 }
 
 impl Bean for LazyOuter {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<LazyCounter>(), type_name::<LazyCounter>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        LazyOuter {
-            inner_n: ctx.get::<LazyCounter>().n,
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            LazyOuter {
+                inner_n: ctx.get::<LazyCounter>().n,
+            }
+        })
     }
 }
 
@@ -109,14 +115,17 @@ struct LazyAsyncThing {
 }
 
 impl AsyncBean for LazyAsyncThing {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn build(_ctx: &BeanContext) -> Self {
-        tokio::task::yield_now().await;
-        LazyAsyncThing { n: 9 }
+    async fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            tokio::task::yield_now().await;
+            LazyAsyncThing { n: 9 }
+        })
     }
 }
 
@@ -174,13 +183,14 @@ async fn lazy_bean_conflicting_with_provided_is_duplicate() {
 struct EagerCounterProducer;
 
 impl Producer for EagerCounterProducer {
+    type Error = ::std::convert::Infallible;
     type Output = LazyCounter;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn produce(_ctx: &BeanContext) -> LazyCounter {
-        LazyCounter { n: 1 }
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok({ LazyCounter { n: 1 } })
     }
 }
 
@@ -220,6 +230,7 @@ async fn lazy_default_superseded_by_later_registration() {
 struct LazyCfgRequired;
 
 impl Bean for LazyCfgRequired {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
@@ -228,8 +239,8 @@ impl Bean for LazyCfgRequired {
     fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         vec![("lazy.greeting", "String", ConfigKeyKind::Required)]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        LazyCfgRequired
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ LazyCfgRequired })
     }
 }
 
@@ -237,6 +248,7 @@ impl Bean for LazyCfgRequired {
 pub struct LazyCfgOptional;
 
 impl Bean for LazyCfgOptional {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
@@ -245,8 +257,8 @@ impl Bean for LazyCfgOptional {
     fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         vec![("lazy.greeting", "String", ConfigKeyKind::Optional)]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        LazyCfgOptional
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ LazyCfgOptional })
     }
 }
 

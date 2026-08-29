@@ -20,16 +20,19 @@ struct OptionalConsumer {
 }
 
 impl Bean for OptionalConsumer {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         // Only hard dep is Dep — ServiceA is optional
         vec![(TypeId::of::<Dep>(), type_name::<Dep>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        Self {
-            dep: ctx.get::<Dep>(),
-            optional: ctx.try_get::<ServiceA>(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Self {
+                dep: ctx.get::<Dep>(),
+                optional: ctx.try_get::<ServiceA>(),
+            }
+        })
     }
 }
 
@@ -69,15 +72,18 @@ struct AllOptional {
 }
 
 impl Bean for AllOptional {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![] // no hard deps
     }
-    fn build(ctx: &BeanContext) -> Self {
-        Self {
-            a: ctx.try_get::<ServiceA>(),
-            b: ctx.try_get::<ServiceB>(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Self {
+                a: ctx.try_get::<ServiceA>(),
+                b: ctx.try_get::<ServiceB>(),
+            }
+        })
     }
 }
 

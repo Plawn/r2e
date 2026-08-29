@@ -162,6 +162,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl #krate::beans::Bean for #name {
+            // `#[derive(Bean)]` builds the struct field by field from the
+            // graph — nothing in it can fail.
+            type Error = ::std::convert::Infallible;
             type Deps = #deps_type;
 
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
@@ -172,12 +175,14 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             const BUILD_VERSION: u64 = #build_version;
 
-            fn build(ctx: &#krate::beans::BeanContext) -> Self {
+            fn build(
+                ctx: &#krate::beans::BeanContext,
+            ) -> ::std::result::Result<Self, Self::Error> {
                 #config_prelude
                 #live_config_prelude
-                Self {
+                ::std::result::Result::Ok(Self {
                     #(#field_inits,)*
-                }
+                })
             }
         }
 

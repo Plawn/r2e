@@ -1,5 +1,28 @@
 use std::fmt;
 
+/// The error channel of R2E's boot path.
+///
+/// Every fallible assembly step — [`Bean::build`](crate::beans::Bean::build),
+/// [`AsyncBean::build`](crate::beans::AsyncBean::build),
+/// [`Producer::produce`](crate::beans::Producer::produce),
+/// [`App::setup`](crate::App::setup) / [`App::build`](crate::App::build),
+/// [`launch`](crate::launch) — funnels into this type.
+///
+/// It is a plain boxed `std` error on purpose: any `E: std::error::Error +
+/// Send + Sync + 'static` converts into it with `?`, and it converts on into
+/// `Box<dyn Error>` for a `main` that returns one. Context is added by the
+/// framework, not by the box: a failing bean is wrapped in
+/// [`BeanError::BeanBuild`], which names the bean and keeps the original error
+/// as its [`source`](std::error::Error::source).
+///
+/// ```ignore
+/// #[producer]
+/// async fn create_pool(#[config("app.db.url")] url: String) -> Result<PgPool, sqlx::Error> {
+///     PgPool::connect(&url).await   // `?`-able, no `process::exit`
+/// }
+/// ```
+pub type BootError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Errors that can occur during bean graph resolution.
 #[derive(Debug)]
 pub enum BeanError {
@@ -19,6 +42,16 @@ pub enum BeanError {
     },
     /// One or more config keys required by beans are missing.
     MissingConfigKeys(crate::config::ConfigValidationError),
+    /// A bean's constructor (or a producer function) returned an error.
+    ///
+    /// The first such error aborts `build_state()`; every bean already built
+    /// in this cycle is dropped as the resolution stack unwinds.
+    BeanBuild {
+        /// The bean type whose construction failed (a producer is named by
+        /// its `Output` type — the type the graph knows it by).
+        bean: &'static str,
+        source: BootError,
+    },
     /// A post-construct hook failed.
     PostConstruct(String),
     /// A plugin's `build` returned an error; startup is aborted.
@@ -75,6 +108,9 @@ impl fmt::Display for BeanError {
             BeanError::MissingConfigKeys(err) => {
                 write!(f, "{}", err)
             }
+            BeanError::BeanBuild { bean, source } => {
+                write!(f, "Bean '{}' failed to build: {}", bean, source)
+            }
             BeanError::PostConstruct(msg) => {
                 write!(f, "Post-construct hook failed: {}", msg)
             }
@@ -88,6 +124,7 @@ impl fmt::Display for BeanError {
 impl std::error::Error for BeanError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            BeanError::BeanBuild { source, .. } => Some(source.as_ref()),
             BeanError::PluginBuild { source, .. } => Some(source.as_ref()),
             _ => None,
         }

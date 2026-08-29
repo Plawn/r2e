@@ -34,8 +34,8 @@ pub use serde_json;
 pub use r2e_http::json;
 
 pub use beans::{
-    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, OnStart, OnStartHook, PostConstruct,
-    PreDestroy, Producer,
+    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BootError, OnStart, OnStartHook,
+    PostConstruct, PreDestroy, Producer,
 };
 pub use builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
@@ -75,13 +75,13 @@ pub use plugin::{
     DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
     PluginInstall, PluginSetupContext, RoutesContext,
 };
-pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
-pub use runtime::lifecycle::{LifecycleController, StopHandle};
-pub use runtime::service::ServiceComponent;
-pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use runtime::harness::WorkerHarness;
 pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
+pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
+pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
+pub use runtime::service::ServiceComponent;
+pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use runtime::worker::{
     PerWorkerServiceFactory, WorkerContext, WorkerInfo, WorkerRole, WorkerService,
 };

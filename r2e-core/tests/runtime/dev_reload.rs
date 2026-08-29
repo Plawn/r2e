@@ -37,15 +37,18 @@ struct Stable {
 }
 
 impl Bean for Stable {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self {
-            counter: Arc::new(AtomicU32::new(0)),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self {
+                counter: Arc::new(AtomicU32::new(0)),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -77,6 +80,7 @@ struct ConfDep {
 }
 
 impl Bean for ConfDep {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
@@ -84,12 +88,14 @@ impl Bean for ConfDep {
     fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         vec![("dev.flip", "String", ConfigKeyKind::Required)]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
-        let config: R2eConfig = ctx.get();
-        Self {
-            val: config.get::<String>("dev.flip").unwrap(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
+            let config: R2eConfig = ctx.get();
+            Self {
+                val: config.get::<String>("dev.flip").unwrap(),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -121,13 +127,16 @@ struct UsesStable {
 }
 
 impl Bean for UsesStable {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<Stable, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Stable>(), "Stable")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -147,13 +156,16 @@ struct UsesConf {
 }
 
 impl Bean for UsesConf {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<ConfDep, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<ConfDep>(), "ConfDep")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -175,16 +187,19 @@ struct Decorated {
 }
 
 impl Bean for Decorated {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self {
-            identity: Arc::new(()),
-            slot: SharedDecoSlot::new(),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self {
+                identity: Arc::new(()),
+                slot: SharedDecoSlot::new(),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_deco_fill::<Self>();
@@ -211,13 +226,16 @@ struct UsesDecorated {
 }
 
 impl Bean for UsesDecorated {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<Decorated, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Decorated>(), "Decorated")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -269,12 +287,13 @@ macro_rules! cycle {
 struct Disposable;
 
 impl Bean for Disposable {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        Self
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({ Self })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_pre_destroy::<Self>();
@@ -514,13 +533,16 @@ struct UsesPlugin {
 }
 
 impl Bean for UsesPlugin {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<PluginBean, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<PluginBean>(), "PluginBean")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_PLUGIN_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_PLUGIN_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 

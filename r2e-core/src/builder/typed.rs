@@ -213,7 +213,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             Into<std::convert::Infallible> + 'static,
         <L::Service as tower::Service<crate::http::header::HttpRequest<crate::http::body::Body>>>::Future:
             Send + 'static,
-    {
+{
         self.shared
             .custom_layers
             .push(Box::new(move |router| router.layer(layer)));
@@ -496,9 +496,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
         let service = C::from_context(&self.bean_context);
-        Ok(self.register_service(std::any::type_name::<C>(), move |token| {
-            service.start(token)
-        }))
+        Ok(
+            self.register_service(std::any::type_name::<C>(), move |token| {
+                service.start(token)
+            }),
+        )
     }
 
     /// Get plugin data by type.
@@ -1102,7 +1104,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Runs startup hooks before listening, and shutdown hooks after
     /// graceful shutdown completes. Equivalent to `.prepare(addr).run().await`.
-    pub async fn serve(self, addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn serve(self, addr: &str) -> Result<(), crate::beans::BootError> {
         self.prepare(addr).run().await
     }
 
@@ -1111,7 +1113,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Falls back to `0.0.0.0:3000` when no config is loaded or the keys
     /// are absent.
-    pub async fn serve_auto(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn serve_auto(self) -> Result<(), crate::beans::BootError> {
         let addr = match &self.shared.config {
             Some(config) => {
                 let host = config
