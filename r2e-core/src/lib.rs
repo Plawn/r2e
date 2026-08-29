@@ -39,8 +39,8 @@ pub use beans::{
 };
 pub use builder::{
     boot_error_report, exit_on_boot_error, launch, App, AppBuilder, BootableApp, PreparedApp,
-    RegisterController, RegisterControllers, RegisterModule, ServeContext, SpawnService,
-    TaskRegistryHandle,
+    RegisterController, RegisterControllers, RegisterModule, RunningApp, ServeContext,
+    SpawnService, TaskRegistryHandle,
 };
 pub use builtins::request_id::{RequestId, RequestIdPlugin};
 pub use builtins::secure_headers::SecureHeaders;

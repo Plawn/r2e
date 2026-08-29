@@ -801,9 +801,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// [`add_consumer_registration`](Self::add_consumer_registration)
     /// hooks) that `serve()` would run at startup.
     ///
-    /// This is the in-process test entry point: it gives event consumers
-    /// production parity without binding a listener. Serve hooks (scheduler
-    /// task start, …) still do not run.
+    /// The router-only in-process entry point: event consumers get production
+    /// parity without binding a listener, but the app has no lifecycle — the
+    /// builder's `on_start` closures (hence `spawn_service`), the serve hooks
+    /// and every shutdown hook are skipped. For a real startup with a matching
+    /// shutdown — what `TestApp::boot` runs — use
+    /// [`BootableApp::start_in_process`](crate::BootableApp::start_in_process).
     pub async fn build_with_consumers(self) -> crate::http::Router {
         self.try_build_with_consumers()
             .await
@@ -834,9 +837,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }
         // `#[on_start]` hooks DO run here (unlike `#[pre_destroy]`, which has no
         // shutdown to fire on): the graph and every controller core exist, which
-        // is exactly the contract. `TestApp::boot` reaches this path, so tests
-        // observe production startup behaviour. An `Err` aborts the boot, like
-        // the controller `#[post_construct]` above.
+        // is exactly the contract. `start_in_process` (what `TestApp::boot`
+        // boots through) runs the same hooks in the same order, so tests
+        // observe production startup behaviour either way. An `Err` aborts the
+        // boot, like the controller `#[post_construct]` above.
         for (_, hook) in sort_on_start(built.on_start_hooks) {
             hook().await.map_err(|e| -> crate::beans::BootError {
                 format!("#[on_start] hook failed: {e}").into()

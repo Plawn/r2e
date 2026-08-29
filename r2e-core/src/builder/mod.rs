@@ -14,6 +14,7 @@ mod bootable;
 mod nostate;
 mod prepared;
 mod registration;
+mod running;
 mod task_registry;
 mod typed;
 #[cfg(feature = "ws")]
@@ -23,6 +24,7 @@ pub use app::{boot_error_report, exit_on_boot_error, launch, App};
 pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};
+pub use running::RunningApp;
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 #[cfg(feature = "ws")]
 pub use ws_sessions::WsSessions;
