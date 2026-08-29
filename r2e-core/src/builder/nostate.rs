@@ -364,12 +364,25 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// the base config, so it always wins — including over
     /// [`override_config`](Self::override_config)).
     ///
+    /// # Errors
+    ///
+    /// A config failure — a missing/malformed requested file, a failing
+    /// [`ConfigProvider`](crate::config::ConfigProvider), an unresolved
+    /// `${...}` placeholder, a typed section that does not bind — cannot be
+    /// returned here: this is a type-state transition in the middle of the
+    /// builder chain. It is **recorded** instead, and the chain continues
+    /// against an empty config;
+    /// [`try_build_state`](Self::try_build_state) returns it (as
+    /// [`BeanError::ConfigLoad`](crate::beans::BeanError::ConfigLoad)) before
+    /// any bean is built, and `build_state()` panics with the same rendered
+    /// message. First failure wins.
+    ///
     /// # Panics
     ///
-    /// Panics if configuration loading or typed construction fails, or if both
-    /// [`override_config`](Self::override_config) and
+    /// Panics only if both [`override_config`](Self::override_config) and
     /// [`with_config_file`](Self::with_config_file) were set (the file could
-    /// not be honored — the pre-loaded config wins).
+    /// not be honored — the pre-loaded config wins): that is a wiring bug in
+    /// the builder chain, not an operational failure.
     ///
     /// # Examples
     ///
