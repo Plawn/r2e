@@ -66,6 +66,9 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     /// Per-worker service factories ([`AppBuilder::per_worker_service`]).
     /// Non-empty requires the sharded strategy; checked at `run()`.
     pub(super) per_worker_services: Vec<crate::runtime::worker::PerWorkerServiceFactory>,
+    /// Lifecycle/metrics registry of the sharded workers — the `WorkerSet`
+    /// bean when one is provided, else a detached one.
+    pub(super) worker_set: crate::runtime::worker_set::WorkerSet,
     #[cfg(feature = "quic")]
     pub(super) quic_server_config:
         Option<(std::net::SocketAddr, r2e_http::quic::quinn::ServerConfig)>,
@@ -123,6 +126,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// Whether TCP_NODELAY is enabled for accepted connections.
     pub fn tcp_nodelay(&self) -> bool {
         self.tcp_nodelay
+    }
+
+    /// The [`WorkerSet`](crate::runtime::worker_set::WorkerSet) sharded
+    /// workers report into (the provided bean, or a detached default).
+    pub fn worker_set(&self) -> crate::runtime::worker_set::WorkerSet {
+        self.worker_set.clone()
     }
 
     /// A handle that stops the server programmatically.
@@ -674,6 +683,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 let drain_bound = self.drain_timeout;
                 let cancel_for_workers = cancel_token.clone();
                 let per_worker_services = self.per_worker_services.clone();
+                let worker_set = self.worker_set.clone();
                 // Capture the main (multi-thread) runtime handle as the control
                 // plane. Worker threads register it so that background work
                 // initiated from request handlers (and lazy-bean first-touch)
@@ -724,6 +734,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                         drain_bound,
                         &per_worker_services,
                         park,
+                        worker_set,
                     )
                 });
 

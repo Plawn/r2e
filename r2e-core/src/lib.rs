@@ -79,7 +79,14 @@ pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracin
 pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::service::ServiceComponent;
 pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
-pub use runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
+pub use runtime::harness::WorkerHarness;
+pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
+pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
+pub use runtime::worker::{
+    PerWorkerServiceFactory, WorkerContext, WorkerInfo, WorkerRole, WorkerService,
+};
+pub use runtime::worker_local::{WorkerLocal, WorkerLocalGuard};
+pub use runtime::worker_set::{WorkerHealth, WorkerSet, WorkerSlot, WorkerSnapshot, WorkerState};
 pub use state::R2eState;
 pub use type_list::{
     AllSatisfied, BeanAccess, BeanLookup, BuildHList, Contains, ControllerTuple, HCons, HNil,

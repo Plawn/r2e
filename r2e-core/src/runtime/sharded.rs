@@ -131,31 +131,12 @@ mod imp {
     use std::sync::Arc;
 
     use crate::rt::CancelToken;
-    use crate::runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
-
-    /// Create a `SO_REUSEPORT` listener bound to `addr`, returned as a
-    /// non-blocking `std::net::TcpListener` ready for
-    /// `rt::TcpListener::from_std`.
-    ///
-    /// `set_nonblocking(true)` is MANDATORY — `from_std` requires it.
-    fn make_reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
-        use socket2::{Domain, Protocol, Socket, Type};
-
-        let domain = if addr.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
-        socket.set_reuse_address(true)?;
-        socket.set_reuse_port(true)?;
-        socket.bind(&addr.into())?;
-        socket.listen(1024)?;
-        let std_listener: std::net::TcpListener = socket.into();
-        // MANDATORY for rt::TcpListener::from_std.
-        std_listener.set_nonblocking(true)?;
-        Ok(std_listener)
-    }
+    use crate::runtime::ingress::reuseport_tcp;
+    use crate::runtime::worker::{
+        shutdown_services, start_services, PerWorkerServiceFactory, WorkerContext, WorkerInfo,
+        WorkerRole,
+    };
+    use crate::runtime::worker_set::{WorkerSet, WorkerState};
 
     /// Sends the worker's startup outcome to the main thread exactly once —
     /// including when the worker thread unwinds before reporting (runtime
@@ -180,6 +161,21 @@ mod imp {
                 "worker {} exited before reporting startup (panicked?)",
                 self.worker
             )));
+        }
+    }
+
+    /// Marks the worker `Exited` (or keeps `Failed`) and uninstalls its
+    /// [`WorkerInfo`] when the thread returns — including by unwinding.
+    struct ExitGuard(Arc<crate::runtime::worker_set::WorkerSlot>);
+
+    impl Drop for ExitGuard {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                self.0.fail("worker thread panicked");
+            } else if self.0.state() != WorkerState::Failed {
+                self.0.set_state(WorkerState::Exited);
+            }
+            WorkerInfo::uninstall();
         }
     }
 
@@ -217,15 +213,6 @@ mod imp {
         }
     }
 
-    /// Shut down `services` in reverse start order, awaiting each cleanup.
-    async fn shutdown_services(worker: usize, mut services: Vec<Box<dyn WorkerService>>) {
-        while let Some(svc) = services.pop() {
-            let idx = services.len();
-            tracing::debug!(worker, service = idx, "shutting down per-worker service");
-            svc.shutdown().await;
-        }
-    }
-
     /// Serve `router` across `workers` worker threads, each with its own
     /// `current_thread` runtime and `SO_REUSEPORT` listener.
     ///
@@ -260,6 +247,10 @@ mod imp {
     /// of the shutdown signal — matching the single-listener strategy exactly.
     /// A worker whose drain times out still shuts its per-worker services down.
     ///
+    /// `set` is the [`WorkerSet`] the workers report their lifecycle into
+    /// (`Starting → Ready → Serving → Draining → ServicesDown → Parked →
+    /// Exited`, or `Failed`); it is (re)configured to `workers` slots here.
+    ///
     /// Returns the first worker error, if any. Worker panics are logged via
     /// `tracing::error!`.
     // One more than clippy's default: `drain_timeout` joins the existing
@@ -276,14 +267,16 @@ mod imp {
         drain_timeout: Option<std::time::Duration>,
         services: &[PerWorkerServiceFactory],
         park: WorkerPark,
+        set: WorkerSet,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        set.configure(workers);
         // Pre-create the listeners on the main thread so that a bind failure
         // surfaces synchronously as a run error (rather than from inside a
         // worker thread). Each worker gets its own SO_REUSEPORT socket.
-        let mut last_err: Option<std::io::Error> = None;
+        let mut last_err: Option<crate::runtime::ingress::AffinityError> = None;
         let mut first_listener = None;
         for candidate in addrs {
-            match make_reuseport_listener(*candidate) {
+            match reuseport_tcp(*candidate) {
                 Ok(l) => {
                     first_listener = Some(l);
                     break;
@@ -308,7 +301,7 @@ mod imp {
         let mut std_listeners = Vec::with_capacity(workers);
         std_listeners.push(first_listener);
         for _ in 1..workers {
-            std_listeners.push(make_reuseport_listener(addr)?);
+            std_listeners.push(reuseport_tcp(addr)?);
         }
 
         // Startup barrier: every worker reports (worker, Ok | Err) once its
@@ -333,10 +326,14 @@ mod imp {
                 worker: i,
                 tx: Some(ready_tx.clone()),
             };
+            let slot = set.slot(i).expect("WorkerSet configured for every worker");
             let handle = std::thread::Builder::new()
                 .name(format!("r2e-worker-{i}"))
                 .spawn(move || -> Result<(), String> {
                     let _span = tracing::info_span!("r2e_worker", worker = i).entered();
+                    let _exit = ExitGuard(Arc::clone(&slot));
+                    WorkerInfo::new(i, workers, None, WorkerRole::DataPlane).install();
+                    slot.set_state(WorkerState::Starting);
                     // Register the control-plane handle so background work
                     // initiated from request handlers (rt::spawn_ctl) and
                     // lazy-bean first-touch run on the main multi-thread
@@ -359,27 +356,33 @@ mod imp {
 
                         // ── Per-worker services: start, in order ─────────
                         let ctx = WorkerContext::new(i, workers, None, child_token.clone());
-                        let mut started: Vec<Box<dyn WorkerService>> =
-                            Vec::with_capacity(services.len());
-                        let mut startup_err: Option<String> = None;
-                        for (k, factory) in services.iter().enumerate() {
-                            match factory.build(ctx.clone()).await {
-                                Ok(svc) => started.push(svc),
-                                Err(e) => {
-                                    startup_err = Some(format!(
-                                        "worker {i}: per-worker service #{k} failed to start: {e}"
-                                    ));
-                                    break;
-                                }
+                        let started = match start_services(&ctx, &services).await {
+                            Ok(started) => started,
+                            Err((k, e)) => {
+                                let err = format!(
+                                    "worker {i}: per-worker service #{k} failed to start: {e}"
+                                );
+                                tracing::error!(worker = i, error = %err, "per-worker service startup failed");
+                                slot.fail(err.clone());
+                                ready.report(Err(err.clone()));
+                                return Err(err);
                             }
-                        }
-                        if let Some(err) = startup_err {
-                            tracing::error!(worker = i, error = %err, "per-worker service startup failed");
-                            shutdown_services(i, started).await;
-                            ready.report(Err(err.clone()));
-                            return Err(err);
-                        }
+                        };
+                        slot.set_state(WorkerState::Ready);
                         ready.report(Ok(()));
+                        // Flip to Draining the instant this worker's token is
+                        // cancelled, independently of how long the HTTP drain
+                        // takes.
+                        let drain_watch = {
+                            let slot = Arc::clone(&slot);
+                            let token = child_token.clone();
+                            crate::rt::spawn_local(async move {
+                                token.cancelled().await;
+                                if slot.state() == WorkerState::Serving {
+                                    slot.set_state(WorkerState::Draining);
+                                }
+                            })
+                        };
 
                         // ── Barrier: wait for every worker, or abort ─────
                         let released = crate::rt::select! {
@@ -391,8 +394,10 @@ mod imp {
                             // requested before startup completed): unwind
                             // without ever accepting a connection.
                             shutdown_services(i, started).await;
+                            slot.set_state(WorkerState::ServicesDown);
                             return Ok(());
                         }
+                        slot.set_state(WorkerState::Serving);
 
                         // ── Serve ────────────────────────────────────────
                         // Wrapped in `bounded_http_drain` exactly like the
@@ -439,7 +444,10 @@ mod imp {
                         // Make sure local tasks see cancellation even when the
                         // serve loop ended on an error rather than on the token.
                         child_token.cancel();
+                        drain_watch.abort();
+                        slot.set_state(WorkerState::Draining);
                         shutdown_services(i, started).await;
+                        slot.set_state(WorkerState::ServicesDown);
 
                         // ── Park: outlive the tracked-handle join ────────
                         // This worker is drained, but its runtime still owns
@@ -450,9 +458,14 @@ mod imp {
                         // until the control plane has joined them.
                         let _ = park_drained.send(());
                         drop(park_drained);
+                        slot.set_state(WorkerState::Parked);
                         park_release.cancelled().await;
 
-                        serve_result.map_err(|e| format!("worker {i}: serve error: {e}"))
+                        serve_result.map_err(|e| {
+                            let msg = format!("worker {i}: serve error: {e}");
+                            slot.fail(msg.clone());
+                            msg
+                        })
                     }))
                 })
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
