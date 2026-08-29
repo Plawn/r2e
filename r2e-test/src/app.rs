@@ -311,6 +311,13 @@ pub struct TestApp {
     pub(crate) bean_context: Option<std::sync::Arc<r2e_core::beans::BeanContext>>,
     pub(crate) config: Option<r2e_core::config::R2eConfig>,
     pub(crate) jwt: Option<crate::TestJwt>,
+    /// The live application, on the `boot*` paths: the app is *started* (its
+    /// `#[on_start]` and builder startup hooks ran, so `spawn_service` tasks
+    /// are running) and [`shutdown`](Self::shutdown) runs the production
+    /// shutdown sequence. `None` for a hand-assembled app
+    /// ([`new`](Self::new) / [`from_builder`](Self::from_builder)), which has
+    /// no lifecycle to run.
+    pub(crate) running: Option<r2e_core::RunningApp>,
 }
 
 impl TestApp {
@@ -321,6 +328,7 @@ impl TestApp {
             bean_context: None,
             config: None,
             jwt: None,
+            running: None,
         }
     }
 
@@ -339,6 +347,7 @@ impl TestApp {
             bean_context: Some(bean_context),
             config,
             jwt: None,
+            running: None,
         }
     }
 
@@ -440,8 +449,57 @@ impl TestApp {
     ///
     /// Use this for tests that require a real TCP connection, such as
     /// WebSocket or SSE endpoints.
+    ///
+    /// On a booted app (`boot` / `boot_with` / `boot_plain`) the server is
+    /// **attached to the app lifecycle**: it stops accepting when
+    /// [`shutdown`](Self::shutdown) cancels the app token, its HTTP drain is
+    /// bounded by the app's `drain_timeout`, and the shutdown joins it under
+    /// `shutdown_grace_period` — the same budgets production serves with.
+    /// Dropping the `TestServer` first still stops it on its own.
     pub async fn serve(&self) -> crate::server::TestServer {
-        crate::server::TestServer::new(self.router.clone()).await
+        match &self.running {
+            Some(running) => crate::server::TestServer::attached(running).await,
+            None => crate::server::TestServer::new(self.router.clone()).await,
+        }
+    }
+
+    /// Run the application's graceful-shutdown sequence, exactly as production
+    /// does on SIGTERM (`r2e_core::RunningApp::shutdown`):
+    ///
+    /// 1. `on_drain` hooks (unbounded — the app is still serving);
+    /// 2. plugin sync shutdown hooks, then the ordered async disposers (plugin
+    ///    `on_shutdown_async`, controller `#[pre_destroy]`, bean
+    ///    `#[pre_destroy]`);
+    /// 3. the app shutdown token is cancelled — `spawn_service` /
+    ///    `#[derive(BackgroundService)]` tasks stop, an attached
+    ///    [`serve`](Self::serve) server drains under `drain_timeout`;
+    /// 4. tracked handles are joined, each bounded by `shutdown_grace_period`;
+    /// 5. `on_stop` hooks — outside every budget.
+    ///
+    /// ```ignore
+    /// let app = TestApp::boot::<MyApp>().await;
+    /// app.get("/health").send().await.assert_ok();
+    /// app.shutdown().await;               // on_drain → drain → join → on_stop
+    /// assert_eq!(*log.lock().unwrap(), ["drained", "stopped"]);
+    /// ```
+    ///
+    /// Not calling it is fine for a test that does not assert on shutdown:
+    /// dropping the `TestApp` cancels the app token (no background service is
+    /// stranded) but cannot await, so the hooks above do not run — a drop with
+    /// hooks still pending logs a warning saying so.
+    pub async fn shutdown(mut self) {
+        if let Some(running) = self.running.take() {
+            running.shutdown().await;
+        }
+    }
+
+    /// Whether this app has a shutdown sequence to run — `false` for a
+    /// hand-assembled app, and for a booted app that registers no
+    /// `on_drain`/`#[pre_destroy]`/`on_stop` hook.
+    pub fn has_shutdown_work(&self) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(r2e_core::RunningApp::has_shutdown_work)
     }
 }
 

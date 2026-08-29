@@ -13,7 +13,35 @@ pub struct TestServer {
 }
 
 impl TestServer {
+    /// Spawn a test server **attached to a booted app's lifecycle**.
+    ///
+    /// The serve task lands on the app's tracked lane, so it stops accepting
+    /// when the app shutdown token fires, drains within the app's
+    /// `drain_timeout`, and is joined by
+    /// [`TestApp::shutdown`](crate::TestApp::shutdown) under
+    /// `shutdown_grace_period`. Dropping the `TestServer` before the app still
+    /// stops this server on its own.
+    pub async fn attached(running: &r2e_core::RunningApp) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("failed to bind test server");
+        let addr = listener.local_addr().expect("failed to get local addr");
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        running.serve_tracked(listener, async move {
+            let _ = shutdown_rx.await;
+        });
+
+        Self {
+            addr,
+            shutdown: Some(shutdown_tx),
+        }
+    }
+
     /// Spawn a test server from a `Router`, binding to a random local port.
+    ///
+    /// Detached from any app lifecycle — see [`attached`](Self::attached) for
+    /// the booted-app form `TestApp::serve` uses.
     pub async fn new(router: Router) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
