@@ -37,11 +37,12 @@ impl Clone for CloneTrackedDependency {
 /// A structurally identical probe that no controller injects.
 ///
 /// In the HList application-state model every provided bean is a member of the
-/// state, so a controller's injected dependency is cloned whenever the state is
-/// cloned per request. This probe lives in the same state and absorbs that
-/// identical per-request cloning, but is never pulled by a core's
-/// `from_context`. The difference between the two counters therefore isolates
-/// core (re)construction from routine per-request state cloning.
+/// state, so whatever per-request cloning the state itself incurs, an injected
+/// dependency and this probe incur identically. (Since task #992 the state is
+/// one `Arc`, so that shared baseline is zero — but the test does not depend on
+/// which it is.) The probe is never pulled by a core's `from_context`, so the
+/// difference between the two counters isolates core (re)construction from
+/// routine per-request state cloning.
 struct StateOnlyProbe {
     clone_count: Arc<AtomicUsize>,
 }
@@ -208,4 +209,107 @@ async fn struct_identity_controller_core_built_once() {
         "struct-identity controller core must be built once, not rebuilt per request \
          (injected dep clones grew by {core_delta}, state-only probe by {state_delta})"
     );
+}
+
+// ── Bean-backed request extraction through the `Arc` state (task #992) ───────
+
+/// An app-scoped bean that a request-scoped extractor reads out of the state.
+#[derive(Clone)]
+struct TenantDirectory {
+    prefix: Arc<str>,
+}
+
+/// A request-scoped value built from an app-scoped bean **plus** per-request
+/// data — written exactly the way `AuthenticatedUser` and `Tenant<T>` are:
+/// R2E's `FromRequestPartsVia` only, with the index witness parked in
+/// `ViaBean<I>` (an unconstrained impl parameter otherwise — E0207).
+///
+/// This is the shape that actually exercises the router state at request time:
+/// the extractor is handed `&S` and pulls a bean out of it by index witness.
+struct ResolvedTenant(String);
+
+impl<S, I> r2e_core::web::extract::FromRequestPartsVia<S, r2e_core::web::extract::ViaBean<I>>
+    for ResolvedTenant
+where
+    S: r2e_core::type_list::HasBean<TenantDirectory, I> + Send + Sync,
+    I: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts_via(
+        parts: &mut r2e_core::http::header::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let directory: TenantDirectory = r2e_core::type_list::HasBean::get_bean(state);
+        let tenant = parts
+            .headers
+            .get("x-tenant")
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| StatusCode::BAD_REQUEST.into_response())?;
+        Ok(ResolvedTenant(format!("{}/{tenant}", directory.prefix)))
+    }
+}
+
+#[controller]
+struct BeanBackedExtractorController {
+    #[inject(request)]
+    tenant: ResolvedTenant,
+}
+
+#[routes]
+impl BeanBackedExtractorController {
+    #[get("/resolved-tenant")]
+    async fn resolved(&self) -> String {
+        self.tenant.0.clone()
+    }
+}
+
+async fn get_tenant(router: r2e_core::http::Router, tenant: &str) -> String {
+    let request = Request::builder()
+        .uri("/resolved-tenant")
+        .header("x-tenant", tenant)
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8(body.to_vec()).unwrap()
+}
+
+/// The positive request-path case for the wrapped state: a macro-generated,
+/// bean-backed request extractor must resolve its bean through `BeanState`.
+///
+/// The compile-time half of this (that exactly one extraction route exists)
+/// lives in `tests/http/extract.rs`; this asserts the runtime half end to end —
+/// real builder, real controller codegen, real request — so the `HasBean`
+/// delegation on the wrapper is exercised where it actually matters, with the
+/// index witness threaded through `__R2eRequestData_*`.
+#[r2e_core::test]
+async fn bean_backed_request_extractor_resolves_through_the_state() {
+    let router = r2e_core::AppBuilder::new()
+        .provide(TenantDirectory {
+            prefix: Arc::from("acme"),
+        })
+        .build_state()
+        .await
+        .register_controller::<BeanBackedExtractorController>()
+        .build();
+
+    // The bean's value reaches the handler (not a default), and the
+    // per-request half varies per request.
+    assert_eq!(get_tenant(router.clone(), "one").await, "acme/one");
+    assert_eq!(get_tenant(router.clone(), "two").await, "acme/two");
+
+    // The extractor's rejection still travels: nothing about the wrapper
+    // swallows a failed extraction into a 500.
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/resolved-tenant")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
