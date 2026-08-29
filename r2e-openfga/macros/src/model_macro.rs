@@ -239,6 +239,7 @@ fn expand_type(
         type_name
     );
     let wildcard_doc = format!("The public wildcard subject `{}:*`.", type_name);
+    let wildcard_literal = format!("{}:*", type_name);
 
     let relations = type_def
         .relations
@@ -287,6 +288,9 @@ fn expand_type(
             pub struct Ty;
             impl #krate::typed::FgaType for Ty {
                 const NAME: &'static str = #type_name;
+                // Emitted as a literal so a wildcard subject on a request path
+                // costs nothing: no allocation, no lock, no leak.
+                const WILDCARD: ::core::option::Option<&'static str> = ::core::option::Option::Some(#wildcard_literal);
             }
 
             #[doc = #id_doc]

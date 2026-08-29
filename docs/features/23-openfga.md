@@ -58,7 +58,7 @@ For tests and tiny models, the DSL can be inlined: `model!(pub mod authz = inlin
 |---|---|
 | `authz::MODEL: &str` | The model as schema 1.1 JSON — what `OpenFga::model(...)` applies/verifies at boot (the `WriteAuthorizationModel` payload) |
 | `authz::DSL: &str` | The embedded `.fga` source |
-| `authz::document::Ty` | Type marker (implements `FgaType`; `NAME = "document"`) |
+| `authz::document::Ty` | Type marker (implements `FgaType`; `NAME = "document"`, `WILDCARD = Some("document:*")`) |
 | `authz::document::id("readme")` | `FgaObject<Ty>` formatting `document:readme` — panics on `:`/`#`/`*`; `try_id` is the fallible form for request-supplied input |
 | `authz::document::viewer` | `FgaRel<Ty, Viewer>` const (lowercase, same convention as `path::doc_id`) carrying relation + object type |
 | `authz::team::member.of(authz::team::id("eng"))` | The `team:eng#member` userset subject |

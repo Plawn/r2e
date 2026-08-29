@@ -61,6 +61,17 @@ fn main() {
     let set = authz::team::member.of(authz::team::id("eng"));
     assert_eq!(set.as_str(), "team:eng#member");
     assert_eq!(authz::user::wildcard().to_string(), "user:*");
+    // The wildcard's wire form is a compile-time literal, so passing a wildcard
+    // subject to `FgaClient::{check,grant,revoke}` allocates nothing per call
+    // (docs/claude/hot-path-clone-audit.md).
+    assert_eq!(
+        <authz::user::Ty as r2e::r2e_openfga::typed::FgaType>::WILDCARD,
+        Some("user:*")
+    );
+    assert_eq!(
+        r2e::r2e_openfga::typed::FgaSubject::subject_str(&authz::user::wildcard()),
+        "user:*"
+    );
 
     // `[user, user:*, team#member]` on viewer — all three subject markers.
     assert_assignable::<authz::user::Ty, authz::document::Viewer>();

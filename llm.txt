@@ -1610,7 +1610,10 @@ relation/type/condition in the model = build error at the invocation, with the
   `WriteAuthorizationModel` payload) for boot-time apply/verify;
 - `authz::DSL: &str` — the embedded source (also makes edits to the `.fga`
   retrigger compilation);
-- per type: `authz::document::Ty` (marker implementing `FgaType`),
+- per type: `authz::document::Ty` (marker implementing `FgaType`: `NAME` plus
+  `WILDCARD = Some("document:*")`, the wildcard's wire form as a compile-time
+  literal — a hand-written `FgaType` impl may leave `WILDCARD` at its `None`
+  default, and the string is then interned once per type on first use),
   `authz::document::id("readme")` → `FgaObject<Ty>` (formats `document:readme`,
   panics on `:` in the id; `try_id` is the fallible form for request input),
   `authz::document::wildcard()` → the `document:*` subject;

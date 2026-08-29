@@ -2,7 +2,8 @@
 
 Date: **2026-08-29** — task #990 acceptance criterion "framework middleware /
 per-request paths that implicitly deep-clone immutable configuration or other
-immutable structures per request".
+immutable structures per request"; the regression guard, the before/after
+measurements and the global-lifetime review below landed under task #982.
 
 Precedent: commit `75495d5` *perf(prometheus): share immutable layer config* —
 `PrometheusLayer`/`PrometheusService` held `MetricsConfig` by value; it became
@@ -95,6 +96,201 @@ Crates in scope: `r2e-core` (http/plugin/runtime/controller/decorators/web),
 | `r2e-grpc` | `src/guard.rs`, `src/identity.rs` | — | yes | clean — `GrpcGuardContext` borrows the metadata map, bearer extraction returns `&str`, roles are `&'static [&'static str]` |
 | `r2e-tenant` | `src/{extract,id,router,resolver,plugin,map/*}.rs` | `TenantId(Arc<str>)`, `TenantRouter = Arc<Mode>`, `Tenanted<T>` = `Arc` inner, `TenantedSettings: Copy`, resolvers hold `Cow<'static, str>` and borrow it | yes, but `Arc`/`Copy` | clean — the whole crate is already built to this invariant |
 | `r2e-tenant` | `src/source.rs:195` | `ResolutionChain::root::<T>()` allocates a 1-element `Vec` on every `Tenanted::get()`, including cache hits, though it is only read when a `create` runs | yes | acceptable — one small `Vec`, not a clone of shared data; could be made lazy
+
+## The regression guard
+
+`examples/example-app/tests/hotpath/` is a plain `cargo test` target (no
+criterion, no nightly bench) that makes per-request allocations visible and
+fails CI when they come back:
+
+```bash
+cargo test -p example-app --test hotpath                    # the guard
+cargo test -p example-app --test hotpath -- --nocapture     # + the numbers
+```
+
+It lives in `example-app` because that is the only workspace member that
+depends on `r2e-prometheus`, `r2e-observability`, `r2e-security`, `r2e-utils`
+and `r2e-openapi` at once — `r2e-core` sits *below* all of them, so the
+wrappers cannot meet in a core test.
+
+- `counter.rs` installs a counting `#[global_allocator]` (test target only,
+  never in library code). The counters are `thread_local!` + `const`-init
+  `Cell<u64>`: no `Drop`, no lazy init, so the allocator cannot re-enter
+  itself, and a parallel `cargo test` thread cannot contaminate another's
+  count. Every measurement runs on a `current_thread` runtime for the same
+  reason.
+- `steady_state(n, f)` runs `f` `n` times to warm up (first-touch faults, lazy
+  metric registration, JWKS/validation caches), then measures `n` more and
+  divides. `measure` is the one-shot form.
+
+**What it asserts is mostly config-size invariance, not an absolute budget.**
+Each invariance test builds the same wrapper twice — once with a small
+immutable config, once with a large one — and asserts the per-request cost does
+not grow. That is exactly the bug class this ticket is about (an app-lifetime
+`Vec<String>`/`String`/`Validation` copied per request), and it is the *shape*
+of the assertion, not a baseline, so a different CPU or a dependency bump moves
+both sides together and the test still holds.
+
+Two absolute numbers do appear, and both are slack, not budgets:
+
+- `assert_config_size_invariant` takes a `slack_count`/`slack_bytes` (2–4
+  allocations, 256–512 bytes) so incidental jitter — a differently-sized
+  `format!` buffer, one extra small `Vec` — does not fail the run. Every call
+  site sizes its large config so a real deep clone overshoots the slack by an
+  order of magnitude (≥ 64 allocations / ≥ 4 KiB), which is what keeps the
+  slack from hiding the bug it guards. A dependency bump that adds a few
+  allocations to *both* sides is invisible to it; one that adds them to the
+  large side only is the regression.
+- `layers::composed_stack_budget` (120 allocations / 16 KiB per request) is an
+  outright absolute canary for an order-of-magnitude regression, and it *is*
+  machine- and dependency-specific in principle (it currently measures 23 / 1981
+  on the machine below, so it has ~5× of headroom). It prints its figure, so it
+  can be re-baselined from the test output.
+
+The counting allocator charges an event per `alloc`/`alloc_zeroed`/`realloc`
+and the *full* requested size — for a `realloc`, `new_size`, not the growth
+delta, since that is the request the allocator receives and the block it may
+have to move. `accounting.rs` pins that rule (growth, shrink, repeated
+doubling, `dealloc` is free, thread-locality).
+
+Coverage: the Prometheus layer and the OpenTelemetry trace layer
+(`layers.rs`), the built-in interceptors `Logged`/`Timed`/`Counted`/
+`MetricTimed` (`decorators.rs` — with no subscriber installed every level is
+disabled, so a correctly-lazy interceptor must allocate *nothing*),
+`JwtClaimsValidator::validate_as` (`jwt.rs`), and `GET /openapi.json`
+(`openapi.rs`).
+
+The guard was validated against the real regression: with the seven hot-path
+sources reverted to their pre-fix state, six of the seven tests fail (see the
+table below).
+
+## Before/after
+
+**Machine.** Apple M4 (10 cores), macOS 15.7.7, rustc 1.100.0-nightly
+(bff8e12ff 2026-08-26), `--release`, all on localhost (loopback, so the numbers
+are a framework comparison, not a capacity figure).
+
+**"Before" = `d046b84`**, the merge immediately preceding `0443f28`, the first
+hot-path commit. `BEFORE_REV` makes the script do the reconstruction itself: it
+rewinds the seven hot-path sources to that revision and restores them from an
+EXIT trap, so an interrupted run does not leave the tree rewritten. Only those
+seven move — plenty of other files differ between `d046b84` and this branch's
+HEAD (the worker runtime, MCP auth, …), and leaving them at HEAD is what makes
+the delta this workstream's change rather than the branch's. The app, its
+config, the load generator and its parameters are identical across the two
+runs. The script **refuses to start on a dirty tree**, because the restore is a
+`git restore --source=HEAD` over those paths and would discard local edits to
+them:
+
+```bash
+git status --porcelain        # must be empty
+LABEL=before DURATION=10s CONNS=64 BEFORE_REV=d046b84 tools/bench-hotpath.sh
+LABEL=after  DURATION=10s CONNS=64                    tools/bench-hotpath.sh
+```
+
+The run refuses to measure a server it cannot prove is its own: the port must
+be free beforehand, the launched PID must own it and still be alive, the app
+carries a unique per-run marker read back from `GET /config`, and every
+endpoint must answer 2xx both in a pre-flight probe and across the whole `oha`
+status distribution.
+
+`tools/bench-hotpath.sh` builds `example-app` in release, boots it, scrapes the
+demo JWT it prints, runs a 3 s warm-up then a 10 s `oha` run at 64 connections
+against three endpoints, and prints the markdown rows below.
+
+### HTTP load
+
+| label | endpoint | wrappers exercised | req/s | p50 | p99 |
+|---|---|---|---|---|---|
+| before | `/mixed/public` | prometheus + otel layers + handler | 27998 | 2.27 ms | 4.34 ms |
+| after | `/mixed/public` | prometheus + otel layers + handler | 29133 | 2.18 ms | 4.19 ms |
+| before | `/users/` | + JWT validation + `Logged`/`Timed` | 27005 | 2.35 ms | 4.54 ms |
+| after | `/users/` | + JWT validation + `Logged`/`Timed` | 28589 | 2.21 ms | 4.31 ms |
+| before | `/openapi.json` | immutable document | 57951 | 1.09 ms | 2.13 ms |
+| after | `/openapi.json` | immutable document | 64087 | 0.98 ms | 1.96 ms |
+
++4.1 % / +5.9 % / +10.6 % throughput, p99 down 3–8 %. Modest, and that is the
+honest result: on a loopback benchmark with a *small* configuration the copied
+data is small too. The point of the change is the shape of the curve — see
+below, where the per-request cost stops depending on the size of the config.
+
+### Per-request allocations
+
+From `cargo test -p example-app --test hotpath -- --nocapture`, run once in
+each state. "small" / "large" is the same wrapper with a small vs. a large
+immutable config (64 exclude paths / 64 capture headers / 64 extra audiences /
+200 routes / a 4 KiB metric name).
+
+The **before** column was captured with the counter's earlier `realloc` rule
+(the growth delta rather than the full `new_size`). Re-running the "after"
+column under the current rule reproduces it byte for byte — these paths never
+`realloc` — so only the before figures could move, and only upward: the gap
+below is a lower bound on the one you would measure today.
+
+| Measurement | before, small | before, large | after, small | after, large |
+|---|---|---|---|---|
+| Prometheus + otel + route (`MetricsConfig` grows) | 44 allocs / 2718 B | 233 allocs / 19137 B | 23 / 1981 B | 23 / 1981 B |
+| Prometheus + otel + route (`capture_headers` grows) | 41 / 2709 B | 293 / 24581 B | 23 / 1981 B | 23 / 1981 B |
+| `JwtClaimsValidator::validate_as` | 24 / 1955 B | 88 / 9087 B | 13 / 1484 B | 13 / 1484 B |
+| `GET /openapi.json` | 17 / 3935 B | 17 / **143697 B** | 16 / 1149 B | 16 / 1151 B |
+| `Counted::around` (metric name grows) | 2 / 31 B | 3 / 8207 B | 0 / 0 B | 0 / 0 B |
+| `Logged::info` / `Timed` (level disabled) | 0 / 0 B | — | 0 / 0 B | — |
+| composed stack, absolute | 47 allocs / 2814 B | — | **23 allocs / 1981 B** | — |
+
+The invariant holds after the fix: every "after" pair is identical (±2 bytes of
+`Content-Length` digits on the OpenAPI row) no matter how large the
+configuration is, where before the cost grew with it — an app serving a 140 kB
+OpenAPI document was memcpy'ing all of it on every `/openapi.json` hit, and an
+app with a long exclude-path list was paying one allocation per entry on
+*every request to every route*.
+
+## Global lifetimes and `Box::leak`
+
+Where the fixes rely on a value living for the whole process, that lifetime is
+either structurally guaranteed or contractually documented:
+
+- **`&'static Metrics` (`r2e-prometheus/src/metrics.rs:7`)** — genuinely
+  guaranteed: a `static METRICS: OnceLock<Metrics>` written at most once by
+  `init_metrics`/`metrics()` (`get_or_init`) and only ever read by shared
+  reference. `OnceLock` never drops or replaces its contents, so the `&'static`
+  it hands out is sound by construction. This is what lets the per-request path
+  hold no metric handles at all.
+- **`&'static str` labels** — `r2e-http/src/labels.rs` and `name_for_algorithm`
+  (`r2e-security/src/jwks.rs`) hand out string literals: genuinely `'static`,
+  nothing allocated or leaked.
+- **`status_label` (`r2e-prometheus/src/metrics.rs:134`) is *not* `&'static`** —
+  it writes the status digits into a caller-owned `[u8; 5]` and returns a borrow
+  of that stack buffer (`fn status_label(status: u16, buf: &mut [u8; 5]) ->
+  &str`). Same outcome for the hot path — no allocation per request — by a
+  different mechanism: the label lives on the caller's frame for the duration of
+  the record call, so it can never outlive it.
+- **`Arc<…>` everywhere else.** The audit's fixes deliberately use `Arc`
+  (`Arc<MetricsConfig>`, `Arc<[String]>`, `Arc<str>`, `Bytes`) rather than
+  leaking, so the data is freed with the app/plugin/decorator that owns it and
+  a `#[cfg(feature = "dev-reload")]` hot-patch cycle does not leak a copy per
+  reload.
+
+`Box::leak` audit (`rg 'Box::leak|\.leak\(\)'` over the workspace, `vendor/`
+excluded) — **five calls at three sites**, each with a lifecycle contract:
+
+| Site | Calls | Leaks | Bounded by | Contract |
+|---|---|---|---|---|
+| `r2e-openfga/src/typed.rs:323` (`intern_wildcard::<T>`) | 1 | one `Box<str>` (`"<type>:*"`) per FGA type | the FGA types the process ever takes a wildcard of | **fallback only.** `model!` emits the wire form as the `FgaType::WILDCARD` literal, so a generated type never reaches this; a hand-written `FgaType` impl that leaves `WILDCARD` at `None` interns once per type, on first use. Documented in-place, guarded by `r2e-openfga/tests/typed.rs` |
+| `r2e-devservices/src/service.rs:445` | 1 | one `OnceCell<DevService>` per (service, configuration) | the number of distinct dev-service specs in a test run | test harness only; the cell owns the shared container for the process's lifetime, which is exactly why it must be `&'static`. Documented in-place |
+| `r2e-core/tests/plugin/deferred.rs:117-119` | 3 | three small test fixtures | one per test | test code, process-scoped fixture |
+
+**On the request path:** only the OpenFGA one is reachable from production
+request code — `FgaSubject::subject_str` is called by `FgaClient::{check,
+grant,revoke}`, so before this workstream's follow-up a request using a
+wildcard subject could be the one that performs the leak. It was never *per
+request* (the interning cache is consulted first), and after the
+`FgaType::WILDCARD` change a `model!`-generated model does not leak at all: the
+wildcard subject is a compile-time literal. What remains is bounded by the
+number of hand-written `FgaType` impls the process takes a wildcard of, one
+small `Box<str>` each, on first use.
+
+Nothing was added by this workstream: the OpenFGA and dev-services calls
+predate it (the OpenFGA one was narrowed by it) and the rest are test code.
 
 ## Deferred
 
