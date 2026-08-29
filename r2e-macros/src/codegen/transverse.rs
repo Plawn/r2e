@@ -648,7 +648,12 @@ pub(crate) fn async_exec_method(
         .zip(&arg_idents)
         .map(|(pt, ident)| {
             let ty = &pt.ty;
-            quote! { #ident: #ty }
+            // The parameter's own attributes ride along: a `#[cfg]` here is NOT
+            // pre-evaluated by rustc, so dropping it would gate the inner fn's
+            // parameter while leaving the wrapper's in place — an arity
+            // mismatch that only appears in one cfg (task #985).
+            let attrs = &pt.attrs;
+            quote! { #(#attrs)* #ident: #ty }
         })
         .collect();
 

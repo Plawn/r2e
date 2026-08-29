@@ -117,6 +117,31 @@ async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
 // Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
 ```
 
+### Attributes on the annotated function
+
+`#[producer]` re-emits your function (it only strips `#[config]` /
+`#[config_section]` / `#[live_config]` from the *parameters*), and it carries
+**every attribute you wrote on it**: doc comments, `#[allow]` / `#[deny]`,
+`#[inline]`, `#[deprecated]`, `#[must_use]`. `#[cfg]` needs no help — rustc
+evaluates item-level `#[cfg]` before it invokes an attribute macro, in either
+order, so a cfg'd-out producer never reaches the macro at all.
+
+Two attributes the macro adds for you:
+
+- **`#[allow(clippy::too_many_arguments)]`, always.** A producer takes one
+  parameter per dependency, so a perfectly idiomatic producer with eight beans
+  trips the lint at 8/7. It is emitted on the function *and* on the generated
+  `impl Producer` block. Your own attributes are emitted after the macro's, so
+  `#[warn(clippy::too_many_arguments)]` (or `#[deny]`) on the function still
+  wins if you want the lint back for that one producer.
+- **A doc comment on the generated struct.** `CreatePool` inherits the
+  function's visibility, so a crate under `#![deny(missing_docs)]` would
+  otherwise fail on an item it never wrote.
+
+`#[deprecated]` behaves as expected: the deprecation warns at *your* call sites
+(`.register::<CreatePool>()` and any direct call), never from inside the
+generated `produce()`.
+
 ### Conditional availability via `Option<T>` (first-class bean type)
 
 `Option<T>` is a distinct bean type: a producer that declares

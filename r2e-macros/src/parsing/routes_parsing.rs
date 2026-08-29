@@ -40,6 +40,15 @@ pub struct RoutesImplDef {
     /// / `#[inject(request)]` fields directly and reach core fields via `Deref`.
     pub request_helper_methods: Vec<syn::ImplItemFn>,
     pub other_methods: Vec<syn::ImplItemFn>,
+    /// Everything the user wrote on the `impl` block that `#[routes]` does not
+    /// consume — `#[allow]`/`#[deny]`, `#[rustfmt::skip]`, doc comments, third
+    /// party inert attributes. The macro emits two brand-new impl blocks, so
+    /// anything not carried over here is silently lost (task #985).
+    pub impl_attrs: Vec<syn::Attribute>,
+    /// Non-`fn` items of the `impl` block — associated `const`s and `type`s.
+    /// They used to be swallowed by the classification loop, which turned
+    /// `Self::PAGE_SIZE` into a bewildering E0599 (task #985).
+    pub other_items: Vec<syn::ImplItem>,
 }
 
 /// Detect `#[inject(identity)]` on handler parameters.
@@ -402,6 +411,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // the parsed struct's unsupported families are empty by construction.
     reject_unsupported_impl_attrs(&item.attrs)?;
     let controller_decorators = parse_decorators(&item.attrs)?;
+    // Everything the decorator families did NOT claim belongs to the user and
+    // must reach the emitted impl blocks.
+    let impl_attrs = crate::extract::plugins::strip_known_attrs(item.attrs.clone());
 
     // Scan `#[post_construct]` methods up front (the shared bean-side scan
     // validates `&self` / no extra params). Their bodies still flow to the core
@@ -421,6 +433,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let mut async_exec_methods = Vec::new();
     let mut request_helper_methods = Vec::new();
     let mut other_methods = Vec::new();
+    let mut other_items: Vec<syn::ImplItem> = Vec::new();
 
     for impl_item in item.items {
         // Keeping this as a match avoids reindenting the large classification
@@ -730,7 +743,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     other_methods.push(method);
                 }
             }
-            _ => {} // skip non-method items
+            // Associated consts / types / macros: not routes, but they are
+            // part of the impl the user wrote, so they ride along on the core.
+            other => other_items.push(other),
         }
     }
 
@@ -807,5 +822,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         on_start_methods,
         request_helper_methods,
         other_methods,
+        impl_attrs,
+        other_items,
     })
 }

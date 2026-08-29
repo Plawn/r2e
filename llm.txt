@@ -444,6 +444,21 @@ async fn create_pool(#[config("database.url")] url: String) -> Result<SqlitePool
 // Generates `struct CreatePool` — register with `.register::<CreatePool>()`
 ```
 
+**Attributes on a `#[producer]` function are preserved** — doc comments,
+`#[allow]`/`#[deny]`, `#[inline]`, `#[deprecated]`, `#[must_use]` all reach the
+re-emitted function. The macro additionally emits
+`#[allow(clippy::too_many_arguments)]` on every producer (one parameter per
+dependency makes the 7-argument threshold meaningless there) and a doc comment on
+the generated struct (so `#![deny(missing_docs)]` crates keep building); write
+`#[warn(clippy::too_many_arguments)]` on the function to opt back in.
+
+Attributes are likewise preserved on the `impl` block of `#[routes]`, and
+associated `const`s/`type`s written in a `#[routes]` block stay on the controller
+core (a route body's `Self` is the request façade, so reach them through the
+controller name: `MyController::PAGE_SIZE`). `#[cfg]` on a **request-scoped**
+controller field (`#[inject(identity)]` / `#[inject(request)]`) is a compile
+error — cfg the whole controller instead.
+
 **Fallible construction.** Any of the three may return `Result<_, E>` for any
 `E: Into<BootError>` (`BootError = Box<dyn Error + Send + Sync>`). The error type
 is an associated `type Error` on the trait — it never contaminates the bean type:

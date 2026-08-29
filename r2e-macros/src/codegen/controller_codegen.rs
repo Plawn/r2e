@@ -118,7 +118,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     let rs_field_names: Vec<&syn::Ident> = def
         .request_scoped_fields()
         .into_iter()
-        .map(|(n, _)| n)
+        .map(|f| f.name)
         .collect();
     let bind_request_fn = quote! {
         #[inline]
@@ -273,7 +273,7 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
 
     let field_decls: Vec<TokenStream> = fields
         .iter()
-        .map(|(field_name, field_ty)| quote! { #field_name: #field_ty })
+        .map(|f| { let (n, t, a) = (f.name, f.ty, f.attrs); quote! { #(#a)* #n: #t } })
         .collect();
 
     let marker_idents: Vec<syn::Ident> = (0..fields.len())
@@ -283,7 +283,8 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
     let extractions: Vec<TokenStream> = fields
         .iter()
         .zip(marker_idents.iter())
-        .map(|((field_name, field_ty), marker)| {
+        .map(|(f, marker)| {
+            let (field_name, field_ty) = (f.name, f.ty);
             quote! {
                 let #field_name = <#field_ty as #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
                     ::from_request_parts_via(__parts, __state)
@@ -296,12 +297,13 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
     let via_bounds: Vec<TokenStream> = fields
         .iter()
         .zip(marker_idents.iter())
-        .map(|((_, field_ty), marker)| {
+        .map(|(f, marker)| {
+            let field_ty = f.ty;
             quote! { #field_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker> }
         })
         .collect();
 
-    let field_inits: Vec<&syn::Ident> = fields.iter().map(|(n, _)| *n).collect();
+    let field_inits: Vec<&syn::Ident> = fields.iter().map(|f| f.name).collect();
 
     quote! {
         #[doc(hidden)]
@@ -348,7 +350,10 @@ fn generate_facade(def: &ControllerStructDef) -> TokenStream {
     let field_decls: Vec<TokenStream> = def
         .request_scoped_fields()
         .iter()
-        .map(|(field_name, field_ty)| quote! { #field_name: #field_ty })
+        .map(|f| {
+            let (name, ty, attrs) = (f.name, f.ty, f.attrs);
+            quote! { #(#attrs)* #name: #ty }
+        })
         .collect();
 
     quote! {

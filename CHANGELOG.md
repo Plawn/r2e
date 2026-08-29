@@ -111,6 +111,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Attribute macros no longer drop the attributes you write** (task #985).
+  Several attribute macros rebuild the item they annotate from its pieces
+  (visibility + signature parts + body) so they can strip R2E's own parameter
+  and field attributes. Those rebuilds silently discarded everything else.
+  - `#[producer]` dropped the whole `attrs` list of the annotated function:
+    `#[allow]`/`#[deny]`, `#[inline]`, `#[deprecated]`, `#[must_use]` and doc
+    comments written on a producer did nothing. It also dropped `const`,
+    `unsafe` and `extern "…"` from the signature. All of them are forwarded
+    now, and the generated bean struct carries a doc comment of its own so
+    `#![deny(missing_docs)]` crates keep building.
+  - `#[routes]` dropped the attributes on the `impl` block (a `#[allow(...)]`
+    or doc comment above `impl MyController` vanished) and dropped every
+    associated item that was neither a route, a `#[consumer]`, a `#[scheduled]`
+    nor a lifecycle hook — an associated `const`, an associated `type` or a
+    plain helper `fn` written in a `#[routes]` block disappeared from the
+    build. Impl attributes now reach both synthesized impls, and the other
+    items stay on the controller core. Note that a route body's `Self` is the
+    request façade, so reach an associated const through the controller name
+    (`MyController::PAGE_SIZE`).
+  - `#[bean]` dropped the attributes and the `const`/`unsafe`/`extern` pieces
+    of the constructor it re-emits.
+  - `#[async_exec]` dropped parameter attributes (`#[cfg]` on a parameter,
+    `#[allow]`) when re-emitting the wrapper's parameter list.
+
+  Because rustc evaluates an item-level `#[cfg]` *before* it invokes an
+  attribute macro — in either attribute order — a `#[cfg]`'d-out producer,
+  controller or bean never reaches the macro at all, and no generated impl is
+  left dangling. That is pinned by tests rather than assumed.
+
+- **`#[producer]` now emits `#[allow(clippy::too_many_arguments)]`** on the
+  function and on the generated `Producer` impl. A producer takes one parameter
+  per dependency, so clippy's 7-argument threshold fires on perfectly
+  idiomatic producers and (before the fix above) could not even be silenced.
+  User attributes are emitted after it, so `#[warn(clippy::too_many_arguments)]`
+  on the function opts back in.
+
 - **`#[r2e::test_suite]` now builds ONE runtime per suite, not one per `#[case]`**
   (task #986). The suite value lives in a module-level `OnceLock` that outlives
   every case, but each generated `#[test]` used to build — and then drop — its
@@ -153,6 +189,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   asked for it.
 
 ### Changed
+
+- **BREAKING (`r2e-macros`)**: `#[cfg]` / `#[cfg_attr]` on a **request-scoped**
+  controller field (`#[inject(identity)]` / `#[inject(request)]`) is now a
+  compile error instead of a silent no-op (task #985). Those fields are
+  projected into a positional marker tuple on the generated request extractor,
+  which cannot be gated element-wise; conditionally compiling one used to
+  produce a mismatched extractor rather than the field the author asked for.
+  `#[cfg]` the whole controller instead. App-scoped `#[inject]` / `#[config]`
+  fields are unaffected.
+
+- **BREAKING (`r2e-macros`)**: a plain `#[r2e::test]` with parameters is now a
+  compile error naming `#[r2e::test(app = MyApp)]` (task #985). Parameters are
+  bound from the booted `TestApp`; without an `app = …` there is nothing to
+  bind them from, and the generated `#[test]` fn used to fail with a confusing
+  libtest signature error.
 
 - **Perf (no API change)**: constant error bodies are no longer built through
   `serde_json::json!` on every response. `SecurityError` (401/503), the panic

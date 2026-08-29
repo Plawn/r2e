@@ -1148,7 +1148,16 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
             if is_constructor {
                 let vis = &method.vis;
                 let sig_ident = &method.sig.ident;
+                // Rebuilding the signature from pieces must carry ALL of them:
+                // `const`/`unsafe`/`extern` and the generics + where-clause used
+                // to be dropped here, which turned a generic constructor into a
+                // baffling "cannot find type" (task #985).
+                let sig_constness = &method.sig.constness;
                 let sig_asyncness = &method.sig.asyncness;
+                let sig_unsafety = &method.sig.unsafety;
+                let sig_abi = &method.sig.abi;
+                let sig_generics = &method.sig.generics;
+                let sig_where = &method.sig.generics.where_clause;
                 let sig_output = &method.sig.output;
                 let mut body = method.block.clone();
                 if has_intercepts {
@@ -1182,7 +1191,10 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
 
                 items.push(quote! {
                     #(#attrs)*
-                    #vis #sig_asyncness fn #sig_ident(#(#clean_params),*) #sig_output #body
+                    #vis #sig_constness #sig_asyncness #sig_unsafety #sig_abi
+                    fn #sig_ident #sig_generics (#(#clean_params),*) #sig_output
+                    #sig_where
+                    #body
                 });
             } else if let Some(im) = intercepted_by_name(&method.sig.ident) {
                 items.push(emit_intercepted_method(

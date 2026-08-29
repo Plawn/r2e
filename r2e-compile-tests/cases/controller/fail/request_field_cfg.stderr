@@ -1,0 +1,34 @@
+error: #[cfg] is not supported on a request-scoped controller field (#[inject(identity)] / #[inject(request)])
+
+       The field is re-declared on the generated request extractor and the façade, whose marker tuple is positional — the macro cannot gate one element of it.
+
+         hint: cfg the whole controller instead, or make the field type itself conditional via a type alias
+  --> cases/controller/fail/request_field_cfg.rs:14:5
+   |
+14 |     #[cfg(any())]
+   |     ^^^^^^^^^^^^^
+
+error[E0271]: type mismatch resolving `<OrderController as EndpointDeps>::Deps == _`
+  --> cases/controller/fail/request_field_cfg.rs:19:1
+   |
+19 | #[routes]
+   | ^^^^^^^^^
+   | |
+   | types differ
+   | type mismatch resolving `<OrderController as EndpointDeps>::Deps == _`
+   |
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `OrderController` cannot be constructed from the bean context
+  --> cases/controller/fail/request_field_cfg.rs:19:1
+   |
+19 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `ContextConstruct` is not implemented for `OrderController`
+  --> cases/controller/fail/request_field_cfg.rs:11:1
+   |
+11 | pub struct OrderController {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: annotate the struct with #[controller(...)] or implement ContextConstruct manually
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -9,6 +9,11 @@ pub struct InjectedField {
 
 pub struct IdentityField {
     pub name: syn::Ident,
+    /// The user's own attributes on the field (doc comments, `#[allow]`, …),
+    /// minus the `#[inject(...)]` helper. The field is stripped from the
+    /// physical core struct and re-declared on the request-data extractor and
+    /// the façade, so without carrying them here they vanish (task #985).
+    pub attrs: Vec<syn::Attribute>,
     /// The type as declared on the struct (may be `Option<T>`). Used for the
     /// request-data field, the façade field, and `FromRequestParts` extraction.
     pub ty: syn::Type,
@@ -26,6 +31,8 @@ pub struct IdentityField {
 pub struct RequestField {
     pub name: syn::Ident,
     pub ty: syn::Type,
+    /// See [`IdentityField::attrs`].
+    pub attrs: Vec<syn::Attribute>,
 }
 
 pub struct ConfigField {
