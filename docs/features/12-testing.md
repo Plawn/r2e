@@ -150,25 +150,64 @@ async fn flushes_on_shutdown(app: TestApp) {
 }
 ```
 
-1. `StopHandle::stop()` — readiness flips, as in production;
-2. the builder's `.on_drain(…)` hooks, while still serving;
-3. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks
+1. the builder's `.on_drain(…)` hooks, while still serving;
+2. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks
    first, then bean hooks, each in reverse registration order);
-4. the app shutdown token is cancelled and the tracked handles are joined under
+3. the app shutdown token is cancelled and the tracked handles are joined under
    `shutdown_grace_period` — in-flight HTTP requests drain under
    `drain_timeout`, and a server from `app.serve()` drains with them;
-5. the builder's `.on_stop(…)` hooks, outside every budget.
+4. the builder's `.on_stop(…)` hooks, outside every budget.
 
-Shutdown is explicit because `Drop` cannot await: dropping a `TestApp` cancels
-the token — nothing keeps running — but the hooks do not get to run, and a
-warning names the app if any were pending. Call `shutdown()` in tests that
-assert on disposal or on a background task's cleanup. An app with no hooks has
-nothing to run; `app.has_shutdown_work()` tells you which case you are in.
+### `shutdown()` is the signal path
+
+It deliberately does **not** call `StopHandle::stop()`. Production does not
+either: `run()`'s shutdown future is
+`select!(shutdown_signal(), stop_handle.stopped())`, so on SIGTERM/SIGINT the
+handle is never fired and `StopHandle::is_stopped()` reads `false` for the whole
+sequence. A default `app.shutdown().await` therefore reproduces what an
+orchestrator's TERM does, and a hook or service that reads the handle behaves
+identically in both.
+
+The *programmatic* path — what an admin `/shutdown` endpoint triggers — is one
+line away, and now distinguishable from the signal one:
+
+```rust
+app.stop_handle().stop();   // is_stopped() == true from here on
+app.shutdown().await;       // then the sequence that stop would have started
+```
+
+Readiness flips only if the app's own `on_drain` hook flips it. `StopHandle` is
+a stop *trigger*, not a readiness switch; nothing in R2E changes a health probe
+on its own.
+
+### Dropping instead of shutting down
+
+`shutdown()` is explicit because `Drop` cannot await. Dropping a `TestApp`
+cancels the app token and then **aborts** every still-running tracked task —
+background services, an attached `app.serve()` server. Nothing would ever join
+those handles once the value is gone, so dropping them alone would *detach* the
+tasks: a service that ignores cancellation, or that cleans up slowly after
+seeing it, would keep running against a graph the test believes is released.
+Cancellation is issued before the abort, so a cooperative task may still finish;
+a task whose cleanup must *complete* needs `shutdown().await`, which joins under
+`shutdown_grace_period`. A drop with work pending logs a warning — a generic
+one: `RunningApp` is type-erased and does not know the app's name.
+
+`app.has_shutdown_work()` is `false` only when dropping loses nothing: no
+`on_drain`/`#[pre_destroy]`/`on_stop` hook, no unfired plugin sync hook, and no
+live tracked task. That is the only case where skipping `shutdown()` is
+equivalent to calling it. It is not free in the strict sense — a start allocates
+three `Arc`s for the shutdown token, the plugin hook cell and the handle
+collector — but no hook runs and no task is spawned.
 
 **What a test boot skips:** the plugin *serve hooks*, which bind ports
 (separate-port gRPC, MCP) and start the scheduler driver. So `#[scheduled]`
 tasks do not tick under `TestApp`, and WebSocket sessions run untracked
-(`ws.shutdown_token()` is `None`).
+(`ws.shutdown_token()` is `None`). Also skipped, because they *are* the
+listener: SO_REUSEPORT sharded serving and QUIC/HTTP3. An in-process start
+spawns no worker runtimes, so a registered `per_worker_service()` is refused at
+boot rather than silently never started — and an invalid `server.workers` fails
+the boot exactly as it does in production.
 
 ## Usage
 

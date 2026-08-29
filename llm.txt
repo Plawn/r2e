@@ -3944,24 +3944,41 @@ async fn disposes_cleanly(app: TestApp) {
 }
 ```
 
-1. `StopHandle::stop()` (readiness flips, as in production),
-2. the builder's `.on_drain(…)` hooks — still serving,
-3. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks, then
+1. the builder's `.on_drain(…)` hooks — still serving,
+2. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks, then
    bean hooks, reverse registration order),
-4. the app shutdown token is cancelled, and the tracked handles — background
+3. the app shutdown token is cancelled, and the tracked handles — background
    services, and the server behind `app.serve()` — are joined under
    `shutdown_grace_period`, the in-flight HTTP drain under `drain_timeout`,
-5. the builder's `.on_stop(…)` hooks, outside every budget.
+4. the builder's `.on_stop(…)` hooks, outside every budget.
 
-`shutdown()` is explicit: dropping a `TestApp` cancels the token so nothing is
-left running, but it cannot await, so the hooks do not run (a warning names the
-app when hooks were pending). Call it in tests that assert on disposal; an app
-with no hook has nothing to run and `app.has_shutdown_work()` says so.
+`shutdown()` is the **OS-signal path**: it does not call `StopHandle::stop()`,
+because production does not either (`run()` waits on
+`select!(shutdown_signal(), stop_handle.stopped())`, so under SIGTERM the handle
+never fires and `is_stopped()` reads `false` throughout). To exercise the
+programmatic stop instead — what an admin `/shutdown` endpoint triggers — fire
+it yourself first: `app.stop_handle().stop();` then `app.shutdown().await`.
+Readiness only flips if the app's own `on_drain` hook flips it; no R2E code
+does that for you.
 
-The one production phase a test boot skips is the **plugin serve hooks** — they
-bind ports (separate-port gRPC, MCP) and start the scheduler driver. So
-`#[scheduled]` tasks do not tick under `TestApp`, and WebSocket sessions stay
-untracked (above).
+`shutdown()` is explicit because `Drop` cannot await. Dropping a `TestApp`
+cancels the app token and then **aborts** every still-running tracked task
+(background services, an attached `app.serve()` server) — nothing would ever
+join those handles, so dropping them alone would detach the tasks, not stop
+them. The hooks do not run; a drop with work pending logs a warning (it does
+not name the app — `RunningApp` is type-erased). Call `shutdown()` in tests
+that assert on disposal, or that need a cooperative service's cleanup to
+finish. `app.has_shutdown_work()` is `false` only when dropping loses nothing:
+no hook registered, no unfired plugin hook, no live tracked task.
+
+What a test boot skips: the **plugin serve hooks** — they bind ports
+(separate-port gRPC, MCP) and start the scheduler driver — so `#[scheduled]`
+tasks do not tick under `TestApp` and WebSocket sessions stay untracked
+(above); plus the two behaviours that *are* the listener, SO_REUSEPORT sharded
+serving and QUIC/HTTP3. An in-process start spawns no worker runtimes, so a
+registered `per_worker_service()` is a boot error rather than a silently dead
+service; an invalid `server.workers` is a boot error there exactly as in
+production.
 
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
@@ -3993,9 +4010,13 @@ CLI test runner:
 - `app.serve()` — live `TestServer` on a random port (WebSocket/SSE tests);
   `WsTestClient` for WS. On a booted app the server runs on the app's tracked
   lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the
-  `TestServer` first still stops it on its own.
+  `TestServer` first stops that server on its own, under the same
+  `drain_timeout` (the budget starts from whichever trigger fired).
 - `app.shutdown().await` — production shutdown sequence (see above);
-  `app.has_shutdown_work()` reports whether any hook is registered.
+  `app.has_shutdown_work()` reports whether shutdown has anything to do — user
+  hooks, unfired plugin sync hooks, or a live tracked task.
+- `app.stop_handle()` — the app's `StopHandle`; fire it before `shutdown()` to
+  take the programmatic-stop path instead of the signal path.
 - `TestJwt::token_builder(sub)` — expired/wrong-issuer/wrong-audience tokens.
 
 ### Dev services (containers)

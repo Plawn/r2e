@@ -19,8 +19,10 @@ impl TestServer {
     /// when the app shutdown token fires, drains within the app's
     /// `drain_timeout`, and is joined by
     /// [`TestApp::shutdown`](crate::TestApp::shutdown) under
-    /// `shutdown_grace_period`. Dropping the `TestServer` before the app still
-    /// stops this server on its own.
+    /// `shutdown_grace_period`. Dropping the `TestServer` before the app stops
+    /// this server on its own, and the same `drain_timeout` bounds that drain
+    /// too — the budget runs from whichever trigger stopped the listener, not
+    /// only from app cancellation.
     pub async fn attached(running: &r2e_core::RunningApp) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
