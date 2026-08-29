@@ -10,4 +10,4 @@ error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoStat
    |
    |
    = note: the following trait bounds were not satisfied:
-           `(ShippedController,): PluginControllerList<ShipsController, HCons<PluginBean, HNil>, _>`
+           `(ShippedController,): PluginControllerList<ShipsController, BeanState<HCons<PluginBean, HNil>>, _>`

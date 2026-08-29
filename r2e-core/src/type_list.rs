@@ -223,6 +223,97 @@ impl<S, Idx> BeanAccess<Idx> for S {
 impl<H, T> Contains<H, Here> for HCons<H, T> {}
 impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {}
 
+// ── The router state: the HList behind one Arc ───────────────────────────
+
+/// The application state installed on the router: the resolved bean
+/// [`HCons`] chain `L` held behind a single [`Arc`](std::sync::Arc).
+///
+/// # Why the wrapper exists
+///
+/// The HTTP backend clones the router state on **every** request, whether or
+/// not the handler declares `State<S>` — the router hands each handler its
+/// own `state.clone()`. Installing the bare
+/// `HCons` chain therefore cost the sum of every bean's `Clone` — O(N) in the
+/// size of the bean graph. Beans are `Arc`-shaped by convention, so that was
+/// usually N refcount bumps rather than N deep copies, but nothing *enforced*
+/// it and N grows with the app.
+///
+/// `BeanState` makes that cost O(1): one refcount bump regardless of the
+/// number of beans, and no bean's own `Clone` runs on the request path at all
+/// (task #992, `docs/claude/hot-path-clone-audit.md`).
+///
+/// # It is still a fixed-offset access
+///
+/// Every access trait is forwarded to the inner list, so `state.get::<T>()`
+/// still monomorphizes to `(*arc).tail.tail.head.clone()` — one pointer
+/// dereference, then the same constant field offset as before. No `TypeId`
+/// lookup, no hashing, no downcast:
+///
+/// - [`HasBean<T, Idx>`] — delegated, index witnesses preserved.
+/// - [`Contains<H, Idx>`] — delegated, so `AllSatisfied` checks (controller
+///   `Deps`, gRPC/MCP service registration) work against the wrapper.
+/// - [`BeanLookup`] — delegated, for the witness-free `state.bean::<T>()`.
+/// - [`Deref`](std::ops::Deref)`<Target = L>` — for the rare code that wants
+///   the list itself.
+///
+/// [`BeanAccess::get`] comes along for free: it is a blanket impl over any
+/// `Self: HasBean<T, Idx>`.
+///
+/// Built once by
+/// [`AppBuilder::build_state`](crate::AppBuilder::build_state); tests that
+/// hand-assemble a state wrap their list with [`BeanState::new`].
+pub struct BeanState<L>(std::sync::Arc<L>);
+
+impl<L> BeanState<L> {
+    /// Wrap a materialized HList as the router state.
+    #[inline]
+    pub fn new(list: L) -> Self {
+        BeanState(std::sync::Arc::new(list))
+    }
+
+    /// Borrow the underlying HList.
+    #[inline(always)]
+    pub fn list(&self) -> &L {
+        &self.0
+    }
+}
+
+impl<L> Clone for BeanState<L> {
+    /// One refcount bump — this is the whole point of the wrapper, and it is
+    /// what the HTTP backend runs per request.
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        BeanState(std::sync::Arc::clone(&self.0))
+    }
+}
+
+impl<L> std::ops::Deref for BeanState<L> {
+    type Target = L;
+
+    #[inline(always)]
+    fn deref(&self) -> &L {
+        &self.0
+    }
+}
+
+impl<L: std::fmt::Debug> std::fmt::Debug for BeanState<L> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("BeanState").field(&*self.0).finish()
+    }
+}
+
+impl<L, T, Idx> HasBean<T, Idx> for BeanState<L>
+where
+    L: HasBean<T, Idx>,
+{
+    #[inline(always)]
+    fn get_bean(&self) -> T {
+        self.0.get_bean()
+    }
+}
+
+impl<L, H, Idx> Contains<H, Idx> for BeanState<L> where L: Contains<H, Idx> {}
+
 /// Dynamic (`TypeId`-based) bean access over a value-level HList state.
 ///
 /// The witness-free complement of [`HasBean`], for generic code that **cannot
@@ -273,6 +364,13 @@ impl<H: Send + Sync + 'static, T: BeanLookup> BeanLookup for HCons<H, T> {
     }
 }
 
+impl<L: BeanLookup> BeanLookup for BeanState<L> {
+    #[inline(always)]
+    fn lookup_bean(&self, tid: std::any::TypeId) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        self.0.lookup_bean(tid)
+    }
+}
+
 // `Arc<S>` delegates — generated gRPC wrappers hand interceptors an
 // `Arc<BeanContext>` as their state, so the same `BeanLookup`-bounded
 // interceptors work on both HTTP (HList state) and gRPC.
@@ -306,6 +404,13 @@ pub trait BuildHList {
     /// on the builder, and graph resolution fails earlier (with a proper
     /// error) if a bean could not be constructed.
     fn build_hlist(ctx: &crate::beans::BeanContext) -> Self::Output;
+
+    /// [`build_hlist`](Self::build_hlist), wrapped in the [`BeanState`] the
+    /// router is actually given — so the per-request state clone is one
+    /// refcount bump instead of one per bean.
+    fn build_bean_state(ctx: &crate::beans::BeanContext) -> BeanState<Self::Output> {
+        BeanState::new(Self::build_hlist(ctx))
+    }
 }
 
 impl BuildHList for TNil {

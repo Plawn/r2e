@@ -41,7 +41,7 @@ use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect
 use crate::rt::CancelToken;
 use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::runtime::service::ServiceComponent;
-use crate::type_list::{AllSatisfied, BuildHList, TAppend, TCons, TNil};
+use crate::type_list::{AllSatisfied, BeanState, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;

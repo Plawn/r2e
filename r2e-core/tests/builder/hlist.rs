@@ -129,7 +129,11 @@ async fn register_override_replaces_default_without_growing_the_state() {
 #[r2e_core::test]
 async fn build_state_empty_builder_yields_hnil_state() {
     let app = AppBuilder::new().build_state().await;
-    let _: &r2e_core::HNil = app.state();
+    // `build_state` installs the list behind one `Arc` (`BeanState`), so the
+    // per-request state clone the HTTP backend performs is a single refcount
+    // bump — see `docs/claude/hot-path-clone-audit.md`.
+    let _: &r2e_core::BeanState<r2e_core::HNil> = app.state();
+    let _: &r2e_core::HNil = app.state(); // via `Deref`
 }
 
 #[r2e_core::test]

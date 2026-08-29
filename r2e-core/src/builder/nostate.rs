@@ -885,11 +885,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// Panics if the bean graph has cycles, missing dependencies, or duplicate
     /// registrations. Use [`try_build_state`](Self::try_build_state) for a
     /// non-panicking alternative.
-    pub async fn build_state<W, MW>(self) -> AppBuilder<<P as BuildHList>::Output>
+    pub async fn build_state<W, MW>(self) -> AppBuilder<BeanState<<P as BuildHList>::Output>>
     where
         P: BuildHList,
         R: AllSatisfied<P, W>,
-        Mods: ModuleList<<P as BuildHList>::Output, MW>,
+        Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
         self.try_build_state::<W, MW>()
             .await
@@ -908,11 +908,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// See [`build_state`](Self::build_state).
     pub async fn try_build_state<W, MW>(
         mut self,
-    ) -> Result<AppBuilder<<P as BuildHList>::Output>, crate::beans::BeanError>
+    ) -> Result<AppBuilder<BeanState<<P as BuildHList>::Output>>, crate::beans::BeanError>
     where
         P: BuildHList,
         R: AllSatisfied<P, W>,
-        Mods: ModuleList<<P as BuildHList>::Output, MW>,
+        Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
         assert!(
             self.shared.preloaded_config.is_none(),
@@ -963,7 +963,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // each other's cached graphs.
         #[cfg(feature = "dev-reload")]
         if crate::runtime::dev::hot_reload_loop_active() {
-            type Cached<P> = (<P as BuildHList>::Output, Arc<crate::beans::BeanContext>);
+            type Cached<P> = (
+                BeanState<<P as BuildHList>::Output>,
+                Arc<crate::beans::BeanContext>,
+            );
 
             // Phase 1: compute graph fingerprint (cheap — no bean construction)
             let (new_fp, per_bean_fps) = registry.compute_fingerprint()?;
@@ -1039,7 +1042,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
 
             let mut ctx = registry.resolve_reusing(reuse_plan).await?;
             self.shared.bean_disposers = ctx.take_disposers();
-            let state = <P as BuildHList>::build_hlist(&ctx);
+            let state = <P as BuildHList>::build_bean_state(&ctx);
             let ctx = Arc::new(ctx);
             graph_handle.fill(&ctx);
 
@@ -1075,7 +1078,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // Cold path: prod, tests, and dev-reload builds outside the loop.
         let mut ctx = registry.resolve().await?;
         self.shared.bean_disposers = ctx.take_disposers();
-        let state = <P as BuildHList>::build_hlist(&ctx);
+        let state = <P as BuildHList>::build_bean_state(&ctx);
         let ctx = Arc::new(ctx);
         graph_handle.fill(&ctx);
 

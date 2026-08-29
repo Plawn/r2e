@@ -2,7 +2,7 @@ error[E0599]: the method `build_state` exists for struct `AppBuilder<NoState, TN
   --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:64:14
    |
 20 |   pub struct Stamp(pub String);
-   |   ---------------- doesn't satisfy `Stamp: r2e::FromRequestPartsVia<HNil, _>`
+   |   ---------------- doesn't satisfy `_: FromRequestPartsVia<BeanState<HNil>, _>`
 ...
 62 | /         r2e::AppBuilder::new()
 63 | |             .register_module::<StampModule>()
@@ -11,7 +11,7 @@ error[E0599]: the method `build_state` exists for struct `AppBuilder<NoState, TN
    | |_____________|
    |
    |
-note: trait bound `Stamp: r2e::FromRequestPartsVia<HNil, _>` was not satisfied
+note: trait bound `Stamp: r2e::FromRequestPartsVia<BeanState<HNil>, _>` was not satisfied
   --> cases/modules/fail/module_private_bean_cannot_back_extractor.rs:37:1
    |
 37 | #[controller(path = "/stamped")]
