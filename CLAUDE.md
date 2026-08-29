@@ -54,7 +54,11 @@ controller/      # request façade, core-only path, #[anonymous], injection
 decorators/      # DecoratorSpec, guards, interceptors
 plugin/          # Provided/Deps/Late, deferred surface, config, lifecycle
 http/            # extractors, errors, SSE/WS, managed resources, HTTP plugins
-runtime/         # rt, sharded serving, socket options, tracing, dev-reload
+runtime/         # rt, sharded serving, socket options, tracing
+dev_reload/      # hot-patch cycles, live config, rollback — its OWN target:
+                 #   `mark_hot_reload_loop()` is process-global and one-way,
+                 #   and would make every serving test in a shared binary skip
+                 #   its startup lifecycle
 ```
 
 Conventions inside a target:

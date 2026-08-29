@@ -1,6 +1,6 @@
 //! The **config** semantics of a dev-reload cycle.
 //!
-//! `dev_reload.rs` covers bean reuse; this module pins down what happens to
+//! `cycles.rs` covers bean reuse; this module pins down what happens to
 //! the *config* surface — `R2eConfig`, `LiveConfigRegistry`, typed
 //! `ConfigProperties` beans, late overrides and config providers — when
 //! `build_state()` runs a second time inside the hot-patch loop.
@@ -21,7 +21,7 @@
 //! The full reference (Q1–Q7, evidence, instance diagram) lives in
 //! `docs/claude/dev-reload-config-semantics.md`.
 
-use crate::dev_serial::CommitCycle;
+use crate::serial::CommitCycle;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -35,7 +35,7 @@ use r2e_core::prelude::Bean;
 use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
 
-use crate::dev_serial::dev_serial;
+use crate::serial::dev_serial;
 
 fn config_with(live: &str, unrelated: &str) -> R2eConfig {
     let mut config = R2eConfig::empty();

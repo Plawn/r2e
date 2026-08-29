@@ -13,7 +13,7 @@
 //!    lifecycle it did not initialize;
 //! 3. `invalidate_state_cache()` also discards a cycle still in staging.
 
-use crate::dev_serial::{dev_serial, CommitCycle};
+use crate::serial::{dev_serial, CommitCycle};
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, Registrable};
 use r2e_core::config::{ConfigKeyKind, ConfigValue, R2eConfig};
 use r2e_core::type_list::BeanAccess;

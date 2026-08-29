@@ -8,22 +8,52 @@
 use r2e_core::builder::AppBuilder;
 use r2e_core::runtime::worker::{BoxError, WorkerContext};
 
+/// A `127.0.0.1` address whose port stays held by the returned listener for as
+/// long as it is alive, so **any** further bind on it fails.
+///
+/// Serving through such an address turns "the rejection happens before the
+/// bind" into an observable fact: if `run()` ever reached the network it would
+/// come back with `EADDRINUSE`, not with the per-worker rejection. The helper
+/// asserts the address really is unbindable, so a platform that happened to
+/// allow the rebind fails loudly instead of making the tests vacuous.
+fn occupied_addr() -> (std::net::TcpListener, String) {
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = held.local_addr().unwrap().to_string();
+    assert!(
+        std::net::TcpListener::bind(&addr).is_err(),
+        "{addr} must be unbindable while it is held, else this test proves nothing"
+    );
+    (held, addr)
+}
+
+/// The rejection must be the per-worker one, never a bind failure leaking
+/// through from an address the test deliberately made unbindable.
+fn assert_not_a_bind_error(msg: &str) {
+    let lower = msg.to_lowercase();
+    assert!(
+        !lower.contains("address already in use") && !lower.contains("os error"),
+        "run() bound (or tried to bind) before rejecting: {msg}"
+    );
+}
+
 // ── Builder-level: registration requires sharding ───────────────────────────
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn per_worker_service_without_workers_is_a_run_error() {
+    // Unbindable on purpose: reaching the rejection proves `run()` refuses the
+    // registration before it touches the network.
+    let (_held, addr) = occupied_addr();
     let app = AppBuilder::new()
         .with_state(())
         .per_worker_service(|_w: WorkerContext| async move { Ok::<(), BoxError>(()) })
-        .prepare("127.0.0.1:0");
+        .prepare(&addr);
     let err = app
         .run()
         .await
         .expect_err("run() must reject per-worker services without server.workers");
-    assert!(
-        err.to_string().contains("server.workers"),
-        "unexpected error: {err}"
-    );
+    let msg = err.to_string();
+    assert!(msg.contains("server.workers"), "unexpected error: {msg}");
+    assert_not_a_bind_error(&msg);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -43,6 +73,61 @@ async fn per_worker_service_with_explicit_listener_is_an_error() {
     );
 }
 
+/// `dev-reload` forces the single cached-listener path (hot-reload + sharding
+/// is unsupported in v1, `docs/features/19-sharded-serving.md` § Limitations),
+/// so there are no worker runtimes for a per-worker service to live on.
+/// Running the factory on the multi-thread control plane instead would break
+/// the `!Send` ownership promise silently, so `run()` must refuse — never fall
+/// back. This is the feature-on counterpart of
+/// `lifecycle::builder_per_worker_service_runs_and_stops_via_stop_handle`.
+#[cfg(feature = "dev-reload")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn per_worker_service_under_dev_reload_is_a_run_error() {
+    // Unbindable on purpose: under `dev-reload` the bind goes through
+    // `runtime::dev::get_or_bind_listener`, so reaching the rejection at all
+    // proves the refusal precedes the listener.
+    let (_held, addr) = occupied_addr();
+    let config = r2e_core::config::R2eConfig::from_yaml_str("server:\n  workers: 2\n").unwrap();
+    let app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .with_state(())
+        .per_worker_service(|_w: WorkerContext| async move { Ok::<(), BoxError>(()) })
+        .prepare(&addr);
+    let err = app
+        .run()
+        .await
+        .expect_err("run() must reject per-worker services under dev-reload");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("dev-reload") && msg.contains("per_worker_service"),
+        "the error must name both the feature and the offending call: {msg}"
+    );
+    assert_not_a_bind_error(&msg);
+    // The point of this test is the *advice*, and naming the feature is not it:
+    // the message this replaced was `PER_WORKER_REQUIRES_SHARDING_MSG` plus a
+    // "(the `dev-reload` feature forces single-listener serving)" tail, which
+    // named the feature and the call too. What must be gone is the impossible
+    // remedy it carried — `dev-reload` ignores `server.workers`, so telling the
+    // user to set it sends them in circles. (Mutation check: restoring the old
+    // constant must fail these three assertions, not the two above.)
+    assert!(
+        !msg.contains("set server.workers"),
+        "the message must not tell the user to set a key dev-reload ignores: {msg}"
+    );
+    assert!(
+        !msg.contains("per-core"),
+        "\"per-core\" is a server.workers value: same impossible advice: {msg}"
+    );
+    // ...and what must be there is the remedy that does work. Necessary, not
+    // sufficient: the non-dev path still needs SO_REUSEPORT, which the message
+    // says and this assertion allows for.
+    assert!(
+        msg.contains("without `dev-reload`"),
+        "the message must point at the build that supports per-worker services: {msg}"
+    );
+}
+
 // ── Lifecycle (supported platforms only) ────────────────────────────────────
 
 #[cfg(all(
@@ -58,6 +143,9 @@ mod lifecycle {
     use std::thread::ThreadId;
     use std::time::Duration;
 
+    // Only the builder-level end-to-end test needs these, and that test is
+    // compiled out under `dev-reload` (see its doc comment).
+    #[cfg(not(feature = "dev-reload"))]
     use r2e_core::config::R2eConfig;
     use r2e_core::rt::CancelToken;
     use r2e_core::runtime::sharded::{serve_sharded, WorkerPark};
@@ -65,6 +153,7 @@ mod lifecycle {
         BoxError, LocalBoxFuture, PerWorkerServiceFactory, WorkerContext, WorkerService,
     };
 
+    #[cfg(not(feature = "dev-reload"))]
     use super::AppBuilder;
 
     fn free_port() -> u16 {
@@ -382,6 +471,13 @@ mod lifecycle {
 
     // ── Builder-level end to end ────────────────────────────────────────────
 
+    /// Sharded serving is what per-worker services live on, and `dev-reload`
+    /// deliberately forces the single cached-listener path (see
+    /// `docs/features/19-sharded-serving.md` § Limitations (v1)) — so under
+    /// that feature `run()` rejects the registration instead of serving. The
+    /// rejection is asserted by
+    /// `per_worker_service_under_dev_reload_is_a_run_error` below.
+    #[cfg(not(feature = "dev-reload"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn builder_per_worker_service_runs_and_stops_via_stop_handle() {
         let port = free_port();
@@ -391,7 +487,6 @@ mod lifecycle {
         let started = Arc::new(AtomicUsize::new(0));
         let shut = Arc::new(Mutex::new(Vec::new()));
 
-        let serial = crate::dev_serial::dev_serial();
         let app = AppBuilder::new()
             .override_config(config)
             .load_config::<()>()
@@ -417,7 +512,6 @@ mod lifecycle {
                 }
             })
             .prepare(&addr);
-        drop(serial);
         let stop = app.stop_handle();
 
         let server = r2e_core::rt::spawn(async move { app.run().await.map_err(|e| e.to_string()) });

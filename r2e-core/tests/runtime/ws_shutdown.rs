@@ -372,9 +372,7 @@ mod sharded {
     > {
         let yaml = format!("server:\n  workers: 2\n  port: {port}\n");
         let config = R2eConfig::from_yaml_str(&yaml).unwrap();
-        let serial = crate::dev_serial::dev_serial();
         let builder = AppBuilder::new().override_config(config).load_config::<()>();
-        drop(serial);
         builder
             .build_state()
             .await
