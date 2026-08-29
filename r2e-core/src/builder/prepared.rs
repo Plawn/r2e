@@ -75,11 +75,26 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
 }
 
 /// Error returned by `run()` when a per-worker service is registered but the
-/// app is not serving sharded (`server.workers` absent, hot-reload, or an
-/// explicit listener).
+/// app is not serving sharded — `server.workers` absent, or an explicit
+/// listener (`run_with_listener`, which appends its own clause). Hot-reload
+/// has its own message: there, setting `server.workers` would not help.
 pub const PER_WORKER_REQUIRES_SHARDING_MSG: &str =
     "per_worker_service() is registered but server.workers is not set: per-worker \
      services need SO_REUSEPORT sharded serving (set server.workers to N or \"per-core\")";
+
+/// Error returned by `run()` under `dev-reload`, where sharding is forced off
+/// whatever `server.workers` says — so, unlike
+/// [`PER_WORKER_REQUIRES_SHARDING_MSG`], setting the key is not the fix and the
+/// message must not suggest it is. Dropping the feature is *necessary*, not
+/// sufficient: the non-dev path still refuses to shard on platforms without
+/// `SO_REUSEPORT` ([`UNSUPPORTED_PLATFORM_MSG`](crate::runtime::sharded::UNSUPPORTED_PLATFORM_MSG)),
+/// so the message names that condition too rather than promising it will work.
+#[cfg(feature = "dev-reload")]
+const PER_WORKER_UNSUPPORTED_UNDER_DEV_RELOAD_MSG: &str =
+    "per_worker_service() is registered but the `dev-reload` feature forces single-listener \
+     serving (hot-reload + SO_REUSEPORT sharding is unsupported), so server.workers is ignored \
+     and there is no worker runtime to run the service on: per-worker services require a build \
+     without `dev-reload` (and a platform with SO_REUSEPORT sharding)";
 
 /// Internal serving strategy chosen by [`PreparedApp::run`].
 ///
@@ -209,16 +224,15 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // none. Never fall back silently — the `!Send` ownership promise would
         // be broken on the multi-thread runtime.
         if !self.per_worker_services.is_empty() {
-            if workers.is_none() {
-                return Err(PER_WORKER_REQUIRES_SHARDING_MSG.into());
-            }
+            // Under `dev-reload` this comes first: `server.workers` is ignored
+            // there, so "set server.workers" would be advice that cannot work.
             #[cfg(feature = "dev-reload")]
             {
-                return Err(format!(
-                    "{PER_WORKER_REQUIRES_SHARDING_MSG} (the `dev-reload` feature forces \
-                     single-listener serving)"
-                )
-                .into());
+                return Err(PER_WORKER_UNSUPPORTED_UNDER_DEV_RELOAD_MSG.into());
+            }
+            #[cfg(not(feature = "dev-reload"))]
+            if workers.is_none() {
+                return Err(PER_WORKER_REQUIRES_SHARDING_MSG.into());
             }
         }
 

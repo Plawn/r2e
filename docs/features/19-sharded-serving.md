@@ -244,7 +244,9 @@ and you have shard-local QUIC without r2e knowing about Quinn.
    `shutdown` future is pending.
 5. **Requires sharding.** `per_worker_service()` with `server.workers` unset,
    with `run_with_listener`, or under `dev-reload`, is a hard error at `run()`
-   (`per_worker_service() is registered but server.workers is not set …`).
+   (`per_worker_service() is registered but server.workers is not set …`; under
+   `dev-reload` the message instead says the feature forces single-listener
+   serving, because setting `server.workers` would not help there).
    Running the factory on the multi-thread control plane would silently break
    the `!Send` promise, so there is no fallback.
 6. The control plane is untouched: scheduler, executor, consumers, and R2E's

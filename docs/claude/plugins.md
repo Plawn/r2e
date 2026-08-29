@@ -556,7 +556,7 @@ cycle N's — e.g. a service holding a `Tenanted<T>` whose `GraphHandle` points 
 the graph that was just dropped, failing every tenant lookup with `NoSource`.
 The price is in-memory state loss for those dependents on each patch, dev-only,
 and the same trade the decorator-target rule already makes.
-Covered by `runtime/dev_reload.rs::a_rebuilt_plugin_bean_drags_its_dependents_with_it`
+Covered by `dev_reload/cycles.rs::a_rebuilt_plugin_bean_drags_its_dependents_with_it`
 (needs `--features dev-reload`).
 
 Known gaps (not fixed, see `docs/claude/roadmap.md`): startup lifecycle is

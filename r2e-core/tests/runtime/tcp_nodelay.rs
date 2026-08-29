@@ -2,8 +2,6 @@ use r2e_core::builder::AppBuilder;
 use r2e_core::config::R2eConfig;
 
 fn prepare_with_yaml(yaml: &str) -> r2e_core::builder::PreparedApp<()> {
-    // `load_config` mutates process-global dev-reload state (see dev_serial).
-    let _serial = crate::dev_serial::dev_serial();
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
     AppBuilder::new()
         .override_config(config)
