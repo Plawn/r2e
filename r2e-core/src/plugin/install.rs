@@ -132,7 +132,8 @@ pub fn plugin_action_name<T: ?Sized>() -> &'static str {
     message = "`{Self}` does not implement `Plugin`, the trait `.plugin()` installs",
     label = "not a plugin",
     note = "implement `r2e::Plugin` for `{Self}`: `type Provided`, `type Deps`, `type Config`, `type Controllers`, and an async `build(self, deps, config, ctx)`",
-    note = "there is only one plugin kind — everything installs with `.plugin({Self})` BEFORE `build_state()`"
+    note = "there is only one plugin kind — everything installs with `.plugin({Self})` BEFORE `build_state()`",
+    note = "migrating an older plugin: the old `install(self, app)` method was renamed `build(self, deps, config, ctx)`; `AppBuilder::with(..)` was removed — see docs/migration/plugin-api.md"
 )]
 pub trait Plugin: Send + Sized + 'static {
     /// The **tuple** of bean types this plugin provides to the bean graph.
@@ -376,7 +377,8 @@ pub type PluginBuildError = Box<dyn std::error::Error + Send + Sync>;
     message = "`{Self}` does not implement `Plugin`, the trait `.plugin()` installs",
     label = "not a plugin",
     note = "implement `r2e::Plugin` for `{Self}`: `type Provided`, `type Deps`, `type Config`, `type Controllers`, and an async `build(self, deps, config, ctx)`",
-    note = "there is only one plugin kind — everything installs with `.plugin({Self})` BEFORE `build_state()`"
+    note = "there is only one plugin kind — everything installs with `.plugin({Self})` BEFORE `build_state()`",
+    note = "migrating an older plugin: the old `install(self, app)` method was renamed `build(self, deps, config, ctx)`; `AppBuilder::with(..)` was removed — see docs/migration/plugin-api.md"
 )]
 pub trait PluginInstall: Send + 'static {
     /// The type-level list of bean types this plugin provides.

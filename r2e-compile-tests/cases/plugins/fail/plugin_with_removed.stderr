@@ -1,0 +1,28 @@
+warning: use of deprecated method `r2e::AppBuilder::<T, P, R, Mods>::with`: `AppBuilder::with` was removed with the post-state plugin API: implement `Plugin` and install it with `.plugin(..)` BEFORE `build_state()` — see docs/migration/plugin-api.md
+  --> cases/plugins/fail/plugin_with_removed.rs:32:14
+   |
+32 |             .with(MyPlugin)
+   |              ^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+
+error[E0277]: `AppBuilder::with` was removed: install `MyPlugin` with `.plugin(..)` BEFORE `build_state()` (see docs/migration/plugin-api.md)
+  --> cases/plugins/fail/plugin_with_removed.rs:32:19
+   |
+32 |             .with(MyPlugin)
+   |              ---- ^^^^^^^^ the post-state plugin API is gone
+   |              |
+   |              required by a bound introduced by this call
+   |
+help: the trait `r2e::builder::PostStatePluginRemoved` is not implemented for `MyPlugin`
+  --> cases/plugins/fail/plugin_with_removed.rs:8:1
+   |
+ 8 | pub struct MyPlugin;
+   | ^^^^^^^^^^^^^^^^^^^
+   = note: there is only one plugin kind now: implement `r2e::Plugin` for `MyPlugin` (an async `build(self, deps, config, ctx)`) and install it with `.plugin(MyPlugin)` before `build_state()`
+   = note: post-state effects moved onto `PluginBuildContext`: `add_layer` (Graph), `after_routes` (Routes), `wrap_router` (Finalize, the replacement for `should_be_last()`)
+note: required by a bound in `r2e::AppBuilder::<T, P, R, Mods>::with`
+  --> $WORKSPACE/r2e-core/src/builder/mod.rs
+   |
+   |     pub fn with<Pl: PostStatePluginRemoved>(self, _plugin: Pl) -> Self {
+   |                     ^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `AppBuilder::<T, P, R, Mods>::with`

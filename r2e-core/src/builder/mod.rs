@@ -523,9 +523,47 @@ pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = 
     _modules: PhantomData<Mods>,
 }
 
+// ── Removed post-state plugin API (migration diagnostics) ───────────────────
+
+mod post_state_removed {
+    /// Sealed: outside this module nothing can name — let alone implement —
+    /// this trait, which is the point.
+    pub trait Sealed {}
+}
+
+/// Marker for the **removed** post-state plugin API.
+///
+/// Nothing implements it (its supertrait is sealed and unimplemented), so the
+/// only thing it can do is turn a leftover
+/// [`AppBuilder::with`](AppBuilder::with) call into a compile error that names
+/// the migration. See `docs/migration/plugin-api.md`.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`AppBuilder::with` was removed: install `{Self}` with `.plugin(..)` BEFORE `build_state()` (see docs/migration/plugin-api.md)",
+    label = "the post-state plugin API is gone",
+    note = "there is only one plugin kind now: implement `r2e::Plugin` for `{Self}` (an async `build(self, deps, config, ctx)`) and install it with `.plugin({Self})` before `build_state()`",
+    note = "post-state effects moved onto `PluginBuildContext`: `add_layer` (Graph), `after_routes` (Routes), `wrap_router` (Finalize, the replacement for `should_be_last()`)"
+)]
+pub trait PostStatePluginRemoved: post_state_removed::Sealed {}
+
 // ── Conditional assembly (any phase) ────────────────────────────────────────
 
 impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
+    /// **Removed.** The post-state plugin API (`.with(plugin)` after
+    /// `build_state()`) no longer exists; there is one plugin kind, installed
+    /// with [`.plugin(..)`](AppBuilder::plugin) *before* `build_state()`.
+    ///
+    /// This shim exists only so the leftover call fails at **compile time**
+    /// with a message that names the migration instead of a bare "no method
+    /// `with`". Its bound, [`PostStatePluginRemoved`], is implemented by
+    /// nothing. See `docs/migration/plugin-api.md`.
+    #[doc(hidden)]
+    #[deprecated(
+        note = "`AppBuilder::with` was removed with the post-state plugin API: implement `Plugin` and install it with `.plugin(..)` BEFORE `build_state()` — see docs/migration/plugin-api.md"
+    )]
+    pub fn with<Pl: PostStatePluginRemoved>(self, _plugin: Pl) -> Self {
+        self
+    }
     /// Returns a reference to the loaded [`R2eConfig`](crate::config::R2eConfig),
     /// if any.
     ///
