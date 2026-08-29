@@ -67,3 +67,62 @@ fn has_builds_the_same_check_as_the_stringly_form() {
     assert_eq!(typed.relation, stringly.relation);
     assert_eq!(typed.object_type, stringly.object_type);
 }
+
+// ── Wildcard subjects on the request path ───────────────────────────────────
+//
+// `FgaWildcard` is a ZST, so `subject_str` has to hand out a `'static` string.
+// `FgaClient::{check,grant,revoke}` call it, and those run per request: a
+// wildcard subject must therefore never allocate — let alone leak — per call.
+// `model!` emits `FgaType::WILDCARD` as a literal, which is what the tests
+// below stand in for; the interning fallback covers hand-written impls.
+
+/// What `model!` generates: the wire form is a literal, so `subject_str`
+/// returns *that* literal — no allocation, no lock, no leak, ever.
+struct TeamTy;
+impl FgaType for TeamTy {
+    const NAME: &'static str = "team";
+    const WILDCARD: Option<&'static str> = Some("team:*");
+}
+
+/// Same, but with a `WILDCARD` deliberately unlike `"<NAME>:*"`: whatever
+/// `subject_str` returns proves which branch ran. A crate-boundary
+/// `ptr::eq` against the literal cannot: an equal `&'static str` const is
+/// re-materialised per use site.
+struct ProbeTy;
+impl FgaType for ProbeTy {
+    const NAME: &'static str = "probe";
+    const WILDCARD: Option<&'static str> = Some("from-the-const:*");
+}
+
+#[test]
+fn generated_wildcard_returns_the_compile_time_literal() {
+    assert_eq!(FgaWildcard::<TeamTy>::new().subject_str(), "team:*");
+    assert_eq!(
+        FgaWildcard::<ProbeTy>::new().subject_str(),
+        "from-the-const:*",
+        "a wildcard subject must come from `FgaType::WILDCARD` when it is set — \
+         building (and leaking) `\"{{NAME}}:*\"` instead would return \
+         \"probe:*\". See docs/claude/hot-path-clone-audit.md",
+    );
+}
+
+#[test]
+fn wildcard_subject_is_stable_across_calls() {
+    // Both shapes: the literal (generated) and the interned fallback
+    // (hand-written `DocumentTy`, which leaves `WILDCARD` at its default).
+    for _ in 0..3 {
+        assert!(std::ptr::eq(
+            FgaWildcard::<TeamTy>::new().subject_str().as_ptr(),
+            FgaWildcard::<TeamTy>::new().subject_str().as_ptr(),
+        ));
+        assert!(
+            std::ptr::eq(
+                FgaWildcard::<DocumentTy>::new().subject_str().as_ptr(),
+                FgaWildcard::<DocumentTy>::new().subject_str().as_ptr(),
+            ),
+            "the fallback must intern once per type, not build (and leak) one \
+             string per call",
+        );
+    }
+    assert!(DocumentTy::WILDCARD.is_none(), "fallback path under test");
+}

@@ -24,6 +24,17 @@ use std::marker::PhantomData;
 pub trait FgaType {
     /// The type name as written in the model (`document`).
     const NAME: &'static str;
+
+    /// The wildcard subject's wire form (`document:*`), when it is known at
+    /// compile time.
+    ///
+    /// `model!` always emits it as a literal, so a wildcard subject on a
+    /// request path — `FgaClient::{check,grant,revoke}` with `authz::user::
+    /// wildcard()` — costs no allocation, no lock and no leak. A hand-written
+    /// impl may leave the default `None`, in which case the string is built and
+    /// interned on first use (see the note on [`FgaSubject`] for
+    /// [`FgaWildcard`]).
+    const WILDCARD: Option<&'static str> = None;
 }
 
 /// The error returned by [`FgaObject::try_new`] when the raw id contains an
@@ -280,18 +291,29 @@ impl<T: FgaType, R> FgaSubject for FgaUserset<T, R> {
     }
 }
 
-/// `FgaWildcard` renders lazily, so it keeps an owned copy per call site.
+/// `FgaWildcard` is a ZST, so it has nothing of its own to borrow: the wire
+/// form has to come from somewhere with a `'static` lifetime.
 impl<T: FgaType> FgaSubject for FgaWildcard<T> {
     type Marker = WildcardOf<T>;
 
     fn subject_str(&self) -> &str {
-        // `T::NAME:*` is 'static-derivable but not const-concatenable on
-        // stable; leak once per type via OnceLock.
-        static_wildcard::<T>()
+        // `model!` emits the literal, which is the whole of the production
+        // path: no allocation, no lock, no leak, per call or otherwise.
+        match T::WILDCARD {
+            Some(literal) => literal,
+            None => intern_wildcard::<T>(),
+        }
     }
 }
 
-fn static_wildcard<T: FgaType>() -> &'static str {
+/// Fallback for a hand-written [`FgaType`] that does not set
+/// [`FgaType::WILDCARD`]: `"<name>:*"` is `'static`-derivable but not
+/// const-concatenable on stable, so it is built and interned on first use.
+///
+/// Bounded by the number of FGA types the process ever takes a wildcard of —
+/// one small leaked `Box<str>` each, on the first call for that type, never per
+/// call and never per request.
+fn intern_wildcard<T: FgaType>() -> &'static str {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static CACHE: OnceLock<Mutex<HashMap<&'static str, &'static str>>> = OnceLock::new();
