@@ -3677,8 +3677,14 @@ Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!}`, `rt::JoinSet`,
 (`AsyncRead`/`AsyncWrite` + the `…Ext` traits), `rt::{LocalSet, spawn_local}`
 (only meaningful inside a per-worker service — prefer
 `WorkerContext::spawn_local`), and
-`rt::{RuntimeBuilder, Runtime, RuntimeHandle, block_on, block_in_place}` for
-owning a runtime yourself.
+`rt::{RuntimeBuilder, Runtime, RuntimeHandle, RuntimeId, block_on,
+block_in_place}` for owning a runtime yourself (`Runtime::id()` /
+`RuntimeHandle::id()` give the `RuntimeId`, comparable across threads — use it
+to assert two pieces of work share one reactor; ids are unique only among
+*live* runtimes and may be reused once a runtime is dropped, so only compare
+against a runtime you know is still alive. `Runtime::shutdown_timeout(dur)` /
+`shutdown_background()` shut down a runtime you cannot drop, e.g. one parked in
+a `static`).
 
 `#[r2e::main]` / `#[r2e::test]` / `#[r2e::test_suite]` build their runtime
 through `rt::RuntimeBuilder`, so a generated project needs **no** `tokio` entry
@@ -3903,8 +3909,26 @@ Suite-test rules:
   constructs the suite; otherwise the suite type must implement `Default`.
 - Cases are unordered by default. `#[case(order = N)]` opts into the existing
   ordered-test barrier within that suite.
-- `after_all` is guaranteed for full-suite runs; partial `cargo test <filter>`
-  runs may skip it because libtest does not expose the selected case set.
+- `after_all` runs when the last generated case completes, counted against the
+  `#[case]`s the macro emitted: a partial `cargo test <filter>` run never
+  reaches it, because libtest does not expose the selected case set.
+- `#[ignore]` on a `#[case]` is a **compile error** — it would either suppress
+  teardown or let teardown run before the ignored case. Skip in the case body.
+- **One runtime per suite**, not per case: `#[before_all]`, `#[before_each]`,
+  every `#[case]`, `#[after_each]` and `#[after_all]` run on the same reactor,
+  owned by the suite. So a `#[before_all]` may amortise runtime-bound
+  resources — a `TestApp`, a database pool, a socket, a spawned task, a timer —
+  and every case (and `after_all`) still finds them alive. The runtime knobs
+  (`flavor`, `worker_threads`, `start_paused`, …) are declared on
+  `#[r2e::test_suite(...)]` and apply to that one runtime; a `start_paused`
+  suite therefore shares one paused clock across its cases. Knob combinations
+  the runtime builder panics on (`start_paused` without
+  `flavor = "current_thread"`, a zero `worker_threads`, …) are compile errors.
+  A phase that somehow runs off the suite runtime panics naming both runtimes
+  instead of timing out on a dead resource.
+- **Teardown**: after `#[after_all]`, the last case drops the suite value inside
+  the suite runtime and then shuts that runtime down, so suite threads and
+  detached tasks do not outlive the suite. Use after teardown panics by name.
   is a compile error. Using `order` requires the `r2e-test` dev-dependency
   (already present when using `app = …`).
 

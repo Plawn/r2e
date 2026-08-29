@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`rt::RuntimeId`** (`Runtime::id()` / `RuntimeHandle::id()`): the identity of
+  a runtime, comparable across threads, for asserting that two pieces of work
+  share one reactor. Used by `#[r2e::test_suite]`'s guard-rail (see Fixed).
+  Ids are unique only among *live* runtimes: once a runtime is dropped its id
+  may be reused by a later, unrelated one, so an id only proves shared identity
+  when compared against a runtime known to be alive (which is how the suite
+  guard uses it — the suite owns the runtime it names).
+
+- **`rt::Runtime::shutdown_timeout` / `shutdown_background`**: shut a runtime
+  down explicitly, for runtimes parked in a `static` that can never be dropped
+  by going out of scope. `#[r2e::test_suite]` uses the first one at teardown.
+
 - **Worker scopes and verifiable multi-worker serving** (task #990, ADR
   `docs/adr/0001-worker-scopes-and-planes.md`): `WorkerInfo` (stable worker
   identity — id / count / role / effective CPU — readable anywhere, incl. as a
@@ -96,6 +108,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     test code and byte-stream plumbing need, and their absence was the last
     reason to keep a direct `tokio` dependency around. `rt::stream::wrappers`
     also carries `TcpListenerStream` now (tokio-stream's `net` feature).
+
+### Fixed
+
+- **`#[r2e::test_suite]` now builds ONE runtime per suite, not one per `#[case]`**
+  (task #986). The suite value lives in a module-level `OnceLock` that outlives
+  every case, but each generated `#[test]` used to build — and then drop — its
+  own runtime. Anything `#[before_all]` amortised that is bound to a reactor (a
+  `TestApp`, a `sqlx` pool, a socket, a spawned task, a timer) went inert after
+  case 1; because such a resource stops waking rather than erroring, the suite
+  failed far from the cause, typically as `PoolTimedOut`. The runtime is now
+  owned by `SuiteCell` in that same `OnceLock` and is never dropped, so
+  `#[before_all]`, `#[before_each]`, every case, `#[after_each]` and
+  `#[after_all]` share one reactor. `#[case(order = N)]` and the per-case libtest
+  `#[test]` are unchanged; the runtime knobs (`flavor`, `worker_threads`,
+  `start_paused`, …) stay on `#[r2e::test_suite(...)]` and now configure that
+  single runtime — note `start_paused` means one paused clock for the whole
+  suite instead of a fresh one per case. Guard-rail: every phase
+  (`#[before_all]`, each case, `#[after_each]`, `#[after_all]`) asserts from
+  inside its `block_on` that it is on the suite runtime and panics naming both
+  runtimes if not.
+
+  Teardown: the last case to finish runs `#[after_all]`, then drops the suite
+  value *inside* the runtime (so a socket or pool still has its driver in
+  `Drop`) and shuts the runtime down with a one-second grace for blocking work.
+  Without that the suite's worker threads and detached tasks would outlive it
+  for the rest of the test process, since the `OnceLock` is never dropped.
+  Anything reaching the suite after teardown panics by name instead of hanging.
+
+  "Last case" is counted against the number of generated `#[case]`s, because
+  libtest does not expose which tests the process actually selected. So a
+  filtered run (`cargo test some_case`) runs `#[before_all]` and the case but
+  never `#[after_all]` — the suite value is leaked to process exit, as before.
+  For the same reason `#[ignore]` on a `#[case]` is now a **compile error**:
+  it would either suppress teardown entirely or let teardown fire before the
+  ignored case runs. Skip inside the case body instead.
+
+  Runtime knobs that make the builder *panic* rather than return an error
+  (`start_paused` without `flavor = "current_thread"`, a zero `worker_threads`
+  / `max_blocking_threads` / `global_queue_interval` / `event_interval`, a blank
+  `thread_name`) are now rejected at macro expansion with a spanned compile
+  error, on `#[r2e::main]` / `#[r2e::test]` / `#[r2e::test_suite]` alike; any
+  remaining builder panic is caught and re-raised naming the suite or test that
+  asked for it.
 
 ### Changed
 

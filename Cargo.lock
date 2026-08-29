@@ -6316,6 +6316,7 @@ dependencies = [
  "http-body-util",
  "inventory",
  "jsonwebtoken",
+ "r2e",
  "r2e-core",
  "r2e-security",
  "serde",

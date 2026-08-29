@@ -30,7 +30,7 @@
 //!   [`JoinSet`]
 //! - Streams: the [`stream`] re-export of `tokio-stream`
 //! - Runtime construction: [`RuntimeBuilder`], [`Runtime`], [`RuntimeHandle`],
-//!   [`block_on`], [`block_in_place`]
+//!   [`RuntimeId`], [`block_on`], [`block_in_place`]
 //!
 //! # Wrapped vs re-exported
 //!
@@ -680,6 +680,63 @@ impl Runtime {
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle(self.0.handle().clone())
     }
+
+    /// The identity of this runtime — see [`RuntimeId`].
+    #[must_use]
+    pub fn id(&self) -> RuntimeId {
+        RuntimeId(self.0.handle().id())
+    }
+
+    /// Shut the runtime down, waiting at most `timeout` for blocking tasks.
+    ///
+    /// Async tasks are dropped at once; only `spawn_blocking` work — which
+    /// cannot be cancelled — is waited on. Use this instead of letting a
+    /// long-lived runtime leak when it is parked in a `static`: dropping the
+    /// value is not an option there, and its worker threads and detached tasks
+    /// would otherwise run until the process exits.
+    ///
+    /// # Panics
+    ///
+    /// If called from inside this runtime (a runtime cannot shut itself down).
+    pub fn shutdown_timeout(self, timeout: std::time::Duration) {
+        self.0.shutdown_timeout(timeout);
+    }
+
+    /// Shut the runtime down without waiting for blocking tasks to finish.
+    ///
+    /// [`shutdown_timeout`](Self::shutdown_timeout) with a zero timeout: it
+    /// returns immediately and lets any in-flight `spawn_blocking` work run to
+    /// completion on threads nobody is waiting for.
+    pub fn shutdown_background(self) {
+        self.0.shutdown_background();
+    }
+}
+
+/// The identity of a runtime, comparable across threads.
+///
+/// The one thing it is for: asserting that two pieces of work run on the *same*
+/// reactor. A resource registered with a runtime's I/O driver (a socket, a
+/// timer, a connection pool's keep-alive task) goes inert — not erroring, just
+/// never waking — once that runtime is gone, so code that amortises such a
+/// resource across several `block_on` calls wants to prove they share a
+/// reactor rather than discover it as an unexplained timeout.
+/// See `r2e-test`'s `SuiteCell`, which uses it to guard `#[r2e::test_suite]`.
+///
+/// # Only unique among *live* runtimes
+///
+/// An id identifies a runtime for as long as that runtime exists; once it is
+/// dropped the id may be handed out again to a later, unrelated runtime. So an
+/// id is proof of shared identity only when compared against a runtime you know
+/// to still be alive — which is how the suite guard uses it: the runtime it
+/// names is owned by the suite and outlives every comparison. Do not cache an
+/// id past the life of its runtime and treat a later match as meaningful.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct RuntimeId(tokio::runtime::Id);
+
+impl std::fmt::Display for RuntimeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
 }
 
 /// A cloneable handle to a runtime, used to reach it from another thread.
@@ -744,6 +801,12 @@ impl RuntimeHandle {
     /// [`block_in_place`] when that is the case.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.0.block_on(future)
+    }
+
+    /// The identity of the runtime behind this handle — see [`RuntimeId`].
+    #[must_use]
+    pub fn id(&self) -> RuntimeId {
+        RuntimeId(self.0.id())
     }
 
     /// Whether this runtime is the work-stealing multi-thread flavour.

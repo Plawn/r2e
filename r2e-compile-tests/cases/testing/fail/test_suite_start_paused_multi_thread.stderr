@@ -1,0 +1,5 @@
+error: `start_paused = true` requires `flavor = "current_thread"`: a paused clock is only supported on the current-thread runtime, and the multi-thread runtime (the default here) panics while building instead of returning an error
+ --> cases/testing/fail/test_suite_start_paused_multi_thread.rs:8:36
+  |
+8 | #[r2e::test_suite(tracing = false, start_paused = true)]
+  |                                    ^^^^^^^^^^^^

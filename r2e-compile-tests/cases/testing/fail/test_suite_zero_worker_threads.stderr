@@ -1,0 +1,5 @@
+error: `worker_threads` must be greater than 0 — the runtime builder panics on 0
+ --> cases/testing/fail/test_suite_zero_worker_threads.rs:6:36
+  |
+6 | #[r2e::test_suite(tracing = false, worker_threads = 0)]
+  |                                    ^^^^^^^^^^^^^^
