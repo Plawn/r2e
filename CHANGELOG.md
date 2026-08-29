@@ -7,6 +7,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Feature modules own their gRPC services** (task #989): `#[module]` gained a
+  `grpc_services(...)` key, the transport peer of `controllers(...)`. A vertical
+  slice now declares its gRPC service next to its HTTP controllers, and that
+  service may inject the module's **private** providers — which the app-level
+  `.register_grpc_service::<S>()` cannot, since it checks the service's deps
+  against the application state (so a module bean had to be exported to be
+  injectable).
+
+  ```rust
+  #[module(providers(GreetingRepo), grpc_services(GreeterService))]  // GreetingRepo stays private
+  pub struct GreetingModule;
+
+  AppBuilder::new()
+      .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+      .register_module::<GreetingModule>()   // no .register_grpc_service::<_>() needed
+      .build_state()
+      .await
+  ```
+
+  The services are dependency-checked **module-locally** at `register_module`
+  (deps ⊆ providers ∪ imports, `#[intercept(...)]` spec deps folded in, exactly
+  like `M::Controllers`) and registered by `build_state()` from the module's
+  retained `BeanContext`, in declaration order after the module's controllers.
+  The key also implies the `GrpcServer` plugin: the macro appends it to the
+  module's `RequiredPlugins`, so forgetting `.plugin(GrpcServer::...)` is a
+  compile error **naming `GrpcServer`** rather than a service silently
+  registered into a registry nobody drains. A module may equally bring the
+  plugin itself with `plugins(GrpcServer = GrpcServer::on_port(..))`.
+
+  r2e-core stays transport-agnostic: `FeatureModule` gained
+  `type Endpoints: ModuleEndpointSet` (type-level `Deps` only) and the
+  value-level `ModuleEndpoints<T>` registration hook, both implemented in
+  r2e-grpc for the new `r2e_grpc::ModuleGrpcServices<(A, B)>` (what the macro
+  generates). Modules without `grpc_services(..)` emit `type Endpoints = ();`
+  and no r2e-grpc path, so they still compile in apps without the gRPC feature.
+
+  **BREAKING (pre-production, no compatibility shim)**:
+  - hand-written `impl FeatureModule` blocks must add `type Endpoints = ();`
+    (stable Rust has no associated-type defaults) — the `#[module]` macro
+    generates it;
+  - `RegisterModule` gained a witness type parameter (`EndpIdx`) — only visible
+    to code that names the trait's parameters explicitly;
+  - two new `BeanError` variants, `EndpointConfig` and `MissingTransportPlugin`
+    — an exhaustive `match` on `BeanError` must add arms.
+
 - **`rt::RuntimeId`** (`Runtime::id()` / `RuntimeHandle::id()`): the identity of
   a runtime, comparable across threads, for asserting that two pieces of work
   share one reactor. Used by `#[r2e::test_suite]`'s guard-rail (see Fixed).

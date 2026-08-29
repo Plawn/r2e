@@ -818,7 +818,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// the public face is
     /// [`RegisterModule::register_module`](super::RegisterModule::register_module),
     /// which infers them.
-    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx, PlugIdx>(
+    pub(crate) fn register_module_impl<M, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>(
         mut self,
     ) -> ModuleRegistered<M, P, R, Mods>
     where
@@ -834,6 +834,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        // Non-HTTP endpoints (gRPC services) are checked exactly like
+        // controllers: their aggregated `EndpointDeps::Deps` must resolve
+        // inside the module scope, so they may inject private module beans.
+        <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
         // Every required plugin must already be installed — in the *post-fold*
         // provision list, so a module may both bring and require a plugin.
         M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
@@ -897,7 +901,9 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 // A configuration failure never reached the graph — do not
                 // dress it up as a resolution failure.
                 crate::beans::BeanError::ConfigLoad { .. }
-                | crate::beans::BeanError::ControllerConfig { .. } => panic!("{e}"),
+                | crate::beans::BeanError::ControllerConfig { .. }
+                | crate::beans::BeanError::EndpointConfig { .. }
+                | crate::beans::BeanError::MissingTransportPlugin { .. } => panic!("{e}"),
                 other => panic!("Failed to resolve bean dependency graph: {other}"),
             })
     }

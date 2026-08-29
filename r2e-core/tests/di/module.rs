@@ -90,6 +90,7 @@ impl FeatureModule for UserModule {
     type Imports = TCons<DbPool, TNil>;
     type RequiredPlugins = ();
     type Plugins = ();
+    type Endpoints = ();
 
     fn plugins() {}
 }
@@ -368,6 +369,7 @@ impl FeatureModule for NeedsPluginModule {
     type Imports = TNil;
     type RequiredPlugins = (MarkerPlugin,);
     type Plugins = ();
+    type Endpoints = ();
 
     fn plugins() {}
 }
@@ -734,5 +736,111 @@ async fn a_module_controller_with_missing_config_fails_the_build() {
     assert!(
         rendered.contains("billing.api-key"),
         "the missing key must be listed: {rendered}"
+    );
+}
+
+// ── Module endpoints: the transport-agnostic hook (ticket #989) ────────────
+//
+// `FeatureModule::Endpoints` is what lets a vertical slice own a non-HTTP
+// endpoint (a gRPC service, via `r2e_grpc::ModuleGrpcServices`) exactly like
+// its controllers. r2e-core knows only the two halves of the contract, so this
+// exercises them with a hand-written endpoint set — no transport crate needed:
+//
+// - the declared `Deps` are checked against the module scope at
+//   `register_module` (a private provider is IN scope — that is the point);
+// - `register_all` runs at `build_state()`, after the module's controllers,
+//   against the retained bean context where private beans exist.
+
+/// App-level bean the endpoint writes its trace into (imported by the module).
+#[derive(Clone, Default)]
+struct EndpointLedger(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+/// Module-**private** provider — absent from the application state, but
+/// injectable by the module's endpoint.
+#[derive(Clone)]
+struct PrivateGreeting(&'static str);
+
+#[bean]
+impl PrivateGreeting {
+    fn new() -> Self {
+        Self("bonjour")
+    }
+}
+
+/// Stands in for `r2e_grpc::ModuleGrpcServices<(GreeterService,)>`.
+struct TestEndpoints;
+
+impl r2e_core::di::module::ModuleEndpointSet for TestEndpoints {
+    // A private provider AND an import — both must be in the module scope.
+    type Deps = TCons<PrivateGreeting, TCons<EndpointLedger, TNil>>;
+}
+
+impl<T: Clone + Send + Sync + 'static> r2e_core::di::module::ModuleEndpoints<T> for TestEndpoints {
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, r2e_core::beans::BeanError> {
+        let ctx = builder.bean_context();
+        // Resolved from the retained context — `PrivateGreeting` is NOT in the
+        // application state.
+        let greeting = ctx.get::<PrivateGreeting>();
+        let ledger = ctx.get::<EndpointLedger>();
+        ledger
+            .0
+            .lock()
+            .unwrap()
+            .push(format!("endpoint:{}", greeting.0));
+        Ok(builder)
+    }
+}
+
+/// A controller in the same slice — endpoints and controllers coexist.
+#[controller(path = "/slice")]
+struct SliceController {
+    #[inject]
+    ledger: EndpointLedger,
+}
+
+#[routes]
+impl SliceController {
+    #[get("/")]
+    async fn index(&self) -> String {
+        format!("slice:{}", self.ledger.0.lock().unwrap().len())
+    }
+}
+
+struct EndpointModule;
+
+impl FeatureModule for EndpointModule {
+    type Providers = TCons<PrivateGreeting, TNil>;
+    type Controllers = (SliceController,);
+    type Exports = TNil;
+    type Imports = TCons<EndpointLedger, TNil>;
+    type RequiredPlugins = ();
+    type Plugins = ();
+    type Endpoints = TestEndpoints;
+
+    fn plugins() {}
+}
+
+#[r2e_core::test]
+async fn a_module_endpoint_registers_from_the_retained_context() {
+    let ledger = EndpointLedger::default();
+
+    let state = AppBuilder::new()
+        .provide(ledger.clone())
+        .register_module::<EndpointModule>()
+        .build_state()
+        .await;
+
+    let entries = ledger.0.lock().unwrap().clone();
+    assert_eq!(
+        entries,
+        vec!["endpoint:bonjour".to_string()],
+        "the module's endpoint set must be registered exactly once by `build_state()`, \
+         resolving the module's private provider from the retained bean context"
+    );
+
+    // The private provider stayed private: it is not in the application state.
+    assert!(
+        state.state().bean::<PrivateGreeting>().is_none(),
+        "`PrivateGreeting` is not exported and must be absent from the state"
     );
 }

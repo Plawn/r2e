@@ -77,6 +77,26 @@ pub enum BeanError {
         controller: &'static str,
         source: crate::config::ConfigValidationError,
     },
+    /// A non-HTTP transport endpoint (a gRPC service today) registered by a
+    /// feature module declares config keys/sections that fail validation. The
+    /// endpoint peer of [`ControllerConfig`](Self::ControllerConfig).
+    EndpointConfig {
+        /// The endpoint type whose declared config failed validation.
+        endpoint: &'static str,
+        source: crate::config::ConfigValidationError,
+    },
+    /// A feature module declares non-HTTP endpoints whose transport plugin is
+    /// not installed — e.g. `grpc_services(..)` without `.plugin(GrpcServer::..)`.
+    ///
+    /// The generated `#[module]` declaration makes this a compile error (the
+    /// transport plugin joins `RequiredPlugins`); this variant is the boot-time
+    /// backstop for hand-written `FeatureModule` impls.
+    MissingTransportPlugin {
+        /// The endpoint type that could not be registered.
+        endpoint: &'static str,
+        /// The plugin the transport needs, e.g. `"GrpcServer"`.
+        plugin: &'static str,
+    },
     /// A bean's constructor (or a producer function) returned an error.
     ///
     /// The first such error aborts `build_state()`; every bean already built
@@ -152,6 +172,20 @@ impl fmt::Display for BeanError {
                     "\n=== CONFIGURATION ERRORS (controller: {controller}) ===\n\n{source}\n============================\n"
                 )
             }
+            BeanError::EndpointConfig { endpoint, source } => {
+                write!(
+                    f,
+                    "\n=== CONFIGURATION ERRORS (endpoint: {endpoint}) ===\n\n{source}\n============================\n"
+                )
+            }
+            BeanError::MissingTransportPlugin { endpoint, plugin } => {
+                write!(
+                    f,
+                    "Endpoint '{endpoint}' cannot be registered: the `{plugin}` plugin is not \
+                     installed. Install it with `.plugin({plugin}::...)` before the module, or \
+                     let the module bring it with `plugins({plugin} = ...)`"
+                )
+            }
             BeanError::BeanBuild { bean, source } => {
                 write!(f, "Bean '{}' failed to build: {}", bean, source)
             }
@@ -172,6 +206,7 @@ impl std::error::Error for BeanError {
             BeanError::PluginBuild { source, .. } => Some(source.as_ref()),
             BeanError::ConfigLoad { source, .. } => Some(source.as_ref()),
             BeanError::ControllerConfig { source, .. } => Some(source),
+            BeanError::EndpointConfig { source, .. } => Some(source),
             _ => None,
         }
     }

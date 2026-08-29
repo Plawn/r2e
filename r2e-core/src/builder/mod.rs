@@ -34,8 +34,8 @@ use crate::controller::Controller;
 use crate::di::meta::MetaRegistry;
 use crate::di::module::{
     BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModEntry, ModuleDepsSatisfied,
-    ModuleList, ModulePluginProvisions, ModulePlugins, ModuleProvided, ModuleScope,
-    PushPluginCtrls, RequiredPluginsInstalled,
+    ModuleEndpointSet, ModuleList, ModulePluginProvisions, ModulePlugins, ModuleProvided,
+    ModuleScope, PushPluginCtrls, RequiredPluginsInstalled,
 };
 use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect};
 use crate::rt::CancelToken;

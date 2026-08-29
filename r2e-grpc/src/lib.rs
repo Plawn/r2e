@@ -23,6 +23,7 @@
 
 pub mod guard;
 pub mod identity;
+pub mod module;
 pub mod multiplex;
 pub mod registry;
 pub mod server;
@@ -36,6 +37,7 @@ pub use identity::{
     extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentityExtractor,
     JwtClaimsValidatorLike,
 };
+pub use module::ModuleGrpcServices;
 pub use multiplex::{
     GrpcContentType, MultiplexBody, MultiplexService, NoGrpcWeb, RejectedBody, GRPC_WEB_UNSUPPORTED,
 };
@@ -157,31 +159,69 @@ where
         S: GrpcService + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
-        // Aggregated config validation, before anything is built — the gRPC
-        // peer of the `register_controller` banner. Covers the core's own
-        // `#[config]` keys and every `#[intercept]` decorator spec's.
-        if let Some(config) = self.r2e_config() {
-            let errors = S::validate_config(config);
-            if !errors.is_empty() {
-                return Err(r2e_core::config::ConfigValidationError { errors });
-            }
+        match register_service_unchecked::<T, S>(&self) {
+            Ok(()) => Ok(self),
+            Err(RegisterServiceError::Config(err)) => Err(err),
+            Err(RegisterServiceError::MissingPlugin) => panic!(
+                "GrpcServiceRegistry not found. Did you install `.plugin(GrpcServer::...)` before build_state()?"
+            ),
         }
-
-        let registry = self
-            .get_plugin_data::<GrpcServiceRegistry>()
-            .expect(
-                "GrpcServiceRegistry not found. Did you install `.plugin(GrpcServer::...)` before build_state()?",
-            )
-            .clone();
-
-        registry.add_service(S::service_name(), S::file_descriptor_set(), |routes| {
-            S::add_to_routes(routes, self.bean_context())
-        });
-
-        tracing::debug!(service = S::service_name(), "Registered gRPC service");
-
-        Ok(self)
     }
+}
+
+/// Why [`register_service_unchecked`] could not register a service.
+///
+/// The two call sites map it differently: the app-level
+/// [`AppBuilderGrpcExt`] returns the config error and panics on a missing
+/// plugin (the plugin is a hard wiring mistake at that call site), while the
+/// feature-module path maps both onto [`BeanError`](r2e_core::beans::BeanError)
+/// so `try_build_state()` stays non-panicking.
+pub(crate) enum RegisterServiceError {
+    /// Declared config keys/sections that do not validate.
+    Config(r2e_core::config::ConfigValidationError),
+    /// The `GrpcServer` plugin was not installed, so there is no registry.
+    MissingPlugin,
+}
+
+/// The registration backend shared by the app-level (`register_grpc_service`,
+/// state-checked) and feature-module (`grpc_services(..)`, module-scope
+/// checked) paths: validate declared config, then fold the service — built
+/// once from the retained bean graph — into the `GrpcServiceRegistry`.
+///
+/// Deliberately **unchecked**: the dependency check belongs to the caller,
+/// because the two paths check against different scopes. A module service may
+/// inject the module's private beans, which are absent from the application
+/// state `T`.
+pub(crate) fn register_service_unchecked<T, S>(
+    builder: &r2e_core::AppBuilder<T>,
+) -> Result<(), RegisterServiceError>
+where
+    T: Clone + Send + Sync + 'static,
+    S: GrpcService,
+{
+    // Aggregated config validation, before anything is built — the gRPC
+    // peer of the `register_controller` banner. Covers the core's own
+    // `#[config]` keys and every `#[intercept]` decorator spec's.
+    if let Some(config) = builder.r2e_config() {
+        let errors = S::validate_config(config);
+        if !errors.is_empty() {
+            return Err(RegisterServiceError::Config(
+                r2e_core::config::ConfigValidationError { errors },
+            ));
+        }
+    }
+
+    let Some(registry) = builder.get_plugin_data::<GrpcServiceRegistry>().cloned() else {
+        return Err(RegisterServiceError::MissingPlugin);
+    };
+
+    registry.add_service(S::service_name(), S::file_descriptor_set(), |routes| {
+        S::add_to_routes(routes, builder.bean_context())
+    });
+
+    tracing::debug!(service = S::service_name(), "Registered gRPC service");
+
+    Ok(())
 }
 
 /// Re-exports for generated code.
@@ -198,6 +238,7 @@ pub mod __macro_support {
 pub mod prelude {
     //! Re-exports of the most commonly used gRPC types.
     pub use crate::guard::{GrpcGuard, GrpcGuardContext, GrpcRoleBasedIdentity};
+    pub use crate::module::ModuleGrpcServices;
     pub use crate::server::GrpcServer;
     pub use crate::service::GrpcService;
     pub use crate::AppBuilderGrpcExt;

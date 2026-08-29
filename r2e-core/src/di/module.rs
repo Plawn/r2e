@@ -1,8 +1,8 @@
 //! Feature modules — closed subgraphs with compile-time encapsulation.
 //!
 //! A [`FeatureModule`] bundles **providers (beans/producers) + controllers +
-//! imports/exports + the plugins it brings** into one unit registered with a
-//! single call:
+//! non-HTTP endpoints (gRPC services) + imports/exports + the plugins it
+//! brings** into one unit registered with a single call:
 //! [`AppBuilder::register_module::<M>()`](crate::AppBuilder::register_module).
 //!
 //! Unlike Spring/NestJS modules, encapsulation is enforced **at compile
@@ -33,6 +33,17 @@
 //! is materialized (their dependency check already happened module-locally at
 //! `register_module`), constructing their cores from the retained
 //! [`BeanContext`](crate::beans::BeanContext) — where private beans exist.
+//!
+//! # Modules and other transports
+//!
+//! A module's [`Endpoints`](FeatureModule::Endpoints) carry the same story for
+//! non-HTTP transports: `#[module(grpc_services(GreeterService))]` makes the
+//! gRPC service part of the vertical slice, dependency-checked against
+//! [`ModuleScope`] at `register_module` and registered by `build_state()` from
+//! the same retained bean context — so it may inject the module's **private**
+//! providers. r2e-core stays transport-agnostic: it only names the
+//! [`ModuleEndpointSet`] / [`ModuleEndpoints`] pair, implemented by the
+//! transport crate (`r2e_grpc::ModuleGrpcServices`).
 //!
 //! # Modules and plugins
 //!
@@ -77,6 +88,7 @@ use crate::type_list::{Here, TAppend, TCons, TNil, There};
 ///     type Imports = TCons<DbPool, TNil>;        // supplied by the app
 ///     type RequiredPlugins = ();                 // no plugin required
 ///     type Plugins = ();                         // no plugin brought
+///     type Endpoints = ();                       // no gRPC service
 ///     fn plugins() {}
 /// }
 ///
@@ -171,9 +183,88 @@ pub trait FeatureModule {
     /// .max_concurrent(8).build()))]` generates this and `plugins()`.
     type Plugins: ModulePluginList;
 
+    /// The module's **non-HTTP endpoint set** — the transport endpoints it
+    /// owns, exactly as [`Controllers`](Self::Controllers) are the HTTP ones —
+    /// or `()` for none.
+    ///
+    /// r2e-core stays transport-agnostic: it knows only the aggregated
+    /// dependency list (checked against [`ModuleScope`] at `register_module`,
+    /// like a controller's) and the value-level registration fold
+    /// ([`ModuleEndpoints`]), both run by `build_state()` from the retained
+    /// [`BeanContext`](crate::beans::BeanContext) — so a module endpoint may
+    /// inject the module's **private** providers, just like a module
+    /// controller.
+    ///
+    /// The concrete set type lives in the transport crate:
+    /// `#[module(grpc_services(GreeterService))]` generates
+    /// `type Endpoints = r2e_grpc::ModuleGrpcServices<(GreeterService,)>;`
+    /// (and adds `GrpcServer` to [`RequiredPlugins`](Self::RequiredPlugins), so
+    /// a module whose transport plugin is missing is a compile error naming
+    /// that plugin).
+    type Endpoints: ModuleEndpointSet;
+
     /// The configured plugin **instances** matching [`Plugins`](Self::Plugins),
     /// in the same order. `fn plugins() {}` for `type Plugins = ()`.
     fn plugins() -> Self::Plugins;
+}
+
+// ── Module endpoints (non-HTTP transports) ──────────────────────────────────
+//
+// The generic hook the ticket-989 design hangs on. r2e-grpc depends on
+// r2e-core, never the reverse, so r2e-core cannot name a gRPC service: it
+// declares the two halves of the contract (type-level deps, value-level
+// registration) and the transport crate implements them for its own wrapper
+// type. Orphan rules force that wrapper (`ModuleGrpcServices<(S0, S1, ..)>`)
+// — a foreign trait cannot be implemented for a bare tuple of type
+// parameters.
+
+/// The type-level half of a module's [`Endpoints`](FeatureModule::Endpoints):
+/// the aggregated dependency list, used for the module-scope check at
+/// `register_module`.
+///
+/// Implemented by transport crates for their endpoint-set wrapper (e.g.
+/// `r2e_grpc::ModuleGrpcServices<(S0, S1)>`), and here for `()` (no
+/// endpoints). Independent of the application state type, because
+/// `register_module` runs in the `NoState` phase — exactly like
+/// [`ControllerDepsList`].
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a valid `Endpoints` set for a feature module",
+    label = "not a module endpoint set",
+    note = "`FeatureModule::Endpoints` must be `()` or a transport crate's endpoint-set type, e.g. `r2e_grpc::ModuleGrpcServices<(MyGrpcService,)>`",
+    note = "`#[module(grpc_services(MyGrpcService))]` generates it"
+)]
+pub trait ModuleEndpointSet {
+    /// Concatenation of every endpoint's
+    /// [`EndpointDeps::Deps`](crate::controller::EndpointDeps::Deps) — core
+    /// `#[inject]` deps plus every decorator site's, so the module-scope check
+    /// covers interceptors too.
+    type Deps;
+}
+
+impl ModuleEndpointSet for () {
+    type Deps = TNil;
+}
+
+/// The value-level half of a module's [`Endpoints`](FeatureModule::Endpoints):
+/// registers them into the typed builder at `build_state()`.
+///
+/// Like [`ModuleControllers`], registration here is **unchecked** — the
+/// dependency check already happened module-locally at `register_module`
+/// (against [`ModuleScope`]), so requiring the deps to be in the application
+/// state would wrongly reject an endpoint injecting a private module bean.
+pub trait ModuleEndpoints<T: Clone + Send + Sync + 'static> {
+    /// Register every endpoint in the set, in declaration order.
+    ///
+    /// Fallible for the same reason [`ModuleControllers::register_all`] is:
+    /// `try_build_state()` must not panic on a declared config key, and a
+    /// missing transport plugin is a boot error rather than a panic.
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+}
+
+impl<T: Clone + Send + Sync + 'static> ModuleEndpoints<T> for () {
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+        Ok(builder)
+    }
 }
 
 // ── Module-brought plugins ─────────────────────────────────────────────────
@@ -678,6 +769,7 @@ where
     T: Clone + Send + Sync + 'static,
     M: FeatureModule,
     M::Controllers: ModuleControllers<T, WC>,
+    M::Endpoints: ModuleEndpoints<T>,
     Rest: ModuleList<T, WR>,
 {
     fn register_controllers(
@@ -685,9 +777,11 @@ where
     ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
         // `Mods` grows head-first (the most recently registered module is the
         // head), so recurse into the tail first to preserve registration order.
-        <M::Controllers as ModuleControllers<T, WC>>::register_all(Rest::register_controllers(
-            builder,
-        )?)
+        let builder = Rest::register_controllers(builder)?;
+        let builder = <M::Controllers as ModuleControllers<T, WC>>::register_all(builder)?;
+        // Non-HTTP endpoints (gRPC services) register after the controllers of
+        // the same module, from the same retained bean context.
+        <M::Endpoints as ModuleEndpoints<T>>::register_all(builder)
     }
 }
 

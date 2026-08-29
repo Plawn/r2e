@@ -40,6 +40,7 @@ impl FeatureModule for BadModule {
     type Exports = TCons<Svc, TNil>;
     type Imports = TNil; type RequiredPlugins = ();
     type Plugins = ();
+    type Endpoints = ();
 
     fn plugins() {}
 }

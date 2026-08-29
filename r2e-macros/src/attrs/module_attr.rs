@@ -5,6 +5,7 @@
 //! #[module(
 //!     providers(UserRepo, UserService),
 //!     controllers(UserController, AdminController),
+//!     grpc_services(UserGrpcService),
 //!     exports(UserService),
 //!     imports(DbPool, module(BillingModule)),
 //!     plugins(Scheduler = Scheduler),
@@ -14,8 +15,15 @@
 //! ```
 //!
 //! Every key is optional and defaults to empty. `providers`, `exports`, and
-//! `imports` become `TCons` type-level lists; `controllers`,
+//! `imports` become `TCons` type-level lists; `controllers`, `grpc_services`,
 //! `requires_plugins`, and `plugins` become tuples.
+//!
+//! `grpc_services(...)` — the gRPC services the module owns, the transport peer
+//! of `controllers(...)`. They are dependency-checked against the module scope
+//! at `register_module` (so they may inject the module's *private* providers)
+//! and registered by `build_state()` from the retained bean context. Declaring
+//! any also adds `GrpcServer` to `RequiredPlugins`, so forgetting
+//! `.plugin(GrpcServer::...)` is a compile error naming the plugin.
 //!
 //! `plugins(...)` — the plugins the module **brings** — takes `Type = expr`
 //! entries: the type grows the module's provision list at compile time, the
@@ -38,7 +46,7 @@ use syn::punctuated::Punctuated;
 use syn::{parenthesized, token, Expr, Ident, ItemStruct, Token, Type};
 
 use crate::model::type_list_gen::build_tcons_type;
-use crate::util::crate_path::r2e_core_path;
+use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
 
 #[derive(Default)]
 struct ModuleArgs {
@@ -53,6 +61,8 @@ struct ModuleArgs {
     requires_plugins: Vec<Type>,
     /// `plugins(Type = expr, ...)` — the plugins this module brings.
     plugins: Vec<PluginEntry>,
+    /// `grpc_services(...)` — the gRPC services this module owns.
+    grpc_services: Vec<Type>,
 }
 
 /// One `plugins(...)` entry: `Type = expr`.
@@ -183,13 +193,14 @@ impl Parse for ModuleArgs {
                 "requires_plugins" => {
                     args.requires_plugins = beans_only(entries, "requires_plugins")?
                 }
+                "grpc_services" => args.grpc_services = beans_only(entries, "grpc_services")?,
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown key `{other}` in #[module] — expected `providers`, \
-                             `controllers`, `exports`, `imports`, `plugins`, or \
-                             `requires_plugins`"
+                             `controllers`, `grpc_services`, `exports`, `imports`, `plugins`, \
+                             or `requires_plugins`"
                         ),
                     ));
                 }
@@ -243,9 +254,30 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     let controller_types = &args.controllers;
     let controllers = quote! { ( #(#controller_types,)* ) };
 
+    // `Endpoints` — the module's non-HTTP transport endpoints. Empty (the
+    // common case) keeps the generated impl free of any transport-crate path,
+    // so a module in an app without `r2e-grpc` still compiles.
+    //
+    // A module owning gRPC services needs the `GrpcServer` plugin installed
+    // before it (that is where the service registry lives), so `GrpcServer` is
+    // appended to `RequiredPlugins`: a missing plugin is then the standard
+    // module diagnostic naming it, instead of a boot-time failure. A module
+    // that *brings* `GrpcServer` via `plugins(..)` still satisfies the check —
+    // `RequiredPlugins` is verified against the post-fold provision list.
+    let grpc_service_types = &args.grpc_services;
+    let (endpoints, extra_required_plugins) = if grpc_service_types.is_empty() {
+        (quote! { () }, quote! {})
+    } else {
+        let grpc = r2e_grpc_path();
+        (
+            quote! { #grpc::ModuleGrpcServices<( #(#grpc_service_types,)* )> },
+            quote! { #grpc::GrpcServer, },
+        )
+    };
+
     // `RequiredPlugins` is a tuple of plugin types (same shape as controllers).
     let required_plugin_types = &args.requires_plugins;
-    let required_plugins = quote! { ( #(#required_plugin_types,)* ) };
+    let required_plugins = quote! { ( #(#required_plugin_types,)* #extra_required_plugins ) };
 
     // `Plugins` is a tuple of the brought plugins' types; `plugins()` builds
     // the matching tuple of instances, in the same order.
@@ -270,6 +302,7 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
             type Imports = #imports;
             type RequiredPlugins = #required_plugins;
             type Plugins = #plugins_ty;
+            type Endpoints = #endpoints;
 
             fn plugins() -> Self::Plugins {
                 #plugins_fn

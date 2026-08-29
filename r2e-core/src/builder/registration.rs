@@ -66,7 +66,7 @@ use crate::type_list::ControllerTuple;
 ///     .build_state()
 ///     .await
 /// ```
-pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>: Sized {
+pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>: Sized {
     /// Register a [`FeatureModule`]: its providers, controllers, and
     /// import/export declarations, in one call.
     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
@@ -80,13 +80,14 @@ pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>: Sized {
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
         M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
         M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
         ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>;
 }
 
-impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
-    RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
+impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>
+    RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>
     for AppBuilder<NoState, P, R, Mods>
 {
     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
@@ -100,11 +101,12 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, PlugIdx>
         <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
         M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+        <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
         M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
         M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
         ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     {
-        self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, PlugIdx>()
+        self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>()
     }
 }
 

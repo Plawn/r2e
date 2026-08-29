@@ -78,6 +78,7 @@ impl FeatureModule for GoodModule {
     type Imports = TNil;
     type RequiredPlugins = ();
     type Plugins = ();
+    type Endpoints = ();
 
     fn plugins() {}
 }

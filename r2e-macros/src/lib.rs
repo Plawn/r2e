@@ -1115,12 +1115,21 @@ pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
 /// *requires* its exports; the app must still `.register_module::<OtherModule>()`
 /// (deliberate — two modules importing the same module do not double-register).
 ///
+/// `grpc_services(...)` is the transport peer of `controllers(...)`: the slice
+/// owns its gRPC services, so they may inject the module's **private**
+/// providers (the app-level `.register_grpc_service::<S>()` checks deps against
+/// the application state, so its deps would have to be exported). They are
+/// dependency-checked module-locally at `register_module` and registered by
+/// `build_state()`. The key implies the `GrpcServer` plugin — it is appended to
+/// `RequiredPlugins`, so a missing one is a compile error naming it.
+///
 /// # Example
 ///
 /// ```ignore
 /// #[module(
 ///     providers(OrderRepo, OrderService),
 ///     controllers(OrderController),
+///     grpc_services(OrderGrpcService),         // may inject OrderRepo (private)
 ///     exports(OrderService),
 ///     imports(DbPool, module(BillingModule)),  // DbPool + BillingModule::Exports
 /// )]
