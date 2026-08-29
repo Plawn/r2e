@@ -48,9 +48,16 @@ pub trait BootableApp: Sized {
 
     /// Assemble the final router and run the consumer registrations that
     /// `serve()` would run at startup (`#[consumer]` methods, subscriber
-    /// beans, EventBus bridges). The in-process test entry point — used by
-    /// `TestApp::boot` so event consumers have production parity in tests.
-    fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router>;
+    /// beans, EventBus bridges) plus the controller `#[post_construct]` and
+    /// `#[on_start]` hooks. The in-process test entry point — used by
+    /// `TestApp::boot` so startup behaviour matches production in tests.
+    ///
+    /// Fallible: a startup hook that returns `Err` aborts the boot here, which
+    /// is what lets `TestApp::try_boot*` return it instead of panicking
+    /// underneath the harness.
+    fn into_router_with_consumers(
+        self,
+    ) -> impl Future<Output = Result<crate::http::Router, crate::beans::BootError>>;
 
     /// Build and serve on an explicit address.
     fn serve(self, addr: &str) -> impl Future<Output = Result<(), crate::beans::BootError>>;
@@ -73,8 +80,10 @@ impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
         self.build()
     }
 
-    fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router> {
-        self.build_with_consumers()
+    fn into_router_with_consumers(
+        self,
+    ) -> impl Future<Output = Result<crate::http::Router, crate::beans::BootError>> {
+        self.try_build_with_consumers()
     }
 
     fn serve(self, addr: &str) -> impl Future<Output = Result<(), crate::beans::BootError>> {

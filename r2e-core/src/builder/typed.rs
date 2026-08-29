@@ -805,14 +805,29 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// production parity without binding a listener. Serve hooks (scheduler
     /// task start, …) still do not run.
     pub async fn build_with_consumers(self) -> crate::http::Router {
+        self.try_build_with_consumers()
+            .await
+            .unwrap_or_else(|e| panic!("{e}"))
+    }
+
+    /// [`build_with_consumers`](Self::build_with_consumers) without the panic:
+    /// a failing controller `#[post_construct]` or `#[on_start]` comes back as
+    /// a [`BootError`](crate::beans::BootError) instead.
+    ///
+    /// This is what `TestApp::try_boot*` runs on, so a startup-hook failure is
+    /// a returned `Err` there — and `TestApp::boot` renders it through the same
+    /// app-naming formatter every other boot failure uses.
+    pub async fn try_build_with_consumers(
+        self,
+    ) -> Result<crate::http::Router, crate::beans::BootError> {
         let built = self.build_inner();
         // Controller `#[post_construct]` runs before consumers (mirroring bean
-        // post_construct at `build_state`, which runs before subscribers). This
-        // entry point returns a `Router`, so an error fails loudly with a panic —
-        // the same shape as `build_state` panicking on a bean post_construct Err.
+        // post_construct at `build_state`, which runs before subscribers).
         for pc in built.post_construct_registrations {
             pc.await
-                .unwrap_or_else(|e| panic!("Controller #[post_construct] hook failed: {e}"));
+                .map_err(|e| -> crate::beans::BootError {
+                    format!("Controller #[post_construct] hook failed: {e}").into()
+                })?;
         }
         for reg in built.consumer_registrations {
             reg(built.state.clone()).await;
@@ -820,14 +835,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // `#[on_start]` hooks DO run here (unlike `#[pre_destroy]`, which has no
         // shutdown to fire on): the graph and every controller core exist, which
         // is exactly the contract. `TestApp::boot` reaches this path, so tests
-        // observe production startup behaviour. An `Err` panics, like the
-        // controller `#[post_construct]` above.
+        // observe production startup behaviour. An `Err` aborts the boot, like
+        // the controller `#[post_construct]` above.
         for (_, hook) in sort_on_start(built.on_start_hooks) {
-            hook()
-                .await
-                .unwrap_or_else(|e| panic!("#[on_start] hook failed: {e}"));
+            hook().await.map_err(|e| -> crate::beans::BootError {
+                format!("#[on_start] hook failed: {e}").into()
+            })?;
         }
-        built.router
+        Ok(built.router)
     }
 
     fn build_inner(mut self) -> BuiltApp<T> {

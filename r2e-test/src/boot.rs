@@ -75,7 +75,7 @@ impl TestApp {
             .override_bean(Arc::new(jwt.validator()));
         let env = A::setup().await?;
         let built = A::build(configure(builder), env).await?;
-        Ok(Self::from_bootable(built, Some(jwt)).await)
+        Self::from_bootable(built, Some(jwt)).await
     }
 
     /// Boot an [`App`] **without** the harness JWT wiring — for apps whose
@@ -93,20 +93,26 @@ impl TestApp {
         let builder = AppBuilder::new().with_profile("test");
         let env = A::setup().await?;
         let built = A::build(configure(builder), env).await?;
-        Ok(Self::from_bootable(built, None).await)
+        Self::from_bootable(built, None).await
     }
 
-    async fn from_bootable(built: impl BootableApp, jwt: Option<TestJwt>) -> Self {
+    async fn from_bootable(
+        built: impl BootableApp,
+        jwt: Option<TestJwt>,
+    ) -> Result<Self, BootError> {
         let bean_context = built.bean_context();
         let config = built.r2e_config();
-        Self {
+        Ok(Self {
             // Run consumer registrations so `#[consumer]` methods, subscriber
             // beans, and EventBus bridges are live in tests, as in `serve()`.
-            router: built.into_router_with_consumers().await,
+            // Controller `#[post_construct]` / `#[on_start]` run here too, and
+            // an `Err` from either is a boot failure like any other — returned
+            // to `try_boot*`, rendered by `unwrap_boot` for `boot*`.
+            router: built.into_router_with_consumers().await?,
             bean_context: Some(bean_context),
             config,
             jwt,
-        }
+        })
     }
 }
 
