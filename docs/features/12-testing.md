@@ -242,11 +242,16 @@ impl UserSuite {
 ```
 
 - **One runtime for the whole suite.** Every hook and every case run on the same
-  reactor, and it stays alive for the life of the process. That is what lets
+  reactor, and it stays alive until the suite ends. That is what lets
   `#[before_all]` hold runtime-bound resources — a `TestApp`, a database pool, a
   listening socket, a spawned worker, a timer — and have case 2, case 3 and
   `#[after_all]` still find them working. (A resource whose reactor is gone does
   not error, it stops waking, so this used to surface as an unrelated timeout.)
+- **The suite is torn down by its last case.** After `#[after_all]`, the suite
+  value is dropped *on* the suite runtime and the runtime is then shut down, so
+  a suite's threads and detached tasks do not keep running for the rest of the
+  test binary. Anything that reached the suite afterwards would panic naming
+  the suite, not hang.
 - The runtime knobs go on the attribute and configure that one runtime:
   `#[r2e::test_suite(flavor = "current_thread", worker_threads = 2,
   start_paused = true)]`. With `start_paused` the paused clock is shared by the
@@ -257,9 +262,17 @@ impl UserSuite {
   `with = …` and `jwt = false` arguments.
 - Cases are unordered by default (access to the suite value is serialized);
   `#[case(order = N)]` opts into the ordered-test barrier above, within that
-  suite. `#[after_all]` runs on the last case to finish, so a partial
-  `cargo test <filter>` run may skip it — libtest does not expose which cases
-  were selected.
+  suite.
+- `#[after_all]` (and the teardown that follows it) runs when the **last
+  generated case completes** — counted against the `#[case]`s the macro emitted,
+  because libtest does not expose which tests the process selected. A partial
+  `cargo test <filter>` run therefore does not run `#[after_all]` at all and
+  leaks the suite to process exit; that is a known limitation, not a bug to
+  work around in the case body.
+- For the same reason **`#[ignore]` on a `#[case]` is a compile error**: an
+  ignored case would either suppress teardown (plain run) or let teardown fire
+  before it runs (`cargo test -- --include-ignored`). Skip inside the case body,
+  or move the test out of the suite.
 
 ## Usage
 

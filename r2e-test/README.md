@@ -317,17 +317,21 @@ impl UserSuite {
 
 Cases are unordered by default (Cargo decides start order, R2E serializes
 access to `self`). `#[case(order = N)]` opts specific cases into the existing
-ordered-test barrier. `after_all` is guaranteed for full suite runs; partial
-`cargo test <filter>` runs may skip it because Rust's test harness does not
-publish the selected test set.
+ordered-test barrier. `after_all` runs when the last generated case completes,
+counted against the `#[case]`s the macro emitted: a partial `cargo test <filter>`
+run never reaches it, because Rust's test harness does not publish the selected
+test set. For the same reason `#[ignore]` on a `#[case]` is a compile error —
+skip inside the case body instead.
 
-The whole suite runs on **one** runtime, owned by the suite and alive for the
-life of the process, so `#[before_all]` can amortise runtime-bound resources —
-a `TestApp`, a database pool, a socket, a spawned task, a timer — and every
-case plus `#[after_all]` still finds them working. The runtime knobs
-(`flavor`, `worker_threads`, `start_paused`, …) go on `#[r2e::test_suite(...)]`
-and configure that single runtime; `start_paused` therefore means one paused
-clock for the suite, not one per case.
+The whole suite runs on **one** runtime, owned by the suite, so `#[before_all]`
+can amortise runtime-bound resources — a `TestApp`, a database pool, a socket, a
+spawned task, a timer — and every case plus `#[after_all]` still finds them
+working. The runtime knobs (`flavor`, `worker_threads`, `start_paused`, …) go on
+`#[r2e::test_suite(...)]` and configure that single runtime; `start_paused`
+therefore means one paused clock for the suite, not one per case. When the last
+case finishes, `#[after_all]` runs, the suite value is dropped on that runtime
+and the runtime is shut down, so the suite leaves no threads or detached tasks
+behind.
 
 ## Full example
 
