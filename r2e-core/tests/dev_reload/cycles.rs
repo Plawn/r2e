@@ -10,7 +10,7 @@
 //!
 //! Everything lives in ONE test function: the dev-reload caches are
 //! process-global, so parallel test functions would clobber each other.
-use crate::dev_serial::CommitCycle;
+use crate::serial::CommitCycle;
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, PreDestroy, Registrable};
 use r2e_core::config::{ConfigKeyKind, ConfigValue, R2eConfig};
 use r2e_core::decorators::decorator::{BeanDecoFill, SharedDecoSlot};
@@ -322,7 +322,7 @@ impl Registrable for Disposable {
 async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
     // The dev-reload caches are process-global: hold them exclusively and
     // start cold, so a sibling test's cycles cannot leak into cycle 1.
-    let _serial = crate::dev_serial::dev_serial();
+    let _serial = crate::serial::dev_serial();
     r2e_core::invalidate_state_cache();
     // The caches only engage inside the hot-patch loop (`r2e::launch!` marks
     // it); this test drives the loop's build cycles by hand, so opt in.
@@ -567,7 +567,7 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
     // the context exposes a brand new one — split-brain. In production shapes
     // that is a service holding a `Tenanted<T>` whose `GraphHandle` points at
     // the graph that was just dropped: every tenant lookup fails `NoSource`.
-    let _serial = crate::dev_serial::dev_serial();
+    let _serial = crate::serial::dev_serial();
     r2e_core::invalidate_state_cache();
     r2e_core::runtime::dev::mark_hot_reload_loop();
     PLUGIN_BUILDS.store(0, Ordering::SeqCst);

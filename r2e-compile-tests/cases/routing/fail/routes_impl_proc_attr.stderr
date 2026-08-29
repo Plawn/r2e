@@ -1,0 +1,9 @@
+error: #[some_procedural_attribute] is not supported below #[routes] on a controller impl block
+
+       #[routes] replaces this `impl` with TWO synthesized ones (routes on the request façade, everything else on the controller core), so an attribute written here is applied to both — which duplicates an attribute macro's expansion instead of preserving it. Only inert attributes (doc comments, #[allow]/#[warn]/#[deny]/#[expect]/#[forbid], #[deprecated], #[cfg], #[cfg_attr], tool attributes) may sit here.
+
+         hint: move #[some_procedural_attribute] ABOVE #[routes], where it runs exactly once on the impl block you wrote
+  --> cases/routing/fail/routes_impl_proc_attr.rs:22:1
+   |
+22 | #[some_procedural_attribute]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

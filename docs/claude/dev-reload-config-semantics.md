@@ -13,7 +13,7 @@ This document answers Q1–Q7 of the Phase 0 brief: what *exactly* happens to
 config providers when `build_state()` runs a second time inside the Subsecond
 hot-patch loop. Every claim carries `file:line` evidence; the behaviors that
 can be reproduced in-process are locked by tests in
-`r2e-core/tests/runtime/dev_reload_config.rs` (the ones still named
+`r2e-core/tests/dev_reload/config.rs` (the ones still named
 `characterize_*` describe behavior that was *not* changed).
 
 Companion docs: `docs/claude/configuration.md` (config surface),
@@ -141,7 +141,7 @@ Locked by
 values *before* constructing anything, and `R2eConfig` is the fresh instance,
 so every rebuilt factory's `ctx.get::<R2eConfig>()` and every `#[config]`
 field resolution sees the edit. Already covered by
-`dev_reload.rs` (`state2.get::<ConfDep>().val == "b"`).
+`dev_reload/cycles.rs` (`state2.get::<ConfDep>().val == "b"`).
 
 **Do controllers?** Yes, on both paths.
 
@@ -448,14 +448,16 @@ The constraints identified in Phase 0, all respected:
   `hot_reload_loop_active()`, which `launch!` sets for exactly one app.
 - **Parallel tests.** Anything added here must stay behind the same gate, or
   `cargo test` (which runs test fns on many threads in one process) would
-  cross-contaminate. `tests/runtime/dev_serial.rs` is the lock; **`HOT_RELOAD_LOOP`
-  is process-global and one-way**, so once *any* test in the target marks it,
-  *every* other test in the same binary that calls `load_config()` starts
-  reusing and re-seeding the carried registry. That bit during implementation:
-  `sharded.rs` and `tcp_nodelay.rs` were flaking the dev tests until they took
-  the same lock. `dev_serial` is therefore no longer `#[cfg(feature =
-  "dev-reload")]` — every `load_config()` caller in the `runtime` target holds
-  it.
+  cross-contaminate. `tests/dev_reload/serial.rs` is the lock; **`HOT_RELOAD_LOOP`
+  is process-global and one-way**, so once *any* test in the binary marks it,
+  *every* other test there that calls `load_config()` starts reusing and
+  re-seeding the carried registry. A lock alone was not enough (task #995): the
+  flag stays armed after the marking test releases it, and the first app served
+  afterwards sets `LIFECYCLE_INITIALIZED`, so every later `run()` in that
+  process skips its consumers, serve hooks and startup hooks. The dev-reload
+  tests therefore own a whole test binary — `r2e-core/tests/dev_reload/` — and
+  the lock only has to serialize *them*; the `runtime` target's `load_config()`
+  callers need nothing.
 - **Reset story.** `invalidate_state_cache()` clears the registry, so the
   documented "escape hatch forces a cold rebuild" stays cold for live config.
 - **`dev.rs` is not feature-gated as a module**, but every consumer is; the new
@@ -496,7 +498,7 @@ Non-bugs worth recording, so a later phase does not "fix" them:
 
 - A **real** Subsecond hot patch (new `build_version` token hashes). All tests
   here simulate a cycle by calling `build_state()` twice with an edited config,
-  which is the same trigger the existing `dev_reload.rs` uses and exercises the
+  which is the same trigger the existing `dev_reload/cycles.rs` uses and exercises the
   identical code paths — but it cannot cover "the constructor source changed".
 - `launch!`'s re-invocation of `App::build` itself (macro + dioxus-devtools);
   only its consequences (`load_config` re-running, deferred actions re-running)
@@ -653,7 +655,7 @@ decorator or a background service" above.
 Because `prefix_fingerprint` hashes key *names* as well as values, adding or
 removing a key inside the section moves the digest too — not just editing one.
 
-Tests: `runtime/dev_reload_config.rs::section_key_edit_rebuilds_the_declaring_bean`
+Tests: `dev_reload/config.rs::section_key_edit_rebuilds_the_declaring_bean`
 (two simulated cycles: a key inside the section rebuilds the holder, a key
 outside it does not) and `di/fingerprint.rs`
 (`config_section_declares_its_prefix_as_a_section_key`,
@@ -743,7 +745,7 @@ Why that is not worth fixing today:
   no longer part of the drain accounting), and dedup so a cycle that did not
   change its provider set does not churn. That is new lifecycle state in the
   hot path, testable only by simulating a serve across cycles — the existing
-  `dev_reload_config.rs` cycles never serve.
+  `dev_reload/config.rs` cycles never serve.
 
 **If it is ever taken:** the shape above is the design — `dev::config_watch`
 holding `{ root: OnceLock<CancellationToken>, cycle: Mutex<Option<CancellationToken>> }`,

@@ -111,6 +111,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`r2e-core`'s `runtime` test target is green under `--features dev-reload`
+  again** (task #995). Two independent causes, neither of which CI saw (no
+  workflow runs the `dev-reload` feature). (1) The builder-level per-worker
+  service test served a sharded app, but `dev-reload` deliberately forces the
+  single cached-listener path, so `run()` rejects the registration by design;
+  the test is now compiled out under the feature and replaced by one that
+  asserts the rejection. (2) The dev-reload hot-patch tests shared a process
+  with the ordinary serving tests. `mark_hot_reload_loop()` is process-global
+  and one-way, so once a dev test had armed it the next served app set
+  `LIFECYCLE_INITIALIZED` — after which *every* later `run()` in the binary
+  skipped consumers, serve hooks and startup hooks and quietly lost its
+  `spawn_service` tasks (`shutdown_budget::grace_period_bounds_a_stubborn_service_and_names_it`
+  was the visible casualty). No lock can fix that across parallel test threads,
+  so the dev-reload tests now live in their own target,
+  `r2e-core/tests/dev_reload/`, and the `runtime` target no longer needs the
+  `dev_serial` lock at all.
+
+- **The `dev-reload` per-worker-service error no longer gives impossible
+  advice.** It used to be built from `PER_WORKER_REQUIRES_SHARDING_MSG`, so it
+  told you to set `server.workers` — a key `dev-reload` ignores. It now states
+  that the feature forces single-listener serving and that per-worker services
+  require a build without `dev-reload` (and a platform with SO_REUSEPORT
+  sharding — dropping the feature is necessary, not sufficient).
+
+- **Attribute macros no longer drop the attributes you write** (task #985).
+  Several attribute macros rebuild the item they annotate from its pieces
+  (visibility + signature parts + body) so they can strip R2E's own parameter
+  and field attributes. Those rebuilds silently discarded everything else.
+  - `#[producer]` dropped the whole `attrs` list of the annotated function:
+    `#[allow]`/`#[deny]`, `#[inline]`, `#[deprecated]`, `#[must_use]` and doc
+    comments written on a producer did nothing. It also dropped `const` and
+    `extern "…"` from the signature. All of them are forwarded now, and the
+    generated bean struct carries a doc comment of its own so
+    `#![deny(missing_docs)]` crates keep building. `#[deprecated]` warns at a
+    direct call to the function; the generated struct is a separate item and is
+    not itself deprecated, so `.register::<CreatePool>()` stays quiet.
+  - `#[routes]` dropped the attributes on the `impl` block (a `#[allow(...)]`
+    or doc comment above `impl MyController` vanished) and dropped every
+    associated item that was neither a route, a `#[consumer]`, a `#[scheduled]`
+    nor a lifecycle hook — an associated `const`, an associated `type` or a
+    plain helper `fn` written in a `#[routes]` block disappeared from the
+    build. Impl attributes now reach both synthesized impls, and the other
+    items stay on the controller core. Note that a route body's `Self` is the
+    request façade, so reach an associated const through the controller name
+    (`MyController::PAGE_SIZE`). Because there are *two* synthesized impls,
+    only **inert** attributes may sit below `#[routes]` — doc comments,
+    `#[allow]`/`#[warn]`/`#[deny]`/`#[expect]`/`#[forbid]`, `#[deprecated]`,
+    `#[cfg]`, `#[cfg_attr]` and tool attributes (`#[rustfmt::skip]`). Anything
+    else (an attribute macro) would expand once per impl, so it is a compile
+    error pointing at the position where it runs exactly once: above
+    `#[routes]`.
+  - `#[bean]` dropped the attributes and the `const`/`extern` pieces of the
+    constructor it re-emits.
+  - `#[async_exec]` dropped parameter attributes (`#[cfg]` on a parameter,
+    `#[allow]`) when re-emitting the wrapper's parameter list. A parameter
+    `#[cfg]` is now forwarded to the *forwarding call* as well, so a gated-out
+    parameter disappears from the signature and the call together instead of
+    leaving the disabled build with an unbound argument.
+  - `#[controller]` projects a request-scoped field's attributes onto the
+    generated request extractor and façade, and the generated code that binds
+    them carries `#[allow(deprecated, non_snake_case)]`: a `#[deprecated]`
+    request field warns where *you* read it, not from inside framework code, so
+    a crate under `#![deny(deprecated)]` still builds.
+
+  Because rustc evaluates an item-level `#[cfg]` (and a `#[cfg_attr]` expanding
+  to one) *before* it invokes an attribute macro — in either attribute order —
+  a `#[cfg]`'d-out producer, controller, `#[routes]` impl or bean never reaches
+  the macro at all, and no generated impl is left dangling. That is pinned by
+  tests rather than assumed (`r2e-core/tests/di/producer_attrs.rs` and
+  `r2e-core/tests/controller/attrs.rs`).
+
+  One signature piece is **rejected** rather than forwarded (breaking, but no
+  such code compiled before either): an `unsafe fn` `#[producer]` or `#[bean]`
+  constructor. R2E generates a *safe* `Producer::produce` / `Bean::build` that
+  is the only caller, and the bean graph cannot discharge an `unsafe` contract
+  it knows nothing about — re-emitting the signature verbatim is an E0133, and
+  adding an `unsafe { }` block around the generated call would sign the
+  contract on the user's behalf. Drop `unsafe` from the signature and keep the
+  `unsafe { }` block, with its SAFETY comment, inside the body.
+
+- **`#[producer]` now emits `#[allow(clippy::too_many_arguments)]`** on the
+  function and on the generated `Producer` impl. A producer takes one parameter
+  per dependency, so clippy's 7-argument threshold fires on perfectly
+  idiomatic producers and (before the fix above) could not even be silenced.
+  User attributes are emitted after it, so `#[warn(clippy::too_many_arguments)]`
+  on the function opts back in.
+
 - **`#[r2e::test_suite]` now builds ONE runtime per suite, not one per `#[case]`**
   (task #986). The suite value lives in a module-level `OnceLock` that outlives
   every case, but each generated `#[test]` used to build — and then drop — its
@@ -175,6 +262,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   hand-assembled test state) must wrap it — `BeanState::new(list)`. Guarded by
   `examples/example-app/tests/hotpath/state.rs`; numbers in
   `docs/claude/hot-path-clone-audit.md`.
+
+- **BREAKING (`r2e-macros`)**: `#[cfg]` / `#[cfg_attr]` on a **request-scoped**
+  controller field (`#[inject(identity)]` / `#[inject(request)]`) is now a
+  compile error instead of a silent no-op (task #985). Those fields are
+  projected into a positional marker tuple on the generated request extractor,
+  which cannot be gated element-wise; conditionally compiling one used to
+  produce a mismatched extractor rather than the field the author asked for.
+  `#[cfg]` the whole controller instead. App-scoped `#[inject]` / `#[config]`
+  fields are unaffected.
+
+- **BREAKING (`r2e-macros`)**: a plain `#[r2e::test]` with parameters is now a
+  compile error naming `#[r2e::test(app = MyApp)]` (task #985). Parameters are
+  bound from the booted `TestApp`; without an `app = …` there is nothing to
+  bind them from, and the generated `#[test]` fn used to fail with a confusing
+  libtest signature error.
 
 - **Perf (no API change)**: constant error bodies are no longer built through
   `serde_json::json!` on every response. `SecurityError` (401/503), the panic

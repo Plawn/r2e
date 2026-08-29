@@ -15,6 +15,15 @@ pub struct ControllerStructDef {
     pub config_fields: Vec<ConfigField>,
     pub live_config_fields: Vec<LiveConfigField>,
     pub config_section_fields: Vec<ConfigSectionField>,
+    /// Errors that must be reported WITHOUT aborting codegen.
+    ///
+    /// A hard `Err` from the parser leaves `#[controller]` emitting only the
+    /// struct, so `#[routes]` then fails a second time on the missing
+    /// `ContextConstruct` / `EndpointDeps` impls and the real diagnostic is
+    /// buried under two unrelated trait errors. Anything the macro can recover
+    /// from (an unhonourable attribute it simply drops) lands here instead and
+    /// is emitted as a `compile_error!` alongside the full, normal expansion.
+    pub deferred_errors: Vec<syn::Error>,
 }
 
 impl ControllerStructDef {
@@ -32,13 +41,30 @@ impl ControllerStructDef {
     /// (name, declared type) of every request-scoped field, in declaration
     /// order: the single optional identity field first, then request fields.
     /// Used to generate the request-data extractor and the façade fields.
-    pub fn request_scoped_fields(&self) -> Vec<(&syn::Ident, &syn::Type)> {
+    pub fn request_scoped_fields(&self) -> Vec<RequestScopedField<'_>> {
         self.identity_fields
             .iter()
-            .map(|f| (&f.name, &f.ty))
-            .chain(self.request_fields.iter().map(|f| (&f.name, &f.ty)))
+            .map(|f| RequestScopedField {
+                name: &f.name,
+                ty: &f.ty,
+                attrs: &f.attrs,
+            })
+            .chain(self.request_fields.iter().map(|f| RequestScopedField {
+                name: &f.name,
+                ty: &f.ty,
+                attrs: &f.attrs,
+            }))
             .collect()
     }
+}
+
+/// One request-scoped field (identity or `#[inject(request)]`), as the codegen
+/// needs it: the declaration re-emitted on the request-data extractor and the
+/// façade keeps the user's own attributes.
+pub struct RequestScopedField<'a> {
+    pub name: &'a syn::Ident,
+    pub ty: &'a syn::Type,
+    pub attrs: &'a [syn::Attribute],
 }
 
 /// Field helper attributes consumed by the `#[controller]` attribute macro.
@@ -131,6 +157,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
     let mut config_fields = Vec::new();
     let mut live_config_fields = Vec::new();
     let mut config_section_fields = Vec::new();
+    let mut deferred_errors: Vec<syn::Error> = Vec::new();
 
     for field in fields {
         let field_name = field
@@ -183,12 +210,19 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
         } else if let Some(attr) = inject_attr {
             if has_identity_qualifier(attr) {
                 // #[inject(identity)] -> request-scoped identity
-                identity_fields.push(make_identity_field(field_name, field_type));
+                deferred_errors.extend(cfg_on_request_scoped_field(&field.attrs));
+                identity_fields.push(make_identity_field(
+                    field_name,
+                    field_type,
+                    user_field_attrs(&field.attrs),
+                ));
             } else if has_request_qualifier(attr) {
                 // #[inject(request)] -> request-scoped extraction (any FromRequestParts)
+                deferred_errors.extend(cfg_on_request_scoped_field(&field.attrs));
                 request_fields.push(RequestField {
                     name: field_name,
                     ty: field_type,
+                    attrs: user_field_attrs(&field.attrs),
                 });
             } else if matches!(attr.meta, syn::Meta::List(_)) {
                 // `#[inject(name = "...")]` gets the shared named-bean rejection
@@ -257,17 +291,81 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
         config_fields,
         live_config_fields,
         config_section_fields,
+        deferred_errors,
     })
 }
 
+/// The attributes a request-scoped field must carry over to the re-declared
+/// field: everything except the `#[controller]` helper attributes, which stop
+/// being registered helpers once the macro is gone.
+fn user_field_attrs(attrs: &[syn::Attribute]) -> Vec<syn::Attribute> {
+    attrs
+        .iter()
+        .filter(|a| {
+            !CONTROLLER_FIELD_ATTRS
+                .iter()
+                .any(|name| a.path().is_ident(name))
+                // Recorded as a deferred error by `cfg_on_request_scoped_field`
+                // and dropped here: re-emitting it would gate the façade field
+                // while the positional marker tuple stays ungated, burying the
+                // real diagnostic under a type mismatch.
+                && !a.path().is_ident("cfg")
+                && !a.path().is_ident("cfg_attr")
+        })
+        .cloned()
+        .collect()
+}
+
+/// `#[cfg]` / `#[cfg_attr]` on a request-scoped field cannot be honoured, so it
+/// is reported rather than silently ignored.
+///
+/// Unlike item-level `#[cfg]`, a FIELD-level one is NOT pre-evaluated by rustc:
+/// it arrives here verbatim. Honouring it would mean cfg-gating the request-data
+/// struct field, its extraction, its entry in the positional marker tuple, its
+/// `FromRequestPartsVia` bound and the façade binding — and a tuple type cannot
+/// be cfg-gated element-wise. A silent no-op on a *conditional* field is a
+/// security-shaped surprise (the extractor keeps running), so this is a hard
+/// error (task #985).
+///
+/// Returned rather than raised: the caller records it as a deferred error and
+/// the field is kept (minus the offending attribute) so the rest of the
+/// expansion still happens and `#[routes]` has nothing extra to complain about.
+fn cfg_on_request_scoped_field(attrs: &[syn::Attribute]) -> Option<syn::Error> {
+    let attr = attrs
+        .iter()
+        .find(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))?;
+    let name = if attr.path().is_ident("cfg") {
+        "#[cfg]"
+    } else {
+        "#[cfg_attr]"
+    };
+    Some(syn::Error::new_spanned(
+        attr,
+        format!(
+            "{name} is not supported on a request-scoped controller field \
+             (#[inject(identity)] / #[inject(request)])\n\n\
+             The field is re-declared on the generated request extractor and \
+             the façade, whose marker tuple is positional — the macro cannot \
+             gate one element of it.\n\n\
+             \x20 hint: cfg the whole controller instead, or make the field \
+             type itself conditional via a type alias"
+        ),
+    ))
+}
+
 /// Build an [`IdentityField`], unwrapping `Option<T>` so guards see `Option<&T>`.
-fn make_identity_field(name: syn::Ident, declared: syn::Type) -> IdentityField {
+fn make_identity_field(
+    name: syn::Ident,
+    declared: syn::Type,
+    attrs: Vec<syn::Attribute>,
+) -> IdentityField {
     let (inner_ty, is_optional) = match unwrap_option_type(&declared) {
         Some(inner) => (inner.clone(), true),
         None => (declared.clone(), false),
     };
     IdentityField {
         name,
+        attrs,
         ty: declared,
         inner_ty,
         is_optional,

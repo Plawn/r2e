@@ -151,6 +151,16 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .collect();
 
     let other_fns: Vec<_> = def.other_methods.iter().collect();
+    let other_items: Vec<_> = def.other_items.iter().collect();
+
+    // The user's own impl-block attributes (`#[allow]`, docs, …). `#[routes]`
+    // emits two synthesized impl blocks in place of the one that was written,
+    // so both carry them: route methods land on the façade, everything else on
+    // the core, and a lint allow must cover whichever the method ended up on.
+    // Emitting twice is only sound for INERT attributes, which is why
+    // `routes_parsing::reject_non_inert_impl_attrs` refuses anything else here
+    // (a procedural attribute would otherwise expand twice).
+    let impl_attrs: Vec<_> = def.impl_attrs.iter().collect();
 
     let facade_impl = if route_fns.is_empty()
         && sse_fns.is_empty()
@@ -160,6 +170,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         quote! {}
     } else {
         quote! {
+            #(#impl_attrs)*
             impl #facade_name {
                 #(#route_fns)*
                 #(#sse_fns)*
@@ -173,12 +184,14 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         && scheduled_fns.is_empty()
         && async_exec_fns.is_empty()
         && other_fns.is_empty()
+        && other_items.is_empty()
         && anon_route_fns.is_empty()
         && anon_sse_ws_fns.is_empty()
     {
         quote! {}
     } else {
         quote! {
+            #(#impl_attrs)*
             impl #name {
                 #(#anon_route_fns)*
                 #(#anon_sse_ws_fns)*
@@ -186,6 +199,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 #(#scheduled_fns)*
                 #(#async_exec_fns)*
                 #(#other_fns)*
+                #(#other_items)*
             }
         }
     };

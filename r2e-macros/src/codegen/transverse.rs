@@ -648,7 +648,31 @@ pub(crate) fn async_exec_method(
         .zip(&arg_idents)
         .map(|(pt, ident)| {
             let ty = &pt.ty;
-            quote! { #ident: #ty }
+            // The parameter's own attributes ride along: a `#[cfg]` here is NOT
+            // pre-evaluated by rustc, so dropping it would gate the inner fn's
+            // parameter while leaving the wrapper's in place — an arity
+            // mismatch that only appears in one cfg (task #985).
+            let attrs = &pt.attrs;
+            quote! { #(#attrs)* #ident: #ty }
+        })
+        .collect();
+
+    // …and the forwarding call has to be gated the same way, or the disabled
+    // configuration passes an argument that no longer has a binding (and one
+    // too many of them). `cfg`/`cfg_attr` are the only attributes copied to the
+    // argument position: they are what changes the *arity*, and an expression
+    // does not accept the rest (`#[deprecated]` on a call argument is an
+    // error). Everything else stays on the two signatures.
+    let arg_forwards: Vec<TokenStream> = typed_inputs
+        .iter()
+        .zip(&arg_idents)
+        .map(|(pt, ident)| {
+            let cfg_attrs: Vec<&syn::Attribute> = pt
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))
+                .collect();
+            quote! { #(#cfg_attrs)* #ident }
         })
         .collect();
 
@@ -667,7 +691,7 @@ pub(crate) fn async_exec_method(
         ) -> ::core::result::Result<#exec_krate::JobHandle<#return_ty>, #exec_krate::RejectedError> #where_clause {
             let __self = ::core::clone::Clone::clone(self);
             self.#executor_field.submit(async move {
-                __self.#inner_name(#(#arg_idents),*).await
+                __self.#inner_name(#(#arg_forwards),*).await
             })
         }
     }

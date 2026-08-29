@@ -230,6 +230,20 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         .to_compile_error();
     }
 
+    // The standard path rebuilds the function as `fn #fn_name()`, so a
+    // parameter would be silently discarded. Only the `app = ...` path knows how
+    // to bind one (task #985).
+    if is_test && sig.inputs.first().is_some() {
+        return syn::Error::new_spanned(
+            sig,
+            "#[r2e::test] does not accept parameters unless it boots an app — \
+             parameters are bound from the booted `TestApp`:\n\n\
+             \x20 #[r2e::test(app = MyApp)]\n\
+             \x20 async fn t(app: TestApp) { ... }",
+        )
+        .to_compile_error();
+    }
+
     // ── Standard path ─────────────────────────────────────────────────────
     // Ordered tests (test-only) enroll in the r2e-test sequential barrier: an
     // inventory entry at item level, the turn guard as first statement, and

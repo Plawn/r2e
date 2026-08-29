@@ -117,6 +117,40 @@ async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
 // Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
 ```
 
+### Attributes on the annotated function
+
+`#[producer]` re-emits your function (it only strips `#[config]` /
+`#[config_section]` / `#[live_config]` from the *parameters*), and it carries
+**every attribute you wrote on it**: doc comments, `#[allow]` / `#[deny]`,
+`#[inline]`, `#[deprecated]`, `#[must_use]`. `#[cfg]` needs no help — rustc
+evaluates item-level `#[cfg]` before it invokes an attribute macro, in either
+order, so a cfg'd-out producer never reaches the macro at all.
+
+Two attributes the macro adds for you:
+
+- **`#[allow(clippy::too_many_arguments)]`, always.** A producer takes one
+  parameter per dependency, so a perfectly idiomatic producer with eight beans
+  trips the lint at 8/7. It is emitted on the function *and* on the generated
+  `impl Producer` block. Your own attributes are emitted after the macro's, so
+  `#[warn(clippy::too_many_arguments)]` (or `#[deny]`) on the function still
+  wins if you want the lint back for that one producer.
+- **A doc comment on the generated struct.** `CreatePool` inherits the
+  function's visibility, so a crate under `#![deny(missing_docs)]` would
+  otherwise fail on an item it never wrote.
+
+`#[deprecated]` lands on the **function**, so a direct call to `create_pool(...)`
+warns, and the generated `produce()` does not (the `impl Producer` block carries
+`#[allow(deprecated)]`). The generated `CreatePool` struct is a separate item and
+is *not* deprecated, so `.register::<CreatePool>()` does **not** warn — deprecate
+the bean type itself if you want the registration site to complain.
+
+`unsafe fn` is rejected, not forwarded. The generated `Producer::produce` is a
+safe method and the only caller, and the bean graph has no way to discharge an
+`unsafe` contract it knows nothing about; forwarding it would be an E0133 and
+adding an `unsafe { }` block would sign the contract on your behalf. Drop
+`unsafe` from the signature and put the `unsafe { }` block (with its SAFETY
+comment) inside the body. Same rule for a `#[bean]` constructor.
+
 ### Conditional availability via `Option<T>` (first-class bean type)
 
 `Option<T>` is a distinct bean type: a producer that declares
