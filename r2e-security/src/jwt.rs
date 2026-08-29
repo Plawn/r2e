@@ -67,10 +67,37 @@ impl JwtClaimSet for serde_json::Value {
 pub struct JwtClaimsValidator {
     key_source: KeySource,
     config: SecurityConfig,
-    validation: Validation,
+    /// One prepared [`Validation`] per allowed algorithm, built once at
+    /// construction.
+    ///
+    /// `Validation` owns three `HashSet<String>`s (required claims, issuers,
+    /// audiences) plus a `Vec<Algorithm>`, so cloning it per request — which is
+    /// what every authenticated HTTP, gRPC and MCP call used to do, purely to
+    /// overwrite `algorithms` — costs a handful of heap allocations on the hot
+    /// path. The allow-list is small and fixed, so the narrowed variants are
+    /// materialized up front and borrowed per validation instead.
+    validations: Vec<(jsonwebtoken::Algorithm, Validation)>,
 }
 
 impl JwtClaimsValidator {
+    /// Build the per-algorithm [`Validation`] table.
+    ///
+    /// jsonwebtoken rejects any `Validation` whose algorithm list mixes key
+    /// families (RSA + EC) once the key is known, so each entry is narrowed to
+    /// exactly one algorithm — the same narrowing the request path used to do
+    /// by cloning and mutating.
+    fn build_validations(config: &SecurityConfig) -> Vec<(jsonwebtoken::Algorithm, Validation)> {
+        config
+            .allowed_algorithms
+            .iter()
+            .map(|&algorithm| {
+                let mut validation = Self::build_validation(config);
+                validation.algorithms = vec![algorithm];
+                (algorithm, validation)
+            })
+            .collect()
+    }
+
     fn build_validation(config: &SecurityConfig) -> Validation {
         // `algorithms` is replaced below, so this fallback is only needed to
         // construct a Validation when the configured allow-list is empty.
@@ -98,21 +125,21 @@ impl JwtClaimsValidator {
 
     /// Create a new validator backed by a JWKS cache.
     pub fn new(jwks: Arc<JwksCache>, config: SecurityConfig) -> Self {
-        let validation = Self::build_validation(&config);
+        let validations = Self::build_validations(&config);
         Self {
             key_source: KeySource::Jwks(jwks),
             config,
-            validation,
+            validations,
         }
     }
 
     /// Create a new validator with a static decoding key (useful for testing).
     pub fn new_with_static_key(key: DecodingKey, config: SecurityConfig) -> Self {
-        let validation = Self::build_validation(&config);
+        let validations = Self::build_validations(&config);
         Self {
             key_source: KeySource::Static(Arc::new(key)),
             config,
-            validation,
+            validations,
         }
     }
 
@@ -174,13 +201,17 @@ impl JwtClaimsValidator {
         };
 
         // Step 3: Decode and validate the token using the parameters prepared
-        // once when the validator was constructed. jsonwebtoken rejects any
-        // `Validation` whose algorithm list mixes key families (RSA + EC) once
-        // the key is known, so narrow the list to the token's algorithm — it
-        // already passed the allow-list check above.
-        let mut validation = self.validation.clone();
-        validation.algorithms = vec![algorithm];
-        let token_data = decode::<C>(token, &decoding_key, &validation).map_err(|e| {
+        // once when the validator was constructed, already narrowed to this
+        // algorithm. The allow-list check above guarantees the entry exists.
+        let validation = self
+            .validations
+            .iter()
+            .find(|(candidate, _)| *candidate == algorithm)
+            .map(|(_, validation)| validation)
+            .ok_or_else(|| {
+                SecurityError::ValidationFailed(format!("Disallowed JWT algorithm: {algorithm:?}"))
+            })?;
+        let token_data = decode::<C>(token, &decoding_key, validation).map_err(|e| {
             let err = match e.kind() {
                 jsonwebtoken::errors::ErrorKind::ExpiredSignature => SecurityError::TokenExpired,
                 jsonwebtoken::errors::ErrorKind::InvalidIssuer => {

@@ -43,7 +43,12 @@ struct CacheEntry {
     /// authenticate (a forged token colliding on the 64-bit key would
     /// otherwise inherit the cached principal).
     token: String,
-    result: Result<McpPrincipal, &'static str>,
+    /// Behind an `Arc` so a cache hit clones a refcount while the state lock is
+    /// held and materializes the principal only after releasing it. Cloning
+    /// `McpPrincipal` copies the whole `AuthenticatedUser` claims tree
+    /// (including the flattened `extra` JSON map), which has no business
+    /// lengthening a critical section shared by every concurrent request.
+    result: Result<Arc<McpPrincipal>, &'static str>,
     expires_at: Instant,
     /// Monotonic access sequence used for bounded LRU eviction.
     last_used: u64,
@@ -99,7 +104,13 @@ impl TokenCache {
         let last_used = state.access_seq;
         let entry = state.entries.get_mut(&hash).expect("entry checked above");
         entry.last_used = last_used;
-        Some(entry.result.clone().map_err(McpAuthError::InvalidToken))
+        let result = entry.result.clone();
+        drop(state);
+        Some(
+            result
+                .map(|principal| (*principal).clone())
+                .map_err(McpAuthError::InvalidToken),
+        )
     }
 
     fn insert(
@@ -109,6 +120,7 @@ impl TokenCache {
         result: Result<McpPrincipal, &'static str>,
         ttl: Duration,
     ) {
+        let result = result.map(Arc::new);
         let mut state = self.state.lock().expect("token cache poisoned");
         if state.entries.len() >= self.max_entries && !state.entries.contains_key(&hash) {
             let now = Instant::now();

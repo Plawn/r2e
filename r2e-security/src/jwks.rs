@@ -206,7 +206,7 @@ fn validate_key_metadata(
         )));
     }
     if let Some(advertised_algorithm) = advertised_algorithm {
-        if !advertised_algorithm.eq_ignore_ascii_case(&format!("{algorithm:?}")) {
+        if !advertised_algorithm.eq_ignore_ascii_case(name_for_algorithm(algorithm)) {
             return Err(SecurityError::ValidationFailed(format!(
                 "JWK algorithm '{advertised_algorithm}' does not match token algorithm {algorithm:?}"
             )));
@@ -420,6 +420,30 @@ impl JwksCache {
 
 /// The JWK key type (`kty`) expected for a given JWT signing algorithm.
 #[doc(hidden)]
+/// The JWA name of an algorithm, as it appears in a JWK's `alg` member.
+///
+/// This runs on every validation of a token whose JWK advertises `alg` (which
+/// is most IdPs: Keycloak, Auth0, Entra), so it must not allocate — the
+/// `format!("{algorithm:?}")` it replaces did. The spelling matches
+/// `Algorithm`'s `Debug`, which is what the previous comparison relied on.
+fn name_for_algorithm(algorithm: Algorithm) -> &'static str {
+    use Algorithm::*;
+    match algorithm {
+        HS256 => "HS256",
+        HS384 => "HS384",
+        HS512 => "HS512",
+        RS256 => "RS256",
+        RS384 => "RS384",
+        RS512 => "RS512",
+        PS256 => "PS256",
+        PS384 => "PS384",
+        PS512 => "PS512",
+        ES256 => "ES256",
+        ES384 => "ES384",
+        EdDSA => "EdDSA",
+    }
+}
+
 pub fn kty_for_algorithm(algorithm: Algorithm) -> &'static str {
     use Algorithm::*;
     match algorithm {

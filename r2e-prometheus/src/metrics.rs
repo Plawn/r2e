@@ -124,11 +124,32 @@ pub fn encode_metrics() -> String {
     String::from_utf8(buffer).unwrap()
 }
 
+/// Render the status-code label without allocating.
+///
+/// `with_label_values` wants `&str`, and the naive `status.to_string()` is a
+/// heap allocation on every single request — the only one left on this path,
+/// since `with_label_values` itself just hashes the values and looks the
+/// metric up. The value is drawn from a tiny bounded set, so it renders into
+/// a stack buffer instead.
+fn status_label(status: u16, buf: &mut [u8; 5]) -> &str {
+    use std::io::Write as _;
+    let cap = buf.len();
+    let written = {
+        let mut cursor = &mut buf[..];
+        // Infallible: a `u16` is at most 5 digits.
+        let _ = write!(cursor, "{status}");
+        cap - cursor.len()
+    };
+    // `write!` of a `u16` emits ASCII digits only, so this never fails.
+    std::str::from_utf8(&buf[..written]).unwrap_or("")
+}
+
 /// Record an HTTP request.
 pub fn record_request(method: &str, path: &str, status: u16, duration_secs: f64) {
     let m = metrics();
+    let mut status_buf = [0u8; 5];
     m.http_requests_total
-        .with_label_values(&[method, path, &status.to_string()])
+        .with_label_values(&[method, path, status_label(status, &mut status_buf)])
         .inc();
     m.http_request_duration_seconds
         .with_label_values(&[method, path])

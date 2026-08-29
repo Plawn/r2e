@@ -6,6 +6,7 @@ use r2e_core::http::labels::{method_label, route_label};
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Instant,
 };
@@ -27,14 +28,21 @@ impl Extractor for HeaderExtractor<'_> {
 
 /// Tower layer that extracts trace context from incoming HTTP headers
 /// and creates a tracing span for each request.
+///
+/// The header allow-list is immutable for the app's lifetime, so it is shared
+/// behind an [`Arc`]: the HTTP backend clones the wrapped service once per
+/// request, and a `Vec<String>` there would deep-clone every configured header
+/// name on every request.
 #[derive(Clone)]
 pub struct OtelTraceLayer {
-    capture_headers: Vec<String>,
+    capture_headers: Arc<[String]>,
 }
 
 impl OtelTraceLayer {
     pub fn new(capture_headers: Vec<String>) -> Self {
-        Self { capture_headers }
+        Self {
+            capture_headers: capture_headers.into(),
+        }
     }
 }
 
@@ -44,7 +52,7 @@ impl<S> Layer<S> for OtelTraceLayer {
     fn layer(&self, inner: S) -> Self::Service {
         OtelTraceService {
             inner,
-            capture_headers: self.capture_headers.clone(),
+            capture_headers: Arc::clone(&self.capture_headers),
         }
     }
 }
@@ -53,7 +61,7 @@ impl<S> Layer<S> for OtelTraceLayer {
 #[derive(Clone)]
 pub struct OtelTraceService<S> {
     inner: S,
-    capture_headers: Vec<String>,
+    capture_headers: Arc<[String]>,
 }
 
 impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for OtelTraceService<S>
@@ -93,7 +101,7 @@ where
         let _ = span.set_parent(parent_cx);
 
         // Log captured headers as span events
-        for name in &self.capture_headers {
+        for name in self.capture_headers.iter() {
             if let Some(val) = req.headers().get(name.as_str()) {
                 if let Ok(s) = val.to_str() {
                     tracing::debug!(parent: &span, header.name = %name, header.value = %s, "captured header");

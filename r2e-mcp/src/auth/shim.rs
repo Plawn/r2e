@@ -232,7 +232,7 @@ fn mirrored_metadata(state: &ShimState, raw: &Value) -> String {
 /// `GET` handler for the mirrored authorization-server metadata routes.
 async fn serve_metadata(state: Arc<ShimState>) -> Response {
     match state.discovery.get().await {
-        Ok(meta) => public_json_response(&Arc::from(mirrored_metadata(&state, &meta.raw))),
+        Ok(meta) => public_json_response(mirrored_metadata(&state, &meta.raw).into()),
         Err(err) => {
             tracing::warn!(error = %err.description(), "shim metadata mirror: discovery failed");
             oauth_error(
