@@ -429,6 +429,10 @@ fn generate_case(
                 let __r2e_after_all_result = ::std::panic::catch_unwind(
                     ::std::panic::AssertUnwindSafe(|| {
                         __r2e_runtime.block_on(async {
+                            __r2e_cell.assert_on_suite_runtime(
+                                stringify!(#suite_ident),
+                                "after_all",
+                            );
                             let __r2e_after_all_outcome = #call;
                             #test_crate::suite::SuiteOutcome::assert_passed(__r2e_after_all_outcome);
                         })
@@ -449,8 +453,15 @@ fn generate_case(
             #tracing_init
             #order_turn
             let __r2e_cell = __r2e_suite_cell();
-            // Shared with every other case: see `SuiteCell`'s module docs.
-            let __r2e_runtime = __r2e_cell.runtime();
+            // Shared with every other case: see `SuiteCell`'s module docs. The
+            // slot guard is held for the whole case, so teardown cannot pull the
+            // runtime out from under it; it is always taken before the state
+            // lock, so the two can never deadlock.
+            let mut __r2e_runtime_slot = __r2e_cell.runtime();
+            let __r2e_runtime = __r2e_runtime_slot.get(
+                stringify!(#suite_ident),
+                stringify!(#fn_name),
+            );
             let mut __r2e_state = __r2e_cell.lock();
             if __r2e_state.init_failed {
                 panic!("R2E test suite initialization failed in a previous case");
@@ -458,7 +469,13 @@ fn generate_case(
             if __r2e_state.suite.is_none() {
                 let __r2e_init_result = ::std::panic::catch_unwind(
                     ::std::panic::AssertUnwindSafe(|| {
-                        __r2e_runtime.block_on(__r2e_init_suite())
+                        __r2e_runtime.block_on(async {
+                            __r2e_cell.assert_on_suite_runtime(
+                                stringify!(#suite_ident),
+                                "before_all",
+                            );
+                            __r2e_init_suite().await
+                        })
                     }),
                 );
                 match __r2e_init_result {
@@ -497,6 +514,10 @@ fn generate_case(
                 let __r2e_after_each_result = ::std::panic::catch_unwind(
                     ::std::panic::AssertUnwindSafe(|| {
                         __r2e_runtime.block_on(async {
+                            __r2e_cell.assert_on_suite_runtime(
+                                stringify!(#suite_ident),
+                                "after_each",
+                            );
                             #(
                                 let __r2e_after_each_outcome = #after_each;
                                 #test_crate::suite::SuiteOutcome::assert_passed(__r2e_after_each_outcome);
@@ -508,16 +529,26 @@ fn generate_case(
                 (__r2e_case_result, __r2e_after_each_result)
             };
 
-            __r2e_state.completed_cases += 1;
-            let __r2e_run_after_all =
-                __r2e_state.completed_cases == __r2e_cell.total_cases()
-                    && !__r2e_state.after_all_ran;
-            if __r2e_run_after_all {
-                __r2e_state.after_all_ran = true;
-            }
+            let __r2e_run_after_all = __r2e_state.complete_case(__r2e_cell.total_cases());
 
             let mut __r2e_resume = __r2e_case_result.err().or_else(|| __r2e_after_each_result.err());
             #after_all_call
+            // End of the suite: drop the suite value on its own reactor, then
+            // shut the runtime down. The `OnceLock` holding the cell is never
+            // dropped, so without this the suite's worker threads and detached
+            // tasks would outlive it for the rest of the process.
+            if __r2e_run_after_all {
+                let __r2e_suite_value = __r2e_state.suite.take();
+                ::core::mem::drop(__r2e_state);
+                let __r2e_finish_result = ::std::panic::catch_unwind(
+                    ::std::panic::AssertUnwindSafe(|| {
+                        __r2e_runtime_slot.finish(__r2e_suite_value)
+                    }),
+                );
+                if __r2e_resume.is_none() {
+                    __r2e_resume = __r2e_finish_result.err();
+                }
+            }
             let __r2e_case_panicked = __r2e_resume.is_some();
             #maybe_mark_failed
             if let Some(__r2e_panic) = __r2e_resume {
