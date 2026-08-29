@@ -41,6 +41,7 @@
 #[global_allocator]
 static GLOBAL: counter::CountingAllocator = counter::CountingAllocator;
 
+mod accounting;
 mod counter;
 mod decorators;
 mod jwt;

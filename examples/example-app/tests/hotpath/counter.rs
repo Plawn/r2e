@@ -37,11 +37,16 @@ unsafe impl GlobalAlloc for CountingAllocator {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // A grow counts as one allocation event of the growth delta. Delegating
-        // to `System::realloc` (rather than letting the default trait impl do
-        // alloc+copy+dealloc) keeps in-place growth in place, so the harness
-        // does not distort what it measures.
-        record(new_size.saturating_sub(layout.size()));
+        // One allocation event of `new_size` bytes — what the allocator is
+        // actually asked for. Charging only the growth delta would understate a
+        // buffer that doubles its way up (a 1 KiB -> 2 KiB grow is a 2 KiB
+        // request that may move and memcpy the whole block, not a 1 KiB one)
+        // and would let repeated growth slip under the byte canary.
+        //
+        // Delegating to `System::realloc` — rather than letting the default
+        // trait impl do alloc+copy+dealloc — keeps in-place growth in place, so
+        // the harness does not distort what it measures.
+        record(new_size);
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 
