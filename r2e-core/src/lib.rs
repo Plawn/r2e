@@ -106,7 +106,9 @@ pub use web::request_head::RequestHead;
 
 // Dev-reload helpers
 #[cfg(feature = "dev-reload")]
-pub use runtime::dev::invalidate_state_cache;
+pub use runtime::dev::{
+    commit_dev_cycle, has_staged_dev_cycle, invalidate_state_cache, rollback_dev_cycle,
+};
 
 // Entry-point macros
 pub use r2e_macros::main;

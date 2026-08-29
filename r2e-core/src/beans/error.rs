@@ -42,6 +42,30 @@ pub enum BeanError {
     },
     /// One or more config keys required by beans are missing.
     MissingConfigKeys(crate::config::ConfigValidationError),
+    /// Configuration could not be loaded or bound: a missing/malformed
+    /// requested config file, a failing [`ConfigProvider`], an unresolved
+    /// `${...}` placeholder, or a typed section that does not bind.
+    ///
+    /// Recorded by `load_config()` (which cannot return a `Result` — it is a
+    /// type-state transition in the middle of the builder chain) and surfaced
+    /// by [`try_build_state`](crate::AppBuilder::try_build_state) before any
+    /// bean is constructed.
+    ///
+    /// [`ConfigProvider`]: crate::config::ConfigProvider
+    ConfigLoad {
+        /// What was being done ("Failed to load config", …).
+        context: &'static str,
+        source: BootError,
+    },
+    /// A controller registered by a feature module or a plugin declares config
+    /// keys/sections that fail validation. Carries the same aggregated report
+    /// [`MissingConfigKeys`](Self::MissingConfigKeys) does, plus the
+    /// controller that declared them.
+    ControllerConfig {
+        /// The controller type whose declared config failed validation.
+        controller: &'static str,
+        source: crate::config::ConfigValidationError,
+    },
     /// A bean's constructor (or a producer function) returned an error.
     ///
     /// The first such error aborts `build_state()`; every bean already built
@@ -108,6 +132,15 @@ impl fmt::Display for BeanError {
             BeanError::MissingConfigKeys(err) => {
                 write!(f, "{}", err)
             }
+            BeanError::ConfigLoad { context, source } => {
+                write!(f, "{context}: {source}")
+            }
+            BeanError::ControllerConfig { controller, source } => {
+                write!(
+                    f,
+                    "\n=== CONFIGURATION ERRORS (controller: {controller}) ===\n\n{source}\n============================\n"
+                )
+            }
             BeanError::BeanBuild { bean, source } => {
                 write!(f, "Bean '{}' failed to build: {}", bean, source)
             }
@@ -126,6 +159,8 @@ impl std::error::Error for BeanError {
         match self {
             BeanError::BeanBuild { source, .. } => Some(source.as_ref()),
             BeanError::PluginBuild { source, .. } => Some(source.as_ref()),
+            BeanError::ConfigLoad { source, .. } => Some(source.as_ref()),
+            BeanError::ControllerConfig { source, .. } => Some(source),
             _ => None,
         }
     }

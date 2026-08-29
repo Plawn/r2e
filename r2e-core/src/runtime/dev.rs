@@ -182,17 +182,6 @@ pub(crate) fn get_cached_state<T: Clone + Send + Sync + 'static>() -> Option<T> 
         .cloned()
 }
 
-/// Cache the application state for future dev-reload cycles.
-///
-/// Stores (or overwrites) the cached state. Called after every successful
-/// bean resolution.
-#[cfg(feature = "dev-reload")]
-pub(crate) fn cache_state<T: Clone + Send + Sync + 'static>(state: &T) {
-    let store = STATE_CACHE.get_or_init(|| Mutex::new(None));
-    let mut guard = store.lock().expect("state cache poisoned");
-    *guard = Some(Box::new(state.clone()));
-}
-
 // ── Live-config registry carrier ────────────────────────────────────────────
 
 /// The process-stable [`LiveConfigRegistry`](crate::config::LiveConfigRegistry)
@@ -278,6 +267,104 @@ pub(crate) fn mark_lifecycle_initialized() {
     LIFECYCLE_INITIALIZED.store(true, Ordering::Release);
 }
 
+// ── Staged cycle (two-phase cache commit) ───────────────────────────────────
+
+/// The state/context/fingerprints a `try_build_state()` produced this cycle,
+/// held OUT of the live caches until the whole cycle is known to have
+/// assembled.
+///
+/// `try_build_state()` is only the first half of a hot-patch cycle: the
+/// enclosing `App::build` can still fail after it (a plugin, a controller, a
+/// `?` in the app's own assembly). Committing the caches inside
+/// `try_build_state` made a failed cycle leave its graph behind — the beans it
+/// built never dropped, and the *next* patch happily reused that failed graph
+/// while `LIFECYCLE_INITIALIZED` was still set, skipping its startup
+/// lifecycle. Staging makes the commit atomic with cycle success:
+/// [`commit_dev_cycle`] on `Ok`, [`rollback_dev_cycle`] on `Err` (which drops
+/// the staged `Arc<BeanContext>`, releasing the beans built this cycle).
+#[cfg(feature = "dev-reload")]
+struct StagedCycle {
+    state: Box<dyn Any + Send + Sync>,
+    ctx: std::sync::Arc<crate::beans::BeanContext>,
+    fingerprint: u64,
+    per_bean: crate::beans::BeanFingerprints,
+}
+
+#[cfg(feature = "dev-reload")]
+static STAGED_CYCLE: OnceLock<Mutex<Option<StagedCycle>>> = OnceLock::new();
+
+/// Stage this cycle's resolved graph. Visible to nothing until
+/// [`commit_dev_cycle`]; replaced wholesale if another `build_state()` runs
+/// in the same cycle.
+#[cfg(feature = "dev-reload")]
+pub(crate) fn stage_cycle<T: Clone + Send + Sync + 'static>(
+    state: &T,
+    ctx: &std::sync::Arc<crate::beans::BeanContext>,
+    fingerprint: u64,
+    per_bean: crate::beans::BeanFingerprints,
+) {
+    let store = STAGED_CYCLE.get_or_init(|| Mutex::new(None));
+    let mut guard = store.lock().expect("staged cycle poisoned");
+    *guard = Some(StagedCycle {
+        state: Box::new(state.clone()),
+        ctx: std::sync::Arc::clone(ctx),
+        fingerprint,
+        per_bean,
+    });
+}
+
+/// Promote the staged cycle into the live dev-reload caches.
+///
+/// Called by `r2e::launch!` once the hot-patch cycle has assembled
+/// successfully (`App::build` returned `Ok`). No-op when nothing is staged —
+/// a cache-hit cycle reuses the committed graph and stages nothing.
+#[cfg(feature = "dev-reload")]
+pub fn commit_dev_cycle() {
+    let Some(store) = STAGED_CYCLE.get() else {
+        return;
+    };
+    let staged = match store.lock() {
+        Ok(mut guard) => guard.take(),
+        Err(_) => return,
+    };
+    let Some(staged) = staged else { return };
+
+    if let Ok(mut guard) = STATE_CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        *guard = Some(staged.state);
+    }
+    cache_ctx(&staged.ctx);
+    cache_graph_fingerprint(staged.fingerprint, staged.per_bean);
+}
+
+/// Discard the staged cycle: a hot-patch cycle that failed to assemble leaves
+/// the caches exactly as the last successful cycle left them, and the beans it
+/// built are dropped here with the staged context.
+///
+/// Called by `r2e::launch!` when `App::build` returns `Err`.
+#[cfg(feature = "dev-reload")]
+pub fn rollback_dev_cycle() {
+    let Some(store) = STAGED_CYCLE.get() else {
+        return;
+    };
+    if let Ok(mut guard) = store.lock() {
+        // Dropped outside the lock: a bean `Drop` must not run while the
+        // staging mutex is held (it may itself touch the dev caches).
+        let staged = guard.take();
+        drop(guard);
+        drop(staged);
+    }
+}
+
+/// Whether a cycle is currently staged but not yet committed — **tests only**.
+#[cfg(feature = "dev-reload")]
+#[doc(hidden)]
+pub fn has_staged_dev_cycle() -> bool {
+    STAGED_CYCLE
+        .get()
+        .and_then(|store| store.lock().ok().map(|g| g.is_some()))
+        .unwrap_or(false)
+}
+
 /// Force the next dev-reload cycle to rebuild the application state from
 /// scratch (re-resolve all beans).
 ///
@@ -304,6 +391,9 @@ pub fn invalidate_state_cache() {
         }
     }
     invalidate_graph_fingerprint();
+    // A staged-but-uncommitted cycle is part of the cache group too: "force a
+    // cold rebuild" must not leave one behind to be committed later.
+    rollback_dev_cycle();
     LIFECYCLE_INITIALIZED.store(false, Ordering::Release);
 }
 

@@ -578,12 +578,36 @@ impl_controller_deps_list!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12
 /// it is always inferred. Implemented for `()` and tuples of arity 1..=16.
 pub trait ModuleControllers<T: Clone + Send + Sync + 'static, W> {
     /// Register every controller in the tuple, in tuple order.
-    fn register_all(builder: AppBuilder<T>) -> AppBuilder<T>;
+    ///
+    /// Fallible: a controller declaring config keys/sections that do not
+    /// validate yields [`BeanError::ControllerConfig`](crate::beans::BeanError::ControllerConfig)
+    /// rather than a panic, so `try_build_state()` — which runs this fold —
+    /// really is non-panicking.
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+}
+
+/// Register one deferred controller, mapping its config-validation failure to
+/// the boot error channel. Shared by the module and plugin folds; the only
+/// difference is that module controllers skip the global dependency check
+/// (see [`ModuleControllers`]).
+fn register_deferred<T, C, W>(
+    builder: AppBuilder<T>,
+) -> Result<AppBuilder<T>, crate::beans::BeanError>
+where
+    T: Clone + Send + Sync + 'static,
+    C: Controller<T, W>,
+{
+    builder
+        .try_register_controller_unchecked_impl::<C, W>()
+        .map_err(|source| crate::beans::BeanError::ControllerConfig {
+            controller: std::any::type_name::<C>(),
+            source,
+        })
 }
 
 impl<T: Clone + Send + Sync + 'static> ModuleControllers<T, ()> for () {
-    fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
-        builder
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+        Ok(builder)
     }
 }
 
@@ -594,8 +618,10 @@ macro_rules! impl_module_controllers {
             T: Clone + Send + Sync + 'static,
             $C0: Controller<T, $W0>,
         {
-            fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
-                builder.register_controller_unchecked_impl::<$C0, $W0>()
+            fn register_all(
+                builder: AppBuilder<T>,
+            ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+                register_deferred::<T, $C0, $W0>(builder)
             }
         }
     };
@@ -607,10 +633,12 @@ macro_rules! impl_module_controllers {
             $C0: Controller<T, $W0>,
             $($Cs: Controller<T, $Ws>,)+
         {
-            fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
-                builder
-                    .register_controller_unchecked_impl::<$C0, $W0>()
-                    $(.register_controller_unchecked_impl::<$Cs, $Ws>())+
+            fn register_all(
+                builder: AppBuilder<T>,
+            ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+                let builder = register_deferred::<T, $C0, $W0>(builder)?;
+                $(let builder = register_deferred::<T, $Cs, $Ws>(builder)?;)+
+                Ok(builder)
             }
         }
         impl_module_controllers!($($Cs $Ws),+);
@@ -629,12 +657,19 @@ impl_module_controllers!(
 /// code never names it. `W` nests one witness pair per module.
 pub trait ModuleList<T: Clone + Send + Sync + 'static, W> {
     /// Register every pending module's controllers, in registration order.
-    fn register_controllers(builder: AppBuilder<T>) -> AppBuilder<T>;
+    ///
+    /// Fallible for the same reason [`ModuleControllers::register_all`] is:
+    /// `try_build_state()` must not panic on a deferred controller's config.
+    fn register_controllers(
+        builder: AppBuilder<T>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError>;
 }
 
 impl<T: Clone + Send + Sync + 'static> ModuleList<T, ()> for TNil {
-    fn register_controllers(builder: AppBuilder<T>) -> AppBuilder<T> {
-        builder
+    fn register_controllers(
+        builder: AppBuilder<T>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+        Ok(builder)
     }
 }
 
@@ -645,12 +680,14 @@ where
     M::Controllers: ModuleControllers<T, WC>,
     Rest: ModuleList<T, WR>,
 {
-    fn register_controllers(builder: AppBuilder<T>) -> AppBuilder<T> {
+    fn register_controllers(
+        builder: AppBuilder<T>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
         // `Mods` grows head-first (the most recently registered module is the
         // head), so recurse into the tail first to preserve registration order.
         <M::Controllers as ModuleControllers<T, WC>>::register_all(Rest::register_controllers(
             builder,
-        ))
+        )?)
     }
 }
 
@@ -661,9 +698,11 @@ where
     Pl::Controllers: PluginControllerList<Pl, T, WC>,
     Rest: ModuleList<T, WR>,
 {
-    fn register_controllers(builder: AppBuilder<T>) -> AppBuilder<T> {
+    fn register_controllers(
+        builder: AppBuilder<T>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
         <Pl::Controllers as PluginControllerList<Pl, T, WC>>::register_all(
-            Rest::register_controllers(builder),
+            Rest::register_controllers(builder)?,
         )
     }
 }
@@ -751,12 +790,14 @@ impl_push_plugin_ctrls!(C0, C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12, C
 )]
 pub trait PluginControllerList<Pl, T: Clone + Send + Sync + 'static, W> {
     /// Register every controller in the tuple, in tuple order.
-    fn register_all(builder: AppBuilder<T>) -> AppBuilder<T>;
+    ///
+    /// Fallible: see [`ModuleControllers::register_all`].
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError>;
 }
 
 impl<Pl, T: Clone + Send + Sync + 'static> PluginControllerList<Pl, T, ()> for () {
-    fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
-        builder
+    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+        Ok(builder)
     }
 }
 
@@ -774,8 +815,10 @@ macro_rules! impl_plugin_controllers {
             $C0: Controller<T, $W0>,
             $C0::Deps: crate::type_list::AllSatisfied<T, $D0>,
         {
-            fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
-                builder.register_controller_impl::<$C0, $W0, $D0>()
+            fn register_all(
+                builder: AppBuilder<T>,
+            ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+                register_deferred::<T, $C0, $W0>(builder)
             }
         }
     };
@@ -790,10 +833,12 @@ macro_rules! impl_plugin_controllers {
             $($Cs: Controller<T, $Ws>,)+
             $($Cs::Deps: crate::type_list::AllSatisfied<T, $Ds>,)+
         {
-            fn register_all(builder: AppBuilder<T>) -> AppBuilder<T> {
-                builder
-                    .register_controller_impl::<$C0, $W0, $D0>()
-                    $(.register_controller_impl::<$Cs, $Ws, $Ds>())+
+            fn register_all(
+                builder: AppBuilder<T>,
+            ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+                let builder = register_deferred::<T, $C0, $W0>(builder)?;
+                $(let builder = register_deferred::<T, $Cs, $Ws>(builder)?;)+
+                Ok(builder)
             }
         }
         impl_plugin_controllers!($($Cs $Ws $Ds),+);

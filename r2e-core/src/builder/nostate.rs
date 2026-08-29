@@ -32,6 +32,7 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
                 live_config: None,
                 stop_handle: None,
                 bean_disposers: Vec::new(),
+                deferred_boot_error: None,
             },
             state: NoState,
             bean_context: Arc::new(crate::beans::BeanContext::empty()),
@@ -402,27 +403,52 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             }
             // An explicitly requested file must exist (load_profiled_from is
             // strict, and its error names the file); the default is optional.
-            None => match self.shared.config_file.take() {
+            None => match match self.shared.config_file.take() {
                 Some(file) => crate::config::R2eConfig::load_profiled_from(&file, profile),
                 None => crate::config::R2eConfig::load_profiled(profile),
-            }
-            .unwrap_or_else(|e| panic!("Failed to load config: {e}")),
+            } {
+                Ok(config) => config,
+                // A missing/malformed config file is an operational boot
+                // failure, not a bug: record it and keep the chain going with
+                // an empty config so `try_build_state()` can report it through
+                // `BootError` (one `error:` line + exit 1, or `Err` from
+                // `TestApp::try_boot`) instead of unwinding here.
+                Err(e) => {
+                    self.shared
+                        .record_boot_error(crate::beans::BeanError::ConfigLoad {
+                            context: "Failed to load config",
+                            source: Box::new(e),
+                        });
+                    crate::config::R2eConfig::empty()
+                }
+            },
         };
         if !self.shared.config_providers.is_empty() {
             let provider_profile = resolve_profile(self.shared.forced_profile.as_deref(), &config);
+            let mut provider_errors: Vec<crate::beans::BeanError> = Vec::new();
             for provider in &self.shared.config_providers {
-                provider
-                    .load(
-                        &mut config,
-                        crate::config::ConfigProviderContext {
-                            profile: &provider_profile,
-                        },
-                    )
-                    .unwrap_or_else(|e| panic!("Failed to load config provider: {e}"));
+                if let Err(e) = provider.load(
+                    &mut config,
+                    crate::config::ConfigProviderContext {
+                        profile: &provider_profile,
+                    },
+                ) {
+                    provider_errors.push(crate::beans::BeanError::ConfigLoad {
+                        context: "Failed to load config provider",
+                        source: Box::new(e),
+                    });
+                }
             }
-            config
-                .resolve_placeholders_with(&crate::config::DefaultSecretResolver)
-                .unwrap_or_else(|e| panic!("Failed to resolve provider config placeholders: {e}"));
+            if let Err(e) = config.resolve_placeholders_with(&crate::config::DefaultSecretResolver)
+            {
+                provider_errors.push(crate::beans::BeanError::ConfigLoad {
+                    context: "Failed to resolve provider config placeholders",
+                    source: Box::new(e),
+                });
+            }
+            for err in provider_errors {
+                self.shared.record_boot_error(err);
+            }
             config.apply_current_env_overlay();
         }
         let mut pinned_keys: std::collections::HashSet<String> =
@@ -440,8 +466,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             // warning `live_config()` would otherwise emit.
             live.mark_has_providers();
         }
-        C::register(&config, &mut self.shared.bean_registry)
-            .unwrap_or_else(|e| panic!("Failed to construct typed config: {e}"));
+        if let Err(e) = C::register(&config, &mut self.shared.bean_registry) {
+            self.shared
+                .record_boot_error(crate::beans::BeanError::ConfigLoad {
+                    context: "Failed to construct typed config",
+                    source: Box::new(e),
+                });
+        }
         self.shared.active_profile =
             resolve_profile(self.shared.forced_profile.as_deref(), &config);
         self.shared.config = Some(config.clone());
@@ -849,7 +880,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     {
         self.try_build_state::<W, MW>()
             .await
-            .unwrap_or_else(|e| panic!("Failed to resolve bean dependency graph: {e}"))
+            .unwrap_or_else(|e| match e {
+                // A configuration failure never reached the graph — do not
+                // dress it up as a resolution failure.
+                crate::beans::BeanError::ConfigLoad { .. }
+                | crate::beans::BeanError::ControllerConfig { .. } => panic!("{e}"),
+                other => panic!("Failed to resolve bean dependency graph: {other}"),
+            })
     }
 
     /// Resolve the bean dependency graph and build the HList application
@@ -882,6 +919,14 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
              file would be silently ignored; add .load_config::<()>() (or a typed \
              variant) to the app assembly"
         );
+
+        // A builder step that cannot return a `Result` (today: `load_config`,
+        // a type-state transition mid-chain) parks its failure here. Surface it
+        // before a single bean is constructed: nothing downstream can be
+        // trusted once the configuration did not load.
+        if let Some(err) = self.shared.deferred_boot_error.take() {
+            return Err(err);
+        }
 
         let mut registry = std::mem::take(&mut self.shared.bean_registry);
         let scheduled_sources = registry.take_scheduled_sources();
@@ -928,13 +973,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                     // against the cached graph: the task registry and consumer
                     // registrations are fresh per build (plugins re-install),
                     // even when the bean instances are reused.
-                    return Ok(Mods::register_controllers(
+                    return Mods::register_controllers(
                         AppBuilder::from_pre(self.shared, cached_state, cached_ctx)
                             .collect_service_sources(service_sources)
                             .collect_bean_scheduled_tasks(scheduled_sources)
                             .collect_bean_subscribers(event_subscribers)
                             .collect_bean_on_start(on_start_hooks),
-                    ));
+                    );
                 }
                 // Same graph but the provision list changed shape (e.g. a
                 // `.provide()` was added, so `Cached<P>` no longer downcasts):
@@ -985,17 +1030,33 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             let ctx = Arc::new(ctx);
             graph_handle.fill(&ctx);
 
-            crate::runtime::dev::cache_state(&(state.clone(), Arc::clone(&ctx)));
-            crate::runtime::dev::cache_ctx(&ctx);
-            crate::runtime::dev::cache_graph_fingerprint(new_fp, per_bean_fps);
-
-            return Ok(Mods::register_controllers(
-                AppBuilder::from_pre(self.shared, state, ctx)
+            // Deferred-controller registration comes FIRST: it can still
+            // fail (a module controller's config), and a failed cycle must
+            // leave nothing behind. `builder` and the graph it owns drop on
+            // the `?`, so the beans just built here are released.
+            let builder = Mods::register_controllers(
+                AppBuilder::from_pre(self.shared, state.clone(), Arc::clone(&ctx))
                     .collect_service_sources(service_sources)
                     .collect_bean_scheduled_tasks(scheduled_sources)
                     .collect_bean_subscribers(event_subscribers)
                     .collect_bean_on_start(on_start_hooks),
-            ));
+            )?;
+
+            // The caches are *staged*, not committed: the enclosing
+            // `App::build` may still fail after this point (a plugin, a
+            // controller, a `?` in the app's own assembly). The hot-patch
+            // loop commits on success and rolls back on failure — see
+            // `dev::commit_cycle` / `dev::rollback_cycle`. Committing here
+            // would strand the failed cycle's graph in the caches and let the
+            // next patch reuse it with `LIFECYCLE_INITIALIZED` still true.
+            crate::runtime::dev::stage_cycle(
+                &(state, Arc::clone(&ctx)),
+                &ctx,
+                new_fp,
+                per_bean_fps,
+            );
+
+            return Ok(builder);
         }
 
         // Cold path: prod, tests, and dev-reload builds outside the loop.
@@ -1005,13 +1066,13 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         let ctx = Arc::new(ctx);
         graph_handle.fill(&ctx);
 
-        Ok(Mods::register_controllers(
+        Mods::register_controllers(
             AppBuilder::from_pre(self.shared, state, ctx)
                 .collect_service_sources(service_sources)
                 .collect_bean_scheduled_tasks(scheduled_sources)
                 .collect_bean_subscribers(event_subscribers)
                 .collect_bean_on_start(on_start_hooks),
-        ))
+        )
     }
 }
 

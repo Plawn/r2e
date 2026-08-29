@@ -212,8 +212,20 @@ macro_rules! launch {
                     let __app = match <$app as $crate::App>::build($crate::AppBuilder::new(), __env)
                         .await
                     {
-                        ::core::result::Result::Ok(__a) => __a,
+                        ::core::result::Result::Ok(__a) => {
+                            // The cycle assembled: promote the graph this
+                            // cycle staged into the dev-reload caches, so the
+                            // next patch may reuse it.
+                            $crate::commit_dev_cycle();
+                            __a
+                        }
                         ::core::result::Result::Err(__e) => {
+                            // A failed cycle must leave nothing behind: drop
+                            // the staged graph (and the beans it built) and
+                            // keep the last successful cycle's caches, so the
+                            // next patch neither reuses a broken graph nor
+                            // skips its startup lifecycle.
+                            $crate::rollback_dev_cycle();
                             ::std::eprintln!("[r2e dev-reload] build failed: {}", __e);
                             return;
                         }
