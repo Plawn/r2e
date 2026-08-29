@@ -1080,6 +1080,19 @@ impl PluginShutdownCell {
         }
     }
 
+    /// Whether any hook is still waiting to be fired.
+    ///
+    /// `false` once [`fire`](Self::fire) has spent the cell, and `false` from
+    /// the start for an app whose plugins register none — which is what makes
+    /// it usable as a "does shutdown have work?" probe.
+    pub(super) fn is_pending(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|hooks| !hooks.is_empty())
+    }
+
     pub(super) fn fire(&self) {
         while let Some(hook) = self.pop() {
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(hook)) {

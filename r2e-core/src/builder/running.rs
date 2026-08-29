@@ -89,14 +89,34 @@ impl RunningApp {
         self.shutdown_grace_period
     }
 
-    /// Whether any shutdown hook is still pending, i.e. whether
-    /// [`shutdown`](Self::shutdown) has something to run. `false` for an app
-    /// that registers no `on_drain`/`#[pre_destroy]`/`on_stop` hook — the
-    /// harness uses it to keep a hook-less app's teardown free.
+    /// Whether [`shutdown`](Self::shutdown) has anything to do — **every**
+    /// kind of work, not only the user hooks.
+    ///
+    /// `true` when any of the five phases would act:
+    ///
+    /// - an `on_drain` hook is registered (phase 1);
+    /// - a plugin sync shutdown hook has not fired yet, or an async disposer
+    ///   (plugin `on_shutdown_async`, controller/bean `#[pre_destroy]`) is
+    ///   registered (phase 2);
+    /// - a tracked task is still running — a `spawn_service` /
+    ///   `#[derive(BackgroundService)]` task, or a server attached with
+    ///   [`serve_tracked`](Self::serve_tracked) — so the cancel + join of
+    ///   phases 3–4 has a subject;
+    /// - an `on_stop` hook is registered (phase 5).
+    ///
+    /// `false` therefore means dropping this value loses nothing: no hook is
+    /// skipped and no task is abandoned. It is the only condition under which
+    /// skipping `shutdown()` is equivalent to calling it.
+    ///
+    /// Note the tracked-task term is a live reading, not a boot-time
+    /// property: a service that has already ended does not count (it needs no
+    /// teardown), so the answer can go from `true` to `false` on its own.
     pub fn has_shutdown_work(&self) -> bool {
         !self.drain_hooks.is_empty()
             || !self.async_shutdown_hooks.is_empty()
             || !self.stop_hooks.is_empty()
+            || self.plugin_shutdown.is_pending()
+            || self.handles.has_live()
     }
 
     /// Spawn `fut` on the app's tracked lane: it owns the bean graph while it
@@ -200,20 +220,31 @@ impl RunningApp {
 }
 
 impl Drop for RunningApp {
-    /// Cancels the app token (the `cancel_guard` field does it as this value is
-    /// dropped), so no background service outlives the app — but nothing is
-    /// awaited: `Drop` cannot run the async shutdown sequence. A drop with
-    /// hooks still pending says so, once, rather than silently skipping the
-    /// app's shutdown contract.
+    /// Cancel, then abort — see "Dropping without `shutdown()`" on the type.
+    ///
+    /// Nothing is awaited (`Drop` cannot), so a task that ignores its token or
+    /// cleans up slowly is aborted rather than detached. The warning is
+    /// emitted only when there was something to lose, and it names what.
     fn drop(&mut self) {
-        if self.has_shutdown_work() {
+        let pending_hooks = !self.drain_hooks.is_empty()
+            || !self.async_shutdown_hooks.is_empty()
+            || !self.stop_hooks.is_empty()
+            || self.plugin_shutdown.is_pending();
+
+        // Cancel first: a task sitting on `token.cancelled()` may reach its
+        // own end before the abort lands, which is the friendlier outcome.
+        self.cancel.cancel();
+        let aborted = self.handles.abort_all();
+
+        if pending_hooks || aborted > 0 {
             tracing::warn!(
+                aborted_tasks = aborted,
                 "app dropped without `shutdown().await`: on_drain, #[pre_destroy] \
-                 and on_stop hooks did not run (background services were still \
-                 cancelled). Call `.shutdown().await` to exercise the shutdown \
-                 sequence."
+                 and on_stop hooks did not run, and any still-running background \
+                 task was cancelled and then aborted without being joined. Call \
+                 `.shutdown().await` to run the shutdown sequence."
             );
         }
-        // `_cancel_guard` fires here.
+        // `_cancel_guard` fires here too (idempotent).
     }
 }
