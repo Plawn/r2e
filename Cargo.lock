@@ -2542,6 +2542,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tower",
  "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",

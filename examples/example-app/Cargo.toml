@@ -25,3 +25,6 @@ futures-core = {workspace = true}
 r2e-test = {workspace = true, features = ["ws"]}
 garde = {workspace = true}
 http = {workspace = true}
+# tests/hotpath: drives the framework's layer stack in-process with
+# `ServiceExt::oneshot`, under a counting global allocator.
+tower = {workspace = true, features = ["util"]}
