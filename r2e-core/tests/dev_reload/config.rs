@@ -1,6 +1,6 @@
 //! The **config** semantics of a dev-reload cycle.
 //!
-//! `dev_reload.rs` covers bean reuse; this module pins down what happens to
+//! `cycles.rs` covers bean reuse; this module pins down what happens to
 //! the *config* surface — `R2eConfig`, `LiveConfigRegistry`, typed
 //! `ConfigProperties` beans, late overrides and config providers — when
 //! `build_state()` runs a second time inside the hot-patch loop.

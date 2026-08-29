@@ -85,13 +85,16 @@ pub const PER_WORKER_REQUIRES_SHARDING_MSG: &str =
 /// Error returned by `run()` under `dev-reload`, where sharding is forced off
 /// whatever `server.workers` says — so, unlike
 /// [`PER_WORKER_REQUIRES_SHARDING_MSG`], setting the key is not the fix and the
-/// message must not suggest it is.
+/// message must not suggest it is. Dropping the feature is *necessary*, not
+/// sufficient: the non-dev path still refuses to shard on platforms without
+/// `SO_REUSEPORT` ([`UNSUPPORTED_PLATFORM_MSG`](crate::runtime::sharded::UNSUPPORTED_PLATFORM_MSG)),
+/// so the message names that condition too rather than promising it will work.
 #[cfg(feature = "dev-reload")]
 const PER_WORKER_UNSUPPORTED_UNDER_DEV_RELOAD_MSG: &str =
     "per_worker_service() is registered but the `dev-reload` feature forces single-listener \
      serving (hot-reload + SO_REUSEPORT sharding is unsupported), so server.workers is ignored \
-     and there is no worker runtime to run the service on: build without `dev-reload` to use \
-     per-worker services";
+     and there is no worker runtime to run the service on: per-worker services require a build \
+     without `dev-reload` (and a platform with SO_REUSEPORT sharding)";
 
 /// Internal serving strategy chosen by [`PreparedApp::run`].
 ///

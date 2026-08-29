@@ -131,8 +131,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **The `dev-reload` per-worker-service error no longer gives impossible
   advice.** It used to be built from `PER_WORKER_REQUIRES_SHARDING_MSG`, so it
   told you to set `server.workers` — a key `dev-reload` ignores. It now states
-  that the feature forces single-listener serving and that building without
-  `dev-reload` is the fix.
+  that the feature forces single-listener serving and that per-worker services
+  require a build without `dev-reload` (and a platform with SO_REUSEPORT
+  sharding — dropping the feature is necessary, not sufficient).
 
 - **`#[r2e::test_suite]` now builds ONE runtime per suite, not one per `#[case]`**
   (task #986). The suite value lives in a module-level `OnceLock` that outlives
