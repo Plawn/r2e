@@ -261,3 +261,105 @@ async fn a_fallible_async_bean_constructor_aborts_the_build() {
 
     assert!(err.to_string().contains(type_name::<AsyncGuard>()));
 }
+
+// ── 5. What counts as a fallible return, exactly ───────────────────────────
+//
+// The macros look at ONE thing: is the declared return type a two-argument
+// `Result<_, _>` (any path spelling)? Everything else is the bean type,
+// verbatim — no nesting is unwrapped and no alias is resolved (a macro sees
+// tokens, not types). These are the corner cases the rule is easy to get
+// wrong on, and the shapes `docs/claude/beans-di.md` documents.
+
+/// Fully-qualified `std::result::Result` — recognised like bare `Result`,
+/// since only the LAST path segment is matched.
+#[derive(Clone, Debug, PartialEq)]
+struct QualifiedPool(&'static str);
+
+#[producer]
+async fn make_qualified_pool() -> std::result::Result<QualifiedPool, ConnectFailed> {
+    Ok(QualifiedPool("qualified"))
+}
+
+/// `Result<Option<T>, E>`: the `Result` is unwrapped (once), the `Option` is
+/// not — `Option<T>` is a first-class bean type in its own right.
+#[derive(Clone, Debug, PartialEq)]
+struct Feature(&'static str);
+
+#[producer]
+async fn make_optional_feature() -> Result<Option<Feature>, ConnectFailed> {
+    Ok(Some(Feature("enabled")))
+}
+
+/// `Option<Result<T, E>>`: NOT a fallible producer. The outer type is an
+/// `Option`, so the whole `Option<Result<..>>` is the bean type and the
+/// producer is infallible.
+#[derive(Clone, Debug, PartialEq)]
+struct Wrapped(&'static str);
+
+#[derive(Clone, Debug, PartialEq)]
+struct NotAnError;
+
+#[producer]
+async fn make_wrapped() -> Option<Result<Wrapped, NotAnError>> {
+    Some(Ok(Wrapped("inner")))
+}
+
+/// A single-argument alias is not recognised either: `Fallible<T>` IS
+/// `Result<T, E>` to the compiler, but the macro sees a path whose last
+/// segment is `Fallible`, so the alias itself becomes the bean type. Spell
+/// the error out instead. (`#[bean]` diverges here — it rejects such a
+/// constructor outright, since the return is neither `Self` nor a literal
+/// `Result<Self, E>`; that rejection is covered in r2e-compile-tests.)
+type Fallible<T> = std::result::Result<T, NotAnError>;
+
+#[derive(Clone, Debug, PartialEq)]
+struct Aliased(&'static str);
+
+#[producer]
+async fn make_aliased() -> Fallible<Aliased> {
+    Ok(Aliased("alias"))
+}
+
+#[r2e_core::test]
+async fn the_macros_unwrap_exactly_one_literal_two_argument_result() {
+    let state = AppBuilder::new()
+        .register::<MakeQualifiedPool>()
+        .register::<MakeOptionalFeature>()
+        .register::<MakeWrapped>()
+        .register::<MakeAliased>()
+        .try_build_state()
+        .await
+        .expect("graph resolves");
+    let ctx = state.bean_context();
+
+    // Qualified `Result`: unwrapped, and `E` landed on `Producer::Error`.
+    assert_eq!(ctx.get::<QualifiedPool>(), QualifiedPool("qualified"));
+    assert_eq!(
+        TypeId::of::<<MakeQualifiedPool as Producer>::Error>(),
+        TypeId::of::<ConnectFailed>(),
+    );
+
+    // `Result<Option<T>, E>` registers `Option<T>`, not `T`.
+    assert_eq!(ctx.get::<Option<Feature>>(), Some(Feature("enabled")));
+    assert_eq!(
+        TypeId::of::<<MakeOptionalFeature as Producer>::Error>(),
+        TypeId::of::<ConnectFailed>(),
+    );
+
+    // `Option<Result<T, E>>` is one opaque bean type, produced infallibly.
+    assert_eq!(
+        ctx.get::<Option<Result<Wrapped, NotAnError>>>(),
+        Some(Ok(Wrapped("inner"))),
+    );
+    assert_eq!(
+        TypeId::of::<<MakeWrapped as Producer>::Error>(),
+        TypeId::of::<std::convert::Infallible>(),
+    );
+
+    // The alias is the bean type, and the producer is infallible.
+    assert_eq!(ctx.get::<Fallible<Aliased>>(), Ok(Aliased("alias")));
+    assert_eq!(
+        TypeId::of::<<MakeAliased as Producer>::Error>(),
+        TypeId::of::<std::convert::Infallible>(),
+    );
+}

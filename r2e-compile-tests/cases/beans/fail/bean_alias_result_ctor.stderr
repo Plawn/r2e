@@ -1,0 +1,16 @@
+error: #[bean] requires a constructor — a static method returning `Self` or `Result<Self, E>`:
+
+         #[bean]
+         impl MyService {
+             fn new(dep: OtherService) -> Self {
+                 Self { dep }
+             }
+         }
+
+       A fallible one aborts boot naming the bean:
+
+             fn new(dep: OtherService) -> Result<Self, BootError> { ... }
+  --> cases/beans/fail/bean_alias_result_ctor.rs:15:6
+   |
+15 | impl MyService {
+   |      ^^^^^^^^^
