@@ -311,6 +311,13 @@ pub struct TestApp {
     pub(crate) bean_context: Option<std::sync::Arc<r2e_core::beans::BeanContext>>,
     pub(crate) config: Option<r2e_core::config::R2eConfig>,
     pub(crate) jwt: Option<crate::TestJwt>,
+    /// The live application, on the `boot*` paths: the app is *started* (its
+    /// `#[on_start]` and builder startup hooks ran, so `spawn_service` tasks
+    /// are running) and [`shutdown`](Self::shutdown) runs the production
+    /// shutdown sequence. `None` for a hand-assembled app
+    /// ([`new`](Self::new) / [`from_builder`](Self::from_builder)), which has
+    /// no lifecycle to run.
+    pub(crate) running: Option<r2e_core::RunningApp>,
 }
 
 impl TestApp {
@@ -321,6 +328,7 @@ impl TestApp {
             bean_context: None,
             config: None,
             jwt: None,
+            running: None,
         }
     }
 
@@ -339,6 +347,7 @@ impl TestApp {
             bean_context: Some(bean_context),
             config,
             jwt: None,
+            running: None,
         }
     }
 
@@ -440,8 +449,104 @@ impl TestApp {
     ///
     /// Use this for tests that require a real TCP connection, such as
     /// WebSocket or SSE endpoints.
+    ///
+    /// On a booted app (`boot` / `boot_with` / `boot_plain`) the server is
+    /// **attached to the app lifecycle**: it stops accepting when
+    /// [`shutdown`](Self::shutdown) cancels the app token, its HTTP drain is
+    /// bounded by the app's `drain_timeout`, and the shutdown joins it under
+    /// `shutdown_grace_period` — the same budgets production serves with.
+    ///
+    /// Dropping the `TestServer` first stops that server on its own, and the
+    /// same `drain_timeout` bounds *that* drain: the budget is measured from
+    /// whichever trigger stopped the listener, so a request left stuck in a
+    /// dropped server is abandoned on schedule rather than held until the app
+    /// itself is cancelled.
     pub async fn serve(&self) -> crate::server::TestServer {
-        crate::server::TestServer::new(self.router.clone()).await
+        match &self.running {
+            Some(running) => crate::server::TestServer::attached(running).await,
+            None => crate::server::TestServer::new(self.router.clone()).await,
+        }
+    }
+
+    /// Run the application's graceful-shutdown sequence, exactly as production
+    /// does on SIGTERM (`r2e_core::RunningApp::shutdown`):
+    ///
+    /// 1. `on_drain` hooks (unbounded — the app is still serving);
+    /// 2. plugin sync shutdown hooks, then the ordered async disposers (plugin
+    ///    `on_shutdown_async`, controller `#[pre_destroy]`, bean
+    ///    `#[pre_destroy]`);
+    /// 3. the app shutdown token is cancelled — `spawn_service` /
+    ///    `#[derive(BackgroundService)]` tasks stop, an attached
+    ///    [`serve`](Self::serve) server drains under `drain_timeout`;
+    /// 4. tracked handles are joined, each bounded by `shutdown_grace_period`;
+    /// 5. `on_stop` hooks — outside every budget.
+    ///
+    /// This is the **signal** path, which is why `StopHandle::stop()` is not
+    /// called: production's shutdown future is
+    /// `select!(shutdown_signal(), stop_handle.stopped())`, so a SIGTERM never
+    /// fires the handle and `StopHandle::is_stopped()` reads `false` for the
+    /// whole sequence. To exercise the programmatic stop instead, fire it
+    /// yourself first — [`stop_handle`](Self::stop_handle) — then call this.
+    ///
+    /// ```ignore
+    /// let app = TestApp::boot::<MyApp>().await;
+    /// app.get("/health").send().await.assert_ok();
+    /// app.shutdown().await;               // on_drain → drain → join → on_stop
+    /// assert_eq!(*log.lock().unwrap(), ["drained", "stopped"]);
+    /// ```
+    ///
+    /// Not calling it is fine for a test that does not assert on shutdown:
+    /// dropping the `TestApp` cancels the app token and then **aborts** every
+    /// still-running tracked task (nothing would ever join those handles, so
+    /// dropping them alone would detach the tasks rather than stop them). It
+    /// cannot await, so the hooks above do not run, and a task that needs its
+    /// cleanup to *finish* needs this call. A drop with work still pending
+    /// logs a warning saying so.
+    pub async fn shutdown(mut self) {
+        if let Some(running) = self.running.take() {
+            running.shutdown().await;
+        }
+    }
+
+    /// The app's [`StopHandle`](r2e_core::StopHandle) — the *programmatic*
+    /// stop, the one production reaches through `StopHandle::stop()` rather
+    /// than through SIGTERM.
+    ///
+    /// [`shutdown`](Self::shutdown) never fires it (it is the signal path), so
+    /// a hook that branches on `is_stopped()` sees `false` unless the test
+    /// fires the handle itself first:
+    ///
+    /// ```ignore
+    /// let app = TestApp::boot::<MyApp>().await;
+    /// app.stop_handle().stop();   // programmatic stop, as `StopHandle::stop`
+    /// app.shutdown().await;       // hooks now observe `is_stopped() == true`
+    /// ```
+    ///
+    /// Panics on a hand-assembled app (`TestApp::new`), which has no
+    /// lifecycle to stop.
+    pub fn stop_handle(&self) -> r2e_core::StopHandle {
+        self.running
+            .as_ref()
+            .expect(
+                "TestApp::stop_handle requires a booted app — build it with \
+                 TestApp::boot / boot_with / from_builder, not TestApp::new",
+            )
+            .stop_handle()
+    }
+
+    /// Whether [`shutdown`](Self::shutdown) has anything to do.
+    ///
+    /// `false` for a hand-assembled app (there is no lifecycle to run), and
+    /// for a booted app with no `on_drain`/`#[pre_destroy]`/`on_stop` hook, no
+    /// unfired plugin sync hook, and no live tracked task (a background
+    /// service, or a server from [`serve`](Self::serve)). That is exactly the
+    /// condition under which dropping this `TestApp` loses nothing a
+    /// `shutdown()` would have done — see
+    /// [`RunningApp::has_shutdown_work`](r2e_core::RunningApp::has_shutdown_work).
+    pub fn has_shutdown_work(&self) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(r2e_core::RunningApp::has_shutdown_work)
     }
 }
 

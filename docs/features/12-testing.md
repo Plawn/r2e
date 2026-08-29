@@ -122,6 +122,93 @@ async fn lists_created_user(app: TestApp) {
   `#[r2e::main]`. Using `order` requires the `r2e-test` dev-dependency (already
   present whenever you use `app = …`).
 
+## Lifecycle: what a test boot runs
+
+`TestApp::boot` is a **real startup**, not a router build. It runs the same
+startup phase `serve()` does:
+
+1. controller `#[post_construct]` hooks,
+2. consumer registrations (`#[consumer]` methods, subscriber beans, EventBus
+   bridges),
+3. bean and controller `#[on_start]` hooks,
+4. the builder's `.on_start(…)` closures — which is what starts
+   `spawn_service` / `#[derive(BackgroundService)]` tasks.
+
+An error from any of them fails the test (`try_boot*` returns it instead).
+
+`app.shutdown().await` runs the matching shutdown sequence, under the app's own
+budgets:
+
+```rust
+#[r2e::test(app = my_app::MyApp)]
+async fn flushes_on_shutdown(app: TestApp) {
+    app.post("/orders").json(&order).send().await.assert_created();
+
+    app.shutdown().await;
+
+    // #[pre_destroy] disposers and .on_stop(…) hooks have run by here.
+}
+```
+
+1. the builder's `.on_drain(…)` hooks, while still serving;
+2. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks
+   first, then bean hooks, each in reverse registration order);
+3. the app shutdown token is cancelled and the tracked handles are joined under
+   `shutdown_grace_period` — in-flight HTTP requests drain under
+   `drain_timeout`, and a server from `app.serve()` drains with them;
+4. the builder's `.on_stop(…)` hooks, outside every budget.
+
+### `shutdown()` is the signal path
+
+It deliberately does **not** call `StopHandle::stop()`. Production does not
+either: `run()`'s shutdown future is
+`select!(shutdown_signal(), stop_handle.stopped())`, so on SIGTERM/SIGINT the
+handle is never fired and `StopHandle::is_stopped()` reads `false` for the whole
+sequence. A default `app.shutdown().await` therefore reproduces what an
+orchestrator's TERM does, and a hook or service that reads the handle behaves
+identically in both.
+
+The *programmatic* path — what an admin `/shutdown` endpoint triggers — is one
+line away, and now distinguishable from the signal one:
+
+```rust
+app.stop_handle().stop();   // is_stopped() == true from here on
+app.shutdown().await;       // then the sequence that stop would have started
+```
+
+Readiness flips only if the app's own `on_drain` hook flips it. `StopHandle` is
+a stop *trigger*, not a readiness switch; nothing in R2E changes a health probe
+on its own.
+
+### Dropping instead of shutting down
+
+`shutdown()` is explicit because `Drop` cannot await. Dropping a `TestApp`
+cancels the app token and then **aborts** every still-running tracked task —
+background services, an attached `app.serve()` server. Nothing would ever join
+those handles once the value is gone, so dropping them alone would *detach* the
+tasks: a service that ignores cancellation, or that cleans up slowly after
+seeing it, would keep running against a graph the test believes is released.
+Cancellation is issued before the abort, so a cooperative task may still finish;
+a task whose cleanup must *complete* needs `shutdown().await`, which joins under
+`shutdown_grace_period`. A drop with work pending logs a warning — a generic
+one: `RunningApp` is type-erased and does not know the app's name.
+
+`app.has_shutdown_work()` is `false` only when dropping loses nothing: no
+`on_drain`/`#[pre_destroy]`/`on_stop` hook, no unfired plugin sync hook, and no
+live tracked task. That is the only case where skipping `shutdown()` is
+equivalent to calling it. It is not free in the strict sense — a start allocates
+three `Arc`s for the shutdown token, the plugin hook cell and the handle
+collector — but no hook runs and no task is spawned.
+
+**What a test boot skips:** the plugin *serve hooks*, which bind ports
+(separate-port gRPC, MCP) and start the scheduler driver. So `#[scheduled]`
+tasks do not tick under `TestApp`, and WebSocket sessions run untracked
+(`ws.shutdown_token()` is `None`). Also skipped, because they *are* the
+listener: SO_REUSEPORT sharded serving and QUIC/HTTP3. An in-process start
+spawns no worker runtimes, so a registered `per_worker_service()` is refused at
+boot rather than silently never started — and an invalid `server.workers` fails
+the boot exactly as it does in production.
+
 ## Usage
 
 ### 1. Adding the Dependency
@@ -376,6 +463,9 @@ async fn test_response_structure() {
 | `delete(path)` | Start a DELETE request |
 | `request(method, path)` | Start a request with any HTTP method |
 | `session()` | Create a `TestSession` with cookie persistence |
+| `serve()` | Spawn a live `TestServer` on a random port (attached to a booted app's lifecycle) |
+| `shutdown()` | Run the production shutdown sequence (`on_drain` → disposers → drain → join → `on_stop`) |
+| `has_shutdown_work()` | Whether any shutdown hook is registered |
 
 ### TestRequest Builder Methods
 
@@ -480,7 +570,7 @@ Beyond the in-process client, `r2e-test` re-exports a few specialized helpers:
 
 - **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects; the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, and `assert_no_message`.
 - **`FiniteStream` / `ParsedSseEvent`** — consume and parse SSE responses; `TestResponse` also has `sse_events`, `assert_sse_event`, and `assert_sse_data`.
-- **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch.
+- **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch. On a booted `TestApp` it runs on the app's tracked lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the `TestServer` first stops it on its own.
 - **`SetCookie`** — parsed `Set-Cookie` attributes, with `TestResponse` helpers `assert_cookie_secure`, `assert_cookie_http_only`, `assert_cookie_same_site`, `assert_cookie_path`.
 
 ## Dev Services (real infrastructure)

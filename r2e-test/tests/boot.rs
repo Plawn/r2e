@@ -102,8 +102,8 @@ async fn boot_wires_a_test_jwt() {
 type StartLog = std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>;
 
 /// A bean with a startup observer. `#[on_start]` runs on the boot path (there
-/// IS a startup under `TestApp::boot`), unlike `#[pre_destroy]`, which needs a
-/// shutdown and therefore never fires here.
+/// IS a startup under `TestApp::boot`); `#[pre_destroy]` needs a shutdown, so
+/// it fires on `TestApp::shutdown` — see `tests/lifecycle.rs`.
 #[derive(Clone)]
 struct Warmer {
     log: StartLog,

@@ -647,9 +647,10 @@ track`, `spawn_service`, the scheduler driver, the QUIC drain and every upgraded
 WebSocket session move an `Arc` *into* the task, which is what makes them sound on the paths where nothing joins
 the handle (an elapsed per-handle `shutdown_grace_period`, a dropped `run()` future under
 `r2e dev` — where they are still cancelled, since every framework shutdown token
-is a child of the app one, or relayed from it as the scheduler's is); (3) when
-serving, `PreparedApp` itself for the whole of `run()`,
-which covers the shutdown phase (`on_stop`, `#[pre_destroy]`). Serve-time work
+is a child of the app one, or relayed from it as the scheduler's is); (3) the app
+object itself for the whole of its lifetime — `PreparedApp` across `run()` when
+serving, `RunningApp` across a `TestApp`'s life in process — which covers the
+shutdown phase (`on_stop`, `#[pre_destroy]`). Serve-time work
 must therefore be started through `track`, never a bare `rt::spawn`:
 
 ```rust
@@ -783,6 +784,9 @@ beans), use the imperative form `AppBuilder::provide_with_pre_destroy(value)`
 (the value implements the `PreDestroy` trait) or, in a plugin's `install`,
 `ctx.run_pre_destroy::<T>()`.
 
+In tests, disposal fires on `app.shutdown().await` — `TestApp` runs the same
+shutdown sequence as `run()` (see **Testing**).
+
 ### `#[on_start]` — startup observers
 
 The bean/controller counterpart of the builder's `.on_start(closure)`, and the
@@ -803,9 +807,10 @@ order). Ordering is **global**: every `#[on_start]` hook in the application is
 sorted into one list. The hooks run after the consumer registrations and before
 the plugin serve hooks and the builder's `.on_start(…)` closures.
 
-Unlike `#[pre_destroy]`, these hooks **DO** run under `TestApp::boot` /
-`build_with_consumers` (there is a startup there; there is no shutdown) — an
-`Err` panics on that path instead of aborting `serve`.
+These hooks run under `TestApp::boot` and `build_with_consumers` too (a test
+boot is a real startup) — on the router-only `build_with_consumers` path an
+`Err` panics instead of aborting `serve`; `TestApp::try_boot*` returns it as a
+`BootError`.
 
 Same rejection matrix as the other two hooks: it is a compile error to combine
 `#[on_start]` with a route / `#[scheduled]` / `#[consumer]` / `#[sse]` / `#[ws]`
@@ -2514,7 +2519,9 @@ async fn chat(&self, mut ws: WsStream) {
 A handler that ignores the signal is abandoned (detached, not aborted) once
 `shutdown_grace_period` elapses, with the named warning; `on_stop` still runs.
 Under `TestApp` / `build_with_consumers()` (never served through `run()`)
-sessions run untracked with `shutdown_token() == None`, exactly as before.
+sessions run untracked with `shutdown_token() == None`, exactly as before —
+`TestApp::boot` runs the startup and shutdown phases, not the serve hooks that
+arm the session registry.
 
 Sharded serving (`server.workers`) behaves identically: worker runtimes are
 kept alive until the tracked-handle join is over, so a session's socket stays
@@ -3918,6 +3925,61 @@ bean and producer construction, plugin build, and the controller
 `#[post_construct]` / `#[on_start]` hooks the harness runs (`TestApp` boots
 through `try_build_with_consumers`).
 
+### Test lifecycle: startup and shutdown
+
+`TestApp::boot` runs the **production startup phase**, not just a router build:
+controller `#[post_construct]`, consumer registrations, bean/controller
+`#[on_start]`, then the builder's `.on_start(…)` closures — which is what starts
+`spawn_service` / `#[derive(BackgroundService)]` tasks. An `Err` from any of them
+is the boot failure above.
+
+`app.shutdown().await` runs the matching **production shutdown sequence**, under
+the app's own budgets:
+
+```rust
+#[r2e::test(app = my_app::MyApp)]
+async fn disposes_cleanly(app: TestApp) {
+    app.post("/orders").send().await.assert_ok();
+    app.shutdown().await;   // on_drain → disposers → cancel → join → on_stop
+}
+```
+
+1. the builder's `.on_drain(…)` hooks — still serving,
+2. plugin shutdown hooks and `#[pre_destroy]` disposers (controller hooks, then
+   bean hooks, reverse registration order),
+3. the app shutdown token is cancelled, and the tracked handles — background
+   services, and the server behind `app.serve()` — are joined under
+   `shutdown_grace_period`, the in-flight HTTP drain under `drain_timeout`,
+4. the builder's `.on_stop(…)` hooks, outside every budget.
+
+`shutdown()` is the **OS-signal path**: it does not call `StopHandle::stop()`,
+because production does not either (`run()` waits on
+`select!(shutdown_signal(), stop_handle.stopped())`, so under SIGTERM the handle
+never fires and `is_stopped()` reads `false` throughout). To exercise the
+programmatic stop instead — what an admin `/shutdown` endpoint triggers — fire
+it yourself first: `app.stop_handle().stop();` then `app.shutdown().await`.
+Readiness only flips if the app's own `on_drain` hook flips it; no R2E code
+does that for you.
+
+`shutdown()` is explicit because `Drop` cannot await. Dropping a `TestApp`
+cancels the app token and then **aborts** every still-running tracked task
+(background services, an attached `app.serve()` server) — nothing would ever
+join those handles, so dropping them alone would detach the tasks, not stop
+them. The hooks do not run; a drop with work pending logs a warning (it does
+not name the app — `RunningApp` is type-erased). Call `shutdown()` in tests
+that assert on disposal, or that need a cooperative service's cleanup to
+finish. `app.has_shutdown_work()` is `false` only when dropping loses nothing:
+no hook registered, no unfired plugin hook, no live tracked task.
+
+What a test boot skips: the **plugin serve hooks** — they bind ports
+(separate-port gRPC, MCP) and start the scheduler driver — so `#[scheduled]`
+tasks do not tick under `TestApp` and WebSocket sessions stay untracked
+(above); plus the two behaviours that *are* the listener, SO_REUSEPORT sharded
+serving and QUIC/HTTP3. An in-process start spawns no worker runtimes, so a
+registered `per_worker_service()` is a boot error rather than a silently dead
+service; an invalid `server.workers` is a boot error there exactly as in
+production.
+
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
 next `load_config::<C>()` uses it instead of reading disk (see Configuration).
@@ -3946,7 +4008,15 @@ CLI test runner:
   cookie and SSE assertions; access via `json::<T>()`, `text()`.
 - `app.session()` — cookie-persisting `TestSession`.
 - `app.serve()` — live `TestServer` on a random port (WebSocket/SSE tests);
-  `WsTestClient` for WS.
+  `WsTestClient` for WS. On a booted app the server runs on the app's tracked
+  lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the
+  `TestServer` first stops that server on its own, under the same
+  `drain_timeout` (the budget starts from whichever trigger fired).
+- `app.shutdown().await` — production shutdown sequence (see above);
+  `app.has_shutdown_work()` reports whether shutdown has anything to do — user
+  hooks, unfired plugin sync hooks, or a live tracked task.
+- `app.stop_handle()` — the app's `StopHandle`; fire it before `shutdown()` to
+  take the programmatic-stop path instead of the signal path.
 - `TestJwt::token_builder(sub)` — expired/wrong-issuer/wrong-audience tokens.
 
 ### Dev services (containers)

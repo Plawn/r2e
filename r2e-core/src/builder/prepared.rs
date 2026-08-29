@@ -102,6 +102,29 @@ enum ServeStrategy {
     },
 }
 
+/// Which half of the lifecycle the app is starting for.
+///
+/// Both modes share [`PreparedApp::start_lifecycle`]; the mode only decides
+/// whether the two *serving* steps run — arming the WebSocket session registry
+/// and calling the plugin serve hooks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LifecycleMode {
+    /// Full serving lifecycle: [`PreparedApp::run`].
+    Serving,
+    /// In-process lifecycle: [`PreparedApp::start_in_process`] (`TestApp`).
+    InProcess,
+}
+
+/// What [`PreparedApp::start_lifecycle`] hands back to whoever drives the rest
+/// of the lifecycle: the app shutdown token and its cancel-on-drop guard, the
+/// run-once plugin sync-hook cell, and the shared tracked-handle collector.
+struct StartedLifecycle {
+    cancel: CancelToken,
+    guard: crate::rt::CancelDropGuard,
+    plugin_shutdown: PluginShutdownCell,
+    handles: ServiceHandles,
+}
+
 impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// Access the assembled router for inspection or testing.
     pub fn router(&self) -> &crate::http::Router {
@@ -285,6 +308,307 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         self.run_inner(ServeStrategy::Single(listener)).await
     }
 
+    /// Start the app **in process**: everything the serving lifecycle does at
+    /// startup, minus the listener.
+    ///
+    /// Returns a [`RunningApp`]: the assembled router plus the live lifecycle —
+    /// the shutdown token background services already watch, the tracked-handle
+    /// lane, the drain/`#[pre_destroy]`/`on_stop` hooks and both shutdown
+    /// budgets. [`RunningApp::shutdown`] then runs the *same* sequence
+    /// `run()` runs on a signal.
+    ///
+    /// This is what [`TestApp::boot`](https://docs.rs/r2e-test) is built on, so
+    /// a test observes the production startup: controller `#[post_construct]`,
+    /// consumer registrations, bean/controller `#[on_start]`, and the builder's
+    /// `on_start` closures — which is how
+    /// [`spawn_service`](crate::builder::AppBuilder::spawn_service) /
+    /// `#[derive(BackgroundService)]` start their tasks.
+    ///
+    /// # What it deliberately does NOT run
+    ///
+    /// The plugin **serve hooks** ([`DeferredContext::on_serve`](crate::plugin::DeferredContext::on_serve))
+    /// and the WebSocket session registry arming. Serve hooks are the "a port
+    /// is now open" phase: the separate-port gRPC server, the MCP transport and
+    /// the scheduler driver all start there, and starting them for every
+    /// in-process test would bind ports and tick schedules a test never asked
+    /// for. Everything a serve hook would have tracked is therefore absent.
+    ///
+    /// Two further production behaviours have no in-process counterpart
+    /// because they *are* the listener: SO_REUSEPORT sharded serving (an
+    /// in-process start spawns no worker runtimes — which is why a registered
+    /// `per_worker_service` is refused outright here, rather than silently
+    /// dropped) and QUIC/HTTP3 serving. Everything else runs: worker-config
+    /// validation, `#[post_construct]`, consumer registrations, `#[on_start]`
+    /// and the builder's startup hooks.
+    ///
+    /// # What it costs when the app has no hooks
+    ///
+    /// Not literally zero, and the docs should not say so: the shutdown root
+    /// token, the run-once plugin sync-hook cell and the tracked-handle
+    /// collector are three `Arc` allocations, made once at start. What *is*
+    /// zero is behaviour — no hook runs, no task is spawned, the empty hook
+    /// vectors allocate nothing when bound to the state, and
+    /// [`RunningApp::has_shutdown_work`] reports `false`, so dropping the
+    /// value loses nothing `shutdown()` would have done.
+    pub async fn start_in_process(mut self) -> Result<RunningApp, crate::beans::BootError> {
+        // ── Refuse the same configurations `run()` refuses, BEFORE any
+        // startup side effect runs. A test that boots an app production would
+        // not start learns it here, not by wondering why a service is silent.
+        //
+        // `server.workers` is parsed at `prepare()` time and only *reported*
+        // at start; an invalid value (`0`, an unknown string) is a hard error
+        // on both paths.
+        let _workers = self.workers.clone()?;
+        // Per-worker services need worker runtimes to own their `!Send` state.
+        // An in-process start binds nothing and spawns no worker runtime, so
+        // there is no "unsharded fallback" to take — the same refusal
+        // `run_with_listener` makes, for the same reason. Never silently drop
+        // them.
+        if !self.per_worker_services.is_empty() {
+            return Err(format!(
+                "{PER_WORKER_REQUIRES_SHARDING_MSG} (an in-process start — \
+                 `TestApp::boot` / `start_in_process` — never shards)"
+            )
+            .into());
+        }
+
+        let graph = Arc::clone(&self.graph);
+        let StartedLifecycle {
+            cancel,
+            guard,
+            plugin_shutdown,
+            handles,
+        } = self
+            .start_lifecycle(&graph, LifecycleMode::InProcess)
+            .await?;
+
+        // Bind the state into the state-typed hooks so `RunningApp` carries no
+        // `T` (the HList state type cannot be named outside the builder). Empty
+        // hook lists allocate nothing — an app with no lifecycle hook pays for
+        // nothing here.
+        let state = self.state;
+        let bind = |hooks: Vec<ShutdownHook<T>>, state: &T| -> Vec<crate::plugin::AsyncShutdownHook> {
+            hooks
+                .into_iter()
+                .map(|hook| {
+                    let state = state.clone();
+                    Box::new(move || hook(state)) as crate::plugin::AsyncShutdownHook
+                })
+                .collect()
+        };
+
+        Ok(RunningApp {
+            router: self.router,
+            graph,
+            cancel,
+            _cancel_guard: guard,
+            plugin_shutdown,
+            handles,
+            drain_hooks: bind(self.drain_hooks, &state),
+            async_shutdown_hooks: self.async_shutdown_hooks,
+            stop_hooks: bind(self.shutdown_hooks, &state),
+            stop_handle: self.stop_handle,
+            shutdown_grace_period: self.shutdown_grace_period,
+            drain_timeout: self.drain_timeout,
+        })
+    }
+
+    /// The startup half of the lifecycle, shared by [`run_inner`](Self::run_inner)
+    /// (serving) and [`start_in_process`](Self::start_in_process).
+    ///
+    /// Runs, in order: the shutdown root + its cancel-on-any-exit guard, the
+    /// run-once plugin sync-hook cell, the shared tracked-handle collector, the
+    /// WebSocket registry arming (serving only), controller
+    /// `#[post_construct]`, consumer registrations, `#[on_start]` hooks, the
+    /// plugin serve hooks (serving only) and the builder `on_start` closures.
+    /// An `Err` from a hook winds down whatever already started
+    /// ([`abort_started_work`]) before returning.
+    ///
+    /// Takes `&mut self` and moves the hook vectors out one by one: the caller
+    /// keeps the rest of `PreparedApp` (router, state, shutdown hooks, budgets)
+    /// for the phase that follows.
+    async fn start_lifecycle(
+        &mut self,
+        graph: &Arc<crate::beans::BeanContext>,
+        mode: LifecycleMode,
+    ) -> Result<StartedLifecycle, crate::beans::BootError> {
+        // Hot-patch cycles skip the startup lifecycle; an in-process start
+        // never does (there is exactly one, and it is the test's).
+        #[cfg(feature = "dev-reload")]
+        let skip_lifecycle = matches!(mode, LifecycleMode::Serving)
+            && crate::runtime::dev::is_lifecycle_initialized();
+        #[cfg(not(feature = "dev-reload"))]
+        let skip_lifecycle = false;
+
+        // Cancelled when graceful shutdown begins (after drain hooks). Serve
+        // hooks receive it via `ServeContext`; the HTTP/QUIC/sharded serving
+        // paths observe it as their graceful-shutdown signal.
+        //
+        // Not a fresh token: this is the app's shutdown ROOT, get-or-inserted
+        // (`ShutdownRoot` in `plugin_data`) because `spawn_service` has to
+        // derive its per-service child tokens from it before serving starts.
+        // Cancelling here therefore reaches every service task as well.
+        let cancel_token = shutdown_root(&mut self.plugin_data);
+
+        // Cancel-on-any-exit, armed BEFORE the serve hooks that spawn tracked
+        // tasks. A tracked task is *supposed* to stop when this token fires
+        // (that is the contract `ServeContext::shutdown_token` states), so any
+        // path that leaves the lifecycle without firing it strands the task
+        // forever — it keeps its port, and it also keeps the graph alive. The
+        // two known aborts (`#[on_start]`/startup-hook `Err`) cancel explicitly
+        // below so they can also DRAIN; this guard is the belt that keeps the
+        // invariant true for any future early return — including a panic
+        // unwinding out of a hook. It is handed to the caller, which holds it
+        // for the rest of the lifecycle.
+        let cancel_guard = cancel_token.clone().drop_guard();
+
+        // Plugin sync shutdown hooks cancel the private tokens handed to
+        // `spawn_service` tasks, so both the normal shutdown future and the
+        // abort paths need them — and neither may run them twice. A run-once
+        // cell shared by both is the whole mechanism.
+        let plugin_shutdown_hooks =
+            PluginShutdownCell::new(std::mem::take(&mut self.plugin_shutdown_hooks));
+
+        // Get-or-insert the shared post-drain handle collector BEFORE serve
+        // hooks run: hooks `track()` into it via `ServeContext`, and it must
+        // be the same instance the shutdown phase drains (spawn_service
+        // inserts it at registration time, but only when used).
+        let service_handles = self
+            .plugin_data
+            .entry(TypeId::of::<ServiceHandles>())
+            .or_insert_with(|| Box::new(ServiceHandles::default()))
+            .downcast_ref::<ServiceHandles>()
+            .expect("ServiceHandles type mismatch in plugin_data")
+            .clone();
+
+        // Claim the WebSocket session registry for this run, BEFORE anything
+        // can accept a connection. Until this line every `#[ws]` route runs
+        // its session inline (the `TestApp` / `build_with_consumers`
+        // behaviour); from here on sessions land on the tracked lane above.
+        // Re-armed on every `run()` because `r2e dev` carries one graph — and
+        // with it one registry — across hot-patch cycles. The in-process
+        // lifecycle leaves it unarmed: nothing accepts connections there
+        // unless the test explicitly serves, and sessions then run inline as
+        // they always did.
+        #[cfg(feature = "ws")]
+        if matches!(mode, LifecycleMode::Serving) {
+            if let Some(ws_sessions) = graph.try_get::<super::WsSessions>() {
+                ws_sessions.arm(service_handles.clone(), cancel_token.clone(), graph);
+            }
+        }
+
+        if !skip_lifecycle {
+            // Controller-core `#[post_construct]` hooks run before consumers
+            // (mirroring bean post_construct at `build_state`, before
+            // subscribers). A failure aborts startup.
+            for pc in std::mem::take(&mut self.post_construct_registrations) {
+                // Name the phase: a boot report that only says "cache priming
+                // failed" leaves the reader guessing which lifecycle step ran
+                // it. Same wording as `try_build_with_consumers`, so the two
+                // in-process entry points render identically.
+                pc.await.map_err(|e| -> crate::beans::BootError {
+                    format!("Controller #[post_construct] hook failed: {e}").into()
+                })?;
+            }
+
+            // Register event consumers
+            for reg in std::mem::take(&mut self.consumer_registrations) {
+                reg(self.state.clone()).await;
+            }
+
+            // Bean and controller `#[on_start]` hooks, in declared order. They
+            // run once the whole graph and every controller core exist, and
+            // before the plugin serve hooks / builder `on_start` closures — so
+            // a hook may safely observe the fully assembled application but
+            // still runs before anything binds or starts accepting. An `Err`
+            // aborts boot; nothing tracked has started yet at this point, but
+            // the wind-down is run anyway for the hooks a `serve`-less plugin
+            // may already have armed.
+            let mut on_start_error = None;
+            for (_, hook) in super::typed::sort_on_start(std::mem::take(&mut self.on_start_hooks)) {
+                if let Err(e) = hook().await {
+                    on_start_error = Some(e);
+                    break;
+                }
+            }
+            if let Some(e) = on_start_error {
+                abort_started_work(
+                    &cancel_token,
+                    &plugin_shutdown_hooks,
+                    &service_handles,
+                    self.shutdown_grace_period,
+                    "#[on_start] hook failed",
+                )
+                .await;
+                return Err(format!("#[on_start] hook failed: {e}").into());
+            }
+
+            // Call serve hooks (e.g., scheduler starts tasks).
+            //
+            // Each hook receives a `ServeContext`: a clone of the shared
+            // `TaskRegistryHandle` (Arc-backed) to drain the tasks it owns,
+            // the app shutdown token, and a `track()` collector for tasks
+            // whose drain must be awaited at shutdown. Multiple hooks can
+            // share the registry: scheduler calls `take_all()` or
+            // `take_of::<ScheduledTaskMarker>()`, other subsystems pick their
+            // own tagged subset, and absent subsystems observe no tasks.
+            //
+            // Serving only — see `start_in_process` for why an in-process
+            // start has no "a port is now open" phase.
+            if matches!(mode, LifecycleMode::Serving) {
+                let task_registry = self
+                    .plugin_data
+                    .get(&TypeId::of::<TaskRegistryHandle>())
+                    .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
+                    .cloned()
+                    .unwrap_or_default();
+                for hook in std::mem::take(&mut self.serve_hooks) {
+                    hook(ServeContext {
+                        tasks: task_registry.clone(),
+                        shutdown: cancel_token.clone(),
+                        handles: service_handles.clone(),
+                        graph: Arc::clone(graph),
+                    });
+                }
+            }
+
+            // Run startup hooks. They run AFTER the serve hooks, so by now
+            // tracked tasks may already be listening on ports and holding the
+            // graph; an `Err` here must therefore not just return — it has to
+            // wind that work down first (cancel + drain, below).
+            let mut startup_error = None;
+            for hook in std::mem::take(&mut self.startup_hooks) {
+                if let Err(e) = hook(self.state.clone()).await {
+                    startup_error = Some(e);
+                    break;
+                }
+            }
+            if let Some(e) = startup_error {
+                abort_started_work(
+                    &cancel_token,
+                    &plugin_shutdown_hooks,
+                    &service_handles,
+                    self.shutdown_grace_period,
+                    "startup hook failed",
+                )
+                .await;
+                return Err(e);
+            }
+
+            #[cfg(feature = "dev-reload")]
+            crate::runtime::dev::mark_lifecycle_initialized();
+        } else {
+            tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
+        }
+
+        Ok(StartedLifecycle {
+            cancel: cancel_token,
+            guard: cancel_guard,
+            plugin_shutdown: plugin_shutdown_hooks,
+            handles: service_handles,
+        })
+    }
+
     /// Shared serving core for both single-listener and sharded strategies.
     ///
     /// Owns the full lifecycle: consumer registration, serve/startup hooks,
@@ -343,159 +667,23 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // in axum's detached task, and the old advice stands — resolve what it
         // needs before its socket loop. See `docs/claude/plugins.md`
         // § "The graph outlives the router".
-        let serve_scope_graph = self.graph;
+        let serve_scope_graph = Arc::clone(&self.graph);
 
-        #[cfg(feature = "dev-reload")]
-        let skip_lifecycle = crate::runtime::dev::is_lifecycle_initialized();
-        #[cfg(not(feature = "dev-reload"))]
-        let skip_lifecycle = false;
-
-        // Cancelled when graceful shutdown begins (after drain hooks). Serve
-        // hooks receive it via `ServeContext`; the HTTP/QUIC/sharded serving
-        // paths observe it as their graceful-shutdown signal.
-        //
-        // Not a fresh token: this is the app's shutdown ROOT, get-or-inserted
-        // time (`ShutdownRoot` in `plugin_data`) because `spawn_service` has to
-        // derive its per-service child tokens from it before serving starts.
-        // Cancelling here therefore reaches every service task as well.
-        let cancel_token = shutdown_root(&mut self.plugin_data);
-
-        // Cancel-on-any-exit, armed BEFORE the serve hooks that spawn tracked
-        // tasks. A tracked task is *supposed* to stop when this token fires
-        // (that is the contract `ServeContext::shutdown_token` states), so any
-        // path that leaves `run_inner` without firing it strands the task
-        // forever — it keeps its port, and since round 4 it also keeps the
-        // graph alive. The two known aborts (startup-hook `Err`, serve error)
-        // cancel explicitly below so they can also DRAIN; this guard is the
-        // belt that keeps the invariant true for any future early return —
-        // including a panic unwinding out of a hook.
-        let _boot_cancel_guard = cancel_token.clone().drop_guard();
-
-        // Plugin sync shutdown hooks cancel the private tokens handed to
-        // `spawn_service` tasks, so both the normal shutdown future and the
-        // abort paths need them — and neither may run them twice. A run-once
-        // cell shared by both is the whole mechanism.
-        let plugin_shutdown_hooks = PluginShutdownCell::new(self.plugin_shutdown_hooks);
-
-        // Get-or-insert the shared post-drain handle collector BEFORE serve
-        // hooks run: hooks `track()` into it via `ServeContext`, and it must
-        // be the same instance the shutdown phase drains (spawn_service
-        // inserts it at registration time, but only when used).
-        let service_handles = self
-            .plugin_data
-            .entry(TypeId::of::<ServiceHandles>())
-            .or_insert_with(|| Box::new(ServiceHandles::default()))
-            .downcast_ref::<ServiceHandles>()
-            .expect("ServiceHandles type mismatch in plugin_data")
-            .clone();
-
-        // Claim the WebSocket session registry for this run, BEFORE anything
-        // can accept a connection. Until this line every `#[ws]` route runs
-        // its session inline (the `TestApp` / `build_with_consumers`
-        // behaviour); from here on sessions land on the tracked lane above.
-        // Re-armed on every `run()` because `r2e dev` carries one graph — and
-        // with it one registry — across hot-patch cycles.
-        #[cfg(feature = "ws")]
-        if let Some(ws_sessions) = serve_scope_graph.try_get::<super::WsSessions>() {
-            ws_sessions.arm(
-                service_handles.clone(),
-                cancel_token.clone(),
-                &serve_scope_graph,
-            );
-        }
-
-        if !skip_lifecycle {
-            // Controller-core `#[post_construct]` hooks run before consumers
-            // (mirroring bean post_construct at `build_state`, before
-            // subscribers). A failure aborts startup.
-            for pc in self.post_construct_registrations {
-                pc.await.map_err(|e| -> crate::beans::BootError { e })?;
-            }
-
-            // Register event consumers
-            for reg in self.consumer_registrations {
-                reg(self.state.clone()).await;
-            }
-
-            // Bean and controller `#[on_start]` hooks, in declared order. They
-            // run once the whole graph and every controller core exist, and
-            // before the plugin serve hooks / builder `on_start` closures — so
-            // a hook may safely observe the fully assembled application but
-            // still runs before anything binds or starts accepting. An `Err`
-            // aborts boot; nothing tracked has started yet at this point, but
-            // the wind-down is run anyway for the hooks a `serve`-less plugin
-            // may already have armed.
-            let mut on_start_error = None;
-            for (_, hook) in super::typed::sort_on_start(self.on_start_hooks) {
-                if let Err(e) = hook().await {
-                    on_start_error = Some(e);
-                    break;
-                }
-            }
-            if let Some(e) = on_start_error {
-                abort_started_work(
-                    &cancel_token,
-                    &plugin_shutdown_hooks,
-                    &service_handles,
-                    self.shutdown_grace_period,
-                    "#[on_start] hook failed",
-                )
-                .await;
-                return Err(e);
-            }
-
-            // Call serve hooks (e.g., scheduler starts tasks).
-            //
-            // Each hook receives a `ServeContext`: a clone of the shared
-            // `TaskRegistryHandle` (Arc-backed) to drain the tasks it owns,
-            // the app shutdown token, and a `track()` collector for tasks
-            // whose drain must be awaited at shutdown. Multiple hooks can
-            // share the registry: scheduler calls `take_all()` or
-            // `take_of::<ScheduledTaskMarker>()`, other subsystems pick their
-            // own tagged subset, and absent subsystems observe no tasks.
-            let task_registry = self
-                .plugin_data
-                .get(&TypeId::of::<TaskRegistryHandle>())
-                .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
-                .cloned()
-                .unwrap_or_default();
-            for hook in self.serve_hooks {
-                hook(ServeContext {
-                    tasks: task_registry.clone(),
-                    shutdown: cancel_token.clone(),
-                    handles: service_handles.clone(),
-                    graph: Arc::clone(&serve_scope_graph),
-                });
-            }
-
-            // Run startup hooks. They run AFTER the serve hooks, so by now
-            // tracked tasks may already be listening on ports and holding the
-            // graph; an `Err` here must therefore not just return — it has to
-            // wind that work down first (cancel + drain, below).
-            let mut startup_error = None;
-            for hook in self.startup_hooks {
-                if let Err(e) = hook(self.state.clone()).await {
-                    startup_error = Some(e);
-                    break;
-                }
-            }
-            if let Some(e) = startup_error {
-                abort_started_work(
-                    &cancel_token,
-                    &plugin_shutdown_hooks,
-                    &service_handles,
-                    self.shutdown_grace_period,
-                    "startup hook failed",
-                )
-                .await;
-                return Err(e);
-            }
-
-            #[cfg(feature = "dev-reload")]
-            crate::runtime::dev::mark_lifecycle_initialized();
-        } else {
-            tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
-        }
+        // ── Startup phase ───────────────────────────────────────────────────
+        // Shared with the in-process lifecycle
+        // ([`start_in_process`](Self::start_in_process), which is what
+        // `TestApp` boots through): shutdown root + cancel-on-any-exit guard,
+        // the run-once plugin sync-hook cell, the shared tracked-handle
+        // collector, `#[post_construct]`, consumer registrations,
+        // `#[on_start]`, the plugin serve hooks and the builder startup hooks.
+        let StartedLifecycle {
+            cancel: cancel_token,
+            guard: _boot_cancel_guard,
+            plugin_shutdown: plugin_shutdown_hooks,
+            handles: service_handles,
+        } = self
+            .start_lifecycle(&serve_scope_graph, LifecycleMode::Serving)
+            .await?;
 
         // Compose the shutdown future handed to `with_graceful_shutdown`.
         // The full phase order, with the budget that bounds each phase:
@@ -830,12 +1018,17 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             hook(self.state.clone()).await;
         }
 
-        // Explicit end of the serve-scope ownership window. Note what this
-        // does NOT claim: that everything detached has finished. Tasks the
-        // grace period abandoned may still be running — they carry their own
-        // `Arc` (`ServiceHandles::spawn_owning`), so this drop is not the last
-        // one and the graph lives until the last of them ends.
+        // Explicit end of the serve-scope ownership window: both strong
+        // references this function holds — the named local and the
+        // `PreparedApp` field it was cloned from (the startup phase needs
+        // `self` intact, so the field cannot be moved out up front) — are
+        // released here. Note what this does NOT claim: that everything
+        // detached has finished. Tasks the grace period abandoned may still be
+        // running — they carry their own `Arc`
+        // (`ServiceHandles::spawn_owning`), so this drop is not the last one
+        // and the graph lives until the last of them ends.
         drop(serve_scope_graph);
+        drop(self.graph);
 
         info!("R2E server stopped");
         Ok(())
@@ -887,7 +1080,20 @@ impl PluginShutdownCell {
         }
     }
 
-    fn fire(&self) {
+    /// Whether any hook is still waiting to be fired.
+    ///
+    /// `false` once [`fire`](Self::fire) has spent the cell, and `false` from
+    /// the start for an app whose plugins register none — which is what makes
+    /// it usable as a "does shutdown have work?" probe.
+    pub(super) fn is_pending(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|hooks| !hooks.is_empty())
+    }
+
+    pub(super) fn fire(&self) {
         while let Some(hook) = self.pop() {
             if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(hook)) {
                 // The default panic hook already printed the location; repeat
@@ -936,7 +1142,7 @@ fn disarm_ws_sessions(graph: &Arc<crate::beans::BeanContext>) {
 /// its `Arc<BeanContext>`, so it stays sound if it eventually finishes.
 ///
 /// `grace = None` waits indefinitely, the default.
-async fn drain_tracked_handles(handles: &ServiceHandles, grace: Option<Duration>) {
+pub(super) async fn drain_tracked_handles(handles: &ServiceHandles, grace: Option<Duration>) {
     let handles = handles.drain();
     if handles.is_empty() {
         return;

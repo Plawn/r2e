@@ -14,6 +14,7 @@ mod bootable;
 mod nostate;
 mod prepared;
 mod registration;
+mod running;
 mod task_registry;
 mod typed;
 #[cfg(feature = "ws")]
@@ -21,8 +22,9 @@ mod ws_sessions;
 
 pub use app::{boot_error_report, exit_on_boot_error, launch, App};
 pub use bootable::BootableApp;
-pub use prepared::PreparedApp;
+pub use prepared::{PreparedApp, PER_WORKER_REQUIRES_SHARDING_MSG};
 pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};
+pub use running::RunningApp;
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 #[cfg(feature = "ws")]
 pub use ws_sessions::WsSessions;
@@ -306,6 +308,41 @@ impl ServiceHandles {
 
     fn drain(&self) -> Vec<TrackedHandle> {
         std::mem::take(&mut *self.0.lock().unwrap())
+    }
+
+    /// Whether any tracked task is still running.
+    ///
+    /// What [`RunningApp::has_shutdown_work`](crate::RunningApp::has_shutdown_work)
+    /// asks: a task on this lane is joined (under `shutdown_grace_period`) by
+    /// the shutdown sequence, so "there is one" means "shutdown has work".
+    /// Finished handles do not count — `push` already prunes them, and a
+    /// service that ended on its own needs no teardown.
+    fn has_live(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|h| !h.handle.is_finished())
+    }
+
+    /// Abort every tracked task and clear the lane, returning how many were
+    /// still running.
+    ///
+    /// The teardown of last resort, for the paths that cannot await a join:
+    /// [`RunningApp`](crate::RunningApp) dropped without `shutdown()`. These
+    /// handles are never joined afterwards — nothing else holds them — so
+    /// abort is the honest semantics: dropping the handle alone would *detach*
+    /// the task, leaving it running against a graph the test believes is gone.
+    fn abort_all(&self) -> usize {
+        let handles = self.drain();
+        let mut aborted = 0;
+        for h in handles {
+            if !h.handle.is_finished() {
+                aborted += 1;
+                h.handle.abort();
+            }
+        }
+        aborted
     }
 }
 

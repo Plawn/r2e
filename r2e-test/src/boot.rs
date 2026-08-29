@@ -96,22 +96,38 @@ impl TestApp {
         Self::from_bootable(built, None).await
     }
 
+    /// Start the assembled app through the production lifecycle.
+    ///
+    /// `start_in_process()` is the same startup phase `serve()` runs —
+    /// controller `#[post_construct]`, consumer registrations (`#[consumer]`
+    /// methods, subscriber beans, EventBus bridges), bean/controller
+    /// `#[on_start]`, then the builder's `on_start` closures, which is what
+    /// starts `spawn_service` / `#[derive(BackgroundService)]` tasks. The
+    /// returned [`RunningApp`](r2e_core::RunningApp) is kept so
+    /// [`TestApp::shutdown`] can run the matching shutdown sequence under the
+    /// app's own budgets.
+    ///
+    /// The one production phase it skips is the plugin **serve hooks** (they
+    /// bind ports: separate-port gRPC, MCP, and they start the scheduler
+    /// driver) — see `PreparedApp::start_in_process`.
     async fn from_bootable(
         built: impl BootableApp,
         jwt: Option<TestJwt>,
     ) -> Result<Self, BootError> {
         let bean_context = built.bean_context();
         let config = built.r2e_config();
+        // The production startup phase runs here: controller
+        // `#[post_construct]`, consumer registrations, `#[on_start]`, then the
+        // builder's `on_start` closures. An `Err` from any of them is a boot
+        // failure like any other — returned to `try_boot*` with the failing
+        // phase named, rendered by `unwrap_boot` for `boot*`.
+        let running = built.start_in_process().await?;
         Ok(Self {
-            // Run consumer registrations so `#[consumer]` methods, subscriber
-            // beans, and EventBus bridges are live in tests, as in `serve()`.
-            // Controller `#[post_construct]` / `#[on_start]` run here too, and
-            // an `Err` from either is a boot failure like any other — returned
-            // to `try_boot*`, rendered by `unwrap_boot` for `boot*`.
-            router: built.into_router_with_consumers().await?,
+            router: running.router().clone(),
             bean_context: Some(bean_context),
             config,
             jwt,
+            running: Some(running),
         })
     }
 }
