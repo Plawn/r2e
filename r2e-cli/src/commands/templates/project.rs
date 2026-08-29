@@ -197,11 +197,14 @@ pub fn app_rs(opts: &ProjectOptions) -> String {
         };
         producers.push_str(&format!(
             r#"
+// Fallible producer: an unreachable database is an operational boot failure,
+// so it flows into `BootError` — one `error:` line and exit code 1 — instead
+// of a panic with a backtrace.
 #[producer]
-async fn create_pool(#[config("database.url")] url: String) -> {pool_ty} {{
-    {pool_ty}::connect(&url)
-        .await
-        .expect("Failed to connect to the database")
+async fn create_pool(
+    #[config("database.url")] url: String,
+) -> Result<{pool_ty}, sqlx::Error> {{
+    {pool_ty}::connect(&url).await
 }}
 "#
         ));
@@ -209,19 +212,17 @@ async fn create_pool(#[config("database.url")] url: String) -> {pool_ty} {{
     if opts.auth {
         producers.push_str(
             r#"
+// Fallible producer: an IdP that will not answer is an operational boot
+// failure, reported as one `error:` line with exit code 1.
 #[producer]
 async fn jwt_validator(
     #[config("security.jwt.jwks-url")] jwks_url: String,
     #[config("security.jwt.issuer")] issuer: String,
     #[config("security.jwt.audience")] audience: String,
-) -> Arc<JwtClaimsValidator> {
+) -> Result<Arc<JwtClaimsValidator>, BootError> {
     let config = SecurityConfig::new(jwks_url, issuer, audience);
-    let jwks = Arc::new(
-        JwksCache::new(config.clone())
-            .await
-            .expect("Failed to initialize JWKS cache"),
-    );
-    Arc::new(JwtClaimsValidator::new(jwks, config))
+    let jwks = Arc::new(JwksCache::new(config.clone()).await?);
+    Ok(Arc::new(JwtClaimsValidator::new(jwks, config)))
 }
 "#,
         );

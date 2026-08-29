@@ -328,5 +328,5 @@ impl App for UdpApp {
 
 #[r2e::main]
 async fn main() {
-    r2e::launch!(UdpApp).await.unwrap();
+    r2e::exit_on_boot_error(r2e::launch!(UdpApp).await);
 }
