@@ -278,3 +278,224 @@ fn boot_turns_a_failure_into_an_attributable_test_failure() {
         "the panic must name the cause: {message}"
     );
 }
+
+// ── Fallible startup hooks ────────────────────────────────────────────────
+//
+// `TestApp` boots through `into_router_with_consumers`, which also runs the
+// controller `#[post_construct]` and `#[on_start]` hooks. A hook that fails is
+// a boot failure like any other: it must reach `try_boot` as an `Err` and be
+// rendered by `boot` with the app name — not panic underneath the harness.
+
+use r2e_core::prelude::{controller, routes};
+use r2e_core::RegisterControllers;
+
+#[controller]
+struct WarmCacheController;
+
+#[routes]
+impl WarmCacheController {
+    #[get("/warm")]
+    async fn warm(&self) -> String {
+        "warm".to_string()
+    }
+
+    #[post_construct]
+    async fn prime(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err(Box::new(BootFailure("cache priming failed")))
+    }
+}
+
+struct PostConstructFailsApp;
+
+impl App for PostConstructFailsApp {
+    type Env = ();
+
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.try_build_state()
+            .await?
+            .register_controllers::<(WarmCacheController,)>())
+    }
+}
+
+#[controller]
+struct AnnounceController;
+
+#[routes]
+impl AnnounceController {
+    #[get("/announce")]
+    async fn announce(&self) -> String {
+        "announced".to_string()
+    }
+
+    #[on_start]
+    async fn register_with_discovery(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+    {
+        Err(Box::new(BootFailure("service discovery refused")))
+    }
+}
+
+struct OnStartFailsApp;
+
+impl App for OnStartFailsApp {
+    type Env = ();
+
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.try_build_state()
+            .await?
+            .register_controllers::<(AnnounceController,)>())
+    }
+}
+
+#[tokio::test]
+async fn try_boot_surfaces_a_controller_post_construct_failure() {
+    let err = TestApp::try_boot::<PostConstructFailsApp>()
+        .await
+        .map(|_| ())
+        .expect_err("the post-construct hook fails");
+
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("cache priming failed"),
+        "unexpected error: {rendered}"
+    );
+    assert!(
+        rendered.contains("post_construct"),
+        "the error must say which lifecycle phase failed: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn try_boot_surfaces_a_controller_on_start_failure() {
+    let err = TestApp::try_boot::<OnStartFailsApp>()
+        .await
+        .map(|_| ())
+        .expect_err("the on_start hook fails");
+
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("service discovery refused"),
+        "unexpected error: {rendered}"
+    );
+    assert!(
+        rendered.contains("on_start"),
+        "the error must say which lifecycle phase failed: {rendered}"
+    );
+}
+
+/// The panicking form must render a startup-hook failure exactly like any
+/// other boot failure: the app name plus the cause, attributed to this test.
+#[test]
+fn boot_renders_a_startup_hook_failure_with_the_app_name() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let joined = std::thread::spawn(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            TestApp::boot::<OnStartFailsApp>().await;
+        });
+    })
+    .join();
+    std::panic::set_hook(previous);
+
+    let panic = joined.expect_err("boot panics");
+    let message = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("expected a string panic payload");
+
+    assert!(
+        message.contains("OnStartFailsApp"),
+        "the panic must name the app: {message}"
+    );
+    assert!(
+        message.contains("service discovery refused"),
+        "the panic must name the cause: {message}"
+    );
+}
+
+// ── Config failures ───────────────────────────────────────────────────────
+//
+// `load_config()` is a type-state transition in the middle of the builder
+// chain, so it cannot return a `Result`. It records the failure instead, and
+// `try_build_state()` reports it before a single bean is built — which is what
+// makes a bad config an `Err` from `try_boot` rather than a panic under the
+// harness.
+
+/// Asks for a config file that is not there. `with_config_file` is strict by
+/// contract: an explicitly requested file must exist.
+struct MissingConfigFileApp;
+
+impl App for MissingConfigFileApp {
+    type Env = ();
+
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.with_config_file("does-not-exist-984.yaml")
+            .load_config::<()>()
+            .provide(Greeter { origin: "never built" })
+            .try_build_state()
+            .await?)
+    }
+}
+
+#[tokio::test]
+async fn try_boot_surfaces_a_missing_config_file() {
+    let err = TestApp::try_boot::<MissingConfigFileApp>()
+        .await
+        .map(|_| ())
+        .expect_err("the requested config file is absent");
+
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("Failed to load config"),
+        "unexpected error: {rendered}"
+    );
+    assert!(
+        rendered.contains("does-not-exist-984.yaml"),
+        "the error must name the file it could not read: {rendered}"
+    );
+    // The underlying io/parse error stays reachable, so `exit_on_boot_error`
+    // can print it as a `caused by:` line.
+    assert!(
+        std::error::Error::source(&*err).is_some(),
+        "the cause chain must survive: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn a_recorded_config_failure_aborts_before_any_bean_is_built() {
+    // The app provides a bean after `load_config`. `try_build_state()` returns
+    // the recorded config error first, so the graph is never resolved.
+    let err = TestApp::try_boot::<MissingConfigFileApp>()
+        .await
+        .map(|_| ())
+        .expect_err("boot fails");
+
+    assert!(
+        !err.to_string().contains("Greeter"),
+        "the failure must be the config one, reported before bean resolution: {err}"
+    );
+}
