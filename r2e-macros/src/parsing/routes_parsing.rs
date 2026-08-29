@@ -40,6 +40,15 @@ pub struct RoutesImplDef {
     /// / `#[inject(request)]` fields directly and reach core fields via `Deref`.
     pub request_helper_methods: Vec<syn::ImplItemFn>,
     pub other_methods: Vec<syn::ImplItemFn>,
+    /// Everything the user wrote on the `impl` block that `#[routes]` does not
+    /// consume — `#[allow]`/`#[deny]`, `#[rustfmt::skip]`, doc comments, third
+    /// party inert attributes. The macro emits two brand-new impl blocks, so
+    /// anything not carried over here is silently lost (task #985).
+    pub impl_attrs: Vec<syn::Attribute>,
+    /// Non-`fn` items of the `impl` block — associated `const`s and `type`s.
+    /// They used to be swallowed by the classification loop, which turned
+    /// `Self::PAGE_SIZE` into a bewildering E0599 (task #985).
+    pub other_items: Vec<syn::ImplItem>,
 }
 
 /// Detect `#[inject(identity)]` on handler parameters.
@@ -378,6 +387,70 @@ fn reject_unsupported_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     Ok(())
 }
 
+/// Attributes that survive onto the impl blocks `#[routes]` synthesizes must be
+/// **inert and idempotent**, because there are two of them.
+///
+/// `#[routes]` replaces the one `impl` the user wrote with two — route methods
+/// on the request façade, everything else on the controller core — so an
+/// attribute written on it has to reach both or a lint allow would only cover
+/// half the methods. That is fine for a lint/doc attribute and wrong for an
+/// attribute macro: a procedural attribute placed *after* `#[routes]` would run
+/// once per synthesized impl, duplicating whatever items it emits and handing
+/// the second copy a hidden façade impl it never expected. Duplicating an
+/// expansion is worse than dropping it, so anything outside the inert set is a
+/// targeted error pointing at the one position where it runs exactly once:
+/// above `#[routes]` (task #985).
+///
+/// Tool attributes (`#[rustfmt::skip]`, `#[clippy::…]`) are inert by
+/// construction and pass. `#[cfg_attr]` passes because its whole point here is a
+/// conditional lint allow — its payload inherits the same rule, which the
+/// doc/CHANGELOG states.
+fn reject_non_inert_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    const INERT: &[&str] = &[
+        "doc",
+        "allow",
+        "expect",
+        "warn",
+        "deny",
+        "forbid",
+        "deprecated",
+        "cfg",
+        "cfg_attr",
+        "automatically_derived",
+    ];
+    const TOOLS: &[&str] = &["rustfmt", "clippy", "rust_analyzer"];
+
+    for attr in attrs {
+        let path = attr.path();
+        if path.segments.len() > 1 {
+            let first = &path.segments[0].ident;
+            if TOOLS.iter().any(|t| first == t) {
+                continue;
+            }
+        } else if let Some(ident) = path.get_ident() {
+            if INERT.iter().any(|n| ident == n) {
+                continue;
+            }
+        }
+        let name = quote::ToTokens::to_token_stream(path).to_string();
+        return Err(syn::Error::new_spanned(
+            attr,
+            format!(
+                "#[{name}] is not supported below #[routes] on a controller impl block\n\n\
+                 #[routes] replaces this `impl` with TWO synthesized ones (routes on the \
+                 request façade, everything else on the controller core), so an attribute \
+                 written here is applied to both — which duplicates an attribute macro's \
+                 expansion instead of preserving it. Only inert attributes (doc comments, \
+                 #[allow]/#[warn]/#[deny]/#[expect]/#[forbid], #[deprecated], #[cfg], \
+                 #[cfg_attr], tool attributes) may sit here.\n\n\
+                 \x20 hint: move #[{name}] ABOVE #[routes], where it runs exactly once on \
+                 the impl block you wrote"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
@@ -402,6 +475,10 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // the parsed struct's unsupported families are empty by construction.
     reject_unsupported_impl_attrs(&item.attrs)?;
     let controller_decorators = parse_decorators(&item.attrs)?;
+    // Everything the decorator families did NOT claim belongs to the user and
+    // must reach the emitted impl blocks.
+    let impl_attrs = crate::extract::plugins::strip_known_attrs(item.attrs.clone());
+    reject_non_inert_impl_attrs(&impl_attrs)?;
 
     // Scan `#[post_construct]` methods up front (the shared bean-side scan
     // validates `&self` / no extra params). Their bodies still flow to the core
@@ -421,6 +498,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let mut async_exec_methods = Vec::new();
     let mut request_helper_methods = Vec::new();
     let mut other_methods = Vec::new();
+    let mut other_items: Vec<syn::ImplItem> = Vec::new();
 
     for impl_item in item.items {
         // Keeping this as a match avoids reindenting the large classification
@@ -730,7 +808,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     other_methods.push(method);
                 }
             }
-            _ => {} // skip non-method items
+            // Associated consts / types / macros: not routes, but they are
+            // part of the impl the user wrote, so they ride along on the core.
+            other => other_items.push(other),
         }
     }
 
@@ -807,5 +887,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         on_start_methods,
         request_helper_methods,
         other_methods,
+        impl_attrs,
+        other_items,
     })
 }

@@ -1,0 +1,8 @@
+error: #[r2e::test] does not accept parameters unless it boots an app — parameters are bound from the booted `TestApp`:
+
+         #[r2e::test(app = MyApp)]
+         async fn t(app: TestApp) { ... }
+ --> cases/testing/fail/test_param_without_app.rs:5:1
+  |
+5 | async fn seeded(seed: u64) {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^

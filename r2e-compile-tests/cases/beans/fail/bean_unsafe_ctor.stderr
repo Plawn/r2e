@@ -1,0 +1,19 @@
+error: #[bean] cannot be applied to an `unsafe fn`
+
+       R2E generates `Bean::build / AsyncBean::build`, a safe method that is the only caller. The bean graph cannot discharge an `unsafe` contract — it knows nothing about the invariants the keyword asks the caller to uphold.
+
+         hint: drop `unsafe` from the signature and wrap the unsafe work in an `unsafe { }` block inside the body, where you can write the SAFETY comment that justifies it
+  --> cases/beans/fail/bean_unsafe_ctor.rs:11:5
+   |
+11 |     unsafe fn new() -> Self {
+   |     ^^^^^^
+
+error: #[bean] cannot be applied to an `unsafe fn`
+
+       R2E generates `Bean::build / AsyncBean::build`, a safe method that is the only caller. The bean graph cannot discharge an `unsafe` contract — it knows nothing about the invariants the keyword asks the caller to uphold.
+
+         hint: drop `unsafe` from the signature and wrap the unsafe work in an `unsafe { }` block inside the body, where you can write the SAFETY comment that justifies it
+  --> cases/beans/fail/bean_unsafe_ctor.rs:21:11
+   |
+21 |     async unsafe fn new() -> Result<Self, std::io::Error> {
+   |           ^^^^^^

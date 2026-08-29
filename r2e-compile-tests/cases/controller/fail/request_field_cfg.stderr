@@ -1,0 +1,9 @@
+error: #[cfg] is not supported on a request-scoped controller field (#[inject(identity)] / #[inject(request)])
+
+       The field is re-declared on the generated request extractor and the façade, whose marker tuple is positional — the macro cannot gate one element of it.
+
+         hint: cfg the whole controller instead, or make the field type itself conditional via a type alias
+  --> cases/controller/fail/request_field_cfg.rs:14:5
+   |
+14 |     #[cfg(any())]
+   |     ^^^^^^^^^^^^^

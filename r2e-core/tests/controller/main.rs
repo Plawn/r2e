@@ -6,6 +6,7 @@
 mod support;
 
 mod anonymous;
+mod attrs;
 mod config;
 mod core_path;
 mod facade;

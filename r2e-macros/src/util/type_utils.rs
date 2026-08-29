@@ -312,3 +312,40 @@ pub fn result_ok_err_types(ty: &Type) -> Option<(&Type, &Type)> {
         None
     }
 }
+
+/// Reject an `unsafe fn` that R2E's generated code is the *only* caller of.
+///
+/// `#[producer]` and the `#[bean]` constructor are invoked from a generated
+/// safe method (`Producer::produce` / `Bean::build`), which has no way to
+/// discharge an `unsafe` contract: the DI container calls it, nobody else, and
+/// the container knows nothing about the invariants the `unsafe` keyword is
+/// asking the caller to uphold. Re-emitting the `unsafe fn` and calling it from
+/// safe code would either be a hard E0133 (what shipped before this check) or,
+/// with an `unsafe { }` block added, a silent discharge of a contract on the
+/// user's behalf. Neither is honest, so the declaration itself is the error
+/// (task #985).
+///
+/// `host` names the macro in the message (`#[producer]` / `#[bean]`), `callee`
+/// names the generated caller.
+pub fn reject_unsafe_constructor(
+    sig: &syn::Signature,
+    host: &str,
+    callee: &str,
+) -> syn::Result<()> {
+    let Some(unsafety) = &sig.unsafety else {
+        return Ok(());
+    };
+    Err(syn::Error::new_spanned(
+        unsafety,
+        format!(
+            "{host} cannot be applied to an `unsafe fn`\n\n\
+             R2E generates `{callee}`, a safe method that is the only caller. \
+             The bean graph cannot discharge an `unsafe` contract — it knows \
+             nothing about the invariants the keyword asks the caller to \
+             uphold.\n\n\
+             \x20 hint: drop `unsafe` from the signature and wrap the unsafe \
+             work in an `unsafe {{ }}` block inside the body, where you can \
+             write the SAFETY comment that justifies it"
+        ),
+    ))
+}
