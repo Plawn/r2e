@@ -34,12 +34,13 @@ pub use serde_json;
 pub use r2e_http::json;
 
 pub use beans::{
-    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, OnStart, OnStartHook, PostConstruct,
-    PreDestroy, Producer,
+    AsyncBean, Bean, BeanContext, BeanError, BeanRegistry, BootError, OnStart, OnStartHook,
+    PostConstruct, PreDestroy, Producer,
 };
 pub use builder::{
-    launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
-    RegisterModule, ServeContext, SpawnService, TaskRegistryHandle,
+    boot_error_report, exit_on_boot_error, launch, App, AppBuilder, BootableApp, PreparedApp,
+    RegisterController, RegisterControllers, RegisterModule, ServeContext, SpawnService,
+    TaskRegistryHandle,
 };
 pub use builtins::request_id::{RequestId, RequestIdPlugin};
 pub use builtins::secure_headers::SecureHeaders;
@@ -75,13 +76,13 @@ pub use plugin::{
     DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
     PluginInstall, PluginSetupContext, RoutesContext,
 };
-pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
-pub use runtime::lifecycle::{LifecycleController, StopHandle};
-pub use runtime::service::ServiceComponent;
-pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use runtime::harness::WorkerHarness;
 pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
+pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
+pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
+pub use runtime::service::ServiceComponent;
+pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use runtime::worker::{
     PerWorkerServiceFactory, WorkerContext, WorkerInfo, WorkerRole, WorkerService,
 };
@@ -105,7 +106,9 @@ pub use web::request_head::RequestHead;
 
 // Dev-reload helpers
 #[cfg(feature = "dev-reload")]
-pub use runtime::dev::invalidate_state_cache;
+pub use runtime::dev::{
+    commit_dev_cycle, has_staged_dev_cycle, invalidate_state_cache, rollback_dev_cycle,
+};
 
 // Entry-point macros
 pub use r2e_macros::main;

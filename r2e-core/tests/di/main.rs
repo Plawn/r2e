@@ -8,6 +8,7 @@ mod support;
 mod async_beans;
 mod context;
 mod defaults;
+mod fallible;
 #[cfg(feature = "dev-reload")]
 mod fingerprint;
 mod fixtures;

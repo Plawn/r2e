@@ -15,25 +15,29 @@ pub struct ProductApp;
 impl App for ProductApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        // `serve_auto` (called by `launch`) reads `server.port` (3001) from
-        // this service's own config file.
-        b.with_config_file("application-product.yaml")
-            .load_config::<()>()
-            .register::<services::ProductService>()
-            .plugin(Health)
-            .plugin(Cors::permissive())
-            .plugin(Tracing)
-            .plugin(ErrorHandling)
-            .plugin(OpenApiPlugin::new(
-                OpenApiConfig::new("Product Service", "1.0.0")
-                    .with_description("Product catalog microservice")
-                    .with_docs_ui(true),
-            ))
-            .build_state()
-            .await
-            .register_controller::<ProductController>()
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
+            // `serve_auto` (called by `launch`) reads `server.port` (3001) from
+            // this service's own config file.
+            b.with_config_file("application-product.yaml")
+                .load_config::<()>()
+                .register::<services::ProductService>()
+                .plugin(Health)
+                .plugin(Cors::permissive())
+                .plugin(Tracing)
+                .plugin(ErrorHandling)
+                .plugin(OpenApiPlugin::new(
+                    OpenApiConfig::new("Product Service", "1.0.0")
+                        .with_description("Product catalog microservice")
+                        .with_docs_ui(true),
+                ))
+                .build_state()
+                .await
+                .register_controller::<ProductController>()
+        })
     }
 }

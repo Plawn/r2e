@@ -28,15 +28,18 @@ struct LlmClient {
 /// `Option<Arc<LlmClient>>`, keyed on `TypeId::of::<Option<Arc<LlmClient>>>()`.
 struct CreateLlmClientPresent;
 impl Producer for CreateLlmClientPresent {
+    type Error = ::std::convert::Infallible;
     type Output = Option<Arc<LlmClient>>;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn produce(_ctx: &BeanContext) -> Option<Arc<LlmClient>> {
-        Some(Arc::new(LlmClient {
-            endpoint: "https://example.azure.com".into(),
-        }))
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok({
+            Some(Arc::new(LlmClient {
+                endpoint: "https://example.azure.com".into(),
+            }))
+        })
     }
 }
 
@@ -44,13 +47,14 @@ impl Producer for CreateLlmClientPresent {
 /// under `TypeId::of::<Option<Arc<LlmClient>>>()` — the value is `None`.
 struct CreateLlmClientAbsent;
 impl Producer for CreateLlmClientAbsent {
+    type Error = ::std::convert::Infallible;
     type Output = Option<Arc<LlmClient>>;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    async fn produce(_ctx: &BeanContext) -> Option<Arc<LlmClient>> {
-        None
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok(None)
     }
 }
 
@@ -95,6 +99,7 @@ struct LlmConsumer {
 }
 
 impl Bean for LlmConsumer {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         // Hard dep on the Option slot — not on the inner type.
@@ -103,10 +108,12 @@ impl Bean for LlmConsumer {
             type_name::<Option<Arc<LlmClient>>>(),
         )]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        Self {
-            client: ctx.get::<Option<Arc<LlmClient>>>(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Self {
+                client: ctx.get::<Option<Arc<LlmClient>>>(),
+            }
+        })
     }
 }
 

@@ -117,9 +117,12 @@ pub struct GrpcApp;
 impl App for GrpcApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
         // Reflection serves the descriptor set collected from the services
         // above: `grpcurl -plaintext localhost:50051 list` works out of the box.
         b.plugin(GrpcServer::on_port("0.0.0.0:50051").with_reflection())
@@ -133,5 +136,6 @@ impl App for GrpcApp {
             })
             .register_grpc_service::<GreeterService>()
             .register_controller::<HealthController>()
+    })
     }
 }

@@ -94,8 +94,11 @@ fn new_creates_shared_app_source_and_library_wrapper() {
     assert!(app.contains("pub struct Myapp;"));
     assert!(app.contains("impl App for Myapp"));
     assert!(app.contains("async fn build(b: AppBuilder"));
-    // New DI model: state is inferred via `.build_state().await`, no typed state.
-    assert!(app.contains(".build_state()"));
+    // New DI model: state is inferred via `.try_build_state().await?`, no typed
+    // state — and boot is fallible end to end.
+    assert!(app.contains(".try_build_state()"));
+    assert!(app.contains("Result<impl BootableApp, BootError>"));
+    assert!(app.contains("async fn setup() -> Result<AppEnv, BootError>"));
     assert!(!app.contains("build_state!"));
     assert!(!app.contains("AppState"));
     assert!(app.contains(".register_controller::<HelloController>()"));

@@ -65,23 +65,29 @@ struct CycleA;
 struct CycleB;
 
 impl Bean for CycleA {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<CycleB>(), type_name::<CycleB>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let _ = ctx.get::<CycleB>();
-        Self
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let _ = ctx.get::<CycleB>();
+            Self
+        })
     }
 }
 impl Bean for CycleB {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<CycleA>(), type_name::<CycleA>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let _ = ctx.get::<CycleA>();
-        Self
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let _ = ctx.get::<CycleA>();
+            Self
+        })
     }
 }
 
@@ -108,13 +114,16 @@ async fn cyclic_dependency() {
 struct CycleDependent;
 
 impl Bean for CycleDependent {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<CycleA>(), type_name::<CycleA>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let _ = ctx.get::<CycleA>();
-        Self
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let _ = ctx.get::<CycleA>();
+            Self
+        })
     }
 }
 

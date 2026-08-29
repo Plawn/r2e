@@ -242,13 +242,13 @@ pub struct MyApp;
 
 impl App for MyApp {
     type Env = ();
-    async fn setup() {}
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        b.load_config::<AppConfig>()
+    async fn setup() -> Result<(), BootError> { Ok(()) }
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok(b.load_config::<AppConfig>()
             .register::<UserService>()
             .plugin(Health)
-            .build_state().await
-            .register_controllers::<(UserController,)>()
+            .try_build_state().await?
+            .register_controllers::<(UserController,)>())
     }
 }
 ```

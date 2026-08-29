@@ -76,6 +76,7 @@ pub use r2e_macros::ApiError;
 
 // ── Core types (from r2e-core) ──────────────────────────────────────────
 
+pub use crate::beans::BootError;
 pub use crate::builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
     RegisterModule, SpawnService,

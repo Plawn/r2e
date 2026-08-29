@@ -12,28 +12,31 @@ struct DemoApp;
 impl App for DemoApp {
     type Env = i64;
 
-    async fn setup() -> i64 {
-        42
+    async fn setup() -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(42)
     }
 
-    async fn build(b: AppBuilder, env: i64) -> impl BootableApp {
+    async fn build(
+        b: AppBuilder,
+        env: i64,
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
         let mut config = R2eConfig::empty();
         config.set("app.answer", ConfigValue::Integer(env));
-        b.override_config(config)
+        Ok(b.override_config(config)
             .load_config::<()>()
             .provide(env)
-            .build_state()
-            .await
+            .try_build_state()
+            .await?)
     }
 }
 
 #[tokio::test]
 async fn launch_normal_path_assembly() {
     // Mirror launch's non-dev path up to (but not including) serve_auto.
-    let env = DemoApp::setup().await;
+    let env = DemoApp::setup().await.expect("setup");
     assert_eq!(env, 42);
 
-    let app = DemoApp::build(AppBuilder::new(), env).await;
+    let app = DemoApp::build(AppBuilder::new(), env).await.expect("build");
 
     // The config capture seam the dev-reload loop feeds back between patches.
     let config = app.r2e_config().expect("config present after build");

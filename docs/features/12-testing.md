@@ -63,6 +63,16 @@ Non-macro forms: `TestApp::boot::<my_app::MyApp>()`, `TestApp::boot_with`,
 `TestApp::boot_plain`. See `examples/example-app/tests/app_test.rs` for the
 full showcase.
 
+A boot failure fails **one test**, it does not kill the runner: `App::setup`,
+`App::build`, config loading, every bean constructor, and the controller
+`#[post_construct]` / `#[on_start]` hooks are fallible, and the boot methods
+panic with `TestApp::boot::<MyApp>() failed: <error>` plus the `caused by:`
+chain, which libtest attributes to the calling test. (Corollary: never call
+`std::process::exit` in `setup`/`build` — that code is linked into the test
+binary.) When the failure itself is the subject, `TestApp::try_boot::<A>()` /
+`try_boot_with` / `try_boot_plain` return `Result<TestApp, BootError>` over that
+same set of steps.
+
 ### Ordered tests (@Order)
 
 Keep tests independent and parallel by default. For the occasional scenario that

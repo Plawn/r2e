@@ -27,21 +27,21 @@ pub struct MyApp;
 impl App for MyApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
         setup_env().await
     }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
         // this body is hot-patched on every code change
-        b.load_config::<()>()          // sole config entry; re-read from disk per patch (YAML edits apply next patch)
+        Ok(b.load_config::<()>()       // sole config entry; re-read from disk per patch (YAML edits apply next patch)
             .provide(env.event_bus)
             .provide(env.pool)
             .register::<UserService>()
             .plugin(Health)
             .plugin(Cors::permissive())
             .plugin(DevReload)
-            .build_state().await
-            .register_controller::<UserController>()
+            .try_build_state().await?
+            .register_controller::<UserController>())
     }
 }
 ```
@@ -134,17 +134,17 @@ server:
 
 ```rust
 // Bad: new pool on every hot-patch (leaks connections)
-async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-    let pool = PgPool::connect("...").await.unwrap();
-    b.provide(pool) /* ... */
+async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+    let pool = PgPool::connect("...").await?;
+    Ok(b.provide(pool) /* ... */)
 }
 
 // Good: pool created once in setup(), reused via env
-async fn setup() -> AppEnv {
-    AppEnv { pool: PgPool::connect("...").await.unwrap() }
-}
-async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
-    b.provide(env.pool) /* ... */
+async fn setup() -> Result<AppEnv, BootError> {
+    Ok(AppEnv { pool: PgPool::connect("...").await? })   // `?`, not unwrap: a
+}                                                        // failure exits 1 with one message
+async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+    Ok(b.provide(env.pool) /* ... */)
 }
 ```
 

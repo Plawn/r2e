@@ -15,6 +15,7 @@ struct DbPool {
 struct CreateDbPool;
 
 impl Producer for CreateDbPool {
+    type Error = ::std::convert::Infallible;
     type Output = DbPool;
     type Deps = TNil;
 
@@ -22,12 +23,14 @@ impl Producer for CreateDbPool {
         vec![]
     }
 
-    async fn produce(_ctx: &BeanContext) -> DbPool {
-        // Simulate async pool creation
-        tokio::task::yield_now().await;
-        DbPool {
-            url: "sqlite::memory:".to_string(),
-        }
+    async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
+        ::std::result::Result::Ok({
+            // Simulate async pool creation
+            tokio::task::yield_now().await;
+            DbPool {
+                url: "sqlite::memory:".to_string(),
+            }
+        })
     }
 }
 
@@ -50,14 +53,17 @@ async fn producer_as_dependency() {
     }
 
     impl Bean for RepoService {
+        type Error = ::std::convert::Infallible;
         type Deps = TNil;
         fn dependencies() -> Vec<(TypeId, &'static str)> {
             vec![(TypeId::of::<DbPool>(), type_name::<DbPool>())]
         }
-        fn build(ctx: &BeanContext) -> Self {
-            Self {
-                pool: ctx.get::<DbPool>(),
-            }
+        fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+            ::std::result::Result::Ok({
+                Self {
+                    pool: ctx.get::<DbPool>(),
+                }
+            })
         }
     }
 

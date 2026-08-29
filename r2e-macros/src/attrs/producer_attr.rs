@@ -8,7 +8,7 @@ use crate::util::crate_path::r2e_core_path;
 use crate::util::hash_tokens::hash_token_stream;
 use crate::util::type_utils::{
     check_bean_inject_args, parse_config_field, parse_config_section_prefix,
-    parse_live_config_field, to_pascal_case, NAMED_BEAN_MSG,
+    parse_live_config_field, result_ok_err_types, to_pascal_case, NAMED_BEAN_MSG,
 };
 
 /// Parsed `#[producer(...)]` arguments.
@@ -69,7 +69,12 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     // `T`). Consumers inject `Option<T>` as a hard dependency. This lets
     // `#[producer]` express conditional availability without a separate
     // "soft dependency" mechanism.
-    let output_ty = match &item_fn.sig.output {
+    //
+    // The one exception is a literal `Result<T, E>`: it is split into
+    // `Producer::Output = T` + `Producer::Error = E`, so the *success* type is
+    // the bean and the error aborts `build_state()` naming the bean. A producer
+    // that genuinely wants to register a `Result` as a value returns a newtype.
+    let declared_ty = match &item_fn.sig.output {
         ReturnType::Default => {
             return Err(syn::Error::new_spanned(
                 fn_name,
@@ -79,6 +84,12 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         }
         ReturnType::Type(_, ty) => ty.as_ref().clone(),
     };
+
+    let (output_ty, error_ty) = match result_ok_err_types(&declared_ty) {
+        Some((ok, err)) => (ok.clone(), quote! { #err }),
+        None => (declared_ty.clone(), quote! { ::std::convert::Infallible }),
+    };
+    let is_fallible = result_ok_err_types(&declared_ty).is_some();
 
     // Check no self parameter
     if item_fn
@@ -284,7 +295,11 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     // that needs to coexist with another of the same underlying type returns a
     // newtype the user declares (`struct ReadPool(PgPool)`).
     let effective_output_ty: TokenStream2 = quote! { #output_ty };
-    let produce_expr = quote! { #call };
+    let produce_expr = if is_fallible {
+        quote! { #call }
+    } else {
+        quote! { ::std::result::Result::<_, ::std::convert::Infallible>::Ok(#call) }
+    };
 
     let config_keys_ret_ty = crate::model::field_resolver::config_keys_ret_ty(&krate);
 
@@ -318,6 +333,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
 
         impl #krate::beans::Producer for #struct_ident {
             type Output = #effective_output_ty;
+            type Error = #error_ty;
             type Deps = #deps_type;
 
             fn dependencies() -> Vec<(std::any::TypeId, &'static str)> {
@@ -330,7 +346,9 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
 
             const BUILD_VERSION: u64 = #build_version;
 
-            async fn produce(ctx: &#krate::beans::BeanContext) -> Self::Output {
+            async fn produce(
+                ctx: &#krate::beans::BeanContext,
+            ) -> ::std::result::Result<Self::Output, Self::Error> {
                 #config_prelude
                 #live_config_prelude
                 #(#build_args)*

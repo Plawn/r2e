@@ -231,6 +231,7 @@ struct CycleLazyA;
 struct CycleLazyB;
 
 impl Bean for CycleLazyA {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
@@ -239,13 +240,16 @@ impl Bean for CycleLazyA {
             std::any::type_name::<CycleLazyB>(),
         )]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let _ = ctx.get::<CycleLazyB>();
-        CycleLazyA
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let _ = ctx.get::<CycleLazyB>();
+            CycleLazyA
+        })
     }
 }
 
 impl Bean for CycleLazyB {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     const LAZY: bool = true;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
@@ -254,9 +258,11 @@ impl Bean for CycleLazyB {
             std::any::type_name::<CycleLazyA>(),
         )]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        let _ = ctx.get::<CycleLazyA>();
-        CycleLazyB
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            let _ = ctx.get::<CycleLazyA>();
+            CycleLazyB
+        })
     }
 }
 

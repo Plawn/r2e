@@ -80,7 +80,8 @@ impl App for OidcApp {
     type Env = AppEnv;
 
     /// Called once per process — expensive setup that survives hot-patches.
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
+        Ok({
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -137,10 +138,12 @@ impl App for OidcApp {
         println!("  curl -s -X POST localhost:3000/oauth/token -u 'my-service:service-secret' -d 'grant_type=client_credentials' | jq");
 
         AppEnv { oidc }
+    })
     }
 
     /// Re-run on every hot-patch: assemble the app on the given builder.
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok({
         b.plugin(env.oidc)
             .plugin(Health)
             .plugin(Cors::permissive())
@@ -154,5 +157,6 @@ impl App for OidcApp {
             .build_state()
             .await
             .register_controller::<GreetingController>()
+    })
     }
 }

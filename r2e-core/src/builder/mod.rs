@@ -19,7 +19,7 @@ mod typed;
 #[cfg(feature = "ws")]
 mod ws_sessions;
 
-pub use app::{launch, App};
+pub use app::{boot_error_report, exit_on_boot_error, launch, App};
 pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};
@@ -458,6 +458,23 @@ struct BuilderConfig {
     /// [`AppBuilder::per_worker_service`]; run once inside every sharded
     /// worker before it serves (see [`crate::runtime::worker`]).
     per_worker_services: Vec<crate::runtime::worker::PerWorkerServiceFactory>,
+    /// First boot failure recorded by a builder step that cannot return a
+    /// `Result` — today only `load_config()`, a type-state transition in the
+    /// middle of the chain. `try_build_state()` surfaces it before any bean is
+    /// constructed, so a bad config file reaches `app_main!`'s exit-1 contract
+    /// and `TestApp::try_boot` instead of panicking.
+    deferred_boot_error: Option<crate::beans::BeanError>,
+}
+
+impl BuilderConfig {
+    /// Record a boot failure raised by an infallible-by-signature builder
+    /// step. The **first** failure wins: later steps run against a degraded
+    /// (empty) config and their follow-on errors would only bury the cause.
+    fn record_boot_error(&mut self, err: crate::beans::BeanError) {
+        if self.deferred_boot_error.is_none() {
+            self.deferred_boot_error = Some(err);
+        }
+    }
 }
 
 /// Builder for assembling a R2E application.

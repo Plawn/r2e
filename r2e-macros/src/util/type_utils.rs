@@ -121,7 +121,8 @@ pub fn to_pascal_case(s: &str) -> String {
 /// two beans of the same underlying type is to give them two types. Emitted
 /// verbatim by `#[inject(name = ...)]` (every host) and by
 /// `#[producer(name = ...)]`, so the fix reads identically everywhere.
-pub const NAMED_BEAN_MSG: &str = "named beans are not supported: R2E has no bean qualifiers — the bean graph is keyed by type\n\
+pub const NAMED_BEAN_MSG: &str =
+    "named beans are not supported: R2E has no bean qualifiers — the bean graph is keyed by type\n\
      \n  declare a newtype instead, and inject it by type:\
      \n\
      \n    #[derive(Clone)]\
@@ -280,4 +281,34 @@ pub fn staticize_lifetimes(ty: &Type) -> Type {
     let mut ty = ty.clone();
     Staticize.visit_type_mut(&mut ty);
     ty
+}
+
+/// Split a literal `Result<T, E>` into `(T, E)`.
+///
+/// Only a path whose last segment is `Result` with exactly two angle-bracketed
+/// type arguments matches. Single-argument aliases (`ApiResult<T>`,
+/// `JsonResult<T>`) deliberately do NOT: bean and producer constructors need
+/// both halves (`Self::Error` is the second), and an alias hides one of them.
+pub fn result_ok_err_types(ty: &Type) -> Option<(&Type, &Type)> {
+    let Type::Path(p) = ty else { return None };
+    let last = p.path.segments.last()?;
+    if last.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    let tys: Vec<&Type> = args
+        .args
+        .iter()
+        .filter_map(|a| match a {
+            syn::GenericArgument::Type(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    if tys.len() == 2 && args.args.len() == 2 {
+        Some((tys[0], tys[1]))
+    } else {
+        None
+    }
 }

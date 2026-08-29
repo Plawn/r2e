@@ -10,7 +10,7 @@ error: #[bean] requires a constructor — a static method returning `Self` or `R
        A fallible one aborts boot naming the bean:
 
              fn new(dep: OtherService) -> Result<Self, BootError> { ... }
- --> cases/beans/fail/bean_no_constructor.rs:7:6
-  |
-7 | impl MyService {
-  |      ^^^^^^^^^
+  --> cases/beans/fail/bean_alias_result_ctor.rs:15:6
+   |
+15 | impl MyService {
+   |      ^^^^^^^^^

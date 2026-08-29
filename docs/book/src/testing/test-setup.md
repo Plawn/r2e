@@ -23,14 +23,14 @@ pub struct MyApp;
 
 impl App for MyApp {
     type Env = ();
-    async fn setup() {}
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        b.load_config::<AppConfig>()
+    async fn setup() -> Result<(), BootError> { Ok(()) }
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok(b.load_config::<AppConfig>()
             .register::<UserService>()
             .plugin(Health)
             .plugin(ErrorHandling)
-            .build_state().await
-            .register_controllers::<(UserController,)>()
+            .try_build_state().await?
+            .register_controllers::<(UserController,)>())
     }
 }
 
@@ -59,7 +59,13 @@ Booting an app this way:
   works with no identity provider,
 - retains the resolved bean graph: `app.bean::<UserService>()` (or an
   `#[inject] users: UserService` test parameter) returns the same instance
-  your controllers use.
+  your controllers use,
+- turns a boot failure into **one failing test**: `setup`, `build`, and every
+  bean constructor are fallible, and the panic message names the app and the
+  cause chain. (Never call `process::exit` in `setup`/`build` — that code is
+  linked into the test binary and would kill the whole run with no failure
+  attributed to any test.) `TestApp::try_boot::<A>()` returns
+  `Result<TestApp, BootError>` when the failure itself is what you assert on.
 
 Mocks and config patches go through the `with` hook — overrides are **pinned**,
 so the app's own registration of the same type becomes a no-op:

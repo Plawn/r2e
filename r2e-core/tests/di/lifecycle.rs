@@ -17,14 +17,17 @@ pub struct InitTracker {
 }
 
 impl Bean for InitTracker {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        Self {
-            initialized: Arc::new(AtomicBool::new(false)),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            Self {
+                initialized: Arc::new(AtomicBool::new(false)),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -62,12 +65,13 @@ async fn post_construct_is_called() {
 struct FailingBean;
 
 impl Bean for FailingBean {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        Self
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok(Self)
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -115,12 +119,13 @@ struct FactoryInit {
 }
 
 impl Bean for FactoryInit {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Log>(), type_name::<Log>())]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        Self { log: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok(Self { log: ctx.get() })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();

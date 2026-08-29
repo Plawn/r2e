@@ -41,14 +41,17 @@ struct TestService {
 }
 
 impl Bean for TestService {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        TestService {
-            label: "built".into(),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            TestService {
+                label: "built".into(),
+            }
+        })
     }
 }
 
@@ -79,16 +82,23 @@ struct AsyncService {
 }
 
 impl AsyncBean for AsyncService {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> impl std::future::Future<Output = Self> + Send + '_ {
-        async {
-            AsyncService {
-                label: "async-built".into(),
+    fn build(
+        _ctx: &BeanContext,
+    ) -> impl std::future::Future<Output = ::std::result::Result<Self, Self::Error>> + Send + '_
+    {
+        let __r2e_fut = {
+            async {
+                AsyncService {
+                    label: "async-built".into(),
+                }
             }
-        }
+        };
+        async move { ::std::result::Result::Ok(__r2e_fut.await) }
     }
 }
 
@@ -119,13 +129,18 @@ struct ProducedValue(String);
 struct TestProducer;
 
 impl Producer for TestProducer {
+    type Error = ::std::convert::Infallible;
     type Output = ProducedValue;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn produce(_ctx: &BeanContext) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
-        async { ProducedValue("produced".into()) }
+    fn produce(
+        _ctx: &BeanContext,
+    ) -> impl std::future::Future<Output = ::std::result::Result<Self::Output, Self::Error>> + Send + '_
+    {
+        let __r2e_fut = { async { ProducedValue("produced".into()) } };
+        async move { ::std::result::Result::Ok(__r2e_fut.await) }
     }
 }
 
@@ -186,18 +201,25 @@ struct ServiceEnabled(bool);
 struct MaybeServiceProducer;
 
 impl Producer for MaybeServiceProducer {
+    type Error = ::std::convert::Infallible;
     type Output = Option<TestService>;
     type Deps = TCons<ServiceEnabled, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<ServiceEnabled>(), "ServiceEnabled")]
     }
-    fn produce(ctx: &BeanContext) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
-        let enabled = ctx.get::<ServiceEnabled>().0;
-        async move {
-            enabled.then(|| TestService {
-                label: "built".into(),
-            })
-        }
+    fn produce(
+        ctx: &BeanContext,
+    ) -> impl std::future::Future<Output = ::std::result::Result<Self::Output, Self::Error>> + Send + '_
+    {
+        let __r2e_fut = {
+            let enabled = ctx.get::<ServiceEnabled>().0;
+            async move {
+                enabled.then(|| TestService {
+                    label: "built".into(),
+                })
+            }
+        };
+        async move { ::std::result::Result::Ok(__r2e_fut.await) }
     }
 }
 
@@ -246,6 +268,7 @@ async fn async_producer_option_present() {
     #[derive(Clone)]
     struct MaybeAsyncProducer;
     impl Producer for MaybeAsyncProducer {
+        type Error = ::std::convert::Infallible;
         type Output = Option<AsyncService>;
         type Deps = TCons<ServiceEnabled, TNil>;
         fn dependencies() -> Vec<(TypeId, &'static str)> {
@@ -253,13 +276,18 @@ async fn async_producer_option_present() {
         }
         fn produce(
             ctx: &BeanContext,
-        ) -> impl std::future::Future<Output = Self::Output> + Send + '_ {
-            let enabled = ctx.get::<ServiceEnabled>().0;
-            async move {
-                enabled.then(|| AsyncService {
-                    label: "async-built".into(),
-                })
-            }
+        ) -> impl std::future::Future<Output = ::std::result::Result<Self::Output, Self::Error>>
+               + Send
+               + '_ {
+            let __r2e_fut = {
+                let enabled = ctx.get::<ServiceEnabled>().0;
+                async move {
+                    enabled.then(|| AsyncService {
+                        label: "async-built".into(),
+                    })
+                }
+            };
+            async move { ::std::result::Result::Ok(__r2e_fut.await) }
         }
     }
     impl Registrable for MaybeAsyncProducer {

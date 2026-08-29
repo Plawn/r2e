@@ -113,11 +113,14 @@ impl App for ExecutorApp {
     /// worker; in dev mode it survives hot-patches.
     type Env = Arc<AtomicU64>;
 
-    async fn setup() -> Arc<AtomicU64> {
+    async fn setup() -> Result<Arc<AtomicU64>, BootError> {
+        Ok({
         Arc::new(AtomicU64::new(0))
+    })
     }
 
-    async fn build(b: AppBuilder, counter: Arc<AtomicU64>) -> impl BootableApp {
+    async fn build(b: AppBuilder, counter: Arc<AtomicU64>) -> Result<impl BootableApp, BootError> {
+        Ok({
         // No config file: an empty in-memory config keeps `load_config` from
         // reading disk (and `serve_auto` then defaults to 0.0.0.0:3000).
         b.override_config(R2eConfig::empty())
@@ -130,5 +133,6 @@ impl App for ExecutorApp {
             .await
             .spawn_service::<TickWorker>()
             .register_controller::<ReportController>()
+    })
     }
 }

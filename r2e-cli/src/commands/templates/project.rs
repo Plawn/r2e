@@ -197,11 +197,14 @@ pub fn app_rs(opts: &ProjectOptions) -> String {
         };
         producers.push_str(&format!(
             r#"
+// Fallible producer: an unreachable database is an operational boot failure,
+// so it flows into `BootError` — one `error:` line and exit code 1 — instead
+// of a panic with a backtrace.
 #[producer]
-async fn create_pool(#[config("database.url")] url: String) -> {pool_ty} {{
-    {pool_ty}::connect(&url)
-        .await
-        .expect("Failed to connect to the database")
+async fn create_pool(
+    #[config("database.url")] url: String,
+) -> Result<{pool_ty}, sqlx::Error> {{
+    {pool_ty}::connect(&url).await
 }}
 "#
         ));
@@ -209,30 +212,28 @@ async fn create_pool(#[config("database.url")] url: String) -> {pool_ty} {{
     if opts.auth {
         producers.push_str(
             r#"
+// Fallible producer: an IdP that will not answer is an operational boot
+// failure, reported as one `error:` line with exit code 1.
 #[producer]
 async fn jwt_validator(
     #[config("security.jwt.jwks-url")] jwks_url: String,
     #[config("security.jwt.issuer")] issuer: String,
     #[config("security.jwt.audience")] audience: String,
-) -> Arc<JwtClaimsValidator> {
+) -> Result<Arc<JwtClaimsValidator>, BootError> {
     let config = SecurityConfig::new(jwks_url, issuer, audience);
-    let jwks = Arc::new(
-        JwksCache::new(config.clone())
-            .await
-            .expect("Failed to initialize JWKS cache"),
-    );
-    Arc::new(JwtClaimsValidator::new(jwks, config))
+    let jwks = Arc::new(JwksCache::new(config.clone()).await?);
+    Ok(Arc::new(JwtClaimsValidator::new(jwks, config)))
 }
 "#,
         );
     }
 
     // Builder chain. Beans are `.provide()`-d or `.register()`-ed and plugins
-    // are `.plugin()`-installed before `.build_state().await`, which infers the
+    // are `.plugin()`-installed before `.try_build_state().await?`, which infers the
     // application state from the provision list and runs the plugin builds.
     // Controllers are registered afterward.
     let mut lines: Vec<String> = Vec::new();
-    lines.push("        b".to_string());
+    lines.push("        Ok(b".to_string());
 
     if opts.scheduler {
         lines.push("            .plugin(Scheduler)".to_string());
@@ -266,11 +267,16 @@ async fn jwt_validator(
         );
     }
 
-    lines.push("            .build_state()".to_string());
-    lines.push("            .await".to_string());
+    lines.push("            .try_build_state()".to_string());
+    lines.push("            .await?".to_string());
     lines.push("            .register_controller::<HelloController>()".to_string());
     if opts.grpc {
         lines.push("            .register_grpc_service::<GreeterService>()".to_string());
+    }
+
+    // Close the `Ok(` opened on the first line.
+    if let Some(last) = lines.last_mut() {
+        last.push(')');
     }
 
     let builder = lines.join("\n");
@@ -287,12 +293,14 @@ impl App for {app_name} {{
     /// `env.rs`: `r2e dev` treats that file as a cold restart boundary.
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {{
+    /// A failure here aborts boot with a single error line — never
+    /// `process::exit`, which would kill the test binary too.
+    async fn setup() -> Result<AppEnv, BootError> {{
         setup_env().await
     }}
 
     /// Re-run on every hot-patch: assemble the app on the given builder.
-    async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {{
+    async fn build(b: AppBuilder, _env: Self::Env) -> Result<impl BootableApp, BootError> {{
 {builder}
     }}
 }}
@@ -317,8 +325,8 @@ pub fn env_rs() -> &'static str {
 #[derive(Clone, Default)]
 pub struct AppEnv;
 
-pub async fn setup_env() -> AppEnv {
-    AppEnv
+pub async fn setup_env() -> Result<AppEnv, r2e::BootError> {
+    Ok(AppEnv)
 }
 "#
 }
@@ -436,13 +444,15 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 ## Architecture rules
 
 - **App trait**: the whole app is assembled once in `src/app.rs` in
-  `impl App for {app_name}` — `build(b, env)` returns `impl BootableApp`, and
+  `impl App for {app_name}` — `setup`/`build` return
+  `Result<_, BootError>` (`?` on anything fallible; a failure aborts boot with
+  one error line instead of `process::exit`), and
   long-lived resources and setup helpers go in `src/env.rs`. `lib.rs` includes
   `app.rs` for tests; `r2e::app_main!({app_name})` includes the same file into
   the binary tip crate and generates `main`. Add controllers/beans/plugins inside `build` —
   never in `main.rs`, and never build a second `AppBuilder`.
 - **State is inferred**: there is no state struct. `.provide(bean)` /
-  `.register::<T>()` before `.build_state().await`; inject by type with
+  `.register::<T>()` before `.try_build_state().await?`; inject by type with
   `#[inject]` fields. A missing bean is a compile error at
   `register_controller()`.
 - **Endpoints are controllers**: a `#[controller(path = "...")]` struct +

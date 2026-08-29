@@ -7,21 +7,19 @@
 //! // lib.rs
 //! impl App for MyApp {
 //!     type Env = ();
-//!     async fn setup() {}
-//!     async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-//!         b.load_config::<AppConfig>()
+//!     async fn setup() -> Result<(), BootError> { Ok(()) }
+//!     async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+//!         Ok(b.load_config::<AppConfig>()
 //!             .register::<UserService>()
 //!             .plugin(Health)
-//!             .build_state().await
-//!             .register_controllers::<(UserController,)>()
+//!             .try_build_state().await?
+//!             .register_controllers::<(UserController,)>())
 //!     }
 //! }
 //!
-//! // main.rs
-//! #[r2e::main]
-//! async fn main() {
-//!     r2e::launch::<MyApp>().await.unwrap();
-//! }
+//! // main.rs — `app_main!` generates the equivalent: a boot failure prints
+//! // the error chain and exits non-zero instead of panicking.
+//! r2e::app_main!(MyApp);
 //!
 //! // tests — the harness pre-configures the builder (profile, pinned mocks,
 //! // config overrides) before running the same App:
@@ -50,16 +48,23 @@ pub trait BootableApp: Sized {
 
     /// Assemble the final router and run the consumer registrations that
     /// `serve()` would run at startup (`#[consumer]` methods, subscriber
-    /// beans, EventBus bridges). The in-process test entry point — used by
-    /// `TestApp::boot` so event consumers have production parity in tests.
-    fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router>;
+    /// beans, EventBus bridges) plus the controller `#[post_construct]` and
+    /// `#[on_start]` hooks. The in-process test entry point — used by
+    /// `TestApp::boot` so startup behaviour matches production in tests.
+    ///
+    /// Fallible: a startup hook that returns `Err` aborts the boot here, which
+    /// is what lets `TestApp::try_boot*` return it instead of panicking
+    /// underneath the harness.
+    fn into_router_with_consumers(
+        self,
+    ) -> impl Future<Output = Result<crate::http::Router, crate::beans::BootError>>;
 
     /// Build and serve on an explicit address.
-    fn serve(self, addr: &str) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>>;
+    fn serve(self, addr: &str) -> impl Future<Output = Result<(), crate::beans::BootError>>;
 
     /// Build and serve, reading `server.host`/`server.port` from config
     /// (production entry point).
-    fn serve_auto(self) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>>;
+    fn serve_auto(self) -> impl Future<Output = Result<(), crate::beans::BootError>>;
 }
 
 impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
@@ -75,15 +80,17 @@ impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
         self.build()
     }
 
-    fn into_router_with_consumers(self) -> impl Future<Output = crate::http::Router> {
-        self.build_with_consumers()
+    fn into_router_with_consumers(
+        self,
+    ) -> impl Future<Output = Result<crate::http::Router, crate::beans::BootError>> {
+        self.try_build_with_consumers()
     }
 
-    fn serve(self, addr: &str) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>> {
+    fn serve(self, addr: &str) -> impl Future<Output = Result<(), crate::beans::BootError>> {
         AppBuilder::serve(self, addr)
     }
 
-    fn serve_auto(self) -> impl Future<Output = Result<(), Box<dyn std::error::Error>>> {
+    fn serve_auto(self) -> impl Future<Output = Result<(), crate::beans::BootError>> {
         AppBuilder::serve_auto(self)
     }
 }

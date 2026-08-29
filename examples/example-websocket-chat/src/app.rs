@@ -31,7 +31,8 @@ pub struct ChatApp;
 impl App for ChatApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
+        Ok({
         let event_bus = LocalEventBus::new();
         let ws_rooms = WsRooms::new(128);
 
@@ -53,9 +54,11 @@ impl App for ChatApp {
             ws_rooms,
             pool,
         }
+    })
     }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok({
         b.load_config::<()>()
             .provide(env.event_bus)
             .provide(env.ws_rooms)
@@ -68,5 +71,6 @@ impl App for ChatApp {
             .build_state()
             .await
             .register_controllers::<(ChatController, HistoryController, MessagePersistenceConsumer)>()
+    })
     }
 }

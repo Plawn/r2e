@@ -10,6 +10,7 @@
 //!
 //! Everything lives in ONE test function: the dev-reload caches are
 //! process-global, so parallel test functions would clobber each other.
+use crate::dev_serial::CommitCycle;
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, PreDestroy, Registrable};
 use r2e_core::config::{ConfigKeyKind, ConfigValue, R2eConfig};
 use r2e_core::decorators::decorator::{BeanDecoFill, SharedDecoSlot};
@@ -37,15 +38,18 @@ struct Stable {
 }
 
 impl Bean for Stable {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self {
-            counter: Arc::new(AtomicU32::new(0)),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self {
+                counter: Arc::new(AtomicU32::new(0)),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -77,6 +81,7 @@ struct ConfDep {
 }
 
 impl Bean for ConfDep {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
@@ -84,12 +89,14 @@ impl Bean for ConfDep {
     fn config_keys() -> Vec<(&'static str, &'static str, ConfigKeyKind)> {
         vec![("dev.flip", "String", ConfigKeyKind::Required)]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
-        let config: R2eConfig = ctx.get();
-        Self {
-            val: config.get::<String>("dev.flip").unwrap(),
-        }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
+            let config: R2eConfig = ctx.get();
+            Self {
+                val: config.get::<String>("dev.flip").unwrap(),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -121,13 +128,16 @@ struct UsesStable {
 }
 
 impl Bean for UsesStable {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<Stable, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Stable>(), "Stable")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_STABLE_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -147,13 +157,16 @@ struct UsesConf {
 }
 
 impl Bean for UsesConf {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<ConfDep, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<ConfDep>(), "ConfDep")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_CONF_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -175,16 +188,19 @@ struct Decorated {
 }
 
 impl Bean for Decorated {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self {
-            identity: Arc::new(()),
-            slot: SharedDecoSlot::new(),
-        }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self {
+                identity: Arc::new(()),
+                slot: SharedDecoSlot::new(),
+            }
+        })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_deco_fill::<Self>();
@@ -211,13 +227,16 @@ struct UsesDecorated {
 }
 
 impl Bean for UsesDecorated {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<Decorated, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<Decorated>(), "Decorated")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_DECORATED_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -262,6 +281,7 @@ macro_rules! cycle {
             .register::<UsesDecorated>()
             .build_state()
             .await
+            .commit_cycle()
     };
 }
 
@@ -269,12 +289,13 @@ macro_rules! cycle {
 struct Disposable;
 
 impl Bean for Disposable {
+    type Error = ::std::convert::Infallible;
     type Deps = TNil;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![]
     }
-    fn build(_ctx: &BeanContext) -> Self {
-        Self
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok(Self)
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_pre_destroy::<Self>();
@@ -440,6 +461,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .register::<Disposable>()
         .build_state()
         .await
+        .commit_cycle()
         .prepare("127.0.0.1:0");
     let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let first_server = r2e_core::rt::spawn(async move {
@@ -456,6 +478,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .register::<Disposable>()
         .build_state()
         .await
+        .commit_cycle()
         .prepare("127.0.0.1:0");
     let stop = second.stop_handle();
     let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -514,13 +537,16 @@ struct UsesPlugin {
 }
 
 impl Bean for UsesPlugin {
+    type Error = ::std::convert::Infallible;
     type Deps = TCons<PluginBean, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
         vec![(TypeId::of::<PluginBean>(), "PluginBean")]
     }
-    fn build(ctx: &BeanContext) -> Self {
-        USES_PLUGIN_BUILDS.fetch_add(1, Ordering::SeqCst);
-        Self { inner: ctx.get() }
+    fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok({
+            USES_PLUGIN_BUILDS.fetch_add(1, Ordering::SeqCst);
+            Self { inner: ctx.get() }
+        })
     }
 }
 
@@ -551,7 +577,8 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
         .plugin(CountingPlugin)
         .register::<UsesPlugin>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state1 = app1.state().clone();
     assert_eq!(PLUGIN_BUILDS.load(Ordering::SeqCst), 1);
     assert_eq!(USES_PLUGIN_BUILDS.load(Ordering::SeqCst), 1);
@@ -565,7 +592,8 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
         .plugin(CountingPlugin)
         .register::<UsesPlugin>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state2 = app2.state().clone();
 
     assert_eq!(

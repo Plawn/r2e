@@ -20,17 +20,21 @@ struct SecureMcpApp;
 impl App for SecureMcpApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        pin_mcp_validator(b, &jwt(), RESOURCE)
-            .load_config::<()>()
-            .plugin(McpServer::new().with_name("example-mcp-secure"))
-            .provide(CalcService)
-            .provide(CallLog::default())
-            .build_state()
-            .await
-            .register_mcp_service::<MathTools>()
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
+            pin_mcp_validator(b, &jwt(), RESOURCE)
+                .load_config::<()>()
+                .plugin(McpServer::new().with_name("example-mcp-secure"))
+                .provide(CalcService)
+                .provide(CallLog::default())
+                .build_state()
+                .await
+                .register_mcp_service::<MathTools>()
+        })
     }
 }
 

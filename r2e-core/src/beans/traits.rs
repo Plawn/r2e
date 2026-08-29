@@ -1,4 +1,4 @@
-use super::{BeanContext, BeanRegistry};
+use super::{BeanContext, BeanRegistry, BootError};
 use crate::config::ConfigKeyKind;
 use std::any::TypeId;
 use std::future::Future;
@@ -21,6 +21,19 @@ pub trait Bean: Clone + Send + Sync + 'static {
     /// Generated automatically by `#[bean]` and `#[derive(Bean)]`.
     /// For manual impls without dependencies, use `type Deps = TNil;`.
     type Deps;
+
+    /// How this bean's constructor can fail.
+    ///
+    /// Use [`Infallible`](std::convert::Infallible) for a constructor that
+    /// cannot fail — the overwhelmingly common case, and what `#[bean]`
+    /// generates for a plain `fn new(..) -> Self`. A constructor declared as
+    /// `fn new(..) -> Result<Self, E>` gets `type Error = E`; the **bean type
+    /// stays `Self`**, the error never contaminates what consumers inject.
+    ///
+    /// The first failing bean aborts `build_state()` with
+    /// [`BeanError::BeanBuild`](super::BeanError::BeanBuild) naming this type;
+    /// beans already built in that cycle are dropped as the stack unwinds.
+    type Error: Into<BootError>;
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to construct this bean.
@@ -87,7 +100,10 @@ pub trait Bean: Clone + Send + Sync + 'static {
     const BUILD_VERSION: u64 = 0;
 
     /// Construct the bean from a fully resolved context.
-    fn build(ctx: &BeanContext) -> Self;
+    ///
+    /// An infallible constructor returns `Ok(..)` with
+    /// `type Error = std::convert::Infallible`.
+    fn build(ctx: &BeanContext) -> Result<Self, Self::Error>;
 
     /// Called after registration to allow post-processing (e.g., registering
     /// post-construct hooks). The default is a no-op.
@@ -109,6 +125,11 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     /// Generated automatically by `#[bean]` on async constructors.
     /// For manual impls without dependencies, use `type Deps = TNil;`.
     type Deps;
+
+    /// How this bean's async constructor can fail. See [`Bean::Error`] —
+    /// the rules are identical (`async fn new(..) -> Result<Self, E>` gives
+    /// `type Error = E`, and the bean is still registered as `Self`).
+    type Error: Into<BootError>;
 
     /// When `true`, construction is deferred until first injection.
     /// Set by `#[bean(lazy)]`. See [`Bean::LAZY`] for details.
@@ -162,7 +183,7 @@ pub trait AsyncBean: Clone + Send + Sync + 'static {
     /// `error: lifetime bound not satisfied` / `implementation of Executor is
     /// not general enough` (rust-lang/rust#100013). See the "async
     /// constructors are not `Send`-bound" note in `llm.txt`.
-    fn build(ctx: &BeanContext) -> impl Future<Output = Self> + '_;
+    fn build(ctx: &BeanContext) -> impl Future<Output = Result<Self, Self::Error>> + '_;
 
     /// Called after registration to allow post-processing (e.g., registering
     /// post-construct hooks). The default is a no-op.
@@ -188,6 +209,19 @@ pub trait Producer: Send + 'static {
     /// Generated automatically by `#[producer]`.
     /// For manual impls without dependencies, use `type Deps = TNil;`.
     type Deps;
+
+    /// How this producer can fail.
+    ///
+    /// A `#[producer]` function declared as `-> Result<T, E>` produces the
+    /// bean `T` with `type Error = E`: the **`Output`, not the `Result`, is
+    /// what gets registered**, so consumers inject `T` and never see the
+    /// error type. An infallible producer uses
+    /// [`Infallible`](std::convert::Infallible).
+    ///
+    /// (Conditional availability is a different axis and still travels in the
+    /// `Output`: `-> Option<T>` registers `Option<T>`, and
+    /// `-> Result<Option<T>, E>` registers `Option<T>` with a failure channel.)
+    type Error: Into<BootError>;
 
     /// Returns the [`TypeId`]s and type names of all dependencies needed
     /// to produce the output.
@@ -234,7 +268,7 @@ pub trait Producer: Send + 'static {
     ///
     /// **The returned future is deliberately not required to be `Send`** —
     /// same reasoning as [`AsyncBean::build`].
-    fn produce(ctx: &BeanContext) -> impl Future<Output = Self::Output> + '_;
+    fn produce(ctx: &BeanContext) -> impl Future<Output = Result<Self::Output, Self::Error>> + '_;
 
     /// Called after registration to allow post-processing.
     fn after_register(_registry: &mut BeanRegistry) {}
@@ -281,9 +315,7 @@ pub trait PreDestroy: Clone + Send + Sync + 'static {
 /// and only then start awaiting them.
 pub type OnStartHook = Box<
     dyn FnOnce() -> Pin<
-            Box<
-                dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send,
-            >,
+            Box<dyn Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>> + Send>,
         > + Send,
 >;
 

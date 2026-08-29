@@ -23,3 +23,22 @@ pub fn dev_serial() -> MutexGuard<'static, ()> {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+/// The commit step of the hot-patch loop.
+///
+/// `try_build_state()` **stages** a cycle rather than publishing it: only
+/// `r2e::launch!` knows whether the rest of the assembly (`App::build`,
+/// deferred controllers) succeeded, so it calls `commit_dev_cycle()` on `Ok`
+/// and `rollback_dev_cycle()` on `Err`. Tests that drive cycles by hand play
+/// the loop's part, so they must commit too — otherwise the next cycle finds
+/// an empty cache and rebuilds cold.
+#[cfg(feature = "dev-reload")]
+pub trait CommitCycle: Sized {
+    fn commit_cycle(self) -> Self {
+        r2e_core::commit_dev_cycle();
+        self
+    }
+}
+
+#[cfg(feature = "dev-reload")]
+impl<T> CommitCycle for T {}

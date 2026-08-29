@@ -36,14 +36,14 @@ use std::cell::{Cell, RefCell};
 
 use r2e::http::Json;
 use r2e::prelude::*;
+use r2e::r2e_executor::Executor;
+use r2e::r2e_prometheus::{Prometheus, WorkerCollector};
+use r2e::r2e_scheduler::Scheduler;
 use r2e::rt::sync::oneshot;
 use r2e::rt::{CancelToken, JobHandle, UdpSocket};
 use r2e::runtime::ingress::reuseport_udp;
 use r2e::runtime::worker::{BoxError, LocalBoxFuture, WorkerContext, WorkerService};
 use r2e::runtime::worker_set::WorkerSnapshot;
-use r2e::r2e_executor::Executor;
-use r2e::r2e_prometheus::{Prometheus, WorkerCollector};
-use r2e::r2e_scheduler::Scheduler;
 use serde::Serialize;
 
 // ── Worker-local state ──────────────────────────────────────────────────
@@ -147,7 +147,10 @@ async fn echo_loop(
             s.bytes.set(s.bytes.get() + n as u64);
             s.datagrams.get()
         });
-        let reply = format!("shard={worker} n={count} {}", String::from_utf8_lossy(&buf[..n]));
+        let reply = format!(
+            "shard={worker} n={count} {}",
+            String::from_utf8_lossy(&buf[..n])
+        );
         if let Err(e) = sock.send_to(reply.as_bytes(), peer).await {
             tracing::warn!(worker, error = %e, "udp send failed");
         }
@@ -274,52 +277,56 @@ pub struct UdpApp;
 impl App for UdpApp {
     type Env = ();
 
-    async fn setup() {}
+    async fn setup() -> Result<(), BootError> {
+        Ok(())
+    }
 
-    async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-        let port: u16 = std::env::var("UDP_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(4433);
-        let workers = WorkerSet::new();
-        let mail: Mailboxes<Cmd> = Mailboxes::new(workers.clone(), 64);
-        let stats: WorkerLocal<RefCell<ShardStats>> =
-            WorkerLocal::new(|_worker| async { Ok(RefCell::new(ShardStats::default())) });
-        let installer = stats.clone();
-        let (svc_stats, svc_mail) = (stats.clone(), mail.clone());
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok({
+            let port: u16 = std::env::var("UDP_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(4433);
+            let workers = WorkerSet::new();
+            let mail: Mailboxes<Cmd> = Mailboxes::new(workers.clone(), 64);
+            let stats: WorkerLocal<RefCell<ShardStats>> =
+                WorkerLocal::new(|_worker| async { Ok(RefCell::new(ShardStats::default())) });
+            let installer = stats.clone();
+            let (svc_stats, svc_mail) = (stats.clone(), mail.clone());
 
-        b.load_config::<()>()
-            .provide(workers.clone())
-            .provide(mail)
-            // `WorkerLocal` as a bean: `.worker_local(factory)` is the one-liner
-            // when the handle is not needed elsewhere; here the UDP service
-            // reads it too, so we provide the same handle explicitly.
-            .provide(stats)
-            .per_worker_service(move |ctx| {
-                let installer = installer.clone();
-                async move { installer.install(ctx).await }
-            })
-            .per_worker_service(move |worker| {
-                ShardEcho::start(worker, port, svc_stats.clone(), svc_mail.clone())
-            })
-            .plugin(Scheduler)
-            .plugin(Executor)
-            .plugin(Health::builder().build())
-            .plugin(WorkerHealth::new())
-            .plugin(
-                Prometheus::builder()
-                    .endpoint("/metrics")
-                    .register(Box::new(WorkerCollector::new(workers)))
-                    .build(),
-            )
-            .build_state()
-            .await
-            .register_controller::<StatsController>()
-            .register_controller::<StatsAggregator>()
+            b.load_config::<()>()
+                .provide(workers.clone())
+                .provide(mail)
+                // `WorkerLocal` as a bean: `.worker_local(factory)` is the one-liner
+                // when the handle is not needed elsewhere; here the UDP service
+                // reads it too, so we provide the same handle explicitly.
+                .provide(stats)
+                .per_worker_service(move |ctx| {
+                    let installer = installer.clone();
+                    async move { installer.install(ctx).await }
+                })
+                .per_worker_service(move |worker| {
+                    ShardEcho::start(worker, port, svc_stats.clone(), svc_mail.clone())
+                })
+                .plugin(Scheduler)
+                .plugin(Executor)
+                .plugin(Health::builder().build())
+                .plugin(WorkerHealth::new())
+                .plugin(
+                    Prometheus::builder()
+                        .endpoint("/metrics")
+                        .register(Box::new(WorkerCollector::new(workers)))
+                        .build(),
+                )
+                .build_state()
+                .await
+                .register_controller::<StatsController>()
+                .register_controller::<StatsAggregator>()
+        })
     }
 }
 
 #[r2e::main]
 async fn main() {
-    r2e::launch!(UdpApp).await.unwrap();
+    r2e::exit_on_boot_error(r2e::launch!(UdpApp).await);
 }

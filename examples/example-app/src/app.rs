@@ -88,16 +88,19 @@ impl App for ExampleApp {
     /// Long-lived resources; in dev mode they survive hot-patches.
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
+        Ok({
         // Print a demo JWT for curl usage (harmless in tests; this is a demo app).
         println!("=== Test JWT (valid 1h) ===");
         println!("{}", demo_token());
         println!();
 
         provision_env().await
+    })
     }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok({
         // Fine-grained authorization (OpenFGA). To keep `cargo run` working
         // without a live OpenFGA server, we back the registry with an in-memory
         // MockBackend and seed a few relationship tuples. In production, swap
@@ -198,5 +201,6 @@ impl App for ExampleApp {
                 ProxyController,
                 DocumentController,
             )>()
+    })
     }
 }

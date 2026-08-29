@@ -5,7 +5,5 @@
 
 #[r2e::main]
 async fn main() {
-    r2e::launch!(example_microservice::product::ProductApp)
-        .await
-        .unwrap();
+    r2e::exit_on_boot_error(r2e::launch!(example_microservice::product::ProductApp).await);
 }
