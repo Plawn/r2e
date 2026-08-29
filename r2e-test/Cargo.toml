@@ -36,3 +36,6 @@ futures-util = {workspace = true, optional = true}
 
 [dev-dependencies]
 base64 = {workspace = true}
+# The facade, for the macros only: `tests/suite.rs` drives `#[r2e::test_suite]`
+# end-to-end. Dev-only, and `r2e` does not depend on `r2e-test`, so no cycle.
+r2e = {workspace = true}

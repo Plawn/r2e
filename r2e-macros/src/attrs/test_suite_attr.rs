@@ -303,7 +303,18 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
     let suite_mod = format_ident!("__r2e_suite_{}", def.suite_ident);
     let self_ty = &def.self_ty;
     let total_cases = def.cases.len();
-    let runtime_builder = args.runtime.builder_tokens(&core_crate);
+    // ONE runtime for the whole suite, owned by the `SuiteCell` next to the
+    // suite value: `#[before_all]` routinely builds runtime-bound resources
+    // (a TestApp, a pool, a socket) that every later case reuses, and those go
+    // inert the moment their reactor disappears. Cell + runtime both live in
+    // the module's `OnceLock`, so `#[after_all]` still runs on a live reactor.
+    let runtime_builder = args.runtime.builder_tokens_for(
+        &core_crate,
+        &format!(
+            "failed to build the runtime for R2E test suite `{}`",
+            def.suite_ident
+        ),
+    );
     let tracing_init = args
         .tracing
         .then(|| quote! { #core_crate::init_tracing(); });
@@ -329,7 +340,6 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
             &before_each,
             &after_each,
             after_all.as_ref(),
-            &runtime_builder,
             &tracing_init,
         )
     });
@@ -343,7 +353,9 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
                 ::std::sync::OnceLock::new();
 
             fn __r2e_suite_cell() -> &'static #test_crate::suite::SuiteCell<#self_ty> {
-                __R2E_SUITE.get_or_init(|| #test_crate::suite::SuiteCell::new(#total_cases))
+                __R2E_SUITE.get_or_init(|| {
+                    #test_crate::suite::SuiteCell::new(#total_cases, #runtime_builder)
+                })
             }
 
             async fn __r2e_init_suite() -> #self_ty {
@@ -361,7 +373,6 @@ fn generate_case(
     before_each: &[TokenStream2],
     after_each: &[TokenStream2],
     after_all: Option<&TokenStream2>,
-    runtime_builder: &TokenStream2,
     tracing_init: &Option<TokenStream2>,
 ) -> TokenStream2 {
     let test_crate = r2e_test_path();
@@ -437,8 +448,9 @@ fn generate_case(
         fn #fn_name() {
             #tracing_init
             #order_turn
-            let __r2e_runtime = #runtime_builder;
             let __r2e_cell = __r2e_suite_cell();
+            // Shared with every other case: see `SuiteCell`'s module docs.
+            let __r2e_runtime = __r2e_cell.runtime();
             let mut __r2e_state = __r2e_cell.lock();
             if __r2e_state.init_failed {
                 panic!("R2E test suite initialization failed in a previous case");
@@ -468,6 +480,10 @@ fn generate_case(
                 let __r2e_case_result = ::std::panic::catch_unwind(
                     ::std::panic::AssertUnwindSafe(|| {
                         __r2e_runtime.block_on(async {
+                            __r2e_cell.assert_on_suite_runtime(
+                                stringify!(#suite_ident),
+                                stringify!(#fn_name),
+                            );
                             #(
                                 let __r2e_before_each_outcome = #before_each;
                                 #test_crate::suite::SuiteOutcome::assert_passed(__r2e_before_each_outcome);

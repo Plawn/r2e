@@ -72,6 +72,14 @@ impl RuntimeArgs {
     /// `krate` is the resolved r2e-core root (`::r2e`, `::r2e_core` or
     /// `crate`); the builder is reached through its `rt` re-export.
     pub fn builder_tokens(&self, krate: &TokenStream2) -> TokenStream2 {
+        self.builder_tokens_for(krate, "failed to build r2e runtime")
+    }
+
+    /// [`builder_tokens`](Self::builder_tokens) with a caller-supplied panic
+    /// message, so a failure names *which* runtime could not be built. The
+    /// suite macro uses it: a suite whose runtime never materialises must not
+    /// look like an ordinary test failure.
+    pub fn builder_tokens_for(&self, krate: &TokenStream2, on_error: &str) -> TokenStream2 {
         let builder_fn = if self.flavor.unwrap_or(false) {
             quote! { #krate::rt::RuntimeBuilder::new_current_thread() }
         } else {
@@ -109,7 +117,7 @@ impl RuntimeArgs {
                 #start_paused
                 .enable_all()
                 .build()
-                .expect("failed to build r2e runtime")
+                .expect(#on_error)
         }
     }
 }

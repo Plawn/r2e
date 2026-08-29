@@ -30,7 +30,7 @@
 //!   [`JoinSet`]
 //! - Streams: the [`stream`] re-export of `tokio-stream`
 //! - Runtime construction: [`RuntimeBuilder`], [`Runtime`], [`RuntimeHandle`],
-//!   [`block_on`], [`block_in_place`]
+//!   [`RuntimeId`], [`block_on`], [`block_in_place`]
 //!
 //! # Wrapped vs re-exported
 //!
@@ -680,6 +680,34 @@ impl Runtime {
     pub fn handle(&self) -> RuntimeHandle {
         RuntimeHandle(self.0.handle().clone())
     }
+
+    /// The identity of this runtime — see [`RuntimeId`].
+    #[must_use]
+    pub fn id(&self) -> RuntimeId {
+        RuntimeId(self.0.handle().id())
+    }
+}
+
+/// The identity of a runtime, comparable across threads.
+///
+/// The one thing it is for: asserting that two pieces of work run on the *same*
+/// reactor. A resource registered with a runtime's I/O driver (a socket, a
+/// timer, a connection pool's keep-alive task) goes inert — not erroring, just
+/// never waking — once that runtime is gone, so code that amortises such a
+/// resource across several `block_on` calls wants to prove they share a
+/// reactor rather than discover it as an unexplained timeout.
+/// See `r2e-test`'s `SuiteCell`, which uses it to guard `#[r2e::test_suite]`.
+#[expect(
+    clippy::disallowed_types,
+    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
+)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct RuntimeId(tokio::runtime::Id);
+
+impl std::fmt::Display for RuntimeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
 }
 
 /// A cloneable handle to a runtime, used to reach it from another thread.
@@ -744,6 +772,12 @@ impl RuntimeHandle {
     /// [`block_in_place`] when that is the case.
     pub fn block_on<F: Future>(&self, future: F) -> F::Output {
         self.0.block_on(future)
+    }
+
+    /// The identity of the runtime behind this handle — see [`RuntimeId`].
+    #[must_use]
+    pub fn id(&self) -> RuntimeId {
+        RuntimeId(self.0.id())
     }
 
     /// Whether this runtime is the work-stealing multi-thread flavour.
