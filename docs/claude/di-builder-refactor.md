@@ -46,9 +46,24 @@ the state model.
   startup); `BeanLookup` (witness-free dynamic access via a monomorphized
   TypeId-compare chain — the vocabulary for guards, interceptors, and
   `ManagedResource`).
+- **`BeanState<L>`** — the materialized list `L` behind ONE `Arc`, and what is
+  actually installed as the router state (`build_state()` returns
+  `AppBuilder<BeanState<<P as BuildHList>::Output>>`). The backend clones the
+  router state on every request whether or not the handler declares `State<S>`,
+  so installing the bare `HCons` chain cost one bean `Clone` per bean per
+  request — O(N) in the width of the graph. The wrapper makes it one refcount
+  bump (task #992, `docs/claude/hot-path-clone-audit.md`). It forwards
+  `HasBean<T, Idx>` (index witness intact — so `state.get::<T>()` is still one
+  pointer deref plus a constant field offset, no `TypeId` lookup), `Contains`
+  (so every `AllSatisfied<StateType, _>` bound sees through it), `BeanLookup`,
+  and `Deref<Target = L>`. `BeanAccess::get` comes free from its blanket impl.
+  Nothing in `r2e-macros` changed: the generated extractor and the
+  `Controller<S, W>` impl were already state-generic.
 - **`build_state()`** takes no type arguments: it materializes `P` into the HList
-  state and retains the graph as `Arc<BeanContext>` through the typed phase
-  (`bean_context()` / `state()` accessors). Dev-reload caches `(state, ctx)`.
+  state, wraps it in `BeanState`, and retains the graph as `Arc<BeanContext>`
+  through the typed phase (`bean_context()` / `state()` accessors).
+  `BuildHList::build_bean_state` is the wrapping form of `build_hlist`.
+  Dev-reload caches `(state, ctx)`.
   The typed phase holds `state: T` (not `Option<T>`), so `register_controller`
   has no `.expect("state must be set")`.
 - Apps with more than ~127 registrations need `#![recursion_limit = "512"]` at

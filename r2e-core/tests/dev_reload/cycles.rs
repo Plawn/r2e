@@ -622,3 +622,107 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
          graph exposes a new one"
     );
 }
+
+// ── The cached state is literally the same `Arc` (task #992) ─────────────────
+
+static CACHE_CLONES: AtomicU32 = AtomicU32::new(0);
+
+/// A bean that counts its own `Clone` calls and carries an identity `Arc`.
+///
+/// Both are needed: the clone counter proves no bean was pulled out of the
+/// context and copied into a fresh HList, and `identity` proves the instance
+/// itself carried over (not merely "a bean of the same type").
+struct CloneCounted {
+    identity: Arc<()>,
+}
+
+impl Clone for CloneCounted {
+    fn clone(&self) -> Self {
+        CACHE_CLONES.fetch_add(1, Ordering::SeqCst);
+        Self {
+            identity: Arc::clone(&self.identity),
+        }
+    }
+}
+
+impl Bean for CloneCounted {
+    type Error = ::std::convert::Infallible;
+    type Deps = TNil;
+    fn dependencies() -> Vec<(TypeId, &'static str)> {
+        vec![]
+    }
+    fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
+        ::std::result::Result::Ok(Self {
+            identity: Arc::new(()),
+        })
+    }
+}
+
+impl Registrable for CloneCounted {
+    type Provided = Self;
+    type Deps = TNil;
+    fn register_into(registry: &mut BeanRegistry) {
+        registry.register::<Self>();
+    }
+}
+
+/// A full cache hit must hand back the **same** `BeanState` — the same `Arc`,
+/// not a rebuilt list of the same beans.
+///
+/// The monolithic fast path (`get_cached_state`) returns the stored state
+/// verbatim, so the router of cycle 2 shares the router state of cycle 1 by
+/// pointer. Re-running `build_hlist` there instead would allocate a new `Arc`
+/// and clone every bean out of the context — cheap-looking, but it is a
+/// per-patch copy of the whole graph and it breaks pointer identity for anyone
+/// holding the previous state.
+///
+/// Since #992 that identity is observable directly: `BeanState::list()` borrows
+/// the `Arc`'s contents, so two clones of one `Arc` yield the same address.
+#[r2e_core::test]
+async fn a_full_cache_hit_reuses_the_same_state_arc() {
+    // Process-global dev-reload caches: hold them exclusively, start cold.
+    let _serial = crate::dev_serial::dev_serial();
+    r2e_core::invalidate_state_cache();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
+    CACHE_CLONES.store(0, Ordering::SeqCst);
+
+    // Cycle 1: cold. Nothing about its cost is asserted — it is the baseline.
+    let app1 = AppBuilder::new()
+        .register::<CloneCounted>()
+        .build_state()
+        .await
+        .commit_cycle();
+    let state1 = app1.state().clone();
+    let after_cold = CACHE_CLONES.load(Ordering::SeqCst);
+
+    // Cycle 2: same graph, same provision list → full cache hit. No bean
+    // registration, decorator fill or disposer forces a re-resolution here,
+    // which is what makes the monolithic path eligible.
+    let app2 = AppBuilder::new()
+        .register::<CloneCounted>()
+        .build_state()
+        .await
+        .commit_cycle();
+    let state2 = app2.state().clone();
+
+    assert_eq!(
+        CACHE_CLONES.load(Ordering::SeqCst),
+        after_cold,
+        "a full cache hit rebuilt the state: it cloned beans out of the context \
+         instead of handing back the cached `BeanState` as-is"
+    );
+    assert!(
+        std::ptr::eq(state1.list(), state2.list()),
+        "a full cache hit produced a different `Arc`: the cached state must be \
+         reused by pointer, not rebuilt into a fresh list of the same beans"
+    );
+
+    // Reading the beans clones them, so this comes after the counter check.
+    assert!(
+        Arc::ptr_eq(
+            &state1.get::<CloneCounted>().identity,
+            &state2.get::<CloneCounted>().identity,
+        ),
+        "the reused state must hold the very same bean instance"
+    );
+}

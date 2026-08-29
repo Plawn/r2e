@@ -8,23 +8,29 @@ error[E0277]: bean `TenantRouter` is not present in the application state
    |
    = help: the trait `HasBean<TenantRouter, _>` is not implemented for `HNil`
    = note: add `.provide(value)` or `.register::<TenantRouter>()` before `build_state()` so the bean is part of the provision list
-help: `HCons<H, Tail>` implements trait `HasBean<T, Idx>`
+help: the following other types implement trait `HasBean<T, Idx>`
   --> $WORKSPACE/r2e-core/src/type_list.rs
    |
    |   impl<H: Clone, Tail> HasBean<H, Here> for HCons<H, Tail> {
-   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HasBean<H, Here>`
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, Tail>` implements `HasBean<H, Here>`
 ...
    | / impl<H, Tail, T, I> HasBean<T, There<I>> for HCons<H, Tail>
    | | where
    | |     Tail: HasBean<T, I>,
-   | |________________________^ `HasBean<T, There<I>>`
-   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<HNil, ViaBean<(_, _)>>`
-note: required for `__R2eRequestData_OrderController<(ViaBean<(_, _)>,)>` to implement `FromRequestParts<HNil>`
+   | |________________________^ `HCons<H, Tail>` implements `HasBean<T, There<I>>`
+...
+   | / impl<L, T, Idx> HasBean<T, Idx> for BeanState<L>
+   | | where
+   | |     L: HasBean<T, Idx>,
+   | |_______________________^ `BeanState<L>` implements `HasBean<T, Idx>`
+   = note: required for `BeanState<HNil>` to implement `HasBean<TenantRouter, _>`
+   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<BeanState<HNil>, ViaBean<(_, _)>>`
+note: required for `__R2eRequestData_OrderController<(ViaBean<(_, _)>,)>` to implement `FromRequestParts<BeanState<HNil>>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:19:1
    |
 19 | #[controller(path = "/orders")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `OrderController` to implement `Controller<HNil, ((ViaBean<(_, _)>,),)>`
+note: required for `OrderController` to implement `Controller<BeanState<HNil>, ((ViaBean<(_, _)>,),)>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:25:1
    |
 25 | #[routes]
@@ -52,23 +58,29 @@ error[E0277]: bean `TenantRouter` is not present in the application state
    |
    = help: the trait `HasBean<TenantRouter, _>` is not implemented for `HNil`
    = note: add `.provide(value)` or `.register::<TenantRouter>()` before `build_state()` so the bean is part of the provision list
-help: `HCons<H, Tail>` implements trait `HasBean<T, Idx>`
+help: the following other types implement trait `HasBean<T, Idx>`
   --> $WORKSPACE/r2e-core/src/type_list.rs
    |
    |   impl<H: Clone, Tail> HasBean<H, Here> for HCons<H, Tail> {
-   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HasBean<H, Here>`
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, Tail>` implements `HasBean<H, Here>`
 ...
    | / impl<H, Tail, T, I> HasBean<T, There<I>> for HCons<H, Tail>
    | | where
    | |     Tail: HasBean<T, I>,
-   | |________________________^ `HasBean<T, There<I>>`
-   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<HNil, ViaBean<(_, _)>>`
-note: required for `__R2eRequestData_OrderController<(ViaBean<(_, _)>,)>` to implement `FromRequestParts<HNil>`
+   | |________________________^ `HCons<H, Tail>` implements `HasBean<T, There<I>>`
+...
+   | / impl<L, T, Idx> HasBean<T, Idx> for BeanState<L>
+   | | where
+   | |     L: HasBean<T, Idx>,
+   | |_______________________^ `BeanState<L>` implements `HasBean<T, Idx>`
+   = note: required for `BeanState<HNil>` to implement `HasBean<TenantRouter, _>`
+   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<BeanState<HNil>, ViaBean<(_, _)>>`
+note: required for `__R2eRequestData_OrderController<(ViaBean<(_, _)>,)>` to implement `FromRequestParts<BeanState<HNil>>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:19:1
    |
 19 | #[controller(path = "/orders")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `OrderController` to implement `Controller<HNil, ((ViaBean<(_, _)>,),)>`
+note: required for `OrderController` to implement `Controller<BeanState<HNil>, ((ViaBean<(_, _)>,),)>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:25:1
    |
 25 | #[routes]

@@ -241,6 +241,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Perf: the router state is one `Arc`** (task #992). The HTTP backend clones
+  the router state on *every* request, whether or not a handler asks for it, so
+  installing the resolved bean HList directly meant one bean `Clone` per bean
+  per request — O(N) in the width of the graph, and a deep copy for any bean
+  that owns its data. `build_state()` now wraps the materialized list in the new
+  `r2e::BeanState<L>` (the list behind a single `Arc`), so the per-request state
+  clone costs O(1) at any graph size — the backend takes two state clones per
+  request, and each is now a refcount bump rather than one clone per bean:
+  measured on a 64-bean state, 128 bean clones per request → 0, and for beans
+  owning a `String`, 142 allocations / 10389 B per request → 14 / 1053 B (the
+  same as at 8 beans). `state.get::<T>()`, `state.bean::<T>()`, `HasBean` index
+  witnesses, `Contains`/`AllSatisfied` bounds and `FromRequestPartsVia` are all
+  forwarded through the wrapper, each keeping the cost it already had —
+  `get` a fixed-offset field read (now behind one dereference), `bean` the
+  same runtime `TypeId` walk it always was — and no application code,
+  controller, plugin or macro changes. **Mildly breaking**:
+  the state type is now `BeanState<HCons<…>>`, so code that spells the state
+  type out (a hand-written `AppBuilder<HCons<A, HNil>>` annotation, a
+  hand-assembled test state) must wrap it — `BeanState::new(list)`. Guarded by
+  `examples/example-app/tests/hotpath/state.rs`; numbers in
+  `docs/claude/hot-path-clone-audit.md`.
+
 - **BREAKING (`r2e-macros`)**: `#[cfg]` / `#[cfg_attr]` on a **request-scoped**
   controller field (`#[inject(identity)]` / `#[inject(request)]`) is now a
   compile error instead of a silent no-op (task #985). Those fields are
