@@ -683,3 +683,56 @@ async fn plugin_installed_by_app_and_module_names_both_owners() {
     assert!(rendered.contains("by app and by module 'AlsoBringsPluginModule'"), "{rendered}");
     assert!(rendered.contains("requires_plugins(BroughtPlugin)"), "{rendered}");
 }
+
+// ── A module controller whose declared config is missing ───────────────────
+//
+// Module and plugin controllers are registered *inside* `try_build_state()`,
+// after the graph resolves. A controller that declares a config key the loaded
+// config does not have used to panic there — even on the `try_` path. It is a
+// boot error now, carrying the same aggregated report an app-level controller
+// produces plus the controller that declared the keys.
+
+#[controller(path = "/billing")]
+struct BillingController {
+    #[config("billing.api-key")]
+    api_key: String,
+}
+
+#[routes]
+impl BillingController {
+    #[get("/")]
+    async fn ping(&self) -> String {
+        self.api_key.clone()
+    }
+}
+
+#[module(controllers(BillingController), imports(R2eConfig))]
+struct BillingModule;
+
+#[r2e_core::test]
+async fn a_module_controller_with_missing_config_fails_the_build() {
+    let err = AppBuilder::new()
+        .register_module::<BillingModule>()
+        .override_config(r2e_core::config::R2eConfig::empty())
+        .load_config::<()>()
+        .try_build_state()
+        .await
+        .map(|_| ())
+        .expect_err("the controller declares a key the config does not have");
+
+    let rendered = err.to_string();
+    // The controller that declared the keys is named…
+    assert!(
+        rendered.contains("BillingController"),
+        "the error must name the controller: {rendered}"
+    );
+    // …and the aggregated report is preserved verbatim inside it.
+    assert!(
+        rendered.contains("CONFIGURATION ERRORS"),
+        "the aggregated report must survive: {rendered}"
+    );
+    assert!(
+        rendered.contains("billing.api-key"),
+        "the missing key must be listed: {rendered}"
+    );
+}
