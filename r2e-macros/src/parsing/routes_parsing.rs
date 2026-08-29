@@ -387,6 +387,70 @@ fn reject_unsupported_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     Ok(())
 }
 
+/// Attributes that survive onto the impl blocks `#[routes]` synthesizes must be
+/// **inert and idempotent**, because there are two of them.
+///
+/// `#[routes]` replaces the one `impl` the user wrote with two — route methods
+/// on the request façade, everything else on the controller core — so an
+/// attribute written on it has to reach both or a lint allow would only cover
+/// half the methods. That is fine for a lint/doc attribute and wrong for an
+/// attribute macro: a procedural attribute placed *after* `#[routes]` would run
+/// once per synthesized impl, duplicating whatever items it emits and handing
+/// the second copy a hidden façade impl it never expected. Duplicating an
+/// expansion is worse than dropping it, so anything outside the inert set is a
+/// targeted error pointing at the one position where it runs exactly once:
+/// above `#[routes]` (task #985).
+///
+/// Tool attributes (`#[rustfmt::skip]`, `#[clippy::…]`) are inert by
+/// construction and pass. `#[cfg_attr]` passes because its whole point here is a
+/// conditional lint allow — its payload inherits the same rule, which the
+/// doc/CHANGELOG states.
+fn reject_non_inert_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
+    const INERT: &[&str] = &[
+        "doc",
+        "allow",
+        "expect",
+        "warn",
+        "deny",
+        "forbid",
+        "deprecated",
+        "cfg",
+        "cfg_attr",
+        "automatically_derived",
+    ];
+    const TOOLS: &[&str] = &["rustfmt", "clippy", "rust_analyzer"];
+
+    for attr in attrs {
+        let path = attr.path();
+        if path.segments.len() > 1 {
+            let first = &path.segments[0].ident;
+            if TOOLS.iter().any(|t| first == t) {
+                continue;
+            }
+        } else if let Some(ident) = path.get_ident() {
+            if INERT.iter().any(|n| ident == n) {
+                continue;
+            }
+        }
+        let name = quote::ToTokens::to_token_stream(path).to_string();
+        return Err(syn::Error::new_spanned(
+            attr,
+            format!(
+                "#[{name}] is not supported below #[routes] on a controller impl block\n\n\
+                 #[routes] replaces this `impl` with TWO synthesized ones (routes on the \
+                 request façade, everything else on the controller core), so an attribute \
+                 written here is applied to both — which duplicates an attribute macro's \
+                 expansion instead of preserving it. Only inert attributes (doc comments, \
+                 #[allow]/#[warn]/#[deny]/#[expect]/#[forbid], #[deprecated], #[cfg], \
+                 #[cfg_attr], tool attributes) may sit here.\n\n\
+                 \x20 hint: move #[{name}] ABOVE #[routes], where it runs exactly once on \
+                 the impl block you wrote"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
@@ -414,6 +478,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // Everything the decorator families did NOT claim belongs to the user and
     // must reach the emitted impl blocks.
     let impl_attrs = crate::extract::plugins::strip_known_attrs(item.attrs.clone());
+    reject_non_inert_impl_attrs(&impl_attrs)?;
 
     // Scan `#[post_construct]` methods up front (the shared bean-side scan
     // validates `&self` / no extra params). Their bodies still flow to the core

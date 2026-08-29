@@ -157,6 +157,9 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     // emits two synthesized impl blocks in place of the one that was written,
     // so both carry them: route methods land on the façade, everything else on
     // the core, and a lint allow must cover whichever the method ended up on.
+    // Emitting twice is only sound for INERT attributes, which is why
+    // `routes_parsing::reject_non_inert_impl_attrs` refuses anything else here
+    // (a procedural attribute would otherwise expand twice).
     let impl_attrs: Vec<_> = def.impl_attrs.iter().collect();
 
     let facade_impl = if route_fns.is_empty()
