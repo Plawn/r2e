@@ -123,17 +123,35 @@ wrappers cannot meet in a core test.
   metric registration, JWKS/validation caches), then measures `n` more and
   divides. `measure` is the one-shot form.
 
-**What it asserts is config-size invariance, not an absolute budget.** Each
-test builds the same wrapper twice — once with a small immutable config, once
-with a large one — and asserts the per-request cost does not grow
-(`assert_config_size_invariant`, with a few allocations of slack for the
-runtime's own jitter). That is exactly the bug class this ticket is about (an
-app-lifetime `Vec<String>`/`String`/`Validation` copied per request), and it is
-machine-independent: no number in the assertion needs re-baselining on a
-different CPU, allocator or dependency bump. One absolute check remains,
-`layers::composed_stack_budget` (120 allocations / 16 KiB per request), as a
-deliberately loose canary for an order-of-magnitude regression; it prints its
-figure so it can be re-baselined from the test output.
+**What it asserts is mostly config-size invariance, not an absolute budget.**
+Each invariance test builds the same wrapper twice — once with a small
+immutable config, once with a large one — and asserts the per-request cost does
+not grow. That is exactly the bug class this ticket is about (an app-lifetime
+`Vec<String>`/`String`/`Validation` copied per request), and it is the *shape*
+of the assertion, not a baseline, so a different CPU or a dependency bump moves
+both sides together and the test still holds.
+
+Two absolute numbers do appear, and both are slack, not budgets:
+
+- `assert_config_size_invariant` takes a `slack_count`/`slack_bytes` (2–4
+  allocations, 256–512 bytes) so incidental jitter — a differently-sized
+  `format!` buffer, one extra small `Vec` — does not fail the run. Every call
+  site sizes its large config so a real deep clone overshoots the slack by an
+  order of magnitude (≥ 64 allocations / ≥ 4 KiB), which is what keeps the
+  slack from hiding the bug it guards. A dependency bump that adds a few
+  allocations to *both* sides is invisible to it; one that adds them to the
+  large side only is the regression.
+- `layers::composed_stack_budget` (120 allocations / 16 KiB per request) is an
+  outright absolute canary for an order-of-magnitude regression, and it *is*
+  machine- and dependency-specific in principle (it currently measures 23 / 1981
+  on the machine below, so it has ~5× of headroom). It prints its figure, so it
+  can be re-baselined from the test output.
+
+The counting allocator charges an event per `alloc`/`alloc_zeroed`/`realloc`
+and the *full* requested size — for a `realloc`, `new_size`, not the growth
+delta, since that is the request the allocator receives and the block it may
+have to move. `accounting.rs` pins that rule (growth, shrink, repeated
+doubling, `dealloc` is free, thread-locality).
 
 Coverage: the Prometheus layer and the OpenTelemetry trace layer
 (`layers.rs`), the built-in interceptors `Logged`/`Timed`/`Counted`/
@@ -153,19 +171,28 @@ table below).
 are a framework comparison, not a capacity figure).
 
 **"Before" = `d046b84`**, the merge immediately preceding `0443f28`, the first
-hot-path commit. Only these seven files differ between the two runs — the app,
-its config, the load generator and its parameters are identical:
+hot-path commit. `BEFORE_REV` makes the script do the reconstruction itself: it
+rewinds the seven hot-path sources to that revision and restores them from an
+EXIT trap, so an interrupted run does not leave the tree rewritten. Only those
+seven move — plenty of other files differ between `d046b84` and this branch's
+HEAD (the worker runtime, MCP auth, …), and leaving them at HEAD is what makes
+the delta this workstream's change rather than the branch's. The app, its
+config, the load generator and its parameters are identical across the two
+runs. The script **refuses to start on a dirty tree**, because the restore is a
+`git restore --source=HEAD` over those paths and would discard local edits to
+them:
 
 ```bash
-git checkout d046b84 -- \
-    r2e-observability/src/middleware.rs r2e-openapi/src/handlers.rs \
-    r2e-prometheus/src/layer.rs r2e-prometheus/src/metrics.rs \
-    r2e-security/src/jwt.rs r2e-security/src/jwks.rs \
-    r2e-utils/src/interceptors.rs
-LABEL=before DURATION=10s CONNS=64 tools/bench-hotpath.sh
-git restore --source=HEAD --staged --worktree -- <those files>
-LABEL=after  DURATION=10s CONNS=64 tools/bench-hotpath.sh
+git status --porcelain        # must be empty
+LABEL=before DURATION=10s CONNS=64 BEFORE_REV=d046b84 tools/bench-hotpath.sh
+LABEL=after  DURATION=10s CONNS=64                    tools/bench-hotpath.sh
 ```
+
+The run refuses to measure a server it cannot prove is its own: the port must
+be free beforehand, the launched PID must own it and still be alive, the app
+carries a unique per-run marker read back from `GET /config`, and every
+endpoint must answer 2xx both in a pre-flight probe and across the whole `oha`
+status distribution.
 
 `tools/bench-hotpath.sh` builds `example-app` in release, boots it, scrapes the
 demo JWT it prints, runs a 3 s warm-up then a 10 s `oha` run at 64 connections
@@ -175,8 +202,8 @@ against three endpoints, and prints the markdown rows below.
 
 | label | endpoint | wrappers exercised | req/s | p50 | p99 |
 |---|---|---|---|---|---|
-| before | `/mixed/public` | prometheus + otel layers | 27998 | 2.27 ms | 4.34 ms |
-| after | `/mixed/public` | prometheus + otel layers | 29133 | 2.18 ms | 4.19 ms |
+| before | `/mixed/public` | prometheus + otel layers + handler | 27998 | 2.27 ms | 4.34 ms |
+| after | `/mixed/public` | prometheus + otel layers + handler | 29133 | 2.18 ms | 4.19 ms |
 | before | `/users/` | + JWT validation + `Logged`/`Timed` | 27005 | 2.35 ms | 4.54 ms |
 | after | `/users/` | + JWT validation + `Logged`/`Timed` | 28589 | 2.21 ms | 4.31 ms |
 | before | `/openapi.json` | immutable document | 57951 | 1.09 ms | 2.13 ms |
@@ -193,6 +220,12 @@ From `cargo test -p example-app --test hotpath -- --nocapture`, run once in
 each state. "small" / "large" is the same wrapper with a small vs. a large
 immutable config (64 exclude paths / 64 capture headers / 64 extra audiences /
 200 routes / a 4 KiB metric name).
+
+The **before** column was captured with the counter's earlier `realloc` rule
+(the growth delta rather than the full `new_size`). Re-running the "after"
+column under the current rule reproduces it byte for byte — these paths never
+`realloc` — so only the before figures could move, and only upward: the gap
+below is a lower bound on the one you would measure today.
 
 | Measurement | before, small | before, large | after, small | after, large |
 |---|---|---|---|---|
@@ -222,9 +255,15 @@ either structurally guaranteed or contractually documented:
   reference. `OnceLock` never drops or replaces its contents, so the `&'static`
   it hands out is sound by construction. This is what lets the per-request path
   hold no metric handles at all.
-- **`&'static str` labels (`r2e-http/src/labels.rs`, `name_for_algorithm` in
-  `r2e-security/src/jwks.rs`, `status_label`'s stack buffer in
-  `r2e-prometheus`)** — string literals and stack buffers, not leaks.
+- **`&'static str` labels** — `r2e-http/src/labels.rs` and `name_for_algorithm`
+  (`r2e-security/src/jwks.rs`) hand out string literals: genuinely `'static`,
+  nothing allocated or leaked.
+- **`status_label` (`r2e-prometheus/src/metrics.rs:134`) is *not* `&'static`** —
+  it writes the status digits into a caller-owned `[u8; 5]` and returns a borrow
+  of that stack buffer (`fn status_label(status: u16, buf: &mut [u8; 5]) ->
+  &str`). Same outcome for the hot path — no allocation per request — by a
+  different mechanism: the label lives on the caller's frame for the duration of
+  the record call, so it can never outlive it.
 - **`Arc<…>` everywhere else.** The audit's fixes deliberately use `Arc`
   (`Arc<MetricsConfig>`, `Arc<[String]>`, `Arc<str>`, `Bytes`) rather than
   leaking, so the data is freed with the app/plugin/decorator that owns it and
@@ -232,17 +271,26 @@ either structurally guaranteed or contractually documented:
   reload.
 
 `Box::leak` audit (`rg 'Box::leak|\.leak\(\)'` over the workspace, `vendor/`
-excluded) — four hits, none on the HTTP hot path, each with a lifecycle
-contract:
+excluded) — **five calls at three sites**, each with a lifecycle contract:
 
-| Site | Leaks | Bounded by | Contract |
-|---|---|---|---|
-| `r2e-openfga/src/typed.rs:301` (`static_wildcard::<T>`) | one `Box<str>` (`"<type>:*"`) per FGA type | the number of `FgaType`s in the model (compile-time set) | memoized in a `OnceLock<Mutex<HashMap<&'static str, &'static str>>>`, so it leaks once per type for the process, never per request. Documented in-place |
-| `r2e-devservices/src/service.rs:445` | one `OnceCell<DevService>` per (service, configuration) | the number of distinct dev-service specs in a test run | test harness only; the cell owns the shared container for the process's lifetime, which is exactly why it must be `&'static`. Documented in-place |
-| `r2e-core/tests/plugin/deferred.rs:117-119` | three small test fixtures | one per test | test code, process-scoped fixture |
+| Site | Calls | Leaks | Bounded by | Contract |
+|---|---|---|---|---|
+| `r2e-openfga/src/typed.rs:323` (`intern_wildcard::<T>`) | 1 | one `Box<str>` (`"<type>:*"`) per FGA type | the FGA types the process ever takes a wildcard of | **fallback only.** `model!` emits the wire form as the `FgaType::WILDCARD` literal, so a generated type never reaches this; a hand-written `FgaType` impl that leaves `WILDCARD` at `None` interns once per type, on first use. Documented in-place, guarded by `r2e-openfga/tests/typed.rs` |
+| `r2e-devservices/src/service.rs:445` | 1 | one `OnceCell<DevService>` per (service, configuration) | the number of distinct dev-service specs in a test run | test harness only; the cell owns the shared container for the process's lifetime, which is exactly why it must be `&'static`. Documented in-place |
+| `r2e-core/tests/plugin/deferred.rs:117-119` | 3 | three small test fixtures | one per test | test code, process-scoped fixture |
 
-No production request path leaks. Nothing was added by this workstream: the
-first two predate it and the third is a test.
+**On the request path:** only the OpenFGA one is reachable from production
+request code — `FgaSubject::subject_str` is called by `FgaClient::{check,
+grant,revoke}`, so before this workstream's follow-up a request using a
+wildcard subject could be the one that performs the leak. It was never *per
+request* (the interning cache is consulted first), and after the
+`FgaType::WILDCARD` change a `model!`-generated model does not leak at all: the
+wildcard subject is a compile-time literal. What remains is bounded by the
+number of hand-written `FgaType` impls the process takes a wildcard of, one
+small `Box<str>` each, on first use.
+
+Nothing was added by this workstream: the OpenFGA and dev-services calls
+predate it (the OpenFGA one was narrowed by it) and the rest are test code.
 
 ## Deferred
 

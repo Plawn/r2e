@@ -47,9 +47,11 @@ CONNS="${CONNS:-64}"
 LABEL="${LABEL:-working-tree}"
 BEFORE_REV="${BEFORE_REV:-}"
 
-# The only files that may differ between a "before" and an "after" run. The app,
-# its config, the load generator and its parameters are identical, so the delta
-# is the framework and nothing else.
+# The hot-path sources, and the ONLY files BEFORE_REV rewinds. Everything else
+# in the tree — the app, its config, other work that landed on this branch, the
+# load generator and its parameters — is identical between the two runs, so the
+# delta is this workstream's change and nothing else. (Many more files differ
+# between BEFORE_REV and HEAD; rewinding only these is the point.)
 HOTPATH_SOURCES=(
   r2e-observability/src/middleware.rs
   r2e-openapi/src/handlers.rs
