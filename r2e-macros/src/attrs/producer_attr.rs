@@ -57,6 +57,11 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> {
     let fn_name = &item_fn.sig.ident;
     let is_async = item_fn.sig.asyncness.is_some();
+    crate::util::type_utils::reject_unsafe_constructor(
+        &item_fn.sig,
+        "#[producer]",
+        "Producer::produce",
+    )?;
 
     // Generate PascalCase struct name from fn name (e.g. create_pool -> CreatePool)
     let struct_name = to_pascal_case(&fn_name.to_string());
@@ -290,7 +295,6 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
     let fn_body = &item_fn.block;
     let fn_constness = &item_fn.sig.constness;
     let fn_asyncness = &item_fn.sig.asyncness;
-    let fn_unsafety = &item_fn.sig.unsafety;
     let fn_abi = &item_fn.sig.abi;
     let fn_generics = &item_fn.sig.generics;
     let fn_where = &item_fn.sig.generics.where_clause;
@@ -361,7 +365,7 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         // attribute the user wrote on it (doc comments included).
         #allow_many_args
         #(#fn_attrs)*
-        #vis #fn_constness #fn_asyncness #fn_unsafety #fn_abi fn #fn_name #fn_generics (#(#clean_params),*) #ret_ty
+        #vis #fn_constness #fn_asyncness #fn_abi fn #fn_name #fn_generics (#(#clean_params),*) #ret_ty
         #fn_where
         #fn_body
 

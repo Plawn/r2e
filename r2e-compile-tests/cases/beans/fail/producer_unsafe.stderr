@@ -1,0 +1,29 @@
+error: #[producer] cannot be applied to an `unsafe fn`
+
+       R2E generates `Producer::produce`, a safe method that is the only caller. The bean graph cannot discharge an `unsafe` contract — it knows nothing about the invariants the keyword asks the caller to uphold.
+
+         hint: drop `unsafe` from the signature and wrap the unsafe work in an `unsafe { }` block inside the body, where you can write the SAFETY comment that justifies it
+  --> cases/beans/fail/producer_unsafe.rs:14:1
+   |
+14 | unsafe fn make_raw() -> Raw {
+   | ^^^^^^
+
+error: #[producer] cannot be applied to an `unsafe fn`
+
+       R2E generates `Producer::produce`, a safe method that is the only caller. The bean graph cannot discharge an `unsafe` contract — it knows nothing about the invariants the keyword asks the caller to uphold.
+
+         hint: drop `unsafe` from the signature and wrap the unsafe work in an `unsafe { }` block inside the body, where you can write the SAFETY comment that justifies it
+  --> cases/beans/fail/producer_unsafe.rs:19:7
+   |
+19 | async unsafe fn make_raw_async() -> Raw {
+   |       ^^^^^^
+
+error: #[producer] cannot be applied to an `unsafe fn`
+
+       R2E generates `Producer::produce`, a safe method that is the only caller. The bean graph cannot discharge an `unsafe` contract — it knows nothing about the invariants the keyword asks the caller to uphold.
+
+         hint: drop `unsafe` from the signature and wrap the unsafe work in an `unsafe { }` block inside the body, where you can write the SAFETY comment that justifies it
+  --> cases/beans/fail/producer_unsafe.rs:24:7
+   |
+24 | async unsafe fn make_raw_fallible() -> Result<Raw, std::io::Error> {
+   |       ^^^^^^

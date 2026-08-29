@@ -197,6 +197,11 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
 
     // Find the constructor: a method that returns Self and has no self receiver.
     let (constructor, is_async, ctor_error_ty) = find_constructor(item_impl)?;
+    crate::util::type_utils::reject_unsafe_constructor(
+        &constructor.sig,
+        "#[bean]",
+        "Bean::build / AsyncBean::build",
+    )?;
 
     // Extract parameter types and generate dependency list + build args.
     let mut dep_type_ids = Vec::new();
@@ -1151,7 +1156,10 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                 // Rebuilding the signature from pieces must carry ALL of them:
                 // `const`/`unsafe`/`extern` and the generics + where-clause used
                 // to be dropped here, which turned a generic constructor into a
-                // baffling "cannot find type" (task #985).
+                // baffling "cannot find type" (task #985). `unsafe` survives
+                // only on a *secondary* static `-> Self` helper: the one
+                // `find_constructor` picks is rejected up front, because
+                // generated safe code is its only caller.
                 let sig_constness = &method.sig.constness;
                 let sig_asyncness = &method.sig.asyncness;
                 let sig_unsafety = &method.sig.unsafety;
