@@ -657,6 +657,25 @@ pub(crate) fn async_exec_method(
         })
         .collect();
 
+    // …and the forwarding call has to be gated the same way, or the disabled
+    // configuration passes an argument that no longer has a binding (and one
+    // too many of them). `cfg`/`cfg_attr` are the only attributes copied to the
+    // argument position: they are what changes the *arity*, and an expression
+    // does not accept the rest (`#[deprecated]` on a call argument is an
+    // error). Everything else stays on the two signatures.
+    let arg_forwards: Vec<TokenStream> = typed_inputs
+        .iter()
+        .zip(&arg_idents)
+        .map(|(pt, ident)| {
+            let cfg_attrs: Vec<&syn::Attribute> = pt
+                .attrs
+                .iter()
+                .filter(|a| a.path().is_ident("cfg") || a.path().is_ident("cfg_attr"))
+                .collect();
+            quote! { #(#cfg_attrs)* #ident }
+        })
+        .collect();
+
     let attrs = &method.attrs;
     let vis = &method.vis;
     let generics = &original_sig.generics;
@@ -672,7 +691,7 @@ pub(crate) fn async_exec_method(
         ) -> ::core::result::Result<#exec_krate::JobHandle<#return_ty>, #exec_krate::RejectedError> #where_clause {
             let __self = ::core::clone::Clone::clone(self);
             self.#executor_field.submit(async move {
-                __self.#inner_name(#(#arg_idents),*).await
+                __self.#inner_name(#(#arg_forwards),*).await
             })
         }
     }
