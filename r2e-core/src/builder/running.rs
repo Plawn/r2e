@@ -113,12 +113,15 @@ impl RunningApp {
 
     /// Serve this app's router on `listener`, attached to the lifecycle.
     ///
-    /// The task lands on the tracked lane, stops when the app shutdown token
-    /// fires (or when `stop_early` resolves — that is how a live test server
-    /// shuts itself down when it is dropped before the app is), and its HTTP
-    /// drain is bounded by the app's `drain_timeout` exactly as the production
-    /// single-listener path is. `ConnectInfo<SocketAddr>` is installed like
-    /// every production serve path, so peer-address guards behave the same.
+    /// The task lands on the tracked lane and stops accepting on **either**
+    /// trigger: the app shutdown token, or `stop_early` (how a live test
+    /// server shuts itself down when it is dropped before the app is). Its
+    /// HTTP drain is bounded by the app's `drain_timeout` from whichever
+    /// trigger fired — not only from the app-wide one — so a `TestServer`
+    /// dropped while a request is stuck gives up on schedule instead of
+    /// hanging until the whole app is cancelled.
+    /// `ConnectInfo<SocketAddr>` is installed like every production serve
+    /// path, so peer-address guards behave the same.
     pub fn serve_tracked<F>(&self, listener: crate::rt::TcpListener, stop_early: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
@@ -128,19 +131,30 @@ impl RunningApp {
             .router
             .clone()
             .into_make_service_with_connect_info::<std::net::SocketAddr>();
-        let cancel = self.cancel.clone();
-        let cancel_for_signal = cancel.clone();
+        let app_cancel = self.cancel.clone();
+        // This server's OWN stop token. `bounded_http_drain` starts the
+        // `drain_timeout` clock when the token it is given fires, so handing
+        // it the app root would leave an early `stop_early` drain unbounded:
+        // the budget would only start once someone cancelled the whole app.
+        // Cancelling it from inside the graceful-shutdown future arms the
+        // clock at exactly the instant the listener stops accepting — the
+        // same relationship the production single-listener path has between
+        // its shutdown future and the app token.
+        let serve_stop = crate::rt::CancelToken::new();
+        let arm_deadline = serve_stop.clone();
         let drain_bound = self.drain_timeout;
         self.track_named("in-process http server", async move {
             let serve = crate::http::serve(listener, svc)
                 .with_graceful_shutdown(async move {
                     crate::rt::select! {
-                        _ = cancel_for_signal.cancelled() => {}
+                        _ = app_cancel.cancelled() => {}
                         _ = stop_early => {}
                     }
+                    arm_deadline.cancel();
                 })
                 .into_future();
-            if let Err(e) = crate::runtime::drain::bounded_http_drain(serve, cancel, drain_bound).await
+            if let Err(e) =
+                crate::runtime::drain::bounded_http_drain(serve, serve_stop, drain_bound).await
             {
                 tracing::error!(error = %e, "in-process server failed");
             }
