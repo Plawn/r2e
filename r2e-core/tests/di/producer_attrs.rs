@@ -133,6 +133,100 @@ mod many_dependencies {
     }
 }
 
+// ── 5. `#[deprecated]` / `#[must_use]` really reach the emitted function ───
+//
+// `#[expect(...)]` is the assertion: it FAILS (as `unfulfilled_lint_expectations`,
+// denied below) when the lint it names does not fire. So if `#[producer]` were
+// to drop the attribute again, these two functions stop compiling — unlike a
+// plain `#[allow]`, which is silent either way. This is what the earlier
+// `#[inline]` case cannot do.
+
+#[deny(unfulfilled_lint_expectations)]
+mod attributes_are_load_bearing {
+    use r2e_core::prelude::*;
+
+    #[derive(Clone)]
+    pub struct Legacy(pub u8);
+
+    #[deprecated(note = "use the new one")]
+    #[producer]
+    pub fn legacy_thing() -> Legacy {
+        Legacy(1)
+    }
+
+    #[expect(deprecated)]
+    pub fn call_legacy() -> Legacy {
+        legacy_thing()
+    }
+
+    #[derive(Clone)]
+    pub struct Receipt(pub u8);
+
+    #[must_use]
+    #[producer]
+    pub fn receipt_slip() -> Receipt {
+        Receipt(2)
+    }
+
+    #[expect(unused_must_use)]
+    pub fn drop_receipt() {
+        receipt_slip();
+    }
+}
+
+// ── 6. `#[cfg_attr]` gating, in either attribute order ─────────────────────
+//
+// A `#[cfg_attr]` that expands to a `#[cfg]` gates the item exactly like a
+// literal one, before the attribute macro runs, whichever order they are
+// written in. Same proof as case 2: the signatures name types that do not
+// exist, so anything left behind fails this target.
+
+#[producer]
+#[cfg_attr(all(), cfg(any()))]
+fn cfg_attr_out_below(dep: ThisTypeDoesNotExist) -> AlsoMissing {
+    unreachable!()
+}
+
+#[cfg_attr(all(), cfg(any()))]
+#[producer]
+fn cfg_attr_out_above(dep: ThisTypeDoesNotExist) -> AlsoMissing {
+    unreachable!()
+}
+
+// ── 7. The same two orders on `#[bean]` ────────────────────────────────────
+//
+// The CHANGELOG claims the rule holds for every attribute macro that rebuilds
+// its item, not just `#[producer]`. `#[bean]` is pinned here; `#[controller]`
+// and `#[routes]` in `r2e-core/tests/controller/attrs.rs`.
+
+#[bean]
+#[cfg(any())]
+impl ThisTypeDoesNotExist {
+    fn new(dep: AlsoMissing) -> Self {
+        unreachable!()
+    }
+}
+
+#[cfg(any())]
+#[bean]
+impl AlsoMissing {
+    fn new(dep: ThisTypeDoesNotExist) -> Self {
+        unreachable!()
+    }
+}
+
+// The always-true twin: a cfg'd-IN bean must still register normally.
+#[derive(Clone)]
+struct CfgEnabledBean(&'static str);
+
+#[bean]
+#[cfg(all())]
+impl CfgEnabledBean {
+    fn new() -> Self {
+        Self("bean-enabled")
+    }
+}
+
 // ── Runtime checks ─────────────────────────────────────────────────────────
 
 #[r2e_core::test]
@@ -188,4 +282,35 @@ async fn wide_producer_still_resolves() {
         .expect("graph resolves");
 
     let _: Wide = state.bean_context().get::<Wide>();
+}
+
+#[r2e_core::test]
+async fn cfgd_in_bean_still_resolves() {
+    let state = AppBuilder::new()
+        .register::<CfgEnabledBean>()
+        .try_build_state()
+        .await
+        .expect("graph resolves");
+
+    assert_eq!(state.bean_context().get::<CfgEnabledBean>().0, "bean-enabled");
+}
+
+#[r2e_core::test]
+async fn load_bearing_attribute_producers_still_resolve() {
+    use attributes_are_load_bearing::*;
+
+    let state = AppBuilder::new()
+        .register::<LegacyThing>()
+        .register::<ReceiptSlip>()
+        .try_build_state()
+        .await
+        .expect("graph resolves");
+
+    assert_eq!(state.bean_context().get::<Legacy>().0, 1);
+    assert_eq!(state.bean_context().get::<Receipt>().0, 2);
+
+    // Keep the two `#[expect(...)]` assertion sites live: they are the mutation
+    // detectors, and an unused fn would only warn.
+    assert_eq!(call_legacy().0, 1);
+    drop_receipt();
 }
