@@ -7,21 +7,19 @@
 //! // lib.rs
 //! impl App for MyApp {
 //!     type Env = ();
-//!     async fn setup() {}
-//!     async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-//!         b.load_config::<AppConfig>()
+//!     async fn setup() -> Result<(), BootError> { Ok(()) }
+//!     async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+//!         Ok(b.load_config::<AppConfig>()
 //!             .register::<UserService>()
 //!             .plugin(Health)
-//!             .build_state().await
-//!             .register_controllers::<(UserController,)>()
+//!             .try_build_state().await?
+//!             .register_controllers::<(UserController,)>())
 //!     }
 //! }
 //!
-//! // main.rs
-//! #[r2e::main]
-//! async fn main() {
-//!     r2e::launch::<MyApp>().await.unwrap();
-//! }
+//! // main.rs — `app_main!` generates the equivalent: a boot failure prints
+//! // the error chain and exits non-zero instead of panicking.
+//! r2e::app_main!(MyApp);
 //!
 //! // tests — the harness pre-configures the builder (profile, pinned mocks,
 //! // config overrides) before running the same App:

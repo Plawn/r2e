@@ -54,7 +54,7 @@ impl Producer for CreateLlmClientAbsent {
         vec![]
     }
     async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
-        ::std::result::Result::Ok({ None })
+        ::std::result::Result::Ok(None)
     }
 }
 

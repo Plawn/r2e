@@ -90,19 +90,19 @@ pub struct MyApp;
 impl App for MyApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
         setup_env().await
     }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
         // this body is hot-patched on every code change
-        b.load_config::<()>()          // sole config entry; re-read from disk per patch (YAML edits apply next patch)
+        Ok(b.load_config::<()>()       // sole config entry; re-read from disk per patch (YAML edits apply next patch)
             .provide(env.event_bus)
             .provide(env.pool)
             .register::<UserService>()
             .plugin(Health)
-            .build_state().await       // no type args — state inferred from the provisions
-            .register_controller::<UserController>()
+            .try_build_state().await?  // no type args — state inferred from the provisions
+            .register_controller::<UserController>())
     }
 }
 ```
@@ -260,8 +260,8 @@ This:
 ### Recommended assembly order
 
 ```rust
-async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
-    b
+async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+    Ok(b
         // 1. Config first — enables #[config("key")] and auto-registers typed
         //    sections. This is the sole config entry; because build() re-runs per
         //    patch, load_config re-reads application.yaml so YAML edits apply on
@@ -280,11 +280,13 @@ async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
         .plugin(Health)
         .plugin(Cors::permissive())
         // 5. Build the state — no type args; the state type is the provision
-        //    list materialized as an HList, inferred by the builder chain
-        .build_state().await
+        //    list materialized as an HList, inferred by the builder chain.
+        //    `try_build_state` propagates a bean that fails to build; the
+        //    panicking `build_state` is the shortcut for infallible graphs.
+        .try_build_state().await?
         // 6. After the state: controllers and hooks. Return the BootableApp —
         //    do NOT call serve here; r2e::launch! does that.
-        .register_controller::<UserController>()
+        .register_controller::<UserController>())
 }
 ```
 
@@ -312,17 +314,17 @@ and controllers resolve their `#[inject]` fields from it **by type** at
 
 ```rust
 // Bad: new pool on every hot-patch, inside build()
-async fn build(b: AppBuilder, _env: ()) -> impl BootableApp {
-    let pool = PgPool::connect("...").await.unwrap();
-    b.provide(pool) /* ... */
+async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+    let pool = PgPool::connect("...").await?;
+    Ok(b.provide(pool) /* ... */)
 }
 
 // Good: pool built once in setup(), reused via env
-async fn setup() -> AppEnv {
-    AppEnv { pool: PgPool::connect("...").await.unwrap() }
+async fn setup() -> Result<AppEnv, BootError> {
+    Ok(AppEnv { pool: PgPool::connect("...").await? })   // `?`, not unwrap
 }
-async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
-    b.provide(env.pool) /* ... */
+async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+    Ok(b.provide(env.pool) /* ... */)
 }
 ```
 

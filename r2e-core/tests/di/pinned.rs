@@ -37,7 +37,7 @@ async fn pin_provide_wins_over_later_register() {
             vec![]
         }
         fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-            ::std::result::Result::Ok({ Self { origin: "real" } })
+            ::std::result::Result::Ok(Self { origin: "real" })
         }
     }
 

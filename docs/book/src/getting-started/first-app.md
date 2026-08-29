@@ -66,8 +66,8 @@ Create `src/env.rs` for resources that must survive hot-patches:
 #[derive(Clone, Default)]
 pub struct AppEnv;
 
-pub async fn setup_env() -> AppEnv {
-    AppEnv
+pub async fn setup_env() -> Result<AppEnv, r2e::BootError> {
+    Ok(AppEnv)
 }
 ```
 
@@ -87,16 +87,16 @@ pub struct MyApp;
 impl App for MyApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
         setup_env().await
     }
 
-    async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
-        b.load_config::<()>()
+    async fn build(b: AppBuilder, _env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok(b.load_config::<()>()
             .plugin(Health)
             .plugin(Tracing)
-            .build_state().await
-            .register_controller::<HelloController>()
+            .try_build_state().await?
+            .register_controller::<HelloController>())
     }
 }
 ```
@@ -116,6 +116,12 @@ r2e::app_main!(MyApp);
 `app_main!` includes the same `app.rs` in the binary, generates Tokio `main`,
 and handles normal serving or hot reload. `build_state()` takes no type
 arguments; controllers are registered after it.
+
+Both `App` phases return `Result<_, BootError>` (`BootError` is
+`Box<dyn Error + Send + Sync>`, so `?` accepts any error). Return the error
+instead of panicking or calling `process::exit`: `app_main!` prints one
+`error:` line with its cause chain and exits `1`, and in tests
+`TestApp::boot` turns the same error into a single failing test.
 
 > **Large apps:** if your bean graph grows past ~127 registrations, add
 > `#![recursion_limit = "512"]` at the top of both `main.rs` and `lib.rs`.
@@ -240,17 +246,17 @@ pub struct MyApp;
 impl App for MyApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
         setup_env().await
     }
 
-    async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
-        b.load_config::<()>()
+    async fn build(b: AppBuilder, _env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok(b.load_config::<()>()
             .register::<services::UserService>()
             .plugin(Health)
             .plugin(Tracing)
-            .build_state().await
-            .register_controllers::<(HelloController, UserController)>()
+            .try_build_state().await?
+            .register_controllers::<(HelloController, UserController)>())
     }
 }
 ```

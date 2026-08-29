@@ -293,7 +293,7 @@ impl Bean for Disposable {
         vec![]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ Self })
+        ::std::result::Result::Ok(Self)
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_pre_destroy::<Self>();

@@ -88,10 +88,19 @@ For types from external crates (e.g., connection pools) where you can't write `i
 
 ```rust
 #[producer]
-async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
-    SqlitePool::connect(&url).await.unwrap()
+async fn create_pool(#[config("database.url")] url: String) -> Result<SqlitePool, sqlx::Error> {
+    Ok(SqlitePool::connect(&url).await?)
 }
 ```
+
+A producer (like a `#[bean]` constructor, sync or async) may return either the
+value itself or `Result<value, E>` for any `E: Into<BootError>`. The error type
+never contaminates the bean type: the producer above registers `SqlitePool`, and
+consumers inject `SqlitePool`. A failure aborts the build naming the bean —
+`Bean 'sqlx::Pool<Sqlite>' failed to build: <error>` — with the original error
+kept as `source()`, and everything built before it is dropped. Prefer that over
+`unwrap()`: it is what makes a bad `database.url` one failing test under
+`TestApp::boot` and one `error:` line + exit code 1 under `app_main!`.
 
 This generates a struct `CreatePool` (PascalCase of the function name) with `impl Producer`. Register with `.register::<CreatePool>()`. The struct is just a vehicle for the trait impl — you never instantiate it yourself.
 

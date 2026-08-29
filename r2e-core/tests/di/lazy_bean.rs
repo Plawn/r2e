@@ -190,7 +190,7 @@ impl Producer for EagerCounterProducer {
         vec![]
     }
     async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
-        ::std::result::Result::Ok({ LazyCounter { n: 1 } })
+        ::std::result::Result::Ok(LazyCounter { n: 1 })
     }
 }
 
@@ -240,7 +240,7 @@ impl Bean for LazyCfgRequired {
         vec![("lazy.greeting", "String", ConfigKeyKind::Required)]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ LazyCfgRequired })
+        ::std::result::Result::Ok(LazyCfgRequired)
     }
 }
 
@@ -258,7 +258,7 @@ impl Bean for LazyCfgOptional {
         vec![("lazy.greeting", "String", ConfigKeyKind::Optional)]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ LazyCfgOptional })
+        ::std::result::Result::Ok(LazyCfgOptional)
     }
 }
 

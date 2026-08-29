@@ -62,17 +62,17 @@ pub struct MyApp;
 impl App for MyApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
         setup_env().await
     }
 
-    async fn build(b: AppBuilder, _env: AppEnv) -> impl BootableApp {
-        b.load_config::<()>()
+    async fn build(b: AppBuilder, _env: AppEnv) -> Result<impl BootableApp, BootError> {
+        Ok(b.load_config::<()>()
             .register::<UserService>()
             .plugin(Health)
             .plugin(Tracing)
-            .build_state().await
-            .register_controller::<UserController>()
+            .try_build_state().await?
+            .register_controller::<UserController>())
     }
 }
 ```

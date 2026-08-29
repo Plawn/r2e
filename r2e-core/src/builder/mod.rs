@@ -19,7 +19,7 @@ mod typed;
 #[cfg(feature = "ws")]
 mod ws_sessions;
 
-pub use app::{launch, App};
+pub use app::{boot_error_report, exit_on_boot_error, launch, App};
 pub use bootable::BootableApp;
 pub use prepared::PreparedApp;
 pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};

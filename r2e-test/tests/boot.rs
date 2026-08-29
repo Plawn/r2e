@@ -152,3 +152,129 @@ async fn boot_runs_on_start_hooks() {
 
     assert_eq!(*log.lock().unwrap(), vec!["warmed"]);
 }
+
+// ── Fallible boot ──────────────────────────────────────────────────────────
+
+/// A boot error carrying a `source()`, the shape a real driver error has.
+#[derive(Debug)]
+struct BootFailure(&'static str);
+
+impl std::fmt::Display for BootFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "boot failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for BootFailure {}
+
+/// `setup` is the phase apps used to end with `process::exit(1)`, which killed
+/// the whole test binary. It returns an error now.
+struct SetupFailsApp;
+
+impl App for SetupFailsApp {
+    type Env = ();
+
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err(Box::new(BootFailure("DATABASE_URL points nowhere")))
+    }
+
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.build_state().await)
+    }
+}
+
+/// A bean that refuses to build — the `build`-phase counterpart.
+#[derive(Clone)]
+struct Locked;
+
+#[r2e_core::prelude::bean]
+impl Locked {
+    fn new() -> Result<Self, BootFailure> {
+        Err(BootFailure("advisory lock already held"))
+    }
+}
+
+struct BuildFailsApp;
+
+impl App for BuildFailsApp {
+    type Env = ();
+
+    async fn setup() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+
+    async fn build(
+        b: AppBuilder,
+        _env: (),
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.register::<Locked>().try_build_state().await?)
+    }
+}
+
+#[tokio::test]
+async fn try_boot_surfaces_a_setup_failure() {
+    let err = TestApp::try_boot::<SetupFailsApp>()
+        .await
+        .map(|_| ())
+        .expect_err("setup fails");
+
+    assert!(
+        err.to_string().contains("DATABASE_URL points nowhere"),
+        "unexpected error: {err}"
+    );
+}
+
+#[tokio::test]
+async fn try_boot_surfaces_a_bean_failure() {
+    let err = TestApp::try_boot::<BuildFailsApp>()
+        .await
+        .map(|_| ())
+        .expect_err("the graph refuses to resolve");
+
+    let rendered = err.to_string();
+    assert!(rendered.contains("Locked"), "unexpected error: {rendered}");
+    assert!(
+        rendered.contains("advisory lock already held"),
+        "unexpected error: {rendered}"
+    );
+}
+
+/// The panicking form must fail ONE test with an attributable message — the
+/// behaviour a `process::exit` in `setup` destroys, since that takes down the
+/// whole binary with no failure attributed to any test.
+#[test]
+fn boot_turns_a_failure_into_an_attributable_test_failure() {
+    // Its own thread + runtime: the panic has to be caught, and the boot
+    // future is not `Send` (it holds the builder across awaits).
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {})); // keep the expected panic quiet
+    let joined = std::thread::spawn(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            TestApp::boot::<SetupFailsApp>().await;
+        });
+    })
+    .join();
+    std::panic::set_hook(previous);
+
+    let panic = joined.expect_err("boot panics");
+    let message = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("expected a string panic payload");
+
+    assert!(
+        message.contains("SetupFailsApp"),
+        "the panic must name the app: {message}"
+    );
+    assert!(
+        message.contains("DATABASE_URL points nowhere"),
+        "the panic must name the cause: {message}"
+    );
+}

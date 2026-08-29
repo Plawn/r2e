@@ -49,7 +49,7 @@ impl Bean for LoudGreeter {
         vec![]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ LoudGreeter })
+        ::std::result::Result::Ok(LoudGreeter)
     }
 }
 

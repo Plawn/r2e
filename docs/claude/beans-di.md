@@ -4,13 +4,42 @@
 
 | Trait | Constructor | Registration | Use case |
 |-------|-----------|-------------|----------|
-| `Bean` | `fn build(ctx) -> Self` (sync) | `.register::<T>()` | Simple services |
-| `AsyncBean` | `async fn build(ctx) -> Self` | `.register::<T>()` | Services needing async init |
-| `Producer` | `async fn produce(ctx) -> Output` | `.register::<P>()` | Types you don't own (pools, clients) |
+| `Bean` | `fn build(ctx) -> Result<Self, Self::Error>` (sync) | `.register::<T>()` | Simple services |
+| `AsyncBean` | `async fn build(ctx) -> Result<Self, Self::Error>` | `.register::<T>()` | Services needing async init |
+| `Producer` | `async fn produce(ctx) -> Result<Output, Self::Error>` | `.register::<P>()` | Types you don't own (pools, clients) |
 
 All three kinds register through the single unified `.register::<T>()` method — the type implements `Registrable`, which `#[bean]`, `#[derive(Bean)]`, and `#[producer]` emit automatically. `#[bean]` picks sync vs async `Bean`/`AsyncBean` for you; `#[producer]` registers the producer's **output** type.
 
 All three traits have an associated `type Deps` that declares their dependencies as a type-level list. **This is auto-generated** by the `#[bean]`, `#[derive(Bean)]`, and `#[producer]` macros — you never write `Deps` manually. For manual trait impls without dependencies, use `type Deps = TNil;`.
+
+### Fallible construction — `type Error`
+
+All three traits also carry `type Error: Into<BootError>`, where
+`BootError = Box<dyn std::error::Error + Send + Sync + 'static>`. The bean type
+is unchanged by it: a `Producer` with `Output = SqlitePool` and
+`Error = sqlx::Error` registers `SqlitePool`, and dependents inject
+`SqlitePool` — the error never contaminates the graph's type.
+
+The macros derive it from the constructor's return type: `-> Self` / `-> T`
+gives `type Error = std::convert::Infallible` (and the body is wrapped in `Ok`),
+`-> Result<Self, E>` / `-> Result<T, E>` gives `type Error = E`. Only a literal
+two-argument `Result<_, _>` is recognised — a single-argument alias
+(`-> anyhow::Result<Self>`) is treated as an infallible return of that type, so
+spell the error out. `type Error` is a **required** associated type on hand-written
+impls (`associated_type_defaults` is unstable, so there is no `Infallible`
+default); write `type Error = std::convert::Infallible;` for an infallible one.
+
+A failure aborts the build at that node: the factory maps it to
+`BeanError::BeanBuild { bean: type_name::<T>(), source }`, rendered as
+`Bean '<type>' failed to build: <error>` with the original error preserved as
+`source()`. `try_build_state()` returns it; `build_state()` panics with it.
+Everything constructed earlier in that cycle is dropped as `construct_beans_in_order`
+unwinds — which is the point of returning an error rather than calling
+`process::exit` from a constructor.
+
+Lazy beans (`#[bean(lazy)]`) have no error channel at their resolution point
+(they are built on first access, behind `Lazy<T>`), so a lazy constructor that
+returns `Err` panics with the same `Bean '<type>' failed to build:` message.
 
 **`build_state` is async and takes NO type arguments** — it must be `.await`ed because the bean graph may contain async beans or producers. The state type is **inferred**: it is the builder's provision list `P` (everything you `.provide()`/`.register()`) materialized as a type-level HList. You never write a state struct. Call `.build_state().await` directly; `.try_build_state().await` is the non-panicking (`Result`) variant.
 

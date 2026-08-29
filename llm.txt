@@ -33,12 +33,21 @@ binary tip crate and generates `main`. There is one declaration of `MyApp`, used
 by production, tests, and real hot-reload; users write no target `cfg` or
 crate-name-dependent import.
 
-- `App::setup() -> Self::Env` — long-lived resources built **once** (pools, buses).
-  Under the `dev-reload` feature the `Env` survives hot-patches. Put its type and
-  setup helpers in `src/env.rs`, a cold boundary that `r2e dev` fully restarts
-  when changed. Nothing to persist? Use an empty `AppEnv` as shown below.
-- `App::build(b, env) -> impl BootableApp` — assembles the app on the builder;
-  **re-run on every hot-patch**. `load_config` is the sole config registration point.
+- `App::setup() -> Result<Self::Env, BootError>` — long-lived resources built
+  **once** (pools, buses). Under the `dev-reload` feature the `Env` survives
+  hot-patches. Put its type and setup helpers in `src/env.rs`, a cold boundary
+  that `r2e dev` fully restarts when changed. Nothing to persist? Use an empty
+  `AppEnv` as shown below.
+- `App::build(b, env) -> Result<impl BootableApp, BootError>` — assembles the app
+  on the builder; **re-run on every hot-patch**. `load_config` is the sole config
+  registration point.
+- **Both phases are fallible.** `BootError` is
+  `Box<dyn std::error::Error + Send + Sync>`, so `?` accepts any `std` error.
+  Never call `std::process::exit` in `setup`/`build`: that code is linked by the
+  test harness, and an `exit` there kills the whole test binary with no
+  attributable failure and no `Drop` for anything already built. Return the error
+  — `app_main!` prints one `error:` line plus the `source()` chain and exits `1`,
+  and `TestApp::boot` turns it into a failing test naming the cause.
 - Under the hot-patch loop, bean instances also survive patches: only beans whose
   constructor code or declared config values changed (plus their transitive
   dependents) are reconstructed; everything else — including `.provide()`-ed
@@ -60,18 +69,19 @@ pub struct MyApp;
 impl App for MyApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv {
+    async fn setup() -> Result<AppEnv, BootError> {
         setup_env().await
     }
 
-    async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
-        b.load_config::<()>()                    // application.yaml + env (sole config entry)
+    async fn build(b: AppBuilder, _env: Self::Env) -> Result<impl BootableApp, BootError> {
+        Ok(b
+            .load_config::<()>()                 // application.yaml + env (sole config entry)
             .plugin(Health)                      // /health → 200 "OK"
             .plugin(Tracing)
             .plugin(ErrorHandling)               // panics → JSON 500
-            .build_state()                       // resolve bean graph (state is inferred)
-            .await
-            .register_controller::<HelloController>()
+            .try_build_state()                   // resolve bean graph (state is inferred)
+            .await?                              // a bean that fails to build aborts boot
+            .register_controller::<HelloController>())
     }
 }
 ```
@@ -81,8 +91,8 @@ impl App for MyApp {
 #[derive(Clone, Default)]
 pub struct AppEnv;
 
-pub async fn setup_env() -> AppEnv {
-    AppEnv
+pub async fn setup_env() -> Result<AppEnv, r2e::BootError> {
+    Ok(AppEnv)
 }
 ```
 
@@ -409,9 +419,9 @@ r2e::map_error! {
 
 | Trait | Constructor | Use case |
 |-------|-------------|----------|
-| `Bean` | sync `fn new(...)` | Simple services |
-| `AsyncBean` | `async fn new(...)` | Async init |
-| `Producer` | `#[producer] async fn ...() -> T` | Types you don't own (pools, clients) |
+| `Bean` | sync `fn new(...) -> Self` / `-> Result<Self, E>` | Simple services |
+| `AsyncBean` | `async fn new(...) -> Self` / `-> Result<Self, E>` | Async init |
+| `Producer` | `#[producer] async fn ...() -> T` / `-> Result<T, E>` | Types you don't own (pools, clients) |
 
 ```rust
 #[derive(Clone)]
@@ -428,11 +438,27 @@ impl UserService {
 }
 
 #[producer]                               // for types you don't own
-async fn create_pool(#[config("database.url")] url: String) -> SqlitePool {
-    SqlitePool::connect(&url).await.expect("db connect")
+async fn create_pool(#[config("database.url")] url: String) -> Result<SqlitePool, sqlx::Error> {
+    Ok(SqlitePool::connect(&url).await?)   // no expect/panic: the failure is reported
 }
 // Generates `struct CreatePool` — register with `.register::<CreatePool>()`
 ```
+
+**Fallible construction.** Any of the three may return `Result<_, E>` for any
+`E: Into<BootError>` (`BootError = Box<dyn Error + Send + Sync>`). The error type
+is an associated `type Error` on the trait — it never contaminates the bean type:
+the producer above registers `SqlitePool`, and consumers inject `SqlitePool`, not
+`Result<SqlitePool, _>`. An infallible constructor (`-> Self` / `-> T`) gets
+`type Error = Infallible` from the macro; a hand-written `impl Bean` /
+`impl AsyncBean` / `impl Producer` must declare `type Error` itself.
+
+The first failure aborts the build: `try_build_state()` returns
+`BeanError::BeanBuild { bean, source }` — `"Bean '<type>' failed to build: <e>"`,
+with the original error kept as `source()` — and the beans already constructed in
+that cycle are dropped as the stack unwinds. `build_state()` is the panicking
+form of the same thing. So a constructor **returns** its error instead of calling
+`process::exit`/`panic!`: under `TestApp::boot` the failure becomes one failing
+test naming the cause, and under `app_main!` one `error:` line and exit code 1.
 
 `#[config("key")]` works in `#[bean]` constructor params and `#[derive(Bean)]`
 fields. Constructor params are resolved from the bean graph **by type**.
@@ -2937,16 +2963,18 @@ impl TenantSource<ApiClient> for ApiClients {
 impl App for MultiTenantDbApp {
     type Env = AppEnv;
 
-    async fn setup() -> AppEnv { AppEnv { master: provision().await } }
+    async fn setup() -> Result<AppEnv, BootError> {
+        Ok(AppEnv { master: provision().await? })
+    }
 
-    async fn build(b: AppBuilder, env: AppEnv) -> impl BootableApp {
+    async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
         let master = env.master.clone();
         let pool_source = PoolSource::<Sqlite>::new(move |tenant| {
             let master = master.clone();
             async move { Ok(master.dsn(tenant.as_str()).await?) }
         }).max_connections(2);                        // per tenant!
 
-        b.load_config::<()>()
+        Ok(b.load_config::<()>()
             .provide(env.master)
             .provide(HeaderResolver)
             .plugin(Tenancy::resolver::<HeaderResolver>())
@@ -2960,8 +2988,8 @@ impl App for MultiTenantDbApp {
             .provide(Brandings)
             .plugin(PerTenant::<Branding>::from::<Brandings>().fallback_to_default())
             .plugin(Health)
-            .build_state().await
-            .register_controllers::<(NotesController, ClientController, AdminController)>()
+            .try_build_state().await?
+            .register_controllers::<(NotesController, ClientController, AdminController)>())
     }
 }
 
@@ -3880,6 +3908,12 @@ requests) and `.as_tenant_user("alice", "acme", &["admin"])` (Bearer token with
 a `tenant` claim **and** the header, so header- and claim-based resolvers both
 work). The constants are `r2e_test::{TENANT_HEADER, TENANT_CLAIM}`.
 
+A boot failure is a **failing test**, never a dead runner: `boot`/`boot_with`/
+`boot_plain` panic with `TestApp::boot::<MyApp>() failed: <error>` plus the
+`caused by:` chain, which libtest attributes to the test that called it. Use
+`TestApp::try_boot::<A>()` / `try_boot_with` / `try_boot_plain` (all returning
+`Result<TestApp, BootError>`) to assert on a boot that is *expected* to fail.
+
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
 next `load_config::<C>()` uses it instead of reading disk (see Configuration).
@@ -4057,6 +4091,22 @@ process-local static container: Rust statics are not dropped at process exit.
 - `r2e::app_main!(MyApp)` — canonical `main.rs`: includes `src/app.rs` in the
   binary tip crate, generates the Tokio `main`, and invokes `launch!`. Use a
   manual `#[r2e::main]` + `launch!` only when the entry point must be customized.
+- **Boot failures exit non-zero with one message.** `r2e::launch!(A)` /
+  `r2e::launch::<A>()` yield `Result<(), BootError>`; `app_main!` ends with
+  `r2e::exit_on_boot_error(...)`, which prints `error: <e>` plus one
+  `  caused by: <cause>` line per `source()` level to stderr and exits `1` — no
+  panic, no backtrace. A custom entry point gets the same contract by ending the
+  same way:
+
+  ```rust
+  #[r2e::main]
+  async fn main() {
+      r2e::exit_on_boot_error(r2e::launch!(MyApp).await);
+  }
+  ```
+
+  `r2e::boot_error_report(&err) -> String` renders that message on its own if a
+  binary wants to log it instead.
 - Hot reload setup: `r2e dev` passes `--features dev-reload` to **your package**,
   not to the `r2e` crate. Your app's `Cargo.toml` must relay the feature:
 

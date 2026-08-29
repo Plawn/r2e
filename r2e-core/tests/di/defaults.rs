@@ -21,7 +21,7 @@ impl Bean for InMemoryCache {
         vec![]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ Self { kind: "in-memory" } })
+        ::std::result::Result::Ok(Self { kind: "in-memory" })
     }
 }
 
@@ -41,7 +41,7 @@ impl Producer for DefaultCacheProducer {
         vec![]
     }
     async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
-        ::std::result::Result::Ok({ CacheImpl { kind: "in-memory" } })
+        ::std::result::Result::Ok(CacheImpl { kind: "in-memory" })
     }
 }
 
@@ -55,7 +55,7 @@ impl Producer for RedisCacheProducer {
         vec![]
     }
     async fn produce(_ctx: &BeanContext) -> ::std::result::Result<Self::Output, Self::Error> {
-        ::std::result::Result::Ok({ CacheImpl { kind: "redis" } })
+        ::std::result::Result::Ok(CacheImpl { kind: "redis" })
     }
 }
 

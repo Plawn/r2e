@@ -163,13 +163,13 @@ struct MyApp;
 
 impl App for MyApp {
     type Env = ();
-    async fn setup() -> Self::Env {}
-    async fn build(b: AppBuilder, _env: Self::Env) -> impl BootableApp {
-        b.register::<UserService>()
+    async fn setup() -> Result<Self::Env, BootError> { Ok(()) }
+    async fn build(b: AppBuilder, _env: Self::Env) -> Result<impl BootableApp, BootError> {
+        Ok(b.register::<UserService>()
             .plugin(Health)
-            .build_state()
-            .await
-            .register_controller::<UserController>()
+            .try_build_state()
+            .await?
+            .register_controller::<UserController>())
     }
 }
 

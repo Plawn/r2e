@@ -71,7 +71,7 @@ impl Bean for FailingBean {
         vec![]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ Self })
+        ::std::result::Result::Ok(Self)
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();
@@ -125,7 +125,7 @@ impl Bean for FactoryInit {
         vec![(TypeId::of::<Log>(), type_name::<Log>())]
     }
     fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ Self { log: ctx.get() } })
+        ::std::result::Result::Ok(Self { log: ctx.get() })
     }
     fn after_register(registry: &mut BeanRegistry) {
         registry.register_post_construct::<Self>();

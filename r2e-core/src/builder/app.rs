@@ -144,3 +144,42 @@ pub async fn launch<A: App>() -> Result<(), BootError> {
     let env = A::setup().await?;
     A::build(AppBuilder::new(), env).await?.serve_auto().await
 }
+
+/// Render a boot failure as R2E's single operational message: one `error:`
+/// line, then one `  caused by:` line per level of the [`source`] chain.
+///
+/// [`source`]: std::error::Error::source
+///
+/// A boot failure is an operational condition (a pool that will not connect, a
+/// port already taken, a missing secret), not a bug, so the entry point reports
+/// it like a CLI tool rather than panicking: no backtrace, no `RUST_BACKTRACE`
+/// advice, and exactly one message however deep the cause chain is.
+pub fn boot_error_report(err: &BootError) -> String {
+    let mut report = format!("error: {err}");
+    let mut source = std::error::Error::source(err.as_ref());
+    while let Some(cause) = source {
+        report.push_str(&format!("\n  caused by: {cause}"));
+        source = std::error::Error::source(cause);
+    }
+    report
+}
+
+/// The tail of every R2E entry point: on `Err`, print
+/// [`boot_error_report`] to stderr and exit with status `1`; on `Ok`, return.
+///
+/// This is what `app_main!` wraps around [`launch!`]. A custom `main` that
+/// drives `launch!` itself gets the same contract — non-zero status, one
+/// message — by ending with:
+///
+/// ```ignore
+/// #[r2e::main]
+/// async fn main() {
+///     r2e::exit_on_boot_error(r2e::launch!(MyApp).await);
+/// }
+/// ```
+pub fn exit_on_boot_error(result: Result<(), BootError>) {
+    if let Err(err) = result {
+        eprintln!("{}", boot_error_report(&err));
+        std::process::exit(1);
+    }
+}

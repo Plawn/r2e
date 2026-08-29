@@ -26,7 +26,7 @@ impl Bean for FactoryBean {
         vec![]
     }
     fn build(_ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ FactoryBean(99) })
+        ::std::result::Result::Ok(FactoryBean(99))
     }
 }
 
@@ -173,7 +173,7 @@ impl Bean for NeedsAlpha {
         vec![(TypeId::of::<Alpha>(), "Alpha")]
     }
     fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
-        ::std::result::Result::Ok({ NeedsAlpha(ctx.get::<Alpha>().0 + 1) })
+        ::std::result::Result::Ok(NeedsAlpha(ctx.get::<Alpha>().0 + 1))
     }
 }
 

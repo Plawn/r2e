@@ -5,6 +5,7 @@
 //! untagged tests of the sibling modules.
 
 mod app;
+mod boot_failure;
 mod config;
 mod order_module;
 mod ordered;

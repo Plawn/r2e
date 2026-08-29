@@ -152,15 +152,7 @@ macro_rules! app_main {
             // A boot failure is an operational error, not a bug: print one
             // line (plus the `source()` chain) and exit non-zero, rather than
             // the panic + backtrace + exit code 101 that `unwrap` would give.
-            if let ::core::result::Result::Err(__e) = $crate::launch!($app).await {
-                ::std::eprintln!("error: {}", __e);
-                let mut __src = ::std::error::Error::source(__e.as_ref());
-                while let ::core::option::Option::Some(__c) = __src {
-                    ::std::eprintln!("  caused by: {}", __c);
-                    __src = ::std::error::Error::source(__c);
-                }
-                ::std::process::exit(1);
-            }
+            $crate::exit_on_boot_error($crate::launch!($app).await);
         }
     };
 }
@@ -170,7 +162,8 @@ macro_rules! app_main {
 /// ```ignore
 /// #[r2e::main]
 /// async fn main() {
-///     r2e::launch!(MyApp).await.unwrap();
+///     // Same contract as `app_main!`: one `error:` line and exit code 1.
+///     r2e::exit_on_boot_error(r2e::launch!(MyApp).await);
 /// }
 /// ```
 ///
