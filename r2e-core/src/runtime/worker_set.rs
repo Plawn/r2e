@@ -228,8 +228,12 @@ impl WorkerSlot {
     }
 }
 
+fn duration_secs<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_f64(d.as_secs_f64())
+}
+
 /// Point-in-time copy of a [`WorkerSlot`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct WorkerSnapshot {
     /// Worker index.
     pub id: usize,
@@ -247,6 +251,8 @@ pub struct WorkerSnapshot {
     /// Messages ever queued in this worker's mailbox.
     pub mailbox_sends: u64,
     /// Total time messages spent queued before being received.
+    /// Serialised as fractional seconds (`mailbox_wait_seconds`).
+    #[serde(rename = "mailbox_wait_seconds", serialize_with = "duration_secs")]
     pub mailbox_wait_total: Duration,
     /// The error that moved the worker to [`WorkerState::Failed`].
     pub error: Option<String>,
@@ -475,5 +481,11 @@ impl HealthIndicator for WorkerReadiness {
         } else {
             HealthStatus::Down(not_serving.join(", "))
         }
+    }
+}
+
+impl serde::Serialize for WorkerState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }

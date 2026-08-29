@@ -269,6 +269,19 @@ impl<M: Send + 'static> Mailboxes<M> {
         delivered
     }
 
+    /// [`broadcast`](Self::broadcast) for messages that are not `Clone`:
+    /// `make` builds one message per attached worker.
+    pub async fn broadcast_with(&self, make: impl Fn() -> M) -> usize {
+        let n = self.inner.senders.load().len();
+        let mut delivered = 0;
+        for target in 0..n {
+            if self.send_to(target, make()).await.is_ok() {
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
     /// Request/reply: build the message from a one-shot reply sender, deliver
     /// it, await the answer.
     pub async fn ask<R: Send + 'static>(

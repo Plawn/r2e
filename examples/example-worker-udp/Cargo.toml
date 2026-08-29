@@ -9,8 +9,8 @@ publish = false
 # See docs/features/19-sharded-serving.md § "Per-worker services".
 
 [dependencies]
-r2e = { workspace = true }
-socket2 = { workspace = true }
+r2e = { workspace = true, features = ["prometheus", "scheduler"] }
+serde = { workspace = true, features = ["derive"] }
 tracing = { workspace = true }
 
 [features]
