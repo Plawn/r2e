@@ -135,8 +135,9 @@ async fn hello_works(app: TestApp) {
 
 **There is no hand-written state struct.** The application state is inferred
 from what you `.provide()` / `.register()` — a compile-time HList, installed on
-the router as `BeanState<L>` (that list behind one `Arc`, so the per-request
-state clone the HTTP backend performs is a single refcount bump). You never
+the router as `BeanState<L>` (that list behind one `Arc`, so each per-request
+state clone the HTTP backend performs is one refcount bump instead of one
+clone per bean). You never
 name that type: there is no state derive to write, and `state = ...` on
 `#[controller]` does not exist.
 
@@ -539,8 +540,10 @@ let built = AppBuilder::new()
 
 **`build_state()` takes no type arguments.** The state is the provision list
 materialized as a type-level HList, wrapped in `BeanState<L>` (one `Arc`)
-before it reaches the router — `state.get::<T>()` / `state.bean::<T>()` are
-unchanged and still compile to a fixed-offset field access. `>127` provisions need
+before it reaches the router. Bean access is unchanged, each at the cost it
+always had: `state.get::<T>()` still compiles to a fixed-offset field access
+(now behind one pointer dereference), and `state.bean::<T>()` is still the
+witness-free runtime `TypeId` walk down the list. `>127` provisions need
 `#![recursion_limit = "512"]` in every crate root that includes the app
 (`src/main.rs` and `src/lib.rs` in the standard layout).
 

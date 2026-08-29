@@ -238,21 +238,30 @@ impl<H, X, T, I> Contains<H, There<I>> for HCons<X, T> where T: Contains<H, I> {
 /// usually N refcount bumps rather than N deep copies, but nothing *enforced*
 /// it and N grows with the app.
 ///
-/// `BeanState` makes that cost O(1): one refcount bump regardless of the
-/// number of beans, and no bean's own `Clone` runs on the request path at all
-/// (task #992, `docs/claude/hot-path-clone-audit.md`).
+/// `BeanState` makes that cost **O(1) in the number of beans**: each state
+/// clone is one `Arc` refcount bump whatever the graph's width, and no bean's
+/// own `Clone` runs on the request path at all. (The backend performs *two*
+/// such clones per request, measured — the guarantee is that the count no
+/// longer depends on N, not that it is exactly one. Task #992,
+/// `docs/claude/hot-path-clone-audit.md`.)
 ///
-/// # It is still a fixed-offset access
+/// # Access costs are unchanged
 ///
-/// Every access trait is forwarded to the inner list, so `state.get::<T>()`
-/// still monomorphizes to `(*arc).tail.tail.head.clone()` — one pointer
-/// dereference, then the same constant field offset as before. No `TypeId`
-/// lookup, no hashing, no downcast:
+/// Every access trait is forwarded to the inner list, so how a bean is found
+/// is exactly what it was — the wrapper only puts one pointer dereference in
+/// front of it:
 ///
-/// - [`HasBean<T, Idx>`] — delegated, index witnesses preserved.
+/// - [`HasBean<T, Idx>`] — delegated, index witnesses preserved, so
+///   `state.get::<T>()` still monomorphizes to `(*arc).tail.tail.head.clone()`:
+///   one dereference, then the same constant field offset as before. No
+///   `TypeId` lookup, no hashing, no downcast.
 /// - [`Contains<H, Idx>`] — delegated, so `AllSatisfied` checks (controller
 ///   `Deps`, gRPC/MCP service registration) work against the wrapper.
 /// - [`BeanLookup`] — delegated, for the witness-free `state.bean::<T>()`.
+///   That one is **not** a fixed offset and never was: it is a runtime walk
+///   down the list comparing `TypeId`s, O(N) constant integer compares. This
+///   wrapper leaves that cost exactly as it found it. Prefer
+///   [`BeanAccess::get`] wherever an index witness can be threaded.
 /// - [`Deref`](std::ops::Deref)`<Target = L>` — for the rare code that wants
 ///   the list itself.
 ///
@@ -279,8 +288,9 @@ impl<L> BeanState<L> {
 }
 
 impl<L> Clone for BeanState<L> {
-    /// One refcount bump — this is the whole point of the wrapper, and it is
-    /// what the HTTP backend runs per request.
+    /// One refcount bump, whatever the graph's width — this is the whole point
+    /// of the wrapper, and it is what the HTTP backend runs per request (twice,
+    /// as it happens; the guarantee is O(1) in the number of beans, not "once").
     #[inline(always)]
     fn clone(&self) -> Self {
         BeanState(std::sync::Arc::clone(&self.0))

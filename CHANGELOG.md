@@ -160,13 +160,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   per request — O(N) in the width of the graph, and a deep copy for any bean
   that owns its data. `build_state()` now wraps the materialized list in the new
   `r2e::BeanState<L>` (the list behind a single `Arc`), so the per-request state
-  clone is one refcount bump at any graph size: measured on a 64-bean state,
-  128 bean clones per request → 0, and for beans owning a `String`,
-  142 allocations / 10389 B per request → 14 / 1053 B (the same as at 8 beans).
-  `state.get::<T>()`, `state.bean::<T>()`, `HasBean` index witnesses,
-  `Contains`/`AllSatisfied` bounds and `FromRequestPartsVia` are all forwarded
-  through the wrapper, so access is still a fixed-offset field read and no
-  application code, controller, plugin or macro changes. **Mildly breaking**:
+  clone costs O(1) at any graph size — the backend takes two state clones per
+  request, and each is now a refcount bump rather than one clone per bean:
+  measured on a 64-bean state, 128 bean clones per request → 0, and for beans
+  owning a `String`, 142 allocations / 10389 B per request → 14 / 1053 B (the
+  same as at 8 beans). `state.get::<T>()`, `state.bean::<T>()`, `HasBean` index
+  witnesses, `Contains`/`AllSatisfied` bounds and `FromRequestPartsVia` are all
+  forwarded through the wrapper, each keeping the cost it already had —
+  `get` a fixed-offset field read (now behind one dereference), `bean` the
+  same runtime `TypeId` walk it always was — and no application code,
+  controller, plugin or macro changes. **Mildly breaking**:
   the state type is now `BeanState<HCons<…>>`, so code that spells the state
   type out (a hand-written `AppBuilder<HCons<A, HNil>>` annotation, a
   hand-assembled test state) must wrap it — `BeanState::new(list)`. Guarded by

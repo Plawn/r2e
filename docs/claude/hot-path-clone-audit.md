@@ -272,18 +272,23 @@ invisibly.
 `BeanState<L>` (`r2e-core/src/type_list.rs`) — the materialized `HCons` chain
 held behind a single `Arc`. `build_state()` returns
 `AppBuilder<BeanState<<P as BuildHList>::Output>>`, so `BeanState` *is* the
-router state; the per-request clone is one refcount bump regardless of N.
+router state; each per-request clone is one refcount bump regardless of N. (The
+backend takes two of them per request — see the measurement below — so the
+guarantee is O(1) in the number of beans, not "one clone".)
 
 The list itself is unchanged, and so is the cost of reading a bean: every
 access trait is forwarded to the inner list with its index witness intact, so
 `state.get::<T>()` still monomorphizes to one pointer dereference plus the same
-constant field offset — no `TypeId` lookup, no hash, no downcast.
+constant field offset — no `TypeId` lookup, no hash, no downcast. The
+witness-free `state.bean::<T>()` keeps *its* cost too, which was never a fixed
+offset: a runtime `TypeId` walk down the list, O(N) integer compares, now with
+one dereference in front. This change neither helps nor hurts it.
 
 | Trait | How it reaches the list |
 |---|---|
 | `HasBean<T, Idx>` | delegated, `Idx` unchanged — the witnesses generated extractors carry keep working |
 | `Contains<H, Idx>` | delegated, so every `AllSatisfied<StateType, _>` bound (controller `Deps`, `register_grpc_service`, MCP service registration, module scope checks) sees through the wrapper |
-| `BeanLookup` | delegated — `state.bean::<T>()`, `ManagedResource` providers |
+| `BeanLookup` | delegated — `state.bean::<T>()`, `ManagedResource` providers. Still the runtime `TypeId` walk it always was, not a fixed offset |
 | `BeanAccess::get` | free: a blanket impl over any `Self: HasBean<T, Idx>` |
 | `Deref<Target = L>` | for the rare code that wants the list itself |
 
@@ -322,6 +327,27 @@ Two observations:
   absolute figure drops below the `Arc` case's too (the wrapper removes the
   `HCons` chain copy itself, which the allocator was seeing as part of the
   boxed-service clone).
+
+The same two properties are asserted a second time against the router
+`AppBuilder::build_state().…​.build()` actually produces (`provide` → `build_state`
+→ `build_inner`'s `with_state`), so unwrapping the state anywhere on that path
+fails the guard even while `BeanState` itself stays correct. That router carries
+the framework's own layers, so its "before" figures are higher again — 32 and
+256 bean clones per request at 8 and 64 beans, i.e. four state clones rather
+than two. The "after" figure is 0 at both widths, as above.
+
+### The rest of the guard set
+
+- `r2e-core/tests/controller/scope.rs::bean_backed_request_extractor_resolves_through_the_state`
+  — the positive request-path case: a macro-generated `#[inject(request)]`
+  extractor written like `AuthenticatedUser` (`FromRequestPartsVia` + `ViaBean`)
+  pulls its bean out of the wrapper at request time, index witness threaded
+  through `__R2eRequestData_*`. The compile-time complement (exactly one
+  extraction route) is `tests/http/extract.rs`.
+- `r2e-core/tests/runtime/dev_reload.rs::a_full_cache_hit_reuses_the_same_state_arc`
+  (feature `dev-reload`) — a full cache hit hands back the *same* `Arc`:
+  `std::ptr::eq` on `BeanState::list()`, plus a counting-`Clone` bean proving no
+  bean was re-cloned out of the context into a fresh list.
 
 No HTTP-load row: the delta is invisible on `example-app`, which has ~10 beans
 and measures 2×10 refcount bumps against ~35 µs of request handling. The
