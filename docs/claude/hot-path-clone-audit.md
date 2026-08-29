@@ -32,7 +32,10 @@ Both were verified in the vendored `axum-0.8.9` source rather than assumed:
    `axum/src/handler/service.rs:168` — `Handler::call(handler, req,
    self.state.clone())`, unconditionally, whether or not the handler declares
    `State<S>`. R2E installs the resolved bean HList as that state
-   (`r2e-core/src/builder/typed.rs:849`, `router.with_state(state.clone())`).
+   (`r2e-core/src/builder/typed.rs`, `router.with_state(state.clone())`) —
+   since task #992 behind one `Arc` (`BeanState`), so that clone is a single
+   refcount bump whatever the graph's width; see "The router state is one
+   `Arc`" below.
 
 Everything else — decorator sets, controller cores, route metadata — is built
 once at registration and reached through an `Arc`, so it is out of the blast
@@ -69,6 +72,7 @@ Crates in scope: `r2e-core` (http/plugin/runtime/controller/decorators/web),
 | `r2e-utils` | `src/interceptors.rs` `Timed`/`Counted`/`MetricTimed` | `&format!(..)` message allocated before `tracing` decides whether the level is enabled | yes | **fixed** — new private `log_args_at_level` takes `format_args!`, so nothing is allocated and a filtered-out level formats nothing. `log_at_level` (public) keeps its signature and delegates |
 | `r2e-utils` | `src/interceptors.rs` `Cache::full_key` | two `String` allocations to build one cache key | yes | **fixed (partial)** — collapsed to a single `format!`. It cannot be precomputed: `#[intercept]` on an impl block builds **one** interceptor shared by every route, so the key depends on the `&'static str` method name passed in per call |
 | `r2e-prometheus` | `src/metrics.rs` `record_request` | `status.to_string()` — the only heap allocation left on the metrics path (`with_label_values` itself just hashes) | yes | **fixed** — rendered into a stack buffer by `status_label` |
+| `r2e-core` | `src/builder/typed.rs` `router.with_state(state)` | the resolved bean HList — one `Clone` per bean, per request | yes — the backend clones the router state unconditionally | **fixed** (task #992) — the list is held behind one `Arc` (`BeanState<L>`); the per-request clone is a single refcount bump and no bean's `Clone` runs at all. See "The router state is one `Arc`" below |
 | `r2e-core` | `src/builtins/request_id.rs:84` | `s.to_string()` of the incoming `X-Request-Id` | yes | acceptable — genuine per-request data; the `HeaderValue` beside it is already reused instead of re-parsed, and the generated path writes a UUID into a stack buffer |
 | `r2e-core` | `src/builtins/secure_headers.rs:70-78` | `Vec<(HeaderName, HeaderValue)>` | no — moved into `SetResponseHeaderLayer`s at plugin build | acceptable |
 | `r2e-core` | `src/runtime/layers.rs` `GraphKeepAlive`, `normalize_path_router`, `catch_panic_layer`, `default_cors` | `Arc<BeanContext>` only | yes, but `Arc` | acceptable — deliberate, documented |
@@ -157,8 +161,10 @@ Coverage: the Prometheus layer and the OpenTelemetry trace layer
 (`layers.rs`), the built-in interceptors `Logged`/`Timed`/`Counted`/
 `MetricTimed` (`decorators.rs` — with no subscriber installed every level is
 disabled, so a correctly-lazy interceptor must allocate *nothing*),
-`JwtClaimsValidator::validate_as` (`jwt.rs`), and `GET /openapi.json`
-(`openapi.rs`).
+`JwtClaimsValidator::validate_as` (`jwt.rs`), `GET /openapi.json`
+(`openapi.rs`), and the router state itself (`state.rs` — width invariance
+rather than config-size invariance: the per-request cost must not grow with the
+number of beans in the graph).
 
 The guard was validated against the real regression: with the seven hot-path
 sources reverted to their pre-fix state, six of the seven tests fail (see the
@@ -244,6 +250,84 @@ OpenAPI document was memcpy'ing all of it on every `/openapi.json` hit, and an
 app with a long exclude-path list was paying one allocation per entry on
 *every request to every route*.
 
+## The router state is one `Arc` (task #992)
+
+This was the audit's first Deferred row, and the one whose cost grew with the
+app rather than with a config value. It landed under task #992.
+
+### The finding
+
+`r2e-core/src/builder/typed.rs` installs the resolved bean HList as the router
+state, and the backend clones that state on **every** request whether or not
+the handler declares `State<S>` (`axum/src/handler/service.rs`,
+`Handler::call(handler, req, self.state.clone())`). `HCons` derives `Clone`, so
+the per-request cost was the sum of every bean's `Clone` — O(N) in the width of
+the bean graph. Beans are `Arc`-shaped *by convention*, so that was usually N
+refcount bumps rather than N deep copies, but nothing enforced it: one bean
+holding a `String` by value made every request in the app pay a heap copy,
+invisibly.
+
+### The fix
+
+`BeanState<L>` (`r2e-core/src/type_list.rs`) — the materialized `HCons` chain
+held behind a single `Arc`. `build_state()` returns
+`AppBuilder<BeanState<<P as BuildHList>::Output>>`, so `BeanState` *is* the
+router state; the per-request clone is one refcount bump regardless of N.
+
+The list itself is unchanged, and so is the cost of reading a bean: every
+access trait is forwarded to the inner list with its index witness intact, so
+`state.get::<T>()` still monomorphizes to one pointer dereference plus the same
+constant field offset — no `TypeId` lookup, no hash, no downcast.
+
+| Trait | How it reaches the list |
+|---|---|
+| `HasBean<T, Idx>` | delegated, `Idx` unchanged — the witnesses generated extractors carry keep working |
+| `Contains<H, Idx>` | delegated, so every `AllSatisfied<StateType, _>` bound (controller `Deps`, `register_grpc_service`, MCP service registration, module scope checks) sees through the wrapper |
+| `BeanLookup` | delegated — `state.bean::<T>()`, `ManagedResource` providers |
+| `BeanAccess::get` | free: a blanket impl over any `Self: HasBean<T, Idx>` |
+| `Deref<Target = L>` | for the rare code that wants the list itself |
+
+Nothing in `r2e-macros` needed to change: the generated request extractor
+`__R2eRequestData_<C><__M>` and the `Controller<S, W>` impl were already
+state-generic, bounded on `HasBean` / `BeanLookup` rather than on `HCons`. That
+generality is what made the wrapper a drop-in.
+
+### Before/after
+
+`examples/example-app/tests/hotpath/state.rs` — the same router built over a
+narrow (8-bean) and a wide (64-bean) state, driven through the same
+`current_thread` runtime as the rest of the target. Two bean flavours, because
+the two halves of the finding are different: an `Arc`-shaped bean that counts
+its own `Clone` calls (refcount traffic no allocation counter can see) and a
+`String`-owning bean whose cost the allocation counter does see.
+
+"Before" is reproduced by replacing that file's `StateOf`/`into_state` with the
+identity (`type StateOf<L> = L`), which is exactly the pre-#992 state shape;
+everything else in the file is unchanged.
+
+| Measurement (per request) | before, 8 beans | before, 64 beans | after, 8 beans | after, 64 beans |
+|---|---|---|---|---|
+| bean `Clone` calls (`Arc`-shaped beans) | 16 | **128** | 0 | **0** |
+| allocations (beans owning a `String`) | 30 allocs / 2213 B | **142 allocs / 10389 B** | 14 / 1053 B | **14 / 1053 B** |
+
+Two observations:
+
+- The backend clones the state **twice** per request, not once — 16 and 128
+  clones for 8 and 64 beans. So the old cost was 2N bean clones per request on
+  every route, and the fix removes all of them: a bean's `Clone` no longer runs
+  on the request path at all.
+- The owning-bean row is the reason this was worth doing even though beans are
+  `Arc`-shaped by convention. 64 such beans cost 112 extra allocations and
+  ~8 KiB per request before; after, the bean's shape stops mattering, and the
+  absolute figure drops below the `Arc` case's too (the wrapper removes the
+  `HCons` chain copy itself, which the allocator was seeing as part of the
+  boxed-service clone).
+
+No HTTP-load row: the delta is invisible on `example-app`, which has ~10 beans
+and measures 2×10 refcount bumps against ~35 µs of request handling. The
+property this change buys is the shape of the curve — flat in N instead of
+linear — which is what the table above measures.
+
 ## Global lifetimes and `Box::leak`
 
 Where the fixes rely on a value living for the whole process, that lifetime is
@@ -297,22 +381,6 @@ predate it (the OpenFGA one was narrowed by it) and the rest are test code.
 Each of these is a real per-request cost that was **not** fixed here, because the
 fix is structural rather than "wrap it in an `Arc`". Listed so they are not
 re-discovered from scratch.
-
-### The bean HList is cloned into every request
-
-`r2e-core/src/builder/typed.rs:849` installs the resolved bean HList as the
-router state, and `axum/src/handler/service.rs:168` clones that state on every
-request whether or not the handler declares `State<S>`. `HCons`
-(`r2e-core/src/type_list.rs:147-153`) derives `Clone`, so the cost is the sum of
-every bean's `Clone`. In practice beans are `Arc`-shaped by convention, so this
-is usually N refcount bumps rather than N deep copies — but nothing *enforces*
-it, and N grows with the app.
-
-The fix is to hold the HList behind a single `Arc` so the per-request clone is
-one bump regardless of N. That touches `BeanAccess`, `HasBean`,
-`BeanLookup`, `FromRequestPartsVia` and the generated extractor in
-`r2e-macros`, which is well beyond a minimal change. Worth its own task, with a
-benchmark on a wide graph first.
 
 ### `McpPrincipal` carries `AuthenticatedUser` by value
 
