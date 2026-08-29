@@ -21,7 +21,7 @@
 //! The full reference (Q1–Q7, evidence, instance diagram) lives in
 //! `docs/claude/dev-reload-config-semantics.md`.
 
-use crate::dev_serial::CommitCycle;
+use crate::serial::CommitCycle;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -35,7 +35,7 @@ use r2e_core::prelude::Bean;
 use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
 
-use crate::dev_serial::dev_serial;
+use crate::serial::dev_serial;
 
 fn config_with(live: &str, unrelated: &str) -> R2eConfig {
     let mut config = R2eConfig::empty();

@@ -164,8 +164,6 @@ impl ServiceComponent for CooperativeService {
 /// resolved — the same trick `runtime::tcp_nodelay` uses, so no test here has
 /// to sit out a real 30-second drain.
 fn prepare_with_yaml(yaml: &str) -> r2e_core::builder::PreparedApp<()> {
-    // `load_config` mutates process-global dev-reload state (see dev_serial).
-    let _serial = crate::dev_serial::dev_serial();
     let config = R2eConfig::from_yaml_str(yaml).unwrap();
     AppBuilder::new()
         .override_config(config)
@@ -208,7 +206,6 @@ fn config_drain_timeout_is_honored() {
 
 #[test]
 fn builder_drain_timeout_wins_over_config() {
-    let _serial = crate::dev_serial::dev_serial();
     let config = R2eConfig::from_yaml_str("server:\n  drain-timeout: 5s\n").unwrap();
     let app = AppBuilder::new()
         .override_config(config)
@@ -232,7 +229,6 @@ fn drain_timeout_unbounded_yields_no_bound() {
     );
 
     // It also wins over a configured budget: unbounded is a code decision.
-    let _serial = crate::dev_serial::dev_serial();
     let config = R2eConfig::from_yaml_str("server:\n  drain-timeout: 5s\n").unwrap();
     let app = AppBuilder::new()
         .override_config(config)
@@ -474,7 +470,6 @@ mod sharded {
         let stopped = Arc::new(AtomicBool::new(false));
         let stopped_hook = stopped.clone();
 
-        let serial = crate::dev_serial::dev_serial();
         let app = AppBuilder::new()
             .override_config(config)
             .load_config::<()>()
@@ -488,7 +483,6 @@ mod sharded {
                 }
             })
             .prepare(&addr.to_string());
-        drop(serial);
         let stop = app.stop_handle();
         let server = r2e_core::rt::spawn(async move { app.run().await.map_err(|e| e.to_string()) });
 

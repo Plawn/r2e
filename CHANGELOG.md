@@ -111,6 +111,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`r2e-core`'s `runtime` test target is green under `--features dev-reload`
+  again** (task #995). Two independent causes, neither of which CI saw (no
+  workflow runs the `dev-reload` feature). (1) The builder-level per-worker
+  service test served a sharded app, but `dev-reload` deliberately forces the
+  single cached-listener path, so `run()` rejects the registration by design;
+  the test is now compiled out under the feature and replaced by one that
+  asserts the rejection. (2) The dev-reload hot-patch tests shared a process
+  with the ordinary serving tests. `mark_hot_reload_loop()` is process-global
+  and one-way, so once a dev test had armed it the next served app set
+  `LIFECYCLE_INITIALIZED` — after which *every* later `run()` in the binary
+  skipped consumers, serve hooks and startup hooks and quietly lost its
+  `spawn_service` tasks (`shutdown_budget::grace_period_bounds_a_stubborn_service_and_names_it`
+  was the visible casualty). No lock can fix that across parallel test threads,
+  so the dev-reload tests now live in their own target,
+  `r2e-core/tests/dev_reload/`, and the `runtime` target no longer needs the
+  `dev_serial` lock at all.
+
+- **The `dev-reload` per-worker-service error no longer gives impossible
+  advice.** It used to be built from `PER_WORKER_REQUIRES_SHARDING_MSG`, so it
+  told you to set `server.workers` — a key `dev-reload` ignores. It now states
+  that the feature forces single-listener serving and that building without
+  `dev-reload` is the fix.
+
 - **`#[r2e::test_suite]` now builds ONE runtime per suite, not one per `#[case]`**
   (task #986). The suite value lives in a module-level `OnceLock` that outlives
   every case, but each generated `#[test]` used to build — and then drop — its
