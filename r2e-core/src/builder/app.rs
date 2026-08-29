@@ -156,9 +156,19 @@ pub async fn launch<A: App>() -> Result<(), BootError> {
 /// advice, and exactly one message however deep the cause chain is.
 pub fn boot_error_report(err: &BootError) -> String {
     let mut report = format!("error: {err}");
+    let mut printed = err.to_string();
     let mut source = std::error::Error::source(err.as_ref());
     while let Some(cause) = source {
-        report.push_str(&format!("\n  caused by: {cause}"));
+        let rendered = cause.to_string();
+        // A wrapper that already spelled its cause out is not repeated. R2E's
+        // own [`BeanError`](crate::beans::BeanError) does exactly that ("Bean
+        // 'X' failed to build: <cause>"), so that the panicking entry points,
+        // which have only the `Display`, still say everything; here that would
+        // read as the same sentence twice.
+        if !printed.contains(&rendered) {
+            report.push_str(&format!("\n  caused by: {rendered}"));
+            printed = rendered;
+        }
         source = std::error::Error::source(cause);
     }
     report
