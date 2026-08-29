@@ -3697,6 +3697,65 @@ order → `LocalSet` dropped. Requires `server.workers` — with it unset, under
 than falling back to the multi-thread control plane. Example:
 `examples/example-worker-udp`. Reference: `docs/features/19-sharded-serving.md`.
 
+### Worker scopes, lifecycle, mailboxes, ingress, metrics, test harness
+
+Layered on `per_worker_service` (ADR `docs/adr/0001-worker-scopes-and-planes.md`;
+all in `r2e::prelude` unless noted):
+
+- **`WorkerInfo`** (`Copy`): stable identity readable anywhere — `id()`,
+  `workers()`, `cpu()` (`Option<usize>`, effective affinity), `role()`
+  (`WorkerRole::DataPlane | ControlPlane`), `is_data_plane()`;
+  `WorkerInfo::current()` / `current_or_control_plane()`, `WorkerContext::info()`,
+  and as a **handler parameter** (infallible; "control-plane" when not sharded).
+  `Display` = `worker 3/8` / `control-plane`.
+- **`WorkerLocal<T: 'static>`** — exactly one `T` per worker, `T` may be `!Send`.
+  Handle is `Clone + Send + Sync` (provide as a bean, `#[inject]` it).
+  `WorkerLocal::new(|w: WorkerContext| async { Ok::<_, BoxError>(t) })`;
+  `.worker_local(factory)` on the builder = `.provide(local)` +
+  `.per_worker_service(install)`. Read with `with(|t| ..)` (panics off-worker /
+  before install / after drop) or `try_with(..) -> Option<R>`; `install(ctx) ->
+  WorkerLocalGuard<T>` (a `WorkerService`; drops `T` on its own thread after HTTP
+  drain). Counters: `instances()`, `built()`, `dropped()`, `is_installed()`.
+- **`WorkerSet`** — aggregated lifecycle; `.provide(WorkerSet::new())` and the
+  builder picks it up like `StopHandle`. `WorkerState`: `Unstarted → Starting →
+  Ready → Serving → Draining → ServicesDown → Parked → Exited`, or `Failed`.
+  `snapshot() -> Vec<WorkerSnapshot>` (`Serialize`), `states()`, `all_serving()`,
+  `any_failed()`, `first_error() -> Option<(usize, String)>`, `slot(i)`,
+  `wait_all_serving()`, `wait_all_exited()`, `wait_until(pred)`.
+  **`WorkerHealth::new()`** plugin (`Deps = (WorkerSet, HealthRegistry)`):
+  indicator `workers`, `UP` only while every worker is `Serving`.
+- **`Mailboxes<M: Send + 'static>`** — cross-worker messaging, counted:
+  `Mailboxes::new(set, capacity)` bean; inside a per-worker service
+  `mail.attach(&ctx) -> Result<Mailbox<M>>` (`recv().await`, `try_recv`,
+  `close`); from anywhere `send_to(i, m)`, `try_send_to(i, m) -> Result<(),
+  (MailboxError, M)>`, `broadcast(m)` (`M: Clone`), `broadcast_with(|| m)`,
+  `ask(i, |reply: oneshot::Sender<R>| m) -> Result<R>`, `ask_all(..) ->
+  Vec<Result<R>>`. `MailboxError::{NoSuchWorker, NotAttached, Closed, Full,
+  NoReply}`. Each send counts a `local`/`remote` crossing on the **target**.
+- **Ingress affinity** (`r2e::runtime::ingress`): `reuseport_supported() ->
+  bool` (const), `reuseport_tcp(addr) -> Result<std::net::TcpListener,
+  AffinityError>`, `reuseport_udp(addr) -> Result<std::net::UdpSocket, _>`;
+  `WorkerContext::adopt_udp(std) -> io::Result<rt::UdpSocket>` /
+  `adopt_tcp_listener(std)` (must run on that worker's thread — asserts).
+  `AffinityError::Unsupported { transport }` on platforms without
+  `SO_REUSEPORT` — never a silent single-socket fallback. QUIC: pass the
+  `reuseport_udp` socket to `quinn::Endpoint::new`.
+- **`WorkerCollector`** (`r2e::r2e_prometheus`, feature `prometheus`):
+  `Prometheus::builder().register(Box::new(WorkerCollector::new(set)))` →
+  `r2e_workers`, `r2e_worker_state{worker,state}`, `r2e_worker_cpu{worker}`,
+  `r2e_worker_crossings_total{worker,origin}`, `r2e_worker_mailbox_depth`,
+  `r2e_worker_mailbox_sends_total`, `r2e_worker_mailbox_wait_seconds_total`
+  (`with_namespace(set, "app")` to rename).
+- **`WorkerHarness`** (tests): `WorkerHarness::start(n, vec![local.into_factory(),
+  ..]).await?` boots `n` real worker threads (no listener, same barrier + reverse
+  shutdown as serving); `run_on(i, |ctx| async { .. }) -> R` (future may be
+  `!Send`), `run_on_all(..) -> Vec<R>`, `worker_set()`, `shutdown_token()`,
+  `shutdown().await`. Proves instance count / execution worker / routing / drain
+  deterministically.
+
+Example: `examples/example-worker-udp` (shared-nothing UDP shards + control-plane
+aggregation via `ask_all` every 10s, `/whoami`, `/stats`, `/workers`, `/metrics`).
+
 ---
 
 ## Additional Plugins
@@ -4109,6 +4168,7 @@ Alongside `&self`:
 | `.drain_timeout_unbounded()` | app | Opt out of the drain bound entirely (plain-axum behaviour); wins over config |
 | `.shutdown_grace_period(d)` | app | Bound the tracked-handle join, PER handle (`spawn_service`, `ServeContext::track`, `#[ws]` sessions). Default: unbounded |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
+| `.worker_local(f)` | pre-state | `.provide(WorkerLocal<T>)` + install as per-worker service: exactly one `T` per worker (`T` may be `!Send`) |
 | `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 
 Launching: normally write only `r2e::app_main!(MyApp);` in `main.rs`; it includes
