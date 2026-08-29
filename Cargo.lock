@@ -2695,7 +2695,7 @@ name = "example-worker-udp"
 version = "0.3.0"
 dependencies = [
  "r2e",
- "socket2",
+ "serde",
  "tracing",
 ]
 

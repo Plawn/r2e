@@ -259,6 +259,185 @@ Tests: `r2e-core/tests/runtime/worker_services.rs` (1/2/4 workers: invocation
 count and identity, `!Send` state + local tasks, reverse-order shutdown,
 startup failure unwinding, panic, `StopHandle`).
 
+## Worker scopes: `WorkerInfo` and `WorkerLocal<T>`
+
+`per_worker_service` is the raw primitive. On top of it, R2E names the worker
+model explicitly (ADR: `docs/adr/0001-worker-scopes-and-planes.md`):
+
+| Scope | Type | Built | Used | Dropped |
+|---|---|---|---|---|
+| App | `#[inject]` beans | control plane, `build_state()` | any thread (`Send + Sync`) | control plane, after the last worker exits |
+| Worker | `WorkerLocal<T>` | worker thread `i`, before it serves | worker thread `i` only | worker thread `i`, after HTTP drain (reverse start order) |
+| Request | `#[inject(request)]`, `WorkerInfo` | the worker serving the request | that request | end of request |
+
+### `WorkerInfo` — stable identity, everywhere
+
+`WorkerInfo` (`Copy`) is the answer to "where am I?": `id()` (`0..workers()`),
+`workers()`, `cpu()` (effective affinity, `None` = not pinned), `role()`
+(`WorkerRole::DataPlane` | `ControlPlane`), `is_data_plane()`. It is installed
+in a thread-local on every worker thread for the thread's whole life, so it is
+readable from anywhere: `WorkerInfo::current()` (`None` off any worker),
+`WorkerInfo::current_or_control_plane()`, `WorkerContext::info()`, and as a
+**handler parameter** (`FromRequestParts`, infallible — a non-sharded app
+reports `control-plane`):
+
+```rust
+#[get("/whoami")]
+async fn whoami(&self, info: WorkerInfo) -> String {
+    format!("{info}")            // "worker 3/8" or "control-plane"
+}
+```
+
+### `WorkerLocal<T>` — exactly one `T` per worker
+
+`WorkerLocal<T>` is a `Clone + Send + Sync` handle you can `provide` as a bean
+and `#[inject]` into controllers; the `T` it fronts is **thread-local** and may
+be `!Send` (`Rc`, `RefCell`, a socket adopted into the worker runtime):
+
+```rust
+let stats: WorkerLocal<RefCell<ShardStats>> =
+    WorkerLocal::new(|worker: WorkerContext| async move {
+        Ok(RefCell::new(ShardStats::new(worker.id())))
+    });
+
+AppBuilder::new()
+    .load_config::<()>()
+    .worker_local(|worker| async move { Ok(RefCell::new(ShardStats::new(worker.id()))) })
+    //  ^ sugar for .provide(local.clone()).per_worker_service(move |ctx| local.install(ctx))
+```
+
+- `with(|t| …)` / `try_with` — run a closure against **this thread's** instance.
+  `with` panics off-worker (or before install / after drop) with the type name;
+  `try_with` returns `None`. There is no way to obtain a `&T` that outlives the
+  closure, so a `!Send` `T` can never leak to another thread.
+- `install(ctx) -> WorkerLocalGuard<T>` — the factory runs once, on the worker
+  thread, inside its `LocalSet`, before the worker serves; the guard is a
+  `WorkerService` whose drop (after HTTP drain, reverse start order) drops `T`
+  **on the same thread** — `T::drop` may touch `Rc`s. Installing twice on one
+  thread is an error, not a silent overwrite.
+- Counters for tests and dashboards: `instances()` (currently live),
+  `built()`, `dropped()`, `is_installed()` (this thread).
+
+Allowed `T`: anything `'static`. Not required: `Send`, `Sync`, `Clone`.
+Constraint: `T` is only reachable from the worker that built it — aggregate
+across workers with a `Mailboxes` round-trip (below), never by sharing `T`.
+
+## Aggregated lifecycle: `WorkerSet` and `WorkerHealth`
+
+Every sharded worker reports its lifecycle to a `WorkerSet` — provide one as
+a bean (`.provide(WorkerSet::new())`) and the builder picks it up in
+`prepare()` exactly like `StopHandle` (a detached default is used otherwise).
+States, in order:
+
+```
+Unstarted → Starting → Ready → Serving → Draining → ServicesDown → Parked → Exited
+                                   └──────────── (any) ────────────→ Failed
+```
+
+- `Starting`: thread up, runtime built. `Ready`: every per-worker service
+  started on this worker. `Serving`: the all-workers barrier passed, the
+  listener accepts. `Draining`: shutdown token fired, in-flight HTTP finishing.
+  `ServicesDown`: `WorkerService::shutdown` done (reverse order). `Parked`:
+  waiting for the control plane's tracked-handle join. `Exited`: `LocalSet`
+  and runtime dropped. `Failed`: a factory `Err`, a serve error, or a panic —
+  `first_error()` returns `(worker, message)`.
+- Read: `snapshot() -> Vec<WorkerSnapshot>` (`Serialize` — expose it on an
+  admin route), `states()`, `all_serving()`, `any_failed()`, `slot(i)`.
+- Await: `wait_all_serving()`, `wait_all_exited()`, `wait_until(pred)`.
+- `WorkerHealth` plugin (`Deps = (WorkerSet, HealthRegistry)`): a health
+  indicator named `workers` (`.name(..)` to rename) that is `UP` only while
+  every worker is `Serving` (vacuously `UP` when not sharded),
+  so the load balancer deregisters the pod at the first `Draining` transition
+  and never sees a half-started set.
+
+## Cross-worker messaging: `Mailboxes<M>`
+
+Worker-local state is aggregated **off the hot path** through per-worker
+mailboxes. `Mailboxes::new(worker_set, capacity)` is a bean; each worker
+`attach(&ctx)`es once (inside a per-worker service) and gets its `Mailbox<M>`
+receiver; anyone holding the bean can `send_to(i, msg)`, `try_send_to`,
+`broadcast(msg)` (`M: Clone`) / `broadcast_with(|| msg)`, or round-trip with
+`ask(i, |reply| msg)` / `ask_all(|reply| msg)` (a `oneshot` per worker).
+Errors are explicit: `NoSuchWorker`, `NotAttached` (worker not up yet or
+already closed), `Full` (bounded queue), `Closed`, `NoReply`.
+
+Every send is counted on the **target** worker's slot: `local` when the sender
+is that same worker thread, `remote` otherwise. A hot path that shows
+`remote_crossings` growing per request is a design smell you can now see.
+
+## Ingress affinity contract
+
+The point of a worker-affine ingress is that the kernel picks the worker; the
+application never re-dispatches. The contract, by transport:
+
+| Transport | Helper | Who binds | Affinity | If unsupported |
+|---|---|---|---|---|
+| TCP (HTTP) | built in (`server.workers`) | each worker, `SO_REUSEPORT` | kernel 4-tuple hash | `run()` error on non-unix / Solaris / illumos / Cygwin |
+| TCP (custom) | `reuseport_tcp(addr) -> std::net::TcpListener` then `worker.adopt_tcp_listener(l)` | your per-worker service | same | `Err(AffinityError::Unsupported { transport: "tcp" })` |
+| UDP / QUIC | `reuseport_udp(addr) -> std::net::UdpSocket` then `worker.adopt_udp(s)` (or hand the std socket to `quinn::Endpoint::new`) | your per-worker service | Linux: 4-tuple hash across the group; macOS: **one** socket receives everything | `Err(AffinityError::Unsupported { transport: "udp" })` |
+
+`reuseport_supported()` is a `const fn` for an early, explicit check.
+`adopt_*` asserts it runs on the worker's own thread (the socket is registered
+with **that** runtime's reactor) — calling it from the control plane panics
+with a message naming the worker. Nothing in R2E ever silently falls back to a
+single shared socket: if affinity is not available you get an error to
+handle, not a slower topology you did not ask for.
+
+## Metrics: `WorkerCollector` (r2e-prometheus)
+
+`Prometheus::builder().register(Box::new(WorkerCollector::new(worker_set)))`
+exports the `WorkerSet` on every scrape (namespace `r2e`, or
+`with_namespace(set, "app")`):
+
+| Series | Type | Labels |
+|---|---|---|
+| `r2e_workers` | gauge | — (configured worker count) |
+| `r2e_worker_state` | gauge (1 for the current state, 0 for the others) | `worker`, `state` |
+| `r2e_worker_cpu` | gauge (`-1` = not pinned) | `worker` |
+| `r2e_worker_crossings_total` | counter | `worker` (target), `origin` = `local` \| `remote` |
+| `r2e_worker_mailbox_depth` | gauge | `worker` |
+| `r2e_worker_mailbox_sends_total` | counter | `worker` |
+| `r2e_worker_mailbox_wait_seconds_total` | counter (dequeue latency sum) | `worker` |
+
+## Testing worker code: `WorkerHarness`
+
+`WorkerHarness::start(n, factories)` boots `n` real worker threads (one
+`current_thread` runtime + `LocalSet` each, `WorkerInfo` installed, the same
+all-or-nothing barrier and reverse-order shutdown as `serve_sharded`) without
+a listener, so a test can prove the properties instead of trusting them:
+
+```rust
+let local = WorkerLocal::new(|w: WorkerContext| async move { Ok(Cell::new(w.id())) });
+let h = WorkerHarness::start(3, vec![local.clone().into_factory()]).await?;
+
+assert_eq!(local.instances(), 3);                                  // exactly one per worker
+let ids = h.run_on_all(|_| async move { local.with(|c| c.get()) }).await;
+assert_eq!(ids, vec![0, 1, 2]);                                    // and each on its own worker
+assert_eq!(h.run_on(1, |ctx| async move { ctx.id() }).await, 1);   // routing
+h.shutdown().await;
+assert_eq!(local.dropped(), 3);                                    // drain drops on-thread
+assert!(h.worker_set().all_in(WorkerState::Exited));
+```
+
+`run_on(i, |ctx| fut)` executes a `!Send` future on worker `i` and returns its
+result; `run_on_all` fans out. Reference tests:
+`r2e-core/tests/runtime/worker_scopes.rs`.
+
+## Migrating from raw `per_worker_service`
+
+Nothing is removed; the new API is layered on top.
+
+| Before | After |
+|---|---|
+| `per_worker_service(\|w\| async { Ok(MyService{..}) })` with `Rc` state read only from inside the service | `.worker_local(\|w\| async { Ok(state) })` and `#[inject] state: WorkerLocal<State>` in controllers, `state.with(..)` in handlers |
+| Hand-rolled `socket2` `SO_REUSEPORT` bind + `rt::UdpSocket::from_std` | `reuseport_udp(addr)?` + `worker.adopt_udp(sock)?` |
+| Custom `Arc<Mutex<Vec<…>>>` written from every worker to aggregate | `Mailboxes<Cmd>` + `ask_all` from a control-plane `#[scheduled]` or admin route |
+| Reading `worker.id()` only inside the factory | `WorkerInfo` handler parameter / `WorkerInfo::current()` |
+| No view of worker lifecycle | `.provide(WorkerSet::new())` + `WorkerHealth::new()` + `WorkerCollector` |
+
+Full before/after: `examples/example-worker-udp` (shared-nothing UDP echo,
+control-plane aggregation every 10s, `/stats`, `/workers`, `/metrics`).
+
 ## Which runtime executes what (control plane / data plane)
 
 Sharded mode splits work across two kinds of runtime:

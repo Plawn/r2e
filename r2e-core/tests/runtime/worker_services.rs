@@ -144,6 +144,7 @@ mod lifecycle {
                 None,
                 &factories,
                 WorkerPark::unparked(),
+                r2e_core::runtime::worker_set::WorkerSet::new(),
             )
             .map_err(|e| e.to_string())
         });

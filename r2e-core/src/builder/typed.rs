@@ -1017,6 +1017,18 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         let workers = crate::runtime::sharded::parse_workers(this.shared.config.as_ref());
         let per_worker_services = this.shared.per_worker_services.clone();
 
+        // Worker-set resolution mirrors the stop handle: a `WorkerSet` bean
+        // from the graph (so `.provide(WorkerSet::new())` is enough to read
+        // worker lifecycle/metrics from beans and `WorkerHealth`), else a
+        // detached one. Sized now so readers see `workers()` before serving.
+        let worker_set = this
+            .bean_context
+            .try_get::<crate::runtime::worker_set::WorkerSet>()
+            .unwrap_or_default();
+        if let Ok(Some(n)) = workers {
+            worker_set.configure(n);
+        }
+
         // Stop-handle resolution: explicit `with_stop_handle` wins, then a
         // `StopHandle` bean from the graph (so `.provide(stop.clone())` alone
         // is enough to wire an admin stop endpoint — a provided-but-unwired
@@ -1080,6 +1092,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             tcp_nodelay,
             workers,
             per_worker_services,
+            worker_set,
             #[cfg(feature = "quic")]
             quic_server_config,
         }

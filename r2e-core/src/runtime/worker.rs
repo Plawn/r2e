@@ -62,6 +62,7 @@
 
 use std::cell::Cell;
 use std::future::Future;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -224,6 +225,25 @@ impl WorkerContext {
         self.thread
     }
 
+    /// This worker's plane. A `WorkerContext` always belongs to a data-plane
+    /// worker (the control plane has no context — it is the caller's
+    /// multi-thread runtime).
+    pub fn role(&self) -> WorkerRole {
+        WorkerRole::DataPlane
+    }
+
+    /// The sendable identity of this worker: the same `id`/`workers`/`cpu`
+    /// as a `Copy + Send + Sync` value, for labelling work that leaves the
+    /// worker thread (metrics, mailbox envelopes, log fields).
+    pub fn info(&self) -> WorkerInfo {
+        WorkerInfo {
+            id: self.id,
+            workers: self.workers,
+            cpu: self.cpu,
+            role: WorkerRole::DataPlane,
+        }
+    }
+
     /// The worker's shutdown token: cancelled when graceful shutdown begins
     /// (at the same moment the worker's HTTP listener stops accepting), and
     /// also when startup is aborted because another worker failed. Local
@@ -258,5 +278,204 @@ impl WorkerContext {
             self.id
         );
         crate::rt::spawn_local(future)
+    }
+}
+
+// ── Worker identity (sendable) ───────────────────────────────────────────────
+
+/// Which plane a thread belongs to. See ADR 0001
+/// (`docs/adr/0001-worker-scopes-and-planes.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkerRole {
+    /// A sharded HTTP worker: `current_thread` runtime + `LocalSet`, owns one
+    /// `SO_REUSEPORT` listener and the per-worker services.
+    DataPlane,
+    /// The caller's multi-thread runtime: boot, scheduler, consumers,
+    /// executor, QUIC, shutdown. Also every thread of a non-sharded app.
+    ControlPlane,
+}
+
+impl WorkerRole {
+    /// Stable lowercase label (`"data"` / `"control"`) for metrics and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkerRole::DataPlane => "data",
+            WorkerRole::ControlPlane => "control",
+        }
+    }
+}
+
+impl std::fmt::Display for WorkerRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Identity of the worker the current code runs on — the sendable half of
+/// [`WorkerContext`].
+///
+/// `Copy + Send + Sync`: pass it around, put it in log fields, hash it. It
+/// grants nothing (no `spawn_local`, no socket adoption) — that stays on the
+/// `!Send` [`WorkerContext`].
+///
+/// Obtain it from:
+/// - [`WorkerContext::info`] inside a per-worker service;
+/// - [`WorkerInfo::current`] anywhere (`None` on the control plane);
+/// - a route parameter or `#[inject(request)]` field — it is an infallible
+///   request extractor: a request served by worker `i` sees `id == i`; a
+///   request served by the single-listener path sees the control plane.
+///
+/// `cpu` is the *effective* CPU affinity: `None` until R2E pins worker
+/// threads (it does not today). Readers should treat `None` as "unknown",
+/// never as CPU 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WorkerInfo {
+    id: usize,
+    workers: usize,
+    cpu: Option<usize>,
+    role: WorkerRole,
+}
+
+thread_local! {
+    static CURRENT_WORKER: Cell<Option<WorkerInfo>> = const { Cell::new(None) };
+}
+
+/// Number of data-plane workers last installed, for
+/// [`WorkerInfo::control_plane`] to report a meaningful `workers`.
+static INSTALLED_WORKERS: AtomicUsize = AtomicUsize::new(0);
+
+impl WorkerInfo {
+    /// Build an identity. Framework/harness use; applications read identities,
+    /// they do not mint them.
+    #[doc(hidden)]
+    pub fn new(id: usize, workers: usize, cpu: Option<usize>, role: WorkerRole) -> Self {
+        Self {
+            id,
+            workers,
+            cpu,
+            role,
+        }
+    }
+
+    /// The identity of the control plane: `role == ControlPlane`, `id == 0`,
+    /// `workers` = the number of data-plane workers currently installed in
+    /// this process (`0` for a non-sharded app).
+    pub fn control_plane() -> Self {
+        Self {
+            id: 0,
+            workers: INSTALLED_WORKERS.load(Ordering::Relaxed),
+            cpu: None,
+            role: WorkerRole::ControlPlane,
+        }
+    }
+
+    /// The worker the calling thread belongs to, or `None` when called from
+    /// the control plane (or any thread that is not a sharded worker).
+    pub fn current() -> Option<Self> {
+        CURRENT_WORKER.with(|c| c.get())
+    }
+
+    /// Like [`current`](Self::current) but never `None`: falls back to
+    /// [`control_plane`](Self::control_plane).
+    pub fn current_or_control_plane() -> Self {
+        Self::current().unwrap_or_else(Self::control_plane)
+    }
+
+    /// Record `self` as the calling thread's worker identity. Called by the
+    /// worker bootstrap (sharded serving and the test harness) before the
+    /// worker runtime is built.
+    #[doc(hidden)]
+    pub fn install(self) {
+        INSTALLED_WORKERS.fetch_max(self.workers, Ordering::Relaxed);
+        CURRENT_WORKER.with(|c| c.set(Some(self)));
+    }
+
+    /// Forget the calling thread's worker identity (worker thread exit).
+    #[doc(hidden)]
+    pub fn uninstall() {
+        CURRENT_WORKER.with(|c| c.set(None));
+    }
+
+    /// Zero-based worker index (`0` on the control plane).
+    pub fn id(&self) -> usize {
+        self.id
+    }
+
+    /// Number of data-plane workers in this server.
+    pub fn workers(&self) -> usize {
+        self.workers
+    }
+
+    /// Effective CPU affinity, when known.
+    pub fn cpu(&self) -> Option<usize> {
+        self.cpu
+    }
+
+    /// Which plane this identity belongs to.
+    pub fn role(&self) -> WorkerRole {
+        self.role
+    }
+
+    /// `true` for a sharded worker, `false` for the control plane.
+    pub fn is_data_plane(&self) -> bool {
+        self.role == WorkerRole::DataPlane
+    }
+}
+
+impl std::fmt::Display for WorkerInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.role {
+            WorkerRole::DataPlane => write!(f, "worker {}/{}", self.id, self.workers),
+            WorkerRole::ControlPlane => f.write_str("control-plane"),
+        }
+    }
+}
+
+// Named bridge point (plan §5.3b): route-method parameters and
+// `#[inject(request)]` fields are extracted by the HTTP backend, reached
+// through the `ViaAxum` blanket bridge of `FromRequestPartsVia`. Infallible:
+// the identity is a thread-local read.
+impl<S: Send + Sync> crate::http::extract::FromRequestParts<S> for WorkerInfo {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        _parts: &mut crate::http::header::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(WorkerInfo::current_or_control_plane())
+    }
+}
+
+// ── Shared worker bootstrap helpers ──────────────────────────────────────────
+
+/// Start `factories` in order for `ctx`'s worker. On failure, the services
+/// already started are shut down (reverse order) and the failing factory's
+/// index and error are returned. Shared by sharded serving and the test
+/// harness so both follow the same all-or-nothing rule.
+#[doc(hidden)]
+pub async fn start_services(
+    ctx: &WorkerContext,
+    factories: &[PerWorkerServiceFactory],
+) -> Result<Vec<Box<dyn WorkerService>>, (usize, BoxError)> {
+    let mut started: Vec<Box<dyn WorkerService>> = Vec::with_capacity(factories.len());
+    for (k, factory) in factories.iter().enumerate() {
+        match factory.build(ctx.clone()).await {
+            Ok(svc) => started.push(svc),
+            Err(e) => {
+                shutdown_services(ctx.id(), started).await;
+                return Err((k, e));
+            }
+        }
+    }
+    Ok(started)
+}
+
+/// Shut down `services` in reverse start order, awaiting each cleanup.
+#[doc(hidden)]
+pub async fn shutdown_services(worker: usize, mut services: Vec<Box<dyn WorkerService>>) {
+    while let Some(svc) = services.pop() {
+        let idx = services.len();
+        tracing::debug!(worker, service = idx, "shutting down per-worker service");
+        svc.shutdown().await;
     }
 }

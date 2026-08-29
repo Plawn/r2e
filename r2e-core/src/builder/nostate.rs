@@ -130,6 +130,41 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self.with_updated_types()
     }
 
+    /// Declare a **worker-local** bean: exactly one `T` per sharded worker,
+    /// built by `factory` on the worker thread before it accepts traffic and
+    /// dropped there at shutdown.
+    ///
+    /// The handle [`WorkerLocal<T>`] becomes an app-scoped bean (injectable
+    /// with `#[inject]`), while the `T` instances never leave their worker:
+    /// `T` needs neither `Send` nor `Sync`, and reading it off-worker panics
+    /// with the worker/thread it was asked from. Requires the sharded
+    /// strategy (`server.workers`), like
+    /// [`per_worker_service`](Self::per_worker_service).
+    ///
+    /// ```ignore
+    /// let app = AppBuilder::new()
+    ///     .worker_local(|_worker| async { Ok(RefCell::new(ShardState::default())) })
+    ///     .register::<ShardController>()   // #[inject] state: WorkerLocal<RefCell<ShardState>>
+    ///     .build_state().await?;
+    /// ```
+    pub fn worker_local<T, F, Fut>(
+        self,
+        factory: F,
+    ) -> AppBuilder<NoState, TCons<crate::runtime::worker_local::WorkerLocal<T>, P>, R, Mods>
+    where
+        T: 'static,
+        F: Fn(crate::runtime::worker::WorkerContext) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<T, crate::runtime::worker::BoxError>> + 'static,
+    {
+        let local = crate::runtime::worker_local::WorkerLocal::new(factory);
+        let installer = local.clone();
+        self.per_worker_service(move |ctx| {
+            let installer = installer.clone();
+            async move { installer.install(ctx).await }
+        })
+        .provide(local)
+    }
+
     /// Provide a pre-built bean **and** run its
     /// [`PostConstruct`](crate::PostConstruct) hook once the graph is resolved.
     ///

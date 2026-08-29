@@ -81,7 +81,10 @@ pub use crate::builder::{
     RegisterModule, SpawnService,
 };
 pub use crate::runtime::lifecycle::StopHandle;
-pub use crate::runtime::worker::{WorkerContext, WorkerService};
+pub use crate::runtime::mailbox::Mailboxes;
+pub use crate::runtime::worker::{WorkerContext, WorkerInfo, WorkerService};
+pub use crate::runtime::worker_local::WorkerLocal;
+pub use crate::runtime::worker_set::{WorkerHealth, WorkerSet};
 // NOTE: `BeanAccess` is deliberately NOT in the prelude: its blanket impl puts
 // a `get` method on every type, which would shadow inherent `get`s reached
 // through `Deref` (e.g. `Arc<DashMap>::get`). Import it explicitly where

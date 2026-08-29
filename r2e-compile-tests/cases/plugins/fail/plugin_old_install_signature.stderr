@@ -1,0 +1,19 @@
+error[E0407]: method `install` is not a member of trait `Plugin`
+  --> cases/plugins/fail/plugin_old_install_signature.rs:14:5
+   |
+14 | /     fn install<T: Clone + Send + Sync + 'static>(self, app: AppBuilder<T>) -> AppBuilder<T> {
+15 | |         app
+16 | |     }
+   | |_____^ not a member of trait `Plugin`
+
+error[E0046]: not all trait items implemented, missing: `Provided`, `Deps`, `Config`, `Controllers`, `build`
+  --> cases/plugins/fail/plugin_old_install_signature.rs:13:1
+   |
+13 | impl Plugin for Legacy {
+   | ^^^^^^^^^^^^^^^^^^^^^^ missing `Provided`, `Deps`, `Config`, `Controllers`, `build` in implementation
+   |
+   = help: implement the missing item: `type Provided = /* Type */;`
+   = help: implement the missing item: `type Deps = /* Type */;`
+   = help: implement the missing item: `type Config = /* Type */;`
+   = help: implement the missing item: `type Controllers = /* Type */;`
+   = help: implement the missing item: `fn build(self, _: <Self as Plugin>::Deps, _: std::option::Option<<Self as Plugin>::Config>, _: &mut PluginBuildContext) -> impl Future<Output = Result<<Self as Plugin>::Provided, Box<(dyn std::error::Error + std::marker::Send + Sync + 'static)>>> { todo!() }`

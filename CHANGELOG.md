@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Worker scopes and verifiable multi-worker serving** (task #990, ADR
+  `docs/adr/0001-worker-scopes-and-planes.md`): `WorkerInfo` (stable worker
+  identity — id / count / role / effective CPU — readable anywhere, incl. as a
+  handler parameter), `WorkerLocal<T>` + `AppBuilder::worker_local` (exactly one
+  `!Send`-capable `T` per worker, built/used/dropped on its worker thread),
+  `WorkerSet` + `WorkerState` + `WorkerHealth` (aggregated per-worker lifecycle
+  and errors, health indicator), `Mailboxes<M>` (counted cross-worker messaging
+  with `send_to`/`broadcast`/`ask_all`), `r2e::runtime::ingress`
+  (`reuseport_tcp`/`reuseport_udp`/`adopt_*`, `AffinityError::Unsupported` — no
+  silent fallback), `WorkerCollector` in `r2e-prometheus` (`r2e_worker_*`
+  series), and `WorkerHarness` for deterministic tests. Docs in
+  `docs/features/19-sharded-serving.md`; example `examples/example-worker-udp`
+  rewritten as a shared-nothing service with control-plane aggregation.
+
 - **grpc-web on the multiplexed gRPC transport** (feature `grpc-web`, `web` on
   `r2e-grpc`): `GrpcServer::multiplexed().with_grpc_web()` (or
   `.with_grpc_web_cors(CorsLayer)`) adds a `tonic-web` arm to

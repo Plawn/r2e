@@ -56,10 +56,12 @@
 mod handler;
 mod layer;
 mod metrics;
+mod worker;
 
 pub use layer::{PrometheusLayer, OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 pub use metrics::{encode_metrics, init_metrics, is_initialized, metrics, registry, MetricsConfig};
 pub use prometheus;
+pub use worker::WorkerCollector;
 
 use handler::metrics_handler;
 use r2e_core::http::routing::get;

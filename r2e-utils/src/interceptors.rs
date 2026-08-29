@@ -15,12 +15,24 @@ pub enum LogLevel {
 
 /// Log a message at the given level using `tracing`.
 pub fn log_at_level(level: LogLevel, method: &str, msg: &str) {
+    log_args_at_level(level, method, format_args!("{}", msg))
+}
+
+/// Same as [`log_at_level`], but takes pre-formatted [`Arguments`] instead of a
+/// `&str`.
+///
+/// The interceptors below log once per request; going through `&format!(..)`
+/// would heap-allocate the message on every one of them, even when the level is
+/// filtered out. `format_args!` renders straight into the subscriber's buffer.
+///
+/// [`Arguments`]: std::fmt::Arguments
+fn log_args_at_level(level: LogLevel, method: &str, args: std::fmt::Arguments<'_>) {
     match level {
-        LogLevel::Trace => tracing::trace!(method = method, "{}", msg),
-        LogLevel::Debug => tracing::debug!(method = method, "{}", msg),
-        LogLevel::Info => tracing::info!(method = method, "{}", msg),
-        LogLevel::Warn => tracing::warn!(method = method, "{}", msg),
-        LogLevel::Error => tracing::error!(method = method, "{}", msg),
+        LogLevel::Trace => tracing::trace!(method = method, "{}", args),
+        LogLevel::Debug => tracing::debug!(method = method, "{}", args),
+        LogLevel::Info => tracing::info!(method = method, "{}", args),
+        LogLevel::Warn => tracing::warn!(method = method, "{}", args),
+        LogLevel::Error => tracing::error!(method = method, "{}", args),
     }
 }
 
@@ -168,7 +180,11 @@ impl<R: Send> Interceptor<R> for Timed {
             let elapsed_ms = start.elapsed().as_millis() as u64;
             match threshold_ms {
                 Some(threshold) if elapsed_ms <= threshold => {}
-                _ => log_at_level(level, method_name, &format!("elapsed_ms={elapsed_ms}")),
+                _ => log_args_at_level(
+                    level,
+                    method_name,
+                    format_args!("elapsed_ms={elapsed_ms}"),
+                ),
             }
             result
         }
@@ -227,15 +243,19 @@ impl Cache {
         self
     }
 
+    /// Build the cache key for one call site.
+    ///
+    /// This runs per request — the interceptor is built once but may be shared
+    /// by every route of a controller (`#[intercept]` on the impl block), so
+    /// the key cannot be precomputed: it depends on the `&'static str` method
+    /// name the caller passes in. It is written as a single `format!` so at
+    /// least only one `String` is allocated instead of two.
     fn full_key(&self, controller_name: &str, method_name: &str) -> String {
-        let prefix = self.group.as_deref().unwrap_or_else(|| "");
-        let prefix = if prefix.is_empty() {
-            format!("__{}_{}", controller_name, method_name)
-        } else {
-            prefix.to_string()
-        };
         let suffix = self.key.as_deref().unwrap_or("default");
-        format!("{}:{}", prefix, suffix)
+        match self.group.as_deref().filter(|g| !g.is_empty()) {
+            Some(prefix) => format!("{}:{}", prefix, suffix),
+            None => format!("__{}_{}:{}", controller_name, method_name, suffix),
+        }
     }
 }
 
@@ -317,7 +337,10 @@ impl CacheInvalidate {
 /// The built product of the [`CacheInvalidate`] spec.
 pub struct CacheInvalidateInterceptor {
     store: std::sync::Arc<dyn r2e_cache::CacheStore>,
-    group: String,
+    /// The group name with its `:` separator already appended, shared behind an
+    /// `Arc` — it is fixed for the life of the interceptor, so neither the
+    /// `String` clone nor the `format!` belongs on the per-request path.
+    prefix: std::sync::Arc<str>,
 }
 
 impl r2e_core::DecoratorSpec for CacheInvalidate {
@@ -330,7 +353,7 @@ impl r2e_core::DecoratorSpec for CacheInvalidate {
     fn build(self, ctx: &r2e_core::BeanContext) -> CacheInvalidateInterceptor {
         CacheInvalidateInterceptor {
             store: ctx.get(),
-            group: self.group,
+            prefix: format!("{}:", self.group).into(),
         }
     }
 }
@@ -342,10 +365,10 @@ impl<R: Send> Interceptor<R> for CacheInvalidateInterceptor {
         Fut: Future<Output = R> + Send,
     {
         let store = self.store.clone();
-        let group = self.group.clone();
+        let prefix = std::sync::Arc::clone(&self.prefix);
         async move {
             let result = next().await;
-            store.remove_by_prefix(&format!("{}:", group)).await;
+            store.remove_by_prefix(&prefix).await;
             result
         }
     }
@@ -391,12 +414,18 @@ impl<R: Send> Interceptor<R> for Counted {
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        let metric_name = self.metric_name.clone();
+        // Borrowed, not cloned: the metric name is fixed for the life of the
+        // interceptor and this future is awaited in place at the call site.
+        let metric_name = self.metric_name.as_str();
         let level = self.level;
         let method_name = ctx.method_name;
         async move {
             let result = next().await;
-            log_at_level(level, method_name, &format!("counted metric={metric_name}"));
+            log_args_at_level(
+                level,
+                method_name,
+                format_args!("counted metric={metric_name}"),
+            );
             result
         }
     }
@@ -442,17 +471,18 @@ impl<R: Send> Interceptor<R> for MetricTimed {
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        let metric_name = self.metric_name.clone();
+        // Borrowed, not cloned — see `Counted` above.
+        let metric_name = self.metric_name.as_str();
         let level = self.level;
         let method_name = ctx.method_name;
         async move {
             let start = std::time::Instant::now();
             let result = next().await;
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            log_at_level(
+            log_args_at_level(
                 level,
                 method_name,
-                &format!("metric={metric_name} elapsed_ms={elapsed_ms}"),
+                format_args!("metric={metric_name} elapsed_ms={elapsed_ms}"),
             );
             result
         }

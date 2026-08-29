@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::routing::get;
-use r2e_core::http::{header, HeaderValue, Response, Router, StatusCode};
+use r2e_core::http::{header, Bytes, HeaderValue, Response, Router, StatusCode};
 use serde_json::json;
 
 /// Build the pre-serialised PRM document.
@@ -49,8 +49,13 @@ pub(crate) fn prm_json(
 /// Shared response builder for the public well-known documents: JSON,
 /// cacheable, permissive CORS (see module docs), `WWW-Authenticate` and
 /// `Mcp-Session-Id` exposed so browser clients can read them.
-pub(crate) fn public_json_response(json: &Arc<str>) -> Response {
-    let mut response = Response::new(json.to_string().into());
+///
+/// Takes the body as [`Bytes`] rather than `&str`: these documents are fixed
+/// for the life of the process (or of a discovery generation), so the caller
+/// encodes once and each request clones a refcount instead of re-allocating
+/// and copying the whole document.
+pub(crate) fn public_json_response(body: Bytes) -> Response {
+    let mut response = Response::new(body.into());
     put_public_headers(&mut response);
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -95,9 +100,12 @@ pub(crate) async fn preflight() -> Response {
 
 /// The PRM router: both well-known paths, GET + preflight.
 pub(crate) fn prm_routes(prm: Arc<str>, mcp_path: &str) -> Router {
+    // Encoded once at router build time; the per-request clone is a refcount
+    // bump on an immutable document rather than a fresh `String` copy.
+    let prm = Bytes::from(prm.as_bytes().to_vec());
     let serve = move || {
         let prm = prm.clone();
-        async move { public_json_response(&prm).into_response() }
+        async move { public_json_response(prm).into_response() }
     };
     let root = "/.well-known/oauth-protected-resource".to_string();
     let suffixed = format!("{root}{mcp_path}");
