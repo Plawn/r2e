@@ -3913,6 +3913,10 @@ A boot failure is a **failing test**, never a dead runner: `boot`/`boot_with`/
 `caused by:` chain, which libtest attributes to the test that called it. Use
 `TestApp::try_boot::<A>()` / `try_boot_with` / `try_boot_plain` (all returning
 `Result<TestApp, BootError>`) to assert on a boot that is *expected* to fail.
+Both forms cover the whole startup, not just `setup`/`build`: config loading,
+bean and producer construction, plugin build, and the controller
+`#[post_construct]` / `#[on_start]` hooks the harness runs (`TestApp` boots
+through `try_build_with_consumers`).
 
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
@@ -4106,7 +4110,21 @@ process-local static container: Rust statics are not dropped at process exit.
   ```
 
   `r2e::boot_error_report(&err) -> String` renders that message on its own if a
-  binary wants to log it instead.
+  binary wants to log it instead. What reaches it: `App::setup`/`App::build`,
+  config loading (a missing/malformed file, a failing provider, an unresolved
+  `${...}` placeholder, a typed section that does not bind), bean/producer
+  construction, plugin build, module/plugin controller config validation, and
+  the controller `#[post_construct]`/`#[on_start]` hooks — provided the app
+  builds through the fallible forms (`try_build_state()`,
+  `try_build_with_consumers()`). The `build_state()` / `build_with_consumers()`
+  wrappers deliberately panic with the same rendered error instead; use them
+  only where a panic is the intended failure mode.
+  **Under `dev-reload` this contract is different by design:** `launch!` runs a
+  hot-patch loop, so a failed `build` (or `serve_auto`) is logged and the loop
+  waits for the next patch instead of exiting — only an `App::setup` failure
+  propagates out of `launch!`. A failed cycle rolls its staged bean graph back,
+  so the caches keep the last successful cycle and the next patch re-runs the
+  full startup lifecycle.
 - Hot reload setup: `r2e dev` passes `--features dev-reload` to **your package**,
   not to the `r2e` crate. Your app's `Cargo.toml` must relay the feature:
 

@@ -417,6 +417,20 @@ Shape (`r2e-core/src/runtime/dev.rs`): process-global `static`s, each a
 
 `invalidate_state_cache()` (`dev.rs:228`) resets the cache group.
 
+**Task #984 added `STAGED_CYCLE`** — `OnceLock<Mutex<Option<StagedCycle>>>` —
+turning the cache write into a two-phase commit. `try_build_state()` no longer
+writes `STATE_CACHE` / `CTX_CACHE` / `GRAPH_FINGERPRINT` /
+`PER_BEAN_FINGERPRINTS` directly; it `stage_cycle(..)`s them, and `launch!`
+either `commit_dev_cycle()`s (the whole `App::build` returned `Ok`) or
+`rollback_dev_cycle()`s (it returned `Err` — the staged tuple is taken out of
+the mutex and dropped outside the lock, so the beans of the failed cycle drop
+immediately). A failed cycle therefore leaves the **previous** successful
+cycle's caches in place: the next patch never reuses a half-assembled graph and
+never inherits a `LIFECYCLE_INITIALIZED` it did not earn. `serve_auto` failing
+*after* a successful build keeps the commit — that graph is valid, only serving
+failed. `invalidate_state_cache()` rolls back any staged cycle first.
+`has_staged_dev_cycle()` (`#[doc(hidden)]`) is the test probe.
+
 **Phase 1 added `LIVE_CONFIG_REGISTRY`** to that list —
 `OnceLock<Mutex<Option<LiveConfigRegistry>>>` with
 `carried_live_config_registry()` / `carry_live_config_registry()` accessors

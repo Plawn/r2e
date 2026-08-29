@@ -23,9 +23,15 @@ is unchanged by it: a `Producer` with `Output = SqlitePool` and
 The macros derive it from the constructor's return type: `-> Self` / `-> T`
 gives `type Error = std::convert::Infallible` (and the body is wrapped in `Ok`),
 `-> Result<Self, E>` / `-> Result<T, E>` gives `type Error = E`. Only a literal
-two-argument `Result<_, _>` is recognised — a single-argument alias
-(`-> anyhow::Result<Self>`) is treated as an infallible return of that type, so
-spell the error out. `type Error` is a **required** associated type on hand-written
+two-argument `Result<_, _>` is recognised (any path spelling — `Result<T, E>`,
+`std::result::Result<T, E>`); a single-argument alias (`-> anyhow::Result<Self>`)
+is **not**, and the two macros diverge on it: `#[bean]` sees no constructor at
+all and fails to compile ("requires a constructor — a static method returning
+`Self` or `Result<Self, E>`"), while `#[producer]` takes it at face value and
+registers a bean of type `anyhow::Result<Self>`. Spell the error out. Nesting is
+not unwrapped either: `Result<Option<T>, E>` registers `Option<T>` with
+`Error = E`, and `Option<Result<T, E>>` registers the whole `Option<..>`
+infallibly. `type Error` is a **required** associated type on hand-written
 impls (`associated_type_defaults` is unstable, so there is no `Infallible`
 default); write `type Error = std::convert::Infallible;` for an infallible one.
 

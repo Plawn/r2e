@@ -2,11 +2,22 @@ use std::fmt;
 
 /// The error channel of R2E's boot path.
 ///
-/// Every fallible assembly step — [`Bean::build`](crate::beans::Bean::build),
+/// Every fallible assembly step funnels into this type: config loading
+/// ([`load_config`](crate::AppBuilder::load_config), whose failure is recorded
+/// and surfaced by [`try_build_state`](crate::AppBuilder::try_build_state)),
+/// bean construction ([`Bean::build`](crate::beans::Bean::build),
 /// [`AsyncBean::build`](crate::beans::AsyncBean::build),
-/// [`Producer::produce`](crate::beans::Producer::produce),
-/// [`App::setup`](crate::App::setup) / [`App::build`](crate::App::build),
-/// [`launch`](crate::launch) — funnels into this type.
+/// [`Producer::produce`](crate::beans::Producer::produce)), plugin build,
+/// module/plugin controller registration, the controller `#[post_construct]` /
+/// `#[on_start]` hooks run by
+/// [`try_build_with_consumers`](crate::AppBuilder::try_build_with_consumers),
+/// and the app itself ([`App::setup`](crate::App::setup) /
+/// [`App::build`](crate::App::build), [`launch`](crate::launch)).
+///
+/// The panicking entry points — `build_state()`, `build_with_consumers()`,
+/// `TestApp::boot*` — are thin wrappers over the `try_*` forms that render this
+/// error; they exist so the common path needs no `?`, not because those steps
+/// bypass the channel.
 ///
 /// It is a plain boxed `std` error on purpose: any `E: std::error::Error +
 /// Send + Sync + 'static` converts into it with `?`, and it converts on into
