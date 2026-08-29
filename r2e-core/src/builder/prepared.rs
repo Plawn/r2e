@@ -331,9 +331,47 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
     /// is now open" phase: the separate-port gRPC server, the MCP transport and
     /// the scheduler driver all start there, and starting them for every
     /// in-process test would bind ports and tick schedules a test never asked
-    /// for. Everything a serve hook would have tracked is therefore absent —
-    /// but nothing else is.
+    /// for. Everything a serve hook would have tracked is therefore absent.
+    ///
+    /// Two further production behaviours have no in-process counterpart
+    /// because they *are* the listener: SO_REUSEPORT sharded serving (an
+    /// in-process start spawns no worker runtimes — which is why a registered
+    /// `per_worker_service` is refused outright here, rather than silently
+    /// dropped) and QUIC/HTTP3 serving. Everything else runs: worker-config
+    /// validation, `#[post_construct]`, consumer registrations, `#[on_start]`
+    /// and the builder's startup hooks.
+    ///
+    /// # What it costs when the app has no hooks
+    ///
+    /// Not literally zero, and the docs should not say so: the shutdown root
+    /// token, the run-once plugin sync-hook cell and the tracked-handle
+    /// collector are three `Arc` allocations, made once at start. What *is*
+    /// zero is behaviour — no hook runs, no task is spawned, the empty hook
+    /// vectors allocate nothing when bound to the state, and
+    /// [`RunningApp::has_shutdown_work`] reports `false`, so dropping the
+    /// value loses nothing `shutdown()` would have done.
     pub async fn start_in_process(mut self) -> Result<RunningApp, crate::beans::BootError> {
+        // ── Refuse the same configurations `run()` refuses, BEFORE any
+        // startup side effect runs. A test that boots an app production would
+        // not start learns it here, not by wondering why a service is silent.
+        //
+        // `server.workers` is parsed at `prepare()` time and only *reported*
+        // at start; an invalid value (`0`, an unknown string) is a hard error
+        // on both paths.
+        let _workers = self.workers.clone()?;
+        // Per-worker services need worker runtimes to own their `!Send` state.
+        // An in-process start binds nothing and spawns no worker runtime, so
+        // there is no "unsharded fallback" to take — the same refusal
+        // `run_with_listener` makes, for the same reason. Never silently drop
+        // them.
+        if !self.per_worker_services.is_empty() {
+            return Err(format!(
+                "{PER_WORKER_REQUIRES_SHARDING_MSG} (an in-process start — \
+                 `TestApp::boot` / `start_in_process` — never shards)"
+            )
+            .into());
+        }
+
         let graph = Arc::clone(&self.graph);
         let StartedLifecycle {
             cancel,
