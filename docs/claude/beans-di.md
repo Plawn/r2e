@@ -138,9 +138,18 @@ Two attributes the macro adds for you:
   function's visibility, so a crate under `#![deny(missing_docs)]` would
   otherwise fail on an item it never wrote.
 
-`#[deprecated]` behaves as expected: the deprecation warns at *your* call sites
-(`.register::<CreatePool>()` and any direct call), never from inside the
-generated `produce()`.
+`#[deprecated]` lands on the **function**, so a direct call to `create_pool(...)`
+warns, and the generated `produce()` does not (the `impl Producer` block carries
+`#[allow(deprecated)]`). The generated `CreatePool` struct is a separate item and
+is *not* deprecated, so `.register::<CreatePool>()` does **not** warn — deprecate
+the bean type itself if you want the registration site to complain.
+
+`unsafe fn` is rejected, not forwarded. The generated `Producer::produce` is a
+safe method and the only caller, and the bean graph has no way to discharge an
+`unsafe` contract it knows nothing about; forwarding it would be an E0133 and
+adding an `unsafe { }` block would sign the contract on your behalf. Drop
+`unsafe` from the signature and put the `unsafe { }` block (with its SAFETY
+comment) inside the body. Same rule for a `#[bean]` constructor.
 
 ### Conditional availability via `Option<T>` (first-class bean type)
 

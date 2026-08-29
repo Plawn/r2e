@@ -455,9 +455,25 @@ the generated struct (so `#![deny(missing_docs)]` crates keep building); write
 Attributes are likewise preserved on the `impl` block of `#[routes]`, and
 associated `const`s/`type`s written in a `#[routes]` block stay on the controller
 core (a route body's `Self` is the request façade, so reach them through the
-controller name: `MyController::PAGE_SIZE`). `#[cfg]` on a **request-scoped**
-controller field (`#[inject(identity)]` / `#[inject(request)]`) is a compile
-error — cfg the whole controller instead.
+controller name: `MyController::PAGE_SIZE`). `#[routes]` replaces the written
+`impl` with **two** synthesized ones (routes on the request façade, everything
+else on the core) and copies the impl attributes to both, so only **inert**
+attributes may sit below `#[routes]`: doc comments,
+`#[allow]`/`#[warn]`/`#[deny]`/`#[expect]`/`#[forbid]`, `#[deprecated]`,
+`#[cfg]`, `#[cfg_attr]`, and tool attributes (`#[rustfmt::skip]`). An attribute
+macro there is a compile error (it would expand twice) — put it **above**
+`#[routes]`, where it runs exactly once.
+
+`#[cfg]` (or `#[cfg_attr]`) on a **request-scoped** controller field
+(`#[inject(identity)]` / `#[inject(request)]`) is a compile error — cfg the whole
+controller instead. Other attributes on a request-scoped field are projected onto
+the generated extractor and façade, so a `#[deprecated]` request field warns
+where *you* read it, not from inside generated code.
+
+An **`unsafe fn`** `#[producer]` — or a `#[bean]` constructor — is rejected. R2E
+generates a safe `Producer::produce` / `Bean::build` that is the graph's only
+caller, and it cannot discharge an `unsafe` contract; drop `unsafe` from the
+signature and keep the `unsafe { }` block, with its SAFETY comment, in the body.
 
 **Fallible construction.** Any of the three may return `Result<_, E>` for any
 `E: Into<BootError>` (`BootError = Box<dyn Error + Send + Sync>`). The error type

@@ -117,10 +117,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and field attributes. Those rebuilds silently discarded everything else.
   - `#[producer]` dropped the whole `attrs` list of the annotated function:
     `#[allow]`/`#[deny]`, `#[inline]`, `#[deprecated]`, `#[must_use]` and doc
-    comments written on a producer did nothing. It also dropped `const`,
-    `unsafe` and `extern "…"` from the signature. All of them are forwarded
-    now, and the generated bean struct carries a doc comment of its own so
-    `#![deny(missing_docs)]` crates keep building.
+    comments written on a producer did nothing. It also dropped `const` and
+    `extern "…"` from the signature. All of them are forwarded now, and the
+    generated bean struct carries a doc comment of its own so
+    `#![deny(missing_docs)]` crates keep building. `#[deprecated]` warns at a
+    direct call to the function; the generated struct is a separate item and is
+    not itself deprecated, so `.register::<CreatePool>()` stays quiet.
   - `#[routes]` dropped the attributes on the `impl` block (a `#[allow(...)]`
     or doc comment above `impl MyController` vanished) and dropped every
     associated item that was neither a route, a `#[consumer]`, a `#[scheduled]`
@@ -129,16 +131,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     build. Impl attributes now reach both synthesized impls, and the other
     items stay on the controller core. Note that a route body's `Self` is the
     request façade, so reach an associated const through the controller name
-    (`MyController::PAGE_SIZE`).
-  - `#[bean]` dropped the attributes and the `const`/`unsafe`/`extern` pieces
-    of the constructor it re-emits.
+    (`MyController::PAGE_SIZE`). Because there are *two* synthesized impls,
+    only **inert** attributes may sit below `#[routes]` — doc comments,
+    `#[allow]`/`#[warn]`/`#[deny]`/`#[expect]`/`#[forbid]`, `#[deprecated]`,
+    `#[cfg]`, `#[cfg_attr]` and tool attributes (`#[rustfmt::skip]`). Anything
+    else (an attribute macro) would expand once per impl, so it is a compile
+    error pointing at the position where it runs exactly once: above
+    `#[routes]`.
+  - `#[bean]` dropped the attributes and the `const`/`extern` pieces of the
+    constructor it re-emits.
   - `#[async_exec]` dropped parameter attributes (`#[cfg]` on a parameter,
-    `#[allow]`) when re-emitting the wrapper's parameter list.
+    `#[allow]`) when re-emitting the wrapper's parameter list. A parameter
+    `#[cfg]` is now forwarded to the *forwarding call* as well, so a gated-out
+    parameter disappears from the signature and the call together instead of
+    leaving the disabled build with an unbound argument.
+  - `#[controller]` projects a request-scoped field's attributes onto the
+    generated request extractor and façade, and the generated code that binds
+    them carries `#[allow(deprecated, non_snake_case)]`: a `#[deprecated]`
+    request field warns where *you* read it, not from inside framework code, so
+    a crate under `#![deny(deprecated)]` still builds.
 
-  Because rustc evaluates an item-level `#[cfg]` *before* it invokes an
-  attribute macro — in either attribute order — a `#[cfg]`'d-out producer,
-  controller or bean never reaches the macro at all, and no generated impl is
-  left dangling. That is pinned by tests rather than assumed.
+  Because rustc evaluates an item-level `#[cfg]` (and a `#[cfg_attr]` expanding
+  to one) *before* it invokes an attribute macro — in either attribute order —
+  a `#[cfg]`'d-out producer, controller, `#[routes]` impl or bean never reaches
+  the macro at all, and no generated impl is left dangling. That is pinned by
+  tests rather than assumed (`r2e-core/tests/di/producer_attrs.rs` and
+  `r2e-core/tests/controller/attrs.rs`).
+
+  One signature piece is **rejected** rather than forwarded (breaking, but no
+  such code compiled before either): an `unsafe fn` `#[producer]` or `#[bean]`
+  constructor. R2E generates a *safe* `Producer::produce` / `Bean::build` that
+  is the only caller, and the bean graph cannot discharge an `unsafe` contract
+  it knows nothing about — re-emitting the signature verbatim is an E0133, and
+  adding an `unsafe { }` block around the generated call would sign the
+  contract on the user's behalf. Drop `unsafe` from the signature and keep the
+  `unsafe { }` block, with its SAFETY comment, inside the body.
 
 - **`#[producer]` now emits `#[allow(clippy::too_many_arguments)]`** on the
   function and on the generated `Producer` impl. A producer takes one parameter
