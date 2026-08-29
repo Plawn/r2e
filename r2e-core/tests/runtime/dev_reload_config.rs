@@ -21,6 +21,7 @@
 //! The full reference (Q1–Q7, evidence, instance diagram) lives in
 //! `docs/claude/dev-reload-config-semantics.md`.
 
+use crate::dev_serial::CommitCycle;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -62,7 +63,8 @@ async fn live_config_registry_keeps_one_identity_and_reseeds_across_cycles() {
         .override_config(config_with("one", "x"))
         .load_config::<()>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state1 = app1.state().clone();
     let registry1 = state1.get::<LiveConfigRegistry>();
     assert_eq!(registry1.get::<String>("app.live").unwrap(), "one");
@@ -76,7 +78,8 @@ async fn live_config_registry_keeps_one_identity_and_reseeds_across_cycles() {
         .override_config(config_with("two", "y"))
         .load_config::<()>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state2 = app2.state().clone();
 
     // The immutable snapshot bean is refreshed: `R2eConfig` is config-derived
@@ -114,7 +117,8 @@ async fn without_the_hot_reload_gate_each_load_config_builds_its_own_registry() 
         .override_config(config_with("one", "x"))
         .load_config::<()>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let registry1 = app1.state().get::<LiveConfigRegistry>();
     assert!(registry1.set("marker.first", "yes"));
 
@@ -122,7 +126,8 @@ async fn without_the_hot_reload_gate_each_load_config_builds_its_own_registry() 
         .override_config(config_with("two", "y"))
         .load_config::<()>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let registry2 = app2.state().get::<LiveConfigRegistry>();
 
     assert_eq!(registry2.get::<String>("app.live").unwrap(), "two");
@@ -158,7 +163,8 @@ async fn typed_config_bean_tracks_edits_across_cycles() {
         .override_config(config1)
         .load_config::<DevSettings>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     assert_eq!(app1.state().get::<DevSettings>().greeting, "hello");
 
     let mut config2 = R2eConfig::empty();
@@ -167,7 +173,8 @@ async fn typed_config_bean_tracks_edits_across_cycles() {
         .override_config(config2)
         .load_config::<DevSettings>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state2 = app2.state().clone();
 
     // The raw config bean tracks the edit…
@@ -199,7 +206,8 @@ async fn late_override_config_value_reaches_live_readers_and_stays_pinned() {
         .override_config(config1)
         .load_config::<()>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     assert_eq!(
         app1.state()
             .get::<LiveConfigRegistry>()
@@ -215,7 +223,8 @@ async fn late_override_config_value_reaches_live_readers_and_stays_pinned() {
         .load_config::<()>()
         .override_config_value("db.url", "postgres://late")
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state2 = app2.state().clone();
 
     assert_eq!(
@@ -278,6 +287,7 @@ async fn live_key_edit_pushes_without_rebuilding_copied_key_edit_rebuilds() {
                 .register::<CopiedOnly>()
                 .build_state()
                 .await
+                .commit_cycle()
                 .state()
                 .clone()
         }};
@@ -369,6 +379,7 @@ async fn section_key_edit_rebuilds_the_declaring_bean() {
                 .register::<SectionHolder>()
                 .build_state()
                 .await
+                .commit_cycle()
                 .state()
                 .clone()
         }};
@@ -416,7 +427,8 @@ async fn runtime_push_survives_an_unrelated_cycle_but_a_real_edit_wins() {
         .override_config(config_with("one", "x"))
         .load_config::<()>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let registry1 = app1.state().get::<LiveConfigRegistry>();
     assert_eq!(registry1.get::<String>("app.live").unwrap(), "one");
     assert!(registry1.set("app.live", "pushed-at-runtime"));
@@ -427,6 +439,7 @@ async fn runtime_push_survives_an_unrelated_cycle_but_a_real_edit_wins() {
         .load_config::<()>()
         .build_state()
         .await
+        .commit_cycle()
         .state()
         .clone();
     assert_eq!(
@@ -444,6 +457,7 @@ async fn runtime_push_survives_an_unrelated_cycle_but_a_real_edit_wins() {
         .load_config::<()>()
         .build_state()
         .await
+        .commit_cycle()
         .state()
         .clone();
     assert_eq!(
@@ -512,7 +526,8 @@ async fn characterize_provider_watch_runs_once_but_its_registry_is_the_live_one(
                 .with_config_provider(CountingProvider)
                 .load_config::<()>()
                 .build_state()
-                .await;
+                .await
+                .commit_cycle();
             let state = app.state().clone();
             let prepared = app.prepare("127.0.0.1:0");
             let stop = prepared.stop_handle();

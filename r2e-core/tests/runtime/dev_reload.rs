@@ -10,6 +10,7 @@
 //!
 //! Everything lives in ONE test function: the dev-reload caches are
 //! process-global, so parallel test functions would clobber each other.
+use crate::dev_serial::CommitCycle;
 use r2e_core::beans::{Bean, BeanContext, BeanRegistry, PostConstruct, PreDestroy, Registrable};
 use r2e_core::config::{ConfigKeyKind, ConfigValue, R2eConfig};
 use r2e_core::decorators::decorator::{BeanDecoFill, SharedDecoSlot};
@@ -280,6 +281,7 @@ macro_rules! cycle {
             .register::<UsesDecorated>()
             .build_state()
             .await
+            .commit_cycle()
     };
 }
 
@@ -459,6 +461,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .register::<Disposable>()
         .build_state()
         .await
+        .commit_cycle()
         .prepare("127.0.0.1:0");
     let first_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let first_server = r2e_core::rt::spawn(async move {
@@ -475,6 +478,7 @@ async fn partial_rebuild_reuses_unchanged_beans_across_cycles() {
         .register::<Disposable>()
         .build_state()
         .await
+        .commit_cycle()
         .prepare("127.0.0.1:0");
     let stop = second.stop_handle();
     let second_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -573,7 +577,8 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
         .plugin(CountingPlugin)
         .register::<UsesPlugin>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state1 = app1.state().clone();
     assert_eq!(PLUGIN_BUILDS.load(Ordering::SeqCst), 1);
     assert_eq!(USES_PLUGIN_BUILDS.load(Ordering::SeqCst), 1);
@@ -587,7 +592,8 @@ async fn a_rebuilt_plugin_bean_drags_its_dependents_with_it() {
         .plugin(CountingPlugin)
         .register::<UsesPlugin>()
         .build_state()
-        .await;
+        .await
+        .commit_cycle();
     let state2 = app2.state().clone();
 
     assert_eq!(
