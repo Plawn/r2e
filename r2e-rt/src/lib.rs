@@ -697,10 +697,6 @@ impl Runtime {
 /// resource across several `block_on` calls wants to prove they share a
 /// reactor rather than discover it as an unexplained timeout.
 /// See `r2e-test`'s `SuiteCell`, which uses it to guard `#[r2e::test_suite]`.
-#[expect(
-    clippy::disallowed_types,
-    reason = "this IS the sanctioned wrapper the workspace-wide deny points to"
-)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RuntimeId(tokio::runtime::Id);
 

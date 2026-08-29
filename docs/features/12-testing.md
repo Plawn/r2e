@@ -209,6 +209,58 @@ spawns no worker runtimes, so a registered `per_worker_service()` is refused at
 boot rather than silently never started — and an invalid `server.workers` fails
 the boot exactly as it does in production.
 
+### Suite tests (`#[r2e::test_suite]`)
+
+When several tests share the same expensive setup, put them on an inherent
+`impl` block: `#[before_all]` runs once and builds the suite value, each
+`#[case]` becomes its own Cargo test running against that shared value, and
+`#[before_each]` / `#[after_each]` / `#[after_all]` bracket them.
+
+```rust
+struct UserSuite { app: TestApp, token: String }
+
+#[r2e::test_suite(app = my_app::MyApp)]
+impl UserSuite {
+    #[before_all]
+    async fn setup(app: TestApp, jwt: TestJwt) -> Self {
+        Self { token: jwt.token("alice", &["user"]), app }
+    }
+
+    #[case]
+    async fn creates_user(&mut self) {
+        self.app.post("/users").bearer(self.token.clone()).send().await.assert_created();
+    }
+
+    #[case]
+    async fn lists_users(&mut self) {
+        self.app.get("/users").bearer(self.token.clone()).send().await.assert_ok();
+    }
+
+    #[after_all]
+    async fn teardown(&mut self) { /* full-suite runs only */ }
+}
+```
+
+- **One runtime for the whole suite.** Every hook and every case run on the same
+  reactor, and it stays alive for the life of the process. That is what lets
+  `#[before_all]` hold runtime-bound resources — a `TestApp`, a database pool, a
+  listening socket, a spawned worker, a timer — and have case 2, case 3 and
+  `#[after_all]` still find them working. (A resource whose reactor is gone does
+  not error, it stops waking, so this used to surface as an unrelated timeout.)
+- The runtime knobs go on the attribute and configure that one runtime:
+  `#[r2e::test_suite(flavor = "current_thread", worker_threads = 2,
+  start_paused = true)]`. With `start_paused` the paused clock is shared by the
+  whole suite rather than reset per case.
+- `#[before_all]` is optional (the suite type then needs `Default`) and may
+  return `Self` or `Result<Self, E>`; it binds `TestApp`, `TestJwt` and
+  `#[inject]` beans exactly like `#[r2e::test]`, with the same `app = …`,
+  `with = …` and `jwt = false` arguments.
+- Cases are unordered by default (access to the suite value is serialized);
+  `#[case(order = N)]` opts into the ordered-test barrier above, within that
+  suite. `#[after_all]` runs on the last case to finish, so a partial
+  `cargo test <filter>` run may skip it — libtest does not expose which cases
+  were selected.
+
 ## Usage
 
 ### 1. Adding the Dependency
