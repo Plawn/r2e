@@ -1,0 +1,10 @@
+{
+  "resourceTemplates": [
+    {
+      "description": "A templated resource.",
+      "mimeType": "application/json",
+      "name": "user",
+      "uriTemplate": "r2e://golden/users/{id}"
+    }
+  ]
+}

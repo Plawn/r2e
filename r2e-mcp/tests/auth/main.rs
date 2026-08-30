@@ -9,6 +9,7 @@ mod fixtures;
 mod backends;
 mod config;
 mod discovery;
+mod identity;
 mod keycloak;
 mod layer;
 mod scopes;

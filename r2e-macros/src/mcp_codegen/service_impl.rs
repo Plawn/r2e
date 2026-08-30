@@ -112,7 +112,10 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     let tool_name_str = tool.tool_name();
 
     let title = opt_string(&tool.meta.title);
-    let description = opt_string(&tool_description(tool));
+    // Borrowed, not owned: the description travels into rmcp's
+    // `Tool::description` (a `Cow<'static, str>`) and the whole `tools/list`
+    // payload is cloned per request — a literal must not re-allocate there.
+    let description = opt_cow_str(&tool_description(tool));
 
     // Input schema: from the Params<T> inner type (spanned there so a
     // missing `JsonSchema` derive is a trait-bound error at the right spot);
@@ -272,6 +275,17 @@ fn tool_description(tool: &McpTool) -> Option<String> {
 fn opt_string(value: &Option<String>) -> TokenStream {
     match value {
         Some(s) => quote! { ::core::option::Option::Some(::std::string::String::from(#s)) },
+        None => quote! { ::core::option::Option::None },
+    }
+}
+
+/// A `Option<Cow<'static, str>>` literal — borrowed, so cloning the wire
+/// metadata it ends up in never re-allocates the string.
+fn opt_cow_str(value: &Option<String>) -> TokenStream {
+    match value {
+        Some(s) => quote! {
+            ::core::option::Option::Some(::std::borrow::Cow::Borrowed(#s))
+        },
         None => quote! { ::core::option::Option::None },
     }
 }

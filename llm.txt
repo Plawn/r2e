@@ -3485,8 +3485,8 @@ advertised only for non-empty families. Resources/prompts have NO in-result
 error plane: `McpError::tool(...)` degrades to JSON-RPC -32603 (message
 preserved); unknown resource URI → -32002, unknown prompt name → -32602.
 Guards/interceptors/scopes/roles work identically on all three families, and
-`resources/list`/`prompts/list` are filtered by caller access like
-`tools/list`.
+`resources/list`, `resources/templates/list` and `prompts/list` are filtered by
+caller access like `tools/list`.
 
 One type cannot be both `#[routes]` and `#[mcp_routes]` — share a bean between
 a thin HTTP controller and a thin MCP service instead (see
@@ -3560,8 +3560,33 @@ async fn secure(&self, #[inject(identity)] user: AuthenticatedUser) -> String { 
 ```
 
 Scope denials are JSON-RPC errors with agent-actionable text ("re-authorize
-requesting them"). `#[inject(identity)]` on a tool parameter (or `Option<…>`)
-reads the validated principal.
+requesting them"). `#[inject(identity)]` on a member parameter (or `Option<…>`)
+reads the validated principal — on all three families, not just tools.
+
+`McpPrincipal.user` is an `Arc<AuthenticatedUser>`, and the auth layer deposits
+that same handle as the identity extension, so no request holds two copies of
+its caller: `principal.user.sub` still works through `Deref`, an owned copy is
+`(*principal.user).clone()`. What `#[inject(identity)]` compiles to is
+`ToolCall::identity::<T>()` (also `ResourceCall::identity` /
+`PromptCall::identity`) — `Option<T>`, resolved from the transport request
+extensions:
+
+```rust
+call.identity::<AuthenticatedUser>()        // Arc<T> extension first  -> (*arc).clone(), the ONLY copy,
+                                            //   made only for a member that declares an identity
+                                            // plain T extension second -> .clone() (any other layer
+                                            //   that inserts an identity by value)
+                                            // neither, or no HTTP parts -> None
+call.identity::<Arc<AuthenticatedUser>>()   // hits the plain-T arm, finds the shared handle: no copy
+```
+
+`Arc<T>` wins when both are present. `extension::<T>()` is unchanged — a plain
+`get::<T>().cloned()`, with no `Arc` step.
+
+`ToolRoute::description` is `Option<Cow<'static, str>>` (rmcp's `Tool` stores a
+`Cow`, and `tools/list` clones the prebuilt list per request, so `#[tool]`
+emits `Cow::Borrowed` and the clone copies a pointer pair). Hand-built routes:
+`Some(s.into())` for a `String`, `Some("…".into())` for a literal.
 
 Testing (feature `mcp-testing` on the `r2e` facade): boot with zero network I/O —
 

@@ -1,0 +1,66 @@
+{
+  "tools": [
+    {
+      "annotations": {
+        "idempotentHint": true,
+        "readOnlyHint": true
+      },
+      "description": "Echo a name.\n\nThe body of the doc comment is part of the advertised description.",
+      "inputSchema": {
+        "properties": {
+          "count": {
+            "description": "An optional count.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "A documented required field.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GoldenInput",
+        "type": "object"
+      },
+      "name": "echo",
+      "outputSchema": {
+        "properties": {
+          "value": {
+            "description": "The echoed name.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "GoldenOutput",
+        "type": "object"
+      },
+      "title": "Echo"
+    },
+    {
+      "annotations": {
+        "destructiveHint": true,
+        "openWorldHint": true
+      },
+      "description": "Fail on demand.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "boom"
+    },
+    {
+      "description": "A tool with no annotations and no arguments.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "plain"
+    }
+  ]
+}

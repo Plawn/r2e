@@ -55,6 +55,27 @@ impl ToolCall {
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.parts.as_ref()?.extensions.get::<T>().cloned()
     }
+
+    /// Resolve a request-scoped **identity** of type `T` from the HTTP
+    /// request extensions.
+    ///
+    /// What an `#[inject(identity)]` member parameter compiles to. Unlike
+    /// [`extension`](Self::extension) it looks for an `Arc<T>` first: the MCP
+    /// auth layer deposits the caller as `Arc<AuthenticatedUser>` so that
+    /// `McpPrincipal` and the identity extension share ONE allocation, and
+    /// the owned `T` is materialized here — once, and only for a member that
+    /// actually asks for it. A plain `T` extension (any other layer that
+    /// inserts an identity by value) is the fallback.
+    ///
+    /// Declaring the parameter as `Arc<AuthenticatedUser>` skips the copy
+    /// entirely: that lookup hits the fallback and finds the shared `Arc`.
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let extensions = &self.parts.as_ref()?.extensions;
+        extensions
+            .get::<Arc<T>>()
+            .map(|shared| (**shared).clone())
+            .or_else(|| extensions.get::<T>().cloned())
+    }
 }
 
 /// Boxed future returned by a tool invocation.
@@ -117,7 +138,12 @@ pub struct ToolRoute {
     /// Optional human-readable title.
     pub title: Option<String>,
     /// Description shown to the agent (from the method's doc comment).
-    pub description: Option<String>,
+    ///
+    /// `Cow` rather than `String`: `tools/list` clones the prebuilt wire
+    /// `Tool` list on every request, and rmcp's `Tool::description` is itself
+    /// a `Cow<'static, str>` — a macro-emitted literal therefore travels as
+    /// `Cow::Borrowed` and costs nothing to clone.
+    pub description: Option<Cow<'static, str>>,
     /// JSON Schema (draft 2020-12) object for the tool arguments.
     pub input_schema: Arc<SchemaObject>,
     /// Optional JSON Schema for `structuredContent` of results.
@@ -136,16 +162,20 @@ pub struct ToolRoute {
 impl ToolRoute {
     /// Convert the metadata into the rmcp wire `Tool` (dispatch closure
     /// excluded).
-    pub(crate) fn to_rmcp_tool(&self) -> rmcp::model::Tool {
-        let mut tool = rmcp::model::Tool::new(
+    ///
+    /// Public (hidden) so the allocation guard in `tests/hotpath/` can build
+    /// and clone the wire list the way the handler does.
+    #[doc(hidden)]
+    pub fn to_rmcp_tool(&self) -> rmcp::model::Tool {
+        // `new_with_raw` takes the description as-is: a `Cow::Borrowed`
+        // literal stays borrowed all the way onto the wire, so cloning the
+        // `tools/list` payload copies a pointer pair instead of the string.
+        let mut tool = rmcp::model::Tool::new_with_raw(
             self.name.clone(),
-            self.description.clone().unwrap_or_default(),
+            self.description.clone(),
             Arc::clone(&self.input_schema),
         );
         tool.title = self.title.clone();
-        if self.description.is_none() {
-            tool.description = None;
-        }
         tool.output_schema = self.output_schema.clone();
         if !self.annotations.is_empty() {
             tool.annotations = Some(self.annotations.clone().into_rmcp());
@@ -193,6 +223,16 @@ impl ResourceCall {
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+
+    /// Resolve a request-scoped identity — same semantics as
+    /// [`ToolCall::identity`].
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let extensions = &self.parts.as_ref()?.extensions;
+        extensions
+            .get::<Arc<T>>()
+            .map(|shared| (**shared).clone())
+            .or_else(|| extensions.get::<T>().cloned())
     }
 }
 
@@ -293,6 +333,16 @@ impl PromptCall {
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+
+    /// Resolve a request-scoped identity — same semantics as
+    /// [`ToolCall::identity`].
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let extensions = &self.parts.as_ref()?.extensions;
+        extensions
+            .get::<Arc<T>>()
+            .map(|shared| (**shared).clone())
+            .or_else(|| extensions.get::<T>().cloned())
     }
 }
 

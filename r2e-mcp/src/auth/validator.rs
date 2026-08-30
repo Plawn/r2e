@@ -21,7 +21,16 @@ use super::error::McpAuthError;
 pub struct McpPrincipal {
     /// The caller's identity (subject, email, roles) — the same type HTTP
     /// route identity injection uses.
-    pub user: AuthenticatedUser,
+    ///
+    /// Behind an `Arc` so that no request ever holds two copies of the same
+    /// identity: the auth layer shares this handle between the principal and
+    /// the identity extension rather than deep-copying the claims tree
+    /// (including the flattened `extra` map) a second time. The JWT path
+    /// builds one `AuthenticatedUser` per request; on the opaque-token path a
+    /// cache hit builds none at all and reuses the one cached for that token.
+    /// Reads go through `Deref` — `principal.user.sub` still works; take an
+    /// owned copy with `(*principal.user).clone()`.
+    pub user: Arc<AuthenticatedUser>,
     /// The token's granted scopes, normalized (`scope` string, `scp`
     /// string/array, or the configured `scope-claim`).
     pub scopes: Arc<[String]>,
@@ -262,7 +271,7 @@ async fn validate_jwt(
         _ => McpAuthError::InvalidToken("token validation failed"),
     })?;
     let scope_values: Arc<[String]> = scopes.scopes(&claims).into();
-    let user = r2e_security::identity::build_authenticated_user(claims, scopes);
+    let user = Arc::new(r2e_security::identity::build_authenticated_user(claims, scopes));
     Ok(McpPrincipal {
         user,
         scopes: scope_values,

@@ -79,6 +79,10 @@ fn generate_invoke_method(
     };
 
     // --- identity extraction ---------------------------------------------
+    // `identity`, not `extension`: the MCP auth layer shares one
+    // `Arc<AuthenticatedUser>` between `McpPrincipal` and the identity
+    // extension, and this is where the owned value is materialized — only for
+    // a member that declares one (task #993).
     let identity_param = tool.identity_param();
     let identity_stmts = match identity_param {
         Some(p) => {
@@ -86,11 +90,11 @@ fn generate_invoke_method(
             if p.is_optional {
                 quote! {
                     let __identity: ::core::option::Option<#id_ty> =
-                        __call.extension::<#id_ty>();
+                        __call.identity::<#id_ty>();
                 }
             } else {
                 quote! {
-                    let __identity: #id_ty = match __call.extension::<#id_ty>() {
+                    let __identity: #id_ty = match __call.identity::<#id_ty>() {
                         ::core::option::Option::Some(__v) => __v,
                         ::core::option::Option::None => {
                             return ::core::result::Result::Err(

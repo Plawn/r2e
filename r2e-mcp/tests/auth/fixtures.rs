@@ -8,7 +8,7 @@ use r2e_core::http::{Body, HeaderMap, Request, Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::auth::{DiscoveryMode, McpAuthConfig, ScopePolicy};
-use r2e_mcp::{AppBuilderMcpExt, McpServer, McpTokenValidator};
+use r2e_mcp::{AppBuilderMcpExt, McpServer, McpTokenValidator, ResourceCall};
 use r2e_security::AuthenticatedUser;
 use r2e_test::TestJwt;
 use serde_json::Value;
@@ -83,6 +83,19 @@ impl SecuredTools {
     #[resource(uri = "r2e://secured/report", scopes = "mcp:write")]
     async fn report(&self) -> &'static str {
         "confidential report"
+    }
+
+    /// Open resource TEMPLATE. Templates are a separate wire family with
+    /// their own visibility filter, so they need their own coverage.
+    #[resource(uri = "r2e://secured/docs/{id}")]
+    async fn doc(&self, call: ResourceCall) -> String {
+        format!("doc:{}", call.variables["id"])
+    }
+
+    /// Scope-gated resource TEMPLATE.
+    #[resource(uri = "r2e://secured/audit/{id}", scopes = "mcp:write")]
+    async fn audit(&self, call: ResourceCall) -> String {
+        format!("audit:{}", call.variables["id"])
     }
 
     /// Open prompt.
