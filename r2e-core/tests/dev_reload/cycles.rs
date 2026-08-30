@@ -681,7 +681,7 @@ impl Registrable for CloneCounted {
 #[r2e_core::test]
 async fn a_full_cache_hit_reuses_the_same_state_arc() {
     // Process-global dev-reload caches: hold them exclusively, start cold.
-    let _serial = crate::dev_serial::dev_serial();
+    let _serial = crate::serial::dev_serial();
     r2e_core::invalidate_state_cache();
     r2e_core::runtime::dev::mark_hot_reload_loop();
     CACHE_CLONES.store(0, Ordering::SeqCst);
