@@ -640,9 +640,10 @@ through `ServeContext::bind_tcp(owner, addr)` (async → `BoundListener`) so the
 socket carries over between cycles, and serve through
 `bound.into_incoming(shutdown)` — a stream that stops before any accept on
 shutdown or handover and releases the socket (so does `stop_signal` when it
-resolves); the next cycle's `bind_tcp` waits for that release — bounded to 5 s,
-fail-open with a warning — so the old server does not accept after the new one
-starts),
+resolves); the next cycle's `bind_tcp` waits for that release so the old
+server normally does not accept after the new one starts — bounded to 5 s: a
+holder that never releases is overridden with a warning and may still race for
+queued connections),
 `on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
 hatch).
 

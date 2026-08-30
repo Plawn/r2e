@@ -44,9 +44,12 @@ static LISTENER_STORE: OnceLock<Mutex<HashMap<(&'static str, String), StoredList
     OnceLock::new();
 
 /// One cached socket plus the handover token of the cycle currently serving
-/// it. The next cycle that asks for the same key cancels that token, so the
-/// previous server stops accepting *before* the new one starts — the two
-/// clones of the fd would otherwise race for queued connections.
+/// it. The next cycle that asks for the same key cancels that token and waits
+/// for the holder's release, so the previous server normally stops accepting
+/// *before* the new one starts — the two clones of the fd would otherwise race
+/// for queued connections. The wait is bounded by [`HANDOVER_ACK_TIMEOUT`]:
+/// a holder that never releases is overridden (with a warning) and the race
+/// is accepted rather than blocking the patch cycle.
 #[cfg(feature = "dev-reload")]
 struct StoredListener {
     listener: std::net::TcpListener,
@@ -75,6 +78,8 @@ const HANDOVER_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// Take the cached listener for `(owner, addr)` and wait for the previous
 /// holder (if any) to stop accepting — the acknowledged handover behind
 /// [`ServeContext::bind_tcp`](crate::builder::ServeContext::bind_tcp).
+/// The wait is fail-open: after [`HANDOVER_ACK_TIMEOUT`] the previous holder
+/// is overridden with a warning and the new listener is returned anyway.
 ///
 /// The bind itself (which may resolve a hostname) runs on the blocking pool.
 /// Public for the dev-reload test target.
