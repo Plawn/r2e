@@ -82,27 +82,39 @@ environment the caller already owns and hand it straight to `A::build`;
 `A::setup()` is not called:
 
 ```rust
-use r2e::rt::sync::OnceCell;
-use r2e_core::App;
+use r2e_test::SharedEnv;
 
-static ENV: OnceCell<<MyApp as App>::Env> = OnceCell::const_new();
+static ENV: SharedEnv<MyApp> = SharedEnv::new();
 
-async fn env() -> <MyApp as App>::Env {
-    ENV.get_or_init(|| async { MyApp::setup().await.expect("setup") })
-        .await
-        .clone()
-}
-
-#[r2e::test(app = my_app::MyApp, env = env().await)]
+#[r2e::test(app = my_app::MyApp, env = ENV.get().await)]
 async fn lists_users(app: TestApp) {
     app.get("/users").send().await.assert_ok();
 }
 ```
 
+**Memoise it with `SharedEnv`, never with a bare `OnceCell`.** `#[r2e::test]`
+builds one runtime per test and drops it when the test returns;
+`#[r2e::test_suite]` builds one per suite and shuts it down after the last case.
+A `OnceCell` initialised from a test therefore runs `setup()` on whichever
+per-test runtime won the race, and everything the environment bound to that
+runtime — listeners, pool keep-alive tasks, timers, anything `setup` spawned —
+is destroyed with it. The value survives in the `static`; the reactor behind it
+does not, so a later test reuses an inert environment and hangs or times out far
+from the test that owned the runtime. (A `LazyLock` that builds its own runtime
+and `block_on`s it is worse: called from inside a test runtime it panics.)
+`SharedEnv` runs `setup()` **once**, on a multi-thread runtime `r2e-test` owns in
+a `static` and never shuts down, and hands the value to every caller
+(concurrent first callers share the one run; a failure is reported to all of
+them and not retried). For "setup, then seed once", use
+`SharedEnv::with(|| Box::pin(async { … }))`.
+
 - **Macro knob:** `env = <expr>` on `#[r2e::test(app = …)]` and on
   `#[r2e::test_suite(app = …)]`. The expression is evaluated in the test's async
-  block (so `env().await` is fine) and must produce `<App as App>::Env`. It
-  composes with `with = …` and `jwt = false`, and requires `app = …`.
+  block (so `ENV.get().await` is fine) and must produce `<App as App>::Env`. It
+  composes with `with = …` and `jwt = false`, and requires `app = …`. On a
+  suite it also requires a `#[before_all]` that binds the booted app (`async fn
+  setup(app: TestApp) -> Self`) — that hook is what evaluates the expression, so
+  without it `env = …` would silently never run (compile error).
 - **Explicit forms**, mirroring `boot` / `boot_with` / `boot_plain`:
   `TestApp::boot_env::<A>(env)`, `TestApp::boot_with_env::<A>(env, |b| …)`,
   `TestApp::boot_plain_env::<A>(env, |b| …)` — plus `try_boot_env`,
@@ -113,14 +125,27 @@ async fn lists_users(app: TestApp) {
   `build`-phase failure is still reported exactly as before.
 - `#[r2e::test_suite]`'s `#[before_all]` amortises setup **within one suite**;
   a shared `Env` amortises it across suites and across whole test binaries.
+- **`SharedEnv<A>` API:** `SharedEnv::new()` / `SharedEnv::with(init)` (both
+  `const`, for a `static`), `get().await -> A::Env` (panics with the app name
+  and the whole `caused by:` chain if `setup` failed), `try_get().await ->
+  Result<A::Env, SharedEnvError>`, and `shared_env_runtime()` for the rare
+  fixture that must spawn onto the same long-lived runtime.
 
 **Isolation is your job.** A shared `Env` means shared state: the same pool,
 rows and caches for every test booted off it, and the boots still run
 concurrently under libtest. Keep the tests independent (per-test schema, prefix
-or tenant, unique fixtures) or serialise them with `order = …`. The shared value
-also outlives each `TestApp` — `shutdown()` disposes the app's own beans, never
-the `Env` a later boot still needs, so dispose it yourself (or let the process
-exit do it).
+or tenant, unique fixtures) or serialise them with `order = …`.
+
+**Shutdown runs what your `build` registered.** The harness never disposes the
+`Env` itself, but it cannot promise nothing else does: `shutdown()` runs *the
+app's own* shutdown sequence — `on_drain`, disposers, `#[pre_destroy]`,
+`on_stop` — over whatever `A::build` registered. If `build` hands an
+`Env`-owned resource to something that closes it (a pool closed by a disposer, a
+`ManagedResource` wrapping a shared handle), the first `shutdown()` invalidates
+it for every later boot. That is your contract to keep, exactly as in
+production: an app that closes what it did not open breaks the next boot. Keep
+`Env`-owned resources shared-and-borrowed in `build`, and dispose them yourself
+at the end of the binary (or let the process exit do it).
 
 ### Ordered tests (@Order)
 
