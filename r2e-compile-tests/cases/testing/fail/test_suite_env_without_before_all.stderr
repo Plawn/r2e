@@ -1,0 +1,5 @@
+error: `env = ...` is never evaluated: this suite has no #[before_all], so no `TestApp` is booted. Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` — or drop `env = ...`
+ --> cases/testing/fail/test_suite_env_without_before_all.rs:9:32
+  |
+9 | #[r2e::test_suite(app = MyApp, env = shared_env())]
+  |                                ^^^^^^^^^^^^^^^^^^

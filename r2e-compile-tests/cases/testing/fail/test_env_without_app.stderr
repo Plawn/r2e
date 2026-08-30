@@ -1,5 +1,7 @@
-error: `with = ...`, `env = ...` and `jwt = ...` require `app = <App type>`
- --> cases/testing/fail/test_env_without_app.rs:6:1
+error: `env = ...` requires `app = <App type>` — the environment is handed to `App::build`, so there is nothing to boot it into:
+
+         #[r2e::test(app = MyApp, env = ENV.get().await)]
+ --> cases/testing/fail/test_env_without_app.rs:5:13
   |
-6 | async fn shares_an_environment() {}
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+5 | #[r2e::test(env = env())]
+  |             ^^^^^^^^^^^

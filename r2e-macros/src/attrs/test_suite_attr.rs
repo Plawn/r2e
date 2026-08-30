@@ -10,17 +10,22 @@ use syn::{
 };
 
 use crate::util::crate_path::{r2e_core_path, r2e_test_path};
-use crate::util::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
+use crate::util::runtime_args::{parse_bool, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs};
 
 struct SuiteArgs {
     tracing: bool,
     app_ty: Option<syn::Path>,
-    with_expr: Option<syn::Expr>,
+    with_expr: Option<KeyedExpr>,
     /// `#[r2e::test_suite(app = ..., env = expr)]`: boot `#[before_all]`'s
     /// `TestApp` on an already-built `App::Env` instead of calling
-    /// `App::setup()`. Evaluated inside the suite's async block.
-    env_expr: Option<syn::Expr>,
+    /// `App::setup()`. Evaluated inside the suite's async block — on the
+    /// suite's own runtime, which is shut down after the last case, so the
+    /// expression must yield an environment that does NOT belong to it
+    /// (`r2e_test::SharedEnv`).
+    env_expr: Option<KeyedExpr>,
     jwt: bool,
+    /// Where `jwt = ...` was written, for the diagnostics that reject it.
+    jwt_key: Option<KeyedFlag>,
     /// Shared Tokio `runtime::Builder` knobs (`flavor`, `worker_threads`, …).
     runtime: RuntimeArgs,
 }
@@ -33,6 +38,7 @@ impl Default for SuiteArgs {
             with_expr: None,
             env_expr: None,
             jwt: true,
+            jwt_key: None,
             runtime: RuntimeArgs::default(),
         }
     }
@@ -59,9 +65,14 @@ impl SuiteArgs {
             match key.as_str() {
                 "tracing" => this.tracing = parse_bool(&meta)?,
                 "app" => this.app_ty = Some(meta.value()?.parse()?),
-                "with" => this.with_expr = Some(meta.value()?.parse()?),
-                "env" => this.env_expr = Some(meta.value()?.parse()?),
-                "jwt" => this.jwt = parse_bool(&meta)?,
+                "with" => this.with_expr = Some(KeyedExpr::parse(&meta)?),
+                "env" => this.env_expr = Some(KeyedExpr::parse(&meta)?),
+                "jwt" => {
+                    this.jwt_key = Some(KeyedFlag {
+                        key: meta.path.clone(),
+                    });
+                    this.jwt = parse_bool(&meta)?;
+                }
                 _ => {
                     if !this.runtime.try_parse(&key, &meta)? {
                         return Err(meta.error(format!("unknown argument `{key}`")));
@@ -77,6 +88,85 @@ impl SuiteArgs {
         // builder would otherwise show up as an unattributed tokio panic.
         this.runtime.validate()?;
         Ok(this)
+    }
+
+    /// The arguments that only mean something on a boot (`app = ...`), spanned
+    /// where the user wrote them. `None` when there is nothing to reject.
+    fn reject_app_only_args(&self) -> Option<syn::Error> {
+        if let Some(env) = &self.env_expr {
+            return Some(syn::Error::new_spanned(
+                env,
+                "`env = ...` requires `app = <App type>` — the environment is handed to \
+                 `App::build`, so there is nothing to boot it into",
+            ));
+        }
+        if let Some(with) = &self.with_expr {
+            return Some(syn::Error::new_spanned(
+                with,
+                "`with = ...` requires `app = <App type>` — the hook pre-configures the \
+                 `AppBuilder` of the app being booted",
+            ));
+        }
+        if let Some(jwt) = &self.jwt_key {
+            return Some(syn::Error::new_spanned(
+                jwt,
+                "`jwt = ...` requires `app = <App type>` — it turns the harness's `TestJwt` \
+                 wiring off on the booted app",
+            ));
+        }
+        None
+    }
+
+    /// Reject boot arguments the suite would never reach.
+    ///
+    /// The `TestApp` boot is emitted **only** inside `#[before_all]`, and only
+    /// when it binds something from it (a `TestApp`, a `TestJwt`, an
+    /// `#[inject]` bean). Without that, `env = ...` — the expression a caller
+    /// wrote precisely to be evaluated once — is evaluated zero times, silently.
+    /// Say so instead.
+    fn reject_unused_boot_args(&self, def: &SuiteDef) -> syn::Result<()> {
+        let boots = def
+            .before_all
+            .as_ref()
+            .is_some_and(|method| !method.sig.inputs.is_empty());
+        if boots {
+            return Ok(());
+        }
+        let reason = match &def.before_all {
+            None => "this suite has no #[before_all]",
+            Some(_) => "this suite's #[before_all] binds nothing from the booted app",
+        };
+        if let Some(env) = &self.env_expr {
+            return Err(syn::Error::new_spanned(
+                env,
+                format!(
+                    "`env = ...` is never evaluated: {reason}, so no `TestApp` is booted. \
+                     Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` \
+                     — or drop `env = ...`"
+                ),
+            ));
+        }
+        if let Some(with) = &self.with_expr {
+            return Err(syn::Error::new_spanned(
+                with,
+                format!(
+                    "`with = ...` is never evaluated: {reason}, so no `TestApp` is booted. \
+                     Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` \
+                     — or drop `with = ...`"
+                ),
+            ));
+        }
+        if let Some(jwt) = &self.jwt_key {
+            return Err(syn::Error::new_spanned(
+                jwt,
+                format!(
+                    "`jwt = ...` has no effect: {reason}, so no `TestApp` is booted. \
+                     Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` \
+                     — or drop `jwt = ...`"
+                ),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -133,16 +223,16 @@ fn expand_inner(args: SuiteArgs, item_impl: ItemImpl) -> syn::Result<TokenStream
             "#[r2e::test_suite] does not support generic impl blocks yet",
         ));
     }
-    if args.app_ty.is_none() && (args.with_expr.is_some() || args.env_expr.is_some() || !args.jwt)
-    {
-        return Err(syn::Error::new_spanned(
-            item_impl.impl_token,
-            "`with = ...`, `env = ...` and `jwt = ...` require `app = <App type>`",
-        ));
+    if args.app_ty.is_none() {
+        // Spanned on the argument the user wrote, not on the `impl` token.
+        if let Some(err) = args.reject_app_only_args() {
+            return Err(err);
+        }
     }
 
     let mut def = parse_suite(item_impl)?;
     validate_suite(&def)?;
+    args.reject_unused_boot_args(&def)?;
 
     let cleaned_impl = clean_impl(&mut def.item_impl);
     let generated = generate_suite(&args, &def)?;
@@ -650,12 +740,21 @@ fn before_all_bindings(
     if let Some(app_ty) = &args.app_ty {
         if needs_app {
             let configure: TokenStream2 = match &args.with_expr {
-                Some(expr) => quote! { #expr },
+                Some(with) => {
+                    let expr = &with.expr;
+                    quote! { #expr }
+                }
                 None => quote! { |__r2e_b| __r2e_b },
             };
             // `env = expr` boots on an environment the caller already owns, so
             // `App::setup()` is not called again (shared across suites too).
-            let boot_call = match (args.jwt, &args.env_expr) {
+            // The expression runs on the SUITE runtime, which is shut down
+            // after the last case — so it must hand back an environment that
+            // does not belong to it (`r2e_test::SharedEnv` owns its own
+            // process-lifetime runtime; a `OnceCell` initialised here would
+            // strand every later suite on a dead reactor).
+            let env = args.env_expr.as_ref().map(|keyed| &keyed.expr);
+            let boot_call = match (args.jwt, env) {
                 (true, None) => {
                     quote! { #test_crate::TestApp::boot_with::<#app_ty>(#configure).await }
                 }

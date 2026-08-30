@@ -22,7 +22,7 @@ use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn};
 
 use crate::util::crate_path::r2e_core_path;
-use crate::util::runtime_args::{parse_bool, type_ends_with, RuntimeArgs};
+use crate::util::runtime_args::{parse_bool, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs};
 
 // ── Argument parsing ─────────────────────────────────────────────────────
 
@@ -32,14 +32,17 @@ struct MainArgs {
     /// `TestApp`.
     app_fn: Option<syn::Path>,
     /// `#[r2e::test(app = ..., with = |b| ...)]`: builder pre-configuration hook.
-    with_expr: Option<syn::Expr>,
+    with_expr: Option<KeyedExpr>,
     /// `#[r2e::test(app = ..., env = expr)]`: boot on an already-built
     /// `App::Env` instead of calling `App::setup()`. The expression is
-    /// evaluated inside the test's async block (so `env = shared().await` is
+    /// evaluated inside the test's async block (so `env = ENV.get().await` is
     /// fine) and must produce `<App as App>::Env`.
-    env_expr: Option<syn::Expr>,
+    env_expr: Option<KeyedExpr>,
     /// `#[r2e::test(app = ..., jwt = false)]`: skip the TestJwt auto-wiring.
     jwt: bool,
+    /// Where `jwt = ...` was written, for the diagnostic that rejects it
+    /// without `app = ...`.
+    jwt_key: Option<KeyedFlag>,
     /// `#[r2e::test(order = <u32>)]`: run this test sequentially (ascending
     /// `order`) via the r2e-test static barrier. Test-only. The literal is kept
     /// for span-accurate error reporting; the value is parsed as `u32`.
@@ -59,6 +62,7 @@ impl Default for MainArgs {
             with_expr: None,
             env_expr: None,
             jwt: true,
+            jwt_key: None,
             order: None,
             group: None,
             runtime: RuntimeArgs::default(),
@@ -85,9 +89,14 @@ impl MainArgs {
                 match key.as_str() {
                     "tracing" => this.tracing = parse_bool(&meta)?,
                     "app" => this.app_fn = Some(meta.value()?.parse()?),
-                    "with" => this.with_expr = Some(meta.value()?.parse()?),
-                    "env" => this.env_expr = Some(meta.value()?.parse()?),
-                    "jwt" => this.jwt = parse_bool(&meta)?,
+                    "with" => this.with_expr = Some(KeyedExpr::parse(&meta)?),
+                    "env" => this.env_expr = Some(KeyedExpr::parse(&meta)?),
+                    "jwt" => {
+                        this.jwt_key = Some(KeyedFlag {
+                            key: meta.path.clone(),
+                        });
+                        this.jwt = parse_bool(&meta)?;
+                    }
                     "order" => this.order = Some(meta.value()?.parse()?),
                     "group" => this.group = Some(meta.value()?.parse()?),
                     _ => {
@@ -112,6 +121,34 @@ impl MainArgs {
         // an anonymous tokio panic at test time.
         this.runtime.validate()?;
         Ok(this)
+    }
+
+    /// The arguments that only mean something on a boot (`app = ...`), spanned
+    /// where the user wrote them. `None` when there is nothing to reject.
+    fn reject_app_only_args(&self) -> Option<syn::Error> {
+        if let Some(env) = &self.env_expr {
+            return Some(syn::Error::new_spanned(
+                env,
+                "`env = ...` requires `app = <App type>` — the environment is handed to \
+                 `App::build`, so there is nothing to boot it into:\n\n\
+                 \x20 #[r2e::test(app = MyApp, env = ENV.get().await)]",
+            ));
+        }
+        if let Some(with) = &self.with_expr {
+            return Some(syn::Error::new_spanned(
+                with,
+                "`with = ...` requires `app = <App type>` — the hook pre-configures the \
+                 `AppBuilder` of the app being booted",
+            ));
+        }
+        if let Some(jwt) = &self.jwt_key {
+            return Some(syn::Error::new_spanned(
+                jwt,
+                "`jwt = ...` requires `app = <App type>` — it turns the harness's `TestJwt` \
+                 wiring off on the booted app",
+            ));
+        }
+        None
     }
 }
 
@@ -205,19 +242,19 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         return syn::Error::new_spanned(sig, "`app = ...` is only valid on #[r2e::test]")
             .to_compile_error();
     }
-    if args.app_fn.is_none() && (args.with_expr.is_some() || args.env_expr.is_some() || !args.jwt)
-    {
-        return syn::Error::new_spanned(
-            sig,
-            "`with = ...`, `env = ...` and `jwt = ...` require `app = <App type>`",
-        )
-        .to_compile_error();
+    if args.app_fn.is_none() {
+        // Spanned on the argument itself, not on the item: the user's mistake
+        // is the argument they wrote, and `env = <expr>` in particular is
+        // usually a `#[r2e::test]` that lost its `app = ...`.
+        if let Some(err) = args.reject_app_only_args() {
+            return err.to_compile_error();
+        }
     }
     if let Some(app_ty) = &args.app_fn {
         return expand_boot_test(
             app_ty,
-            args.with_expr.as_ref(),
-            args.env_expr.as_ref(),
+            args.with_expr.as_ref().map(|k| &k.expr),
+            args.env_expr.as_ref().map(|k| &k.expr),
             args.jwt,
             ordering.as_ref(),
             &func,
@@ -356,6 +393,9 @@ impl OrderedHooks {
 /// - `app: TestApp` — the booted app (at most one),
 /// - `jwt: TestJwt` — a clone of the app's auto-wired `TestJwt`,
 /// - `#[inject] bean: T` — `app.bean::<T>()` from the resolved graph.
+// One parameter per knob the attribute accepts; bundling them into a struct
+// would only move the same list one indirection away.
+#[allow(clippy::too_many_arguments)]
 fn expand_boot_test(
     app_ty: &syn::Path,
     with_expr: Option<&syn::Expr>,
