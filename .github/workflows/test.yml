@@ -36,10 +36,13 @@ jobs:
           df -h /
 
       # tonic-prost-build shells out to `protoc` (r2e-grpc-build, example-grpc,
-      # r2e-compile-tests); librdkafka (r2e-events-kafka) builds through cmake,
-      # which the image already ships.
+      # r2e-compile-tests); `libprotobuf-dev` carries the well-known-type
+      # `.proto` includes that prost-wkt-types compiles against. librdkafka
+      # (r2e-events-kafka) builds through cmake, which the image already ships.
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
 
       # The runner ships rustup; `rustup show` installs whatever
       # `rust-toolchain.toml` pins (the nightly the trybuild `.stderr`
