@@ -421,9 +421,30 @@ both in place.
 ### The wire is unchanged
 
 `r2e-mcp/tests/server/wire_golden.rs` pins the exact JSON of all four `*/list`
-payloads against goldens captured before the change
-(`r2e-mcp/tests/server/golden/*.json`, re-baselined with `R2E_UPDATE_GOLDEN=1`).
-A representation change that alters the wire fails there.
+payloads (`r2e-mcp/tests/server/golden/*.json`, re-baselined with
+`R2E_UPDATE_GOLDEN=1`). A representation change that alters the wire fails
+there.
+
+The goldens landed in the same commit as the change they guard, so they prove
+nothing on their own — a golden captured *after* a regression records the
+regression. Their provenance was established separately, and is reproducible:
+
+```bash
+git checkout -b tmp/golden-provenance c8da199   # master, pre-#994/#993
+git show <pr-branch>:r2e-mcp/tests/server/wire_golden.rs \
+  > r2e-mcp/tests/server/wire_golden.rs
+echo 'mod wire_golden;' >> r2e-mcp/tests/server/main.rs
+R2E_UPDATE_GOLDEN=1 cargo test -p r2e-mcp --test server wire_golden::
+diff -r r2e-mcp/tests/server/golden <pr-checkout>/r2e-mcp/tests/server/golden
+```
+
+The test target compiles unchanged against master (it only uses
+`#[mcp_routes]`'s public surface), so master can be made to emit its own
+goldens. Run on **c8da199** (`Merge pull request #55`, the merge base of this
+branch) all four files came out **byte-identical** to the ones committed here
+— `tools_list`, `resources_list`, `resource_templates_list`, `prompts_list`.
+`Cow::Borrowed` + `Tool::new_with_raw` is a representation change and nothing
+more.
 
 ## One `AuthenticatedUser` per authenticated MCP request (task #993)
 

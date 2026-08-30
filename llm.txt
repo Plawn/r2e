@@ -3485,8 +3485,8 @@ advertised only for non-empty families. Resources/prompts have NO in-result
 error plane: `McpError::tool(...)` degrades to JSON-RPC -32603 (message
 preserved); unknown resource URI → -32002, unknown prompt name → -32602.
 Guards/interceptors/scopes/roles work identically on all three families, and
-`resources/list`/`prompts/list` are filtered by caller access like
-`tools/list`.
+`resources/list`, `resources/templates/list` and `prompts/list` are filtered by
+caller access like `tools/list`.
 
 One type cannot be both `#[routes]` and `#[mcp_routes]` — share a bean between
 a thin HTTP controller and a thin MCP service instead (see
@@ -3565,6 +3565,11 @@ reads the validated principal. `McpPrincipal.user` is an
 `Arc<AuthenticatedUser>` (one identity allocation per request, shared with the
 identity extension): `principal.user.sub` still works through `Deref`, an owned
 copy is `(*principal.user).clone()`.
+
+`ToolRoute::description` is `Option<Cow<'static, str>>` (rmcp's `Tool` stores a
+`Cow`, and `tools/list` clones the prebuilt list per request, so `#[tool]`
+emits `Cow::Borrowed` and the clone copies a pointer pair). Hand-built routes:
+`Some(s.into())` for a `String`, `Some("…".into())` for a literal.
 
 Testing (feature `mcp-testing` on the `r2e` facade): boot with zero network I/O —
 

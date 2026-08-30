@@ -391,3 +391,72 @@ async fn scoped_resource_and_prompt_denials_are_json_rpc_errors() {
         "Call `write_data` with the payload."
     );
 }
+
+/// `resources/templates/list` has its OWN visibility filter (templates are a
+/// separate wire family from fixed resources, built and filtered by
+/// `TemplateFamily`), so it needs its own coverage: a caller without the
+/// scope must not even see the template, and reading through it must be
+/// denied.
+#[tokio::test]
+async fn resource_template_list_filters_by_scope() {
+    let router = secured_app().await;
+
+    // Alice holds mcp:write → both templates.
+    let token = alice_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let templates = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "resources/templates/list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        sorted_values(&templates["result"], "resourceTemplates", "uriTemplate"),
+        ["r2e://secured/audit/{id}", "r2e://secured/docs/{id}"]
+    );
+
+    // Bob (mcp:read only) → the write-gated template is hidden…
+    let token = bob_token();
+    let session = initialize_auth(&router, "/mcp", &token).await;
+    let templates = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "resources/templates/list",
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        sorted_values(&templates["result"], "resourceTemplates", "uriTemplate"),
+        ["r2e://secured/docs/{id}"]
+    );
+
+    // …and reading through it is denied, not merely hidden.
+    let denied = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "resources/read",
+        json!({ "uri": "r2e://secured/audit/42" }),
+    )
+    .await;
+    assert_eq!(denied["error"]["code"], -32600, "{denied}");
+    assert_eq!(denied["error"]["data"], "forbidden", "{denied}");
+
+    // The open template still resolves, variables included.
+    let read = rpc_auth(
+        &router,
+        "/mcp",
+        &session,
+        &token,
+        "resources/read",
+        json!({ "uri": "r2e://secured/docs/42" }),
+    )
+    .await;
+    assert_eq!(read["result"]["contents"][0]["text"], "doc:42", "{read}");
+}

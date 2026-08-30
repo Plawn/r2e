@@ -16,6 +16,25 @@
 //! ```bash
 //! R2E_UPDATE_GOLDEN=1 cargo test -p r2e-mcp --test server wire_golden::
 //! ```
+//!
+//! # Provenance of the committed goldens
+//!
+//! These files landed in the same commit as the change they guard, so on their
+//! own they would only prove the new code agrees with itself. They were
+//! checked against the pre-change tree instead: this file compiles unchanged
+//! against master (it only uses `#[mcp_routes]`'s public surface), so master
+//! can emit its own goldens.
+//!
+//! ```bash
+//! git checkout -b tmp/golden-provenance c8da199   # master, pre-#994/#993
+//! git show <pr-branch>:r2e-mcp/tests/server/wire_golden.rs > $PWD/r2e-mcp/tests/server/wire_golden.rs
+//! echo 'mod wire_golden;' >> r2e-mcp/tests/server/main.rs
+//! R2E_UPDATE_GOLDEN=1 cargo test -p r2e-mcp --test server wire_golden::
+//! # then diff the emitted golden/ against the one committed on the PR branch
+//! ```
+//!
+//! Run on **c8da199** (`Merge pull request #55`, this branch's merge base) all
+//! four files came out byte-identical to the ones committed here.
 
 use r2e_core::http::Router;
 use r2e_core::prelude::*;
