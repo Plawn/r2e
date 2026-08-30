@@ -6,6 +6,7 @@ mod multipart;
 pub mod ordering;
 mod server;
 mod session;
+mod shared_env;
 mod sse;
 pub mod suite;
 #[cfg(feature = "ws")]
@@ -18,6 +19,7 @@ pub use app::{
 pub use jwt::{TestJwt, TokenBuilder};
 pub use server::TestServer;
 pub use session::{SessionRequest, TestSession};
+pub use shared_env::{shared_env_runtime, SharedEnv, SharedEnvError, SharedEnvFuture};
 pub use sse::{FiniteStream, ParsedSseEvent};
 #[cfg(feature = "ws")]
 pub use ws::{WsTestClient, WsTestError};

@@ -507,11 +507,12 @@ async fn a_recorded_config_failure_aborts_before_any_bean_is_built() {
 //
 // `App::Env` is the production concept of "resources built once". The `*_env`
 // boots hand an environment the caller already owns straight to `App::build`,
-// so a test binary can build it once (a `OnceCell`/`LazyLock`) instead of
-// replaying pools and migrations per test.
+// so a test binary can build it once (a `SharedEnv`) instead of replaying pools
+// and migrations per test. See `shared_env.rs` for why the sharing goes through
+// `SharedEnv` and not a bare `OnceCell`.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use r2e_core::rt::sync::OnceCell;
+use r2e_test::SharedEnv;
 
 /// Stands in for the expensive thing a real `setup()` builds — a pool, a
 /// migrated schema, a container. Its `generation` witnesses *which* setup call
@@ -580,21 +581,19 @@ impl App for PlainEnvApp {
 /// count is its own.
 static ENV_STOPS: AtomicUsize = AtomicUsize::new(0);
 
-/// The binary-wide environment: `EnvApp::setup()` runs at most once here, and
-/// every boot below reuses the value.
-static SHARED_ENV: OnceCell<SharedPool> = OnceCell::const_new();
+/// The binary-wide environment: `EnvApp::setup()` runs at most once here — on
+/// the shared runtime, which outlives every per-test one — and every boot below
+/// reuses the value.
+static SHARED_ENV: SharedEnv<EnvApp> = SharedEnv::new();
 
 async fn shared_env() -> SharedPool {
-    SHARED_ENV
-        .get_or_init(|| async { EnvApp::setup().await.expect("setup") })
-        .await
-        .clone()
+    SHARED_ENV.get().await
 }
 
 #[tokio::test]
 async fn boot_env_reuses_one_environment_across_boots() {
     let env = shared_env().await;
-    // The only `setup()` this test tolerates is the `OnceCell`'s own.
+    // The only `setup()` this test tolerates is the `SharedEnv`'s own.
     let setups = ENV_SETUPS.load(Ordering::SeqCst);
 
     let first = TestApp::boot_env::<EnvApp>(env.clone()).await;
@@ -656,7 +655,7 @@ async fn try_boot_with_env_surfaces_a_build_failure() {
 }
 
 // The macro knob: `#[r2e::test(app = …, env = <expr>)]` expands to
-// `boot_with_env`. Both tests below share the one `OnceCell` environment, so
+// `boot_with_env`. Both tests below share the one `SharedEnv` environment, so
 // the setup count stays at 1 however the runner interleaves them — that is the
 // cross-test amortisation the plain `app = …` form cannot express.
 

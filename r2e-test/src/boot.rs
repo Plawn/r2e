@@ -9,7 +9,9 @@
 //! The `*_env` variants ([`TestApp::boot_env`], [`TestApp::boot_with_env`],
 //! [`TestApp::boot_plain_env`]) skip `App::setup` and build on an
 //! [`App::Env`](r2e_core::App::Env) the caller already owns, so one test binary
-//! can share a single expensive environment across many boots.
+//! can share a single expensive environment across many boots. Build that
+//! environment with [`SharedEnv`](crate::SharedEnv) — never with a bare
+//! `OnceCell`, which would pin it to whichever per-test runtime won the race.
 
 use std::sync::Arc;
 
@@ -103,22 +105,27 @@ impl TestApp {
     ///
     /// `App::Env` is the production concept of "resources built once"; this is
     /// how a test binary gets the same amortisation. Build it once in a
-    /// `LazyLock`/`OnceCell` (it is `Clone + Send + Sync + 'static`) and boot
-    /// as many apps as the file needs off that one value, instead of replaying
-    /// pools and migrations per test:
+    /// [`SharedEnv`](crate::SharedEnv) `static` and boot as many apps as the
+    /// binary needs off that one value, instead of replaying pools and
+    /// migrations per test:
     ///
     /// ```ignore
-    /// static ENV: OnceCell<MyEnv> = OnceCell::const_new();
-    /// async fn env() -> MyEnv {
-    ///     ENV.get_or_init(|| async { MyApp::setup().await.unwrap() }).await.clone()
-    /// }
+    /// static ENV: SharedEnv<MyApp> = SharedEnv::new();
     ///
     /// #[r2e::test]
     /// async fn lists_users() {
-    ///     let app = TestApp::boot_env::<MyApp>(env().await).await;
+    ///     let app = TestApp::boot_env::<MyApp>(ENV.get().await).await;
     ///     app.get("/users").send().await.assert_ok();
     /// }
     /// ```
+    ///
+    /// **Use [`SharedEnv`](crate::SharedEnv), not a bare `OnceCell`.** Every
+    /// test gets its own runtime, dropped when it returns; an environment
+    /// memoised in a plain `OnceCell` is built on whichever per-test runtime
+    /// won the race, so everything it bound to that reactor — sockets, pool
+    /// keep-alive tasks, anything `setup` spawned — dies with that test and
+    /// later boots inherit an inert value. `SharedEnv` builds it on a runtime
+    /// this crate owns for the whole process.
     ///
     /// Everything else is unchanged: `test` profile, pinned [`TestJwt`]
     /// validators, the production startup phase, and
@@ -130,9 +137,20 @@ impl TestApp {
     /// same caches, seen by every test that boots off it — and the boots
     /// themselves still run concurrently under libtest. Keep the tests
     /// independent (per-test schema/prefix/tenant, or unique fixtures), or
-    /// serialise them with `#[r2e::test(order = …)]`. Note also that the shared
-    /// value outlives each `TestApp`: `shutdown()` disposes the app's own
-    /// beans, never the `Env` a later boot still needs.
+    /// serialise them with `#[r2e::test(order = …)]`.
+    ///
+    /// # Shutdown runs what `build` registered
+    ///
+    /// The harness never disposes the `Env` itself — but it cannot promise
+    /// nothing else does. [`shutdown`](Self::shutdown) runs *the app's own*
+    /// shutdown sequence: `on_drain` hooks, plugin shutdown hooks,
+    /// `#[pre_destroy]` disposers, `on_stop` hooks. If `A::build` hands an
+    /// `Env`-owned resource to something that closes it (a pool the datasource
+    /// plugin owns and closes at shutdown, a disposer over an `Env` field), the
+    /// first `shutdown()` invalidates the environment every later boot still
+    /// needs. That is the app's contract, not the harness's: keep `Env`-owned
+    /// resources out of disposers, or hand `build` a clone/handle that owns
+    /// nothing.
     pub async fn boot_env<A: App>(env: A::Env) -> Self {
         Self::boot_with_env::<A>(env, |b| b).await
     }
@@ -256,17 +274,27 @@ fn unwrap_boot<A: App>(result: Result<TestApp, BootError>) -> TestApp {
     match result {
         Ok(app) => app,
         Err(err) => {
-            let mut chain = err.to_string();
-            let mut source = std::error::Error::source(err.as_ref());
-            while let Some(cause) = source {
-                chain.push_str("\n  caused by: ");
-                chain.push_str(&cause.to_string());
-                source = std::error::Error::source(cause);
-            }
             panic!(
-                "TestApp::boot::<{}>() failed: {chain}",
-                std::any::type_name::<A>()
+                "TestApp::boot::<{}>() failed: {}",
+                std::any::type_name::<A>(),
+                error_chain(&err)
             );
         }
     }
+}
+
+/// Render a boot failure as one line plus one `caused by:` line per
+/// [`source`](std::error::Error::source) level.
+///
+/// Shared with [`SharedEnv`](crate::SharedEnv), whose failure is rendered once
+/// (at the moment it happens) and then reported to every later caller.
+pub(crate) fn error_chain(err: &BootError) -> String {
+    let mut chain = err.to_string();
+    let mut source = std::error::Error::source(err.as_ref());
+    while let Some(cause) = source {
+        chain.push_str("\n  caused by: ");
+        chain.push_str(&cause.to_string());
+        source = std::error::Error::source(cause);
+    }
+    chain
 }
