@@ -309,6 +309,7 @@ Owned by the factory future (`'static`, no lifetime param):
 | `add_layer(f)` | Graph | router layer, plain closure (applied inside-out, install order) |
 | `store_data(d)` | Graph | type-keyed plugin data for cross-plugin coordination (`app.get_plugin_data::<T>()`, `RoutesContext::take_data`) |
 | `on_serve(f)` | Graph | `FnOnce(ServeContext)` at serve time (spawn servers, start tasks) |
+| `on_serve_each_cycle(f)` | Graph | same, but **also runs on `r2e dev` hot-patch cycles** (plain `on_serve` is skipped there). For transports that own a port: a patch drops the previous `run()`, cancelling its tracked tasks, so the port must be re-served each cycle — bind via `ServeContext::bind_tcp` (dev listener store: same socket across cycles). Must be safe to re-run. |
 | `after_build(f)` | Graph | `FnOnce(&mut DeferredContext)` — full-graph boot-time escape hatch |
 | `after_routes(f)` | Routes | `FnOnce(&mut RoutesContext)` — runs after every controller is registered: read the route registry, mount routers from it |
 | `wrap_router(f)` | Finalize | replace the whole router (e.g. gRPC multiplexer) — outside every HTTP layer, `catch_panic` included |

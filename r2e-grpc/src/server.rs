@@ -183,7 +183,16 @@ impl Plugin for GrpcServer {
                 // handle is tracked so the shutdown phase awaits the gRPC
                 // drain (concurrent with the HTTP drain, bounded by the
                 // shutdown grace period) instead of exiting mid-drain.
-                ctx.on_serve(move |serve_ctx| {
+                //
+                // `on_serve_each_cycle`, not `on_serve`: under `r2e dev` a
+                // hot patch drops the previous `run()`, which cancels that
+                // cycle's token and stops this task, while plain serve hooks
+                // are skipped on the rebuilt cycle — the rebuilt registry was
+                // never drained and the gRPC port went silent (task #997).
+                // Re-running the hook each cycle, with the listener bound
+                // through the dev listener store, keeps the port answering
+                // with the freshly registered services.
+                ctx.on_serve_each_cycle(move |serve_ctx| {
                     let Some(services) = registry.take() else {
                         tracing::warn!(
                             "GrpcServer::on_port is installed but no gRPC service was \
@@ -194,24 +203,25 @@ impl Plugin for GrpcServer {
                     #[cfg(feature = "reflection")]
                     let services = apply_reflection(services, &reflection);
                     let RegisteredServices { routes, names, .. } = services;
+                    // Bind explicitly (instead of tonic's internal bind) so
+                    // the resolved address — including an OS-assigned port
+                    // for `:0` — is logged, and so the socket carries over
+                    // between hot-patch cycles.
+                    let listener = match serve_ctx.bind_tcp(addr.as_str()) {
+                        Ok(l) => l,
+                        Err(e) => {
+                            tracing::error!(
+                                addr = %addr, error = %e,
+                                "Failed to bind gRPC listener; gRPC server NOT started"
+                            );
+                            return;
+                        }
+                    };
                     // Phase 2 will move this crate onto `CancelToken`; until then
                     // the seam hands out the raw tokio-util token, which tonic's
                     // `serve_with_incoming_shutdown` needs for `cancelled_owned()`.
                     let cancel = serve_ctx.shutdown_token().into_inner();
                     serve_ctx.track_named("grpc server", async move {
-                        // Bind explicitly (instead of tonic's internal bind)
-                        // so the resolved address — including an OS-assigned
-                        // port for `:0` — is logged.
-                        let listener = match r2e_core::rt::bind_tcp(addr.as_str()).await {
-                            Ok(l) => l,
-                            Err(e) => {
-                                tracing::error!(
-                                    addr = %addr, error = %e,
-                                    "Failed to bind gRPC listener; gRPC server NOT started"
-                                );
-                                return;
-                            }
-                        };
                         match listener.local_addr() {
                             Ok(local) => tracing::info!(
                                 addr = %local, services = ?names,

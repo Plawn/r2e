@@ -85,7 +85,7 @@ pub struct DeferredContext<'a> {
     /// [`ServeContext`](crate::builder::ServeContext) tying it into the
     /// app's shutdown sequence.
     #[doc(hidden)]
-    pub serve_hooks: &'a mut Vec<Box<dyn FnOnce(crate::builder::ServeContext) + Send>>,
+    pub serve_hooks: &'a mut Vec<crate::builder::ServeHook>,
     /// Shutdown hooks from plugins (sync).
     #[doc(hidden)]
     pub shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
@@ -242,7 +242,37 @@ impl DeferredContext<'_> {
     where
         F: FnOnce(crate::builder::ServeContext) + Send + 'static,
     {
-        self.serve_hooks.push(Box::new(hook));
+        self.serve_hooks.push(crate::builder::ServeHook {
+            hook: Box::new(hook),
+            each_cycle: false,
+        });
+    }
+
+    /// Like [`on_serve`](Self::on_serve), but **not skipped by `r2e dev`
+    /// hot-patch cycles**.
+    ///
+    /// A hot patch rebuilds the app and drops the previous `run()` future,
+    /// which cancels that cycle's shutdown token — and with it every task the
+    /// previous serve hooks tracked. The startup lifecycle (consumers,
+    /// `#[on_start]`, plain `on_serve` hooks, startup hooks) is then skipped
+    /// on purpose: it must run once per process, not once per patch. A
+    /// transport that owns its own port is the exception: its server task is
+    /// gone with the old cycle and nothing would ever serve the rebuilt
+    /// routes. Register such a hook here instead; it runs on every `run()`,
+    /// and in production exactly once, like `on_serve`.
+    ///
+    /// The hook must therefore be safe to run again: bind through
+    /// [`ServeContext::bind_tcp`](crate::builder::ServeContext::bind_tcp)
+    /// (the port carries over between cycles), and never start anything a
+    /// second run would duplicate.
+    pub fn on_serve_each_cycle<F>(&mut self, hook: F)
+    where
+        F: FnOnce(crate::builder::ServeContext) + Send + 'static,
+    {
+        self.serve_hooks.push(crate::builder::ServeHook {
+            hook: Box::new(hook),
+            each_cycle: true,
+        });
     }
 
     /// Add a shutdown hook that runs when the server stops.

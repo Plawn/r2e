@@ -142,9 +142,18 @@ type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send
 /// a router fragment to be merged into the application.
 type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> + Send>;
 
-/// A serve hook, called once when the server starts. Receives a
-/// [`ServeContext`] tying the hook into the app's shutdown sequence.
-type ServeHook = Box<dyn FnOnce(ServeContext) + Send>;
+/// A serve hook, called when the server starts. Receives a [`ServeContext`]
+/// tying the hook into the app's shutdown sequence.
+///
+/// `each_cycle` marks a hook registered through
+/// [`DeferredContext::on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):
+/// it also runs on `r2e dev` hot-patch cycles, which skip the rest of the
+/// startup lifecycle (see `PreparedApp::start_lifecycle`).
+#[doc(hidden)]
+pub struct ServeHook {
+    pub(crate) hook: Box<dyn FnOnce(ServeContext) + Send>,
+    pub(crate) each_cycle: bool,
+}
 
 /// Context handed to serve hooks ([`DeferredContext::on_serve`]) when the
 /// server starts.
@@ -181,6 +190,30 @@ impl ServeContext {
     /// Token cancelled when graceful shutdown begins.
     pub fn shutdown_token(&self) -> crate::rt::CancelToken {
         self.shutdown.clone()
+    }
+
+    /// Bind a TCP listener for a transport this hook serves on its own port
+    /// (the separate-port gRPC server, for instance).
+    ///
+    /// In production this is a plain bind. Inside the `r2e dev` hot-patch
+    /// loop it goes through the same process-global listener store the HTTP
+    /// port uses: the socket is bound once and every later cycle receives a
+    /// clone of it, so the port stays open — and stays the *same* port, even
+    /// for `:0` — across patches instead of racing the previous cycle's
+    /// server for it. Pair it with
+    /// [`on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):
+    /// a hook that only runs once cannot re-serve the port after a patch.
+    ///
+    /// Synchronous (a serve hook is a sync closure): `addr` is resolved by
+    /// the standard library's blocking resolver.
+    pub fn bind_tcp(&self, addr: &str) -> Result<crate::rt::TcpListener, crate::beans::BootError> {
+        #[cfg(feature = "dev-reload")]
+        if crate::runtime::dev::hot_reload_loop_active() {
+            return crate::runtime::dev::get_or_bind_listener(addr);
+        }
+        let listener = std::net::TcpListener::bind(addr)?;
+        listener.set_nonblocking(true)?;
+        Ok(crate::rt::TcpListener::from_std(listener)?)
     }
 
     /// Spawn a tracked task: its completion is awaited after the HTTP drain

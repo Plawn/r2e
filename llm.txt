@@ -634,8 +634,11 @@ runs, return a cheap INERT disabled variant when false, checking the gate before
 any global side effect; the gate is decided once here, not re-read later),
 `graph() -> GraphHandle` (handle on the final resolved graph, for request-time
 lookups), `config_raw()`, `add_layer`, `after_routes`, `wrap_router`,
-`store_data`, `on_serve`, `on_shutdown`, `on_shutdown_async`, `after_build`
-(full-graph boot escape hatch).
+`store_data`, `on_serve`, `on_serve_each_cycle` (an `on_serve` that also runs
+on `r2e dev` hot-patch cycles — for transports serving their own port; bind
+through `ServeContext::bind_tcp` so the socket carries over between cycles),
+`on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
+hatch).
 
 **Three effect stages**, applied in this order (install order *within* a stage;
 builds themselves run in dependency order):

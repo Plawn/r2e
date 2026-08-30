@@ -435,6 +435,17 @@ impl PluginBuildContext {
             .push(Box::new(move |dctx| dctx.on_serve(hook)));
     }
 
+    /// Add a serve hook that also runs on `r2e dev` hot-patch cycles. See
+    /// [`DeferredContext::on_serve_each_cycle`].
+    pub fn on_serve_each_cycle<F>(&mut self, hook: F)
+    where
+        F: FnOnce(crate::builder::ServeContext) + Send + 'static,
+    {
+        self.effects
+            .surface
+            .push(Box::new(move |dctx| dctx.on_serve_each_cycle(hook)));
+    }
+
     /// Add a shutdown hook that runs when the server stops. See
     /// [`DeferredContext::on_shutdown`].
     ///

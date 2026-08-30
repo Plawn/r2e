@@ -569,22 +569,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             //
             // Serving only — see `start_in_process` for why an in-process
             // start has no "a port is now open" phase.
-            if matches!(mode, LifecycleMode::Serving) {
-                let task_registry = self
-                    .plugin_data
-                    .get(&TypeId::of::<TaskRegistryHandle>())
-                    .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
-                    .cloned()
-                    .unwrap_or_default();
-                for hook in std::mem::take(&mut self.serve_hooks) {
-                    hook(ServeContext {
-                        tasks: task_registry.clone(),
-                        shutdown: cancel_token.clone(),
-                        handles: service_handles.clone(),
-                        graph: Arc::clone(graph),
-                    });
-                }
-            }
+            self.run_serve_hooks(mode, false, &cancel_token, &service_handles, graph);
 
             // Run startup hooks. They run AFTER the serve hooks, so by now
             // tracked tasks may already be listening on ports and holding the
@@ -613,6 +598,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             crate::runtime::dev::mark_lifecycle_initialized();
         } else {
             tracing::debug!("dev-reload: skipping consumers, serve hooks, and startup hooks");
+            // A hot patch dropped the previous cycle's `run()` — and its
+            // cancel-on-exit guard fired, stopping every task that cycle's
+            // serve hooks tracked. Transports that own a port re-serve it
+            // from the hooks that opted into running each cycle
+            // (`on_serve_each_cycle`); everything else stays skipped.
+            self.run_serve_hooks(mode, true, &cancel_token, &service_handles, graph);
         }
 
         Ok(StartedLifecycle {
@@ -621,6 +612,43 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             plugin_shutdown: plugin_shutdown_hooks,
             handles: service_handles,
         })
+    }
+
+    /// Run the plugin serve hooks — all of them on a normal start, only the
+    /// `each_cycle` ones (`on_serve_each_cycle`) on a hot-patch cycle that
+    /// skips the rest of the lifecycle. Serving only: an in-process start has
+    /// no "a port is now open" phase (see `start_in_process`). Hooks run in
+    /// registration order; the vector is drained either way, so a hook never
+    /// runs twice in one `run()`.
+    fn run_serve_hooks(
+        &mut self,
+        mode: LifecycleMode,
+        each_cycle_only: bool,
+        cancel_token: &CancelToken,
+        service_handles: &ServiceHandles,
+        graph: &Arc<crate::beans::BeanContext>,
+    ) {
+        let hooks = std::mem::take(&mut self.serve_hooks);
+        if !matches!(mode, LifecycleMode::Serving) {
+            return;
+        }
+        let task_registry = self
+            .plugin_data
+            .get(&TypeId::of::<TaskRegistryHandle>())
+            .and_then(|d| d.downcast_ref::<TaskRegistryHandle>())
+            .cloned()
+            .unwrap_or_default();
+        for hook in hooks {
+            if each_cycle_only && !hook.each_cycle {
+                continue;
+            }
+            (hook.hook)(ServeContext {
+                tasks: task_registry.clone(),
+                shutdown: cancel_token.clone(),
+                handles: service_handles.clone(),
+                graph: Arc::clone(graph),
+            });
+        }
     }
 
     /// Shared serving core for both single-listener and sharded strategies.
