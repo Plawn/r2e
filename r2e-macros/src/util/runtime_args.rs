@@ -279,3 +279,43 @@ pub(crate) fn type_ends_with(ty: &syn::Type, name: &str) -> bool {
         _ => false,
     }
 }
+
+/// A `key = <expr>` macro argument that remembers **where it was written**.
+///
+/// The expression alone is not enough to report `env = …` without `app = …`:
+/// the diagnostic has to point at the argument the user typed, not at the item
+/// it was attached to. Rendering the pair back out (`ToTokens`) gives
+/// `syn::Error::new_spanned` a span that starts at the key.
+pub(crate) struct KeyedExpr {
+    pub key: syn::Path,
+    pub expr: syn::Expr,
+}
+
+impl KeyedExpr {
+    pub fn parse(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Self> {
+        Ok(Self {
+            key: meta.path.clone(),
+            expr: meta.value()?.parse()?,
+        })
+    }
+}
+
+impl quote::ToTokens for KeyedExpr {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        let key = &self.key;
+        let expr = &self.expr;
+        tokens.extend(quote! { #key = #expr });
+    }
+}
+
+/// A `key = <literal>` argument whose value is not worth keeping, but whose
+/// key span is (`jwt = false`).
+pub(crate) struct KeyedFlag {
+    pub key: syn::Path,
+}
+
+impl quote::ToTokens for KeyedFlag {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        self.key.to_tokens(tokens);
+    }
+}

@@ -7,6 +7,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`TestApp` can reuse an `App::Env` across boots** (task #988): three new
+  boots skip `A::setup()` and build on an environment the caller already owns —
+  `TestApp::boot_env::<A>(env)`, `TestApp::boot_with_env::<A>(env, configure)`,
+  `TestApp::boot_plain_env::<A>(env, configure)`, plus `try_boot_env` /
+  `try_boot_with_env` / `try_boot_plain_env`. `App::Env` is already
+  `Clone + Send + Sync + 'static`, so a test binary builds the expensive part
+  once and boots every test off it instead of replaying pools and migrations
+  per test (`#[before_all]` only amortises inside one suite).
+
+  ```rust
+  use r2e_test::SharedEnv;
+
+  static ENV: SharedEnv<MyApp> = SharedEnv::new();
+
+  #[r2e::test(app = my_app::MyApp, env = ENV.get().await)]
+  async fn lists_users(app: TestApp) {
+      app.get("/users").send().await.assert_ok();
+  }
+  ```
+
+  `r2e_test::SharedEnv<A>` is the supported way to memoise it: `new()` /
+  `with(init)` are `const` (so they go into a `static`), `get().await` /
+  `try_get().await` build the environment **once per process on a runtime
+  `r2e-test` owns and never shuts down**, and concurrent first callers share the
+  one run. A bare `OnceCell`/`LazyLock` must not be used: `#[r2e::test]` builds
+  one runtime per test and drops it at the end of the test, so an environment
+  initialised there keeps its value but loses its reactor (listeners, pool
+  keep-alive tasks, timers, anything `setup` spawned), and later tests hang on
+  an inert environment.
+
+  `#[r2e::test]` and `#[r2e::test_suite]` gained the matching `env = <expr>`
+  knob (evaluated inside the test's async block, composes with `with = …` and
+  `jwt = false`, requires `app = …`; on a suite it also requires a
+  `#[before_all]` that binds the booted app, since that hook is what evaluates
+  it — likewise for `with = …` / `jwt = …`). Everything else is unchanged:
+  `test` profile, pinned `TestJwt` validators, the production startup phase,
+  `shutdown()`. **Isolation is the caller's job** — a shared `Env` is shared
+  state across concurrently running tests. The harness never disposes the `Env`
+  itself, but `shutdown()` does run whatever `A::build` registered, so an app
+  that hands an `Env`-owned resource to a disposer still invalidates it for
+  later boots.
+
 - **Feature modules own their gRPC services** (task #989): `#[module]` gained a
   `grpc_services(...)` key, the transport peer of `controllers(...)`. A vertical
   slice now declares its gRPC service next to its HTTP controllers, and that

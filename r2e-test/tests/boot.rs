@@ -3,7 +3,10 @@
 
 use r2e_core::config::{ConfigValue, R2eConfig};
 use r2e_core::{App, AppBuilder, BootableApp};
-use r2e_test::TestApp;
+// `pub`, not a plain `use`: `#[r2e::test(app = …)]` resolves `r2e-test` as
+// `crate::` inside this package (proc-macro-crate reports `FoundCrate::Itself`),
+// so the generated code looks for `crate::TestApp` in *this* test binary.
+pub use r2e_test::TestApp;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Greeter {
@@ -498,4 +501,173 @@ async fn a_recorded_config_failure_aborts_before_any_bean_is_built() {
         !err.to_string().contains("Greeter"),
         "the failure must be the config one, reported before bean resolution: {err}"
     );
+}
+
+// ── Sharing one `App::Env` across boots (#988) ────────────────────────────
+//
+// `App::Env` is the production concept of "resources built once". The `*_env`
+// boots hand an environment the caller already owns straight to `App::build`,
+// so a test binary can build it once (a `SharedEnv`) instead of replaying pools
+// and migrations per test. See `shared_env.rs` for why the sharing goes through
+// `SharedEnv` and not a bare `OnceCell`.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use r2e_test::SharedEnv;
+
+/// Stands in for the expensive thing a real `setup()` builds — a pool, a
+/// migrated schema, a container. Its `generation` witnesses *which* setup call
+/// produced it.
+#[derive(Clone, Debug, PartialEq)]
+struct SharedPool {
+    generation: usize,
+}
+
+/// How many times `EnvApp::setup()` ran in this process. The whole point of the
+/// `*_env` boots is that `TestApp` never adds to it.
+static ENV_SETUPS: AtomicUsize = AtomicUsize::new(0);
+
+struct EnvApp;
+
+impl App for EnvApp {
+    type Env = SharedPool;
+
+    async fn setup() -> Result<SharedPool, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(SharedPool {
+            generation: ENV_SETUPS.fetch_add(1, Ordering::SeqCst) + 1,
+        })
+    }
+
+    async fn build(
+        b: AppBuilder,
+        env: SharedPool,
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.provide(env)
+            .provide(Greeter { origin: "real" })
+            .build_state()
+            .await
+            .on_stop(|_state| async {
+                ENV_STOPS.fetch_add(1, Ordering::SeqCst);
+            }))
+    }
+}
+
+/// The same app **without** the `on_stop` hook, for the tests that must not
+/// disturb [`ENV_STOPS`] (it is a process-wide counter and the runner
+/// interleaves tests). Its `setup` delegates, so any accidental `A::setup()`
+/// call from the harness still moves [`ENV_SETUPS`].
+struct PlainEnvApp;
+
+impl App for PlainEnvApp {
+    type Env = SharedPool;
+
+    async fn setup() -> Result<SharedPool, Box<dyn std::error::Error + Send + Sync>> {
+        EnvApp::setup().await
+    }
+
+    async fn build(
+        b: AppBuilder,
+        env: SharedPool,
+    ) -> Result<impl BootableApp, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(b.provide(env)
+            .provide(Greeter { origin: "real" })
+            .build_state()
+            .await)
+    }
+}
+
+/// How many `EnvApp` `on_stop` hooks fired — proof a booted app still owns a
+/// full lifecycle even though its environment is borrowed from the binary.
+/// Only `boot_env_reuses_one_environment_across_boots` boots `EnvApp`, so the
+/// count is its own.
+static ENV_STOPS: AtomicUsize = AtomicUsize::new(0);
+
+/// The binary-wide environment: `EnvApp::setup()` runs at most once here — on
+/// the shared runtime, which outlives every per-test one — and every boot below
+/// reuses the value.
+static SHARED_ENV: SharedEnv<EnvApp> = SharedEnv::new();
+
+async fn shared_env() -> SharedPool {
+    SHARED_ENV.get().await
+}
+
+#[tokio::test]
+async fn boot_env_reuses_one_environment_across_boots() {
+    let env = shared_env().await;
+    // The only `setup()` this test tolerates is the `SharedEnv`'s own.
+    let setups = ENV_SETUPS.load(Ordering::SeqCst);
+
+    let first = TestApp::boot_env::<EnvApp>(env.clone()).await;
+    let second = TestApp::boot_with_env::<EnvApp>(env.clone(), |b| {
+        b.override_bean(Greeter { origin: "mock" })
+    })
+    .await;
+
+    // `TestApp` called `setup()` zero times: the count did not move.
+    assert_eq!(
+        ENV_SETUPS.load(Ordering::SeqCst),
+        setups,
+        "boot_env / boot_with_env must not call A::setup()"
+    );
+    // The environment passed in is the one `A::build` received — same value,
+    // same generation, for both boots.
+    assert_eq!(first.bean::<SharedPool>(), env);
+    assert_eq!(second.bean::<SharedPool>(), env);
+    // The harness defaults still apply, and the `configure` hook still runs.
+    assert_eq!(first.bean::<Greeter>(), Greeter { origin: "real" });
+    assert_eq!(second.bean::<Greeter>(), Greeter { origin: "mock" });
+    assert_eq!(first.test_jwt().token("alice", &["admin"]).matches('.').count(), 2);
+
+    // Lifecycle is untouched: each app shuts down on its own.
+    first.shutdown().await;
+    second.shutdown().await;
+    assert_eq!(
+        ENV_STOPS.load(Ordering::SeqCst),
+        2,
+        "each booted app must still run its own shutdown sequence"
+    );
+}
+
+#[tokio::test]
+async fn boot_plain_env_skips_setup_too() {
+    let env = shared_env().await;
+    let setups = ENV_SETUPS.load(Ordering::SeqCst);
+
+    let app = TestApp::boot_plain_env::<PlainEnvApp>(env.clone(), |b| b).await;
+
+    assert_eq!(ENV_SETUPS.load(Ordering::SeqCst), setups);
+    assert_eq!(app.bean::<SharedPool>(), env);
+    app.shutdown().await;
+}
+
+#[tokio::test]
+async fn try_boot_with_env_surfaces_a_build_failure() {
+    // The `try_` form still reports `build`-phase failures; only `setup` is
+    // out of the picture.
+    let err = TestApp::try_boot_with_env::<MissingConfigFileApp>((), |b| b)
+        .await
+        .map(|_| ())
+        .expect_err("the requested config file is absent");
+
+    assert!(
+        err.to_string().contains("does-not-exist-984.yaml"),
+        "unexpected error: {err}"
+    );
+}
+
+// The macro knob: `#[r2e::test(app = …, env = <expr>)]` expands to
+// `boot_with_env`. Both tests below share the one `SharedEnv` environment, so
+// the setup count stays at 1 however the runner interleaves them — that is the
+// cross-test amortisation the plain `app = …` form cannot express.
+
+#[r2e::test(app = PlainEnvApp, env = shared_env().await)]
+async fn macro_env_knob_boots_on_the_shared_environment(app: TestApp) {
+    assert_eq!(app.bean::<SharedPool>().generation, 1);
+    assert_eq!(ENV_SETUPS.load(Ordering::SeqCst), 1);
+}
+
+#[r2e::test(app = PlainEnvApp, env = shared_env().await, with = |b| b.override_bean(Greeter { origin: "mock" }))]
+async fn macro_env_knob_composes_with_the_with_hook(app: TestApp) {
+    assert_eq!(app.bean::<Greeter>(), Greeter { origin: "mock" });
+    assert_eq!(app.bean::<SharedPool>().generation, 1);
+    assert_eq!(ENV_SETUPS.load(Ordering::SeqCst), 1);
 }

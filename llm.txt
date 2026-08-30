@@ -4053,6 +4053,80 @@ bean and producer construction, plugin build, and the controller
 `#[post_construct]` / `#[on_start]` hooks the harness runs (`TestApp` boots
 through `try_build_with_consumers`).
 
+#### Sharing one `App::Env` across boots
+
+`App::Env` is the production concept of "resources built once". Every plain
+`boot*` calls `A::setup()` again, so a test binary that boots per test replays
+the pools and migrations per test. The `*_env` boots take an environment the
+caller already owns and hand it straight to `A::build` — `A::setup()` is not
+called at all:
+
+```rust
+use r2e_test::{SharedEnv, TestApp};
+
+// `const`, so it goes straight into a `static`. `setup()` runs ONCE per test
+// binary, on a runtime `r2e-test` owns and never shuts down.
+static ENV: SharedEnv<MyApp> = SharedEnv::new();
+
+#[r2e::test(app = my_app::MyApp, env = ENV.get().await)]     // macro knob
+async fn lists_users(app: TestApp) {
+    app.get("/users").send().await.assert_ok();
+}
+
+// Explicit forms, mirroring boot / boot_with / boot_plain:
+let app = TestApp::boot_env::<MyApp>(ENV.get().await).await;
+let app = TestApp::boot_with_env::<MyApp>(ENV.get().await, |b| b.override_bean(mock)).await;
+let app = TestApp::boot_plain_env::<MyApp>(ENV.get().await, |b| b).await;
+// `try_boot_env` / `try_boot_with_env` / `try_boot_plain_env` are the
+// `Result`-returning forms.
+
+// "setup, then seed once":
+static SEEDED: SharedEnv<MyApp> = SharedEnv::with(|| Box::pin(async {
+    let env = MyApp::setup().await?;
+    seed_reference_data(&env).await?;
+    Ok(env)
+}));
+```
+
+`SharedEnv<A>` API: `new()` / `with(init)` (both `const`), `get().await ->
+A::Env` (panics with the app name + full `caused by:` chain when `setup`
+failed), `try_get().await -> Result<A::Env, SharedEnvError>` (`app()`,
+`chain()`), `shared_env_runtime() -> RuntimeHandle` for a fixture that must
+spawn onto the same long-lived runtime. Concurrent first callers share one
+`setup` run; a failed environment stays failed for the process (no retry — the
+failed attempt's side effects already happened).
+
+**Never memoise the environment in a bare `OnceCell`/`LazyLock`.** `#[r2e::test]`
+builds one runtime per test and drops it at the end of the test;
+`#[r2e::test_suite]` builds one per suite and shuts it down after the last case.
+A `OnceCell` initialised from a test runs `setup()` on whichever per-test runtime
+won the race, so everything the environment bound to it (listeners, pool
+keep-alive tasks, timers, anything `setup` spawned) dies with that runtime while
+the value lives on in the `static` — later tests then hang on an inert
+environment. A `LazyLock` that builds its own runtime and `block_on`s it panics
+outright inside a test runtime. `SharedEnv` exists precisely to fix that
+lifetime.
+
+`env = <expr>` is also accepted on `#[r2e::test_suite(app = …)]`, so several
+suites in one binary share the same environment (`#[before_all]` only amortises
+within its own suite). It requires a `#[before_all]` that binds the booted app
+(`async fn setup(app: TestApp) -> Self`) — that hook is what evaluates the
+expression; without it the expression would never run, so it is a compile error
+(same for `with = …` / `jwt = …`). Everything else is unchanged: `test` profile,
+pinned `TestJwt` validators, the production startup phase, `shutdown()`.
+
+**Isolation is the caller's job.** A shared `Env` means shared state — the same
+pool, rows and caches for every test that boots off it, with the boots running
+concurrently under libtest. Keep tests independent (per-test schema, prefix or
+tenant), or serialise them with `order = …`.
+
+**Shutdown runs whatever `A::build` registered.** The harness never disposes the
+`Env` itself, but it cannot promise nothing else does: `shutdown()` runs the
+app's own shutdown sequence (`on_drain`, disposers, `#[pre_destroy]`, `on_stop`)
+over what `build` registered. If `build` hands an `Env`-owned resource to
+something that closes it, the first `shutdown()` invalidates it for every later
+boot — the app's contract, not the harness's.
+
 ### Test lifecycle: startup and shutdown
 
 `TestApp::boot` runs the **production startup phase**, not just a router build:
