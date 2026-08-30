@@ -93,7 +93,7 @@ Crates in scope: `r2e-core` (http/plugin/runtime/controller/decorators/web),
 | `r2e-mcp` | `src/auth/wellknown.rs:53` | the prebuilt PRM document `Arc<str>` re-`to_string()`d per `/.well-known/oauth-protected-resource*` GET | yes | **fixed** — encoded to `Bytes` once in `prm_routes`; `public_json_response` now takes `Bytes` |
 | `r2e-mcp` | `src/auth/shim.rs:235` | the mirrored AS-metadata document copied three times per GET (`String` → `Arc<str>` → `String`) | yes | **fixed (partial)** — down to one copy (`String` → `Bytes`). Memoizing the render per discovery generation is deferred, below |
 | `r2e-mcp` | `src/auth/layer.rs:167` | `principal.user.clone()` — the same `AuthenticatedUser` inserted twice so both extensions exist | yes | deferred — see below |
-| `r2e-mcp` | `src/handler.rs:121,182` | `Vec<Tool>` / `Vec<Resource>` / `Vec<Prompt>` / `Vec<ResourceTemplate>` cloned per `*/list` | yes | deferred — see below |
+| `r2e-mcp` | `src/handler.rs:121,182` | `Vec<Tool>` / `Vec<Resource>` / `Vec<Prompt>` / `Vec<ResourceTemplate>` cloned per `*/list` | yes | **fixed** (tools) — `ToolRoute::description` is `Cow<'static, str>` and `#[tool]` emits a borrowed literal, so `tools/list` clones **1 allocation / 720 bytes** for 6 tools instead of 7 / 1080 (7 / 2748 with long descriptions). The lists themselves were already built once at boot and filtered before cloning; `Resource`/`Prompt`/`ResourceTemplate` still copy their `String`s — rmcp models them as `String` |
 | `r2e-mcp` | `src/auth/layer.rs` `AuthState`, `auth/validator.rs`, `auth/discovery.rs` | `Arc` / `Arc<str>` / `Arc<[String]>` only; scope checks borrow `&StandardClaims` | yes, but `Arc` | clean |
 | `r2e-mcp` | `src/uri_template.rs:243-296` | template variable names copied into the per-call `BTreeMap<String, String>` | yes, per `resources/read` | acceptable — forced by the public `ResourceCall::variables` type |
 | `r2e-grpc` | `src/multiplex.rs` `call()` | `self.grpc.clone()` / `self.http.clone()` | yes | clean — `tonic::service::Routes` wraps `axum::Router`, whose `Clone` is an `Arc` bump (verified in `tonic-0.14.6/src/service/router.rs:14`, `axum-0.8.9/src/routing/mod.rs:72`) |
@@ -110,7 +110,13 @@ fails CI when they come back:
 ```bash
 cargo test -p example-app --test hotpath                    # the guard
 cargo test -p example-app --test hotpath -- --nocapture     # + the numbers
+cargo test -p r2e-mcp     --test hotpath                    # the MCP guards
 ```
+
+`r2e-mcp/tests/hotpath/` is the same harness (its `counter.rs` is a copy — a
+`#[global_allocator]` can only be installed by the binary that measures with
+it) for the two MCP hot paths, `*/list` payloads and the authenticated-request
+principal.
 
 It lives in `example-app` because that is the only workspace member that
 depends on `r2e-prometheus`, `r2e-observability`, `r2e-security`, `r2e-utils`
@@ -354,6 +360,71 @@ and measures 2×10 refcount bumps against ~35 µs of request handling. The
 property this change buys is the shape of the curve — flat in N instead of
 linear — which is what the table above measures.
 
+## MCP `tools/list` is borrowed metadata (task #994)
+
+### The finding
+
+`Family::visible_list` hands every `tools/list` a clone of the `Vec<Tool>`
+built at boot, and `Family::wire` clones one element per `tools/call`. Clients
+re-list (and `list_changed` forces them to), so this is a hot path, not a
+once-per-session cost.
+
+The list *itself* was already right: `Family::build` precomputes it, and the
+`mcp.auth.filter-members` visibility filter runs over `(wire, requirements)`
+pairs **before** cloning, so a filtered list is built from the prebuilt
+elements rather than rebuilt from the routes. What was wrong was the element:
+rmcp's `Tool` stores `name` and `description` as `Cow<'static, str>`, but
+`ToolRoute::description` was an `Option<String>`, so `to_rmcp_tool` produced a
+`Cow::Owned` and every clone re-allocated a string the macro had emitted as a
+literal.
+
+### The fix
+
+- `ToolRoute::description` is `Option<Cow<'static, str>>`. **Breaking** for
+  hand-built routes: `description: Some("…".into())` still compiles,
+  `Some(String)` needs `.into()`.
+- `#[tool]` emits `Cow::Borrowed` (`opt_cow_str` in
+  `r2e-macros/src/mcp_codegen/service_impl.rs`), so every macro-declared tool
+  is borrowed end to end.
+- `to_rmcp_tool` uses `Tool::new_with_raw`, which takes the description
+  as-is instead of round-tripping it through `unwrap_or_default()`.
+
+`ToolRoute::name` was already `Cow<'static, str>`; `title` stays `String`
+because rmcp's `Tool::title` is a `String` and would re-allocate on
+conversion anyway (a tool that sets `title` therefore still costs one
+allocation per request — the macro sets it only when `#[tool(title = "…")]`
+is given).
+
+### Before/after
+
+Per `tools/list` clone of a six-tool service (input + output schemas,
+annotations, doc-comment descriptions), measured by
+`r2e-mcp/tests/hotpath/lists.rs`:
+
+| descriptions | before | after |
+|---|---|---|
+| short (`"Add."`) | 7 allocations / 1080 bytes | **1 allocation / 720 bytes** |
+| long (~280 chars) | 7 allocations / 2748 bytes | **1 allocation / 720 bytes** |
+
+720 bytes is `6 * size_of::<Tool>()` — the destination `Vec` and nothing else.
+The cost is now flat in what the tools say about themselves.
+
+### What is still copied
+
+`Resource`, `ResourceTemplate`, `Prompt` and `PromptArgument` hold `String`
+(not `Cow`) in rmcp itself, so `resources/list`, `resources/templates/list` and
+`prompts/list` still allocate their `uri`/`name`/`title`/`description`/
+`mimeType` per request. That is rmcp's wire model, not R2E's: removing it means
+changing rmcp. The R2E-side halves — build once, filter before cloning — are
+both in place.
+
+### The wire is unchanged
+
+`r2e-mcp/tests/server/wire_golden.rs` pins the exact JSON of all four `*/list`
+payloads against goldens captured before the change
+(`r2e-mcp/tests/server/golden/*.json`, re-baselined with `R2E_UPDATE_GOLDEN=1`).
+A representation change that alters the wire fails there.
+
 ## Global lifetimes and `Box::leak`
 
 Where the fixes rely on a value living for the whole process, that lifetime is
@@ -417,19 +488,6 @@ flattened `extra: serde_json::Map`. Making `McpPrincipal.user` an
 `Arc<AuthenticatedUser>` removes it, but is a breaking change for anything
 reading `principal.user` by value. Acceptable pre-production; out of scope for
 this pass.
-
-### MCP `*/list` clones the whole wire list
-
-`r2e-mcp/src/handler.rs:121,182` clone the prebuilt `Vec<Tool>` /
-`Vec<Resource>` / `Vec<Prompt>` / `Vec<ResourceTemplate>` on every list request
-(not once per session — clients re-list, and `list_changed` forces it). rmcp's
-`Tool` uses `Cow<'static, str>` for `name`/`description`, but `ToolRoute` stores
-them as `Option<String>` (`r2e-mcp/src/route.rs:118-120`), so `to_rmcp_tool`
-produces `Cow::Owned` and every clone re-allocates each string — even though the
-macro emits them from string literals. Storing `Cow<'static, str>` in
-`ToolRoute` would make the tool list clone allocation-free; `Resource`/`Prompt`
-hold `String` in rmcp itself, so those need the visibility filter to be checked
-before rebuilding rather than after.
 
 ### Shim metadata is re-rendered per request
 

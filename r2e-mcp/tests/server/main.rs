@@ -15,3 +15,4 @@ mod prompts;
 mod registry;
 mod resources;
 mod schema;
+mod wire_golden;

@@ -307,6 +307,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Perf: MCP `tools/list` no longer re-allocates the tool metadata**
+  (task #994). Every `tools/list` clones the wire payload built at boot (and
+  every `tools/call` clones one element of it), but rmcp's `Tool` stores
+  `name`/`description` as `Cow<'static, str>` while `ToolRoute::description`
+  was an `Option<String>` — so each clone re-allocated a string `#[tool]` had
+  emitted as a literal. `ToolRoute::description` is now
+  `Option<Cow<'static, str>>` and the macro emits `Cow::Borrowed`: a six-tool
+  `tools/list` clone went from 7 allocations / 1080 B to **1 allocation /
+  720 B** (the destination `Vec` alone), and stays there with long
+  descriptions where the old path cost 2748 B. **Breaking** for hand-built
+  `ToolRoute`s only: `description: Some(s.into())` where `s: String`,
+  `Some("…".into())` for a literal — the macro path and the wire format are
+  unchanged (pinned by `r2e-mcp/tests/server/wire_golden.rs`). `Resource`,
+  `ResourceTemplate` and `Prompt` are `String`-typed in rmcp itself, so their
+  lists still copy their strings; both R2E-side halves (built once at boot,
+  visibility filter applied before cloning) were already in place. Guarded by
+  `r2e-mcp/tests/hotpath/lists.rs`; numbers in
+  `docs/claude/hot-path-clone-audit.md`.
+
 - **Perf: the router state is one `Arc`** (task #992). The HTTP backend clones
   the router state on *every* request, whether or not a handler asks for it, so
   installing the resolved bean HList directly meant one bean `Clone` per bean

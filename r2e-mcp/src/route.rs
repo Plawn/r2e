@@ -117,7 +117,12 @@ pub struct ToolRoute {
     /// Optional human-readable title.
     pub title: Option<String>,
     /// Description shown to the agent (from the method's doc comment).
-    pub description: Option<String>,
+    ///
+    /// `Cow` rather than `String`: `tools/list` clones the prebuilt wire
+    /// `Tool` list on every request, and rmcp's `Tool::description` is itself
+    /// a `Cow<'static, str>` — a macro-emitted literal therefore travels as
+    /// `Cow::Borrowed` and costs nothing to clone.
+    pub description: Option<Cow<'static, str>>,
     /// JSON Schema (draft 2020-12) object for the tool arguments.
     pub input_schema: Arc<SchemaObject>,
     /// Optional JSON Schema for `structuredContent` of results.
@@ -136,16 +141,20 @@ pub struct ToolRoute {
 impl ToolRoute {
     /// Convert the metadata into the rmcp wire `Tool` (dispatch closure
     /// excluded).
-    pub(crate) fn to_rmcp_tool(&self) -> rmcp::model::Tool {
-        let mut tool = rmcp::model::Tool::new(
+    ///
+    /// Public (hidden) so the allocation guard in `tests/hotpath/` can build
+    /// and clone the wire list the way the handler does.
+    #[doc(hidden)]
+    pub fn to_rmcp_tool(&self) -> rmcp::model::Tool {
+        // `new_with_raw` takes the description as-is: a `Cow::Borrowed`
+        // literal stays borrowed all the way onto the wire, so cloning the
+        // `tools/list` payload copies a pointer pair instead of the string.
+        let mut tool = rmcp::model::Tool::new_with_raw(
             self.name.clone(),
-            self.description.clone().unwrap_or_default(),
+            self.description.clone(),
             Arc::clone(&self.input_schema),
         );
         tool.title = self.title.clone();
-        if self.description.is_none() {
-            tool.description = None;
-        }
         tool.output_schema = self.output_schema.clone();
         if !self.annotations.is_empty() {
             tool.annotations = Some(self.annotations.clone().into_rmcp());

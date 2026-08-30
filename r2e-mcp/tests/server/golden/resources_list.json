@@ -1,0 +1,11 @@
+{
+  "resources": [
+    {
+      "description": "A fixed resource.",
+      "mimeType": "text/plain",
+      "name": "info",
+      "title": "Golden info",
+      "uri": "r2e://golden/info"
+    }
+  ]
+}

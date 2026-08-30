@@ -1,0 +1,25 @@
+{
+  "prompts": [
+    {
+      "arguments": [
+        {
+          "description": "An optional count.",
+          "name": "count",
+          "required": false
+        },
+        {
+          "description": "A documented required field.",
+          "name": "name",
+          "required": true
+        }
+      ],
+      "description": "Explain the echo tool.\n\nWalks the agent through calling `echo`.",
+      "name": "explain_echo",
+      "title": "Explain echo"
+    },
+    {
+      "description": "A prompt without arguments.",
+      "name": "usage"
+    }
+  ]
+}
