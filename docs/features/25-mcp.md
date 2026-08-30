@@ -389,6 +389,14 @@ impl AdminTools {
 - `#[inject(identity)] user: AuthenticatedUser` (or `Option<…>`) on a tool
   parameter reads the authenticated principal; a required identity with no
   authenticated caller is a JSON-RPC `unauthorized` error.
+- The caller is built **once** per request: `McpPrincipal.user` is an
+  `Arc<AuthenticatedUser>` and the layer deposits that same handle as the
+  identity extension. Reads are unchanged (`principal.user.sub` goes through
+  `Deref`); an owned copy is `(*principal.user).clone()`, and
+  `#[inject(identity)] user: AuthenticatedUser` still hands the member an
+  owned value — materialized only for members that ask for one. A member that
+  declares `ToolCall` can take the shared handle instead, with
+  `call.extension::<Arc<AuthenticatedUser>>()`.
 
 ### Configuration reference
 

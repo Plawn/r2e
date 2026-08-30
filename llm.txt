@@ -3561,7 +3561,10 @@ async fn secure(&self, #[inject(identity)] user: AuthenticatedUser) -> String { 
 
 Scope denials are JSON-RPC errors with agent-actionable text ("re-authorize
 requesting them"). `#[inject(identity)]` on a tool parameter (or `Option<…>`)
-reads the validated principal.
+reads the validated principal. `McpPrincipal.user` is an
+`Arc<AuthenticatedUser>` (one identity allocation per request, shared with the
+identity extension): `principal.user.sub` still works through `Deref`, an owned
+copy is `(*principal.user).clone()`.
 
 Testing (feature `mcp-testing` on the `r2e` facade): boot with zero network I/O —
 

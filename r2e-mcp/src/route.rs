@@ -55,6 +55,27 @@ impl ToolCall {
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.parts.as_ref()?.extensions.get::<T>().cloned()
     }
+
+    /// Resolve a request-scoped **identity** of type `T` from the HTTP
+    /// request extensions.
+    ///
+    /// What an `#[inject(identity)]` member parameter compiles to. Unlike
+    /// [`extension`](Self::extension) it looks for an `Arc<T>` first: the MCP
+    /// auth layer deposits the caller as `Arc<AuthenticatedUser>` so that
+    /// `McpPrincipal` and the identity extension share ONE allocation, and
+    /// the owned `T` is materialized here — once, and only for a member that
+    /// actually asks for it. A plain `T` extension (any other layer that
+    /// inserts an identity by value) is the fallback.
+    ///
+    /// Declaring the parameter as `Arc<AuthenticatedUser>` skips the copy
+    /// entirely: that lookup hits the fallback and finds the shared `Arc`.
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let extensions = &self.parts.as_ref()?.extensions;
+        extensions
+            .get::<Arc<T>>()
+            .map(|shared| (**shared).clone())
+            .or_else(|| extensions.get::<T>().cloned())
+    }
 }
 
 /// Boxed future returned by a tool invocation.
@@ -203,6 +224,16 @@ impl ResourceCall {
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.parts.as_ref()?.extensions.get::<T>().cloned()
     }
+
+    /// Resolve a request-scoped identity — same semantics as
+    /// [`ToolCall::identity`].
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let extensions = &self.parts.as_ref()?.extensions;
+        extensions
+            .get::<Arc<T>>()
+            .map(|shared| (**shared).clone())
+            .or_else(|| extensions.get::<T>().cloned())
+    }
 }
 
 /// Boxed future returned by a resource read.
@@ -302,6 +333,16 @@ impl PromptCall {
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+
+    /// Resolve a request-scoped identity — same semantics as
+    /// [`ToolCall::identity`].
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        let extensions = &self.parts.as_ref()?.extensions;
+        extensions
+            .get::<Arc<T>>()
+            .map(|shared| (**shared).clone())
+            .or_else(|| extensions.get::<T>().cloned())
     }
 }
 

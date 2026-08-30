@@ -92,8 +92,8 @@ Crates in scope: `r2e-core` (http/plugin/runtime/controller/decorators/web),
 | `r2e-mcp` | `src/auth/opaque.rs:102` | the cached `McpPrincipal` (whole `AuthenticatedUser` + `StandardClaims` incl. the flattened `extra` JSON map) deep-cloned **while the cache `Mutex` is held** | yes — the fast path of the opaque-token (introspection / userinfo) backends | **fixed** — `CacheEntry.result` is `Result<Arc<McpPrincipal>, _>`; the lock is now released after an `Arc` bump and the principal is materialized outside the critical section |
 | `r2e-mcp` | `src/auth/wellknown.rs:53` | the prebuilt PRM document `Arc<str>` re-`to_string()`d per `/.well-known/oauth-protected-resource*` GET | yes | **fixed** — encoded to `Bytes` once in `prm_routes`; `public_json_response` now takes `Bytes` |
 | `r2e-mcp` | `src/auth/shim.rs:235` | the mirrored AS-metadata document copied three times per GET (`String` → `Arc<str>` → `String`) | yes | **fixed (partial)** — down to one copy (`String` → `Bytes`). Memoizing the render per discovery generation is deferred, below |
-| `r2e-mcp` | `src/auth/layer.rs:167` | `principal.user.clone()` — the same `AuthenticatedUser` inserted twice so both extensions exist | yes | deferred — see below |
-| `r2e-mcp` | `src/handler.rs:121,182` | `Vec<Tool>` / `Vec<Resource>` / `Vec<Prompt>` / `Vec<ResourceTemplate>` cloned per `*/list` | yes | **fixed** (tools) — `ToolRoute::description` is `Cow<'static, str>` and `#[tool]` emits a borrowed literal, so `tools/list` clones **1 allocation / 720 bytes** for 6 tools instead of 7 / 1080 (7 / 2748 with long descriptions). The lists themselves were already built once at boot and filtered before cloning; `Resource`/`Prompt`/`ResourceTemplate` still copy their `String`s — rmcp models them as `String` |
+| `r2e-mcp` | `src/auth/layer.rs:174` | `principal.user.clone()` — the same `AuthenticatedUser` inserted twice so both extensions exist | yes | **fixed** — `McpPrincipal.user` is an `Arc<AuthenticatedUser>` and the layer deposits `Arc::clone` of it, so an authenticated `tools/call` costs **200 allocations / 32,976 bytes** whatever the token carries, instead of 764 / 129,176 with a 32 KiB claims tree |
+| `r2e-mcp` | `src/handler.rs:121,182` | `Vec<Tool>` / `Vec<Resource>` / `Vec<Prompt>` / `Vec<ResourceTemplate>` cloned per `*/list` | yes | **fixed** (tools) — `ToolRoute::description` is `Cow<'static, str>` and `#[tool]` emits a borrowed literal, so `tools/list` clones **1 allocation / 1056 bytes** for 6 tools instead of 7 / 1080 (7 / 2748 with long descriptions). The lists themselves were already built once at boot and filtered before cloning; `Resource`/`Prompt`/`ResourceTemplate` still copy their `String`s — rmcp models them as `String` |
 | `r2e-mcp` | `src/auth/layer.rs` `AuthState`, `auth/validator.rs`, `auth/discovery.rs` | `Arc` / `Arc<str>` / `Arc<[String]>` only; scope checks borrow `&StandardClaims` | yes, but `Arc` | clean |
 | `r2e-mcp` | `src/uri_template.rs:243-296` | template variable names copied into the per-call `BTreeMap<String, String>` | yes, per `resources/read` | acceptable — forced by the public `ResourceCall::variables` type |
 | `r2e-grpc` | `src/multiplex.rs` `call()` | `self.grpc.clone()` / `self.http.clone()` | yes | clean — `tonic::service::Routes` wraps `axum::Router`, whose `Clone` is an `Arc` bump (verified in `tonic-0.14.6/src/service/router.rs:14`, `axum-0.8.9/src/routing/mod.rs:72`) |
@@ -403,10 +403,10 @@ annotations, doc-comment descriptions), measured by
 
 | descriptions | before | after |
 |---|---|---|
-| short (`"Add."`) | 7 allocations / 1080 bytes | **1 allocation / 720 bytes** |
-| long (~280 chars) | 7 allocations / 2748 bytes | **1 allocation / 720 bytes** |
+| short (`"Add."`) | 7 allocations / 1080 bytes | **1 allocation / 1056 bytes** |
+| long (~280 chars) | 7 allocations / 2748 bytes | **1 allocation / 1056 bytes** |
 
-720 bytes is `6 * size_of::<Tool>()` — the destination `Vec` and nothing else.
+1056 bytes is `6 * size_of::<Tool>()` — the destination `Vec` and nothing else.
 The cost is now flat in what the tools say about themselves.
 
 ### What is still copied
@@ -424,6 +424,64 @@ both in place.
 payloads against goldens captured before the change
 (`r2e-mcp/tests/server/golden/*.json`, re-baselined with `R2E_UPDATE_GOLDEN=1`).
 A representation change that alters the wire fails there.
+
+## One `AuthenticatedUser` per authenticated MCP request (task #993)
+
+### The finding
+
+The auth layer deposits the caller twice — standalone (what the identity
+extractor reads) and inside the `McpPrincipal` (what scope checks read) — so
+every authenticated request deep-copied the whole claims tree, flattened
+`extra: serde_json::Map` included. The cost scaled with what the IdP put in
+the token, on a path every MCP request takes.
+
+### The fix
+
+`McpPrincipal.user` is an `Arc<AuthenticatedUser>` (**breaking**: reads go
+through `Deref`, `principal.user.sub` still works; an owned copy is now
+`(*principal.user).clone()`). The identity is built once — in the JWT backend
+and at both opaque-token construction sites — and shared from there on.
+
+The layer then has to satisfy two readers with one allocation:
+
+```rust
+// r2e-mcp/src/auth/layer.rs
+req.extensions_mut().insert(Arc::clone(&principal.user)); // refcount bump
+req.extensions_mut().insert(principal);                   // holds the same Arc
+```
+
+The identity extension is therefore an `Arc<AuthenticatedUser>`, while
+`#[inject(identity)] user: AuthenticatedUser` still hands the member an owned
+value. `ToolCall::identity::<T>()` (also on `ResourceCall`/`PromptCall`, and
+what the `#[tool]`/`#[resource]`/`#[prompt]` codegen now calls instead of
+`extension::<T>()`) bridges the two: it looks for `Arc<T>` first and
+materializes the owned `T` there — **once, and only for a member that actually
+declares an identity parameter** — falling back to a plain `T` extension for
+any other layer that inserts an identity by value. A member that declares
+`Arc<AuthenticatedUser>` skips the copy entirely (that lookup hits the
+fallback and finds the shared handle).
+
+*Why not make the extension itself owned and share it the other way?* Because
+the common member declares no identity at all: paying the copy in the layer
+would charge every request for a value most of them never read. Paying it in
+`identity::<T>()` charges only the members that ask.
+
+### Before/after
+
+`r2e-mcp/tests/hotpath/principal.rs` drives authenticated `tools/call`s
+through the real layer against a validator that returns a prebuilt principal
+(the shape of the opaque-token cache hit, where the identity *is* the whole
+per-request cost), with a caller whose token carries 128 x 256-byte claims:
+
+| | before | after |
+|---|---|---|
+| authenticated `tools/call`, no extra claims | 210 allocations / 34,692 bytes | **200 allocations / 32,976 bytes** |
+| authenticated `tools/call`, ~32 KiB of claims | 764 allocations / 129,176 bytes | **200 allocations / 32,976 bytes** |
+| `McpPrincipal::clone` (same claims) | 282 allocations / 47,300 bytes | **0 allocations** |
+
+The per-request cost is now flat in the size of the claims tree, and cloning a
+principal — which the layer, the opaque-token cache and `check_access` all do —
+is three refcount bumps.
 
 ## Global lifetimes and `Box::leak`
 
@@ -478,16 +536,6 @@ predate it (the OpenFGA one was narrowed by it) and the rest are test code.
 Each of these is a real per-request cost that was **not** fixed here, because the
 fix is structural rather than "wrap it in an `Arc`". Listed so they are not
 re-discovered from scratch.
-
-### `McpPrincipal` carries `AuthenticatedUser` by value
-
-`r2e-mcp/src/auth/layer.rs:167` inserts the same `AuthenticatedUser` twice —
-once standalone (for the identity extractor) and once inside `McpPrincipal` —
-so every authenticated MCP request deep-copies the claims tree, including the
-flattened `extra: serde_json::Map`. Making `McpPrincipal.user` an
-`Arc<AuthenticatedUser>` removes it, but is a breaking change for anything
-reading `principal.user` by value. Acceptable pre-production; out of scope for
-this pass.
 
 ### Shim metadata is re-rendered per request
 

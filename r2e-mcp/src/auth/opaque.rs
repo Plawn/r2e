@@ -420,7 +420,7 @@ impl IntrospectionBackend {
         }
 
         let scope_values: Arc<[String]> = self.scopes.scopes(&claims).into();
-        let user = build_authenticated_user(claims, &self.scopes);
+        let user = Arc::new(build_authenticated_user(claims, &self.scopes));
         let principal = McpPrincipal {
             user,
             scopes: scope_values,
@@ -552,7 +552,7 @@ impl UserinfoBackend {
         }
 
         let scope_values: Arc<[String]> = self.scopes.scopes(&claims).into();
-        let user = build_authenticated_user(claims, &self.scopes);
+        let user = Arc::new(build_authenticated_user(claims, &self.scopes));
         let principal = McpPrincipal {
             user,
             scopes: scope_values,

@@ -164,7 +164,14 @@ where
                     // rmcp copies `http::request::Parts` extensions into each
                     // JSON-RPC message's `RequestContext.extensions`, so tools
                     // read these via `ToolCall.parts` / identity params.
-                    req.extensions_mut().insert(principal.user.clone());
+                    //
+                    // Two extensions, ONE `AuthenticatedUser`: the identity is
+                    // deposited as `Arc<AuthenticatedUser>` — a refcount bump,
+                    // not a second copy of the claims tree — and the principal
+                    // holds the same `Arc`. `ToolCall::identity::<T>()`
+                    // materializes an owned `T` only for a member that
+                    // actually declares `#[inject(identity)]`.
+                    req.extensions_mut().insert(Arc::clone(&principal.user));
                     req.extensions_mut().insert(principal);
                     inner.call(req).await.map(IntoResponse::into_response)
                 }

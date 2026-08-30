@@ -307,6 +307,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Perf: one `AuthenticatedUser` per authenticated MCP request** (task #993).
+  The auth layer deposited the caller twice — standalone for the identity
+  extractor, and inside `McpPrincipal` — so every request deep-copied the
+  claims tree, flattened `extra` map included, and the cost grew with whatever
+  the IdP put in the token. **Breaking:** `McpPrincipal.user` is now an
+  `Arc<AuthenticatedUser>`. Reads are unchanged (`principal.user.sub` goes
+  through `Deref`); an owned copy is `(*principal.user).clone()`. The layer
+  deposits `Arc::clone(&principal.user)` as the identity extension, and the
+  `#[tool]`/`#[resource]`/`#[prompt]` codegen now resolves an identity
+  parameter through the new `ToolCall::identity::<T>()` (also on `ResourceCall`
+  / `PromptCall`), which looks for `Arc<T>` first and materializes the owned
+  `T` only for a member that actually declares one — a member taking
+  `ToolCall` can read `call.extension::<Arc<AuthenticatedUser>>()` and copy
+  nothing. An authenticated `tools/call` with a 32 KiB claims tree went from
+  764 allocations / 129,176 B per request to **200 / 32,976 B** — the same
+  cost as a caller with no extra claims at all — and `McpPrincipal::clone`
+  (layer, opaque-token cache, `check_access`) from 282 allocations / 47,300 B
+  to **0**. Guarded by `r2e-mcp/tests/hotpath/principal.rs` and
+  `r2e-mcp/tests/auth/identity.rs`; numbers in
+  `docs/claude/hot-path-clone-audit.md`.
+
 - **Perf: MCP `tools/list` no longer re-allocates the tool metadata**
   (task #994). Every `tools/list` clones the wire payload built at boot (and
   every `tools/call` clones one element of it), but rmcp's `Tool` stores
@@ -315,7 +336,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   emitted as a literal. `ToolRoute::description` is now
   `Option<Cow<'static, str>>` and the macro emits `Cow::Borrowed`: a six-tool
   `tools/list` clone went from 7 allocations / 1080 B to **1 allocation /
-  720 B** (the destination `Vec` alone), and stays there with long
+  1056 B** (the destination `Vec` alone), and stays there with long
   descriptions where the old path cost 2748 B. **Breaking** for hand-built
   `ToolRoute`s only: `description: Some(s.into())` where `s: String`,
   `Some("…".into())` for a literal — the macro path and the wire format are
