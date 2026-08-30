@@ -1,0 +1,28 @@
+error[E0277]: `AuditSink` is not in this feature module's scope
+  --> cases/modules/fail/module_grpc_service_intercept_dep_not_in_scope.rs:69:28
+   |
+69 |         .register_module::<PingModule>();
+   |                            ^^^^^^^^^^ the module neither provides nor imports `AuditSink`
+   |
+   = help: the trait `InModuleScope<AuditSink, _>` is not implemented for `TNil`
+   = note: a module's providers and controllers may depend only on the module's own provided types plus its declared `Imports`
+   = note: add a provider for `AuditSink` to the module's `Providers`, or declare it in the module's `Imports`
+help: the following other types implement trait `InModuleScope<H, Idx>`
+  --> $WORKSPACE/r2e-core/src/di/module.rs
+   |
+   | impl<H, T> InModuleScope<H, Here> for TCons<H, T> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<H, T>` implements `InModuleScope<H, Here>`
+   | impl<H, X, T, I> InModuleScope<H, There<I>> for TCons<X, T> where T: InModuleScope<H, I> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TCons<X, T>` implements `InModuleScope<H, There<I>>`
+   = note: required for `TCons<PingRepo, TNil>` to implement `InModuleScope<AuditSink, There<_>>`
+   = note: required for `TCons<AuditSink, TNil>` to implement `ModuleDepsSatisfied<TCons<PingRepo, TNil>, (There<_>, _)>`
+   = note: 1 redundant requirement hidden
+   = note: required for `TCons<PingRepo, TCons<AuditSink, TNil>>` to implement `ModuleDepsSatisfied<TCons<PingRepo, TNil>, (Here, (There<_>, _))>`
+note: required by a bound in `register_module`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_module<M>(self) -> ModuleRegistered<M, P, R, Mods>
+   |        --------------- required by a bound in this associated function
+...
+   |         <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
+   |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RegisterModule::register_module`

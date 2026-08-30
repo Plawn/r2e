@@ -776,17 +776,22 @@ impl r2e_core::di::module::ModuleEndpointSet for TestEndpoints {
 }
 
 impl<T: Clone + Send + Sync + 'static> r2e_core::di::module::ModuleEndpoints<T> for TestEndpoints {
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, r2e_core::beans::BeanError> {
+    fn register_all(
+        builder: AppBuilder<T>,
+        module: &'static str,
+    ) -> Result<AppBuilder<T>, r2e_core::beans::BeanError> {
         let ctx = builder.bean_context();
         // Resolved from the retained context — `PrivateGreeting` is NOT in the
         // application state.
         let greeting = ctx.get::<PrivateGreeting>();
         let ledger = ctx.get::<EndpointLedger>();
+        // `module` is the owning module's type name, passed by the core so a
+        // failing endpoint can name its module in the boot error.
         ledger
             .0
             .lock()
             .unwrap()
-            .push(format!("endpoint:{}", greeting.0));
+            .push(format!("endpoint:{}:{module}", greeting.0));
         Ok(builder)
     }
 }
@@ -832,15 +837,113 @@ async fn a_module_endpoint_registers_from_the_retained_context() {
 
     let entries = ledger.0.lock().unwrap().clone();
     assert_eq!(
-        entries,
-        vec!["endpoint:bonjour".to_string()],
+        entries.len(),
+        1,
+        "the module's endpoint set must be registered exactly once: {entries:?}"
+    );
+    assert!(
+        entries[0].starts_with("endpoint:bonjour:") && entries[0].ends_with("EndpointModule"),
         "the module's endpoint set must be registered exactly once by `build_state()`, \
-         resolving the module's private provider from the retained bean context"
+         resolving the module's private provider from the retained bean context, and \
+         receives its owning module's name: {entries:?}"
     );
 
     // The private provider stayed private: it is not in the application state.
     assert!(
         state.state().bean::<PrivateGreeting>().is_none(),
         "`PrivateGreeting` is not exported and must be absent from the state"
+    );
+}
+
+// ── Module endpoints: failures reach the boot-error channel ────────────────
+//
+// A transport crate maps its registration failures onto `BeanError` so
+// `try_build_state()` stays non-panicking (r2e-grpc maps a missing
+// `GrpcServer` plugin, a config-validation failure, and a duplicate service
+// name). Core-side, the contract is just: whatever `register_all` returns is
+// the error `try_build_state()` yields — and `build_state()` panics with the
+// rendered message rather than dressing it up as a resolution failure.
+
+/// Stands in for a module gRPC service registered without the `GrpcServer`
+/// plugin — the transport crate's `register_all` returns the boot error.
+struct FailingEndpoints;
+
+impl r2e_core::di::module::ModuleEndpointSet for FailingEndpoints {
+    type Deps = TNil;
+}
+
+impl<T: Clone + Send + Sync + 'static> r2e_core::di::module::ModuleEndpoints<T> for FailingEndpoints {
+    fn register_all(
+        _builder: AppBuilder<T>,
+        module: &'static str,
+    ) -> Result<AppBuilder<T>, r2e_core::beans::BeanError> {
+        Err(r2e_core::beans::BeanError::MissingTransportPlugin {
+            endpoint: "demo::GreeterService",
+            module,
+            plugin: "GrpcServer",
+        })
+    }
+}
+
+struct FailingEndpointModule;
+
+impl FeatureModule for FailingEndpointModule {
+    type Providers = TNil;
+    type Controllers = ();
+    type Exports = TNil;
+    type Imports = TNil;
+    type RequiredPlugins = ();
+    type Plugins = ();
+    type Endpoints = FailingEndpoints;
+
+    fn plugins() {}
+}
+
+#[r2e_core::test]
+async fn a_failing_module_endpoint_surfaces_on_the_boot_error_channel() {
+    let err = AppBuilder::new()
+        .register_module::<FailingEndpointModule>()
+        .try_build_state()
+        .await
+        .err()
+        .expect("a failing endpoint registration must fail the build");
+
+    let rendered = err.to_string();
+    assert!(
+        matches!(
+            err,
+            r2e_core::beans::BeanError::MissingTransportPlugin { .. }
+        ),
+        "the transport's error must reach `try_build_state` unchanged: {rendered}"
+    );
+    assert!(
+        rendered.contains("demo::GreeterService"),
+        "the message must name the endpoint: {rendered}"
+    );
+    assert!(
+        rendered.contains("GrpcServer"),
+        "the message must name the missing plugin: {rendered}"
+    );
+    assert!(
+        rendered.contains("FailingEndpointModule"),
+        "the message must name the module that declared the endpoint: {rendered}"
+    );
+}
+
+#[r2e_core::test]
+async fn a_duplicate_module_endpoint_message_names_the_clashing_name() {
+    let rendered = r2e_core::beans::BeanError::DuplicateEndpoint {
+        endpoint: "demo::GreeterService",
+        module: "demo::GreeterModule",
+        name: "greeter.Greeter",
+    }
+    .to_string();
+
+    assert!(
+        rendered.contains("demo::GreeterService")
+            && rendered.contains("demo::GreeterModule")
+            && rendered.contains("greeter.Greeter"),
+        "a duplicate endpoint must name the endpoint, its module and the clashing \
+         transport-level name: {rendered}"
     );
 }
