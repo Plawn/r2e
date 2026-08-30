@@ -903,7 +903,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 crate::beans::BeanError::ConfigLoad { .. }
                 | crate::beans::BeanError::ControllerConfig { .. }
                 | crate::beans::BeanError::EndpointConfig { .. }
-                | crate::beans::BeanError::MissingTransportPlugin { .. } => panic!("{e}"),
+                | crate::beans::BeanError::MissingTransportPlugin { .. }
+                | crate::beans::BeanError::DuplicateEndpoint { .. } => panic!("{e}"),
                 other => panic!("Failed to resolve bean dependency graph: {other}"),
             })
     }

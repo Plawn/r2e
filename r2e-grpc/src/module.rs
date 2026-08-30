@@ -52,7 +52,10 @@ pub struct ModuleGrpcServices<S>(PhantomData<fn() -> S>);
 /// the application-state dependency check (it was already checked against the
 /// module scope at `register_module`), mapping the failure modes onto the boot
 /// error channel.
-fn register_module_service<T, S>(builder: AppBuilder<T>) -> Result<AppBuilder<T>, BeanError>
+fn register_module_service<T, S>(
+    builder: AppBuilder<T>,
+    module: &'static str,
+) -> Result<AppBuilder<T>, BeanError>
 where
     T: Clone + Send + Sync + 'static,
     S: GrpcService,
@@ -65,7 +68,13 @@ where
         }),
         Err(RegisterServiceError::MissingPlugin) => Err(BeanError::MissingTransportPlugin {
             endpoint: std::any::type_name::<S>(),
+            module,
             plugin: "GrpcServer",
+        }),
+        Err(RegisterServiceError::Duplicate(dup)) => Err(BeanError::DuplicateEndpoint {
+            endpoint: std::any::type_name::<S>(),
+            module,
+            name: dup.name,
         }),
     }
 }
@@ -75,7 +84,10 @@ impl ModuleEndpointSet for ModuleGrpcServices<()> {
 }
 
 impl<T: Clone + Send + Sync + 'static> ModuleEndpoints<T> for ModuleGrpcServices<()> {
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, BeanError> {
+    fn register_all(
+        builder: AppBuilder<T>,
+        _module: &'static str,
+    ) -> Result<AppBuilder<T>, BeanError> {
         Ok(builder)
     }
 }
@@ -94,8 +106,11 @@ macro_rules! impl_module_grpc_services {
             T: Clone + Send + Sync + 'static,
             $S0: GrpcService,
         {
-            fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, BeanError> {
-                register_module_service::<T, $S0>(builder)
+            fn register_all(
+                builder: AppBuilder<T>,
+                module: &'static str,
+            ) -> Result<AppBuilder<T>, BeanError> {
+                register_module_service::<T, $S0>(builder, module)
             }
         }
     };
@@ -117,9 +132,12 @@ macro_rules! impl_module_grpc_services {
             $S0: GrpcService,
             $($Ss: GrpcService,)+
         {
-            fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, BeanError> {
-                let builder = register_module_service::<T, $S0>(builder)?;
-                $(let builder = register_module_service::<T, $Ss>(builder)?;)+
+            fn register_all(
+                builder: AppBuilder<T>,
+                module: &'static str,
+            ) -> Result<AppBuilder<T>, BeanError> {
+                let builder = register_module_service::<T, $S0>(builder, module)?;
+                $(let builder = register_module_service::<T, $Ss>(builder, module)?;)+
                 Ok(builder)
             }
         }

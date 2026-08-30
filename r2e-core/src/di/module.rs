@@ -198,9 +198,15 @@ pub trait FeatureModule {
     /// The concrete set type lives in the transport crate:
     /// `#[module(grpc_services(GreeterService))]` generates
     /// `type Endpoints = r2e_grpc::ModuleGrpcServices<(GreeterService,)>;`
-    /// (and adds `GrpcServer` to [`RequiredPlugins`](Self::RequiredPlugins), so
+    /// and adds `GrpcServer` to [`RequiredPlugins`](Self::RequiredPlugins), so
     /// a module whose transport plugin is missing is a compile error naming
-    /// that plugin).
+    /// that plugin. That check is a *provision* check (see
+    /// [`RequiredPluginInstalled`]) — it is exact for gRPC only because
+    /// `GrpcServer`'s provision marker cannot be constructed outside r2e-grpc.
+    /// A hand-written `FeatureModule` impl that skips `RequiredPlugins`
+    /// altogether is caught at boot with
+    /// [`BeanError::MissingTransportPlugin`](crate::beans::BeanError::MissingTransportPlugin),
+    /// naming the plugin and the module.
     type Endpoints: ModuleEndpointSet;
 
     /// The configured plugin **instances** matching [`Plugins`](Self::Plugins),
@@ -255,14 +261,24 @@ impl ModuleEndpointSet for () {
 pub trait ModuleEndpoints<T: Clone + Send + Sync + 'static> {
     /// Register every endpoint in the set, in declaration order.
     ///
+    /// `module` is the declaring module's type name, carried only so a
+    /// boot-time failure (missing transport plugin, duplicate endpoint) can
+    /// name the slice that owns the endpoint instead of the endpoint alone.
+    ///
     /// Fallible for the same reason [`ModuleControllers::register_all`] is:
     /// `try_build_state()` must not panic on a declared config key, and a
     /// missing transport plugin is a boot error rather than a panic.
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+    fn register_all(
+        builder: AppBuilder<T>,
+        module: &'static str,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError>;
 }
 
 impl<T: Clone + Send + Sync + 'static> ModuleEndpoints<T> for () {
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+    fn register_all(
+        builder: AppBuilder<T>,
+        _module: &'static str,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
         Ok(builder)
     }
 }
@@ -563,6 +579,15 @@ where
 /// Compile-time witness that required plugin `Plug` is installed — every bean
 /// in its [`PluginInstall::Provisions`](crate::plugin::PluginInstall::Provisions)
 /// is present in the provision list `Self` (the app-global `P`).
+///
+/// The check is on the *provisions*, not on the plugin's identity: hand-writing
+/// `.provide(..)` for every type a plugin provides satisfies it without the
+/// plugin ever running. That is only reachable when a plugin's provision types
+/// are constructible by the caller — a plugin whose provision is an
+/// unconstructible marker (as `GrpcServer`'s `GrpcMarker` is, so that
+/// `grpc_services(..)` really cannot compile without the plugin) is exact.
+/// Transports that also need runtime wiring keep a boot-time backstop:
+/// [`BeanError::MissingTransportPlugin`](crate::beans::BeanError::MissingTransportPlugin).
 #[diagnostic::on_unimplemented(
     message = "this feature module requires the `{Plug}` plugin, which is not installed before it",
     label = "`{Plug}` must be installed before this module",
@@ -781,7 +806,7 @@ where
         let builder = <M::Controllers as ModuleControllers<T, WC>>::register_all(builder)?;
         // Non-HTTP endpoints (gRPC services) register after the controllers of
         // the same module, from the same retained bean context.
-        <M::Endpoints as ModuleEndpoints<T>>::register_all(builder)
+        <M::Endpoints as ModuleEndpoints<T>>::register_all(builder, std::any::type_name::<M>())
     }
 }
 

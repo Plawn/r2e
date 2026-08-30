@@ -142,6 +142,32 @@ fn beans_only(entries: Vec<Entry>, key: &str) -> syn::Result<Vec<Type>> {
     Ok(out)
 }
 
+/// Reject a type listed twice in the same key.
+///
+/// Textual comparison of the written paths: it catches the copy/paste
+/// (`grpc_services(S, S)`) that would otherwise register one endpoint twice,
+/// and cannot see through aliases or differently-spelled paths for the same
+/// type — those are caught at boot, where the check is on the resolved
+/// endpoint name.
+fn reject_repeats(types: &[Type], key: &str) -> syn::Result<()> {
+    let mut seen: Vec<(String, &Type)> = Vec::new();
+    for ty in types {
+        let rendered = quote!(#ty).to_string();
+        if seen.iter().any(|(s, _)| *s == rendered) {
+            return Err(syn::Error::new_spanned(
+                ty,
+                format!(
+                    "`{}` is listed twice in `{key}(...)` — each entry is registered once, \
+                     so a repeat is always a mistake",
+                    rendered.replace(' ', "")
+                ),
+            ));
+        }
+        seen.push((rendered, ty));
+    }
+    Ok(())
+}
+
 impl Parse for ModuleArgs {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut args = ModuleArgs::default();
@@ -193,7 +219,11 @@ impl Parse for ModuleArgs {
                 "requires_plugins" => {
                     args.requires_plugins = beans_only(entries, "requires_plugins")?
                 }
-                "grpc_services" => args.grpc_services = beans_only(entries, "grpc_services")?,
+                "grpc_services" => {
+                    let services = beans_only(entries, "grpc_services")?;
+                    reject_repeats(&services, "grpc_services")?;
+                    args.grpc_services = services;
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),

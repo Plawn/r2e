@@ -37,6 +37,22 @@ pub struct RegisteredServices {
     pub descriptors: Vec<&'static [u8]>,
 }
 
+/// A service with this name is already registered — the error half of
+/// [`GrpcServiceRegistry::add_service`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuplicateService {
+    /// The gRPC service's full name (e.g. `greeter.Greeter`).
+    pub name: &'static str,
+}
+
+impl std::fmt::Display for DuplicateService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "gRPC service '{}' is already registered", self.name)
+    }
+}
+
+impl std::error::Error for DuplicateService {}
+
 impl GrpcServiceRegistry {
     /// Create a new empty registry.
     pub fn new() -> Self {
@@ -52,7 +68,19 @@ impl GrpcServiceRegistry {
     /// `descriptor` is the service's encoded file descriptor set, if it
     /// declares one; identical sets (services generated from the same proto
     /// compilation) are stored once.
-    pub fn add_service<F>(&self, name: &'static str, descriptor: Option<&'static [u8]>, add: F)
+    ///
+    /// A service name may be registered **once**. A second registration of the
+    /// same name — the same service listed by two feature modules, or by a
+    /// module and an app-level `register_grpc_service` — returns
+    /// [`DuplicateService`] and changes nothing: `add` is not called (the
+    /// service is not even built), so tonic never receives two overlapping
+    /// route sets for one name and the reported service list stays truthful.
+    pub fn add_service<F>(
+        &self,
+        name: &'static str,
+        descriptor: Option<&'static [u8]>,
+        add: F,
+    ) -> Result<(), DuplicateService>
     where
         F: FnOnce(Routes) -> Routes,
     {
@@ -61,12 +89,16 @@ impl GrpcServiceRegistry {
         // deadlock on this non-reentrant Mutex. Not reachable today:
         // registration is a linear builder chain.
         let mut guard = self.inner.lock().unwrap();
+        if guard.names.contains(&name) {
+            return Err(DuplicateService { name });
+        }
         let routes = std::mem::take(&mut guard.routes);
         guard.routes = add(routes);
         guard.names.push(name);
         if let Some(descriptor) = descriptor {
             push_unique(&mut guard.descriptors, descriptor);
         }
+        Ok(())
     }
 
     /// Drain the registry: the accumulated [`Routes`], the registered service

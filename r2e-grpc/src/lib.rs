@@ -41,7 +41,7 @@ pub use module::ModuleGrpcServices;
 pub use multiplex::{
     GrpcContentType, MultiplexBody, MultiplexService, NoGrpcWeb, RejectedBody, GRPC_WEB_UNSUPPORTED,
 };
-pub use registry::{GrpcServiceRegistry, RegisteredServices};
+pub use registry::{DuplicateService, GrpcServiceRegistry, RegisteredServices};
 pub use server::{GrpcMarker, GrpcServer, GrpcTransport};
 pub use service::GrpcService;
 
@@ -111,6 +111,12 @@ where
     ///
     /// # Panics
     ///
+    /// Panics if the service's name is already registered — by another
+    /// `register_grpc_service` call or by a feature module's
+    /// `grpc_services(..)`: each service belongs to exactly one owner, and
+    /// registering it twice would hand tonic two overlapping route sets for
+    /// one name.
+    ///
     /// Panics if config keys or sections declared on the service (or on any of
     /// its `#[intercept]` decorator specs) fail validation. Use
     /// [`try_register_grpc_service`](Self::try_register_grpc_service) for a
@@ -123,6 +129,11 @@ where
 
     /// Register a gRPC service, returning config-validation errors instead of
     /// panicking.
+    ///
+    /// Only the config failure becomes a `Result`: a missing `GrpcServer`
+    /// plugin and a duplicate service name are wiring mistakes at this call
+    /// site and still panic (see
+    /// [`register_grpc_service`](Self::register_grpc_service)).
     ///
     /// Behaves exactly like
     /// [`register_grpc_service`](Self::register_grpc_service) on success. On
@@ -165,6 +176,14 @@ where
             Err(RegisterServiceError::MissingPlugin) => panic!(
                 "GrpcServiceRegistry not found. Did you install `.plugin(GrpcServer::...)` before build_state()?"
             ),
+            Err(RegisterServiceError::Duplicate(dup)) => panic!(
+                "gRPC service '{}' ({}) is already registered. Register each service exactly \
+                 once: drop this `.register_grpc_service::<{}>()`, or the `grpc_services(..)` \
+                 entry of the feature module that already owns it.",
+                dup.name,
+                std::any::type_name::<S>(),
+                std::any::type_name::<S>(),
+            ),
         }
     }
 }
@@ -173,14 +192,17 @@ where
 ///
 /// The two call sites map it differently: the app-level
 /// [`AppBuilderGrpcExt`] returns the config error and panics on a missing
-/// plugin (the plugin is a hard wiring mistake at that call site), while the
-/// feature-module path maps both onto [`BeanError`](r2e_core::beans::BeanError)
-/// so `try_build_state()` stays non-panicking.
+/// plugin or a duplicate service name (both are hard wiring mistakes at that
+/// call site), while the feature-module path maps all three onto
+/// [`BeanError`](r2e_core::beans::BeanError) so `try_build_state()` stays
+/// non-panicking.
 pub(crate) enum RegisterServiceError {
     /// Declared config keys/sections that do not validate.
     Config(r2e_core::config::ConfigValidationError),
     /// The `GrpcServer` plugin was not installed, so there is no registry.
     MissingPlugin,
+    /// Another registration already claimed this service name.
+    Duplicate(registry::DuplicateService),
 }
 
 /// The registration backend shared by the app-level (`register_grpc_service`,
@@ -215,9 +237,11 @@ where
         return Err(RegisterServiceError::MissingPlugin);
     };
 
-    registry.add_service(S::service_name(), S::file_descriptor_set(), |routes| {
-        S::add_to_routes(routes, builder.bean_context())
-    });
+    registry
+        .add_service(S::service_name(), S::file_descriptor_set(), |routes| {
+            S::add_to_routes(routes, builder.bean_context())
+        })
+        .map_err(RegisterServiceError::Duplicate)?;
 
     tracing::debug!(service = S::service_name(), "Registered gRPC service");
 

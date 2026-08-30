@@ -89,13 +89,28 @@ pub enum BeanError {
     /// not installed — e.g. `grpc_services(..)` without `.plugin(GrpcServer::..)`.
     ///
     /// The generated `#[module]` declaration makes this a compile error (the
-    /// transport plugin joins `RequiredPlugins`); this variant is the boot-time
+    /// transport plugin joins `RequiredPlugins`, and its provision marker is
+    /// unforgeable outside the transport crate); this variant is the boot-time
     /// backstop for hand-written `FeatureModule` impls.
     MissingTransportPlugin {
         /// The endpoint type that could not be registered.
         endpoint: &'static str,
+        /// The module that declared the endpoint.
+        module: &'static str,
         /// The plugin the transport needs, e.g. `"GrpcServer"`.
         plugin: &'static str,
+    },
+    /// Two transport endpoints claim the same wire name — the same service
+    /// listed by two feature modules, or by a module and an app-level
+    /// registration. Registering both would hand the transport two overlapping
+    /// route sets for one name, so boot fails instead.
+    DuplicateEndpoint {
+        /// The endpoint type that could not be registered.
+        endpoint: &'static str,
+        /// The module that declared it.
+        module: &'static str,
+        /// The wire name already registered (e.g. a gRPC service's full name).
+        name: &'static str,
     },
     /// A bean's constructor (or a producer function) returned an error.
     ///
@@ -178,12 +193,30 @@ impl fmt::Display for BeanError {
                     "\n=== CONFIGURATION ERRORS (endpoint: {endpoint}) ===\n\n{source}\n============================\n"
                 )
             }
-            BeanError::MissingTransportPlugin { endpoint, plugin } => {
+            BeanError::MissingTransportPlugin {
+                endpoint,
+                module,
+                plugin,
+            } => {
                 write!(
                     f,
-                    "Endpoint '{endpoint}' cannot be registered: the `{plugin}` plugin is not \
-                     installed. Install it with `.plugin({plugin}::...)` before the module, or \
-                     let the module bring it with `plugins({plugin} = ...)`"
+                    "Endpoint '{endpoint}' declared by module '{module}' cannot be registered: \
+                     the `{plugin}` plugin is not installed. Install it with \
+                     `.plugin({plugin}::...)` before `.register_module::<{module}>()`, or let the \
+                     module bring it with `plugins({plugin} = ...)`"
+                )
+            }
+            BeanError::DuplicateEndpoint {
+                endpoint,
+                module,
+                name,
+            } => {
+                write!(
+                    f,
+                    "Endpoint '{endpoint}' declared by module '{module}' cannot be registered: a \
+                     transport endpoint named '{name}' is already registered. Register it exactly \
+                     once — check the other modules' endpoint lists and any app-level endpoint \
+                     registration"
                 )
             }
             BeanError::BeanBuild { bean, source } => {
