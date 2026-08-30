@@ -25,6 +25,7 @@ impl FeatureModule for BadModule {
     type Exports = TCons<Pool, TNil>; // Pool is not provided by this module
     type Imports = TNil; type RequiredPlugins = ();
     type Plugins = ();
+    type Endpoints = ();
 
     fn plugins() {}
 }

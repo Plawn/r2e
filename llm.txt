@@ -884,6 +884,7 @@ checked closed subgraph:
 #[module(
     providers(UserService),
     controllers(UserController, UserEventConsumer),
+    grpc_services(UserGrpcService),       // gRPC services this slice owns
     exports(UserService),                 // visible to the rest of the app
     imports(LocalEventBus, SqlitePool,    // beans: satisfied by the app's provide/load_config
             module(BillingModule)),       // module(...): pulls in BillingModule's exports
@@ -917,7 +918,39 @@ you must still `.register_module::<OtherModule>()` yourself.
   modules) is a startup `DuplicatePlugin` error naming both owners. Use
   `requires_plugins` in every module that does not own it.
 - Hand-written `FeatureModule` impls (no macro) must write
-  `type Plugins = (); fn plugins() {}` when they bring nothing.
+  `type Plugins = (); fn plugins() {}` when they bring nothing, and
+  `type Endpoints = ();` when they own no gRPC service.
+
+`grpc_services(...)` is the transport peer of `controllers(...)`: the slice owns
+its gRPC services, so they may inject the module's **private** providers (the
+app-level `.register_grpc_service::<S>()` cannot — its deps must be in the
+application state). The services are dependency-checked module-locally at
+`register_module` (deps ⊆ providers ∪ imports, decorator deps included) and
+registered by `build_state()` from the retained bean context, in declaration
+order after the module's controllers. The key implies the `GrpcServer` plugin:
+it is appended to the module's `requires_plugins`, so forgetting
+`.plugin(GrpcServer::...)` is a compile error **naming `GrpcServer`** (the
+module may also bring it itself with `plugins(GrpcServer = GrpcServer::on_port(..))`).
+`requires_plugins` is checked on the plugin's *provisions*, and `GrpcServer`'s
+(`GrpcMarker`) cannot be constructed outside r2e-grpc — so there is no way to
+hand-`.provide(..)` past that compile error. A hand-written `impl FeatureModule`
+that skips `RequiredPlugins` fails at boot instead, with
+`BeanError::MissingTransportPlugin` naming the plugin and the module.
+
+Each gRPC service has exactly one owner. Registering the same service twice —
+two modules, or a module plus `.register_grpc_service::<S>()` — fails: the
+module path returns `BeanError::DuplicateEndpoint` (visible on
+`try_build_state()`), the app-level call panics, and listing a service twice in
+one `grpc_services(..)` is a macro compile error.
+
+```rust
+#[module(providers(GreetingRepo), grpc_services(GreeterService))]  // GreetingRepo is private
+pub struct GreetingModule;
+
+b.plugin(GrpcServer::on_port("0.0.0.0:50051"))
+ .register_module::<GreetingModule>()      // no .register_grpc_service:: needed
+ .build_state().await
+```
 
 ### Same-typed beans
 
@@ -3311,6 +3344,10 @@ is needed for browser clients. Separate-port transport ignores it (warning).
 `try_register_grpc_service::<S>()` (same trait) returns
 `Result<Self, ConfigValidationError>` for callers that want to report the
 failure themselves — the gRPC peer of `try_register_controller`.
+
+A service owned by a feature module is registered by the module instead —
+`#[module(grpc_services(GreeterService))]`, see *Feature modules* above — which
+is the only way for a gRPC service to inject the module's private beans.
 
 ```rust
 #[controller]

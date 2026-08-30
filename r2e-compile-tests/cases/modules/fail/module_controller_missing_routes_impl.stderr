@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `(PlainService,): ControllerDepsList` is not satisfied
-  --> cases/modules/fail/module_controller_missing_routes_impl.rs:34:54
+  --> cases/modules/fail/module_controller_missing_routes_impl.rs:35:54
    |
-34 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
+35 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
    |                                                      ^^^^^^^^^ the trait `ControllerDepsList` is not implemented for `(PlainService,)`
    |
    = help: the following other types implement trait `ControllerDepsList`:
@@ -16,9 +16,9 @@ note: required by a bound in `register_module`
    |                         ^^^^^^^^^^^^^^^^^^ required by this bound in `RegisterModule::register_module`
 
 error[E0277]: the trait bound `(PlainService,): ControllerDepsList` is not satisfied
-  --> cases/modules/fail/module_controller_missing_routes_impl.rs:34:13
+  --> cases/modules/fail/module_controller_missing_routes_impl.rs:35:13
    |
-34 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
+35 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `ControllerDepsList` is not implemented for `(PlainService,)`
    |
    = help: the following other types implement trait `ControllerDepsList`:

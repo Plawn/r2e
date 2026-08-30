@@ -1,7 +1,7 @@
 error[E0277]: `Pool` is exported but not provided by this feature module
-  --> cases/modules/fail/module_export_not_provided.rs:33:54
+  --> cases/modules/fail/module_export_not_provided.rs:34:54
    |
-33 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
+34 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
    |                                                      ^^^^^^^^^ no provider in the module's `Providers` outputs `Pool`
    |
    = help: the trait `ProvidedByModule<Pool, _>` is not implemented for `TNil`

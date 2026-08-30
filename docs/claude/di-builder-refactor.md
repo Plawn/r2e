@@ -138,9 +138,9 @@ frameworks cannot offer.
   Imports) and `ProvidedByModule` / `ExportsProvided` (exports must be
   provided). Trybuild covers: provider dep out of scope, export not provided,
   controller dep out of scope, private bean invisible to app controllers.
-- `#[module(providers(...), controllers(...), exports(...), imports(...),
-  plugins(...), requires_plugins(...))]` generates the `FeatureModule` impl; all
-  keys optional.
+- `#[module(providers(...), controllers(...), grpc_services(...), exports(...),
+  imports(...), plugins(...), requires_plugins(...))]` generates the
+  `FeatureModule` impl; all keys optional.
 - **Modules bring their plugins.** `plugins(Scheduler = Scheduler)` (macro) /
   `type Plugins = (Scheduler,)` + `fn plugins()` installs the plugin at the
   `register_module` call site; `requires_plugins(Scheduler)` only *needs* it
@@ -170,6 +170,39 @@ frameworks cannot offer.
   register the module — the app must still `.register_module::<Billing>()`
   (deliberate: two modules importing the same one don't double-register →
   `DuplicateBean`). `module(...)` in any other key is a targeted macro error.
+- **Modules own non-HTTP endpoints too** (ticket #989). `FeatureModule` has a
+  transport-neutral `type Endpoints: ModuleEndpointSet` — the peer of
+  `Controllers`. r2e-core stays transport-agnostic by splitting the hook in two:
+  `ModuleEndpointSet` exposes only the aggregated `type Deps` (checked against
+  `ModuleScope<M>` at `register_module`, exactly like `M::Controllers`), and
+  `ModuleEndpoints<T>::register_all` does the value-level registration inside the
+  `ModuleList` fold that `build_state()` applies — after the module's
+  controllers, from the same retained `BeanContext`, through an **unchecked**
+  backend (a module endpoint may inject private beans, so the app-state
+  `AllSatisfied` check would wrongly reject it). Both traits are implemented in
+  the transport crate: `r2e_grpc::ModuleGrpcServices<(A, B)>` (a local wrapper —
+  orphan rules forbid implementing a foreign trait for a bare tuple of type
+  params) folds each service's `EndpointDeps::Deps` with `TAppend` and registers
+  them in declaration order. `#[module(grpc_services(A, B))]` generates exactly
+  that, and appends `GrpcServer` to `RequiredPlugins`, so a missing plugin is the
+  standard module diagnostic naming `GrpcServer` instead of a boot-time failure.
+  `RequiredPluginInstalled` checks the plugin's *provisions*, not its identity,
+  so that claim only holds because `GrpcMarker` is unconstructible outside
+  r2e-grpc (deliberate: a hand-`.provide(GrpcMarker)` would otherwise compile a
+  module with no registry to register into). With no `grpc_services` key the
+  macro emits `type Endpoints = ();` and no r2e-grpc path, so modules compile in
+  apps without the gRPC feature. Failures go to the boot error channel
+  (`BeanError::EndpointConfig` / `MissingTransportPlugin` / `DuplicateEndpoint`,
+  the last two naming the declaring module) so `try_build_state()` stays
+  non-panicking. Endpoint names are unique across the whole app: the registry
+  refuses a name it already holds, so two modules claiming one service, or a
+  module plus an app-level `.register_grpc_service::<S>()`, fails at boot instead
+  of double-registering (a repeat inside one `grpc_services(..)` is a macro
+  error). Stable
+  Rust has no associated-type defaults, so hand-written impls must write
+  `type Endpoints = ();`. Trybuild covers the missing plugin, an endpoint dep out
+  of module scope, and the happy path; `examples/example-grpc/tests/grpc_module.rs`
+  serves a module-owned service over the wire.
 - Same-typed **private** beans in different modules collide at runtime
   (`DuplicateBean` at startup, by design — the graph is `TypeId`-keyed). Use
   newtypes.

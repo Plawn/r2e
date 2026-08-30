@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Native gRPC with the same developer experience as HTTP controllers: `#[inject]`, `#[config]`, and interceptors, all wired at compile time. Proto setup is automagic: a one-line `build.rs` (`r2e_grpc_build::compile()`) compiles every `.proto` under `proto/` and `r2e::r2e_grpc::include_protos!()` includes the generated modules (plus a combined `FILE_DESCRIPTOR_SET` for reflection) — `r2e add grpc` scaffolds the whole thing. Annotate a service impl with `#[grpc_routes]` (analogous to `#[routes]`) — construction goes through `ContextConstruct` from the bean graph. Install the `GrpcServer` plugin before `build_state()`; transport is either a dedicated port or multiplexed on the HTTP port.
+Native gRPC with the same developer experience as HTTP controllers: `#[inject]`, `#[config]`, and interceptors, all wired at compile time. Proto setup is automagic: a one-line `build.rs` (`r2e_grpc_build::compile()`) compiles every `.proto` under `proto/` and `r2e::r2e_grpc::include_protos!()` includes the generated modules (plus a combined `FILE_DESCRIPTOR_SET` for reflection) — `r2e add grpc` scaffolds the whole thing. Annotate a service impl with `#[grpc_routes]` (analogous to `#[routes]`) — construction goes through `ContextConstruct` from the bean graph. Install the `GrpcServer` plugin before `build_state()`; transport is either a dedicated port or multiplexed on the HTTP port. A vertical slice can own its services with `#[module(grpc_services(...))]`, which is the only way for a service to inject the module's private beans.
 
 
 ## Goal
@@ -234,6 +234,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `build_state()` takes no type arguments and is async — `.await` it. Register gRPC services **after** `build_state()` with `.register_grpc_service::<S>()` — the gRPC analog of `.register_controller()` for HTTP (both are extension-trait methods on the built phase). Like its HTTP counterpart, it compile-checks the service's dependencies: a bean read by an `#[inject]` field or an `#[intercept(...)]` spec but never provided is a compile error at the registration line, not a startup panic.
 
+### 9. Services owned by a feature module
+
+A vertical slice declares its gRPC services next to its controllers, with
+`grpc_services(...)` in `#[module]`:
+
+```rust
+#[derive(Clone)]
+pub struct GreetingRepo;          // module-private: never exported
+
+#[bean]
+impl GreetingRepo {
+    fn new() -> Self { Self }
+}
+
+#[controller]
+pub struct GreeterService {
+    #[inject] repo: GreetingRepo, // a PRIVATE bean of the module
+}
+
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+impl GreeterService { /* ... */ }
+
+#[module(
+    providers(GreetingRepo),
+    grpc_services(GreeterService),
+    controllers(GreetingController),   // HTTP routes of the same slice
+)]
+pub struct GreetingModule;
+
+let app = AppBuilder::new()
+    .plugin(GrpcServer::on_port("0.0.0.0:50051"))
+    .register_module::<GreetingModule>()   // no .register_grpc_service:: needed
+    .build_state()
+    .await;
+```
+
+This is the only way for a gRPC service to inject a module's **private** beans:
+`.register_grpc_service::<S>()` checks the service's dependencies against the
+*application state*, so its deps would have to be exported. A module-owned
+service is checked **module-locally** at `register_module` (deps ⊆ providers ∪
+imports, `#[intercept(...)]` spec deps included) and registered by
+`build_state()` from the module's retained bean context, right after the
+module's controllers.
+
+`grpc_services(...)` implies the `GrpcServer` plugin — the macro appends it to
+the module's `requires_plugins`, so forgetting `.plugin(GrpcServer::...)` before
+the module is a compile error naming `GrpcServer`. A module may also bring the
+plugin itself: `plugins(GrpcServer = GrpcServer::on_port("0.0.0.0:50051"))`.
+
+That check works on the plugin's *provisions*, not on its identity. It is exact
+here because `GrpcServer`'s provision (`GrpcMarker`) cannot be constructed
+outside r2e-grpc, so `.provide(..)`-ing a look-alike past the compile error is
+not possible. The boot-time backstop remains for hand-written `impl
+FeatureModule` blocks that declare `Endpoints` without the matching
+`RequiredPlugins`: `BeanError::MissingTransportPlugin`, naming the plugin and
+the module.
+
+### One owner per service
+
+A gRPC service is registered exactly once. A second registration of the same
+service name fails rather than handing tonic two overlapping route sets:
+
+| Duplicate | Where it is caught |
+|---|---|
+| `grpc_services(S, S)` | compile error from `#[module]` |
+| `S` in two modules | boot: `BeanError::DuplicateEndpoint` (a `try_build_state()` error, naming the second module) |
+| module `grpc_services(S)` + app-level `.register_grpc_service::<S>()` | panic at the `register_grpc_service` call (modules register first, inside `build_state()`) |
+
+Hand-written `FeatureModule` impls (no macro) must write `type Endpoints = ();`
+when the module owns no gRPC service.
+
 ## Transport Modes
 
 ### Separate Port (recommended)
@@ -254,6 +325,15 @@ grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHell
 ```
 
 This is the simplest configuration and recommended for most deployments. It avoids content-type routing overhead and allows independent load balancing per protocol.
+
+> **Caveat — separate-port gRPC under `r2e dev`** (task #997, pre-existing): the
+> tonic server is spawned from a serve hook, and hot-patch cycles skip the
+> startup lifecycle, so after the first reload the rebuilt services land in a
+> registry nobody drains and the gRPC port goes silent (HTTP keeps working).
+> Restart `r2e dev`, or use `GrpcServer::multiplexed()` while iterating — the
+> multiplexed transport re-wraps the router on every build and is unaffected.
+> This applies to both `.register_grpc_service::<S>()` and a module's
+> `grpc_services(..)`.
 
 ### Multiplexed (single port)
 
@@ -403,6 +483,7 @@ After generation, you need to:
 | Builder Method | Description |
 |----------------|-------------|
 | `.register_grpc_service::<S>()` | Register a gRPC service (analog of `register_controller`) |
+| `#[module(grpc_services(S))]` | A feature module owns the service — registered by `build_state()`, may inject the module's private beans |
 
 ## Supported Decorators
 

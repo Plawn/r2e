@@ -1,0 +1,20 @@
+error[E0423]: cannot find value `GrpcMarker` in this scope
+  --> cases/modules/fail/module_grpc_marker_spoof.rs:17:18
+   |
+17 |         .provide(GrpcMarker)
+   |                  ^^^^^^^^^^ constructor is not visible here due to private fields
+   |
+   = note: a struct named `GrpcMarker` exists in another namespace
+
+error[E0423]: cannot initialize a tuple struct which contains private fields
+  --> cases/modules/fail/module_grpc_marker_spoof.rs:23:44
+   |
+23 |     let _ = r2e::AppBuilder::new().provide(GrpcMarker(()));
+   |                                            ^^^^^^^^^^
+   |
+   = note: a struct named `GrpcMarker` exists in another namespace
+note: constructor is not visible here due to private fields
+  --> $WORKSPACE/r2e-grpc/src/server.rs
+   |
+   | pub struct GrpcMarker(pub(crate) ());
+   |                       ^^^^^^^^^^^^^ private field

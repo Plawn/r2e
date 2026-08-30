@@ -1,7 +1,7 @@
 error[E0277]: `Pool` is not in this feature module's scope
-  --> cases/modules/fail/module_controller_dep_not_in_scope.rs:48:54
+  --> cases/modules/fail/module_controller_dep_not_in_scope.rs:49:54
    |
-48 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
+49 |     let _ = r2e::AppBuilder::new().register_module::<BadModule>();
    |                                                      ^^^^^^^^^ the module neither provides nor imports `Pool`
    |
    = help: the trait `InModuleScope<Pool, _>` is not implemented for `TNil`

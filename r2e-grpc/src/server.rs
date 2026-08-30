@@ -293,7 +293,7 @@ impl Plugin for GrpcServer {
             }
         }
 
-        Ok((GrpcMarker,))
+        Ok((GrpcMarker(()),))
     }
 }
 
@@ -301,8 +301,16 @@ impl Plugin for GrpcServer {
 ///
 /// This exists so the plugin can participate in the type-level provision list.
 /// Users don't need to reference it directly.
+///
+/// **Unconstructible outside this crate** (the private field is deliberate):
+/// module `RequiredPlugins` are verified by checking a plugin's provisions
+/// against the provision list, so a marker anyone could `.provide(..)` would
+/// let `#[module(grpc_services(..))]` compile with no `GrpcServer` installed
+/// and no registry to register into. Sealing it makes
+/// "`grpc_services(..)` without `.plugin(GrpcServer::..)` is a compile error"
+/// exact rather than merely conventional.
 #[derive(Clone)]
-pub struct GrpcMarker;
+pub struct GrpcMarker(pub(crate) ());
 
 /// Fold the reflection services (v1 + v1alpha, both for client compatibility:
 /// older `grpcurl` speaks v1alpha only) into the drained service set, fed by

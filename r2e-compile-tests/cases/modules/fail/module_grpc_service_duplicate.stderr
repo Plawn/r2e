@@ -1,0 +1,5 @@
+error: `PingService` is listed twice in `grpc_services(...)` — each entry is registered once, so a repeat is always a mistake
+  --> cases/modules/fail/module_grpc_service_duplicate.rs:39:58
+   |
+39 | #[module(providers(PingRepo), grpc_services(PingService, PingService))]
+   |                                                          ^^^^^^^^^^^

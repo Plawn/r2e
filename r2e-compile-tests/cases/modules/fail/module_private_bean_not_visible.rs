@@ -33,6 +33,7 @@ impl FeatureModule for UserModule {
     type Exports = TCons<Api, TNil>; // Secret stays private
     type Imports = TNil; type RequiredPlugins = ();
     type Plugins = ();
+    type Endpoints = ();
 
     fn plugins() {}
 }

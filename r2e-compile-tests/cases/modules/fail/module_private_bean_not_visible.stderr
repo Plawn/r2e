@@ -1,7 +1,7 @@
 error[E0277]: type `Secret` was not provided to the AppBuilder
-  --> cases/modules/fail/module_private_bean_not_visible.rs:61:36
+  --> cases/modules/fail/module_private_bean_not_visible.rs:62:36
    |
-61 |             .register_controller::<SpyController>()
+62 |             .register_controller::<SpyController>()
    |                                    ^^^^^^^^^^^^^ missing `.provide::<Secret>()` or `.register::<Secret>()`
    |
    = help: the trait `Contains<Secret, _>` is not implemented for `HNil`
