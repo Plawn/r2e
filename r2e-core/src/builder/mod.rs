@@ -158,14 +158,31 @@ pub struct ServeHook {
 /// A listener handed out by [`ServeContext::bind_tcp`].
 ///
 /// `handover` is cancelled when a later dev-reload cycle takes the same
-/// socket (never in production): a server should stop accepting as soon as
-/// either it or the cycle's shutdown token fires — see
-/// [`BoundListener::stop_signal`].
+/// socket (never in production). Serve through [`into_incoming`]: the
+/// stream checks the handover before every accept and, when it ends (or is
+/// dropped), tells the store this holder has released the socket — the next
+/// cycle's `bind_tcp` waits for that acknowledgement before it gets the
+/// socket, so no connection is accepted by the previous server once the
+/// new one is serving.
+///
+/// [`into_incoming`]: BoundListener::into_incoming
 pub struct BoundListener {
     /// The bound socket.
     pub listener: crate::rt::TcpListener,
     /// Fires when a later cycle takes over the socket.
     pub handover: CancelToken,
+    /// Cancelled on drop: "this holder no longer accepts".
+    pub(crate) release: ReleaseGuard,
+}
+
+/// Fires its token on drop — the holder's acknowledgement that it stopped
+/// accepting (whether it exited cleanly, was dropped, or never served).
+pub(crate) struct ReleaseGuard(pub(crate) CancelToken);
+
+impl Drop for ReleaseGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 impl BoundListener {
@@ -181,6 +198,67 @@ impl BoundListener {
                 _ = shutdown.cancelled() => {}
                 _ = handover.cancelled() => {}
             }
+        }
+    }
+
+    /// Turn the listener into an accept stream that ends on `shutdown` or on
+    /// the handover, checking those *before* every accept — so a queued
+    /// connection is never taken after the stop was signalled — and releases
+    /// the socket to the next holder when it ends. Feed it to
+    /// `serve_with_incoming_shutdown` (tonic) or any accept loop.
+    pub fn into_incoming(self, shutdown: CancelToken) -> HandoverIncoming {
+        let stop = Box::pin(self.stop_signal(shutdown));
+        HandoverIncoming {
+            listener: self.listener,
+            stop,
+            release: Some(self.release),
+            done: false,
+        }
+    }
+}
+
+/// Accept stream of a [`BoundListener`] — see [`BoundListener::into_incoming`].
+///
+/// Yields `Result<TcpStream, io::Error>`; ends (`None`) once the stop signal
+/// fired. Ending, or dropping the stream, releases the socket to the next
+/// dev-reload holder.
+pub struct HandoverIncoming {
+    listener: crate::rt::TcpListener,
+    stop: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    release: Option<ReleaseGuard>,
+    done: bool,
+}
+
+impl HandoverIncoming {
+    /// Local address of the underlying socket.
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.listener.local_addr()
+    }
+}
+
+impl futures_core::Stream for HandoverIncoming {
+    type Item = Result<crate::rt::TcpStream, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if self.done {
+            return Poll::Ready(None);
+        }
+        // Stop signal first, then accept: never take a connection once the
+        // stop (shutdown or handover) is observable.
+        if self.stop.as_mut().poll(cx).is_ready() {
+            self.done = true;
+            // Acknowledge: the next holder may start serving now.
+            drop(self.release.take());
+            return Poll::Ready(None);
+        }
+        match self.listener.poll_accept(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok((stream, _))) => Poll::Ready(Some(Ok(stream))),
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e))),
         }
     }
 }
@@ -232,9 +310,13 @@ impl ServeContext {
     /// sockets): the socket is bound once and every later cycle receives a
     /// clone of it, so the port stays open — and stays the *same* port, even
     /// for `:0` — across patches. Taking the socket cancels the handover
-    /// token handed to the previous cycle: a server that selects on it stops
-    /// accepting before the new cycle's server starts, instead of racing it
-    /// for queued connections and answering them with stale routes.
+    /// token handed to the previous cycle and then **waits for that holder
+    /// to acknowledge** (its [`HandoverIncoming`] ending or being dropped —
+    /// bounded, a stuck holder is logged and overridden after a few
+    /// seconds) before returning: the previous server has stopped accepting
+    /// before the new cycle's server starts, so no queued connection is
+    /// answered with stale routes. Serve through
+    /// [`BoundListener::into_incoming`] to take part in that protocol.
     ///
     /// Pair it with
     /// [`on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):
@@ -251,13 +333,14 @@ impl ServeContext {
         async move {
             #[cfg(feature = "dev-reload")]
             if crate::runtime::dev::hot_reload_loop_active() {
-                return crate::runtime::dev::get_or_bind_listener(owner, &addr);
+                return crate::runtime::dev::bind_listener(owner, addr).await;
             }
             #[cfg(not(feature = "dev-reload"))]
             let _ = owner;
             Ok(BoundListener {
                 listener: crate::rt::bind_tcp(&addr).await?,
                 handover: CancelToken::new(),
+                release: ReleaseGuard(CancelToken::new()),
             })
         }
     }

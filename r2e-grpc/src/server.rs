@@ -222,12 +222,15 @@ impl Plugin for GrpcServer {
                             }
                         };
                         // Stop accepting on shutdown OR when the next dev
-                        // cycle takes the socket over — the previous server
-                        // must not race the new one for queued connections
-                        // and answer them with stale routes.
-                        let stop = bound.stop_signal(shutdown);
-                        let listener = bound.listener;
-                        match listener.local_addr() {
+                        // cycle takes the socket over: the incoming stream
+                        // checks that before every accept and, once ended,
+                        // releases the socket to the next holder — which is
+                        // waiting for exactly that in its `bind_tcp`. The
+                        // same signal doubles as tonic's graceful-shutdown
+                        // trigger so in-flight requests drain either way.
+                        let stop = bound.stop_signal(shutdown.clone());
+                        let incoming = bound.into_incoming(shutdown);
+                        match incoming.local_addr() {
                             Ok(local) => tracing::info!(
                                 addr = %local, services = ?names,
                                 "R2E gRPC server listening"
@@ -237,7 +240,6 @@ impl Plugin for GrpcServer {
                                 "Could not read gRPC listener local address"
                             ),
                         }
-                        let incoming = tonic::transport::server::TcpIncoming::from(listener);
                         if let Err(e) = tonic::transport::Server::builder()
                             .add_routes(routes)
                             .serve_with_incoming_shutdown(incoming, stop)

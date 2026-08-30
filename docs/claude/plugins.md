@@ -78,7 +78,7 @@ A plugin never touches the router directly; it registers **effects** on the
 
 | Stage | Registered with | Applied |
 |---|---|---|
-| **Graph** | `add_layer`, `after_build`, `on_serve`, `store_data` | inside `build_state()`, right after the graph resolves |
+| **Graph** | `add_layer`, `after_build`, `on_serve`, `on_serve_each_cycle`, `store_data` | inside `build_state()`, right after the graph resolves |
 | **Routes** | `after_routes(FnOnce(&mut RoutesContext))` | in `build()`, after **every** controller (app, module, plugin) is registered |
 | **Finalize** | `wrap_router(FnOnce(Router) -> Router)` | in `build()`, outermost — after every HTTP layer |
 
@@ -309,7 +309,7 @@ Owned by the factory future (`'static`, no lifetime param):
 | `add_layer(f)` | Graph | router layer, plain closure (applied inside-out, install order) |
 | `store_data(d)` | Graph | type-keyed plugin data for cross-plugin coordination (`app.get_plugin_data::<T>()`, `RoutesContext::take_data`) |
 | `on_serve(f)` | Graph | `FnOnce(ServeContext)` at serve time (spawn servers, start tasks) |
-| `on_serve_each_cycle(f)` | Graph | same, but **also runs on `r2e dev` hot-patch cycles** (plain `on_serve` is skipped there). For transports that own a port: a patch drops the previous `run()`, cancelling its tracked tasks, so the port must be re-served each cycle — bind via `ServeContext::bind_tcp(owner, addr)` (async; dev listener store keyed by `(owner, addr)`: same socket across cycles, no sharing with HTTP) and stop accepting on `BoundListener::stop_signal` (shutdown or the next cycle's handover). Must be safe to re-run. |
+| `on_serve_each_cycle(f)` | Graph | same, but **also runs on `r2e dev` hot-patch cycles** (plain `on_serve` is skipped there). For transports that own a port: a patch drops the previous `run()`, which cancels that cycle's shutdown token (tracked tasks stop cooperatively — they are detached, not aborted), so the port must be re-served each cycle — bind via `ServeContext::bind_tcp(owner, addr)` (async; dev listener store keyed by `(owner, addr)`: same socket across cycles, no sharing with HTTP) and serve through `BoundListener::into_incoming(shutdown)`, whose stream stops before any accept once shutdown or the next cycle's handover fires and then releases the socket; the next cycle's `bind_tcp` waits for that release (5 s bound, then warns and proceeds). Must be safe to re-run. |
 | `after_build(f)` | Graph | `FnOnce(&mut DeferredContext)` — full-graph boot-time escape hatch |
 | `after_routes(f)` | Routes | `FnOnce(&mut RoutesContext)` — runs after every controller is registered: read the route registry, mount routers from it |
 | `wrap_router(f)` | Finalize | replace the whole router (e.g. gRPC multiplexer) — outside every HTTP layer, `catch_panic` included |

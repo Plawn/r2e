@@ -637,8 +637,11 @@ lookups), `config_raw()`, `add_layer`, `after_routes`, `wrap_router`,
 `store_data`, `on_serve`, `on_serve_each_cycle` (an `on_serve` that also runs
 on `r2e dev` hot-patch cycles — for transports serving their own port; bind
 through `ServeContext::bind_tcp(owner, addr)` (async → `BoundListener`) so the
-socket carries over between cycles, and stop accepting on
-`bound.stop_signal(shutdown)` so the previous cycle's server hands over),
+socket carries over between cycles, and serve through
+`bound.into_incoming(shutdown)` — a stream that stops before any accept on
+shutdown or handover and releases the socket; the next cycle's `bind_tcp`
+waits for that release, so the old server never accepts after the new one
+starts),
 `on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
 hatch).
 

@@ -12,6 +12,7 @@
 //! drives two serving cycles by hand, the way `r2e::launch!` does, against a
 //! plugin standing in for the gRPC transport.
 use crate::serial::CommitCycle;
+use futures_util::StreamExt;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
 use r2e_core::rt::io::{AsyncReadExt, AsyncWriteExt};
 use r2e_core::{AppBuilder, Plugin};
@@ -58,15 +59,9 @@ impl Plugin for PortPlugin {
             serve_ctx.track_named("cycle echo", async move {
                 let bound = bind.await.expect("bind through the dev listener store");
                 *BOUND.lock().unwrap() = Some(bound.listener.local_addr().unwrap());
-                let stop = bound.stop_signal(shutdown);
-                let listener = bound.listener;
-                r2e_core::rt::pin!(stop);
-                loop {
-                    let accepted = r2e_core::rt::select! {
-                        _ = &mut stop => break,
-                        accepted = listener.accept() => accepted,
-                    };
-                    if let Ok((mut stream, _)) = accepted {
+                let mut incoming = bound.into_incoming(shutdown);
+                while let Some(accepted) = incoming.next().await {
+                    if let Ok(mut stream) = accepted {
                         let _ = stream.write_all(cycle.to_string().as_bytes()).await;
                     }
                 }
@@ -189,44 +184,42 @@ async fn each_cycle_serve_hook_keeps_the_port_across_hot_patches() {
     wait_stopped(2).await;
 }
 
-/// The handover itself: a server whose cycle was NOT cancelled (it leaked —
-/// the tracked task is detached, never joined) must still stop accepting the
-/// moment the next cycle takes the socket, so it cannot answer with stale
-/// routes.
+/// The handover itself: a holder whose cycle was NOT cancelled (it leaked —
+/// the tracked task is detached, never joined) stops accepting the moment the
+/// next cycle takes the socket, and the next cycle only gets the socket once
+/// the old holder acknowledged — so no connection is ever accepted by the
+/// old server after the new one started.
 #[tokio::test(flavor = "multi_thread")]
-async fn taking_the_socket_again_stops_the_previous_holder() {
+async fn taking_the_socket_again_stops_the_previous_holder_first() {
     let _serial = crate::serial::dev_serial();
     r2e_core::runtime::dev::mark_hot_reload_loop();
-    // `ServeContext::bind_tcp` is the store call below under the loop; the
-    // store is what the handover lives in.
-    let first =
-        r2e_core::runtime::dev::get_or_bind_listener("handover-test", "127.0.0.1:0").unwrap();
-    let addr = first.listener.local_addr().unwrap();
     let never = r2e_core::rt::CancelToken::new();
-    let first_stop = first.stop_signal(never.clone());
+
+    let first = r2e_core::runtime::dev::bind_listener("handover-test", "127.0.0.1:0".into())
+        .await
+        .unwrap();
+    let addr = first.listener.local_addr().unwrap();
     let (tx, rx) = r2e_core::rt::sync::oneshot::channel();
-    let old_loop = r2e_core::rt::spawn(async move {
-        let listener = first.listener;
-        r2e_core::rt::pin!(first_stop);
-        let mut served = 0u32;
-        loop {
-            let accepted = r2e_core::rt::select! {
-                _ = &mut first_stop => break,
-                accepted = listener.accept() => accepted,
-            };
-            if let Ok((mut stream, _)) = accepted {
-                let _ = stream.write_all(b"old").await;
-                served += 1;
+    let old_loop = r2e_core::rt::spawn({
+        let mut incoming = first.into_incoming(never.clone());
+        async move {
+            let mut served = 0u32;
+            while let Some(accepted) = incoming.next().await {
+                if let Ok(mut stream) = accepted {
+                    let _ = stream.write_all(b"old").await;
+                    served += 1;
+                }
             }
+            let _ = tx.send(served);
         }
-        let _ = tx.send(served);
     });
     assert_eq!(served_cycle(addr).await, "old");
 
-    // The next cycle takes the socket: the old loop stops without anyone
-    // cancelling its shutdown token.
-    let second =
-        r2e_core::runtime::dev::get_or_bind_listener("handover-test", "127.0.0.1:0").unwrap();
+    // The next cycle takes the socket: by the time it has it, the old loop
+    // has exited — nobody cancelled its shutdown token.
+    let second = r2e_core::runtime::dev::bind_listener("handover-test", "127.0.0.1:0".into())
+        .await
+        .unwrap();
     assert_eq!(second.listener.local_addr().unwrap(), addr);
     let served_by_old = r2e_core::rt::timeout(Duration::from_secs(5), rx)
         .await
@@ -235,22 +228,57 @@ async fn taking_the_socket_again_stops_the_previous_holder() {
     assert_eq!(served_by_old, 1);
     let _ = old_loop.await;
 
-    // Connections queued now are answered by the new holder only.
-    let second_stop = second.stop_signal(never.clone());
-    let new_loop = r2e_core::rt::spawn(async move {
-        let listener = second.listener;
-        r2e_core::rt::pin!(second_stop);
-        loop {
-            let accepted = r2e_core::rt::select! {
-                _ = &mut second_stop => break,
-                accepted = listener.accept() => accepted,
-            };
-            if let Ok((mut stream, _)) = accepted {
-                let _ = stream.write_all(b"new").await;
+    // Connections from now on are answered by the new holder only.
+    let new_loop = r2e_core::rt::spawn({
+        let mut incoming = second.into_incoming(never.clone());
+        async move {
+            while let Some(accepted) = incoming.next().await {
+                if let Ok(mut stream) = accepted {
+                    let _ = stream.write_all(b"new").await;
+                }
             }
         }
     });
     assert_eq!(served_cycle(addr).await, "new");
     never.cancel();
-    let _ = r2e_core::rt::timeout(Duration::from_secs(5), new_loop).await;
+    r2e_core::rt::timeout(Duration::from_secs(5), new_loop)
+        .await
+        .expect("new holder did not stop on shutdown")
+        .unwrap();
+}
+
+/// The acknowledgement: while the previous holder has not stopped accepting
+/// (here: its incoming stream exists but is never polled), the next bind
+/// stays pending; it resolves once the holder releases the socket.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_bind_waits_for_the_previous_holder_to_release() {
+    let _serial = crate::serial::dev_serial();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
+    let never = r2e_core::rt::CancelToken::new();
+
+    let first = r2e_core::runtime::dev::bind_listener("ack-test", "127.0.0.1:0".into())
+        .await
+        .unwrap();
+    let addr = first.listener.local_addr().unwrap();
+    let held = first.into_incoming(never.clone());
+
+    let second = r2e_core::rt::spawn(r2e_core::runtime::dev::bind_listener(
+        "ack-test",
+        "127.0.0.1:0".into(),
+    ));
+    r2e_core::rt::pin!(second);
+    assert!(
+        r2e_core::rt::timeout(Duration::from_millis(300), &mut second)
+            .await
+            .is_err(),
+        "the next bind must wait for the previous holder"
+    );
+
+    drop(held); // the old holder releases the socket
+    let second = r2e_core::rt::timeout(Duration::from_secs(5), second)
+        .await
+        .expect("bind did not resolve after the release")
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.listener.local_addr().unwrap(), addr);
 }

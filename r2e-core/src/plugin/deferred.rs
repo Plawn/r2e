@@ -264,10 +264,11 @@ impl DeferredContext<'_> {
     ///
     /// The hook must therefore be safe to run again: bind through
     /// [`ServeContext::bind_tcp`](crate::builder::ServeContext::bind_tcp)
-    /// (the port carries over between cycles), stop accepting on the
-    /// returned [`BoundListener::stop_signal`](crate::builder::BoundListener::stop_signal)
-    /// (shutdown *or* the next cycle taking the socket over), and never start
-    /// anything a second run would duplicate.
+    /// (the port carries over between cycles), serve through
+    /// [`BoundListener::into_incoming`](crate::builder::BoundListener::into_incoming)
+    /// (stops accepting on shutdown *or* the next cycle taking the socket
+    /// over, and releases it to that cycle), and never start anything a
+    /// second run would duplicate.
     pub fn on_serve_each_cycle<F>(&mut self, hook: F)
     where
         F: FnOnce(crate::builder::ServeContext) + Send + 'static,

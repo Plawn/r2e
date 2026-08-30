@@ -249,8 +249,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                          SO_REUSEPORT sharding is ignored (unsupported with hot-reload). \
                          Serving with a single listener."
                     );
-                    let listener =
-                        crate::runtime::dev::get_or_bind_listener("http", &self.addr)?.listener;
+                    let listener = crate::runtime::dev::get_or_bind_listener("http", &self.addr)?
+                        .bound
+                        .listener;
                     self.run_inner(ServeStrategy::Single(listener)).await
                 }
                 #[cfg(not(feature = "dev-reload"))]
@@ -261,8 +262,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // Default: single listener on the caller's runtime — unchanged.
             None => {
                 #[cfg(feature = "dev-reload")]
-                let listener =
-                    crate::runtime::dev::get_or_bind_listener("http", &self.addr)?.listener;
+                let listener = crate::runtime::dev::get_or_bind_listener("http", &self.addr)?
+                    .bound
+                    .listener;
                 #[cfg(not(feature = "dev-reload"))]
                 let listener = crate::rt::bind_tcp(&self.addr).await?;
                 self.run_inner(ServeStrategy::Single(listener)).await
