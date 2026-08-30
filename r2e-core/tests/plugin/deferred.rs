@@ -5,7 +5,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 
-use r2e_core::builder::ServeContext;
+use r2e_core::builder::ServeHook;
 use r2e_core::plugin::{
     AsyncShutdownHook, DeferredAction, DeferredContext, Plugin, PluginBuildContext,
     PluginBuildError,
@@ -98,7 +98,7 @@ fn make_deferred_context<'a>(
         Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>,
     >,
     plugin_data: &'a mut HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
-    serve_hooks: &'a mut Vec<Box<dyn FnOnce(ServeContext) + Send>>,
+    serve_hooks: &'a mut Vec<ServeHook>,
     shutdown_hooks: &'a mut Vec<Box<dyn FnOnce() + Send>>,
     async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
     bean_context: &'a std::sync::Arc<r2e_core::BeanContext>,

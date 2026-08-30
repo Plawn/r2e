@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use r2e_core::runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
 use r2e_core::rt::sync::oneshot;
+use r2e_core::runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
 use r2e_core::{
     reuseport_supported, reuseport_tcp, reuseport_udp, MailboxError, Mailboxes, WorkerHarness,
     WorkerInfo, WorkerLocal, WorkerRole, WorkerSet, WorkerState,
@@ -32,11 +32,20 @@ async fn worker_info_is_installed_on_each_harness_worker() {
     let seen = h
         .run_on_all(|ctx| async move {
             let info = WorkerInfo::current().expect("installed on worker");
-            (ctx.id(), info.id(), info.workers(), info.role(), info.to_string())
+            (
+                ctx.id(),
+                info.id(),
+                info.workers(),
+                info.role(),
+                info.to_string(),
+            )
         })
         .await;
     for (i, row) in seen.iter().enumerate() {
-        assert_eq!(*row, (i, i, 3, WorkerRole::DataPlane, format!("worker {i}/3")));
+        assert_eq!(
+            *row,
+            (i, i, 3, WorkerRole::DataPlane, format!("worker {i}/3"))
+        );
     }
     h.shutdown().await;
 }
@@ -96,7 +105,11 @@ async fn worker_local_is_built_exactly_once_per_worker_and_dropped_on_shutdown()
     h.shutdown().await;
     assert_eq!(local.instances(), 0);
     assert_eq!(local.dropped(), 4);
-    assert_eq!(drops.load(Ordering::SeqCst), 4, "dropped on the worker at shutdown");
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        4,
+        "dropped on the worker at shutdown"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -112,7 +125,10 @@ async fn worker_local_with_panics_off_worker_naming_the_caller() {
         .cloned()
         .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
         .unwrap_or_default();
-    assert!(msg.contains("control-plane"), "panic names the caller: {msg}");
+    assert!(
+        msg.contains("control-plane"),
+        "panic names the caller: {msg}"
+    );
     assert!(msg.contains("Cell<u64>"), "panic names the type: {msg}");
     h.shutdown().await;
 }
@@ -191,7 +207,9 @@ async fn worker_set_records_failure_with_message() {
             Ok(())
         }
     });
-    let err = WorkerHarness::start(2, vec![boom]).await.expect_err("fails");
+    let err = WorkerHarness::start(2, vec![boom])
+        .await
+        .expect_err("fails");
     assert!(err.contains("no socket"), "{err}");
 }
 
@@ -213,10 +231,7 @@ async fn worker_set_wait_until_wakes_on_state_change() {
         .unwrap();
     slot.fail("late failure");
     assert!(set.any_failed());
-    assert_eq!(
-        set.first_error(),
-        Some((0, "late failure".to_string()))
-    );
+    assert_eq!(set.first_error(), Some((0, "late failure".to_string())));
     assert_eq!(slot.snapshot().state, WorkerState::Failed);
 }
 
@@ -402,7 +417,11 @@ async fn harness_shuts_services_down_in_reverse_order_on_the_worker() {
     }
     impl WorkerService for Svc {
         fn shutdown(self: Box<Self>) -> r2e_core::runtime::worker::LocalBoxFuture<'static, ()> {
-            assert_eq!(std::thread::current().id(), self.thread, "shutdown on the worker");
+            assert_eq!(
+                std::thread::current().id(),
+                self.thread,
+                "shutdown on the worker"
+            );
             Box::pin(async move {
                 self.log.lock().unwrap().push(format!(
                     "{}:{}",
@@ -436,7 +455,10 @@ async fn harness_shuts_services_down_in_reverse_order_on_the_worker() {
     for w in 0..2 {
         let a = raw.iter().position(|s| *s == format!("{w}:a")).unwrap();
         let b = raw.iter().position(|s| *s == format!("{w}:b")).unwrap();
-        assert!(b < a, "b (started last) shuts down first on worker {w}: {raw:?}");
+        assert!(
+            b < a,
+            "b (started last) shuts down first on worker {w}: {raw:?}"
+        );
     }
 }
 
@@ -456,9 +478,15 @@ fn reuseport_helpers_follow_the_platform_contract() {
         assert_eq!(u2.local_addr().unwrap(), ubound);
     } else {
         let e = reuseport_tcp(addr).unwrap_err();
-        assert!(matches!(e, r2e_core::AffinityError::Unsupported { transport: "tcp" }));
+        assert!(matches!(
+            e,
+            r2e_core::AffinityError::Unsupported { transport: "tcp" }
+        ));
         let e = reuseport_udp(addr).unwrap_err();
-        assert!(matches!(e, r2e_core::AffinityError::Unsupported { transport: "udp" }));
+        assert!(matches!(
+            e,
+            r2e_core::AffinityError::Unsupported { transport: "udp" }
+        ));
     }
 }
 

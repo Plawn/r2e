@@ -265,7 +265,11 @@ impl<T: 'static> WorkerLocalGuard<T> {
     fn remove(&mut self) {
         let removed = SLOTS.with(|s| s.borrow_mut().remove(&self.key));
         if let Some(value) = removed {
-            tracing::debug!(worker = self.worker, r#type = self.name, "dropping worker-local");
+            tracing::debug!(
+                worker = self.worker,
+                r#type = self.name,
+                "dropping worker-local"
+            );
             drop(value);
             self.stats.dropped.fetch_add(1, Ordering::Relaxed);
         }

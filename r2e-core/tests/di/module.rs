@@ -682,8 +682,14 @@ async fn plugin_installed_by_app_and_module_names_both_owners() {
     }
 
     let rendered = err.to_string();
-    assert!(rendered.contains("by app and by module 'AlsoBringsPluginModule'"), "{rendered}");
-    assert!(rendered.contains("requires_plugins(BroughtPlugin)"), "{rendered}");
+    assert!(
+        rendered.contains("by app and by module 'AlsoBringsPluginModule'"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("requires_plugins(BroughtPlugin)"),
+        "{rendered}"
+    );
 }
 
 // ── A module controller whose declared config is missing ───────────────────
@@ -872,7 +878,9 @@ impl r2e_core::di::module::ModuleEndpointSet for FailingEndpoints {
     type Deps = TNil;
 }
 
-impl<T: Clone + Send + Sync + 'static> r2e_core::di::module::ModuleEndpoints<T> for FailingEndpoints {
+impl<T: Clone + Send + Sync + 'static> r2e_core::di::module::ModuleEndpoints<T>
+    for FailingEndpoints
+{
     fn register_all(
         _builder: AppBuilder<T>,
         module: &'static str,

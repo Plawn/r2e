@@ -368,10 +368,7 @@ impl<P, R, Mods> ModulePlugins<P, R, Mods> for () {
     type OutR = R;
     type OutMods = Mods;
 
-    fn install_all(
-        self,
-        app: AppBuilder<NoState, P, R, Mods>,
-    ) -> AppBuilder<NoState, P, R, Mods> {
+    fn install_all(self, app: AppBuilder<NoState, P, R, Mods>) -> AppBuilder<NoState, P, R, Mods> {
         app
     }
 }
@@ -494,8 +491,7 @@ pub type ModuleProvided<M> = <<<M as FeatureModule>::Providers as BeanList>::Pro
 /// The module's local resolution scope: everything its providers provide, the
 /// beans of the plugins it brings, plus its imports. Provider and controller
 /// dependencies must resolve here.
-pub type ModuleScope<M> =
-    <ModuleProvided<M> as TAppend<<M as FeatureModule>::Imports>>::Output;
+pub type ModuleScope<M> = <ModuleProvided<M> as TAppend<<M as FeatureModule>::Imports>>::Output;
 
 // ── Encapsulation checks ────────────────────────────────────────────────────
 //

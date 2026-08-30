@@ -89,6 +89,7 @@ async fn cfgd_in_controller_still_builds_from_the_graph() {
         .await
         .expect("graph resolves");
 
-    let core = <EnabledController as r2e_core::ContextConstruct>::from_context(state.bean_context());
+    let core =
+        <EnabledController as r2e_core::ContextConstruct>::from_context(state.bean_context());
     assert_eq!(core.label.0.as_ref(), "enabled");
 }

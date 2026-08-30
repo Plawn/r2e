@@ -249,7 +249,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                          SO_REUSEPORT sharding is ignored (unsupported with hot-reload). \
                          Serving with a single listener."
                     );
-                    let listener = crate::runtime::dev::get_or_bind_listener(&self.addr)?;
+                    let listener =
+                        crate::runtime::dev::get_or_bind_listener("http", &self.addr)?.listener;
                     self.run_inner(ServeStrategy::Single(listener)).await
                 }
                 #[cfg(not(feature = "dev-reload"))]
@@ -260,7 +261,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             // Default: single listener on the caller's runtime — unchanged.
             None => {
                 #[cfg(feature = "dev-reload")]
-                let listener = crate::runtime::dev::get_or_bind_listener(&self.addr)?;
+                let listener =
+                    crate::runtime::dev::get_or_bind_listener("http", &self.addr)?.listener;
                 #[cfg(not(feature = "dev-reload"))]
                 let listener = crate::rt::bind_tcp(&self.addr).await?;
                 self.run_inner(ServeStrategy::Single(listener)).await
@@ -401,15 +403,16 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // hook lists allocate nothing — an app with no lifecycle hook pays for
         // nothing here.
         let state = self.state;
-        let bind = |hooks: Vec<ShutdownHook<T>>, state: &T| -> Vec<crate::plugin::AsyncShutdownHook> {
-            hooks
-                .into_iter()
-                .map(|hook| {
-                    let state = state.clone();
-                    Box::new(move || hook(state)) as crate::plugin::AsyncShutdownHook
-                })
-                .collect()
-        };
+        let bind =
+            |hooks: Vec<ShutdownHook<T>>, state: &T| -> Vec<crate::plugin::AsyncShutdownHook> {
+                hooks
+                    .into_iter()
+                    .map(|hook| {
+                        let state = state.clone();
+                        Box::new(move || hook(state)) as crate::plugin::AsyncShutdownHook
+                    })
+                    .collect()
+            };
 
         Ok(RunningApp {
             router: self.router,

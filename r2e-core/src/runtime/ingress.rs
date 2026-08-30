@@ -80,7 +80,11 @@ impl From<std::io::Error> for AffinityError {
 pub const fn reuseport_supported() -> bool {
     cfg!(all(
         unix,
-        not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))
+        not(any(
+            target_os = "solaris",
+            target_os = "illumos",
+            target_os = "cygwin"
+        ))
     ))
 }
 

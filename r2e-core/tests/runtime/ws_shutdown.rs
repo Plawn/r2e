@@ -367,12 +367,12 @@ mod sharded {
     async fn sharded_app(
         port: u16,
         grace: Duration,
-    ) -> r2e_core::builder::PreparedApp<
-        impl Clone + Send + Sync + 'static + BeanLookup,
-    > {
+    ) -> r2e_core::builder::PreparedApp<impl Clone + Send + Sync + 'static + BeanLookup> {
         let yaml = format!("server:\n  workers: 2\n  port: {port}\n");
         let config = R2eConfig::from_yaml_str(&yaml).unwrap();
-        let builder = AppBuilder::new().override_config(config).load_config::<()>();
+        let builder = AppBuilder::new()
+            .override_config(config)
+            .load_config::<()>();
         builder
             .build_state()
             .await
@@ -502,7 +502,8 @@ mod sharded {
                 let stopped_at_client = stopped_at.clone();
                 let client = r2e_core::rt::spawn(async move {
                     let _stop_on_drop = StopOnDrop(stop);
-                    let mut client = connect_retry(&format!("ws://127.0.0.1:{port}/stubborn")).await;
+                    let mut client =
+                        connect_retry(&format!("ws://127.0.0.1:{port}/stubborn")).await;
                     let greeting = r2e_core::rt::timeout(Duration::from_secs(5), client.next())
                         .await
                         .expect("no greeting before timeout");

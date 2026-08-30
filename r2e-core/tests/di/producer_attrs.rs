@@ -119,16 +119,7 @@ mod many_dependencies {
     pub struct Wide;
 
     #[producer]
-    pub fn wide_producer(
-        _a: D1,
-        _b: D2,
-        _c: D3,
-        _d: D4,
-        _e: D5,
-        _f: D6,
-        _g: D7,
-        _h: D8,
-    ) -> Wide {
+    pub fn wide_producer(_a: D1, _b: D2, _c: D3, _d: D4, _e: D5, _f: D6, _g: D7, _h: D8) -> Wide {
         Wide
     }
 }
@@ -260,7 +251,10 @@ async fn allowed_producer_still_resolves() {
         .await
         .expect("graph resolves");
 
-    assert_eq!(state.bean_context().get::<allow_is_honoured::Allowed>().0, 2);
+    assert_eq!(
+        state.bean_context().get::<allow_is_honoured::Allowed>().0,
+        2
+    );
 }
 
 #[r2e_core::test]
@@ -292,7 +286,10 @@ async fn cfgd_in_bean_still_resolves() {
         .await
         .expect("graph resolves");
 
-    assert_eq!(state.bean_context().get::<CfgEnabledBean>().0, "bean-enabled");
+    assert_eq!(
+        state.bean_context().get::<CfgEnabledBean>().0,
+        "bean-enabled"
+    );
 }
 
 #[r2e_core::test]

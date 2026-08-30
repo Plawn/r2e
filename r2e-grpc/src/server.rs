@@ -206,22 +206,27 @@ impl Plugin for GrpcServer {
                     // Bind explicitly (instead of tonic's internal bind) so
                     // the resolved address — including an OS-assigned port
                     // for `:0` — is logged, and so the socket carries over
-                    // between hot-patch cycles.
-                    let listener = match serve_ctx.bind_tcp(addr.as_str()) {
-                        Ok(l) => l,
-                        Err(e) => {
-                            tracing::error!(
-                                addr = %addr, error = %e,
-                                "Failed to bind gRPC listener; gRPC server NOT started"
-                            );
-                            return;
-                        }
-                    };
-                    // Phase 2 will move this crate onto `CancelToken`; until then
-                    // the seam hands out the raw tokio-util token, which tonic's
-                    // `serve_with_incoming_shutdown` needs for `cancelled_owned()`.
-                    let cancel = serve_ctx.shutdown_token().into_inner();
+                    // between hot-patch cycles. The bind is async (DNS may
+                    // block), so it runs inside the tracked task.
+                    let bind = serve_ctx.bind_tcp("grpc", addr.as_str());
+                    let shutdown = serve_ctx.shutdown_token();
                     serve_ctx.track_named("grpc server", async move {
+                        let bound = match bind.await {
+                            Ok(bound) => bound,
+                            Err(e) => {
+                                tracing::error!(
+                                    addr = %addr, error = %e,
+                                    "Failed to bind gRPC listener; gRPC server NOT started"
+                                );
+                                return;
+                            }
+                        };
+                        // Stop accepting on shutdown OR when the next dev
+                        // cycle takes the socket over — the previous server
+                        // must not race the new one for queued connections
+                        // and answer them with stale routes.
+                        let stop = bound.stop_signal(shutdown);
+                        let listener = bound.listener;
                         match listener.local_addr() {
                             Ok(local) => tracing::info!(
                                 addr = %local, services = ?names,
@@ -235,7 +240,7 @@ impl Plugin for GrpcServer {
                         let incoming = tonic::transport::server::TcpIncoming::from(listener);
                         if let Err(e) = tonic::transport::Server::builder()
                             .add_routes(routes)
-                            .serve_with_incoming_shutdown(incoming, cancel.cancelled_owned())
+                            .serve_with_incoming_shutdown(incoming, stop)
                             .await
                         {
                             tracing::error!(error = %e, "gRPC server error");

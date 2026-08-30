@@ -155,6 +155,36 @@ pub struct ServeHook {
     pub(crate) each_cycle: bool,
 }
 
+/// A listener handed out by [`ServeContext::bind_tcp`].
+///
+/// `handover` is cancelled when a later dev-reload cycle takes the same
+/// socket (never in production): a server should stop accepting as soon as
+/// either it or the cycle's shutdown token fires — see
+/// [`BoundListener::stop_signal`].
+pub struct BoundListener {
+    /// The bound socket.
+    pub listener: crate::rt::TcpListener,
+    /// Fires when a later cycle takes over the socket.
+    pub handover: CancelToken,
+}
+
+impl BoundListener {
+    /// A future that resolves when either the given shutdown token or the
+    /// handover token fires — the signal to stop accepting connections.
+    pub fn stop_signal(
+        &self,
+        shutdown: CancelToken,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let handover = self.handover.clone();
+        async move {
+            crate::rt::select! {
+                _ = shutdown.cancelled() => {}
+                _ = handover.cancelled() => {}
+            }
+        }
+    }
+}
+
 /// Context handed to serve hooks ([`DeferredContext::on_serve`]) when the
 /// server starts.
 ///
@@ -192,28 +222,44 @@ impl ServeContext {
         self.shutdown.clone()
     }
 
-    /// Bind a TCP listener for a transport this hook serves on its own port
-    /// (the separate-port gRPC server, for instance).
+    /// Bind the TCP listener a serve hook serves its own port from.
     ///
-    /// In production this is a plain bind. Inside the `r2e dev` hot-patch
-    /// loop it goes through the same process-global listener store the HTTP
-    /// port uses: the socket is bound once and every later cycle receives a
+    /// In production this is a plain (async) bind and the returned
+    /// [`BoundListener::handover`] token never fires. Inside the `r2e dev`
+    /// hot-patch loop it goes through the same process-global listener store
+    /// the HTTP port uses, namespaced by `owner` (so a gRPC transport and the
+    /// HTTP server asking for the same address string get *different*
+    /// sockets): the socket is bound once and every later cycle receives a
     /// clone of it, so the port stays open — and stays the *same* port, even
-    /// for `:0` — across patches instead of racing the previous cycle's
-    /// server for it. Pair it with
+    /// for `:0` — across patches. Taking the socket cancels the handover
+    /// token handed to the previous cycle: a server that selects on it stops
+    /// accepting before the new cycle's server starts, instead of racing it
+    /// for queued connections and answering them with stale routes.
+    ///
+    /// Pair it with
     /// [`on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):
     /// a hook that only runs once cannot re-serve the port after a patch.
-    ///
-    /// Synchronous (a serve hook is a sync closure): `addr` is resolved by
-    /// the standard library's blocking resolver.
-    pub fn bind_tcp(&self, addr: &str) -> Result<crate::rt::TcpListener, crate::beans::BootError> {
-        #[cfg(feature = "dev-reload")]
-        if crate::runtime::dev::hot_reload_loop_active() {
-            return crate::runtime::dev::get_or_bind_listener(addr);
+    /// The future borrows nothing from the context, so a hook can move it
+    /// into the task it tracks.
+    pub fn bind_tcp(
+        &self,
+        owner: &'static str,
+        addr: &str,
+    ) -> impl std::future::Future<Output = Result<BoundListener, crate::beans::BootError>> + Send + 'static
+    {
+        let addr = addr.to_string();
+        async move {
+            #[cfg(feature = "dev-reload")]
+            if crate::runtime::dev::hot_reload_loop_active() {
+                return crate::runtime::dev::get_or_bind_listener(owner, &addr);
+            }
+            #[cfg(not(feature = "dev-reload"))]
+            let _ = owner;
+            Ok(BoundListener {
+                listener: crate::rt::bind_tcp(&addr).await?,
+                handover: CancelToken::new(),
+            })
         }
-        let listener = std::net::TcpListener::bind(addr)?;
-        listener.set_nonblocking(true)?;
-        Ok(crate::rt::TcpListener::from_std(listener)?)
     }
 
     /// Spawn a tracked task: its completion is awaited after the HTTP drain
@@ -316,8 +362,12 @@ impl ServiceHandles {
     /// joined; `spawn_ctl` puts the task on the main runtime, which outlives
     /// the workers. On the single-listener path it is a plain `spawn`.
     #[cfg(feature = "ws")]
-    fn spawn_owning_ctl<F>(&self, label: &'static str, graph: Arc<crate::beans::BeanContext>, fut: F)
-    where
+    fn spawn_owning_ctl<F>(
+        &self,
+        label: &'static str,
+        graph: Arc<crate::beans::BeanContext>,
+        fut: F,
+    ) where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.push(TrackedHandle {
@@ -744,7 +794,9 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     {
         self.shared
             .per_worker_services
-            .push(crate::runtime::worker::PerWorkerServiceFactory::new(factory));
+            .push(crate::runtime::worker::PerWorkerServiceFactory::new(
+                factory,
+            ));
         self
     }
 }

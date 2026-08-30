@@ -289,14 +289,21 @@ mod lifecycle {
         });
         res.unwrap();
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), n, "factory must run exactly once per worker: {seen:?}");
+        assert_eq!(
+            seen.len(),
+            n,
+            "factory must run exactly once per worker: {seen:?}"
+        );
         let ids: BTreeSet<usize> = seen.iter().map(|s| s.id).collect();
         assert_eq!(ids, (0..n).collect::<BTreeSet<_>>(), "ids must be 0..n");
         let threads: std::collections::HashSet<ThreadId> = seen.iter().map(|s| s.thread).collect();
         assert_eq!(threads.len(), n, "each worker runs on its own thread");
         for s in seen.iter() {
             assert_eq!(s.workers, n);
-            assert_eq!(s.thread_name.as_deref(), Some(format!("r2e-worker-{}", s.id).as_str()));
+            assert_eq!(
+                s.thread_name.as_deref(),
+                Some(format!("r2e-worker-{}", s.id).as_str())
+            );
         }
     }
 
@@ -331,8 +338,15 @@ mod lifecycle {
         fn shutdown(mut self: Box<Self>) -> LocalBoxFuture<'static, ()> {
             Box::pin(async move {
                 let observed = self.watcher.take().unwrap().await.unwrap();
-                assert_eq!(observed, *self.state.borrow(), "watcher saw the shared Rc state");
-                self.report.lock().unwrap().push((self.id, *self.state.borrow()));
+                assert_eq!(
+                    observed,
+                    *self.state.borrow(),
+                    "watcher saw the shared Rc state"
+                );
+                self.report
+                    .lock()
+                    .unwrap()
+                    .push((self.id, *self.state.borrow()));
             })
         }
     }
@@ -397,7 +411,10 @@ mod lifecycle {
         }
     }
 
-    fn counting_factory(idx: usize, shut: Arc<Mutex<Vec<(usize, usize)>>>) -> PerWorkerServiceFactory {
+    fn counting_factory(
+        idx: usize,
+        shut: Arc<Mutex<Vec<(usize, usize)>>>,
+    ) -> PerWorkerServiceFactory {
         PerWorkerServiceFactory::new(move |w: WorkerContext| {
             let shut = shut.clone();
             async move {
@@ -415,16 +432,31 @@ mod lifecycle {
         let shut = Arc::new(Mutex::new(Vec::new()));
         run_sharded(
             4,
-            vec![counting_factory(0, shut.clone()), counting_factory(1, shut.clone())],
+            vec![
+                counting_factory(0, shut.clone()),
+                counting_factory(1, shut.clone()),
+            ],
             true,
             |addr| ping(addr).unwrap(),
         )
         .unwrap();
         let shut = shut.lock().unwrap();
-        assert_eq!(shut.len(), 8, "2 services × 4 workers must all shut down: {shut:?}");
+        assert_eq!(
+            shut.len(),
+            8,
+            "2 services × 4 workers must all shut down: {shut:?}"
+        );
         for w in 0..4 {
-            let order: Vec<usize> = shut.iter().filter(|(ww, _)| *ww == w).map(|(_, i)| *i).collect();
-            assert_eq!(order, vec![1, 0], "worker {w} must shut down in reverse start order");
+            let order: Vec<usize> = shut
+                .iter()
+                .filter(|(ww, _)| *ww == w)
+                .map(|(_, i)| *i)
+                .collect();
+            assert_eq!(
+                order,
+                vec![1, 0],
+                "worker {w} must shut down in reverse start order"
+            );
         }
     }
 
@@ -446,9 +478,18 @@ mod lifecycle {
             |_| served.store(true, Ordering::SeqCst),
         );
         let err = res.expect_err("startup must fail");
-        assert!(err.contains("worker 2"), "error must name the worker: {err}");
-        assert!(err.contains("service #1"), "error must name the service: {err}");
-        assert!(err.contains("disk on fire"), "error must carry the cause: {err}");
+        assert!(
+            err.contains("worker 2"),
+            "error must name the worker: {err}"
+        );
+        assert!(
+            err.contains("service #1"),
+            "error must name the service: {err}"
+        );
+        assert!(
+            err.contains("disk on fire"),
+            "error must carry the cause: {err}"
+        );
         // Every worker — the failing one AND the ones that started fine — must
         // have shut down service #0 (rollback is all-or-nothing).
         let mut shut = shut.lock().unwrap().clone();
@@ -466,7 +507,10 @@ mod lifecycle {
             Ok::<(), BoxError>(())
         });
         let err = run_sharded(2, vec![panicking], false, |_| {}).expect_err("must fail");
-        assert!(err.contains("worker 0"), "error must name the worker: {err}");
+        assert!(
+            err.contains("worker 0"),
+            "error must name the worker: {err}"
+        );
     }
 
     // ── Builder-level end to end ────────────────────────────────────────────

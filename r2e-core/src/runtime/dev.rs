@@ -33,7 +33,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[cfg(feature = "dev-reload")]
-static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> = OnceLock::new();
+/// Cached listeners, keyed by `(owner, address)` — the owner namespaces the
+/// address so the HTTP server and a plugin transport (gRPC) asking for the
+/// same string (`"127.0.0.1:0"`!) never share one socket (task #997).
+static LISTENER_STORE: OnceLock<Mutex<HashMap<(&'static str, String), StoredListener>>> =
+    OnceLock::new();
+
+/// One cached socket plus the handover token of the cycle currently serving
+/// it. The next cycle that asks for the same key cancels that token, so the
+/// previous server stops accepting *before* the new one starts — the two
+/// clones of the fd would otherwise race for queued connections.
+#[cfg(feature = "dev-reload")]
+struct StoredListener {
+    listener: std::net::TcpListener,
+    holder: crate::rt::CancelToken,
+}
 
 /// Whether this process is actually running inside the Subsecond hot-patch
 /// loop (set by `r2e::launch!` before entering it).
@@ -93,10 +107,16 @@ fn parse_port(addr: &str) -> Option<u16> {
     addr.rsplit(':').next().and_then(|p| p.parse().ok())
 }
 
+/// Bind — or hand over — the cached listener for `(owner, addr)`.
+///
+/// Public for the dev-reload test target; user code goes through
+/// [`ServeContext::bind_tcp`](crate::builder::ServeContext::bind_tcp).
+#[doc(hidden)]
 #[cfg(feature = "dev-reload")]
-pub(crate) fn get_or_bind_listener(
+pub fn get_or_bind_listener(
+    owner: &'static str,
     addr: &str,
-) -> Result<crate::rt::TcpListener, crate::beans::BootError> {
+) -> Result<crate::builder::BoundListener, crate::beans::BootError> {
     // Guard: prevent binding to the Dioxus devserver port.
     if let Some(port) = parse_port(addr) {
         if port == DIOXUS_DEVSERVER_PORT {
@@ -111,18 +131,35 @@ pub(crate) fn get_or_bind_listener(
     }
 
     let store = LISTENER_STORE.get_or_init(|| Mutex::new(HashMap::new()));
+    // A cycle that panicked while holding the lock must not brick every
+    // later cycle: the map is always left consistent, so recover it.
     let mut map = store
         .lock()
-        .map_err(|e| format!("listener store poisoned: {e}"))?;
-    if let Some(existing) = map.get(addr) {
-        Ok(crate::rt::TcpListener::from_std(existing.try_clone()?)?)
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = (owner, addr.to_string());
+    let handover = crate::rt::CancelToken::new();
+    let std_listener = if let Some(existing) = map.get_mut(&key) {
+        // Hand over: the previous cycle's server stops accepting now.
+        existing.holder.cancel();
+        existing.holder = handover.clone();
+        existing.listener.try_clone()?
     } else {
         let l = std::net::TcpListener::bind(addr)?;
         l.set_nonblocking(true)?;
         let cloned = l.try_clone()?;
-        map.insert(addr.to_string(), l);
-        Ok(crate::rt::TcpListener::from_std(cloned)?)
-    }
+        map.insert(
+            key,
+            StoredListener {
+                listener: l,
+                holder: handover.clone(),
+            },
+        );
+        cloned
+    };
+    Ok(crate::builder::BoundListener {
+        listener: crate::rt::TcpListener::from_std(std_listener)?,
+        handover,
+    })
 }
 
 // ── QUIC endpoint cache for dev-reload ─────────────────────────────────────

@@ -156,7 +156,10 @@ async fn a_failed_cycle_rolls_back_and_leaves_the_last_good_one_cached() {
         "cycle 1 was still cached, so cycle 3 rebuilt nothing"
     );
     assert!(
-        Arc::ptr_eq(&state1.get::<Tracked>().probe, &state3.get::<Tracked>().probe),
+        Arc::ptr_eq(
+            &state1.get::<Tracked>().probe,
+            &state3.get::<Tracked>().probe
+        ),
         "cycle 3 must reuse cycle 1's instance, not a graph the failed cycle left behind"
     );
     assert_eq!(state3.get::<Tracked>().val, "one");

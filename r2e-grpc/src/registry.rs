@@ -7,7 +7,7 @@ use tonic::service::Routes;
 /// Analogous to [`r2e_core::builder::TaskRegistryHandle`] for the scheduler:
 /// stored in `plugin_data` by the `GrpcServer` plugin, populated by
 /// `register_grpc_service`, and drained once by the plugin's serve-time
-/// wiring (the `on_serve` hook for the separate-port transport, the router
+/// wiring (the `on_serve_each_cycle` hook for the separate-port transport, the router
 /// layer for the multiplexed transport).
 ///
 /// Services fold into a single [`tonic::service::Routes`] collection so any

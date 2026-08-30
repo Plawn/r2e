@@ -636,7 +636,9 @@ any global side effect; the gate is decided once here, not re-read later),
 lookups), `config_raw()`, `add_layer`, `after_routes`, `wrap_router`,
 `store_data`, `on_serve`, `on_serve_each_cycle` (an `on_serve` that also runs
 on `r2e dev` hot-patch cycles — for transports serving their own port; bind
-through `ServeContext::bind_tcp` so the socket carries over between cycles),
+through `ServeContext::bind_tcp(owner, addr)` (async → `BoundListener`) so the
+socket carries over between cycles, and stop accepting on
+`bound.stop_signal(shutdown)` so the previous cycle's server hands over),
 `on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
 hatch).
 
@@ -645,7 +647,7 @@ builds themselves run in dependency order):
 
 | Stage | Registered with | When it applies |
 |---|---|---|
-| Graph | `add_layer`, `after_build`, `store_data`, `on_serve` | during `build_state()` / router assembly; a later `add_layer` is the outer one |
+| Graph | `add_layer`, `after_build`, `store_data`, `on_serve`, `on_serve_each_cycle` | during `build_state()` / router assembly; a later `add_layer` is the outer one |
 | Routes | `after_routes(FnOnce(&mut RoutesContext))` | in `build()`, once **every** controller (app, module and plugin-shipped) is registered — so install order is irrelevant |
 | Finalize | `wrap_router` | last, outermost (transport-level wrappers) |
 

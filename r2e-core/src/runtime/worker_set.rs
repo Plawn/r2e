@@ -219,11 +219,7 @@ impl WorkerSlot {
             mailbox_wait_total: Duration::from_nanos(
                 self.mailbox_wait_nanos.load(Ordering::Relaxed),
             ),
-            error: self
-                .error
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone(),
+            error: self.error.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         }
     }
 }
