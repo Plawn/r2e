@@ -22,10 +22,12 @@ pub struct McpPrincipal {
     /// The caller's identity (subject, email, roles) — the same type HTTP
     /// route identity injection uses.
     ///
-    /// Behind an `Arc`: exactly one `AuthenticatedUser` is built per
-    /// authenticated request, and the auth layer shares it between this
-    /// principal and the identity extension rather than deep-copying the
-    /// claims tree (including the flattened `extra` map) a second time.
+    /// Behind an `Arc` so that no request ever holds two copies of the same
+    /// identity: the auth layer shares this handle between the principal and
+    /// the identity extension rather than deep-copying the claims tree
+    /// (including the flattened `extra` map) a second time. The JWT path
+    /// builds one `AuthenticatedUser` per request; on the opaque-token path a
+    /// cache hit builds none at all and reuses the one cached for that token.
     /// Reads go through `Deref` — `principal.user.sub` still works; take an
     /// owned copy with `(*principal.user).clone()`.
     pub user: Arc<AuthenticatedUser>,

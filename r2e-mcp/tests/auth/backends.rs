@@ -514,3 +514,88 @@ async fn userinfo_without_any_endpoint_names_the_config_key() {
         other => panic!("expected Upstream, got {other:?}"),
     }
 }
+
+// ── Cache hits reuse the identity built on the miss (task #993) ────────────
+
+/// The opaque path is where "one `AuthenticatedUser` per request" turns into
+/// "one per *token*": the cache stores the whole principal, so a hit does not
+/// merely avoid the IdP round trip — it must also avoid rebuilding the claims
+/// tree. `McpPrincipal.user` is an `Arc`, so the hit hands out the very
+/// allocation the miss produced.
+#[tokio::test]
+async fn an_introspection_cache_hit_reuses_the_identity_built_on_the_miss() {
+    let (base, log) = mini_endpoint(|_| (200, active_response())).await;
+    let backend = introspection_backend(&format!("{base}/introspect"));
+
+    let miss = backend.validate("token-a").await.unwrap();
+    let hit = backend.validate("token-a").await.unwrap();
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "the second call must hit the cache"
+    );
+    assert!(
+        Arc::ptr_eq(&miss.user, &hit.user),
+        "a cache hit rebuilt the AuthenticatedUser instead of sharing the \
+         cached one — see docs/claude/hot-path-clone-audit.md",
+    );
+    assert_eq!(hit.user.sub, "alice");
+
+    // A different token is a different caller: nothing is shared across them.
+    let other = backend.validate("token-b").await.unwrap();
+    assert!(
+        !Arc::ptr_eq(&miss.user, &other.user),
+        "two tokens must not share one identity allocation",
+    );
+}
+
+/// The same, on the `userinfo` backend — the second construction site the
+/// principal is built at.
+#[tokio::test]
+async fn a_userinfo_cache_hit_reuses_the_identity_built_on_the_miss() {
+    let (base, log) = mini_endpoint(|_| {
+        (
+            200,
+            json!({ "sub": "google-user", "email": "a@example.com" }),
+        )
+    })
+    .await;
+    let backend = userinfo_backend(&format!("{base}/userinfo"));
+
+    let miss = backend.validate("ya29.opaque").await.unwrap();
+    let hit = backend.validate("ya29.opaque").await.unwrap();
+    assert_eq!(
+        log.lock().unwrap().len(),
+        1,
+        "the second call must hit the cache"
+    );
+    assert!(
+        Arc::ptr_eq(&miss.user, &hit.user),
+        "a cache hit rebuilt the AuthenticatedUser instead of sharing the \
+         cached one — see docs/claude/hot-path-clone-audit.md",
+    );
+    assert_eq!(hit.user.sub, "google-user");
+}
+
+/// Concurrent misses are coalesced into one IdP call — and therefore into one
+/// identity: every waiter gets the same allocation, not one copy each.
+#[tokio::test]
+async fn coalesced_concurrent_misses_all_share_one_identity() {
+    let (base, log) = mini_endpoint(|_| (200, active_response())).await;
+    let backend = introspection_backend(&format!("{base}/introspect"));
+
+    let (a, b, c, d) = r2e_core::rt::join!(
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+        backend.validate("shared-token"),
+    );
+    assert_eq!(log.lock().unwrap().len(), 1, "misses must be coalesced");
+    let first = a.unwrap();
+    for other in [b.unwrap(), c.unwrap(), d.unwrap()] {
+        assert!(
+            Arc::ptr_eq(&first.user, &other.user),
+            "a coalesced waiter got its own copy of the identity",
+        );
+    }
+}

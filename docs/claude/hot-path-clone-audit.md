@@ -500,9 +500,20 @@ per-request cost), with a caller whose token carries 128 x 256-byte claims:
 | authenticated `tools/call`, ~32 KiB of claims | 764 allocations / 129,176 bytes | **200 allocations / 32,976 bytes** |
 | `McpPrincipal::clone` (same claims) | 282 allocations / 47,300 bytes | **0 allocations** |
 
-The per-request cost is now flat in the size of the claims tree, and cloning a
-principal — which the layer, the opaque-token cache and `check_access` all do —
-is three refcount bumps.
+The per-request cost is now flat in the size of the claims tree. Exactly where
+the refcounts move, since "three bumps" is only true of one of these paths:
+
+| site | what it does | bumps |
+|---|---|---|
+| `layer.rs` identity deposit | `Arc::clone(&principal.user)` | 1 |
+| `layer.rs` principal deposit | **moves** the principal into the extensions | 0 |
+| `check_access` / `requirements_visible` | **borrow** `&McpPrincipal` out of the extensions | 0 |
+| `McpPrincipal::clone` | derived: `user` + `scopes` (`token_hash` is a `u64`) | 2 |
+| opaque cache hit (`TokenCache::get`) | clones the stored `Arc<McpPrincipal>` under the lock, then `(*principal).clone()` outside it | 3 |
+
+So an authenticated JWT request costs one bump, and the opaque-cache-hit path
+— the only place the number three appears — costs three: the outer cache `Arc`
+plus the two inside the principal it materializes. No path copies claims.
 
 ## Global lifetimes and `Box::leak`
 

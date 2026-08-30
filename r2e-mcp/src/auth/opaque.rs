@@ -44,10 +44,12 @@ struct CacheEntry {
     /// otherwise inherit the cached principal).
     token: String,
     /// Behind an `Arc` so a cache hit clones a refcount while the state lock is
-    /// held and materializes the principal only after releasing it. Cloning
-    /// `McpPrincipal` copies the whole `AuthenticatedUser` claims tree
-    /// (including the flattened `extra` JSON map), which has no business
-    /// lengthening a critical section shared by every concurrent request.
+    /// held and materializes the principal only after releasing it. Since task
+    /// #993 the materialization is itself allocation-free (`McpPrincipal` is
+    /// two `Arc`s and a `u64`, so cloning it reuses the very
+    /// `AuthenticatedUser` built on the miss), but keeping it outside the lock
+    /// is the invariant that matters: a critical section shared by every
+    /// concurrent request must not grow with what a principal happens to hold.
     result: Result<Arc<McpPrincipal>, &'static str>,
     expires_at: Instant,
     /// Monotonic access sequence used for bounded LRU eviction.
