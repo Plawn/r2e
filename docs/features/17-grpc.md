@@ -283,6 +283,25 @@ the module's `requires_plugins`, so forgetting `.plugin(GrpcServer::...)` before
 the module is a compile error naming `GrpcServer`. A module may also bring the
 plugin itself: `plugins(GrpcServer = GrpcServer::on_port("0.0.0.0:50051"))`.
 
+That check works on the plugin's *provisions*, not on its identity. It is exact
+here because `GrpcServer`'s provision (`GrpcMarker`) cannot be constructed
+outside r2e-grpc, so `.provide(..)`-ing a look-alike past the compile error is
+not possible. The boot-time backstop remains for hand-written `impl
+FeatureModule` blocks that declare `Endpoints` without the matching
+`RequiredPlugins`: `BeanError::MissingTransportPlugin`, naming the plugin and
+the module.
+
+### One owner per service
+
+A gRPC service is registered exactly once. A second registration of the same
+service name fails rather than handing tonic two overlapping route sets:
+
+| Duplicate | Where it is caught |
+|---|---|
+| `grpc_services(S, S)` | compile error from `#[module]` |
+| `S` in two modules | boot: `BeanError::DuplicateEndpoint` (a `try_build_state()` error, naming the second module) |
+| module `grpc_services(S)` + app-level `.register_grpc_service::<S>()` | panic at the `register_grpc_service` call (modules register first, inside `build_state()`) |
+
 Hand-written `FeatureModule` impls (no macro) must write `type Endpoints = ();`
 when the module owns no gRPC service.
 
@@ -306,6 +325,15 @@ grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHell
 ```
 
 This is the simplest configuration and recommended for most deployments. It avoids content-type routing overhead and allows independent load balancing per protocol.
+
+> **Caveat — separate-port gRPC under `r2e dev`** (task #997, pre-existing): the
+> tonic server is spawned from a serve hook, and hot-patch cycles skip the
+> startup lifecycle, so after the first reload the rebuilt services land in a
+> registry nobody drains and the gRPC port goes silent (HTTP keeps working).
+> Restart `r2e dev`, or use `GrpcServer::multiplexed()` while iterating — the
+> multiplexed transport re-wraps the router on every build and is unaffected.
+> This applies to both `.register_grpc_service::<S>()` and a module's
+> `grpc_services(..)`.
 
 ### Multiplexed (single port)
 

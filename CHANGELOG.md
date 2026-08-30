@@ -35,6 +35,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   compile error **naming `GrpcServer`** rather than a service silently
   registered into a registry nobody drains. A module may equally bring the
   plugin itself with `plugins(GrpcServer = GrpcServer::on_port(..))`.
+  `RequiredPlugins` is verified by checking the plugin's *provisions* against
+  the provision list, so `GrpcMarker` — what `GrpcServer` provides — is now
+  unconstructible outside r2e-grpc: nobody can hand-`.provide(..)` it to make a
+  module compile without the plugin (and hence without the registry the module
+  registers into). A hand-written `impl FeatureModule` that skips
+  `RequiredPlugins` altogether still fails at boot, with
+  `BeanError::MissingTransportPlugin` naming both the plugin and the module.
+
+  Each service is registered **once**: a name already in the registry — the same
+  service in two modules' `grpc_services(..)`, or in a module *and* an app-level
+  `.register_grpc_service::<S>()` — fails instead of handing tonic two
+  overlapping route sets under one name. The module path reports
+  `BeanError::DuplicateEndpoint` on the `try_build_state()` channel; the
+  app-level call panics (that call site already panics for a missing plugin);
+  a service listed twice in one `grpc_services(..)` is a macro compile error.
 
   r2e-core stays transport-agnostic: `FeatureModule` gained
   `type Endpoints: ModuleEndpointSet` (type-level `Deps` only) and the
@@ -49,8 +64,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     generates it;
   - `RegisterModule` gained a witness type parameter (`EndpIdx`) — only visible
     to code that names the trait's parameters explicitly;
-  - two new `BeanError` variants, `EndpointConfig` and `MissingTransportPlugin`
-    — an exhaustive `match` on `BeanError` must add arms.
+  - three new `BeanError` variants, `EndpointConfig`, `MissingTransportPlugin`
+    and `DuplicateEndpoint` — an exhaustive `match` on `BeanError` must add arms;
+  - `GrpcServiceRegistry::add_service` returns `Result<(), DuplicateService>`
+    (it was `()`), and `GrpcMarker` is no longer constructible outside
+    r2e-grpc;
+  - registering the same gRPC service twice now fails (module: boot error;
+    app-level `.register_grpc_service::<S>()`: panic) instead of silently
+    double-registering it.
 
 - **`rt::RuntimeId`** (`Runtime::id()` / `RuntimeHandle::id()`): the identity of
   a runtime, comparable across threads, for asserting that two pieces of work

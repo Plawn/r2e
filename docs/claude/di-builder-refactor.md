@@ -185,11 +185,20 @@ frameworks cannot offer.
   params) folds each service's `EndpointDeps::Deps` with `TAppend` and registers
   them in declaration order. `#[module(grpc_services(A, B))]` generates exactly
   that, and appends `GrpcServer` to `RequiredPlugins`, so a missing plugin is the
-  standard module diagnostic naming `GrpcServer` instead of a boot-time failure;
-  with no `grpc_services` key the macro emits `type Endpoints = ();` and no
-  r2e-grpc path, so modules compile in apps without the gRPC feature. Failures go
-  to the boot error channel (`BeanError::EndpointConfig` /
-  `MissingTransportPlugin`) so `try_build_state()` stays non-panicking. Stable
+  standard module diagnostic naming `GrpcServer` instead of a boot-time failure.
+  `RequiredPluginInstalled` checks the plugin's *provisions*, not its identity,
+  so that claim only holds because `GrpcMarker` is unconstructible outside
+  r2e-grpc (deliberate: a hand-`.provide(GrpcMarker)` would otherwise compile a
+  module with no registry to register into). With no `grpc_services` key the
+  macro emits `type Endpoints = ();` and no r2e-grpc path, so modules compile in
+  apps without the gRPC feature. Failures go to the boot error channel
+  (`BeanError::EndpointConfig` / `MissingTransportPlugin` / `DuplicateEndpoint`,
+  the last two naming the declaring module) so `try_build_state()` stays
+  non-panicking. Endpoint names are unique across the whole app: the registry
+  refuses a name it already holds, so two modules claiming one service, or a
+  module plus an app-level `.register_grpc_service::<S>()`, fails at boot instead
+  of double-registering (a repeat inside one `grpc_services(..)` is a macro
+  error). Stable
   Rust has no associated-type defaults, so hand-written impls must write
   `type Endpoints = ();`. Trybuild covers the missing plugin, an endpoint dep out
   of module scope, and the happy path; `examples/example-grpc/tests/grpc_module.rs`
