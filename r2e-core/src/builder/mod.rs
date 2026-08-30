@@ -142,9 +142,140 @@ type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send
 /// a router fragment to be merged into the application.
 type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> + Send>;
 
-/// A serve hook, called once when the server starts. Receives a
-/// [`ServeContext`] tying the hook into the app's shutdown sequence.
-type ServeHook = Box<dyn FnOnce(ServeContext) + Send>;
+/// A serve hook, called when the server starts. Receives a [`ServeContext`]
+/// tying the hook into the app's shutdown sequence.
+///
+/// `each_cycle` marks a hook registered through
+/// [`DeferredContext::on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):
+/// it also runs on `r2e dev` hot-patch cycles, which skip the rest of the
+/// startup lifecycle (see `PreparedApp::start_lifecycle`).
+#[doc(hidden)]
+pub struct ServeHook {
+    pub(crate) hook: Box<dyn FnOnce(ServeContext) + Send>,
+    pub(crate) each_cycle: bool,
+}
+
+/// A listener handed out by [`ServeContext::bind_tcp`].
+///
+/// `handover` is cancelled when a later dev-reload cycle takes the same
+/// socket (never in production). Serve through [`into_incoming`]: the
+/// stream checks the handover before every accept and, when it ends (or is
+/// dropped) — or when [`stop_signal`] resolves — tells the store this holder
+/// has released the socket. The next cycle's `bind_tcp` waits for that
+/// acknowledgement before it gets the socket (bounded: a holder that has
+/// not acknowledged after 5 s is logged and overridden), so barring that
+/// fail-open no connection is accepted by the previous server once the new
+/// one is serving.
+///
+/// [`stop_signal`]: BoundListener::stop_signal
+///
+/// [`into_incoming`]: BoundListener::into_incoming
+pub struct BoundListener {
+    /// The bound socket.
+    pub listener: crate::rt::TcpListener,
+    /// Fires when a later cycle takes over the socket.
+    pub handover: CancelToken,
+    /// Cancelled on drop: "this holder no longer accepts".
+    pub(crate) release: ReleaseGuard,
+}
+
+/// Fires its token on drop — the holder's acknowledgement that it stopped
+/// accepting (whether it exited cleanly, was dropped, or never served).
+pub(crate) struct ReleaseGuard(pub(crate) CancelToken);
+
+impl Drop for ReleaseGuard {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+impl BoundListener {
+    /// A future that resolves when either the given shutdown token or the
+    /// handover token fires — the signal to stop accepting connections.
+    ///
+    /// Its resolution **is** the holder's acknowledgement: the moment it
+    /// resolves the socket is released to the next dev-reload holder, so the
+    /// caller must not accept after awaiting it. This is what a
+    /// `select!`-style accept loop (tonic's) needs — it may take the signal
+    /// branch, break, and keep the incoming stream alive while draining
+    /// connections; the release must not wait for that drain.
+    pub fn stop_signal(
+        &self,
+        shutdown: CancelToken,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let handover = self.handover.clone();
+        let released = self.release.0.clone();
+        async move {
+            crate::rt::select! {
+                _ = shutdown.cancelled() => {}
+                _ = handover.cancelled() => {}
+            }
+            released.cancel();
+        }
+    }
+
+    /// Turn the listener into an accept stream that ends on `shutdown` or on
+    /// the handover, checking those *before* every accept — so a queued
+    /// connection is never taken once the stop was signalled — and releases
+    /// the socket to the next holder when it ends or is dropped. Feed it to
+    /// `serve_with_incoming_shutdown` (tonic) together with
+    /// [`stop_signal`](Self::stop_signal), or drive it from any accept loop.
+    pub fn into_incoming(self, shutdown: CancelToken) -> HandoverIncoming {
+        let stop = Box::pin(self.stop_signal(shutdown));
+        HandoverIncoming {
+            listener: self.listener,
+            stop,
+            release: Some(self.release),
+            done: false,
+        }
+    }
+}
+
+/// Accept stream of a [`BoundListener`] — see [`BoundListener::into_incoming`].
+///
+/// Yields `Result<TcpStream, io::Error>`; ends (`None`) once the stop signal
+/// fired. Ending, or dropping the stream, releases the socket to the next
+/// dev-reload holder.
+pub struct HandoverIncoming {
+    listener: crate::rt::TcpListener,
+    stop: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>,
+    release: Option<ReleaseGuard>,
+    done: bool,
+}
+
+impl HandoverIncoming {
+    /// Local address of the underlying socket.
+    pub fn local_addr(&self) -> std::io::Result<std::net::SocketAddr> {
+        self.listener.local_addr()
+    }
+}
+
+impl futures_core::Stream for HandoverIncoming {
+    type Item = Result<crate::rt::TcpStream, std::io::Error>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if self.done {
+            return Poll::Ready(None);
+        }
+        // Stop signal first, then accept: never take a connection once the
+        // stop (shutdown or handover) is observable.
+        if self.stop.as_mut().poll(cx).is_ready() {
+            self.done = true;
+            // Acknowledge: the next holder may start serving now.
+            drop(self.release.take());
+            return Poll::Ready(None);
+        }
+        match self.listener.poll_accept(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Ok((stream, _))) => Poll::Ready(Some(Ok(stream))),
+            Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e))),
+        }
+    }
+}
 
 /// Context handed to serve hooks ([`DeferredContext::on_serve`]) when the
 /// server starts.
@@ -181,6 +312,54 @@ impl ServeContext {
     /// Token cancelled when graceful shutdown begins.
     pub fn shutdown_token(&self) -> crate::rt::CancelToken {
         self.shutdown.clone()
+    }
+
+    /// Bind the TCP listener a serve hook serves its own port from.
+    ///
+    /// In production this is a plain (async) bind and the returned
+    /// [`BoundListener::handover`] token never fires. Inside the `r2e dev`
+    /// hot-patch loop it goes through the same process-global listener store
+    /// the HTTP port uses, namespaced by `owner` (so a gRPC transport and the
+    /// HTTP server asking for the same address string get *different*
+    /// sockets): the socket is bound once and every later cycle receives a
+    /// clone of it, so the port stays open — and stays the *same* port, even
+    /// for `:0` — across patches. Taking the socket cancels the handover
+    /// token handed to the previous cycle and then **waits for that holder
+    /// to acknowledge** (its [`HandoverIncoming`] ending or being dropped,
+    /// or its [`BoundListener::stop_signal`] resolving) before returning:
+    /// the previous server has stopped accepting before the new cycle's
+    /// server starts, so no queued connection is answered with stale routes.
+    /// The wait is bounded (5 s): a holder that never acknowledges is logged
+    /// and overridden — fail-open, so a stuck task cannot wedge the dev
+    /// loop; only then can the old server still take a queued connection.
+    /// Serve through [`BoundListener::into_incoming`] to take part in that
+    /// protocol.
+    ///
+    /// Pair it with
+    /// [`on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):
+    /// a hook that only runs once cannot re-serve the port after a patch.
+    /// The future borrows nothing from the context, so a hook can move it
+    /// into the task it tracks.
+    pub fn bind_tcp(
+        &self,
+        owner: &'static str,
+        addr: &str,
+    ) -> impl std::future::Future<Output = Result<BoundListener, crate::beans::BootError>> + Send + 'static
+    {
+        let addr = addr.to_string();
+        async move {
+            #[cfg(feature = "dev-reload")]
+            if crate::runtime::dev::hot_reload_loop_active() {
+                return crate::runtime::dev::bind_listener(owner, addr).await;
+            }
+            #[cfg(not(feature = "dev-reload"))]
+            let _ = owner;
+            Ok(BoundListener {
+                listener: crate::rt::bind_tcp(&addr).await?,
+                handover: CancelToken::new(),
+                release: ReleaseGuard(CancelToken::new()),
+            })
+        }
     }
 
     /// Spawn a tracked task: its completion is awaited after the HTTP drain
@@ -283,8 +462,12 @@ impl ServiceHandles {
     /// joined; `spawn_ctl` puts the task on the main runtime, which outlives
     /// the workers. On the single-listener path it is a plain `spawn`.
     #[cfg(feature = "ws")]
-    fn spawn_owning_ctl<F>(&self, label: &'static str, graph: Arc<crate::beans::BeanContext>, fut: F)
-    where
+    fn spawn_owning_ctl<F>(
+        &self,
+        label: &'static str,
+        graph: Arc<crate::beans::BeanContext>,
+        fut: F,
+    ) where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
         self.push(TrackedHandle {
@@ -711,7 +894,9 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     {
         self.shared
             .per_worker_services
-            .push(crate::runtime::worker::PerWorkerServiceFactory::new(factory));
+            .push(crate::runtime::worker::PerWorkerServiceFactory::new(
+                factory,
+            ));
         self
     }
 }

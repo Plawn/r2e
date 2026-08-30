@@ -62,9 +62,9 @@
 
 use std::cell::Cell;
 use std::future::Future;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::marker::PhantomData;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::ThreadId;
 
@@ -108,9 +108,7 @@ pub struct PerWorkerServiceFactory {
 
 /// Type-erased factory closure: `WorkerContext` → boxed `WorkerService`.
 trait FactoryFn:
-    Fn(WorkerContext) -> LocalBoxFuture<'static, Result<Box<dyn WorkerService>, BoxError>>
-    + Send
-    + Sync
+    Fn(WorkerContext) -> LocalBoxFuture<'static, Result<Box<dyn WorkerService>, BoxError>> + Send + Sync
 {
 }
 
@@ -141,10 +139,7 @@ impl PerWorkerServiceFactory {
         Self {
             inner: Arc::new(move |ctx| {
                 let fut = f(ctx);
-                Box::pin(async move {
-                    fut.await
-                        .map(|s| Box::new(s) as Box<dyn WorkerService>)
-                })
+                Box::pin(async move { fut.await.map(|s| Box::new(s) as Box<dyn WorkerService>) })
             }),
         }
     }

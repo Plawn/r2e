@@ -192,7 +192,8 @@ impl<M: Send + 'static> Mailboxes<M> {
 
     fn account(&self, target: usize) {
         if let Some(slot) = self.slot(target) {
-            let local = WorkerInfo::current().is_some_and(|w| w.is_data_plane() && w.id() == target);
+            let local =
+                WorkerInfo::current().is_some_and(|w| w.is_data_plane() && w.id() == target);
             slot.record_crossing(local);
             slot.mailbox_enqueued();
         }

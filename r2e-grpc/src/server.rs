@@ -183,7 +183,16 @@ impl Plugin for GrpcServer {
                 // handle is tracked so the shutdown phase awaits the gRPC
                 // drain (concurrent with the HTTP drain, bounded by the
                 // shutdown grace period) instead of exiting mid-drain.
-                ctx.on_serve(move |serve_ctx| {
+                //
+                // `on_serve_each_cycle`, not `on_serve`: under `r2e dev` a
+                // hot patch drops the previous `run()`, which cancels that
+                // cycle's token and stops this task, while plain serve hooks
+                // are skipped on the rebuilt cycle — the rebuilt registry was
+                // never drained and the gRPC port went silent (task #997).
+                // Re-running the hook each cycle, with the listener bound
+                // through the dev listener store, keeps the port answering
+                // with the freshly registered services.
+                ctx.on_serve_each_cycle(move |serve_ctx| {
                     let Some(services) = registry.take() else {
                         tracing::warn!(
                             "GrpcServer::on_port is installed but no gRPC service was \
@@ -194,16 +203,16 @@ impl Plugin for GrpcServer {
                     #[cfg(feature = "reflection")]
                     let services = apply_reflection(services, &reflection);
                     let RegisteredServices { routes, names, .. } = services;
-                    // Phase 2 will move this crate onto `CancelToken`; until then
-                    // the seam hands out the raw tokio-util token, which tonic's
-                    // `serve_with_incoming_shutdown` needs for `cancelled_owned()`.
-                    let cancel = serve_ctx.shutdown_token().into_inner();
+                    // Bind explicitly (instead of tonic's internal bind) so
+                    // the resolved address — including an OS-assigned port
+                    // for `:0` — is logged, and so the socket carries over
+                    // between hot-patch cycles. The bind is async (DNS may
+                    // block), so it runs inside the tracked task.
+                    let bind = serve_ctx.bind_tcp("grpc", addr.as_str());
+                    let shutdown = serve_ctx.shutdown_token();
                     serve_ctx.track_named("grpc server", async move {
-                        // Bind explicitly (instead of tonic's internal bind)
-                        // so the resolved address — including an OS-assigned
-                        // port for `:0` — is logged.
-                        let listener = match r2e_core::rt::bind_tcp(addr.as_str()).await {
-                            Ok(l) => l,
+                        let bound = match bind.await {
+                            Ok(bound) => bound,
                             Err(e) => {
                                 tracing::error!(
                                     addr = %addr, error = %e,
@@ -212,7 +221,16 @@ impl Plugin for GrpcServer {
                                 return;
                             }
                         };
-                        match listener.local_addr() {
+                        // Stop accepting on shutdown OR when the next dev
+                        // cycle takes the socket over: the incoming stream
+                        // checks that before every accept and, once ended,
+                        // releases the socket to the next holder — which is
+                        // waiting for exactly that in its `bind_tcp`. The
+                        // same signal doubles as tonic's graceful-shutdown
+                        // trigger so in-flight requests drain either way.
+                        let stop = bound.stop_signal(shutdown.clone());
+                        let incoming = bound.into_incoming(shutdown);
+                        match incoming.local_addr() {
                             Ok(local) => tracing::info!(
                                 addr = %local, services = ?names,
                                 "R2E gRPC server listening"
@@ -222,10 +240,9 @@ impl Plugin for GrpcServer {
                                 "Could not read gRPC listener local address"
                             ),
                         }
-                        let incoming = tonic::transport::server::TcpIncoming::from(listener);
                         if let Err(e) = tonic::transport::Server::builder()
                             .add_routes(routes)
-                            .serve_with_incoming_shutdown(incoming, cancel.cancelled_owned())
+                            .serve_with_incoming_shutdown(incoming, stop)
                             .await
                         {
                             tracing::error!(error = %e, "gRPC server error");

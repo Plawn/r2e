@@ -827,10 +827,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // Controller `#[post_construct]` runs before consumers (mirroring bean
         // post_construct at `build_state`, which runs before subscribers).
         for pc in built.post_construct_registrations {
-            pc.await
-                .map_err(|e| -> crate::beans::BootError {
-                    format!("Controller #[post_construct] hook failed: {e}").into()
-                })?;
+            pc.await.map_err(|e| -> crate::beans::BootError {
+                format!("Controller #[post_construct] hook failed: {e}").into()
+            })?;
         }
         for reg in built.consumer_registrations {
             reg(built.state.clone()).await;

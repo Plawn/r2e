@@ -33,7 +33,83 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 #[cfg(feature = "dev-reload")]
-static LISTENER_STORE: OnceLock<Mutex<HashMap<String, std::net::TcpListener>>> = OnceLock::new();
+/// Cached listeners, keyed by `(owner, address)` — the owner namespaces the
+/// address so the HTTP server and a plugin transport (gRPC) asking for the
+/// same string (`"127.0.0.1:0"`!) never share one socket (task #997). Two
+/// plugins picking the same owner label AND address deliberately share an
+/// entry. Entries are never evicted: an owner that changes address between
+/// patches leaves its old socket bound (unserved) until the process exits —
+/// a dev-process-only cost.
+static LISTENER_STORE: OnceLock<Mutex<HashMap<(&'static str, String), StoredListener>>> =
+    OnceLock::new();
+
+/// One cached socket plus the handover token of the cycle currently serving
+/// it. The next cycle that asks for the same key cancels that token and waits
+/// for the holder's release, so the previous server normally stops accepting
+/// *before* the new one starts — the two clones of the fd would otherwise race
+/// for queued connections. The wait is bounded by [`HANDOVER_ACK_TIMEOUT`]:
+/// a holder that never releases is overridden (with a warning) and the race
+/// is accepted rather than blocking the patch cycle.
+#[cfg(feature = "dev-reload")]
+struct StoredListener {
+    listener: std::net::TcpListener,
+    /// Handover token of the current holder — cancelled when the socket is
+    /// taken again.
+    holder: crate::rt::CancelToken,
+    /// Fired by the current holder once it stopped accepting (its
+    /// `HandoverIncoming` ended or was dropped).
+    released: crate::rt::CancelToken,
+}
+
+/// Result of taking a cached listener: the bound socket plus, when a previous
+/// holder existed, the token it fires once it stopped accepting.
+#[cfg(feature = "dev-reload")]
+#[doc(hidden)]
+pub struct DevBind {
+    pub bound: crate::builder::BoundListener,
+    pub previous_released: Option<crate::rt::CancelToken>,
+}
+
+/// How long [`bind_listener`] waits for the previous holder to acknowledge
+/// the handover before overriding it.
+#[cfg(feature = "dev-reload")]
+const HANDOVER_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Take the cached listener for `(owner, addr)` and wait for the previous
+/// holder (if any) to stop accepting — the acknowledged handover behind
+/// [`ServeContext::bind_tcp`](crate::builder::ServeContext::bind_tcp).
+/// The wait is fail-open: after [`HANDOVER_ACK_TIMEOUT`] the previous holder
+/// is overridden with a warning and the new listener is returned anyway.
+///
+/// The bind itself (which may resolve a hostname) runs on the blocking pool.
+/// Public for the dev-reload test target.
+#[doc(hidden)]
+#[cfg(feature = "dev-reload")]
+pub async fn bind_listener(
+    owner: &'static str,
+    addr: String,
+) -> Result<crate::builder::BoundListener, crate::beans::BootError> {
+    let DevBind {
+        bound,
+        previous_released,
+    } = crate::rt::spawn_blocking(move || get_or_bind_listener(owner, &addr))
+        .await
+        .map_err(|e| format!("listener bind task failed: {e}"))??;
+    if let Some(previous) = previous_released {
+        if crate::rt::timeout(HANDOVER_ACK_TIMEOUT, previous.cancelled())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                owner,
+                "previous holder of the dev listener did not stop accepting within \
+                 {HANDOVER_ACK_TIMEOUT:?}; serving anyway (it may still answer queued \
+                 connections with stale routes)"
+            );
+        }
+    }
+    Ok(bound)
+}
 
 /// Whether this process is actually running inside the Subsecond hot-patch
 /// loop (set by `r2e::launch!` before entering it).
@@ -93,10 +169,18 @@ fn parse_port(addr: &str) -> Option<u16> {
     addr.rsplit(':').next().and_then(|p| p.parse().ok())
 }
 
+/// Bind — or take over — the cached listener for `(owner, addr)`. Sync and
+/// non-waiting: cancels the previous holder and returns its `released` token
+/// so the caller can wait for the acknowledgement ([`bind_listener`] does).
+///
+/// Public for the dev-reload test target; user code goes through
+/// [`ServeContext::bind_tcp`](crate::builder::ServeContext::bind_tcp).
+#[doc(hidden)]
 #[cfg(feature = "dev-reload")]
-pub(crate) fn get_or_bind_listener(
+pub fn get_or_bind_listener(
+    owner: &'static str,
     addr: &str,
-) -> Result<crate::rt::TcpListener, crate::beans::BootError> {
+) -> Result<DevBind, crate::beans::BootError> {
     // Guard: prevent binding to the Dioxus devserver port.
     if let Some(port) = parse_port(addr) {
         if port == DIOXUS_DEVSERVER_PORT {
@@ -111,18 +195,45 @@ pub(crate) fn get_or_bind_listener(
     }
 
     let store = LISTENER_STORE.get_or_init(|| Mutex::new(HashMap::new()));
+    // A cycle that panicked while holding the lock must not brick every
+    // later cycle: the map is always left consistent, so recover it.
     let mut map = store
         .lock()
-        .map_err(|e| format!("listener store poisoned: {e}"))?;
-    if let Some(existing) = map.get(addr) {
-        Ok(crate::rt::TcpListener::from_std(existing.try_clone()?)?)
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let key = (owner, addr.to_string());
+    let handover = crate::rt::CancelToken::new();
+    let released = crate::rt::CancelToken::new();
+    let (std_listener, previous_released) = if let Some(existing) = map.get_mut(&key) {
+        // Clone first: a failed clone must leave the previous holder intact.
+        let cloned = existing.listener.try_clone()?;
+        // Hand over: the previous holder stops accepting; its `released`
+        // token tells the caller when it actually did.
+        let previous = std::mem::replace(&mut existing.released, released.clone());
+        existing.holder.cancel();
+        existing.holder = handover.clone();
+        (cloned, Some(previous))
     } else {
         let l = std::net::TcpListener::bind(addr)?;
         l.set_nonblocking(true)?;
         let cloned = l.try_clone()?;
-        map.insert(addr.to_string(), l);
-        Ok(crate::rt::TcpListener::from_std(cloned)?)
-    }
+        map.insert(
+            key,
+            StoredListener {
+                listener: l,
+                holder: handover.clone(),
+                released: released.clone(),
+            },
+        );
+        (cloned, None)
+    };
+    Ok(DevBind {
+        bound: crate::builder::BoundListener {
+            listener: crate::rt::TcpListener::from_std(std_listener)?,
+            handover,
+            release: crate::builder::ReleaseGuard(released),
+        },
+        previous_released,
+    })
 }
 
 // ── QUIC endpoint cache for dev-reload ─────────────────────────────────────

@@ -21,7 +21,8 @@ type LazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T>>> + Sen
 /// Unlike [`LazyFactory`], this one stays `Send`: [`Lazy::get`] awaits the
 /// factory inline, so the future is part of whatever task calls it — including
 /// request handlers, which require `Send` futures.
-type SendLazyFactory<T> = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>;
+type SendLazyFactory<T> =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + Sync>;
 
 thread_local! {
     /// Stack of lazy-bean `(TypeId, type_name)` pairs currently being resolved

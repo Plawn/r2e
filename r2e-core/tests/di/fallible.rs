@@ -236,8 +236,14 @@ async fn a_fallible_bean_constructor_aborts_the_build() {
         .expect_err("the lock is held");
 
     let rendered = err.to_string();
-    assert!(rendered.contains(type_name::<InstanceGuard>()), "{rendered}");
-    assert!(rendered.contains("advisory lock already held"), "{rendered}");
+    assert!(
+        rendered.contains(type_name::<InstanceGuard>()),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("advisory lock already held"),
+        "{rendered}"
+    );
 }
 
 #[derive(Clone)]

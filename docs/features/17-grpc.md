@@ -326,14 +326,7 @@ grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHell
 
 This is the simplest configuration and recommended for most deployments. It avoids content-type routing overhead and allows independent load balancing per protocol.
 
-> **Caveat — separate-port gRPC under `r2e dev`** (task #997, pre-existing): the
-> tonic server is spawned from a serve hook, and hot-patch cycles skip the
-> startup lifecycle, so after the first reload the rebuilt services land in a
-> registry nobody drains and the gRPC port goes silent (HTTP keeps working).
-> Restart `r2e dev`, or use `GrpcServer::multiplexed()` while iterating — the
-> multiplexed transport re-wraps the router on every build and is unaffected.
-> This applies to both `.register_grpc_service::<S>()` and a module's
-> `grpc_services(..)`.
+Under `r2e dev` the gRPC port survives hot-patch cycles like the HTTP one: the server is re-spawned on every cycle from the same bound socket (the dev listener store keys sockets by owner, so gRPC and HTTP on the same address string never share one), and the previous cycle's server has stopped accepting before the new one receives the socket (acknowledged handover), so no connection accepted after the patch is answered with stale services. The wait is fail-open: a previous server that has not acknowledged after 5 s is logged and overridden, and only in that case could it still take a queued connection. Requests already accepted by the old server finish on the old routes.
 
 ### Multiplexed (single port)
 

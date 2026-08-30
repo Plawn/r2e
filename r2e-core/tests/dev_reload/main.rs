@@ -22,3 +22,5 @@ mod cycles;
 mod rollback;
 #[cfg(feature = "dev-reload")]
 mod serial;
+#[cfg(feature = "dev-reload")]
+mod serve_hooks;

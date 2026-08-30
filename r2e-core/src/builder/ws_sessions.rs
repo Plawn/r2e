@@ -169,8 +169,11 @@ impl WsSessions {
         // A `graph.upgrade()` that fails means the app which armed us is
         // already gone; running inline is the honest fallback (there is no
         // graph left to own, and nobody left to join the handle).
-        let armed =
-            arm.and_then(|a| a.graph.upgrade().map(|graph| (a.handles, a.shutdown, graph)));
+        let armed = arm.and_then(|a| {
+            a.graph
+                .upgrade()
+                .map(|graph| (a.handles, a.shutdown, graph))
+        });
         match armed {
             Some((handles, shutdown, graph)) => {
                 handles.spawn_owning_ctl(label, graph, body(Some(shutdown)));

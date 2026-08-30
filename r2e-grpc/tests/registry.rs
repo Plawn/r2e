@@ -11,14 +11,10 @@ fn new_registry_is_empty() {
 fn add_and_take() {
     let registry = GrpcServiceRegistry::new();
     registry
-
         .add_service("pkg.ServiceA", None, |routes| routes)
-
         .expect("first registration of pkg.ServiceA");
     registry
-
         .add_service("pkg.ServiceB", None, |routes| routes)
-
         .expect("first registration of pkg.ServiceB");
 
     assert_eq!(
@@ -41,16 +37,10 @@ fn clone_shares_state() {
     let cloned = registry.clone();
 
     registry
-
-
         .add_service("pkg.One", None, |routes| routes)
-
-
         .expect("first registration of pkg.One");
     cloned
-
         .add_service("pkg.Two", None, |routes| routes)
-
         .expect("first registration of pkg.Two");
 
     let services = registry.take().expect("both clones fed the registry");
@@ -70,25 +60,17 @@ fn descriptors_are_collected_and_deduplicated() {
 
     let registry = GrpcServiceRegistry::new();
     registry
-
         .add_service("pkg.ServiceA", Some(SET_A), |routes| routes)
-
         .expect("first registration of pkg.ServiceA");
     // Same proto compilation: the identical set is stored once.
     registry
-
         .add_service("pkg.ServiceB", Some(SET_A), |routes| routes)
-
         .expect("first registration of pkg.ServiceB");
     registry
-
         .add_service("pkg.ServiceC", Some(SET_B), |routes| routes)
-
         .expect("first registration of pkg.ServiceC");
     registry
-
         .add_service("pkg.ServiceD", None, |routes| routes)
-
         .expect("first registration of pkg.ServiceD");
 
     let services = registry.take().expect("four services were registered");

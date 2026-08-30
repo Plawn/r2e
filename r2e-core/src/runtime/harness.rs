@@ -133,8 +133,9 @@ impl WorkerHarness {
                         let services = match start_services(&ctx, &factories).await {
                             Ok(s) => s,
                             Err((k, e)) => {
-                                let msg =
-                                    format!("worker {i}: per-worker service #{k} failed to start: {e}");
+                                let msg = format!(
+                                    "worker {i}: per-worker service #{k} failed to start: {e}"
+                                );
                                 slot2.fail(msg.clone());
                                 let _ = report_tx.send(Err(msg));
                                 return;
