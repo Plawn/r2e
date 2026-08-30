@@ -639,8 +639,9 @@ on `r2e dev` hot-patch cycles — for transports serving their own port; bind
 through `ServeContext::bind_tcp(owner, addr)` (async → `BoundListener`) so the
 socket carries over between cycles, and serve through
 `bound.into_incoming(shutdown)` — a stream that stops before any accept on
-shutdown or handover and releases the socket; the next cycle's `bind_tcp`
-waits for that release, so the old server never accepts after the new one
+shutdown or handover and releases the socket (so does `stop_signal` when it
+resolves); the next cycle's `bind_tcp` waits for that release — bounded to 5 s,
+fail-open with a warning — so the old server does not accept after the new one
 starts),
 `on_shutdown`, `on_shutdown_async`, `after_build` (full-graph boot escape
 hatch).

@@ -326,7 +326,7 @@ grpcurl -plaintext -d '{"name":"World"}' localhost:50051 greeter.Greeter/SayHell
 
 This is the simplest configuration and recommended for most deployments. It avoids content-type routing overhead and allows independent load balancing per protocol.
 
-Under `r2e dev` the gRPC port survives hot-patch cycles like the HTTP one: the server is re-spawned on every cycle from the same bound socket (the dev listener store keys sockets by owner, so gRPC and HTTP on the same address string never share one), and the previous cycle's server has stopped accepting before the new one receives the socket (acknowledged handover, bounded to 5 s), so no connection accepted after the patch is answered with stale services. Requests already accepted by the old server finish on the old routes.
+Under `r2e dev` the gRPC port survives hot-patch cycles like the HTTP one: the server is re-spawned on every cycle from the same bound socket (the dev listener store keys sockets by owner, so gRPC and HTTP on the same address string never share one), and the previous cycle's server has stopped accepting before the new one receives the socket (acknowledged handover), so no connection accepted after the patch is answered with stale services. The wait is fail-open: a previous server that has not acknowledged after 5 s is logged and overridden, and only in that case could it still take a queued connection. Requests already accepted by the old server finish on the old routes.
 
 ### Multiplexed (single port)
 

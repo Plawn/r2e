@@ -160,10 +160,14 @@ pub struct ServeHook {
 /// `handover` is cancelled when a later dev-reload cycle takes the same
 /// socket (never in production). Serve through [`into_incoming`]: the
 /// stream checks the handover before every accept and, when it ends (or is
-/// dropped), tells the store this holder has released the socket — the next
-/// cycle's `bind_tcp` waits for that acknowledgement before it gets the
-/// socket, so no connection is accepted by the previous server once the
-/// new one is serving.
+/// dropped) — or when [`stop_signal`] resolves — tells the store this holder
+/// has released the socket. The next cycle's `bind_tcp` waits for that
+/// acknowledgement before it gets the socket (bounded: a holder that has
+/// not acknowledged after 5 s is logged and overridden), so barring that
+/// fail-open no connection is accepted by the previous server once the new
+/// one is serving.
+///
+/// [`stop_signal`]: BoundListener::stop_signal
 ///
 /// [`into_incoming`]: BoundListener::into_incoming
 pub struct BoundListener {
@@ -188,24 +192,34 @@ impl Drop for ReleaseGuard {
 impl BoundListener {
     /// A future that resolves when either the given shutdown token or the
     /// handover token fires — the signal to stop accepting connections.
+    ///
+    /// Its resolution **is** the holder's acknowledgement: the moment it
+    /// resolves the socket is released to the next dev-reload holder, so the
+    /// caller must not accept after awaiting it. This is what a
+    /// `select!`-style accept loop (tonic's) needs — it may take the signal
+    /// branch, break, and keep the incoming stream alive while draining
+    /// connections; the release must not wait for that drain.
     pub fn stop_signal(
         &self,
         shutdown: CancelToken,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         let handover = self.handover.clone();
+        let released = self.release.0.clone();
         async move {
             crate::rt::select! {
                 _ = shutdown.cancelled() => {}
                 _ = handover.cancelled() => {}
             }
+            released.cancel();
         }
     }
 
     /// Turn the listener into an accept stream that ends on `shutdown` or on
     /// the handover, checking those *before* every accept — so a queued
-    /// connection is never taken after the stop was signalled — and releases
-    /// the socket to the next holder when it ends. Feed it to
-    /// `serve_with_incoming_shutdown` (tonic) or any accept loop.
+    /// connection is never taken once the stop was signalled — and releases
+    /// the socket to the next holder when it ends or is dropped. Feed it to
+    /// `serve_with_incoming_shutdown` (tonic) together with
+    /// [`stop_signal`](Self::stop_signal), or drive it from any accept loop.
     pub fn into_incoming(self, shutdown: CancelToken) -> HandoverIncoming {
         let stop = Box::pin(self.stop_signal(shutdown));
         HandoverIncoming {
@@ -311,12 +325,15 @@ impl ServeContext {
     /// clone of it, so the port stays open — and stays the *same* port, even
     /// for `:0` — across patches. Taking the socket cancels the handover
     /// token handed to the previous cycle and then **waits for that holder
-    /// to acknowledge** (its [`HandoverIncoming`] ending or being dropped —
-    /// bounded, a stuck holder is logged and overridden after a few
-    /// seconds) before returning: the previous server has stopped accepting
-    /// before the new cycle's server starts, so no queued connection is
-    /// answered with stale routes. Serve through
-    /// [`BoundListener::into_incoming`] to take part in that protocol.
+    /// to acknowledge** (its [`HandoverIncoming`] ending or being dropped,
+    /// or its [`BoundListener::stop_signal`] resolving) before returning:
+    /// the previous server has stopped accepting before the new cycle's
+    /// server starts, so no queued connection is answered with stale routes.
+    /// The wait is bounded (5 s): a holder that never acknowledges is logged
+    /// and overridden — fail-open, so a stuck task cannot wedge the dev
+    /// loop; only then can the old server still take a queued connection.
+    /// Serve through [`BoundListener::into_incoming`] to take part in that
+    /// protocol.
     ///
     /// Pair it with
     /// [`on_serve_each_cycle`](crate::plugin::DeferredContext::on_serve_each_cycle):

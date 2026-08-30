@@ -262,23 +262,108 @@ async fn the_next_bind_waits_for_the_previous_holder_to_release() {
     let addr = first.listener.local_addr().unwrap();
     let held = first.into_incoming(never.clone());
 
-    let second = r2e_core::rt::spawn(r2e_core::runtime::dev::bind_listener(
-        "ack-test",
-        "127.0.0.1:0".into(),
-    ));
-    r2e_core::rt::pin!(second);
+    // The store hands back the previous holder's release token, still
+    // pending: that is what the async bind waits on.
+    let taken = r2e_core::runtime::dev::get_or_bind_listener("ack-test", "127.0.0.1:0").unwrap();
+    let previous = taken.previous_released.expect("a previous holder exists");
     assert!(
-        r2e_core::rt::timeout(Duration::from_millis(300), &mut second)
-            .await
-            .is_err(),
-        "the next bind must wait for the previous holder"
+        !previous.is_cancelled(),
+        "not released while the old stream is alive"
     );
-
     drop(held); // the old holder releases the socket
-    let second = r2e_core::rt::timeout(Duration::from_secs(5), second)
+    assert!(
+        previous.is_cancelled(),
+        "dropping the stream releases the socket"
+    );
+    assert_eq!(taken.bound.listener.local_addr().unwrap(), addr);
+
+    // And the async form resolves at once once the holder released.
+    drop(taken.bound);
+    let third = r2e_core::rt::timeout(
+        Duration::from_secs(5),
+        r2e_core::runtime::dev::bind_listener("ack-test", "127.0.0.1:0".into()),
+    )
+    .await
+    .expect("bind did not resolve after the release")
+    .unwrap();
+    assert_eq!(third.listener.local_addr().unwrap(), addr);
+}
+
+/// `stop_signal` resolving is an acknowledgement too: a tonic-style loop that
+/// breaks on the signal branch keeps its incoming stream alive while draining
+/// connections, and the next cycle must not wait for that drain.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_signal_resolving_releases_without_dropping_the_stream() {
+    let _serial = crate::serial::dev_serial();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
+    let shutdown = r2e_core::rt::CancelToken::new();
+
+    let first = r2e_core::runtime::dev::bind_listener("signal-test", "127.0.0.1:0".into())
         .await
-        .expect("bind did not resolve after the release")
-        .unwrap()
         .unwrap();
-    assert_eq!(second.listener.local_addr().unwrap(), addr);
+    let stop = first.stop_signal(shutdown.clone());
+    let _held = first.into_incoming(shutdown.clone()); // alive, never polled
+
+    let taken = r2e_core::runtime::dev::get_or_bind_listener("signal-test", "127.0.0.1:0").unwrap();
+    let previous = taken.previous_released.unwrap();
+    assert!(!previous.is_cancelled());
+    stop.await; // handover fired → the signal resolves → released
+    assert!(
+        previous.is_cancelled(),
+        "stop_signal must release on resolution"
+    );
+}
+
+/// Stop is checked BEFORE accept: a connection queued in the backlog while
+/// the old stream sits unpolled is not taken once the handover fired — it
+/// stays queued for the new holder.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_queued_connection_is_not_accepted_after_the_handover() {
+    let _serial = crate::serial::dev_serial();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
+    let never = r2e_core::rt::CancelToken::new();
+
+    let first = r2e_core::runtime::dev::bind_listener("queued-test", "127.0.0.1:0".into())
+        .await
+        .unwrap();
+    let addr = first.listener.local_addr().unwrap();
+    let mut old = first.into_incoming(never.clone());
+
+    // Queue a connection: the kernel completes the handshake without anyone
+    // calling accept.
+    let mut client = r2e_core::rt::timeout(
+        Duration::from_secs(5),
+        r2e_core::rt::TcpStream::connect(addr),
+    )
+    .await
+    .expect("connect timed out")
+    .expect("connect");
+
+    // Handover fires while the old stream has not been polled yet.
+    let taken = r2e_core::runtime::dev::get_or_bind_listener("queued-test", "127.0.0.1:0").unwrap();
+    // The old stream must end, not yield the queued connection.
+    let old_next = r2e_core::rt::timeout(Duration::from_secs(5), old.next())
+        .await
+        .expect("old stream did not end");
+    assert!(
+        old_next.is_none(),
+        "the old holder accepted a queued connection after the handover"
+    );
+    assert!(taken.previous_released.unwrap().is_cancelled());
+
+    // The new holder gets it.
+    let mut new = taken.bound.into_incoming(never.clone());
+    let mut accepted = r2e_core::rt::timeout(Duration::from_secs(5), new.next())
+        .await
+        .expect("new stream did not accept")
+        .expect("new stream ended")
+        .expect("accept failed");
+    accepted.write_all(b"new").await.unwrap();
+    drop(accepted);
+    let mut buf = String::new();
+    r2e_core::rt::timeout(Duration::from_secs(5), client.read_to_string(&mut buf))
+        .await
+        .expect("read timed out")
+        .unwrap();
+    assert_eq!(buf, "new");
 }
