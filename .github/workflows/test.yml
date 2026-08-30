@@ -41,10 +41,13 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
 
-      # No `toolchain:` input — the action reads `rust-toolchain.toml`, the
-      # same pinned nightly the trybuild `.stderr` expectations are blessed on.
+      # The runner ships rustup; `rustup show` installs whatever
+      # `rust-toolchain.toml` pins (the nightly the trybuild `.stderr`
+      # expectations are blessed on), so the pin lives in one place.
       - name: Install toolchain (rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@master
+        run: |
+          rustup show
+          cargo --version
 
       - uses: Swatinem/rust-cache@v2
 
