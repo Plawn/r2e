@@ -33,6 +33,11 @@ struct MainArgs {
     app_fn: Option<syn::Path>,
     /// `#[r2e::test(app = ..., with = |b| ...)]`: builder pre-configuration hook.
     with_expr: Option<syn::Expr>,
+    /// `#[r2e::test(app = ..., env = expr)]`: boot on an already-built
+    /// `App::Env` instead of calling `App::setup()`. The expression is
+    /// evaluated inside the test's async block (so `env = shared().await` is
+    /// fine) and must produce `<App as App>::Env`.
+    env_expr: Option<syn::Expr>,
     /// `#[r2e::test(app = ..., jwt = false)]`: skip the TestJwt auto-wiring.
     jwt: bool,
     /// `#[r2e::test(order = <u32>)]`: run this test sequentially (ascending
@@ -52,6 +57,7 @@ impl Default for MainArgs {
             tracing: true,
             app_fn: None,
             with_expr: None,
+            env_expr: None,
             jwt: true,
             order: None,
             group: None,
@@ -80,6 +86,7 @@ impl MainArgs {
                     "tracing" => this.tracing = parse_bool(&meta)?,
                     "app" => this.app_fn = Some(meta.value()?.parse()?),
                     "with" => this.with_expr = Some(meta.value()?.parse()?),
+                    "env" => this.env_expr = Some(meta.value()?.parse()?),
                     "jwt" => this.jwt = parse_bool(&meta)?,
                     "order" => this.order = Some(meta.value()?.parse()?),
                     "group" => this.group = Some(meta.value()?.parse()?),
@@ -198,10 +205,11 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         return syn::Error::new_spanned(sig, "`app = ...` is only valid on #[r2e::test]")
             .to_compile_error();
     }
-    if args.app_fn.is_none() && (args.with_expr.is_some() || !args.jwt) {
+    if args.app_fn.is_none() && (args.with_expr.is_some() || args.env_expr.is_some() || !args.jwt)
+    {
         return syn::Error::new_spanned(
             sig,
-            "`with = ...` and `jwt = ...` require `app = <App type>`",
+            "`with = ...`, `env = ...` and `jwt = ...` require `app = <App type>`",
         )
         .to_compile_error();
     }
@@ -209,6 +217,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         return expand_boot_test(
             app_ty,
             args.with_expr.as_ref(),
+            args.env_expr.as_ref(),
             args.jwt,
             ordering.as_ref(),
             &func,
@@ -350,6 +359,7 @@ impl OrderedHooks {
 fn expand_boot_test(
     app_ty: &syn::Path,
     with_expr: Option<&syn::Expr>,
+    env_expr: Option<&syn::Expr>,
     jwt: bool,
     ordering: Option<&OrderedHooks>,
     func: &ItemFn,
@@ -368,10 +378,18 @@ fn expand_boot_test(
         Some(expr) => quote! { #expr },
         None => quote! { |__r2e_b| __r2e_b },
     };
-    let boot_call = if jwt {
-        quote! { #test_crate::TestApp::boot_with::<#app_ty>(#configure).await }
-    } else {
-        quote! { #test_crate::TestApp::boot_plain::<#app_ty>(#configure).await }
+    // `env = expr` boots on an environment the caller already owns (a
+    // `LazyLock`/`OnceCell` shared by the whole test binary), so `App::setup()`
+    // is not called again.
+    let boot_call = match (jwt, env_expr) {
+        (true, None) => quote! { #test_crate::TestApp::boot_with::<#app_ty>(#configure).await },
+        (false, None) => quote! { #test_crate::TestApp::boot_plain::<#app_ty>(#configure).await },
+        (true, Some(env)) => {
+            quote! { #test_crate::TestApp::boot_with_env::<#app_ty>(#env, #configure).await }
+        }
+        (false, Some(env)) => {
+            quote! { #test_crate::TestApp::boot_plain_env::<#app_ty>(#env, #configure).await }
+        }
     };
 
     // Bind parameters from the booted app. The `TestApp` binding moves the

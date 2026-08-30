@@ -60,7 +60,7 @@ needs no IdP), and retains the bean graph (`app.bean::<T>()`, `#[inject]`
 test parameters). Mocks and config patches go through the `with` hook:
 `#[r2e::test(app = my_app::MyApp, with = |b| b.override_bean(FakeMailer::new()))]`.
 Non-macro forms: `TestApp::boot::<my_app::MyApp>()`, `TestApp::boot_with`,
-`TestApp::boot_plain`. See `examples/example-app/tests/app_test.rs` for the
+`TestApp::boot_plain` (and the `*_env` variants below). See `examples/example-app/tests/app_test.rs` for the
 full showcase.
 
 A boot failure fails **one test**, it does not kill the runner: `App::setup`,
@@ -72,6 +72,55 @@ chain, which libtest attributes to the calling test. (Corollary: never call
 binary.) When the failure itself is the subject, `TestApp::try_boot::<A>()` /
 `try_boot_with` / `try_boot_plain` return `Result<TestApp, BootError>` over that
 same set of steps.
+
+### Sharing one `App::Env` across boots
+
+`App::Env` is the production concept of "resources built once" — a pool, a
+migrated schema, a container. Every plain `boot*` calls `A::setup()` again, so a
+binary that boots per test replays that work per test. The `*_env` boots take an
+environment the caller already owns and hand it straight to `A::build`;
+`A::setup()` is not called:
+
+```rust
+use r2e::rt::sync::OnceCell;
+use r2e_core::App;
+
+static ENV: OnceCell<<MyApp as App>::Env> = OnceCell::const_new();
+
+async fn env() -> <MyApp as App>::Env {
+    ENV.get_or_init(|| async { MyApp::setup().await.expect("setup") })
+        .await
+        .clone()
+}
+
+#[r2e::test(app = my_app::MyApp, env = env().await)]
+async fn lists_users(app: TestApp) {
+    app.get("/users").send().await.assert_ok();
+}
+```
+
+- **Macro knob:** `env = <expr>` on `#[r2e::test(app = …)]` and on
+  `#[r2e::test_suite(app = …)]`. The expression is evaluated in the test's async
+  block (so `env().await` is fine) and must produce `<App as App>::Env`. It
+  composes with `with = …` and `jwt = false`, and requires `app = …`.
+- **Explicit forms**, mirroring `boot` / `boot_with` / `boot_plain`:
+  `TestApp::boot_env::<A>(env)`, `TestApp::boot_with_env::<A>(env, |b| …)`,
+  `TestApp::boot_plain_env::<A>(env, |b| …)` — plus `try_boot_env`,
+  `try_boot_with_env`, `try_boot_plain_env` returning `Result<TestApp,
+  BootError>`.
+- Everything else is unchanged: `test` profile, pinned `TestJwt` validators, the
+  production startup phase, `shutdown()`. Only `setup` is skipped, so a
+  `build`-phase failure is still reported exactly as before.
+- `#[r2e::test_suite]`'s `#[before_all]` amortises setup **within one suite**;
+  a shared `Env` amortises it across suites and across whole test binaries.
+
+**Isolation is your job.** A shared `Env` means shared state: the same pool,
+rows and caches for every test booted off it, and the boots still run
+concurrently under libtest. Keep the tests independent (per-test schema, prefix
+or tenant, unique fixtures) or serialise them with `order = …`. The shared value
+also outlives each `TestApp` — `shutdown()` disposes the app's own beans, never
+the `Env` a later boot still needs, so dispose it yourself (or let the process
+exit do it).
 
 ### Ordered tests (@Order)
 

@@ -16,6 +16,10 @@ struct SuiteArgs {
     tracing: bool,
     app_ty: Option<syn::Path>,
     with_expr: Option<syn::Expr>,
+    /// `#[r2e::test_suite(app = ..., env = expr)]`: boot `#[before_all]`'s
+    /// `TestApp` on an already-built `App::Env` instead of calling
+    /// `App::setup()`. Evaluated inside the suite's async block.
+    env_expr: Option<syn::Expr>,
     jwt: bool,
     /// Shared Tokio `runtime::Builder` knobs (`flavor`, `worker_threads`, …).
     runtime: RuntimeArgs,
@@ -27,6 +31,7 @@ impl Default for SuiteArgs {
             tracing: true,
             app_ty: None,
             with_expr: None,
+            env_expr: None,
             jwt: true,
             runtime: RuntimeArgs::default(),
         }
@@ -55,6 +60,7 @@ impl SuiteArgs {
                 "tracing" => this.tracing = parse_bool(&meta)?,
                 "app" => this.app_ty = Some(meta.value()?.parse()?),
                 "with" => this.with_expr = Some(meta.value()?.parse()?),
+                "env" => this.env_expr = Some(meta.value()?.parse()?),
                 "jwt" => this.jwt = parse_bool(&meta)?,
                 _ => {
                     if !this.runtime.try_parse(&key, &meta)? {
@@ -127,10 +133,11 @@ fn expand_inner(args: SuiteArgs, item_impl: ItemImpl) -> syn::Result<TokenStream
             "#[r2e::test_suite] does not support generic impl blocks yet",
         ));
     }
-    if args.app_ty.is_none() && (args.with_expr.is_some() || !args.jwt) {
+    if args.app_ty.is_none() && (args.with_expr.is_some() || args.env_expr.is_some() || !args.jwt)
+    {
         return Err(syn::Error::new_spanned(
             item_impl.impl_token,
-            "`with = ...` and `jwt = ...` require `app = <App type>`",
+            "`with = ...`, `env = ...` and `jwt = ...` require `app = <App type>`",
         ));
     }
 
@@ -646,10 +653,21 @@ fn before_all_bindings(
                 Some(expr) => quote! { #expr },
                 None => quote! { |__r2e_b| __r2e_b },
             };
-            let boot_call = if args.jwt {
-                quote! { #test_crate::TestApp::boot_with::<#app_ty>(#configure).await }
-            } else {
-                quote! { #test_crate::TestApp::boot_plain::<#app_ty>(#configure).await }
+            // `env = expr` boots on an environment the caller already owns, so
+            // `App::setup()` is not called again (shared across suites too).
+            let boot_call = match (args.jwt, &args.env_expr) {
+                (true, None) => {
+                    quote! { #test_crate::TestApp::boot_with::<#app_ty>(#configure).await }
+                }
+                (false, None) => {
+                    quote! { #test_crate::TestApp::boot_plain::<#app_ty>(#configure).await }
+                }
+                (true, Some(env)) => {
+                    quote! { #test_crate::TestApp::boot_with_env::<#app_ty>(#env, #configure).await }
+                }
+                (false, Some(env)) => {
+                    quote! { #test_crate::TestApp::boot_plain_env::<#app_ty>(#env, #configure).await }
+                }
             };
             bindings.push(quote! { let __r2e_test_app = #boot_call; });
         }

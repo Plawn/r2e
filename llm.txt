@@ -4053,6 +4053,50 @@ bean and producer construction, plugin build, and the controller
 `#[post_construct]` / `#[on_start]` hooks the harness runs (`TestApp` boots
 through `try_build_with_consumers`).
 
+#### Sharing one `App::Env` across boots
+
+`App::Env` is the production concept of "resources built once". Every plain
+`boot*` calls `A::setup()` again, so a test binary that boots per test replays
+the pools and migrations per test. The `*_env` boots take an environment the
+caller already owns and hand it straight to `A::build` — `A::setup()` is not
+called at all:
+
+```rust
+use r2e::rt::sync::OnceCell;
+
+static ENV: OnceCell<<MyApp as App>::Env> = OnceCell::const_new();
+
+async fn env() -> <MyApp as App>::Env {
+    ENV.get_or_init(|| async { MyApp::setup().await.expect("setup") })
+        .await
+        .clone()
+}
+
+#[r2e::test(app = my_app::MyApp, env = env().await)]     // macro knob
+async fn lists_users(app: TestApp) {
+    app.get("/users").send().await.assert_ok();
+}
+
+// Explicit forms, mirroring boot / boot_with / boot_plain:
+let app = TestApp::boot_env::<MyApp>(env().await).await;
+let app = TestApp::boot_with_env::<MyApp>(env().await, |b| b.override_bean(mock)).await;
+let app = TestApp::boot_plain_env::<MyApp>(env().await, |b| b).await;
+// `try_boot_env` / `try_boot_with_env` / `try_boot_plain_env` are the
+// `Result`-returning forms.
+```
+
+`env = <expr>` is also accepted on `#[r2e::test_suite(app = …)]`, so several
+suites in one binary share the same environment (`#[before_all]` only amortises
+within its own suite). Everything else is unchanged: `test` profile, pinned
+`TestJwt` validators, the production startup phase, `shutdown()`.
+
+**Isolation is the caller's job.** A shared `Env` means shared state — the same
+pool, rows and caches for every test that boots off it, with the boots running
+concurrently under libtest. Keep tests independent (per-test schema, prefix or
+tenant), or serialise them with `order = …`. The shared value also outlives each
+`TestApp`: `shutdown()` disposes the app's own beans, never the `Env` a later
+boot still needs.
+
 ### Test lifecycle: startup and shutdown
 
 `TestApp::boot` runs the **production startup phase**, not just a router build:

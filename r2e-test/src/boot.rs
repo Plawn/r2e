@@ -5,6 +5,11 @@
 //! profile, pinned mocks, config overrides, a local [`TestJwt`] validator —
 //! then runs `App::setup` + `App::build` to assemble the app exactly as
 //! production does.
+//!
+//! The `*_env` variants ([`TestApp::boot_env`], [`TestApp::boot_with_env`],
+//! [`TestApp::boot_plain_env`]) skip `App::setup` and build on an
+//! [`App::Env`](r2e_core::App::Env) the caller already owns, so one test binary
+//! can share a single expensive environment across many boots.
 
 use std::sync::Arc;
 
@@ -23,7 +28,9 @@ impl TestApp {
     ///   no external IdP.
     ///
     /// Each boot runs `A::setup()` fresh, so every test gets its own
-    /// environment.
+    /// environment. To build that environment **once** for a whole test binary
+    /// and boot several apps off it, use [`boot_env`](Self::boot_env) and its
+    /// `_with_env` siblings.
     ///
     /// ```ignore
     /// let app = TestApp::boot::<MyApp>().await;
@@ -68,14 +75,8 @@ impl TestApp {
     pub async fn try_boot_with<A: App>(
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
     ) -> Result<Self, BootError> {
-        let jwt = TestJwt::new();
-        let builder = AppBuilder::new()
-            .with_profile("test")
-            .override_bean(Arc::new(jwt.claims_validator()))
-            .override_bean(Arc::new(jwt.validator()));
         let env = A::setup().await?;
-        let built = A::build(configure(builder), env).await?;
-        Self::from_bootable(built, Some(jwt)).await
+        Self::assemble::<A>(env, Some(TestJwt::new()), configure).await
     }
 
     /// Boot an [`App`] **without** the harness JWT wiring — for apps whose
@@ -90,10 +91,123 @@ impl TestApp {
     pub async fn try_boot_plain<A: App>(
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
     ) -> Result<Self, BootError> {
-        let builder = AppBuilder::new().with_profile("test");
         let env = A::setup().await?;
+        Self::assemble::<A>(env, None, configure).await
+    }
+
+    // ── Reusing one `App::Env` across boots ──────────────────────────────
+
+    /// [`boot`](Self::boot) on an **already-built** [`App::Env`]: `A::setup()`
+    /// is **not** called — the environment you pass is handed straight to
+    /// `A::build`.
+    ///
+    /// `App::Env` is the production concept of "resources built once"; this is
+    /// how a test binary gets the same amortisation. Build it once in a
+    /// `LazyLock`/`OnceCell` (it is `Clone + Send + Sync + 'static`) and boot
+    /// as many apps as the file needs off that one value, instead of replaying
+    /// pools and migrations per test:
+    ///
+    /// ```ignore
+    /// static ENV: OnceCell<MyEnv> = OnceCell::const_new();
+    /// async fn env() -> MyEnv {
+    ///     ENV.get_or_init(|| async { MyApp::setup().await.unwrap() }).await.clone()
+    /// }
+    ///
+    /// #[r2e::test]
+    /// async fn lists_users() {
+    ///     let app = TestApp::boot_env::<MyApp>(env().await).await;
+    ///     app.get("/users").send().await.assert_ok();
+    /// }
+    /// ```
+    ///
+    /// Everything else is unchanged: `test` profile, pinned [`TestJwt`]
+    /// validators, the production startup phase, and
+    /// [`shutdown`](Self::shutdown).
+    ///
+    /// # Isolation is yours
+    ///
+    /// A shared `Env` means **shared state**: the same pool, the same rows, the
+    /// same caches, seen by every test that boots off it — and the boots
+    /// themselves still run concurrently under libtest. Keep the tests
+    /// independent (per-test schema/prefix/tenant, or unique fixtures), or
+    /// serialise them with `#[r2e::test(order = …)]`. Note also that the shared
+    /// value outlives each `TestApp`: `shutdown()` disposes the app's own
+    /// beans, never the `Env` a later boot still needs.
+    pub async fn boot_env<A: App>(env: A::Env) -> Self {
+        Self::boot_with_env::<A>(env, |b| b).await
+    }
+
+    /// [`boot_env`](Self::boot_env) without the panic — see
+    /// [`try_boot`](Self::try_boot).
+    pub async fn try_boot_env<A: App>(env: A::Env) -> Result<Self, BootError> {
+        Self::try_boot_with_env::<A>(env, |b| b).await
+    }
+
+    /// [`boot_with`](Self::boot_with) on an already-built [`App::Env`] —
+    /// mocks and config patches through the hook, no `A::setup()` call. See
+    /// [`boot_env`](Self::boot_env) for the shared-environment contract.
+    ///
+    /// ```ignore
+    /// let app = TestApp::boot_with_env::<MyApp>(env().await, |b| {
+    ///     b.override_bean(FakeMailer::new())
+    /// })
+    /// .await;
+    /// ```
+    pub async fn boot_with_env<A: App>(
+        env: A::Env,
+        configure: impl FnOnce(AppBuilder) -> AppBuilder,
+    ) -> Self {
+        unwrap_boot::<A>(Self::try_boot_with_env::<A>(env, configure).await)
+    }
+
+    /// [`boot_with_env`](Self::boot_with_env) without the panic — see
+    /// [`try_boot`](Self::try_boot).
+    pub async fn try_boot_with_env<A: App>(
+        env: A::Env,
+        configure: impl FnOnce(AppBuilder) -> AppBuilder,
+    ) -> Result<Self, BootError> {
+        Self::assemble::<A>(env, Some(TestJwt::new()), configure).await
+    }
+
+    /// [`boot_plain`](Self::boot_plain) on an already-built [`App::Env`] — no
+    /// harness JWT wiring, no `A::setup()` call. See
+    /// [`boot_env`](Self::boot_env) for the shared-environment contract.
+    pub async fn boot_plain_env<A: App>(
+        env: A::Env,
+        configure: impl FnOnce(AppBuilder) -> AppBuilder,
+    ) -> Self {
+        unwrap_boot::<A>(Self::try_boot_plain_env::<A>(env, configure).await)
+    }
+
+    /// [`boot_plain_env`](Self::boot_plain_env) without the panic — see
+    /// [`try_boot`](Self::try_boot).
+    pub async fn try_boot_plain_env<A: App>(
+        env: A::Env,
+        configure: impl FnOnce(AppBuilder) -> AppBuilder,
+    ) -> Result<Self, BootError> {
+        Self::assemble::<A>(env, None, configure).await
+    }
+
+    /// The one assembly path behind every `boot*`: pre-configure the builder
+    /// with the harness defaults, run the caller's hook, then `A::build` on the
+    /// given environment and start it.
+    ///
+    /// It never calls `A::setup()` — the caller decides whether the environment
+    /// is fresh (`boot`/`boot_with`/`boot_plain`) or shared
+    /// (`boot_env`/`boot_with_env`/`boot_plain_env`).
+    async fn assemble<A: App>(
+        env: A::Env,
+        jwt: Option<TestJwt>,
+        configure: impl FnOnce(AppBuilder) -> AppBuilder,
+    ) -> Result<Self, BootError> {
+        let mut builder = AppBuilder::new().with_profile("test");
+        if let Some(jwt) = &jwt {
+            builder = builder
+                .override_bean(Arc::new(jwt.claims_validator()))
+                .override_bean(Arc::new(jwt.validator()));
+        }
         let built = A::build(configure(builder), env).await?;
-        Self::from_bootable(built, None).await
+        Self::from_bootable(built, jwt).await
     }
 
     /// Start the assembled app through the production lifecycle.

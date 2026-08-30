@@ -1,0 +1,5 @@
+error: `with = ...`, `env = ...` and `jwt = ...` require `app = <App type>`
+ --> cases/testing/fail/test_env_without_app.rs:6:1
+  |
+6 | async fn shares_an_environment() {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

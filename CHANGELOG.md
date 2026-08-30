@@ -7,6 +7,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`TestApp` can reuse an `App::Env` across boots** (task #988): three new
+  boots skip `A::setup()` and build on an environment the caller already owns —
+  `TestApp::boot_env::<A>(env)`, `TestApp::boot_with_env::<A>(env, configure)`,
+  `TestApp::boot_plain_env::<A>(env, configure)`, plus `try_boot_env` /
+  `try_boot_with_env` / `try_boot_plain_env`. `App::Env` is already
+  `Clone + Send + Sync + 'static`, so a test binary builds the expensive part
+  once and boots every test off it instead of replaying pools and migrations
+  per test (`#[before_all]` only amortises inside one suite).
+
+  ```rust
+  use r2e::rt::sync::OnceCell;
+
+  static ENV: OnceCell<<MyApp as App>::Env> = OnceCell::const_new();
+
+  async fn env() -> <MyApp as App>::Env {
+      ENV.get_or_init(|| async { MyApp::setup().await.expect("setup") })
+          .await
+          .clone()
+  }
+
+  #[r2e::test(app = my_app::MyApp, env = env().await)]
+  async fn lists_users(app: TestApp) {
+      app.get("/users").send().await.assert_ok();
+  }
+  ```
+
+  `#[r2e::test]` and `#[r2e::test_suite]` gained the matching `env = <expr>`
+  knob (evaluated inside the test's async block, composes with `with = …` and
+  `jwt = false`, requires `app = …`). Everything else is unchanged: `test`
+  profile, pinned `TestJwt` validators, the production startup phase,
+  `shutdown()`. **Isolation is the caller's job** — a shared `Env` is shared
+  state across concurrently running tests, and `shutdown()` disposes the app's
+  own beans, never the shared `Env`.
+
 - **Feature modules own their gRPC services** (task #989): `#[module]` gained a
   `grpc_services(...)` key, the transport peer of `controllers(...)`. A vertical
   slice now declares its gRPC service next to its HTTP controllers, and that
