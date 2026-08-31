@@ -267,6 +267,46 @@ that cannot watch can implement only `load`.
 
 **There is no struct-level prefix attribute.** The prefix is always provided at the injection site or call site.
 
+### Struct attributes
+
+| Attribute | Effect |
+|---|---|
+| `#[config(derive_default)]` | Also emit `impl Default` from the declared defaults (opt-in). See below. |
+| `#[config(prefix = "...")]` | Accepted and **ignored** (legacy); the prefix comes from the call site. |
+
+#### `#[config(derive_default)]`
+
+Apps were restating every `#[config(default = ...)]` in a hand-written `Default`
+impl, where the two copies drift apart silently. The opt-in flag emits the impl
+from the declared defaults instead.
+
+The contract is the strong one:
+
+```
+Settings::default() == Settings::from_config(&R2eConfig::empty(), None).unwrap()
+```
+
+so the derive can only use, per field, the value config loading would produce
+for an absent key:
+
+| Field shape | `Default` init |
+|---|---|
+| `#[config(default = expr)]` | `expr` (the same tokens `from_config` uses) |
+| `Option<T>` | `None` |
+| `#[config(skip)]` | `Default::default()` (as `from_config` does) |
+| `#[config(section, default)]` / map section | `Default::default()` / empty map (as `from_config` does) |
+| **required** (none of the above) | **compile error** |
+
+A required field has no absent-value — `from_config` fails on it — so no
+`Default` could agree; the derive refuses instead of inventing
+`Default::default()` and letting the two silently diverge. The remedy in the
+message: add a `#[config(default = ...)]`, make it `Option<T>`, or drop
+`derive_default` and write the impl by hand.
+
+**Opt-in, not automatic**, so a struct with a hand-written `Default` (in-tree or
+downstream) keeps it and there is no conflicting-impl breakage. Compile-fail
+case: `r2e-compile-tests/cases/config/fail/config_derive_default_required_field.rs`.
+
 ### Field resolution
 
 Each field resolves to: **`prefix + "." + field_name`** (or `field_name` alone if prefix is `None`).
@@ -288,6 +328,25 @@ Each field resolves to: **`prefix + "." + field_name`** (or `field_name` alone i
 | `/// doc comment` | Description in validation errors | `/// Connection timeout` |
 
 Attributes combine: `#[config(key = "client.id", default = "my-app")]`.
+
+### Two sections of the same type are a compile error
+
+The generated `register_children` provides each `#[config(section)]` as a bean
+**by type**. Two fields of the same section type both call
+`registry.provide::<T>()`, so the last one silently wins and every
+`#[inject] T` reads whichever that was:
+
+```rust
+#[config(section)] pub database: DatabaseSettings,
+#[config(section)] pub run_database: DatabaseSettings,   // compile error
+```
+
+R2E has no bean qualifiers (decisions log: newtypes are the sanctioned answer
+for same-typed beans), so the declaration itself is rejected, and the
+diagnostic suggests a name for the second type. `Option<T>` sections are
+unwrapped before the comparison; map-valued sections are exempt (they provide
+the map, not `T`). Compile-fail case:
+`r2e-compile-tests/cases/config/fail/config_duplicate_section_type.rs`.
 
 Priority for a field: **YAML > env var (`#[config(env)]`) > default > error/None**.
 
@@ -599,6 +658,37 @@ fields hint their exact unprefixed var. `MissingKeyError::env_hint` is
 `Option<String>` (`None` = not env-reachable).
 
 Manual: `validate_keys(config, &[("source", "key", "type")])` → `Vec<MissingKeyError>`.
+
+### `load_config` reports every missing key at once
+
+`load_config::<C>()` is a type-state transition and cannot return a `Result`, so
+its failures are parked on the builder (`record_boot_error`, first wins) and
+surface from `try_build_state()` — `build_state()` panics with the same
+rendered report. That already covered a missing/malformed config **file**; typed
+sections now take the same route:
+
+```rust
+// r2e-core/src/builder/nostate.rs
+let section_errors = C::validate(&config);      // aggregated, metadata-driven
+if section_errors.is_empty() {
+    C::register(&config, &mut registry)         // construct + provide children
+} else {
+    record_boot_error(BeanError::MissingConfigKeys(ConfigValidationError { .. }))
+}
+```
+
+`LoadableConfig` gained `fn validate(&R2eConfig) -> Vec<MissingKeyError>`
+alongside `register` (`()` → empty; the blanket `T: ConfigProperties` impl →
+`validate_section::<T>(config, None)`). Validating **before** construction is
+the point: `from_config` short-circuits on the first `NotFound`, so a five-key
+gap used to take five boots to fix. `register` is deliberately skipped when
+validation fails — it would fail on the very first of those keys — and
+`try_build_state()` returns the recorded error before a single bean is
+constructed, so the unprovided typed slot is never observed.
+
+This is the fix for apps hand-rolling a `build_settings()` helper purely to get
+"all missing keys at once"; they can delete it. Tests:
+`r2e-core/tests/config/validation.rs`.
 
 ---
 

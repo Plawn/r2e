@@ -373,9 +373,18 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// builder chain. It is **recorded** instead, and the chain continues
     /// against an empty config;
     /// [`try_build_state`](Self::try_build_state) returns it (as
-    /// [`BeanError::ConfigLoad`](crate::beans::BeanError::ConfigLoad)) before
-    /// any bean is built, and `build_state()` panics with the same rendered
-    /// message. First failure wins.
+    /// [`BeanError::ConfigLoad`](crate::beans::BeanError::ConfigLoad), or
+    /// [`BeanError::MissingConfigKeys`](crate::beans::BeanError::MissingConfigKeys)
+    /// for a typed section that does not bind) before any bean is built, and
+    /// `build_state()` panics with the same rendered message. First failure
+    /// wins.
+    ///
+    /// The typed section is validated with
+    /// [`LoadableConfig::validate`](crate::config::LoadableConfig::validate)
+    /// *before* it is constructed, so the report lists **every** missing
+    /// required key (its own and every nested `#[config(section)]`'s), plus
+    /// type mismatches and `garde` violations — not just the first one
+    /// `ConfigProperties::from_config` trips over.
     ///
     /// # Panics
     ///
@@ -479,12 +488,30 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             // warning `live_config()` would otherwise emit.
             live.mark_has_providers();
         }
-        if let Err(e) = C::register(&config, &mut self.shared.bean_registry) {
+        // Typed-section binding is validated BEFORE construction so the report
+        // names *every* missing key at once (`from_config` short-circuits on
+        // the first `NotFound`, which used to make a five-key gap take five
+        // boots to fix). The aggregated form is the same one controllers get.
+        let section_errors = C::validate(&config);
+        if section_errors.is_empty() {
+            if let Err(e) = C::register(&config, &mut self.shared.bean_registry) {
+                self.shared
+                    .record_boot_error(crate::beans::BeanError::ConfigLoad {
+                        context: "Failed to construct typed config",
+                        source: Box::new(e),
+                    });
+            }
+        } else {
+            // `register` is skipped: it would fail on the very first of these
+            // keys and overwrite nothing useful. `try_build_state` returns the
+            // recorded error before a single bean is constructed, so the
+            // unprovided typed slot is never observed.
             self.shared
-                .record_boot_error(crate::beans::BeanError::ConfigLoad {
-                    context: "Failed to construct typed config",
-                    source: Box::new(e),
-                });
+                .record_boot_error(crate::beans::BeanError::MissingConfigKeys(
+                    crate::config::ConfigValidationError {
+                        errors: section_errors,
+                    },
+                ));
         }
         self.shared.active_profile =
             resolve_profile(self.shared.forced_profile.as_deref(), &config);

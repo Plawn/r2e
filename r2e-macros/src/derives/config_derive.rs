@@ -43,6 +43,7 @@ struct FieldInfo {
 }
 
 use crate::util::type_utils::is_option_type;
+use crate::util::type_utils::to_pascal_case;
 use crate::util::type_utils::unwrap_option_type as option_inner_type;
 
 /// Extract doc comments from a field's attributes.
@@ -178,9 +179,21 @@ fn has_validate_attr(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| a.path().is_ident("validate"))
 }
 
-/// Consume and ignore a `#[config(prefix = "...")]` attribute if present (for backwards compat).
-/// Returns Ok(()) whether or not the attribute is present.
-fn consume_prefix_attr(input: &DeriveInput) -> syn::Result<()> {
+/// Struct-level `#[config(...)]` arguments.
+struct StructConfig {
+    /// `#[config(derive_default)]` — also emit `impl Default` from the
+    /// declared `#[config(default = ...)]` values.
+    derive_default: bool,
+}
+
+/// Parse the struct-level `#[config(...)]` attribute.
+///
+/// `prefix = "..."` is accepted and ignored (backwards compat — the prefix is
+/// always supplied at the call site). `derive_default` is the F7c opt-in.
+fn extract_struct_config(input: &DeriveInput) -> syn::Result<StructConfig> {
+    let mut result = StructConfig {
+        derive_default: false,
+    };
     for attr in &input.attrs {
         if attr.path().is_ident("config") {
             attr.parse_nested_meta(|meta| {
@@ -188,13 +201,72 @@ fn consume_prefix_attr(input: &DeriveInput) -> syn::Result<()> {
                     let value = meta.value()?;
                     let _lit: syn::LitStr = value.parse()?;
                     Ok(())
+                } else if meta.path.is_ident("derive_default") {
+                    result.derive_default = true;
+                    Ok(())
                 } else {
-                    Err(meta.error("expected `prefix` in #[config(prefix = \"...\")]"))
+                    Err(meta.error(
+                        "expected `derive_default` or `prefix = \"...\"` in struct-level #[config(...)]",
+                    ))
                 }
             })?;
         }
     }
-    Ok(())
+    Ok(result)
+}
+
+/// Build the `impl Default` body requested by `#[config(derive_default)]`.
+///
+/// The emitted `Default` is **exactly** what `from_config` produces against an
+/// empty config — that is the whole point: a hand-written `Default` beside
+/// `#[config(default = ...)]` declarations is free to drift, this one cannot.
+/// So every field must have a determinate absent-value:
+///
+/// | field                          | `Default::default()` |
+/// |--------------------------------|----------------------|
+/// | `#[config(default = expr)]`    | `expr`               |
+/// | `Option<T>`                    | `None`               |
+/// | `#[config(skip)]`              | `Default::default()` |
+/// | `#[config(section, default)]`  | `Default::default()` |
+/// | map-valued `#[config(section)]`| empty map            |
+///
+/// A **required** field (no default, not optional) has none: `from_config`
+/// would fail on an empty config, so there is no value `Default` could pick
+/// that would not be a lie. That is a compile error, not a silent
+/// `Default::default()` of the field type.
+fn default_impl_inits(fields: &[FieldInfo]) -> syn::Result<Vec<TokenStream2>> {
+    fields
+        .iter()
+        .map(|f| {
+            let field_name = &f.name;
+            if let Some(expr) = &f.default_expr {
+                return Ok(quote! { #field_name: #expr });
+            }
+            if f.is_skip
+                || f.is_option
+                || (f.is_section && (f.default_flag || f.is_map_section))
+            {
+                return Ok(quote! { #field_name: ::std::default::Default::default() });
+            }
+            let hint = if f.is_section {
+                "add `#[config(section, default)]` (the section then falls back to \
+                 `Default::default()` when its prefix is absent), make it `Option<...>`"
+            } else {
+                "add `#[config(default = ...)]`, make it `Option<...>`"
+            };
+            Err(syn::Error::new_spanned(
+                field_name,
+                format!(
+                    "`#[config(derive_default)]` needs an absent-value for every field, and \
+                     `{field_name}` is required\n\
+                     \n  The generated `Default` must equal what `from_config` produces \
+                     against an empty config, so it cannot invent one.\
+                     \n  {hint}, or drop `#[config(derive_default)]` and write the \
+                     `Default` impl by hand."
+                ),
+            ))
+        })
+        .collect()
 }
 
 /// Presence probe stored in `PropertyMeta::resolvable` — the validation-side
@@ -282,6 +354,76 @@ fn nested_section_validator(f: &FieldInfo, krate: &TokenStream2) -> TokenStream2
     }
 }
 
+/// Reject two `#[config(section)]` fields that share one section type.
+///
+/// `register_children` provides every section as a bean **by type**, and the
+/// generated `Children` list carries the type once per field, so two fields of
+/// the same type silently collapse: the last registration wins and every
+/// `#[inject]` of that type sees whichever section happened to be registered
+/// last. That is exactly the ambiguity R2E refuses to arbitrate — the bean
+/// graph is keyed by type and there are no qualifiers (decisions log: "named
+/// beans REJECTED, newtypes are the chosen pattern"), so the declaration is
+/// the error.
+///
+/// Map-valued sections are exempt: they are deliberately NOT registered as
+/// beans (all entries share one type), so they cannot collide.
+/// Join two PascalCase names, folding away a shared boundary word so the
+/// suggested newtype reads naturally: `RunDatabase` + `DatabaseSettings` gives
+/// `RunDatabaseSettings`, not `RunDatabaseDatabaseSettings`.
+fn merge_overlapping(prefix: &str, suffix: &str) -> String {
+    let max = prefix.len().min(suffix.len());
+    for k in (1..=max).rev() {
+        if !suffix.is_char_boundary(k) {
+            continue;
+        }
+        if prefix.ends_with(&suffix[..k]) {
+            return format!("{prefix}{}", &suffix[k..]);
+        }
+    }
+    format!("{prefix}{suffix}")
+}
+
+fn reject_duplicate_section_types(fields: &[FieldInfo]) -> syn::Result<()> {
+    let mut seen: Vec<(String, &syn::Ident)> = Vec::new();
+    for f in fields {
+        if !f.is_section || f.is_map_section {
+            continue;
+        }
+        let section_ty = if f.is_option {
+            match option_inner_type(&f.ty) {
+                Some(inner) => inner,
+                None => continue,
+            }
+        } else {
+            &f.ty
+        };
+        let key = quote!(#section_ty).to_string();
+        if let Some((_, first)) = seen.iter().find(|(k, _)| *k == key) {
+            let ty_name = key.replace(' ', "");
+            let short = ty_name.rsplit("::").next().unwrap_or(&ty_name).to_string();
+            let second = f.name.to_string();
+            let new_ty = merge_overlapping(&to_pascal_case(&second), &short);
+            return Err(syn::Error::new_spanned(
+                &f.name,
+                format!(
+                    "duplicate `#[config(section)]` type `{ty_name}`: fields `{first}` and \
+                     `{second}` both register it as a bean **by type**, so the last one \
+                     silently wins and every `#[inject] {short}` reads that one\n\
+                     \n  R2E's bean graph is keyed by type and has no qualifiers — give the \
+                     second section its own type:\
+                     \n\
+                     \n    #[derive(ConfigProperties, Clone)]\
+                     \n    pub struct {new_ty} {{ /* the same fields as {short} */ }}\
+                     \n\
+                     \n    #[config(section)] pub {second}: {new_ty},"
+                ),
+            ));
+        }
+        seen.push((key, &f.name));
+    }
+    Ok(())
+}
+
 fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     match &input.data {
         Data::Struct(data) => generate_struct(input, data),
@@ -295,8 +437,9 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
 fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<TokenStream2> {
     let name = &input.ident;
-    // Consume (and ignore) any #[config(prefix = "...")] for backwards compat
-    consume_prefix_attr(input)?;
+    // Struct-level `#[config(...)]`: `derive_default` opt-in, plus the ignored
+    // legacy `prefix = "..."`.
+    let struct_config = extract_struct_config(input)?;
     let krate = r2e_core_path();
 
     let fields = match &data.fields {
@@ -383,6 +526,26 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
             has_validate: has_validate_attr(&field.attrs),
         });
     }
+
+    reject_duplicate_section_types(&field_infos)?;
+
+    // `#[config(derive_default)]` → an `impl Default` built from the declared
+    // `#[config(default = ...)]` values, so a struct never has to repeat them
+    // in a hand-written impl that can drift.
+    let default_impl = if struct_config.derive_default {
+        let inits = default_impl_inits(&field_infos)?;
+        quote! {
+            impl ::std::default::Default for #name {
+                fn default() -> Self {
+                    Self {
+                        #(#inits,)*
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     // Detect if any field has garde validation → we'll call validate() after construction
     let any_has_validate = field_infos.iter().any(|f| f.has_validate);
@@ -809,6 +972,8 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                 #(#register_children_stmts)*
             }
         }
+
+        #default_impl
     })
 }
 

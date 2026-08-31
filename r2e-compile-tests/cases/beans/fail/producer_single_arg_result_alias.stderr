@@ -1,0 +1,9 @@
+error: #[producer] cannot read `std::io::Result<Pool>`: a one-argument `Result` alias hides the error type
+
+       R2E splits a literal `Result<T, E>` into the produced bean (`T`) and the boot error (`E`) by matching tokens — it cannot resolve the alias, and treating this as a plain type would register the bean under `std::io::Result<Pool>` itself.
+
+         hint: spell both halves out — `-> Result<T, anyhow::Error>` — or return the value directly with `-> T` if construction cannot fail
+  --> cases/beans/fail/producer_single_arg_result_alias.rs:12:21
+   |
+12 | fn create_pool() -> std::io::Result<Pool> {
+   |                     ^^^^^^^^^^^^^^^^^^^^^

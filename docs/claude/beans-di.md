@@ -117,6 +117,46 @@ async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
 // Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
 ```
 
+### `after(...)` — ordering-only dependency edges
+
+A producer sometimes needs a bean to *exist* without reading it: a process-wide
+instance guard, a migration runner, a registry something else must have
+populated. That used to be spelled as an unused parameter
+(`fn create_db(settings: X, _guard: InstanceGuard) -> Db`), which every reader
+then has to be told is load-bearing — and which clippy/`unused` lints keep
+pushing back on.
+
+```rust
+#[producer(after(InstanceGuard, Migrations))]
+fn create_db(#[config("database.url")] url: String) -> Db { Db::open(&url) }
+```
+
+Each type listed joins `type Deps` and `dependencies()`, exactly like a
+parameter: the graph builds it first, and a missing one is the usual boot
+error. Nothing is bound in the function signature.
+
+- Naming a type the producer **already takes as a parameter** is a compile
+  error (it is already an edge). Case:
+  `r2e-compile-tests/cases/beans/fail/producer_after_duplicates_param.rs`.
+- `after()` with no types is a compile error.
+- Composes with `start`: `#[producer(start, after(Migrations))]`.
+- Parsed in `attrs/producer_attr.rs` (`ProducerArgs::after: Vec<syn::Type>`),
+  appended to `dep_type_ids` / `dep_types` after the parameter loop. Tests:
+  `r2e-core/tests/di/producer_attrs.rs` § 8.
+
+### `Result` detection is textual
+
+`#[producer]` splits a **literal** `Result<T, E>` return type into
+`type Output = T` / `type Error = E` by matching tokens — it has no type
+resolution. A one-argument alias (`anyhow::Result<T>`, `std::io::Result<T>`)
+therefore does not look like a `Result` at all: it used to fall through to the
+infallible arm and register the bean under the *alias* type with
+`Error = Infallible`, so `#[inject] T` failed to resolve for reasons nothing in
+the code pointed at. `reject_single_arg_result_alias`
+(`r2e-macros/src/util/type_utils.rs`) now makes it a targeted compile error
+asking for `Result<T, anyhow::Error>` (or `-> T`). Case:
+`r2e-compile-tests/cases/beans/fail/producer_single_arg_result_alias.rs`.
+
 ### Attributes on the annotated function
 
 `#[producer]` re-emits your function (it only strips `#[config]` /

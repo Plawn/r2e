@@ -311,3 +311,103 @@ async fn load_bearing_attribute_producers_still_resolve() {
     assert_eq!(call_legacy().0, 1);
     drop_receipt();
 }
+
+// ── 8. `#[producer(after(..))]` — ordering-only dependency edges ───────────
+//
+// Some beans must exist *before* a producer runs without being anything the
+// producer body reads: a process-wide guard, a migration runner, a registry
+// that must have been populated. That used to be spelled as an unused
+// parameter (`fn create_db(_guard: InstanceGuard) -> Db`), which every reader
+// then has to be told is load-bearing. `after(..)` says it directly: the type
+// joins `Deps`/`dependencies()` — so the graph orders on it and a missing bean
+// is still a boot error — but binds no parameter.
+
+mod ordering_edges {
+    use r2e_core::prelude::*;
+    use std::sync::{Mutex, OnceLock};
+
+    pub fn build_log() -> &'static Mutex<Vec<&'static str>> {
+        static LOG: OnceLock<Mutex<Vec<&'static str>>> = OnceLock::new();
+        LOG.get_or_init(Default::default)
+    }
+
+    #[derive(Clone)]
+    pub struct InstanceGuard;
+
+    #[bean]
+    impl InstanceGuard {
+        fn new() -> Self {
+            build_log().lock().unwrap().push("guard");
+            Self
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct Migrations;
+
+    #[bean]
+    impl Migrations {
+        fn new() -> Self {
+            build_log().lock().unwrap().push("migrations");
+            Self
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct Db(pub &'static str);
+
+    // Registered FIRST below, and taking no parameter at all: only the
+    // `after(..)` edges can push it behind the other two.
+    #[producer(after(InstanceGuard, Migrations))]
+    pub fn create_db() -> Db {
+        build_log().lock().unwrap().push("db");
+        Db("ready")
+    }
+}
+
+#[r2e_core::test]
+async fn after_orders_the_producer_behind_types_it_never_binds() {
+    use ordering_edges::*;
+
+    let state = AppBuilder::new()
+        .register::<CreateDb>()
+        .register::<InstanceGuard>()
+        .register::<Migrations>()
+        .try_build_state()
+        .await
+        .expect("graph resolves");
+
+    assert_eq!(state.bean_context().get::<Db>().0, "ready");
+
+    let log = build_log().lock().unwrap().clone();
+    let db_at = log.iter().position(|s| *s == "db").expect("db was built");
+    for earlier in ["guard", "migrations"] {
+        let at = log
+            .iter()
+            .position(|s| *s == earlier)
+            .unwrap_or_else(|| panic!("{earlier} was built; log = {log:?}"));
+        assert!(
+            at < db_at,
+            "`after({earlier})` must build it before the producer; log = {log:?}"
+        );
+    }
+}
+
+#[r2e_core::test]
+async fn after_types_are_real_dependencies_of_the_producer() {
+    use ordering_edges::*;
+    use r2e_core::Producer;
+    use std::any::TypeId;
+
+    let deps = <CreateDb as Producer>::dependencies();
+    let ids: Vec<TypeId> = deps.iter().map(|(id, _)| *id).collect();
+
+    assert!(
+        ids.contains(&TypeId::of::<InstanceGuard>()),
+        "after(..) must reach `dependencies()`: {deps:?}"
+    );
+    assert!(
+        ids.contains(&TypeId::of::<Migrations>()),
+        "after(..) must reach `dependencies()`: {deps:?}"
+    );
+}

@@ -1095,6 +1095,33 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     .build_state()
 ///     .await
 /// ```
+///
+/// # Arguments
+///
+/// - `start` — register the produced value as a background service
+///   ([`ServiceComponent`](r2e_core::ServiceComponent)); its `Deps` are folded
+///   into the producer's own.
+/// - `after(A, B, ..)` — **ordering-only** dependency edges. Each type joins
+///   `Producer::dependencies()` (so the graph builds it first) and
+///   `Producer::Deps` (so a missing registration is a compile error), but
+///   becomes no function parameter. This is the declarative form of the unused
+///   `_guard: InstanceGuard` parameter people write today:
+///
+///   ```ignore
+///   #[producer(after(InstanceGuard))]
+///   async fn create_doris_db(settings: DorisSettings) -> DorisDb { .. }
+///   ```
+///
+///   Naming a type that is already a parameter is an error — a parameter is
+///   already an edge.
+///
+/// # Return type
+///
+/// The return type IS the bean key, with one exception: a **literal**
+/// `Result<T, E>` is split into `Producer::Output = T` + `Producer::Error = E`.
+/// A one-argument alias (`anyhow::Result<T>`, `std::io::Result<T>`) is
+/// rejected — the macro matches tokens and cannot see the hidden error type;
+/// spell `Result<T, anyhow::Error>` out, or return `T` directly.
 #[proc_macro_attribute]
 pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
     producer_attr::expand(args, input)

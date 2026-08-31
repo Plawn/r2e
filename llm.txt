@@ -479,6 +479,21 @@ generates a safe `Producer::produce` / `Bean::build` that is the graph's only
 caller, and it cannot discharge an `unsafe` contract; drop `unsafe` from the
 signature and keep the `unsafe { }` block, with its SAFETY comment, in the body.
 
+**Ordering-only dependencies.** `#[producer(after(A, B))]` adds `A` and `B` to
+the producer's `Deps` / `dependencies()` — so the graph builds them first and a
+missing one is the usual boot error — **without** binding a parameter. Use it
+for a bean the body never reads (a process-wide guard, a migration runner, a
+registry that must already be populated), instead of the unused-parameter idiom
+it replaces:
+
+```rust
+#[producer(after(InstanceGuard, Migrations))]
+fn create_db(#[config("database.url")] url: String) -> Db { Db::open(&url) }
+```
+
+Naming a type that is already a parameter is a compile error (a parameter is
+already an edge). `after(..)` composes with `#[producer(start)]`.
+
 **Fallible construction.** Any of the three may return `Result<_, E>` for any
 `E: Into<BootError>` (`BootError = Box<dyn Error + Send + Sync>`). The error type
 is an associated `type Error` on the trait — it never contaminates the bean type:
@@ -486,6 +501,12 @@ the producer above registers `SqlitePool`, and consumers inject `SqlitePool`, no
 `Result<SqlitePool, _>`. An infallible constructor (`-> Self` / `-> T`) gets
 `type Error = Infallible` from the macro; a hand-written `impl Bean` /
 `impl AsyncBean` / `impl Producer` must declare `type Error` itself.
+
+The split is **textual**: only a literal `Result<T, E>` return type is read as
+fallible. A one-argument alias (`anyhow::Result<T>`, `std::io::Result<T>`) hides
+the error type from the macro, so `#[producer]` rejects it with a message asking
+for `Result<T, anyhow::Error>` (or `-> T`) rather than registering the bean
+under the alias itself with `Error = Infallible`.
 
 The first failure aborts the build: `try_build_state()` returns
 `BeanError::BeanBuild { bean, source }` — `"Bean '<type>' failed to build: <e>"`,
@@ -1223,12 +1244,48 @@ Tagged enum sections: `#[config(tag = "backend")]` on an enum selects the
 variant from a config key. Enums as scalar values: `#[derive(FromConfigValue)]`
 via serde.
 
+Two `#[config(section)]` fields of the **same type** are a compile error: the
+generated `register_children` provides sections as beans **by type**, so the
+second would silently overwrite the first and every `#[inject]` of that type
+would read whichever won. R2E has no bean qualifiers — give the second section
+its own type (the diagnostic suggests a name).
+
+Struct attribute `#[config(derive_default)]` — opt-in, emits `impl Default`
+from the declared defaults, so an app never restates them in a hand-written
+impl:
+
+```rust
+#[derive(ConfigProperties, Clone)]
+#[config(derive_default)]
+pub struct HttpConfig {
+    #[config(default = 8080)] pub port: u16,
+    #[config(default = "0.0.0.0")] pub host: String,
+    pub tls_cert: Option<PathBuf>,
+}
+// HttpConfig::default() == HttpConfig::from_config(&R2eConfig::empty(), None).unwrap()
+```
+
+That equality is the contract, so a **required** field (no `default`, not
+`Option<T>`, not `skip`, not `#[config(section, default)]`/map section) is a
+compile error rather than a silent `Default::default()` that would disagree
+with what config loading produces. It is opt-in: a struct with a hand-written
+`Default` is untouched.
+
 Missing **required** `#[config]` keys fail at startup (controller registration
 validates them). The message names the full working `R2E_…` env var (prefix
 included) for purely dotted keys; a key containing `-` or `_`
 (`database.min-idle`, `database.max_idle`) is not addressable via the strict
 `R2E_` overlay, so its message points at `application.yaml` / `${VAR}`
 placeholders instead.
+
+`load_config::<C>()` validates the whole typed tree **before** constructing it
+(`LoadableConfig::validate`, the trait's second method alongside `register`), so
+one boot reports **every** missing key of `C` and of its nested sections at
+once — not just the first one `from_config` trips over. As with a missing or
+malformed config file, the failure is parked on the builder (the type-state
+transition cannot return a `Result`) and surfaces from `try_build_state()` as
+`BeanError::MissingConfigKeys`, before any bean is constructed;
+`build_state()` panics with the same rendered report.
 `Option<T>` `#[config]` fields are optional — a missing key resolves to `None`
 and is never reported as missing.
 

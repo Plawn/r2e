@@ -589,6 +589,21 @@ pub trait LoadableConfig: Clone + Send + Sync + 'static {
     /// Used by `load_config` to add children to the compile-time provision list.
     type Children;
 
+    /// Aggregate **every** binding problem of the typed config before it is
+    /// constructed: missing required keys (its own leaves and every nested
+    /// `#[config(section)]`'s), type mismatches and `garde` violations.
+    ///
+    /// `register` alone cannot do this job: it goes through
+    /// [`ConfigProperties::from_config`], which short-circuits on the *first*
+    /// `NotFound`, so a boot with five missing keys used to be reported one
+    /// key per run. `load_config` runs this walk first and records the whole
+    /// report as
+    /// [`BeanError::MissingConfigKeys`](crate::beans::BeanError::MissingConfigKeys)
+    /// — the same aggregated form a controller's `#[config]` declarations get.
+    ///
+    /// An empty vec means the section binds.
+    fn validate(config: &R2eConfig) -> Vec<MissingKeyError>;
+
     /// Optionally register additional beans derived from the config.
     fn register(
         config: &R2eConfig,
@@ -598,6 +613,10 @@ pub trait LoadableConfig: Clone + Send + Sync + 'static {
 
 impl LoadableConfig for () {
     type Children = crate::type_list::TNil;
+
+    fn validate(_config: &R2eConfig) -> Vec<MissingKeyError> {
+        Vec::new()
+    }
 
     fn register(
         _config: &R2eConfig,
@@ -613,6 +632,10 @@ impl LoadableConfig for () {
 
 impl<T: ConfigProperties + Clone + Send + Sync + 'static> LoadableConfig for T {
     type Children = T::Children;
+
+    fn validate(config: &R2eConfig) -> Vec<MissingKeyError> {
+        validate_section::<T>(config, None)
+    }
 
     fn register(
         config: &R2eConfig,
