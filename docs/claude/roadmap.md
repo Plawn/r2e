@@ -471,7 +471,15 @@ legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
 public clients with a Docker-free, one-time Authorization Code + PKCE S256
 flow.
 
-## W17 — data-catalog audit: builder-glue elimination — OPEN (2026-08-31)
+## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
+
+**All 6 sprints landed on `task/w17-sprints`, one commit per sprint**
+(F1–F14 covered; F13 got its explicit go): `2d247d4` (S1: F1/F7b/F7c/F8),
+`02aa047` (S2: F4/F9), `fe80e8c` (S3: F6/F3), `8e026b9` (S4: F2/F14/F5),
+`d7fe7e4` (S5: F10/F11/F7a/F12, closes Tasker #1002), `607a695` (S6: F13,
+`docs/claude/metrics-stacks.md`). Workspace suite green. **Still open:**
+the per-sprint re-audit of data-catalog (which lines does it delete?) was
+not run — do it app-side together with the follow-ups below.
 
 Evidence base: audit of **blumana/data-catalog** (Axum→R2E migration, pinned
 at `915199c` = current master; `default-features = false` + `utils, openapi,
