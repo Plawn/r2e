@@ -637,17 +637,11 @@ data-catalog** (which lines does it delete?) before starting the next.
 App-side follow-ups (no framework change, hand to data-catalog): move
 `CatalogServiceImpl` into a module via `grpc_services(...)`, drop `axum`
 from catalog-core (`impl_into_response!` + prelude `from_fn`/`MatchedPath`),
-try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above, and
-**Tasker #1001** (target data-catalog, low): replace the hand-mounted
-`tower-http` `CorsLayer`/`TraceLayer` `with_layer` calls with the r2e `Cors`
-/ `Tracing` plugins (both exist, `r2e-core/src/builtins/mod.rs`) and drop
-`tower-http` from the root manifest — behavioral change, not a rename:
-diff real CORS preflight/simple-request headers before/after, keep the
-`Prometheus` plugin OUT (collides with the app's own `/metrics` +
-`http_metrics`), and remember gRPC traffic bypasses the HTTP layers. If the
-r2e plugins cannot reproduce the current permissive CORS or the
-`TraceLayer` span/log shape, that delta comes BACK here as a framework
-finding (candidate Sprint 5 extension).
+try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above.
+The CORS/Tracing plugin migration lives in Tasker #1001 (target
+data-catalog); if the r2e plugins cannot reproduce the app's current CORS
+or `TraceLayer` span/log shape, that delta comes back here as a framework
+finding.
 
 ## Open items tracked in their own docs
 
