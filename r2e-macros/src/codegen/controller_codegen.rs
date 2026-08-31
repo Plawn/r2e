@@ -84,6 +84,14 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         None => quote! { None },
     };
 
+    // The OpenAPI tag is welded to the *declaration*, not to the struct name:
+    // `tag = "…"` keeps the published spec stable when a controller is split
+    // or renamed. Defaults to the struct name.
+    let openapi_tag = match &def.tag {
+        Some(t) => t.clone(),
+        None => name.to_string(),
+    };
+
     let facade_name = format_ident!("__R2eRequest_{}", name);
     let data_name = format_ident!("__R2eRequestData_{}", name);
 
@@ -216,6 +224,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
         mod #mod_name {
             use super::*;
             pub const PATH_PREFIX: Option<&str> = #path_prefix;
+            pub const OPENAPI_TAG: &str = #openapi_tag;
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             pub const STRUCT_IDENTITY_IS_REQUIRED: bool = #struct_identity_is_required;
             #identity_type

@@ -15,25 +15,50 @@ use crate::util::type_utils::{
 struct ProducerArgs {
     /// Whether the produced output should be started as a lifecycle service.
     start: bool,
+    /// `after(A, B)` — ordering-only dependency edges.
+    ///
+    /// Each type joins `Producer::Deps` and `Producer::dependencies()` without
+    /// becoming a function parameter: the graph builds it first (and
+    /// compile-checks that it is registered), but the producer body never sees
+    /// it. The alternative people reach for today is an unused parameter
+    /// (`_guard: InstanceGuard`), which reads as a mistake and trips
+    /// `unused_variables` lints.
+    after: Vec<syn::Type>,
 }
 
 impl ProducerArgs {
     fn parse(args: TokenStream) -> syn::Result<Self> {
         let mut start = false;
+        let mut after: Vec<syn::Type> = Vec::new();
         if !args.is_empty() {
             let parser = syn::meta::parser(|meta| {
                 if meta.path.is_ident("start") {
                     start = true;
                     Ok(())
+                } else if meta.path.is_ident("after") {
+                    let content;
+                    syn::parenthesized!(content in meta.input);
+                    let types = content.parse_terminated(
+                        <syn::Type as syn::parse::Parse>::parse,
+                        syn::Token![,],
+                    )?;
+                    if types.is_empty() {
+                        return Err(meta.error(
+                            "#[producer(after(..))] needs at least one type: \
+                             #[producer(after(InstanceGuard))]",
+                        ));
+                    }
+                    after.extend(types);
+                    Ok(())
                 } else if meta.path.is_ident("name") {
                     Err(meta.error(NAMED_BEAN_MSG))
                 } else {
-                    Err(meta.error("expected `start`"))
+                    Err(meta.error("expected `start` or `after(Type, ..)`"))
                 }
             });
             syn::parse::Parser::parse(parser, args)?;
         }
-        Ok(Self { start })
+        Ok(Self { start, after })
     }
 }
 
@@ -89,6 +114,11 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
         }
         ReturnType::Type(_, ty) => ty.as_ref().clone(),
     };
+
+    // `anyhow::Result<Pool>` and friends would fall through the split below
+    // into the infallible arm, registering the bean under the *Result* type.
+    // Refuse the declaration instead of misclassifying it.
+    crate::util::type_utils::reject_single_arg_result_alias(&declared_ty, "#[producer]")?;
 
     let (output_ty, error_ty) = match result_ok_err_types(&declared_ty) {
         Some((ok, err)) => (ok.clone(), quote! { #err }),
@@ -233,6 +263,26 @@ fn generate(item_fn: &ItemFn, args: &ProducerArgs) -> syn::Result<TokenStream2> 
                 clean_params.push(quote! { #(#non_config_attrs)* #pat: #ty });
             }
         }
+    }
+
+    // `after(A, B)`: ordering-only edges. They join `dependencies()` (the
+    // topological order the graph resolves in) and `Deps` (the compile-time
+    // presence check), but produce no `build_args` / `arg_forwards` entry, so
+    // the producer function keeps its written signature.
+    for ty in &args.after {
+        if dep_types
+            .iter()
+            .any(|d| d.to_string() == quote!(#ty).to_string())
+        {
+            return Err(syn::Error::new_spanned(
+                ty,
+                "`after(..)` names a type this producer already takes as a parameter — \
+                 a parameter is already a dependency edge; drop it from `after(..)`",
+            ));
+        }
+        dep_type_ids
+            .push(quote! { (std::any::TypeId::of::<#ty>(), std::any::type_name::<#ty>()) });
+        dep_types.push(quote! { #ty });
     }
 
     // If any #[config] params, add R2eConfig to dependencies

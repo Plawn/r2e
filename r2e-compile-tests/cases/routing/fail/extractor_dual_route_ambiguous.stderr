@@ -6,7 +6,7 @@ error[E0282]: type annotations needed
    |
 help: try using a fully qualified path to specify the expected types
    |
-77 ~         <r2e::AppBuilder<BeanState<HCons<ApiKeys, HNil>>> as r2e::RegisterController<BeanState<HCons<ApiKeys, HNil>>, ((_,),), ()>>::register_controller::<KeyController>(AppBuilder::new()
+77 ~         <r2e::AppBuilder<BeanState<HCons<ApiKeys, HCons<ShutdownToken, HNil>>>> as r2e::RegisterController<BeanState<HCons<ApiKeys, HCons<ShutdownToken, HNil>>>, ((_,),), ()>>::register_controller::<KeyController>(AppBuilder::new()
 78 |             .provide(ApiKeys)
 79 |             .build_state()
 80 ~             .await)

@@ -1,0 +1,17 @@
+error: `prefix` must start with `/` — e.g. `prefix = "/api/v1"`
+  --> cases/modules/fail/module_prefix_invalid.rs:17:19
+   |
+17 | #[module(prefix = "api/v1", providers(Svc))]
+   |                   ^^^^^^^^
+
+error: `prefix` must not end with `/` — write `prefix = "/api/v1"`
+  --> cases/modules/fail/module_prefix_invalid.rs:20:19
+   |
+20 | #[module(prefix = "/api/v1/", providers(Svc))]
+   |                   ^^^^^^^^^^
+
+error: `prefix` must be a literal path — a path parameter or wildcard in a module prefix would have to be extracted by every controller in the module. Put it on the controller's own `#[controller(path = ...)]` instead
+  --> cases/modules/fail/module_prefix_invalid.rs:23:19
+   |
+23 | #[module(prefix = "/tenants/{id}", providers(Svc))]
+   |                   ^^^^^^^^^^^^^^^

@@ -523,3 +523,47 @@ where
         self.rooms.is_empty()
     }
 }
+
+// ── Shutdown termination (generated `#[sse]` support) ────────────────────
+
+/// Resolve the app's [`ShutdownToken`](crate::rt::ShutdownToken) from a bean
+/// context, or `None` when the app has no bean graph.
+///
+/// Called once per `#[sse]` route by generated code, at **registration** time.
+/// `None` is the honest answer for a `with_state()` app or a router built by
+/// hand: there is no shutdown lineage to observe, so the stream is left
+/// untouched.
+#[doc(hidden)]
+pub fn shutdown_token_of(ctx: &crate::beans::BeanContext) -> Option<crate::rt::ShutdownToken> {
+    ctx.try_get::<crate::rt::ShutdownToken>()
+}
+
+/// End `stream` when the application starts its graceful shutdown.
+///
+/// This is what makes `#[sse]` endpoints drain by default: without it a live
+/// SSE response is an open, never-completing HTTP body, so the drain waits out
+/// the whole `drain_timeout` on every connected client and each one is then cut
+/// mid-stream instead of seeing a clean end-of-body.
+///
+/// `shutdown` is `None` when the app has no bean graph — the stream is then
+/// returned unchanged in behaviour (the wrapper waits on a future that never
+/// resolves).
+///
+/// The wrapper is transparent otherwise: it forwards every item, and it ends
+/// the moment the token is cancelled, whether or not the inner stream is ready.
+#[doc(hidden)]
+pub fn until_shutdown<S>(
+    stream: S,
+    shutdown: Option<crate::rt::ShutdownToken>,
+) -> impl futures_core::Stream<Item = S::Item>
+where
+    S: futures_core::Stream,
+{
+    use futures_util::StreamExt as _;
+
+    let signal: Pin<Box<dyn std::future::Future<Output = ()> + Send>> = match shutdown {
+        Some(token) => Box::pin(token.cancelled_owned()),
+        None => Box::pin(std::future::pending()),
+    };
+    stream.take_until(signal)
+}

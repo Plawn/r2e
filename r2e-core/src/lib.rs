@@ -38,8 +38,10 @@ pub use beans::{
     PostConstruct, PreDestroy, Producer,
 };
 pub use builder::{
-    boot_error_report, exit_on_boot_error, launch, App, AppBuilder, BootableApp, PreparedApp,
-    RegisterController, RegisterControllers, RegisterModule, RunningApp, ServeContext,
+    boot_error_report, exit_on_boot_error, launch, launch_with, App, AppBuilder, BootableApp,
+    LaunchOptions, PreparedApp,
+    RegisterController, RegisterControllers, RegisterModule, RegisterModules, RunningApp,
+    ServeContext,
     SpawnService, TaskRegistryHandle,
 };
 pub use builtins::request_id::{RequestId, RequestIdPlugin};
@@ -102,6 +104,7 @@ pub use web::managed::{
     ManagedOutcome, ManagedOutcomeKind, ManagedResource,
 };
 pub use web::pagination::{Page, Pageable};
+pub use web::params::{ParamsRejectionFormat, PARAMS_REJECTION_FORMAT_KEY};
 pub use web::request_head::RequestHead;
 
 // Dev-reload helpers

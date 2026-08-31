@@ -1,0 +1,5 @@
+error: `modules(...)` is exclusive with every other #[module] key (found `providers(...)`) — an aggregate only composes other modules. Move the providers/controllers/exports/imports/plugins into a real module and list that module here
+  --> cases/modules/fail/module_aggregate_mixed_keys.rs:21:10
+   |
+21 | #[module(modules(RealModule), providers(Svc))]
+   |          ^^^^^^^

@@ -95,6 +95,24 @@ pub struct RouteInfo {
 - Doc comments: first `///` line → `summary`, remaining → `description`.
 - Roles declared via `#[roles("admin")]` appear in security metadata.
 
+## Tags
+
+`tag` defaults to the controller's struct name. `#[controller(path = "…", tag =
+"…")]` sets it explicitly, which is how several controllers publish under a
+single tag — the grouping in the spec (and in Swagger UI) stops being welded to
+the Rust type name:
+
+```rust
+#[controller(path = "/catalog/items", tag = "Catalog")]
+pub struct CatalogItemsController;
+
+#[controller(path = "/catalog/categories", tag = "Catalog")]
+pub struct CatalogCategoriesController;   // same "Catalog" group
+```
+
+The tag is a `const OPENAPI_TAG` in the controller's generated meta module, so
+every `RouteInfo` the controller pushes carries it — no per-route annotation.
+
 ## OpenApiConfig
 
 ```rust

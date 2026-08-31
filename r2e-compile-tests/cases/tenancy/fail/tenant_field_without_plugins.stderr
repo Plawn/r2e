@@ -23,14 +23,16 @@ help: the following other types implement trait `HasBean<T, Idx>`
    | | where
    | |     L: HasBean<T, Idx>,
    | |_______________________^ `BeanState<L>` implements `HasBean<T, Idx>`
-   = note: required for `BeanState<HNil>` to implement `HasBean<TenantRouter, _>`
-   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<BeanState<HNil>, ViaBean<(_, _)>>`
-note: required for `__R2eRequestData_OrderController<(ViaBean<(_, _)>,)>` to implement `FromRequestParts<BeanState<HNil>>`
+   = note: required for `HCons<ShutdownToken, HNil>` to implement `HasBean<TenantRouter, There<_>>`
+   = note: 1 redundant requirement hidden
+   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `HasBean<TenantRouter, There<_>>`
+   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaBean<(There<_>, _)>>`
+note: required for `__R2eRequestData_OrderController<(ViaBean<(There<_>, _)>,)>` to implement `FromRequestParts<BeanState<HCons<ShutdownToken, HNil>>>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:19:1
    |
 19 | #[controller(path = "/orders")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `OrderController` to implement `Controller<BeanState<HNil>, ((ViaBean<(_, _)>,),)>`
+note: required for `OrderController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((ViaBean<(There<_>, _)>,),)>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:25:1
    |
 25 | #[routes]
@@ -73,14 +75,16 @@ help: the following other types implement trait `HasBean<T, Idx>`
    | | where
    | |     L: HasBean<T, Idx>,
    | |_______________________^ `BeanState<L>` implements `HasBean<T, Idx>`
-   = note: required for `BeanState<HNil>` to implement `HasBean<TenantRouter, _>`
-   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<BeanState<HNil>, ViaBean<(_, _)>>`
-note: required for `__R2eRequestData_OrderController<(ViaBean<(_, _)>,)>` to implement `FromRequestParts<BeanState<HNil>>`
+   = note: required for `HCons<ShutdownToken, HNil>` to implement `HasBean<TenantRouter, There<_>>`
+   = note: 1 redundant requirement hidden
+   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `HasBean<TenantRouter, There<_>>`
+   = note: required for `Tenant<Pool>` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaBean<(There<_>, _)>>`
+note: required for `__R2eRequestData_OrderController<(ViaBean<(There<_>, _)>,)>` to implement `FromRequestParts<BeanState<HCons<ShutdownToken, HNil>>>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:19:1
    |
 19 | #[controller(path = "/orders")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `OrderController` to implement `Controller<BeanState<HNil>, ((ViaBean<(_, _)>,),)>`
+note: required for `OrderController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((ViaBean<(There<_>, _)>,),)>`
   --> cases/tenancy/fail/tenant_field_without_plugins.rs:25:1
    |
 25 | #[routes]

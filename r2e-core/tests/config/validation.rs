@@ -396,3 +396,73 @@ fn test_validate_section_reports_bad_env_value_as_deserialize_error() {
     );
     assert_eq!(errors[0].key, "log.mode");
 }
+
+// =========================================================================
+// load_config: aggregated typed-section report (W17 F1)
+// =========================================================================
+//
+// `LoadableConfig::register` goes through `from_config`, which short-circuits
+// on the FIRST missing key. `load_config` must validate the section first so a
+// boot names every problem at once — otherwise fixing a five-key gap takes
+// five boots, which is exactly why apps hand-rolled their own
+// `build_settings()`.
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct AggregatedDbSettings {
+    pub url: String,
+    pub user: String,
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+struct AggregatedSettings {
+    pub name: String,
+    pub port: u16,
+    #[config(section)]
+    pub database: AggregatedDbSettings,
+}
+
+#[tokio::test]
+async fn load_config_reports_every_missing_typed_key_at_once() {
+    let err = r2e_core::AppBuilder::new()
+        .override_config(R2eConfig::empty())
+        .load_config::<AggregatedSettings>()
+        .try_build_state()
+        .await
+        .err()
+        .expect("an unbindable typed config must fail the boot");
+
+    let rendered = err.to_string();
+    for key in ["name", "port", "database.url", "database.user"] {
+        assert!(
+            rendered.contains(key),
+            "every missing key must be listed at once, `{key}` is not: {rendered}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn load_config_binds_when_every_typed_key_is_present() {
+    let yaml = r#"
+name: catalog
+port: 8080
+database:
+  url: postgres://localhost
+  user: catalog
+"#;
+    let app = r2e_core::AppBuilder::new()
+        .override_config(R2eConfig::from_yaml_str(yaml).unwrap())
+        .load_config::<AggregatedSettings>()
+        .try_build_state()
+        .await
+        .expect("a complete config must bind");
+
+    use r2e_core::BeanAccess as _;
+    assert_eq!(app.state().get::<AggregatedSettings>().name, "catalog");
+    assert_eq!(
+        app.state().get::<AggregatedDbSettings>().url,
+        "postgres://localhost",
+        "nested sections stay registered as beans"
+    );
+}

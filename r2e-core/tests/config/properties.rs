@@ -324,3 +324,66 @@ fn test_option_with_env_treats_null_as_absent() {
     let c = OptionEnvConfig::from_config(&config, None).unwrap();
     assert_eq!(c.token, None);
 }
+
+// --- `#[config(derive_default)]`: the Default IS what an empty config binds ---
+//
+// Apps used to restate every `#[config(default = ...)]` in a hand-written
+// `Default` impl, where the two copies drift apart silently. The opt-in
+// `derive_default` emits the impl from the declared defaults instead — and the
+// contract asserted here is the strong one: `Settings::default()` equals
+// `Settings::from_config(&R2eConfig::empty(), None)`. That is why a *required*
+// field is a compile error rather than a silent `Default::default()`
+// (`r2e-compile-tests/cases/config/fail/config_derive_default_required_field.rs`):
+// `from_config` has no value for it, so no `Default` could agree.
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
+#[config(derive_default)]
+struct DerivedDefaultNested {
+    #[config(default = 30)]
+    pub timeout: i64,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq, Default)]
+struct DerivedDefaultMapEntry {
+    #[config(default = 1)]
+    pub weight: i64,
+}
+
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
+#[config(derive_default)]
+struct DerivedDefaultSettings {
+    #[config(default = 8080)]
+    pub port: u16,
+    #[config(default = "localhost")]
+    pub host: String,
+    pub label: Option<String>,
+    #[config(skip)]
+    pub computed: Vec<String>,
+    #[config(section, default)]
+    pub nested: DerivedDefaultNested,
+    #[config(section)]
+    pub entries: std::collections::HashMap<String, DerivedDefaultMapEntry>,
+}
+
+#[test]
+fn derive_default_matches_binding_an_empty_config() {
+    let bound = DerivedDefaultSettings::from_config(&R2eConfig::empty(), None)
+        .expect("every field has an absent-value, so an empty config binds");
+
+    assert_eq!(DerivedDefaultSettings::default(), bound);
+}
+
+#[test]
+fn derive_default_uses_the_declared_defaults() {
+    let d = DerivedDefaultSettings::default();
+    assert_eq!(d.port, 8080);
+    assert_eq!(d.host, "localhost");
+    assert_eq!(d.label, None);
+    assert!(d.computed.is_empty());
+    // An absent `#[config(section, default)]` binds
+    // `<Nested as Default>::default()`. `Nested` opts in too, so that Default
+    // is itself built from `#[config(default = 30)]` and the two sides agree
+    // all the way down.
+    assert_eq!(d.nested.timeout, 30);
+    assert!(d.entries.is_empty());
+}

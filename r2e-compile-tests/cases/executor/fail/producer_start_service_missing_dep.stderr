@@ -1,4 +1,4 @@
-error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<MetricsExporter, TNil>, TCons<MetricsSink, TNil>>`, but its trait bounds were not satisfied
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<MetricsExporter, TCons<ShutdownToken, TNil>>, TCons<MetricsSink, TNil>>`, but its trait bounds were not satisfied
   --> cases/executor/fail/producer_start_service_missing_dep.rs:41:14
    |
 39 | /         AppBuilder::new()

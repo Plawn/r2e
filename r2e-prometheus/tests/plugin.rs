@@ -82,6 +82,7 @@ fn resolve_config_builder_setting_wins_over_file() {
         Some(vec!["/builder-skip".into()]),
         Some(PrometheusConfig {
             endpoint: Some("/file".into()),
+            expose_endpoint: None,
             namespace: Some("file_ns".into()),
             buckets: Some(vec![9.0]),
             exclude_paths: Some(vec!["/file-skip".into()]),
@@ -103,6 +104,7 @@ fn resolve_config_file_wins_over_default() {
         None,
         Some(PrometheusConfig {
             endpoint: Some("/file".into()),
+            expose_endpoint: None,
             namespace: Some("file_ns".into()),
             buckets: Some(vec![0.5, 1.5]),
             exclude_paths: Some(vec!["/file-skip".into()]),
@@ -122,6 +124,19 @@ fn resolve_config_falls_back_to_defaults() {
     assert_eq!(cfg.namespace, None);
     assert!(cfg.exclude_paths.is_empty());
     assert!(!cfg.buckets.is_empty(), "default buckets are populated");
+}
+
+#[test]
+fn resolve_expose_endpoint_precedence() {
+    use r2e_prometheus::resolve_expose_endpoint;
+
+    // Builder setting wins over file config, in both directions.
+    assert!(!resolve_expose_endpoint(Some(false), Some(true)));
+    assert!(resolve_expose_endpoint(Some(true), Some(false)));
+    // File config drives it when the builder said nothing.
+    assert!(!resolve_expose_endpoint(None, Some(false)));
+    // Default: the endpoint is mounted (unchanged behavior).
+    assert!(resolve_expose_endpoint(None, None));
 }
 
 async fn status_of(router: r2e_core::http::Router, path: &str) -> StatusCode {

@@ -1,0 +1,23 @@
+# Edition-2024 canary for the `#[routes]` codegen.
+#
+# The rest of the workspace is edition 2021, where a return-position
+# `impl Trait` captures no lifetimes and the automatic `+ use<...>` clause
+# (`r2e_macros::codegen::precise_capture`) is a no-op. Under edition 2024 the
+# same `impl Trait` captures `&self`, and a handler returning one without a
+# precise-capture clause fails to compile — which is exactly what the clause
+# exists to prevent. This crate is the only place in the workspace where that
+# difference is observable, so the tests here are compile-time assertions.
+[package]
+name = "r2e-edition2024-tests"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+r2e = {workspace = true, features = ["full"]}
+futures-core = {workspace = true}
+tokio = {workspace = true, features = ["full"]}

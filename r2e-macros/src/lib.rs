@@ -17,7 +17,7 @@ use attrs::{
 use derives::{
     api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
     decorator_bean_derive, from_config_value_derive, from_multipart, object_params_derive,
-    params_derive,
+    params_derive, provide_bundle_derive,
 };
 use parsing::{grpc_routes_parsing, mcp_routes_parsing};
 
@@ -1015,6 +1015,16 @@ pub fn pre_destroy(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// declaration order). Ordering is global: every `#[on_start]` hook in the
 /// application is sorted into one list.
 ///
+/// `#[on_start(once)]` runs the hook **once per process** instead of once per
+/// startup — the attribute form of
+/// [`AppBuilder::on_start_once`](r2e_core::AppBuilder::on_start_once). It
+/// changes nothing in production (one boot = one cycle); under `r2e dev` the
+/// binary is hot-patched in place, and a `once` hook runs on the first cycle
+/// only, so crash recovery / lock claiming / one-off backfills stop repeating
+/// on every patch. A patch that CHANGES the hook body does not re-run it —
+/// the guard is a process-global flag, not a fingerprint. Composes with
+/// `order`: `#[on_start(once, order = -10)]`.
+///
 /// Works on `#[bean]` impls (via [`OnStart`](r2e_core::OnStart), read by value
 /// from the resolved graph — a pinned `override_bean` skips the hook) and on
 /// `#[routes]` controller impls (run from the core `Arc`). It cannot be
@@ -1095,6 +1105,33 @@ pub fn bean(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     .build_state()
 ///     .await
 /// ```
+///
+/// # Arguments
+///
+/// - `start` — register the produced value as a background service
+///   ([`ServiceComponent`](r2e_core::ServiceComponent)); its `Deps` are folded
+///   into the producer's own.
+/// - `after(A, B, ..)` — **ordering-only** dependency edges. Each type joins
+///   `Producer::dependencies()` (so the graph builds it first) and
+///   `Producer::Deps` (so a missing registration is a compile error), but
+///   becomes no function parameter. This is the declarative form of the unused
+///   `_guard: InstanceGuard` parameter people write today:
+///
+///   ```ignore
+///   #[producer(after(InstanceGuard))]
+///   async fn create_doris_db(settings: DorisSettings) -> DorisDb { .. }
+///   ```
+///
+///   Naming a type that is already a parameter is an error — a parameter is
+///   already an edge.
+///
+/// # Return type
+///
+/// The return type IS the bean key, with one exception: a **literal**
+/// `Result<T, E>` is split into `Producer::Output = T` + `Producer::Error = E`.
+/// A one-argument alias (`anyhow::Result<T>`, `std::io::Result<T>`) is
+/// rejected — the macro matches tokens and cannot see the hidden error type;
+/// spell `Result<T, anyhow::Error>` out, or return `T` directly.
 #[proc_macro_attribute]
 pub fn producer(args: TokenStream, input: TokenStream) -> TokenStream {
     producer_attr::expand(args, input)
@@ -1167,6 +1204,52 @@ pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
 }
 
+/// Derive macro for **provision bundles** — collapse one `.provide(env.field)`
+/// line per field into a single
+/// [`provide_all`](r2e_core::AppBuilder::provide_all) call.
+///
+/// Typically applied to an [`App::Env`](r2e_core::App::Env): the generated
+/// [`ProvideBundle`](r2e_core::di::bundle::ProvideBundle) impl emits exactly the
+/// chain you would have written by hand, so the compile-time provision list `P`
+/// grows with one entry per field, **in field order**, and each field type must
+/// be `Clone + Send + Sync + 'static` like any provided bean.
+///
+/// ```ignore
+/// #[derive(Clone, ProvideBundle)]
+/// pub struct AppEnv {
+///     pub config: R2eConfig,      // → override_config(..) — not a bean
+///     pub pool: DbPool,           // → .provide(..)
+///     pub s3: Option<S3Client>,   // → .provide(..) — the bean type is Option<S3Client>
+/// }
+///
+/// // in App::build
+/// b.provide_all(env).load_config::<Settings>()
+/// ```
+///
+/// Field rules:
+///
+/// - **`R2eConfig`** — at most one field may be an
+///   [`R2eConfig`](r2e_core::config::R2eConfig); it becomes
+///   [`override_config`](r2e_core::AppBuilder::override_config) instead of a
+///   provision, which removes the "call `override_config` before `load_config`"
+///   ordering constraint from the app (`provide_all` itself must still run
+///   before `load_config`). Two `R2eConfig` fields are a compile error.
+///   Detection is **textual**: any field whose type path ends in `R2eConfig`
+///   (with no generic arguments) is taken to be the config, so a type alias to
+///   it is *not* recognised and an unrelated type of that name *is*.
+/// - **`Option<T>`** — provided as-is. `Option<T>` is a first-class bean type in
+///   R2E (keyed by `TypeId::of::<Option<T>>()`, injected as a hard dependency),
+///   exactly like a `#[producer] -> Option<T>`; the bundle does not unwrap it
+///   and does not conditionally skip the provision — a compile-time provision
+///   list cannot depend on a runtime value.
+/// - every other field is `.provide(..)`-ed.
+///
+/// Generic structs, tuple structs, unit structs, and enums are rejected.
+#[proc_macro_derive(ProvideBundle)]
+pub fn derive_provide_bundle(input: TokenStream) -> TokenStream {
+    provide_bundle_derive::expand(input)
+}
+
 /// Derive macro for guards/interceptors with bean deps — generates the
 /// [`DecoratorSpec`](r2e_core::DecoratorSpec) plumbing so the type can be
 /// used in `#[guard(...)]` / `#[pre_guard(...)]` / `#[intercept(...)]`
@@ -1230,6 +1313,29 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 ///
 /// The user supplies an async `run(&self, rt::CancelToken)` method on the
 /// struct; the generated `start` simply forwards to it.
+///
+/// # Turning a service off: `#[service(enabled = "…")]`
+///
+/// The struct attribute `#[service(enabled = "name")]` emits
+/// [`ServiceComponent::enabled`](r2e_core::ServiceComponent::enabled). `name`
+/// is looked up among the struct's own fields first — the usual case, a
+/// `#[config("…")] enabled: bool` flag — and read as a `&self` method
+/// returning `bool` otherwise:
+///
+/// ```ignore
+/// #[derive(BackgroundService)]
+/// #[service(enabled = "enabled")]
+/// pub struct EmailWorker {
+///     #[config("email.worker.enabled")] enabled: bool,
+///     #[inject] mailer: Mailer,
+/// }
+/// ```
+///
+/// A disabled service is still registered, still resolves its beans, still
+/// runs `from_context`, and still has its config keys/sections validated —
+/// only `run()` is skipped, with an `info!` naming the service and the gate
+/// (the *config key*, when the derive can see one). Turning a service off must
+/// never turn its configuration errors off with it.
 ///
 /// # Example
 ///

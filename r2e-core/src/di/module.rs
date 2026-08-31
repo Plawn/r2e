@@ -99,6 +99,21 @@ use crate::type_list::{Here, TAppend, TCons, TNil, There};
 ///     .await
 /// ```
 pub trait FeatureModule {
+    /// HTTP mount point for this module's controllers, e.g. `Some("/api/v1")`.
+    ///
+    /// Every controller in [`Controllers`](Self::Controllers) is nested under
+    /// it, so `#[controller(path = "/users")]` inside a module with
+    /// `prefix = "/api/v1"` serves `/api/v1/users`. The prefix is applied to
+    /// the collected [`RouteInfo`](crate::di::meta::RouteInfo) too, so OpenAPI
+    /// publishes the mounted path.
+    ///
+    /// Non-HTTP endpoints ([`Endpoints`](Self::Endpoints) — gRPC services) are
+    /// **not** path-mounted and ignore this.
+    ///
+    /// `#[module(prefix = "/api/v1")]` generates it; the default is `None`
+    /// (mount at the app root), so hand-written impls need not mention it.
+    const PATH_PREFIX: Option<&'static str> = None;
+
     /// Type-level list ([`TCons`]/[`TNil`]) of the module's provider types.
     ///
     /// Each element must implement [`Registrable`] (emitted by `#[bean]`,
@@ -695,7 +710,36 @@ pub trait ModuleControllers<T: Clone + Send + Sync + 'static, W> {
     /// validate yields [`BeanError::ControllerConfig`](crate::beans::BeanError::ControllerConfig)
     /// rather than a panic, so `try_build_state()` — which runs this fold —
     /// really is non-panicking.
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+    /// `prefix` is the declaring module's
+    /// [`PATH_PREFIX`](FeatureModule::PATH_PREFIX): every controller is nested
+    /// under it (routes **and** collected `RouteInfo`).
+    fn register_all(
+        builder: AppBuilder<T>,
+        prefix: Option<&'static str>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+}
+
+/// Mount a controller path under a module prefix, the way `Router::nest`
+/// composes them.
+///
+/// `("/api/v1", "/users")` → `/api/v1/users`; a bare `"/"` child keeps the
+/// prefix itself (`/api/v1`) rather than producing a trailing slash. Only
+/// [`RouteInfo`](crate::di::meta::RouteInfo) paths go through this — the
+/// router does its own nesting.
+#[doc(hidden)]
+pub fn join_path_prefix(prefix: &str, path: &str) -> String {
+    let prefix = prefix.trim_end_matches('/');
+    match path {
+        "" | "/" => {
+            if prefix.is_empty() {
+                "/".to_string()
+            } else {
+                prefix.to_string()
+            }
+        }
+        p if p.starts_with('/') => format!("{prefix}{p}"),
+        p => format!("{prefix}/{p}"),
+    }
 }
 
 /// Register one deferred controller, mapping its config-validation failure to
@@ -704,13 +748,14 @@ pub trait ModuleControllers<T: Clone + Send + Sync + 'static, W> {
 /// (see [`ModuleControllers`]).
 fn register_deferred<T, C, W>(
     builder: AppBuilder<T>,
+    prefix: Option<&'static str>,
 ) -> Result<AppBuilder<T>, crate::beans::BeanError>
 where
     T: Clone + Send + Sync + 'static,
     C: Controller<T, W>,
 {
     builder
-        .try_register_controller_unchecked_impl::<C, W>()
+        .try_register_controller_unchecked_at::<C, W>(prefix)
         .map_err(|source| crate::beans::BeanError::ControllerConfig {
             controller: std::any::type_name::<C>(),
             source,
@@ -718,7 +763,10 @@ where
 }
 
 impl<T: Clone + Send + Sync + 'static> ModuleControllers<T, ()> for () {
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+    fn register_all(
+        builder: AppBuilder<T>,
+        _prefix: Option<&'static str>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
         Ok(builder)
     }
 }
@@ -732,8 +780,9 @@ macro_rules! impl_module_controllers {
         {
             fn register_all(
                 builder: AppBuilder<T>,
+                prefix: Option<&'static str>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                register_deferred::<T, $C0, $W0>(builder)
+                register_deferred::<T, $C0, $W0>(builder, prefix)
             }
         }
     };
@@ -747,9 +796,10 @@ macro_rules! impl_module_controllers {
         {
             fn register_all(
                 builder: AppBuilder<T>,
+                prefix: Option<&'static str>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                let builder = register_deferred::<T, $C0, $W0>(builder)?;
-                $(let builder = register_deferred::<T, $Cs, $Ws>(builder)?;)+
+                let builder = register_deferred::<T, $C0, $W0>(builder, prefix)?;
+                $(let builder = register_deferred::<T, $Cs, $Ws>(builder, prefix)?;)+
                 Ok(builder)
             }
         }
@@ -799,7 +849,8 @@ where
         // `Mods` grows head-first (the most recently registered module is the
         // head), so recurse into the tail first to preserve registration order.
         let builder = Rest::register_controllers(builder)?;
-        let builder = <M::Controllers as ModuleControllers<T, WC>>::register_all(builder)?;
+        let builder =
+            <M::Controllers as ModuleControllers<T, WC>>::register_all(builder, M::PATH_PREFIX)?;
         // Non-HTTP endpoints (gRPC services) register after the controllers of
         // the same module, from the same retained bean context.
         <M::Endpoints as ModuleEndpoints<T>>::register_all(builder, std::any::type_name::<M>())
@@ -821,6 +872,158 @@ where
         )
     }
 }
+
+// ── Module aggregates ───────────────────────────────────────────────────────
+
+/// A named composition of feature modules — "the application's modules" as one
+/// registrable unit.
+///
+/// The blueprint an app and its tests share is usually the *list of modules*;
+/// `AppBuilder<P>` being unnameable mid-chain is what pushes test harnesses
+/// into duplicating it in a macro. An aggregate makes the list a **type**, so
+/// production and tests both write one call:
+///
+/// ```ignore
+/// #[module(modules(UserModule, BillingModule, AdminModule))]
+/// pub struct AppModules;
+///
+/// // production and tests alike
+/// b.register_modules::<AppModules>()
+/// ```
+///
+/// Registration is a plain fold: every member is registered exactly as
+/// `.register_module::<M>()` at that position would register it, in declaration
+/// order. There is nothing new to learn about visibility — each member's
+/// `Exports` join the app-global `P` (so the aggregate "re-exports" them
+/// automatically, and a member importing another member's export resolves
+/// against `P` like any cross-module import), each member's `Imports` join `R`,
+/// each member's brought plugins are installed at its position, and each
+/// member's `RequiredPlugins` are checked against the provision list as it
+/// stands when that member's turn comes. An aggregate therefore composes only
+/// with itself: it declares no providers, controllers, or plugins of its own.
+///
+/// Implemented by `#[module(modules(..))]` and, for a quick inline list, for
+/// tuples of arity 1..=16 — `b.register_modules::<(UserModule, BillingModule)>()`.
+pub trait ModuleAggregate {
+    /// Type-level list ([`TCons`]/[`TNil`]) of member module types, in
+    /// registration order.
+    type Modules;
+}
+
+/// Fold `register_module` over a type-level list of [`FeatureModule`]s.
+///
+/// The output `P`/`R`/`Mods` are those of the last member: each step threads
+/// the previous step's lists into the next, so the result is identical to
+/// writing the `.register_module::<..>()` chain by hand.
+///
+/// `Idx` is an opaque per-member witness list (the encapsulation-check indices
+/// `register_module` infers), always inferred at the call site — exactly the
+/// [`ControllerTuple`](crate::type_list::ControllerTuple) pattern.
+pub trait ModuleGroup<P, R, Mods, Idx> {
+    /// The provision list after every member is registered.
+    type OutP;
+    /// The requirement list after every member is registered.
+    type OutR;
+    /// The pending-module list after every member is registered.
+    type OutMods;
+
+    /// Register every member, in list order.
+    fn register_all(
+        builder: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods>;
+}
+
+impl<P, R, Mods> ModuleGroup<P, R, Mods, TNil> for TNil {
+    type OutP = P;
+    type OutR = R;
+    type OutMods = Mods;
+
+    fn register_all(
+        builder: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, P, R, Mods> {
+        builder
+    }
+}
+
+impl<M, Rest, P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx, RestIdx>
+    ModuleGroup<P, R, Mods, TCons<(DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx), RestIdx>>
+    for TCons<M, Rest>
+where
+    M: FeatureModule,
+    M::Plugins: ModulePlugins<P, R, Mods>,
+    M::Providers: BeanList,
+    <M::Providers as BeanList>::Provided: TAppend<ModulePluginProvisions<M>>,
+    ModuleProvided<M>: TAppend<M::Imports>,
+    M::Controllers: crate::di::module::ControllerDepsList,
+    <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
+    M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
+    <M::Controllers as crate::di::module::ControllerDepsList>::Deps:
+        ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+    <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
+    M::RequiredPlugins: RequiredPluginsInstalled<crate::builder::ModulePluginsP<M, P, R, Mods>, PlugIdx>,
+    M::Exports: TAppend<crate::builder::ModulePluginsP<M, P, R, Mods>>,
+    crate::builder::ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
+    Rest: ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >,
+{
+    type OutP = <Rest as ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >>::OutP;
+    type OutR = <Rest as ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >>::OutR;
+    type OutMods = <Rest as ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >>::OutMods;
+
+    fn register_all(
+        builder: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods> {
+        Rest::register_all(builder.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>())
+    }
+}
+
+macro_rules! impl_module_aggregate_tuple {
+    ($($M:ident),+) => {
+        impl<$($M),+> ModuleAggregate for ($($M,)+) {
+            type Modules = impl_module_aggregate_tuple!(@list $($M),+);
+        }
+    };
+    (@list $M:ident) => { TCons<$M, TNil> };
+    (@list $M:ident, $($Rest:ident),+) => {
+        TCons<$M, impl_module_aggregate_tuple!(@list $($Rest),+)>
+    };
+}
+
+impl_module_aggregate_tuple!(M0);
+impl_module_aggregate_tuple!(M0, M1);
+impl_module_aggregate_tuple!(M0, M1, M2);
+impl_module_aggregate_tuple!(M0, M1, M2, M3);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15);
 
 // ── Deferred-controller entries ─────────────────────────────────────────────
 //
@@ -933,7 +1136,7 @@ macro_rules! impl_plugin_controllers {
             fn register_all(
                 builder: AppBuilder<T>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                register_deferred::<T, $C0, $W0>(builder)
+                register_deferred::<T, $C0, $W0>(builder, None)
             }
         }
     };
@@ -951,8 +1154,8 @@ macro_rules! impl_plugin_controllers {
             fn register_all(
                 builder: AppBuilder<T>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                let builder = register_deferred::<T, $C0, $W0>(builder)?;
-                $(let builder = register_deferred::<T, $Cs, $Ws>(builder)?;)+
+                let builder = register_deferred::<T, $C0, $W0>(builder, None)?;
+                $(let builder = register_deferred::<T, $Cs, $Ws>(builder, None)?;)+
                 Ok(builder)
             }
         }

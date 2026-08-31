@@ -117,6 +117,46 @@ async fn create_pool(#[config("app.db.url")] url: String) -> SqlitePool {
 // Generates: struct CreatePool; impl Producer for CreatePool { type Output = SqlitePool; ... }
 ```
 
+### `after(...)` — ordering-only dependency edges
+
+A producer sometimes needs a bean to *exist* without reading it: a process-wide
+instance guard, a migration runner, a registry something else must have
+populated. That used to be spelled as an unused parameter
+(`fn create_db(settings: X, _guard: InstanceGuard) -> Db`), which every reader
+then has to be told is load-bearing — and which clippy/`unused` lints keep
+pushing back on.
+
+```rust
+#[producer(after(InstanceGuard, Migrations))]
+fn create_db(#[config("database.url")] url: String) -> Db { Db::open(&url) }
+```
+
+Each type listed joins `type Deps` and `dependencies()`, exactly like a
+parameter: the graph builds it first, and a missing one is the usual boot
+error. Nothing is bound in the function signature.
+
+- Naming a type the producer **already takes as a parameter** is a compile
+  error (it is already an edge). Case:
+  `r2e-compile-tests/cases/beans/fail/producer_after_duplicates_param.rs`.
+- `after()` with no types is a compile error.
+- Composes with `start`: `#[producer(start, after(Migrations))]`.
+- Parsed in `attrs/producer_attr.rs` (`ProducerArgs::after: Vec<syn::Type>`),
+  appended to `dep_type_ids` / `dep_types` after the parameter loop. Tests:
+  `r2e-core/tests/di/producer_attrs.rs` § 8.
+
+### `Result` detection is textual
+
+`#[producer]` splits a **literal** `Result<T, E>` return type into
+`type Output = T` / `type Error = E` by matching tokens — it has no type
+resolution. A one-argument alias (`anyhow::Result<T>`, `std::io::Result<T>`)
+therefore does not look like a `Result` at all: it used to fall through to the
+infallible arm and register the bean under the *alias* type with
+`Error = Infallible`, so `#[inject] T` failed to resolve for reasons nothing in
+the code pointed at. `reject_single_arg_result_alias`
+(`r2e-macros/src/util/type_utils.rs`) now makes it a targeted compile error
+asking for `Result<T, anyhow::Error>` (or `-> T`). Case:
+`r2e-compile-tests/cases/beans/fail/producer_single_arg_result_alias.rs`.
+
 ### Attributes on the annotated function
 
 `#[producer]` re-emits your function (it only strips `#[config]` /
@@ -213,6 +253,26 @@ impl SearchService {
 ```
 
 No manual `.provide()` or `#[config_section]` needed — `load_config` handles it.
+
+## `#[derive(ProvideBundle)]` + `.provide_all(bundle)`
+
+The `App::Env` case: `setup` builds a handful of process-lifetime resources,
+and `build` then needs one `.provide(env.field)` line per field. The derive
+makes the env struct itself the provision list — `.provide_all(env)` expands to
+exactly that chain, in field order, so `P` grows per field and nothing about
+registration semantics changes. Two field rules worth knowing:
+
+- `Option<T>` is provided **as-is** (see the section right below — it is its own
+  bean type), never unwrapped and never conditionally skipped: a compile-time
+  provision list cannot depend on a runtime value.
+- An `R2eConfig` field is applied as `.override_config(value)` instead of being
+  provided as a bean, so `provide_all` belongs **before** `load_config`. At most
+  one; the type is matched **textually** on the written path (an alias is not
+  recognised).
+
+Full design notes in `docs/claude/di-builder-refactor.md` § Registration API;
+trait in `r2e-core/src/di/bundle.rs`, derive in
+`r2e-macros/src/derives/provide_bundle_derive.rs`.
 
 ## `Option<T>` as a first-class bean type
 
@@ -709,6 +769,16 @@ Semantics:
   core is not `Clone`, so it cannot impl `OnStart`; the generated
   `Controller::on_start(core)` returns the same `(i32, OnStartHook)` pairs from
   the core `Arc`, queued at `register_controller`.
+- **`once`:** `#[on_start(once)]` runs the hook **once per process** instead of
+  once per startup — the attribute form of `AppBuilder::on_start_once`. It
+  changes nothing in production (one boot = one cycle); under `r2e dev` the
+  binary is hot-patched in place, and a `once` hook runs on the first cycle
+  only, so crash recovery / lock claiming / one-off backfills stop repeating on
+  every patch. A patch that *changes* the hook body does not re-run it (the
+  guard is a process-global flag, not a fingerprint). Composes with `order`
+  (`#[on_start(once, order = -10)]`) — the guard sits inside the hook body, so
+  the position in the global ordering is the same either way. Full contract:
+  `docs/claude/dev-reload-config-semantics.md` § Q8.
 - **`#[bean(lazy)]`:** rejected (a lazy bean has no instance at registration
   time to observe from) — same rule as `#[post_construct]` / `#[pre_destroy]`.
 - **Test boot:** unlike `#[pre_destroy]`, `#[on_start]` **does** run under

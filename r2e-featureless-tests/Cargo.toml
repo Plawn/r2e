@@ -1,0 +1,32 @@
+# Minimal-feature canary for the "shared worker crate" shape.
+#
+# Real apps factor their background workers into a crate the app depends on
+# (`my-workers`), and that crate wants the *smallest possible* slice of R2E:
+# the `ServiceComponent` contract and `#[derive(BackgroundService)]`, nothing
+# else. This crate is that consumer — `r2e` with `default-features = false`,
+# i.e. no security, no events, no utils — so a feature-gating regression that
+# pushes the service surface behind a feature flag fails here instead of in a
+# downstream repo.
+#
+# Feature unification makes the guarantee only observable when this package is
+# built on its own: `cargo check -p r2e-featureless-tests` (what CI should run;
+# `--workspace` unifies `r2e`'s features across every member and would light up
+# `full` regardless).
+[package]
+name = "r2e-featureless-tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# NOT `workspace = true`: a workspace dependency that does not itself say
+# `default-features = false` re-enables them for every inheritor, which would
+# silently defeat the whole point of this crate.
+r2e = {path = "../r2e", default-features = false}
+
+[dev-dependencies]
+tokio = {workspace = true, features = ["rt", "macros", "time"]}

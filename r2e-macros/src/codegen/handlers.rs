@@ -653,7 +653,10 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let krate = r2e_core_path();
     let ctx = HandlerContext::new(def, rm);
     let controller_name = &def.controller_name;
-    let return_type = &rm.fn_item.sig.output;
+    // Same automatic `+ use<...>` as on the façade method: this return type is
+    // re-emitted on a generated `fn(&__R2eRequest_<Ctrl>) -> …`, so it captures
+    // the receiver lifetime under the user's edition unless the clause is there.
+    let return_type = super::precise_capture::handler_return_type(&rm.fn_item.sig);
 
     let extra_params = extract_handler_params(rm);
     let managed_indices: std::collections::HashSet<usize> =
@@ -1089,7 +1092,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         (
             quote! { -> impl #krate::http::response::IntoResponse },
             quote! {
-                let __stream = #call_expr;
+                let __stream = #krate::web::sse::until_shutdown(#call_expr, __r2e_shutdown);
                 #keep_alive_expr
             },
         )
@@ -1184,11 +1187,20 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
                 #(#ctrl_guard_checks)*
                 #guard_context
                 #(#guard_checks)*
-                let __stream = #call_expr;
+                let __stream = #krate::web::sse::until_shutdown(#call_expr, __r2e_shutdown);
                 #krate::http::response::IntoResponse::into_response(#keep_alive_expr)
             },
         )
     };
+
+    // Default shutdown termination: the app's `ShutdownToken`, resolved once
+    // per route at registration (`None` for an app with no bean graph). It is
+    // the LAST prefix param so it stays put whether or not the guard branch
+    // above pushed its own — `generate_sse_closure` forwards it in the same
+    // position.
+    invocation_prefix_params.push(quote! {
+        __r2e_shutdown: ::core::option::Option<#krate::rt::ShutdownToken>
+    });
 
     let invocation_extra_params = &handler_extra_params;
 
@@ -1910,16 +1922,25 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
         quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
     });
     let deco_arg = has_guards.then(|| quote! { &__deco_capture, });
+    // Resolved ONCE, here at registration — not per request. Absent bean (an
+    // app with no graph) = `None` = no termination wrapper behaviour, so this
+    // costs nothing where there is nothing to observe.
+    let shutdown_setup = quote! {
+        let __shutdown_capture = #krate::web::sse::shutdown_token_of(__ctx);
+    };
+    let shutdown_arg = quote! { __shutdown_capture, };
     if sm.decorators.anonymous {
         return quote! {
             {
                 let __core_capture = __ctrl.clone();
                 #deco_setup
+                #shutdown_setup
                 move |#(#closure_params),*| {
                     async move {
                         #invocation(
                             #(#prefix,)*
                             #deco_arg
+                            #shutdown_arg
                             &__core_capture,
                             #(#suffix),*
                         ).await
@@ -1934,6 +1955,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
             let __core_capture = __ctrl.clone();
             #ctrl_setup
             #deco_setup
+            #shutdown_setup
             move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
                 async move {
                     let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
@@ -1941,6 +1963,7 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
                         #(#prefix,)*
                         #ctrl_arg
                         #deco_arg
+                        #shutdown_arg
                         &__facade,
                         #(#suffix),*
                     ).await

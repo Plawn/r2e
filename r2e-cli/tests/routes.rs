@@ -399,3 +399,98 @@ impl ItemController {
     assert_eq!(routes[0].method, "PATCH");
     assert_eq!(routes[0].handler, "partial_update");
 }
+
+// ── Module prefixes (`#[module(prefix = "…", controllers(...))]`) ────
+
+#[test]
+fn collects_controller_to_prefix_pairs_from_a_module() {
+    let mut map = std::collections::HashMap::new();
+    routes::parse_module_prefixes(
+        r#"
+#[module(
+    prefix = "/api/v1",
+    providers(UserRepo),
+    controllers(UserController, AdminController),
+    imports(DbPool)
+)]
+pub struct V1Module;
+
+#[module(controllers(HealthController))]
+pub struct HealthModule;
+"#,
+        &mut map,
+    );
+
+    assert_eq!(map.get("UserController").map(String::as_str), Some("/api/v1"));
+    assert_eq!(
+        map.get("AdminController").map(String::as_str),
+        Some("/api/v1")
+    );
+    // A module without a prefix contributes nothing.
+    assert!(!map.contains_key("HealthController"));
+}
+
+#[test]
+fn routes_of_a_prefixed_module_show_the_mounted_path() {
+    let tmp = TempDir::new().unwrap();
+    let file_path = tmp.path().join("user_controller.rs");
+    fs::write(
+        &file_path,
+        r#"
+#[controller(path = "/users")]
+pub struct UserController;
+
+#[routes]
+impl UserController {
+    #[get("/")]
+    async fn list(&self) {}
+
+    #[get("/{id}")]
+    async fn get_one(&self) {}
+
+    #[fallback]
+    async fn not_found(&self) {}
+}
+"#,
+    )
+    .unwrap();
+
+    let mut prefixes = std::collections::HashMap::new();
+    prefixes.insert("UserController".to_string(), "/api/v1".to_string());
+
+    let mut routes = Vec::new();
+    routes::parse_routes_from_file_with_prefixes(&file_path, &mut routes, &prefixes).unwrap();
+
+    let paths: Vec<&str> = routes.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(paths, vec!["/api/v1/users", "/api/v1/users/{id}", "/api/v1/*"]);
+}
+
+#[test]
+fn unprefixed_controllers_are_unchanged() {
+    let tmp = TempDir::new().unwrap();
+    let file_path = tmp.path().join("user_controller.rs");
+    fs::write(
+        &file_path,
+        r#"
+#[controller(path = "/users")]
+pub struct UserController;
+
+#[routes]
+impl UserController {
+    #[get("/")]
+    async fn list(&self) {}
+}
+"#,
+    )
+    .unwrap();
+
+    let mut routes = Vec::new();
+    routes::parse_routes_from_file_with_prefixes(
+        &file_path,
+        &mut routes,
+        &std::collections::HashMap::new(),
+    )
+    .unwrap();
+
+    assert_eq!(routes[0].path, "/users");
+}

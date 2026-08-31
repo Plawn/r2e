@@ -1,0 +1,5 @@
+error: `after(..)` names a type this producer already takes as a parameter — a parameter is already a dependency edge; drop it from `after(..)`
+  --> cases/beans/fail/producer_after_duplicates_param.rs:14:18
+   |
+14 | #[producer(after(Settings))]
+   |                  ^^^^^^^^

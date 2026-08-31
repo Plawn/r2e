@@ -53,6 +53,16 @@ impl BeanRegistry {
                 .filter(|reg| reg.volatile)
                 .map(|reg| reg.type_id),
         );
+        // The injectable app shutdown signal is **cycle-scoped**. Every hot
+        // patch builds a fresh `AppBuilder`, hence a fresh shutdown root, and
+        // the cycle it replaces has already cancelled its own. Carrying the
+        // provided value over would hand cycle N a token that reads
+        // `is_cancelled() == true` from its first request on — every `#[sse]`
+        // stream would close immediately and every task waiting on it would
+        // exit at once. Seeding it here both keeps it out of the
+        // provided-pinning loop below and rebuilds every bean that captured a
+        // clone of it, so no dependent is left holding the dead token.
+        forced_rebuild.insert(TypeId::of::<crate::rt::ShutdownToken>());
         loop {
             let mut grew = false;
             for (type_id, dependencies) in self

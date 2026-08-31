@@ -45,6 +45,11 @@ rate-limit = ["dep:r2e-rate-limit"]
 oidc = ["dep:r2e-oidc"]
 openapi = ["dep:r2e-openapi"]
 prometheus = ["dep:r2e-prometheus"]
+# HTTP request metrics through the `metrics` facade instead of the `prometheus`
+# crate: `MetricsFacade` installs only the tracking layer, the application owns
+# the recorder/exporter and the scrape endpoint. Not in `full` — it is a stack
+# choice, not a feature to accumulate.
+metrics-facade = ["prometheus", "r2e-prometheus/metrics-facade"]
 openfga = ["dep:r2e-openfga"]
 observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc", "r2e-security?/grpc"]

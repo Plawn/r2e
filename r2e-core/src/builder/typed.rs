@@ -291,6 +291,51 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Like [`on_start`](Self::on_start), but runs **once per process**.
+    ///
+    /// Under `r2e dev` the binary is hot-patched in place: the app is
+    /// re-assembled on every patch, in the same process, with the same PID and
+    /// the same OS resources. Work that is idempotent-by-boot in production —
+    /// crash recovery, claiming a lock, a one-off backfill, priming an
+    /// external system — is *not* idempotent under that loop. This is the
+    /// declarative form of the `static BOOTED: AtomicBool` guard apps hand-roll
+    /// around such work.
+    ///
+    /// Semantics:
+    ///
+    /// - **Production**: identical to `on_start` — there is exactly one cycle,
+    ///   so the hook runs exactly once, at that boot.
+    /// - **Under `r2e dev`**: runs on the first cycle only. Later hot patches
+    ///   skip it, *including* a patch that changed the closure itself — the
+    ///   guard is a process-global flag, not a fingerprint of the code. If you
+    ///   are iterating on the body of a once-hook, restart the process (a cold
+    ///   change to `Cargo.toml`/`build.rs`/`env.rs` restarts it for you).
+    /// - The hook still runs in the same lifecycle slot as `on_start` (after
+    ///   the serve hooks), and an `Err` still aborts boot.
+    ///
+    /// Note that a first cycle whose startup *failed* consumed nothing: the
+    /// flag is set only after the whole `on_start` phase succeeded.
+    pub fn on_start_once<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(T) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+            + Send
+            + 'static,
+    {
+        self.startup_hooks.push(Box::new(move |state| {
+            Box::pin(async move {
+                if crate::runtime::dev::once_start_consumed() {
+                    tracing::debug!(
+                        "dev-reload: skipping an `on_start_once` hook (already run this process)"
+                    );
+                    return Ok(());
+                }
+                hook(state).await
+            })
+        }));
+        self
+    }
+
     /// Register a shutdown hook that runs after the server stops.
     ///
     /// The hook receives the application state, mirroring [`on_start`](Self::on_start).
@@ -496,11 +541,27 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
         let service = C::from_context(&self.bean_context);
-        Ok(
-            self.register_service(std::any::type_name::<C>(), move |token| {
-                service.start(token)
-            }),
-        )
+        let name = std::any::type_name::<C>();
+        let gate = C::enabled_gate();
+        // The global `services.enabled` switch, captured from the same config
+        // the service was validated against.
+        let globally_enabled =
+            crate::runtime::service::services_enabled(self.shared.config.as_ref());
+        Ok(self.register_service(name, move |token| async move {
+            // Both gates are read at spawn time, on the constructed instance:
+            // everything above (registration, `from_context`, config
+            // validation) has already happened unconditionally, exactly as it
+            // does for an enabled service.
+            if !globally_enabled {
+                crate::runtime::service::log_services_globally_disabled();
+                return;
+            }
+            if !service.enabled() {
+                crate::runtime::service::log_service_disabled(name, gate);
+                return;
+            }
+            service.start(token).await;
+        }))
     }
 
     /// Get plugin data by type.
@@ -572,12 +633,45 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Non-panicking variant of
     /// [`register_controller_unchecked_impl`](Self::register_controller_unchecked_impl).
     pub(crate) fn try_register_controller_unchecked_impl<C, W>(
-        mut self,
+        self,
     ) -> Result<Self, crate::config::ConfigValidationError>
     where
         C: Controller<T, W>,
     {
+        self.try_register_controller_unchecked_at::<C, W>(None)
+    }
+
+    /// Unchecked registration at an HTTP mount point.
+    ///
+    /// `prefix` is a feature module's
+    /// [`PATH_PREFIX`](crate::di::module::FeatureModule::PATH_PREFIX): the
+    /// controller's router is nested under it and the `RouteInfo` this
+    /// registration collected is rewritten to the mounted path, so OpenAPI and
+    /// every other metadata consumer see what is actually served. `None` mounts
+    /// at the app root (the historical behavior).
+    pub(crate) fn try_register_controller_unchecked_at<C, W>(
+        mut self,
+        prefix: Option<&'static str>,
+    ) -> Result<Self, crate::config::ConfigValidationError>
+    where
+        C: Controller<T, W>,
+    {
+        let meta_before = self
+            .meta_registry
+            .get_or_empty::<crate::di::meta::RouteInfo>()
+            .len();
         C::register_meta(&mut self.meta_registry);
+        if let Some(prefix) = prefix {
+            if let Some(routes) = self
+                .meta_registry
+                .get_mut::<crate::di::meta::RouteInfo>()
+                .filter(|r| r.len() > meta_before)
+            {
+                for info in &mut routes[meta_before..] {
+                    info.path = crate::di::module::join_path_prefix(prefix, &info.path);
+                }
+            }
+        }
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
@@ -600,8 +694,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // intercepted `#[scheduled]`/`#[consumer]` methods.
         C::fill_decos(&core, &self.bean_context);
 
-        self.routes
-            .push(C::routes(state, Arc::clone(&core), &self.bean_context));
+        let router = C::routes(state, Arc::clone(&core), &self.bean_context);
+        self.routes.push(match prefix {
+            Some(prefix) => crate::http::Router::new().nest(prefix, router),
+            None => router,
+        });
 
         // Queue this core's `#[post_construct]` hooks — awaited at startup
         // before consumer registrations (no-op future for controllers without
@@ -845,6 +942,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 format!("#[on_start] hook failed: {e}").into()
             })?;
         }
+        // This entry point has no builder `on_start` closures, but it DID run
+        // the `#[on_start]` hooks — including `#[on_start(once)]` ones — so the
+        // once-flag is consumed here too.
+        crate::runtime::dev::mark_once_start_consumed();
         Ok(built.router)
     }
 

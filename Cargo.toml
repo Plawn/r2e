@@ -48,6 +48,8 @@ members = [
     "examples/example-sharded-bench",
     "examples/example-worker-udp",
     "r2e-compile-tests",
+    "r2e-edition2024-tests",
+    "r2e-featureless-tests",
 ]
 resolver = "2"
 
@@ -183,6 +185,12 @@ opentelemetry-otlp = "0.32"
 opentelemetry-semantic-conventions = "0.32"
 tracing-opentelemetry = "0.33"
 prometheus = "0.14"
+# `metrics` facade (optional, r2e-prometheus feature `metrics-facade`): the app
+# owns the recorder/exporter, R2E only emits through the facade macros.
+# `metrics-exporter-prometheus` is deliberately NOT a workspace dependency —
+# picking an exporter is the application's call.
+metrics = "0.24"
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 
 # Validation & serialization
 garde = { version = "0.23", features = ["derive"] }
@@ -196,7 +204,7 @@ dialoguer = "0.12"
 termimad = "0.31"
 
 # Proc-macro
-syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
 proc-macro-crate = "3"

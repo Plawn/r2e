@@ -1,0 +1,5 @@
+error: a `ProvideBundle` may carry at most one `R2eConfig` field — `config` already claims it. The config field becomes `override_config(..)`, and a second one would silently discard the first
+  --> cases/beans/fail/provide_bundle_two_configs.rs:12:5
+   |
+12 |     pub other_config: R2eConfig,
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^

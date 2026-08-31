@@ -127,13 +127,20 @@ async fn register_override_replaces_default_without_growing_the_state() {
 }
 
 #[r2e_core::test]
-async fn build_state_empty_builder_yields_hnil_state() {
+async fn build_state_empty_builder_yields_only_the_builtin_slots() {
     let app = AppBuilder::new().build_state().await;
     // `build_state` installs the list behind one `Arc` (`BeanState`), so the
     // per-request state clone the HTTP backend performs is a single refcount
     // bump — see `docs/claude/hot-path-clone-audit.md`.
-    let _: &r2e_core::BeanState<r2e_core::HNil> = app.state();
-    let _: &r2e_core::HNil = app.state(); // via `Deref`
+    //
+    // "Empty" is `BuiltinProvisions`, not `HNil`: `AppBuilder::new()` seeds
+    // the graph with the one bean only the builder can mint, the injectable
+    // `ShutdownToken`. Pinning the exact shape here is deliberate — anything
+    // added to `BuiltinProvisions` lands in EVERY app's state HList and must
+    // be a conscious decision.
+    type Builtin = r2e_core::HCons<r2e_core::rt::ShutdownToken, r2e_core::HNil>;
+    let _: &r2e_core::BeanState<Builtin> = app.state();
+    let _: &Builtin = app.state(); // via `Deref`
 }
 
 #[r2e_core::test]

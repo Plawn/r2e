@@ -31,7 +31,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     // Phase 4: services construct from the bean graph by type — a named state
     // no longer exists. Reject the removed `#[service(state = ...)]` attribute
-    // with a migration hint.
+    // with a migration hint. `enabled = "…"` is the one accepted argument.
+    let mut enabled_gate: Option<syn::LitStr> = None;
     for attr in &input.attrs {
         if attr.path().is_ident("service") {
             attr.parse_nested_meta(|meta| {
@@ -41,8 +42,17 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                          constructed from the bean graph by type; drop the attribute and make \
                          sure every #[inject] field type is provided/registered on the AppBuilder",
                     ))
+                } else if meta.path.is_ident("enabled") {
+                    if enabled_gate.is_some() {
+                        return Err(meta.error("duplicate `enabled` in #[service(...)]"));
+                    }
+                    enabled_gate = Some(meta.value()?.parse::<syn::LitStr>()?);
+                    Ok(())
                 } else {
-                    Err(meta.error("unknown attribute in #[service(...)]"))
+                    Err(meta.error(
+                        "unknown attribute in #[service(...)] — expected `enabled = \"<field or \
+                         method>\"`",
+                    ))
                 }
             })?;
         }
@@ -52,7 +62,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         Data::Struct(data) => match &data.fields {
             Fields::Named(named) => &named.named,
             Fields::Unit => {
-                return Ok(generate_unit_impl(name, &krate));
+                return generate_unit_impl(name, &krate, enabled_gate.as_ref());
             }
             _ => {
                 return Err(syn::Error::new_spanned(
@@ -174,6 +184,48 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    // `#[service(enabled = "name")]`: `name` is resolved against the struct's
+    // own fields first (the common case — a `#[config("…")] enabled: bool`
+    // flag, whose config key then becomes the logged gate label), and read as a
+    // `&self` method otherwise. Nothing else can name a `bool` here, so the two
+    // forms cannot be confused with each other.
+    let enabled_fns = match &enabled_gate {
+        None => quote! {},
+        Some(lit) => {
+            let raw = lit.value();
+            let mut ident: syn::Ident = syn::parse_str(&raw).map_err(|_| {
+                syn::Error::new_spanned(
+                    lit,
+                    "#[service(enabled = \"…\")] expects the name of a `bool` field or of a \
+                     `&self` method returning `bool`",
+                )
+            })?;
+            ident.set_span(lit.span());
+            let field = classified.iter().find(|cf| *cf.name == ident);
+            let (expr, label) = match field {
+                Some(cf) => {
+                    let label = match &cf.kind {
+                        // A config-backed flag: name the KEY, which is the
+                        // switch an operator actually flips.
+                        FieldKind::Config { key, .. } | FieldKind::LiveConfig { key, .. } => {
+                            key.clone()
+                        }
+                        _ => raw.clone(),
+                    };
+                    (quote! { self.#ident }, label)
+                }
+                None => (quote! { self.#ident() }, format!("{raw}()")),
+            };
+            quote! {
+                fn enabled(&self) -> bool { #expr }
+
+                fn enabled_gate() -> ::core::option::Option<&'static str> {
+                    ::core::option::Option::Some(#label)
+                }
+            }
+        }
+    };
+
     let config_prelude = if has_any_config {
         quote! {
             let __cfg = __ctx.get::<#krate::R2eConfig>();
@@ -195,6 +247,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             #config_sections_fn
 
+            #enabled_fns
+
             fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
                 #config_prelude
                 #live_config_prelude
@@ -213,10 +267,40 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-fn generate_unit_impl(name: &syn::Ident, krate: &TokenStream2) -> TokenStream2 {
-    quote! {
+fn generate_unit_impl(
+    name: &syn::Ident,
+    krate: &TokenStream2,
+    enabled_gate: Option<&syn::LitStr>,
+) -> syn::Result<TokenStream2> {
+    // A unit struct has no fields, so the gate can only be a `&self` method.
+    let enabled_fns = match enabled_gate {
+        None => quote! {},
+        Some(lit) => {
+            let raw = lit.value();
+            let mut ident: syn::Ident = syn::parse_str(&raw).map_err(|_| {
+                syn::Error::new_spanned(
+                    lit,
+                    "#[service(enabled = \"…\")] on a unit struct expects the name of a `&self` \
+                     method returning `bool`",
+                )
+            })?;
+            ident.set_span(lit.span());
+            let label = format!("{raw}()");
+            quote! {
+                fn enabled(&self) -> bool { self.#ident() }
+
+                fn enabled_gate() -> ::core::option::Option<&'static str> {
+                    ::core::option::Option::Some(#label)
+                }
+            }
+        }
+    };
+
+    Ok(quote! {
         impl #krate::ServiceComponent for #name {
             type Deps = #krate::type_list::TNil;
+
+            #enabled_fns
 
             fn from_context(_ctx: &#krate::beans::BeanContext) -> Self { #name }
 
@@ -227,5 +311,5 @@ fn generate_unit_impl(name: &syn::Ident, krate: &TokenStream2) -> TokenStream2 {
                 async move { self.run(__shutdown).await }
             }
         }
-    }
+    })
 }

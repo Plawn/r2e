@@ -10,6 +10,13 @@ keywords = ["prometheus", "metrics", "monitoring", "observability"]
 categories = ["web-programming"]
 description = "Prometheus metrics plugin for R2E - HTTP request tracking and /metrics endpoint"
 
+[features]
+default = []
+# Emit the HTTP request metrics through the `metrics` facade instead of this
+# crate's `prometheus` registry. The application owns the recorder/exporter and
+# the scrape endpoint; R2E only installs the tracking layer.
+metrics-facade = ["dep:metrics"]
+
 [dependencies]
 r2e-core = {workspace = true}
 prometheus = {workspace = true}
@@ -17,7 +24,13 @@ tracing = {workspace = true}
 tower = {workspace = true}
 pin-project-lite = {workspace = true}
 http = {workspace = true}
+metrics = {workspace = true, optional = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["macros", "rt-multi-thread"]}
 tower = {workspace = true, features = ["util"]}
+metrics = {workspace = true}
+metrics-util = {workspace = true}
+
+[package.metadata.docs.rs]
+all-features = true

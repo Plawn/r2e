@@ -150,6 +150,44 @@ pub(crate) fn hot_reload_loop_active() -> bool {
     HOT_RELOAD_LOOP.load(Ordering::Acquire)
 }
 
+// ── "once per process" startup hooks ────────────────────────────────────────
+
+/// Set once a startup lifecycle of this process has finished running its
+/// `on_start` phase.
+///
+/// Deliberately its OWN flag rather than a reader of `LIFECYCLE_INITIALIZED`:
+/// the lifecycle skip is a dev-reload *optimisation* that a future cycle-aware
+/// startup may narrow or drop (see the known dev-reload gaps in the roadmap),
+/// whereas "run this exactly once per process" is a contract the user wrote
+/// down. Keeping them separate means fixing the former cannot silently start
+/// re-running the latter.
+#[cfg(feature = "dev-reload")]
+static ONCE_START_CONSUMED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a `once` startup hook has already run in this process.
+///
+/// Always `false` outside the hot-patch loop — production boots once, and a
+/// test process that builds several apps must run each app's once-hooks — so
+/// the guard only ever suppresses a hook on a *second hot-patch cycle*.
+#[doc(hidden)]
+pub fn once_start_consumed() -> bool {
+    #[cfg(feature = "dev-reload")]
+    {
+        hot_reload_loop_active() && ONCE_START_CONSUMED.load(Ordering::Acquire)
+    }
+    #[cfg(not(feature = "dev-reload"))]
+    {
+        false
+    }
+}
+
+/// Mark the `once` startup hooks as having run. No-op without `dev-reload`
+/// (nothing ever reads the flag there).
+pub(crate) fn mark_once_start_consumed() {
+    #[cfg(feature = "dev-reload")]
+    ONCE_START_CONSUMED.store(true, Ordering::Release);
+}
+
 /// Retrieve a cached listener for the given address, or bind a new one.
 ///
 /// On first call for a given address, binds a `TcpListener`, stores it, and
@@ -506,6 +544,9 @@ pub fn invalidate_state_cache() {
     // cold rebuild" must not leave one behind to be committed later.
     rollback_dev_cycle();
     LIFECYCLE_INITIALIZED.store(false, Ordering::Release);
+    // A forced cold rebuild is a fresh application as far as the caches are
+    // concerned, so its `once` startup hooks are due again.
+    ONCE_START_CONSUMED.store(false, Ordering::Release);
 }
 
 /// Clear the graph fingerprint cache (used by `invalidate_state_cache`).

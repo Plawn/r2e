@@ -23,7 +23,8 @@
 //! - Async I/O traits: the [`io`] module (`AsyncRead`/`AsyncWrite` + their
 //!   extension traits)
 //! - Signals: [`shutdown_signal`]
-//! - Cancellation: [`CancelToken`], [`CancelDropGuard`]
+//! - Cancellation: [`CancelToken`], [`CancelDropGuard`], [`ShutdownToken`]
+//!   (the injectable app-shutdown bean)
 //! - Synchronisation: the [`sync`] module (`mpsc`, `oneshot`, `broadcast`,
 //!   `watch`, `Mutex`, `RwLock`, `Notify`, `Semaphore`, `OnceCell`)
 //! - Async control flow: [`select!`](select), [`pin!`](pin), [`join!`](join),
@@ -585,7 +586,6 @@ impl CancelToken {
     /// The owned form of [`cancelled`](Self::cancelled): a `'static` future,
     /// for the callers that must hand cancellation to something outliving the
     /// borrow (axum's `with_graceful_shutdown`, a spawned task).
-    #[must_use]
     pub fn cancelled_owned(self) -> impl Future<Output = ()> + Send + 'static {
         self.0.cancelled_owned()
     }
@@ -657,6 +657,106 @@ impl CancelDropGuard {
     #[must_use]
     pub fn disarm(self) -> CancelToken {
         CancelToken(self.0.disarm())
+    }
+}
+
+/// The application's shutdown signal, as an **injectable bean**.
+///
+/// Every `AppBuilder::new()` provides one, so `#[inject] shutdown:
+/// ShutdownToken` resolves in any bean, producer or controller without the app
+/// declaring anything (it is still a normal bean: a module must list it in
+/// `imports(...)` like any other — there are no ambient beans in R2E).
+///
+/// It wraps a [`CancelToken`] that is a **child of the app shutdown root** —
+/// the token `PreparedApp::run()` cancels when the graceful drain starts (after
+/// the `on_drain` hooks and the plugin shutdown hooks, at the moment the
+/// listener stops accepting and in-flight requests begin draining) and that a
+/// drop guard fires on every uncontrolled exit as well (a panic unwinding out
+/// of the run loop, an aborted boot, the `run()` future being dropped by an
+/// `r2e dev` hot patch). Long-lived work that must not outlive the process —
+/// an SSE stream, a poll loop, a worker inside a request — should select on
+/// [`cancelled`](Self::cancelled) so the drain can actually complete.
+///
+/// Being a *child* rather than the root itself means user code can
+/// [`child_token`](Self::child_token) and cancel its own scope without shutting
+/// the application down; there is deliberately no `cancel()` on the bean.
+/// Programmatic shutdown stays `StopHandle::stop()`.
+///
+/// # Under `r2e dev`
+///
+/// The token is **cycle-scoped**: each hot-patch cycle builds a fresh graph
+/// with a fresh child of that cycle's shutdown root, and the previous cycle's
+/// token is cancelled when its `run()` future is dropped. It is therefore
+/// excluded from the partial-rebuild pinning that carries `.provide()`-ed
+/// values across patches (it would otherwise resurrect an already-cancelled
+/// token), and every bean that injects it is force-rebuilt on each patch.
+#[derive(Clone, Debug)]
+pub struct ShutdownToken(CancelToken);
+
+impl ShutdownToken {
+    /// Wrap a cancellation token as the app shutdown bean.
+    ///
+    /// `AppBuilder::new()` calls this with a child of the app shutdown root;
+    /// apps normally *read* the bean rather than mint one. The constructor is
+    /// public for **tests**, which override the bean
+    /// (`.override_bean(ShutdownToken::from_token(my_token))`) to drive the
+    /// drain by hand — the bean itself has no `cancel()`, so holding the
+    /// `CancelToken` is the only way to fire it.
+    #[must_use]
+    pub fn from_token(token: CancelToken) -> Self {
+        Self(token)
+    }
+
+    /// A standalone, never-cancelled token, detached from any application.
+    ///
+    /// For unit tests and for the `with_state()` path, where there is no bean
+    /// graph to resolve one from.
+    #[must_use]
+    pub fn detached() -> Self {
+        Self(CancelToken::new())
+    }
+
+    /// Whether graceful shutdown has begun.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.0.is_cancelled()
+    }
+
+    /// Resolves once shutdown begins — immediately if it already has.
+    ///
+    /// Cancellation-safe: usable as a [`select!`](select) branch.
+    pub async fn cancelled(&self) {
+        self.0.cancelled().await;
+    }
+
+    /// The owned form of [`cancelled`](Self::cancelled): a `'static` future,
+    /// for the callers that must hand the signal to something outliving the
+    /// borrow (a spawned task, a stream combinator).
+    pub fn cancelled_owned(self) -> impl Future<Output = ()> + Send + 'static {
+        self.0.cancelled_owned()
+    }
+
+    /// A token cancelled by app shutdown **or** on its own — the way to scope
+    /// a sub-tree of work without touching the application's lifecycle.
+    #[must_use]
+    pub fn child_token(&self) -> CancelToken {
+        self.0.child_token()
+    }
+
+    /// The underlying [`CancelToken`], for the APIs that take one
+    /// (`ManagedResource`, `LiveConfigStream::drive`, a plugin's own helper).
+    ///
+    /// Cancelling it cancels *this* token and its children, never the
+    /// application: it is a child of the app root, not the root.
+    #[must_use]
+    pub fn token(&self) -> &CancelToken {
+        &self.0
+    }
+}
+
+impl From<ShutdownToken> for CancelToken {
+    fn from(token: ShutdownToken) -> Self {
+        token.0
     }
 }
 

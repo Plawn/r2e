@@ -19,6 +19,8 @@ mod config;
 #[cfg(feature = "dev-reload")]
 mod cycles;
 #[cfg(feature = "dev-reload")]
+mod once_start;
+#[cfg(feature = "dev-reload")]
 mod rollback;
 #[cfg(feature = "dev-reload")]
 mod serial;

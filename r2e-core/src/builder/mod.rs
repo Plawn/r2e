@@ -20,10 +20,12 @@ mod typed;
 #[cfg(feature = "ws")]
 mod ws_sessions;
 
-pub use app::{boot_error_report, exit_on_boot_error, launch, App};
+pub use app::{boot_error_report, exit_on_boot_error, launch, launch_with, App, LaunchOptions};
 pub use bootable::BootableApp;
 pub use prepared::{PreparedApp, PER_WORKER_REQUIRES_SHARDING_MSG};
-pub use registration::{RegisterController, RegisterControllers, RegisterModule, SpawnService};
+pub use registration::{
+    RegisterController, RegisterControllers, RegisterModule, RegisterModules, SpawnService,
+};
 pub use running::RunningApp;
 pub use task_registry::{ScheduledTaskMarker, TaskRegistryHandle};
 #[cfg(feature = "ws")]
@@ -33,9 +35,9 @@ use crate::beans::{AsyncBean, Bean, BeanRegistry, Producer, Registrable};
 use crate::controller::Controller;
 use crate::di::meta::MetaRegistry;
 use crate::di::module::{
-    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModEntry, ModuleDepsSatisfied,
-    ModuleEndpointSet, ModuleList, ModulePluginProvisions, ModulePlugins, ModuleProvided,
-    ModuleScope, PushPluginCtrls, RequiredPluginsInstalled,
+    BeanList, ControllerDepsList, ExportsProvided, FeatureModule, ModEntry, ModuleAggregate,
+    ModuleDepsSatisfied, ModuleEndpointSet, ModuleGroup, ModuleList, ModulePluginProvisions,
+    ModulePlugins, ModuleProvided, ModuleScope, PushPluginCtrls, RequiredPluginsInstalled,
 };
 use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect};
 use crate::rt::CancelToken;
@@ -111,10 +113,24 @@ pub type ModulePluginsMods<M, P, R, Mods> =
 /// its controllers.
 pub type ModuleRegistered<M, P, R, Mods> = AppBuilder<
     NoState,
-    <<M as FeatureModule>::Exports as TAppend<ModulePluginsP<M, P, R, Mods>>>::Output,
-    <ModulePluginsR<M, P, R, Mods> as TAppend<<M as FeatureModule>::Imports>>::Output,
-    TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>,
+    ModuleRegisteredP<M, P, R, Mods>,
+    ModuleRegisteredR<M, P, R, Mods>,
+    ModuleRegisteredMods<M, P, R, Mods>,
 >;
+
+/// The provision list [`ModuleRegistered`] carries — its brought plugins'
+/// provisions plus the module's `Exports`. Split out of the builder alias so
+/// the [`ModuleGroup`] fold can thread it through the next member.
+pub type ModuleRegisteredP<M, P, R, Mods> =
+    <<M as FeatureModule>::Exports as TAppend<ModulePluginsP<M, P, R, Mods>>>::Output;
+
+/// The requirement list [`ModuleRegistered`] carries.
+pub type ModuleRegisteredR<M, P, R, Mods> =
+    <ModulePluginsR<M, P, R, Mods> as TAppend<<M as FeatureModule>::Imports>>::Output;
+
+/// The pending-module list [`ModuleRegistered`] carries.
+pub type ModuleRegisteredMods<M, P, R, Mods> =
+    TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>;
 
 type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
@@ -545,6 +561,21 @@ impl ServiceHandles {
 #[derive(Clone)]
 struct ShutdownRoot(CancelToken);
 
+/// The provision list every [`AppBuilder::new`] starts from.
+///
+/// R2E provides exactly one bean before the app declares anything: the
+/// [`ShutdownToken`](crate::rt::ShutdownToken). It is a **normal** bean — it
+/// grows the compile-time provision list `P` like a hand-written
+/// `.provide(...)`, it lands in the state HList, and a `#[module]` must list it
+/// in `imports(...)` to inject it (there are no ambient beans). The only thing
+/// special about it is that the builder writes the `.provide` for you, because
+/// only the builder can mint a token on the app's shutdown lineage.
+///
+/// `WsSessions` is deliberately **not** here: generated `#[ws]` code reads it
+/// from the bean context at registration, never from the state, so putting it
+/// on `P` would only widen every app's state for nobody's benefit.
+pub type BuiltinProvisions = TCons<crate::rt::ShutdownToken, TNil>;
+
 /// Get-or-insert the one [`ShutdownRoot`] for this app.
 ///
 /// Called from `register_service` (build time, first writer) and from
@@ -716,7 +747,12 @@ impl BuilderConfig {
 /// phase, *before* the transition: their `build` runs as a graph node inside
 /// `build_state()`. Once in the typed phase (`AppBuilder<T>`), you register
 /// controllers, add hooks, and call `.build()` or `.serve()`.
-pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil, Mods = TNil> {
+pub struct AppBuilder<
+    T: Clone + Send + Sync + 'static = NoState,
+    P = BuiltinProvisions,
+    R = TNil,
+    Mods = TNil,
+> {
     shared: BuilderConfig,
     state: T,
     /// The resolved bean graph, retained through the typed phase so controller
@@ -901,7 +937,7 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     }
 }
 
-impl Default for AppBuilder<NoState, TNil, TNil, TNil> {
+impl Default for AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }

@@ -98,6 +98,98 @@ pub trait ServiceComponent: Sized + Send + 'static {
     /// Construct from the resolved bean graph.
     fn from_context(ctx: &crate::beans::BeanContext) -> Self;
 
+    /// Opt-in gate: return `false` to keep this service from running.
+    ///
+    /// Evaluated **once**, on the constructed instance, at the moment the
+    /// service task would call [`start`](Self::start) — on every spawn path
+    /// ([`spawn_service`](crate::builder::SpawnService::spawn_service),
+    /// `#[producer(start)]`, and `#[bean]`-declared services). Default: `true`.
+    ///
+    /// What it deliberately does **not** skip: registration, dependency
+    /// resolution, [`from_context`](Self::from_context), and the
+    /// [`config_keys`](Self::config_keys) /
+    /// [`config_sections`](Self::config_sections) validation. A disabled
+    /// service is still a fully declared, fully validated part of the
+    /// application — only `run()` is skipped, and the framework logs an
+    /// `info!` naming the service and (when the derive could work it out) the
+    /// gate that turned it off. Turning a service off must never turn its
+    /// configuration errors off with it.
+    ///
+    /// `#[derive(BackgroundService)]` emits this from
+    /// `#[service(enabled = "…")]`, naming either a `&self` method returning
+    /// `bool` or a `bool` field of the struct — typically a
+    /// `#[config("services.x.enabled")] enabled: bool`.
+    ///
+    /// Composes with the global [`SERVICES_ENABLED_KEY`] switch: the service
+    /// runs only when the global gate **and** this one both say yes.
+    fn enabled(&self) -> bool {
+        true
+    }
+
+    /// Human-readable label for whatever [`enabled`](Self::enabled) reads —
+    /// the config key when the derive can see one, otherwise the field or
+    /// method name. Logged when the gate turns the service off, so the reader
+    /// learns *which* switch to flip. Default: `None`.
+    fn enabled_gate() -> Option<&'static str> {
+        None
+    }
+
     /// Run until the shutdown token is cancelled.
     fn start(self, shutdown: CancelToken) -> impl Future<Output = ()> + Send;
+}
+
+/// Config key of the **global** background-service gate.
+///
+/// `services.enabled: false` keeps every background service from running —
+/// the profile-level switch a `application-test.yaml` flips so a test boot
+/// does not start pollers, exporters or queue consumers. It composes with the
+/// per-service [`ServiceComponent::enabled`] gate: a service runs only when
+/// *both* say yes.
+///
+/// Like the per-service gate it skips **only** `start()`. Registration,
+/// dependency resolution, `from_context` and config validation all still run,
+/// so a test with services off still fails on a broken service configuration.
+///
+/// Absent or non-boolean → services are enabled (default `true`).
+pub const SERVICES_ENABLED_KEY: &str = "services.enabled";
+
+/// Read the global gate from the application config.
+///
+/// `None` (no config loaded) → enabled: an app that never called
+/// `load_config` cannot have opted out.
+pub fn services_enabled(config: Option<&crate::config::R2eConfig>) -> bool {
+    config
+        .and_then(|c| c.try_get::<bool>(SERVICES_ENABLED_KEY))
+        .unwrap_or(true)
+}
+
+static GLOBAL_GATE_LOGGED: std::sync::Once = std::sync::Once::new();
+
+/// Log the "no background service will run" line — once per process, however
+/// many services are skipped, so the boot log carries the cause without one
+/// line per service.
+pub(crate) fn log_services_globally_disabled() {
+    GLOBAL_GATE_LOGGED.call_once(|| {
+        tracing::info!(
+            gate = SERVICES_ENABLED_KEY,
+            "background services globally disabled — every service is still registered and \
+             config-validated, but no run() will be called"
+        );
+    });
+}
+
+/// Log the framework-level "this service will not run" line, shared by every
+/// spawn path so the message and its fields are identical wherever the gate
+/// fires.
+///
+/// `info!`, not `warn!`: a service disabled by its own declared gate is a
+/// configured outcome, not a problem. It is still logged unconditionally —
+/// "why is nothing happening?" must be answerable from the boot log.
+pub(crate) fn log_service_disabled(service: &'static str, gate: Option<&'static str>) {
+    tracing::info!(
+        service,
+        gate = gate.unwrap_or("ServiceComponent::enabled"),
+        "background service disabled by its `enabled` gate — registered and \
+         config-validated, but run() will not be called"
+    );
 }

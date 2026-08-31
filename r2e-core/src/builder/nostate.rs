@@ -5,8 +5,12 @@ use super::*;
 
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
 
-impl AppBuilder<NoState, TNil, TNil, TNil> {
-    /// Create a new, empty builder in the pre-state phase.
+impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
+    /// Create a new builder in the pre-state phase.
+    ///
+    /// Not quite empty: R2E seeds the graph with the one bean only the builder
+    /// can mint, the [`ShutdownToken`](crate::rt::ShutdownToken) — see
+    /// [`BuiltinProvisions`].
     pub fn new() -> Self {
         #[allow(unused_mut)]
         let mut builder = Self {
@@ -66,6 +70,22 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             .shared
             .bean_registry
             .provide(super::WsSessions::default());
+
+        // The injectable app shutdown signal. Unlike `WsSessions` this IS on
+        // the provision list `P` (see `BuiltinProvisions`): apps inject it, so
+        // it must satisfy `Contains` like any other bean.
+        //
+        // A CHILD of the app shutdown root, get-or-inserted here so that the
+        // root exists before anything else asks for it — `register_service`
+        // and `PreparedApp::run()` both go through the same memoized
+        // `plugin_data` entry, so the bean is on the very lineage `run()`
+        // cancels at drain (and that its drop guard fires on the uncontrolled
+        // exits). A child, not the root itself, so that user code cancelling
+        // its own scope cannot take the application down with it.
+        let shutdown = crate::rt::ShutdownToken::from_token(
+            shutdown_root(&mut builder.shared.plugin_data).child_token(),
+        );
+        builder.shared.bean_registry.provide(shutdown);
 
         builder
     }
@@ -128,6 +148,78 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         bean: B,
     ) -> AppBuilder<NoState, TCons<B, P>, R, Mods> {
         self.shared.bean_registry.provide(bean);
+        self.with_updated_types()
+    }
+
+    /// Provide every field of a bundle in one call — the
+    /// [`App::Env`](crate::App::Env) shortcut.
+    ///
+    /// Equivalent to writing one [`provide`](Self::provide) per field, in field
+    /// order: the compile-time provision list `P` grows exactly as the
+    /// hand-written chain would grow it, and each field type must be
+    /// `Clone + Send + Sync + 'static` like any provided bean.
+    ///
+    /// One field may be an [`R2eConfig`](crate::config::R2eConfig); it is
+    /// applied as [`override_config`](Self::override_config) rather than
+    /// provided as a bean, which is why `provide_all` must run **before**
+    /// [`load_config`](Self::load_config) when the bundle carries one.
+    ///
+    /// ```ignore
+    /// #[derive(ProvideBundle)]
+    /// struct AppEnv { config: R2eConfig, pool: DbPool, s3: S3Client }
+    ///
+    /// async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+    ///     Ok(b.provide_all(env)
+    ///         .load_config::<Settings>()
+    ///         .try_build_state().await?)
+    /// }
+    /// ```
+    pub fn provide_all<B>(self, bundle: B) -> AppBuilder<NoState, B::OutP, R, Mods>
+    where
+        B: crate::di::bundle::ProvideBundle<P, R, Mods>,
+    {
+        bundle.provide_into(self)
+    }
+
+    /// Provide a **typed config struct** already in hand, registering its
+    /// `#[config(section)]` children exactly as
+    /// [`load_config`](Self::load_config) would.
+    ///
+    /// [`provide`](Self::provide) puts the struct itself in the graph and
+    /// stops there: a nested `#[config(section)] db: DatabaseSettings` field
+    /// stays invisible, so a controller or bean injecting `DatabaseSettings`
+    /// does not resolve and the app has to hand-write a producer per child.
+    /// `provide_config` runs
+    /// [`ConfigProperties::register_children`](crate::config::ConfigProperties::register_children)
+    /// as well, so the parent **and** every (recursively) nested section land
+    /// in the graph — the same set `load_config::<C>()` provides, minus the
+    /// disk read, the [`R2eConfig`](crate::config::R2eConfig) bean and the
+    /// live-config registry.
+    ///
+    /// It is the test/embedding counterpart of `load_config`: build the
+    /// settings in code (or `Default::default()`), hand them over, and inject
+    /// the sections as usual.
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .provide_config(AppSettings { db: DatabaseSettings { url: ":memory:".into() }, .. })
+    ///     .register::<UserController>()   // #[inject] db: DatabaseSettings
+    ///     .build_state().await
+    /// ```
+    ///
+    /// The value is pinned like any [`provide`](Self::provide)d bean: unlike
+    /// `load_config`, nothing rebuilds it from `R2eConfig` on a dev-reload
+    /// cycle.
+    pub fn provide_config<C>(
+        mut self,
+        settings: C,
+    ) -> AppBuilder<NoState, TCons<C, <C::Children as TAppend<P>>::Output>, R, Mods>
+    where
+        C: crate::config::ConfigProperties + Clone + Send + Sync + 'static,
+        C::Children: TAppend<P>,
+    {
+        settings.register_children(&mut self.shared.bean_registry);
+        self.shared.bean_registry.provide(settings);
         self.with_updated_types()
     }
 
@@ -373,9 +465,18 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// builder chain. It is **recorded** instead, and the chain continues
     /// against an empty config;
     /// [`try_build_state`](Self::try_build_state) returns it (as
-    /// [`BeanError::ConfigLoad`](crate::beans::BeanError::ConfigLoad)) before
-    /// any bean is built, and `build_state()` panics with the same rendered
-    /// message. First failure wins.
+    /// [`BeanError::ConfigLoad`](crate::beans::BeanError::ConfigLoad), or
+    /// [`BeanError::MissingConfigKeys`](crate::beans::BeanError::MissingConfigKeys)
+    /// for a typed section that does not bind) before any bean is built, and
+    /// `build_state()` panics with the same rendered message. First failure
+    /// wins.
+    ///
+    /// The typed section is validated with
+    /// [`LoadableConfig::validate`](crate::config::LoadableConfig::validate)
+    /// *before* it is constructed, so the report lists **every** missing
+    /// required key (its own and every nested `#[config(section)]`'s), plus
+    /// type mismatches and `garde` violations — not just the first one
+    /// `ConfigProperties::from_config` trips over.
     ///
     /// # Panics
     ///
@@ -479,12 +580,30 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             // warning `live_config()` would otherwise emit.
             live.mark_has_providers();
         }
-        if let Err(e) = C::register(&config, &mut self.shared.bean_registry) {
+        // Typed-section binding is validated BEFORE construction so the report
+        // names *every* missing key at once (`from_config` short-circuits on
+        // the first `NotFound`, which used to make a five-key gap take five
+        // boots to fix). The aggregated form is the same one controllers get.
+        let section_errors = C::validate(&config);
+        if section_errors.is_empty() {
+            if let Err(e) = C::register(&config, &mut self.shared.bean_registry) {
+                self.shared
+                    .record_boot_error(crate::beans::BeanError::ConfigLoad {
+                        context: "Failed to construct typed config",
+                        source: Box::new(e),
+                    });
+            }
+        } else {
+            // `register` is skipped: it would fail on the very first of these
+            // keys and overwrite nothing useful. `try_build_state` returns the
+            // recorded error before a single bean is constructed, so the
+            // unprovided typed slot is never observed.
             self.shared
-                .record_boot_error(crate::beans::BeanError::ConfigLoad {
-                    context: "Failed to construct typed config",
-                    source: Box::new(e),
-                });
+                .record_boot_error(crate::beans::BeanError::MissingConfigKeys(
+                    crate::config::ConfigValidationError {
+                        errors: section_errors,
+                    },
+                ));
         }
         self.shared.active_profile =
             resolve_profile(self.shared.forced_profile.as_deref(), &config);
@@ -946,6 +1065,27 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // trusted once the configuration did not load.
         if let Some(err) = self.shared.deferred_boot_error.take() {
             return Err(err);
+        }
+
+        // App-level, resolved once here (and again on every dev-reload cycle,
+        // so a config edit lands): the `#[derive(Params)]` 400 body format.
+        // A mistyped value is a boot error like any other config mismatch.
+        if let Some(config) = &self.shared.config {
+            match config.get_opt::<crate::web::params::ParamsRejectionFormat>(
+                crate::web::params::PARAMS_REJECTION_FORMAT_KEY,
+            ) {
+                Ok(format) => {
+                    crate::web::params::set_params_rejection_format(format.unwrap_or_default())
+                }
+                Err(e) => {
+                    return Err(crate::beans::BeanError::ConfigLoad {
+                        context: "Invalid server.params-rejection-format",
+                        source: Box::new(e),
+                    })
+                }
+            }
+        } else {
+            crate::web::params::set_params_rejection_format(Default::default());
         }
 
         let mut registry = std::mem::take(&mut self.shared.bean_registry);

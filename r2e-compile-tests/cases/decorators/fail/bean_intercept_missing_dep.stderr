@@ -1,4 +1,4 @@
-error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<CleanupService, TNil>, TCons<QuotaRegistry, TNil>>`, but its trait bounds were not satisfied
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<CleanupService, TCons<ShutdownToken, TNil>>, TCons<QuotaRegistry, TNil>>`, but its trait bounds were not satisfied
   --> cases/decorators/fail/bean_intercept_missing_dep.rs:51:56
    |
 51 |         AppBuilder::new().register::<CleanupService>().build_state().await

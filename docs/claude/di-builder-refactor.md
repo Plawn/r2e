@@ -16,6 +16,26 @@ see git history for the phase logs. Open work is listed at the bottom.)
   Signature: `.register::<T>() -> AppBuilder<NoState, TCons<T::Provided, P>,
   <R as TAppend<T::Deps>>::Output>`.
 - **`.provide(value)`** — register an already-built value.
+- **`.provide_all(bundle)`** — provide every field of a
+  `#[derive(ProvideBundle)]` struct in one call, the `App::Env` case (a handful
+  of process-lifetime resources built in `setup`, each of which used to need its
+  own `.provide(env.field)` line). Backed by the `ProvideBundle<P, R, Mods>`
+  trait (`r2e-core/src/di/bundle.rs`): `type OutP; fn provide_into(self,
+  AppBuilder<NoState, P, R, Mods>) -> AppBuilder<NoState, OutP, R, Mods>`. The
+  derive emits a chain of `.provide(self.field)` in **field order**, so `OutP`
+  is exactly what the hand-written chain produces and nothing about
+  registration semantics changes. Rules, all in
+  `r2e-macros/src/derives/provide_bundle_derive.rs`:
+  - `Option<T>` fields are provided as-is — `Option<T>` is a first-class bean
+    type in R2E, and a compile-time provision list cannot depend on a runtime
+    value, so there is no "skip if `None`".
+  - An `R2eConfig` field becomes `.override_config(value)` rather than a bean
+    (which is why `provide_all` runs before `load_config`); two such fields are
+    a compile error. Detection is **textual** on the written type path — an
+    alias for `R2eConfig` is not recognised, an unrelated type spelled
+    `R2eConfig` is. Documented on the derive.
+  - Generic structs, tuple structs, unit structs and enums are rejected with
+    spanned errors (trybuild: `beans/fail/provide_bundle_*`).
 - **`.register_override::<T>()`** — overrides a default registration without
   adding a duplicate `P` slot (`builder/nostate.rs`).
 - **`.register_controllers::<(A, B, ...)>()`** — tuple fan-out (arity 1..=16)
@@ -141,6 +161,25 @@ frameworks cannot offer.
 - `#[module(providers(...), controllers(...), grpc_services(...), exports(...),
   imports(...), plugins(...), requires_plugins(...))]` generates the
   `FeatureModule` impl; all keys optional.
+- **Aggregates** — `#[module(modules(A, B, C))] struct AppModules;` names the
+  app's module blueprint once so the app and its tests register the same list
+  (`.register_modules::<AppModules>()`). An aggregate is **not** a module: it
+  generates `ModuleAggregate { type Modules = TCons<A, TCons<B, ...>>; }`, not a
+  `FeatureModule` impl, so `modules(...)` is exclusive with every other
+  `#[module]` key (trybuild: `modules/fail/module_aggregate_mixed_keys`).
+  `RegisterModules::register_modules::<A>()` (`builder/registration.rs`) folds
+  over `A::Modules` through the recursive `ModuleGroup<P, R, Mods, Idx>` impl
+  (`di/module.rs`), whose recursive arm replicates `register_module_impl`'s
+  where-clauses verbatim and delegates to it — so encapsulation, plugin
+  ownership, `requires_plugins` checking and registration order are exactly
+  those of the hand-written chain, and members' `Exports` reach app-global `P`
+  the usual way (which is what lets one member import another's export). `Idx`
+  is a TCons of per-member witness tuples, inferred at the call site like
+  `ControllerTuple`'s. Tuples of arity 1..=16 implement `ModuleAggregate`
+  directly, so `register_modules::<(A, B)>()` needs no named type. A fold, not
+  a synthesized super-module: type-level concatenation of every
+  `FeatureModule` associated type was considered and rejected as far more
+  machinery for the same observable behaviour.
 - **Modules bring their plugins.** `plugins(Scheduler = Scheduler)` (macro) /
   `type Plugins = (Scheduler,)` + `fn plugins()` installs the plugin at the
   `register_module` call site; `requires_plugins(Scheduler)` only *needs* it
@@ -206,6 +245,68 @@ frameworks cannot offer.
 - Same-typed **private** beans in different modules collide at runtime
   (`DuplicateBean` at startup, by design — the graph is `TypeId`-keyed). Use
   newtypes.
+
+## Path-prefixed modules (`#[module(prefix = "…")]`)
+
+**Design note (W17 F12).** A feature module is the unit an API version or a
+bounded context is carved into, but every controller in it had to repeat the
+mount point in its own `#[controller(path = "/api/v1/…")]`. Re-versioning a
+module meant editing every controller in it — and getting one wrong is silent.
+
+**Decision: the prefix is declared on the module, not at the registration
+call site.** `#[module(prefix = "/api/v1", controllers(...))]` — *not*
+`register_module_at("/api/v1")`.
+
+- `ModuleAggregate` / `ModuleGroup` (the `register_modules::<AppModules>()`
+  fold) are **purely static type-level folds with no runtime argument**. A
+  call-site prefix would either not compose through an aggregate at all, or
+  force an aggregate to carry a runtime list of prefixes parallel to its type
+  list. A `const PATH_PREFIX: Option<&'static str>` on `FeatureModule` threads
+  through every existing fold for free, aggregates included.
+- The same module registered twice under two prefixes is not a use case: its
+  beans are `TypeId`-keyed and would collide (`DuplicateBean`) long before the
+  routes did. So the "one module, many mount points" flexibility a call-site
+  argument would buy is unreachable anyway.
+- It keeps the mount point next to the thing being mounted, like
+  `#[controller(path)]` — one place to read, one place to change.
+
+**Composition with `#[controller(path)]`.** The module prefix is the outer
+segment: the controller's own path is appended to it. `#[module(prefix =
+"/api/v1")]` + `#[controller(path = "/users")]` + `#[get("/{id}")]` serves
+`/api/v1/users/{id}`. Controllers stay prefix-agnostic — nothing in the
+controller's own declaration or codegen changes, so the same controller can be
+mounted app-globally in one app and under a module prefix in another. A
+`#[fallback]` inside a prefixed module becomes **prefix-scoped** (it answers
+`/api/v1/*`, not `/*`) — that is `Router::nest`'s semantics and the intended
+one for a versioned module.
+
+**Aggregates take no prefix.** An aggregate owns no controllers; each member
+keeps its own prefix. `prefix` is rejected at macro level next to
+`modules(...)`, like every other key.
+
+**Validation.** The prefix must start with `/`, must not end with `/`, must not
+be `"/"` (drop the key instead), and must not contain a path parameter (`{…}`):
+a parameterized mount would have to be extracted by every controller in the
+module, which is a different feature.
+
+**OpenAPI.** The published spec must show the *mounted* path, so the prefix is
+applied to `RouteInfo.path` at registration — the same place the router is
+nested — rather than being reconstructed later by the openapi plugin. That
+keeps every `RouteInfo` consumer (openapi, `r2e routes`' runtime counterpart,
+any future spec exporter) correct with no per-consumer knowledge of modules.
+`MetaRegistry` grew a `get_mut` for exactly this rewrite.
+
+**`r2e routes` (CLI).** The CLI is a *textual* scanner (it never builds the
+app), so it learns module prefixes the same way it learns controller paths: it
+scans `src/**/*.rs` for `#[module(...)]` declarations, pairs each `prefix` with
+the `controllers(...)` list in the same attribute, and prefixes those
+controllers' rows.
+
+**Out of scope: non-HTTP endpoints.** A module's `grpc_services(...)` (and MCP
+services) are **not** path-mounted — gRPC routes are `/<package>.<Service>/<Method>`
+derived from the proto, and MCP mounts at its own configured path. A module
+prefix affects HTTP controllers only; `ModuleEndpoints::register_all` is
+untouched.
 
 ## Design decisions worth not relitigating
 

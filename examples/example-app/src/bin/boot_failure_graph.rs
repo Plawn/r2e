@@ -70,3 +70,12 @@ impl App for FailingApp {
 async fn main() {
     r2e::exit_on_boot_error(r2e::launch!(FailingApp).await);
 }
+
+/// Compile-only coverage for the `tracing = false` arm of `launch!` — the arm
+/// `app_main!(App, tracing = false)` expands to. Never called: the point is
+/// that the knob keeps type-checking on both the plain and the `dev-reload`
+/// expansion.
+#[allow(dead_code)]
+async fn launch_without_tracing() -> Result<(), BootError> {
+    r2e::launch!(FailingApp, tracing = false).await
+}

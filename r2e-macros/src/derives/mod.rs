@@ -8,3 +8,4 @@ pub(crate) mod from_config_value_derive;
 pub(crate) mod from_multipart;
 pub(crate) mod object_params_derive;
 pub(crate) mod params_derive;
+pub(crate) mod provide_bundle_derive;

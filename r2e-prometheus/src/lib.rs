@@ -38,6 +38,25 @@
 //!
 //! Or inject `PrometheusRegistry` into services for runtime registration.
 //!
+//! # Three responsibilities, three modes
+//!
+//! The plugin does three separable things: it (1) tracks HTTP requests through
+//! a Tower layer, (2) owns the metric registry the layer records into, and
+//! (3) exposes that registry at an endpoint. They are independently
+//! selectable:
+//!
+//! | mode | layer | registry | `/metrics` |
+//! |---|---|---|---|
+//! | [`Prometheus::new`] / [`Prometheus::builder`] (default) | yes | this crate's `prometheus::Registry` | mounted |
+//! | [`Prometheus::layer_only`] (`prometheus.expose_endpoint: false`) | yes | this crate's `prometheus::Registry` | **not** mounted — scrape it yourself with [`encode_metrics`] |
+//! | `MetricsFacade` (feature `metrics-facade`) | yes | **the app's** `metrics` recorder | **not** mounted — the app owns it |
+//!
+//! The last row is for applications already on the
+//! [`metrics`](https://docs.rs/metrics) facade with their own exporter
+//! (`metrics-exporter-prometheus`, …): R2E emits the same metric names through
+//! the facade macros and touches no global of its own. See the `facade` module
+//! for the emitted series.
+//!
 //! # Metrics
 //!
 //! The following metrics are automatically tracked:
@@ -53,14 +72,23 @@
 //! label is capped to the nine standard HTTP methods; non-standard extension
 //! methods are recorded under [`OTHER_METHOD_LABEL`].
 
+#[cfg(feature = "metrics-facade")]
+mod facade;
 mod handler;
 mod layer;
 mod metrics;
+mod recorder;
 mod worker;
 
-pub use layer::{PrometheusLayer, OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
+#[cfg(feature = "metrics-facade")]
+pub use facade::{MetricsFacade, MetricsFacadeBuilder, MetricsFacadeConfig, MetricsFacadeRecorder};
+pub use layer::{
+    HttpMetricsLayer, HttpMetricsResponseFuture, HttpMetricsService, PrometheusLayer,
+    PrometheusResponseFuture, PrometheusService, OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL,
+};
 pub use metrics::{encode_metrics, init_metrics, is_initialized, metrics, registry, MetricsConfig};
 pub use prometheus;
+pub use recorder::{HttpMetricsRecorder, PrometheusRecorder};
 pub use worker::WorkerCollector;
 
 use handler::metrics_handler;
@@ -80,6 +108,7 @@ use r2e_core::Plugin;
 /// ```yaml
 /// prometheus:
 ///   endpoint: /metrics
+///   expose_endpoint: true
 ///   namespace: myapp
 ///   buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]
 ///   exclude_paths: ["/health", "/metrics"]
@@ -91,6 +120,11 @@ use r2e_core::Plugin;
 pub struct PrometheusConfig {
     /// Metrics endpoint path (default `/metrics`).
     pub endpoint: Option<String>,
+    /// Mount the metrics endpoint at all (default `true`). Set it to `false`
+    /// for layer-only tracking: requests are recorded into the registry, but
+    /// nothing is exported over HTTP by R2E (scrape it yourself with
+    /// [`encode_metrics`], or push it).
+    pub expose_endpoint: Option<bool>,
     /// Namespace prefix applied to every metric name.
     pub namespace: Option<String>,
     /// Histogram buckets for request duration, in seconds.
@@ -184,6 +218,7 @@ pub struct Prometheus {
     // falls through to file config, then the default. This lets the builder
     // take precedence over file config only where it was explicitly set.
     endpoint: Option<String>,
+    expose_endpoint: Option<bool>,
     namespace: Option<String>,
     buckets: Option<Vec<f64>>,
     exclude_paths: Option<Vec<String>>,
@@ -199,11 +234,30 @@ impl Prometheus {
     pub fn new(endpoint: &str) -> Self {
         Self {
             endpoint: Some(endpoint.to_string()),
+            expose_endpoint: None,
             namespace: None,
             buckets: None,
             exclude_paths: None,
             collectors: Vec::new(),
         }
+    }
+
+    /// HTTP tracking **without** the `/metrics` endpoint.
+    ///
+    /// The registry is still initialized (with the merged builder/file config)
+    /// and requests are still recorded into it — R2E just does not serve it.
+    /// Use it when the exposition is the application's business: an endpoint of
+    /// its own rendering [`encode_metrics`], a push gateway, or a sidecar.
+    ///
+    /// Shorthand for `Prometheus::builder().without_endpoint().build()`; the
+    /// same switch is reachable from config as `prometheus.expose_endpoint:
+    /// false`.
+    ///
+    /// If the application is on the [`metrics`](https://docs.rs/metrics) facade
+    /// rather than the `prometheus` crate, use `MetricsFacade` (feature
+    /// `metrics-facade`) instead — same layer, the app's recorder.
+    pub fn layer_only() -> Self {
+        PrometheusBuilder::default().without_endpoint().build()
     }
 
     /// Create a builder for advanced configuration.
@@ -216,6 +270,15 @@ impl Prometheus {
 /// [`PrometheusConfig`] section, and built-in defaults into the effective
 /// endpoint + [`MetricsConfig`].
 ///
+/// Resolve whether the `/metrics` endpoint is mounted: builder setting first,
+/// then `prometheus.expose_endpoint`, then `true`.
+///
+/// Exposed (hidden) so the precedence contract can be unit-tested.
+#[doc(hidden)]
+pub fn resolve_expose_endpoint(builder: Option<bool>, file: Option<bool>) -> bool {
+    builder.or(file).unwrap_or(true)
+}
+
 /// Exposed (hidden) so the precedence contract can be unit-tested without the
 /// global metrics singleton.
 #[doc(hidden)]
@@ -259,11 +322,16 @@ impl Plugin for Prometheus {
     ) -> Result<Self::Provided, PluginBuildError> {
         let Prometheus {
             endpoint,
+            expose_endpoint,
             namespace,
             buckets,
             exclude_paths,
             collectors,
         } = self;
+        let expose_endpoint = resolve_expose_endpoint(
+            expose_endpoint,
+            config.as_ref().and_then(|c| c.expose_endpoint),
+        );
         let (endpoint, metrics_config) =
             resolve_config(endpoint, namespace, buckets, exclude_paths, config);
 
@@ -300,11 +368,15 @@ impl Plugin for Prometheus {
                 .map_err(|e| format!("Failed to register custom Prometheus collector: {e}"))?;
         }
 
-        // Install the /metrics route + tracking layer as router effects.
+        // Install the tracking layer — plus the /metrics route unless this is a
+        // layer-only install — as router effects.
         ctx.add_layer(move |router| {
-            router
-                .route(&endpoint, get(metrics_handler))
-                .layer(PrometheusLayer::new(metrics_config))
+            let router = if expose_endpoint {
+                router.route(&endpoint, get(metrics_handler))
+            } else {
+                router
+            };
+            router.layer(PrometheusLayer::new(metrics_config))
         });
 
         Ok((PrometheusRegistry,))
@@ -315,6 +387,7 @@ impl Plugin for Prometheus {
 #[derive(Default)]
 pub struct PrometheusBuilder {
     endpoint: Option<String>,
+    expose_endpoint: Option<bool>,
     namespace: Option<String>,
     buckets: Option<Vec<f64>>,
     exclude_paths: Vec<String>,
@@ -325,6 +398,15 @@ impl PrometheusBuilder {
     /// Set the metrics endpoint path (default: "/metrics").
     pub fn endpoint(mut self, endpoint: &str) -> Self {
         self.endpoint = Some(endpoint.to_string());
+        self
+    }
+
+    /// Do not mount the metrics endpoint: track requests, export nothing.
+    ///
+    /// Overrides `prometheus.expose_endpoint` from file config, like every
+    /// other builder setting. See [`Prometheus::layer_only`].
+    pub fn without_endpoint(mut self) -> Self {
+        self.expose_endpoint = Some(false);
         self
     }
 
@@ -393,6 +475,7 @@ impl PrometheusBuilder {
     pub fn build(self) -> Prometheus {
         Prometheus {
             endpoint: self.endpoint,
+            expose_endpoint: self.expose_endpoint,
             namespace: self.namespace,
             buckets: self.buckets,
             exclude_paths: (!self.exclude_paths.is_empty()).then_some(self.exclude_paths),

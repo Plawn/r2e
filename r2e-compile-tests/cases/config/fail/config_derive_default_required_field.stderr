@@ -1,0 +1,8 @@
+error: `#[config(derive_default)]` needs an absent-value for every field, and `url` is required
+
+         The generated `Default` must equal what `from_config` produces against an empty config, so it cannot invent one.
+         add `#[config(default = ...)]`, make it `Option<...>`, or drop `#[config(derive_default)]` and write the `Default` impl by hand.
+  --> cases/config/fail/config_derive_default_required_field.rs:14:9
+   |
+14 |     pub url: String,
+   |         ^^^

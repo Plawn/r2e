@@ -1,0 +1,12 @@
+error: duplicate `#[config(section)]` type `DatabaseSettings`: fields `database` and `run_database` both register it as a bean **by type**, so the last one silently wins and every `#[inject] DatabaseSettings` reads that one
+
+         R2E's bean graph is keyed by type and has no qualifiers — give the second section its own type:
+
+           #[derive(ConfigProperties, Clone)]
+           pub struct RunDatabaseSettings { /* the same fields as DatabaseSettings */ }
+
+           #[config(section)] pub run_database: RunDatabaseSettings,
+  --> cases/config/fail/config_duplicate_section_type.rs:20:9
+   |
+20 |     pub run_database: DatabaseSettings,
+   |         ^^^^^^^^^^^^

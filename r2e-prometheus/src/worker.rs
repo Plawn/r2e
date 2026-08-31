@@ -81,7 +81,10 @@ impl WorkerCollector {
             )
             .expect("static metric opts"),
             cpu: IntGaugeVec::new(
-                opts("worker_cpu", "Effective CPU affinity of the worker (-1 = none)"),
+                opts(
+                    "worker_cpu",
+                    "Effective CPU affinity of the worker (-1 = none)",
+                ),
                 &["worker"],
             )
             .expect("static metric opts"),
@@ -94,12 +97,18 @@ impl WorkerCollector {
             )
             .expect("static metric opts"),
             mailbox_depth: IntGaugeVec::new(
-                opts("worker_mailbox_depth", "Messages queued in the worker's mailbox"),
+                opts(
+                    "worker_mailbox_depth",
+                    "Messages queued in the worker's mailbox",
+                ),
                 &["worker"],
             )
             .expect("static metric opts"),
             mailbox_sends: IntCounterVec::new(
-                opts("worker_mailbox_sends_total", "Messages sent to the worker's mailbox"),
+                opts(
+                    "worker_mailbox_sends_total",
+                    "Messages sent to the worker's mailbox",
+                ),
                 &["worker"],
             )
             .expect("static metric opts"),

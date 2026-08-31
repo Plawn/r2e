@@ -313,6 +313,54 @@ pub fn result_ok_err_types(ty: &Type) -> Option<(&Type, &Type)> {
     }
 }
 
+/// Reject a **single-argument** `Result<T>` alias where the macro has to split
+/// `Result<T, E>` into its two halves.
+///
+/// [`result_ok_err_types`] matches tokens, not resolved types: it demands a
+/// literal `Result<T, E>` because `Producer::Error` / `Bean::Error` is the
+/// second half and an alias hides it. `anyhow::Result<Pool>`,
+/// `std::io::Result<Pool>` and any `Result<T>` alias therefore fall through to
+/// the *infallible* arm — and the bean silently gets registered under the type
+/// `anyhow::Result<Pool>` instead of `Pool`, with `Error = Infallible` and a
+/// `?` in the body that no longer compiles for a reason nobody can read.
+///
+/// So the declaration is the error: the last path segment says `Result` and
+/// exactly one type argument follows, which no fallible R2E constructor ever
+/// spells. `host` names the macro in the message.
+pub fn reject_single_arg_result_alias(ty: &Type, host: &str) -> syn::Result<()> {
+    let Type::Path(p) = ty else { return Ok(()) };
+    let Some(last) = p.path.segments.last() else {
+        return Ok(());
+    };
+    if last.ident != "Result" {
+        return Ok(());
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return Ok(());
+    };
+    let type_args = args
+        .args
+        .iter()
+        .filter(|a| matches!(a, syn::GenericArgument::Type(_)))
+        .count();
+    if type_args != 1 || args.args.len() != 1 {
+        return Ok(());
+    }
+    let rendered = quote!(#ty).to_string().replace(' ', "");
+    Err(syn::Error::new_spanned(
+        ty,
+        format!(
+            "{host} cannot read `{rendered}`: a one-argument `Result` alias hides the error \
+             type\n\n\
+             R2E splits a literal `Result<T, E>` into the produced bean (`T`) and the boot \
+             error (`E`) by matching tokens — it cannot resolve the alias, and treating this \
+             as a plain type would register the bean under `{rendered}` itself.\n\n\
+             \x20 hint: spell both halves out — `-> Result<T, anyhow::Error>` — or return the \
+             value directly with `-> T` if construction cannot fail"
+        ),
+    ))
+}
+
 /// Reject an `unsafe fn` that R2E's generated code is the *only* caller of.
 ///
 /// `#[producer]` and the `#[bean]` constructor are invoked from a generated
