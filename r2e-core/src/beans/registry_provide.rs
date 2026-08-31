@@ -425,7 +425,19 @@ impl BeanRegistry {
             type_name::<T>(),
             Box::new(|ctx: &BeanContext, shutdown| {
                 let service = T::from_context(ctx);
-                Box::pin(service.start(shutdown))
+                Box::pin(async move {
+                    // Same gate as the `spawn_service` path, read at the same
+                    // moment (the task is about to run) — see
+                    // `ServiceComponent::enabled`.
+                    if !service.enabled() {
+                        crate::runtime::service::log_service_disabled(
+                            type_name::<T>(),
+                            T::enabled_gate(),
+                        );
+                        return;
+                    }
+                    service.start(shutdown).await
+                })
             }),
         ));
         // Declared separately from the hook: the hook is drained before

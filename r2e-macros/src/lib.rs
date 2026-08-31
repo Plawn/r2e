@@ -1015,6 +1015,16 @@ pub fn pre_destroy(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// declaration order). Ordering is global: every `#[on_start]` hook in the
 /// application is sorted into one list.
 ///
+/// `#[on_start(once)]` runs the hook **once per process** instead of once per
+/// startup — the attribute form of
+/// [`AppBuilder::on_start_once`](r2e_core::AppBuilder::on_start_once). It
+/// changes nothing in production (one boot = one cycle); under `r2e dev` the
+/// binary is hot-patched in place, and a `once` hook runs on the first cycle
+/// only, so crash recovery / lock claiming / one-off backfills stop repeating
+/// on every patch. A patch that CHANGES the hook body does not re-run it —
+/// the guard is a process-global flag, not a fingerprint. Composes with
+/// `order`: `#[on_start(once, order = -10)]`.
+///
 /// Works on `#[bean]` impls (via [`OnStart`](r2e_core::OnStart), read by value
 /// from the resolved graph — a pinned `override_bean` skips the hook) and on
 /// `#[routes]` controller impls (run from the core `Arc`). It cannot be
@@ -1257,6 +1267,29 @@ pub fn derive_decorator_bean(input: TokenStream) -> TokenStream {
 ///
 /// The user supplies an async `run(&self, rt::CancelToken)` method on the
 /// struct; the generated `start` simply forwards to it.
+///
+/// # Turning a service off: `#[service(enabled = "…")]`
+///
+/// The struct attribute `#[service(enabled = "name")]` emits
+/// [`ServiceComponent::enabled`](r2e_core::ServiceComponent::enabled). `name`
+/// is looked up among the struct's own fields first — the usual case, a
+/// `#[config("…")] enabled: bool` flag — and read as a `&self` method
+/// returning `bool` otherwise:
+///
+/// ```ignore
+/// #[derive(BackgroundService)]
+/// #[service(enabled = "enabled")]
+/// pub struct EmailWorker {
+///     #[config("email.worker.enabled")] enabled: bool,
+///     #[inject] mailer: Mailer,
+/// }
+/// ```
+///
+/// A disabled service is still registered, still resolves its beans, still
+/// runs `from_context`, and still has its config keys/sections validated —
+/// only `run()` is skipped, with an `info!` naming the service and the gate
+/// (the *config key*, when the derive can see one). Turning a service off must
+/// never turn its configuration errors off with it.
 ///
 /// # Example
 ///

@@ -481,6 +481,86 @@ The constraints identified in Phase 0, all respected:
 
 ---
 
+## Q8 — `spawn_service` under `r2e dev`, and once-per-process startup
+
+Added by W17/F3 (sprint 3). Consumer apps hand-roll a
+`static BOOTED: AtomicBool` around recovery work and around every
+`spawn_service` call, because the contract below was nowhere written down.
+Here it is.
+
+### What actually happens to a service on a hot patch
+
+`AppBuilder::register_service` — the one funnel behind `spawn_service`,
+`SpawnService`, `#[producer(start)]` and bean-declared services — does two
+things (`builder/typed.rs`):
+
+1. mints a `CancelToken` that is a **child of the app shutdown root**, and
+2. registers the actual spawn as a builder `on_start` closure.
+
+A hot patch drops the previous cycle's `run()` future. That drop fires
+`start_lifecycle`'s cancel-on-any-exit guard on the shutdown root, which
+cancels every service's child token. So:
+
+- **The old cycle's services stop.** Not because a shutdown hook ran — none
+  does on that path — but because the token is a child of the root the drop
+  guard cancels. This is deliberate and load-bearing; do not "simplify" the
+  token to a fresh one.
+- **They are not restarted.** The new cycle's `start_lifecycle` sees
+  `LifecycleMode::Serving` + `is_lifecycle_initialized()` and takes
+  `skip_lifecycle`, which skips the builder `on_start` closures — spawning
+  included. From cycle 2 on, a `spawn_service` service exists only as a
+  registration.
+- **Nobody joins the stopped tasks.** The cancelled tasks of cycle N−1 are
+  awaited by no one (they were tracked in the `ServiceHandles` the dropped
+  future owned). They are best-effort detached; a service that ignores its
+  token keeps running until the process exits.
+
+Net effect for a dev session: **background services run cycle 1's code for the
+whole session.** Editing a worker's body and saving does not restart it. That
+is a known W15 gap, not a new one; the fix (re-spawning services per cycle) is
+still deferred. Until then, restart the process when iterating on a service
+body — a cold change (`Cargo.toml`, `build.rs`, `env.rs`) does it for you.
+
+### `on_start_once` / `#[on_start(once)]`
+
+Both forms are guarded by `ONCE_START_CONSUMED` in `crate::runtime::dev` — its
+own process-global flag, read through `once_start_consumed()`:
+
+```rust
+hot_reload_loop_active() && ONCE_START_CONSUMED.load(Acquire)
+```
+
+- **Outside the hot-patch loop it is always `false`.** Production boots once,
+  so `once` and plain `on_start` are the same thing there; and a test binary
+  that boots a dozen applications runs every one of their once-hooks. "Once
+  per process" is scoped to the loop, which is the only place a process boots
+  the same application twice.
+- The flag is set **after** the startup hook phase completed
+  (`prepared.rs::start_lifecycle`, and `try_build_with_consumers` for the
+  router-only entry point), so a cycle that aborted mid-startup consumed
+  nothing and the next cycle retries.
+- `invalidate_state_cache()` clears it, along with the rest of the cache
+  group: "force a cold rebuild" means the once-hooks are due again.
+- **A patch that changes the once-closure does not re-run it.** The guard is a
+  flag, not a fingerprint of the code. Restart the process to iterate on a
+  once-hook body.
+- `once` composes with `order`: the hook keeps its place in the global
+  ordering whether or not it ends up running (the guard is inside the hook
+  body, not at push time).
+
+**Why a separate flag rather than reading `LIFECYCLE_INITIALIZED`.** Today the
+lifecycle skip *already* makes every builder `on_start` closure run at most
+once per serving dev session, so on the serving path `on_start_once` is
+currently indistinguishable from `on_start`. That is an artifact of a skip
+that a future cycle-aware startup may narrow or drop (see the known gaps
+above); "run this exactly once per process" is a contract the user wrote down.
+Keeping the two flags separate means fixing the former cannot silently start
+re-running the latter. The difference is already observable on the in-process
+path (`start_in_process`, which never skips) — which is exactly how
+`dev_reload/once_start.rs` tests it.
+
+---
+
 ## Confirmed bugs and quirks
 
 | # | Sev | Behavior (as characterized in Phase 0) | Status |

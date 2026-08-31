@@ -231,11 +231,90 @@ awaits the worker. The cancellation token is cancelled on shutdown
 signal; the worker is expected to observe `shutdown.cancelled()` and
 exit promptly.
 
-`#[derive(BackgroundService)]` takes **no** attribute — there is no
-`#[service(state = ...)]`. The service resolves its `#[inject]` fields from the
-bean graph by type (like a controller core), so it works with the inferred HList
-state; each injected type must be present in the graph or `spawn_service::<C>()`
-is a compile error naming the missing type.
+There is no `#[service(state = ...)]`. The service resolves its `#[inject]`
+fields from the bean graph by type (like a controller core), so it works with
+the inferred HList state; each injected type must be present in the graph or
+`spawn_service::<C>()` is a compile error naming the missing type.
+
+### `#[service(enabled = "…")]` — the opt-in off switch
+
+The one struct attribute the derive takes. It emits
+`ServiceComponent::enabled()`; the name it takes is looked up among the
+struct's own fields first (the usual case — a config flag), and read as a
+`&self` method returning `bool` otherwise:
+
+```rust
+#[derive(BackgroundService)]
+#[service(enabled = "enabled")]
+pub struct EmailWorker {
+    #[config("email.worker.enabled")] enabled: bool,
+    #[inject] mailer: Mailer,
+}
+```
+
+**Only `run()` is skipped.** The service is still registered, its beans are
+still resolved, `from_context` still runs, and its `#[config]` /
+`#[config_section]` keys are still presence-validated — turning a worker off
+must never turn its configuration errors off with it (the same rule the
+config subsystem follows: explicit config, no silent skips). The framework
+logs one `info!` naming the service and the gate; when the gate is a
+`#[config]`/`#[live_config]` field the log names the **config key**, which is
+what an operator can act on, not the field.
+
+The gate is read **at spawn time, on the constructed instance**, on every
+spawn path — `spawn_service` / `SpawnService`, and the `#[producer(start)]` /
+bean-declared service source. `per_worker_service` is closure-based rather
+than a `ServiceComponent` and has no gate.
+
+Hand-written `ServiceComponent` impls get the same hook: `fn enabled(&self)`
+defaults to `true`, and `fn enabled_gate() -> Option<&'static str>` supplies
+the label for the log line.
+
+## You do NOT need an adapter struct
+
+A recurring anti-pattern in consumer apps: a shared crate declares the worker
+with plain fields, and the app crate wraps it in a second struct whose only
+job is to hold `#[inject]` fields and clone them into the worker, because
+`#[derive(BackgroundService)]` rejects fields it cannot resolve from the
+graph. One adapter per worker, all identical, all noise.
+
+`#[producer(start)]` is the answer. It registers its output as a bean **and**
+runs it as a background service, so the worker keeps its plain constructor and
+the app builds it from beans and config in one function:
+
+```rust
+// ── shared crate: no DI, no attributes ──────────────────────────────────
+#[derive(Clone)]
+pub struct Reindexer { sink: Sink, batch_size: usize }
+
+impl Reindexer {
+    pub fn new(sink: Sink, batch_size: usize) -> Self { Self { sink, batch_size } }
+    pub async fn run(&self, shutdown: CancelToken) { /* loop */ }
+}
+
+// The produced value IS a bean, so the service reads itself back out of the
+// graph. Three lines, and they can live in the shared crate too.
+impl ServiceComponent for Reindexer {
+    type Deps = TCons<Reindexer, TNil>;
+    fn from_context(ctx: &BeanContext) -> Self { ctx.get::<Reindexer>() }
+    async fn start(self, shutdown: CancelToken) { self.run(shutdown).await }
+}
+
+// ── app crate: one function, no adapter struct ──────────────────────────
+#[producer(start)]
+fn reindexer(sink: Sink, config: R2eConfig) -> Reindexer {
+    Reindexer::new(sink, config.get_or("search.batch", 500))
+}
+```
+
+The producer's own parameters are ordinary bean dependencies, so a missing one
+is a compile error at `.register::<Reindexer_>()`, and the config keys the
+producer declares are validated during `build_state()`. `after(...)` composes
+with it when the worker must start behind another bean.
+
+Use the derive when the worker's fields *are* the injected beans; use
+`#[producer(start)]` when the worker is someone else's type with a plain
+constructor.
 
 ## Cookbook — pick the right primitive
 
@@ -244,6 +323,9 @@ is a compile error naming the missing type.
 | Slow side-task triggered by an HTTP request, fire-and-forget | `executor.submit_detached(...)` directly |
 | Slow side-task whose result the handler awaits later | `#[async_exec]` returning `Result<JobHandle<T>, RejectedError>` |
 | Periodic / event-driven worker bound to app lifecycle | `#[derive(BackgroundService)]` + `spawn_service::<C>()` |
+| Worker type from a shared crate, with a plain constructor | `#[producer(start)]` — build it from beans/config, no adapter struct |
+| A service the operator can turn off | `#[service(enabled = "…")]` (registration + config validation stay unconditional) |
+| Startup work that must not repeat on an `r2e dev` hot patch | `.on_start_once(...)` / `#[on_start(once)]` |
 | Cron / interval schedule | `#[scheduled]` — requires the `Executor` plugin; ticks run on this pool (drained, bounded, metered) |
 | Submit work from inside a background service | Inject `PoolExecutor` and call `submit*` |
 

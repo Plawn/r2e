@@ -900,6 +900,15 @@ order). Ordering is **global**: every `#[on_start]` hook in the application is
 sorted into one list. The hooks run after the consumer registrations and before
 the plugin serve hooks and the builder's `.on_start(…)` closures.
 
+`#[on_start(once)]` runs the hook on the **first startup of the process** only.
+It exists for `r2e dev`: a hot patch re-assembles the application in the same
+process, and work like crash recovery or claiming a lock must not repeat.
+Outside `r2e dev` it is identical to a plain `#[on_start]` (one boot = one
+cycle). A patch that *changes* the hook body does **not** re-run it; a boot that
+failed before finishing its hook phase has consumed nothing, so the next cycle
+retries. `once` composes with `order` in either spelling —
+`#[on_start(once, order = -10)]`. The builder equivalent is `.on_start_once(…)`.
+
 These hooks run under `TestApp::boot` and `build_with_consumers` too (a test
 boot is a real startup) — on the router-only `build_with_consumers` path an
 `Err` panics instead of aborting `serve`; `TestApp::try_boot*` returns it as a
@@ -1049,6 +1058,7 @@ AppBuilder::new()
     .build_state().await
     // ── App phase: controllers, lifecycle ──
     .on_start(|state| async move { Ok(()) })
+    .on_start_once(|state| async move { Ok(()) })  // first cycle only under `r2e dev`
     .on_stop(|state| async move { if let Some(p) = state.bean::<SqlitePool>() { p.close().await; } })
     .register_controller::<UserController>()
     .register_controllers::<(AccountController, ScheduledJobs)>()  // several at once
@@ -3860,12 +3870,82 @@ Hand-written `impl ServiceComponent` must supply `type Deps` (use
 `r2e_core::type_list::TNil` when the service reads nothing from the graph) and
 may override `config_keys()` / `config_sections()`.
 
-A `#[producer(start)]` producer runs its output as a service through the same
-trait. `#[producer]` folds `<Output as ServiceComponent>::Deps` into the
-producer's own registration deps, so a service reading a bean the producer
-itself never takes is still a **compile error** at `build_state()`; the
-service's declared keys and sections are validated during `build_state()`,
-merged with the bean graph's own into one `BeanError::MissingConfigKeys`.
+#### Turning a service off — `#[service(enabled = "…")]`
+
+```rust
+#[derive(BackgroundService)]
+#[service(enabled = "enabled")]
+pub struct MetricsExporter {
+    #[config("metrics.enabled")] enabled: bool,
+    #[inject] pool: SqlitePool,
+}
+```
+
+The name is looked up among the struct's own fields first (the usual case — a
+config flag), and read as a `&self` method returning `bool` otherwise. **Only
+`run()` is skipped**: the service is still registered, its beans still resolve,
+`from_context` still runs, and its `#[config]` / `#[config_section]` keys are
+still presence-validated — turning a worker off never turns its configuration
+errors off with it. One `info!` names the service and the gate (the *config
+key*, when the derive can see one). The gate is read at spawn time, on the
+constructed instance, on **every** spawn path (`spawn_service` and
+`#[producer(start)]`). Hand-written impls override `fn enabled(&self) -> bool`
+(default `true`) and `fn enabled_gate() -> Option<&'static str>`.
+
+#### You do NOT need an adapter struct — `#[producer(start)]`
+
+When the worker is a plain type from a shared crate — ordinary fields, an
+ordinary constructor — do **not** write a second struct whose only job is to
+hold `#[inject]` fields and clone them across. `#[producer(start)]` registers
+its output as a bean *and* runs it as a service, so the app builds the worker
+from beans and config in one function:
+
+```rust
+// shared crate: no DI, no attributes
+#[derive(Clone)]
+pub struct Reindexer { sink: Sink, batch_size: usize }
+
+impl Reindexer {
+    pub fn new(sink: Sink, batch_size: usize) -> Self { Self { sink, batch_size } }
+    pub async fn run(&self, shutdown: rt::CancelToken) { /* loop */ }
+}
+
+// The produced value IS a bean, so the service reads itself back out of the
+// graph. Three lines, and they can live in the shared crate too.
+impl ServiceComponent for Reindexer {
+    type Deps = TCons<Reindexer, TNil>;
+    fn from_context(ctx: &BeanContext) -> Self { ctx.get::<Reindexer>() }
+    async fn start(self, shutdown: rt::CancelToken) { self.run(shutdown).await }
+}
+
+// app crate: one function, no adapter struct
+#[producer(start)]
+fn reindexer(sink: Sink, config: R2eConfig) -> Reindexer {
+    Reindexer::new(sink, config.get_or("search.batch", 500))
+}
+```
+
+Use the derive when the worker's fields *are* the injected beans; use
+`#[producer(start)]` when the worker is someone else's type with a plain
+constructor. `after(...)` composes with it when the worker must start behind
+another bean.
+
+`#[producer]` folds `<Output as ServiceComponent>::Deps` into the producer's
+own registration deps, so a service reading a bean the producer itself never
+takes is still a **compile error** at `build_state()`; the service's declared
+keys and sections are validated during `build_state()`, merged with the bean
+graph's own into one `BeanError::MissingConfigKeys`.
+
+#### Startup work that must not repeat under `r2e dev`
+
+A hot patch re-assembles the app in the same process. Work a boot may do only
+once — crash recovery, claiming a lock, a one-off backfill — goes in
+`.on_start_once(...)` or `#[on_start(once)]` instead of a hand-rolled
+`static BOOTED: AtomicBool`. In production it is identical to `on_start` (one
+boot = one cycle); under `r2e dev` it runs on the first cycle only. A patch
+that *changes* the closure does not re-run it. Note that `spawn_service`
+services are cancelled by a hot patch and **not** restarted for the rest of the
+dev session — restart the process when iterating on a service body.
 
 ---
 
@@ -4636,6 +4716,7 @@ Alongside `&self`:
 | `.schedule_task(def)` | app | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | app | Raw axum escape hatches (last resort) |
 | `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks (`on_stop` always runs at shutdown, outside every budget) |
+| `.on_start_once(f)` | app | Like `.on_start`, but once per **process**: skipped on later `r2e dev` hot-patch cycles |
 | `.on_drain(f)` | app | Awaited hooks run at shutdown trigger, BEFORE the listener stops accepting |
 | `.drain_timeout(d)` | app | Bound the HTTP drain (in-flight requests after the listener stops). Default: 30s, or `server.drain-timeout` |
 | `.drain_timeout_unbounded()` | app | Opt out of the drain bound entirely (plain-axum behaviour); wins over config |

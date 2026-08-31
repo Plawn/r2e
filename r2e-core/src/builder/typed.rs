@@ -291,6 +291,51 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
+    /// Like [`on_start`](Self::on_start), but runs **once per process**.
+    ///
+    /// Under `r2e dev` the binary is hot-patched in place: the app is
+    /// re-assembled on every patch, in the same process, with the same PID and
+    /// the same OS resources. Work that is idempotent-by-boot in production —
+    /// crash recovery, claiming a lock, a one-off backfill, priming an
+    /// external system — is *not* idempotent under that loop. This is the
+    /// declarative form of the `static BOOTED: AtomicBool` guard apps hand-roll
+    /// around such work.
+    ///
+    /// Semantics:
+    ///
+    /// - **Production**: identical to `on_start` — there is exactly one cycle,
+    ///   so the hook runs exactly once, at that boot.
+    /// - **Under `r2e dev`**: runs on the first cycle only. Later hot patches
+    ///   skip it, *including* a patch that changed the closure itself — the
+    ///   guard is a process-global flag, not a fingerprint of the code. If you
+    ///   are iterating on the body of a once-hook, restart the process (a cold
+    ///   change to `Cargo.toml`/`build.rs`/`env.rs` restarts it for you).
+    /// - The hook still runs in the same lifecycle slot as `on_start` (after
+    ///   the serve hooks), and an `Err` still aborts boot.
+    ///
+    /// Note that a first cycle whose startup *failed* consumed nothing: the
+    /// flag is set only after the whole `on_start` phase succeeded.
+    pub fn on_start_once<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: FnOnce(T) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
+            + Send
+            + 'static,
+    {
+        self.startup_hooks.push(Box::new(move |state| {
+            Box::pin(async move {
+                if crate::runtime::dev::once_start_consumed() {
+                    tracing::debug!(
+                        "dev-reload: skipping an `on_start_once` hook (already run this process)"
+                    );
+                    return Ok(());
+                }
+                hook(state).await
+            })
+        }));
+        self
+    }
+
     /// Register a shutdown hook that runs after the server stops.
     ///
     /// The hook receives the application state, mirroring [`on_start`](Self::on_start).
@@ -496,11 +541,19 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
         let service = C::from_context(&self.bean_context);
-        Ok(
-            self.register_service(std::any::type_name::<C>(), move |token| {
-                service.start(token)
-            }),
-        )
+        let name = std::any::type_name::<C>();
+        let gate = C::enabled_gate();
+        Ok(self.register_service(name, move |token| async move {
+            // The gate is read at spawn time, on the constructed instance:
+            // everything above (registration, `from_context`, config
+            // validation) has already happened unconditionally, exactly as it
+            // does for an enabled service.
+            if !service.enabled() {
+                crate::runtime::service::log_service_disabled(name, gate);
+                return;
+            }
+            service.start(token).await;
+        }))
     }
 
     /// Get plugin data by type.
@@ -845,6 +898,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 format!("#[on_start] hook failed: {e}").into()
             })?;
         }
+        // This entry point has no builder `on_start` closures, but it DID run
+        // the `#[on_start]` hooks — including `#[on_start(once)]` ones — so the
+        // once-flag is consumed here too.
+        crate::runtime::dev::mark_once_start_consumed();
         Ok(built.router)
     }
 

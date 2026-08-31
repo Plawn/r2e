@@ -886,22 +886,37 @@ pub(crate) fn pre_destroy_impl(
 // ── OnStart (startup observers) ──────────────────────────────────────────
 
 /// One `#[on_start]` method: the shared lifecycle dispatch shape plus the
-/// declared `order` (ascending, default `0`).
+/// declared `order` (ascending, default `0`) and the `once` flag.
 pub(crate) struct OnStartMethod {
     pub method: LifecycleMethod,
     pub order: i32,
+    /// `#[on_start(once)]` — run on the first startup of the PROCESS only.
+    /// Composes with `order`: a once-hook keeps its place in the ordering, it
+    /// simply returns early on later hot-patch cycles.
+    pub once: bool,
 }
 
-/// Parse `#[on_start]` / `#[on_start(order = N)]`. `N` is an `i32` literal,
-/// optionally negative; the bare form means `order = 0`.
-fn parse_on_start_order(attr: &syn::Attribute) -> syn::Result<i32> {
+/// Parse `#[on_start]` / `#[on_start(order = N)]` / `#[on_start(once)]` /
+/// `#[on_start(once, order = N)]`. `N` is an `i32` literal, optionally
+/// negative; the bare form means `order = 0` and `once = false`.
+fn parse_on_start_args(attr: &syn::Attribute) -> syn::Result<(i32, bool)> {
     if matches!(attr.meta, syn::Meta::Path(_)) {
-        return Ok(0);
+        return Ok((0, false));
     }
     let mut order = 0i32;
+    let mut once = false;
     attr.parse_nested_meta(|meta| {
+        if meta.path.is_ident("once") {
+            if once {
+                return Err(meta.error("duplicate `once` in #[on_start(...)]"));
+            }
+            once = true;
+            return Ok(());
+        }
         if !meta.path.is_ident("order") {
-            return Err(meta.error("unsupported #[on_start] argument — expected `order = <int>`"));
+            return Err(meta.error(
+                "unsupported #[on_start] argument — expected `order = <int>` and/or `once`",
+            ));
         }
         let value = meta.value()?;
         let negative = value.peek(syn::Token![-]);
@@ -913,7 +928,7 @@ fn parse_on_start_order(attr: &syn::Attribute) -> syn::Result<i32> {
         order = if negative { -magnitude } else { magnitude };
         Ok(())
     })?;
-    Ok(order)
+    Ok((order, once))
 }
 
 /// Scan all `&self` methods in an impl block for `#[on_start]`.
@@ -921,9 +936,11 @@ pub(crate) fn scan_on_start_methods(item_impl: &ItemImpl) -> syn::Result<Vec<OnS
     scan_lifecycle_methods_with_attr(item_impl, "on_start", "#[on_start]")?
         .into_iter()
         .map(|(method, attr)| {
+            let (order, once) = parse_on_start_args(&attr)?;
             Ok(OnStartMethod {
                 method,
-                order: parse_on_start_order(&attr)?,
+                order,
+                once,
             })
         })
         .collect()
@@ -980,6 +997,21 @@ pub(crate) fn on_start_pushes(bind: &TokenStream, methods: &[OnStartMethod]) -> 
                 (true, false) => quote! { __r2e_owner.#fn_name().await; },
                 (false, true) => quote! { __r2e_owner.#fn_name()?; },
                 (false, false) => quote! { __r2e_owner.#fn_name(); },
+            };
+            // `#[on_start(once)]`: guard INSIDE the hook body, not at push
+            // time. The hook list is built while the graph is assembled, which
+            // under `r2e dev` happens before the once-flag for this cycle is
+            // known; deciding in the body keeps the ordering identical whether
+            // the hook runs or not.
+            let call = if m.once {
+                quote! {
+                    if #krate::runtime::dev::once_start_consumed() {
+                        return Ok(());
+                    }
+                    #call
+                }
+            } else {
+                call
             };
             quote! {
                 {

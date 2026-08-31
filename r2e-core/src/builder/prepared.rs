@@ -599,6 +599,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 return Err(e);
             }
 
+            // Both `once` forms (`.on_start_once` and `#[on_start(once)]`) are
+            // consumed by a startup that got all the way through its hook
+            // phase. Marked after the hooks, never before: a boot that aborted
+            // mid-startup has not run them, and must retry on the next cycle.
+            crate::runtime::dev::mark_once_start_consumed();
+
             #[cfg(feature = "dev-reload")]
             crate::runtime::dev::mark_lifecycle_initialized();
         } else {

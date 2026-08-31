@@ -7,6 +7,7 @@ mod support;
 
 mod app;
 mod hlist;
+mod on_start_once;
 mod overrides;
 mod prepared;
 mod service_start;

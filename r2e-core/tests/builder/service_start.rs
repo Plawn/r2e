@@ -387,3 +387,102 @@ async fn dropping_the_run_future_stops_a_spawn_service_task() {
          hook runs on that path, so the token has to be a child of the app root",
     );
 }
+
+// ── `ServiceComponent::enabled` — the opt-in off switch ─────────────────────
+//
+// The gate is read at spawn time, on the constructed instance, on BOTH
+// registration paths. What it must NOT do is short-circuit anything earlier:
+// registration, `from_context` and config validation stay unconditional, so
+// turning a service off never turns its configuration errors off with it (the
+// F14 rule — explicit config, no silent skips).
+
+static GATED_STARTED: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone, r2e_macros::BackgroundService)]
+#[service(enabled = "enabled")]
+struct GatedProducedService {
+    #[config("gated.enabled")]
+    enabled: bool,
+}
+
+impl GatedProducedService {
+    async fn run(&self, shutdown: CancelToken) {
+        GATED_STARTED.fetch_add(1, Ordering::SeqCst);
+        shutdown.cancelled().await;
+    }
+}
+
+#[r2e_macros::producer(start)]
+fn make_gated_produced_service(config: R2eConfig) -> GatedProducedService {
+    GatedProducedService {
+        enabled: config.get_or("gated.enabled", false),
+    }
+}
+
+#[test]
+fn the_derive_reports_the_config_key_as_the_gate_label() {
+    // The log line names the *config key*, not the field: "gated.enabled" is
+    // what the operator can act on; "enabled" is an implementation detail.
+    assert_eq!(
+        <GatedProducedService as ServiceComponent>::enabled_gate(),
+        Some("gated.enabled")
+    );
+    // Un-gated services keep the default: no gate, always enabled.
+    assert_eq!(<ProbeService as ServiceComponent>::enabled_gate(), None);
+    assert!(ProbeService.enabled());
+}
+
+/// A disabled service is still a fully registered service: the missing key is
+/// reported exactly as it is for an enabled one.
+#[tokio::test]
+async fn a_gated_service_still_validates_its_config() {
+    let err = AppBuilder::new()
+        .override_config(R2eConfig::empty())
+        .load_config::<()>()
+        .register::<MakeGatedProducedService>()
+        .try_build_state()
+        .await
+        .err()
+        .expect("the gate must not skip config validation");
+    assert!(err.to_string().contains("gated.enabled"), "{err}");
+}
+
+async fn run_gated_producer_cycle(flag: bool) -> usize {
+    GATED_STARTED.store(0, Ordering::SeqCst);
+
+    let mut config = R2eConfig::empty();
+    config.set("gated.enabled", ConfigValue::Bool(flag));
+
+    let app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .register::<MakeGatedProducedService>()
+        .build_state()
+        .await;
+
+    let running = app
+        .prepare("127.0.0.1:0")
+        .start_in_process()
+        .await
+        .expect("boot");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    running.shutdown().await;
+
+    GATED_STARTED.load(Ordering::SeqCst)
+}
+
+/// Both directions in one test: the observation is a process-global counter,
+/// and the functions in a test binary run concurrently.
+#[tokio::test]
+async fn the_gate_is_honoured_on_the_producer_start_path() {
+    assert_eq!(
+        run_gated_producer_cycle(false).await,
+        0,
+        "a disabled service must never enter run()"
+    );
+    assert_eq!(
+        run_gated_producer_cycle(true).await,
+        1,
+        "the same service must run once its gate returns true"
+    );
+}

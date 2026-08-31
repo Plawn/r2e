@@ -6033,6 +6033,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "r2e-featureless-tests"
+version = "0.3.0"
+dependencies = [
+ "r2e",
+ "tokio",
+]
+
+[[package]]
 name = "r2e-grpc"
 version = "0.3.0"
 dependencies = [

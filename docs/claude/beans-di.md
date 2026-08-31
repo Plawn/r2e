@@ -749,6 +749,16 @@ Semantics:
   core is not `Clone`, so it cannot impl `OnStart`; the generated
   `Controller::on_start(core)` returns the same `(i32, OnStartHook)` pairs from
   the core `Arc`, queued at `register_controller`.
+- **`once`:** `#[on_start(once)]` runs the hook **once per process** instead of
+  once per startup — the attribute form of `AppBuilder::on_start_once`. It
+  changes nothing in production (one boot = one cycle); under `r2e dev` the
+  binary is hot-patched in place, and a `once` hook runs on the first cycle
+  only, so crash recovery / lock claiming / one-off backfills stop repeating on
+  every patch. A patch that *changes* the hook body does not re-run it (the
+  guard is a process-global flag, not a fingerprint). Composes with `order`
+  (`#[on_start(once, order = -10)]`) — the guard sits inside the hook body, so
+  the position in the global ordering is the same either way. Full contract:
+  `docs/claude/dev-reload-config-semantics.md` § Q8.
 - **`#[bean(lazy)]`:** rejected (a lazy bean has no instance at registration
   time to observe from) — same rule as `#[post_construct]` / `#[pre_destroy]`.
 - **Test boot:** unlike `#[pre_destroy]`, `#[on_start]` **does** run under
