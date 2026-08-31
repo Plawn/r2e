@@ -24,6 +24,7 @@
 //! | `rate-limit`  | no      | `r2e-rate-limit`          |
 //! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
 //! | `prometheus`  | no      | `r2e-prometheus`          |
+//! | `metrics-facade` | no   | `r2e-prometheus/metrics-facade` — HTTP metrics through the `metrics` facade into the app's own recorder (**not** in `full`) |
 //! | `openfga`     | no      | `r2e-openfga`             |
 //! | `events-kafka`    | no  | `r2e-events-kafka` (Apache Kafka backend) |
 //! | `events-pulsar`   | no  | `r2e-events-pulsar` (Apache Pulsar backend) |

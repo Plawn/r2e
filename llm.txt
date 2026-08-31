@@ -22,7 +22,7 @@ No `tokio` entry: `r2e::main` / `r2e::app_main!` build the runtime through
 `select!`, `sync::*`, `CancelToken`, …) is re-exported there. See "Runtime
 facade" below.
 
-Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `openfga`, `observability`, `grpc`, `grpc-reflection`, `grpc-web` (grpc-web on the multiplexed port via tonic-web), `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `mcp` (MCP server), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
+Feature flags: `security`, `events`, `utils` (on by default), `data`, `data-sqlx`, `data-diesel`, `sqlite`, `postgres`, `mysql`, `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `metrics-facade` (HTTP metrics through the `metrics` crate instead of the `prometheus` registry; not in `full`), `openfga`, `observability`, `grpc`, `grpc-reflection`, `grpc-web` (grpc-web on the multiplexed port via tonic-web), `multipart`, `ws`, `static`, `tenant`, `tenant-sqlx` (per-tenant SQLx pools; not in `full`), `tenant-diesel` (per-tenant Diesel pools; not in `full`), `mcp` (MCP server), `quic`, plus distributed event backends (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). `full` enables all (except `dev-reload`). Validation (via `garde`) is always available — no feature flag needed.
 
 ### Minimal Application — the `App` trait
 
@@ -3498,6 +3498,39 @@ Metrics: `http_requests_total` (method/path/status), `http_request_duration_seco
 `http_requests_in_flight`. Path labels use the matched route template (bounded
 cardinality).
 
+The plugin owns three separable things: the HTTP tracking layer, the
+`prometheus` registry, and the `/metrics` route. Pick how many of them you want:
+
+```rust
+// 1. Default — layer + registry + /metrics (unchanged).
+.plugin(Prometheus::new("/metrics"))
+
+// 2. Layer-only — R2E tracks requests into its registry, YOU expose them
+//    (own route, push gateway, sidecar) via `r2e_prometheus::encode_metrics()`.
+.plugin(Prometheus::layer_only())
+.plugin(Prometheus::builder().namespace("myapp").without_endpoint().build())
+// Same switch from YAML (builder setting wins over file config):
+//   prometheus:
+//     expose_endpoint: false
+```
+
+```rust
+// 3. `metrics`-facade backend — feature `metrics-facade` (NOT in `full`).
+//    For apps already on the `metrics` crate + their own exporter: R2E installs
+//    ONLY the tracking layer, you own the recorder, the buckets and the endpoint.
+use r2e::r2e_prometheus::MetricsFacade;
+
+let handle = metrics_exporter_prometheus::PrometheusBuilder::new().install_recorder()?;
+AppBuilder::new()
+    .plugin(MetricsFacade::builder().namespace("myapp").exclude_path("/health").build())
+    // … your own /metrics route rendering `handle`
+```
+
+Config: `metrics.namespace`, `metrics.exclude_paths`, `metrics.enabled`. Same
+metric names/kinds/labels as the `prometheus` backend, so dashboards are
+portable. R2E's `prometheus` registry is never installed in this mode, and
+`metrics-exporter-prometheus` is NOT an R2E dependency — the app picks it.
+
 ---
 
 ## Observability (OpenTelemetry)
@@ -4913,7 +4946,7 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, Tracing, ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus, Observability, OpenFga, Tenancy/PerTenant) |
+| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, Tracing, ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
 | `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |

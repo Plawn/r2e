@@ -26,22 +26,52 @@ fn exports_state_cpu_crossings_and_mailbox_series() {
     let c = WorkerCollector::new(set.clone());
     let out = render(&c);
     assert!(out.contains("r2e_workers 2"), "{out}");
-    assert!(out.contains(r#"r2e_worker_state{state="serving",worker="1"} 1"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_state{state="unstarted",worker="1"} 0"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_state{state="unstarted",worker="0"} 1"#), "{out}");
+    assert!(
+        out.contains(r#"r2e_worker_state{state="serving",worker="1"} 1"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_state{state="unstarted",worker="1"} 0"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_state{state="unstarted",worker="0"} 1"#),
+        "{out}"
+    );
     assert!(out.contains(r#"r2e_worker_cpu{worker="1"} 3"#), "{out}");
     assert!(out.contains(r#"r2e_worker_cpu{worker="0"} -1"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_crossings_total{origin="local",worker="1"} 1"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_crossings_total{origin="remote",worker="1"} 2"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_mailbox_depth{worker="1"} 1"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_mailbox_sends_total{worker="1"} 2"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_mailbox_wait_seconds_total{worker="1"} 0.25"#), "{out}");
+    assert!(
+        out.contains(r#"r2e_worker_crossings_total{origin="local",worker="1"} 1"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_crossings_total{origin="remote",worker="1"} 2"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_mailbox_depth{worker="1"} 1"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_mailbox_sends_total{worker="1"} 2"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_mailbox_wait_seconds_total{worker="1"} 0.25"#),
+        "{out}"
+    );
 
     // Counters are replayed as deltas: a second scrape does not double-count.
     s1.record_crossing(false);
     let out = render(&c);
-    assert!(out.contains(r#"r2e_worker_crossings_total{origin="remote",worker="1"} 3"#), "{out}");
-    assert!(out.contains(r#"r2e_worker_mailbox_sends_total{worker="1"} 2"#), "{out}");
+    assert!(
+        out.contains(r#"r2e_worker_crossings_total{origin="remote",worker="1"} 3"#),
+        "{out}"
+    );
+    assert!(
+        out.contains(r#"r2e_worker_mailbox_sends_total{worker="1"} 2"#),
+        "{out}"
+    );
 }
 
 #[test]
@@ -55,5 +85,8 @@ fn registers_on_a_registry_and_honours_namespace() {
     TextEncoder::new().encode(&reg.gather(), &mut buf).unwrap();
     let out = String::from_utf8(buf).unwrap();
     assert!(out.contains("app_workers 1"), "{out}");
-    assert!(out.contains(r#"app_worker_state{state="unstarted",worker="0"} 1"#), "{out}");
+    assert!(
+        out.contains(r#"app_worker_state{state="unstarted",worker="0"} 1"#),
+        "{out}"
+    );
 }

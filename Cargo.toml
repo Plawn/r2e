@@ -185,6 +185,12 @@ opentelemetry-otlp = "0.32"
 opentelemetry-semantic-conventions = "0.32"
 tracing-opentelemetry = "0.33"
 prometheus = "0.14"
+# `metrics` facade (optional, r2e-prometheus feature `metrics-facade`): the app
+# owns the recorder/exporter, R2E only emits through the facade macros.
+# `metrics-exporter-prometheus` is deliberately NOT a workspace dependency —
+# picking an exporter is the application's call.
+metrics = "0.24"
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 
 # Validation & serialization
 garde = { version = "0.23", features = ["derive"] }
