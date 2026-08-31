@@ -571,7 +571,7 @@ fn create_search(m: MatchingConfig) -> SearchService { ... }  // MatchingConfig 
 `.build_state()`); `override_config` (below) only stashes an in-memory config
 for `load_config` to consume.
 
-### `load_config::<C>()` — load + provide (the one registration point)
+### `load_config::<C>()` — load + provide (the one registration point that reads disk)
 
 The idiomatic way to set up configuration. Loads YAML + env, stores the raw config in the builder, and provides `R2eConfig` in the bean registry. If `C` is not `()`, also constructs the typed config, **auto-registers all nested `#[config(section)]` children as beans** (via `register_children`), and provides both `C` and `R2eConfig` in the compile-time type list.
 
@@ -596,6 +596,28 @@ pub struct RootConfig {
     pub database: DatabaseConfig, // auto-registered as a bean
 }
 ```
+
+### `provide_config(settings)` — a typed config value already in hand
+
+Same builder phase as `load_config`, for the case where the settings are built
+in code rather than read from disk (tests, embedding, `Default::default()`).
+`provide(settings)` alone puts only the parent struct in the graph — nested
+`#[config(section)]` children stay invisible, so every injector of a child
+needs a hand-written producer. `provide_config` runs `register_children` too,
+so the parent **and** every recursively nested section land in the graph: the
+same bean set `load_config::<C>()` provides, minus the disk read, the
+`R2eConfig` bean and the live-config registry.
+
+```rust
+AppBuilder::new()
+    .provide_config(AppSettings { db: DatabaseSettings { url: ":memory:".into() } })
+    .register::<UserController>()   // #[inject] db: DatabaseSettings resolves
+    .build_state().await
+```
+
+Bound: `C: ConfigProperties + Clone + Send + Sync + 'static`, `C::Children:
+TAppend<P>`. The value is pinned like any `provide`d bean — unlike
+`load_config`, nothing rebuilds it from `R2eConfig` on a dev-reload cycle.
 
 ### `override_config(config)` — stash an in-memory config (test harness)
 
@@ -708,6 +730,7 @@ This is the fix for apps hand-rolling a `build_settings()` helper purely to get
 | `server.quic.cert` | `String` | — | PEM certificate chain path (required with `quic.port`) |
 | `server.quic.key` | `String` | — | PEM private key path (required with `quic.port`) |
 | `server.quic.alt_svc_max_age` | `u32` | `3600` | Alt-Svc header max-age in seconds |
+| `server.params-rejection-format` | `"json"` \| `"plain-text"` | `"json"` | Body format of the `400` a `#[derive(Params)]` extraction failure produces: `{"error": "<message>"}` (default) or the bare message as `text/plain`, which is byte-for-byte what a raw `Query<T>` rejection returns (pick it when migrating a shipped API off `Query<T>`). App-level, never per struct: read **once** in `build_state()` into a process-global slot, because the derive extracts against a state-generic `S` with no bean lookup. An unknown value fails the boot. Constant: `r2e_core::PARAMS_REJECTION_FORMAT_KEY`; enum `r2e_core::ParamsRejectionFormat`. |
 
 ### Background services
 

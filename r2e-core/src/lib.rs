@@ -104,6 +104,7 @@ pub use web::managed::{
     ManagedOutcome, ManagedOutcomeKind, ManagedResource,
 };
 pub use web::pagination::{Page, Pageable};
+pub use web::params::{ParamsRejectionFormat, PARAMS_REJECTION_FORMAT_KEY};
 pub use web::request_head::RequestHead;
 
 // Dev-reload helpers

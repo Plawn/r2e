@@ -10,6 +10,7 @@ enum ParamSource {
     Header { name: String },
 }
 
+#[derive(Clone)]
 enum DefaultValue {
     Trait,      // #[param(default)] → Default::default()
     Expr(Expr), // #[param(default = 42)] → 42
@@ -43,6 +44,196 @@ struct NestedParamsField {
 enum ParsedField {
     Param(ParamField),
     Nested(NestedParamsField),
+    /// `#[serde(skip)]` / `#[serde(skip_deserializing)]`: never read from the
+    /// request, filled with `Default::default()` and absent from the OpenAPI
+    /// parameter list.
+    Skipped(Ident),
+}
+
+// ── serde attribute parity ───────────────────────────────────────────────
+//
+// `#[derive(Params)]` reads the `#[serde(...)]` attributes a struct already
+// carries instead of inventing a competing `#[params(rename…)]` spelling, so
+// a DTO shipped behind `Query<T>` migrates to `Params` untouched.
+
+/// A `#[serde(rename_all = "…")]` case convention.
+#[derive(Clone, Copy)]
+enum RenameAll {
+    Lower,
+    Upper,
+    Pascal,
+    Camel,
+    Snake,
+    ScreamingSnake,
+    Kebab,
+    ScreamingKebab,
+}
+
+impl RenameAll {
+    fn parse(s: &str, span: proc_macro2::Span) -> syn::Result<Self> {
+        Ok(match s {
+            "lowercase" => Self::Lower,
+            "UPPERCASE" => Self::Upper,
+            "PascalCase" => Self::Pascal,
+            "camelCase" => Self::Camel,
+            "snake_case" => Self::Snake,
+            "SCREAMING_SNAKE_CASE" => Self::ScreamingSnake,
+            "kebab-case" => Self::Kebab,
+            "SCREAMING-KEBAB-CASE" => Self::ScreamingKebab,
+            other => {
+                return Err(syn::Error::new(
+                    span,
+                    format!(
+                        "unsupported #[serde(rename_all = \"{other}\")] for #[derive(Params)] — \
+                         expected one of lowercase, UPPERCASE, PascalCase, camelCase, \
+                         snake_case, SCREAMING_SNAKE_CASE, kebab-case, SCREAMING-KEBAB-CASE"
+                    ),
+                ))
+            }
+        })
+    }
+
+    /// Apply the convention to a `snake_case` Rust field name.
+    fn apply(self, field: &str) -> String {
+        let words: Vec<&str> = field.split('_').filter(|w| !w.is_empty()).collect();
+        match self {
+            Self::Lower => field.replace('_', ""),
+            Self::Upper => field.replace('_', "").to_uppercase(),
+            Self::Pascal => words.iter().map(|w| capitalize(w)).collect(),
+            Self::Camel => words
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    if i == 0 {
+                        w.to_string()
+                    } else {
+                        capitalize(w)
+                    }
+                })
+                .collect(),
+            Self::Snake => field.to_string(),
+            Self::ScreamingSnake => field.to_uppercase(),
+            Self::Kebab => field.replace('_', "-"),
+            Self::ScreamingKebab => field.replace('_', "-").to_uppercase(),
+        }
+    }
+}
+
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Read the struct-level `#[serde(rename_all = "…")]`, if any.
+///
+/// Both `rename_all = "…"` and the per-direction
+/// `rename_all(deserialize = "…")` form are honored — extraction is the
+/// deserialize direction. Every other serde key is ignored, not rejected: a
+/// `Params` struct may keep `Serialize` attributes it needs elsewhere.
+fn parse_serde_rename_all(attrs: &[syn::Attribute]) -> syn::Result<Option<RenameAll>> {
+    let mut found = None;
+    for attr in attrs.iter().filter(|a| a.path().is_ident("serde")) {
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename_all") {
+                if meta.input.peek(syn::Token![=]) {
+                    let lit: LitStr = meta.value()?.parse()?;
+                    found = Some((lit.value(), lit.span()));
+                } else if meta.input.peek(syn::token::Paren) {
+                    // rename_all(serialize = "…", deserialize = "…")
+                    meta.parse_nested_meta(|inner| {
+                        if inner.path.is_ident("deserialize") {
+                            let lit: LitStr = inner.value()?.parse()?;
+                            found = Some((lit.value(), lit.span()));
+                        } else if inner.input.peek(syn::Token![=]) {
+                            let _: LitStr = inner.value()?.parse()?;
+                        }
+                        Ok(())
+                    })?;
+                }
+                return Ok(());
+            }
+            skip_meta_value(&meta)
+        });
+    }
+    found
+        .map(|(value, span)| RenameAll::parse(&value, span))
+        .transpose()
+}
+
+/// What the field-level `#[serde(...)]` attributes say about extraction.
+#[derive(Default)]
+struct SerdeFieldAttrs {
+    rename: Option<String>,
+    skip: bool,
+    /// `#[serde(flatten)]` — the nested struct's own keys are read from the
+    /// same request, exactly like a bare `#[params]`.
+    flatten: bool,
+    /// `#[serde(default)]` / `#[serde(default = "path::to::fn")]`, mapped onto
+    /// the same machinery as `#[param(default)]`.
+    default_value: Option<DefaultValue>,
+}
+
+fn parse_serde_field_attrs(attrs: &[syn::Attribute]) -> syn::Result<SerdeFieldAttrs> {
+    let mut out = SerdeFieldAttrs::default();
+    for attr in attrs.iter().filter(|a| a.path().is_ident("serde")) {
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                if meta.input.peek(syn::Token![=]) {
+                    let lit: LitStr = meta.value()?.parse()?;
+                    out.rename = Some(lit.value());
+                } else if meta.input.peek(syn::token::Paren) {
+                    meta.parse_nested_meta(|inner| {
+                        if inner.path.is_ident("deserialize") {
+                            let lit: LitStr = inner.value()?.parse()?;
+                            out.rename = Some(lit.value());
+                        } else if inner.input.peek(syn::Token![=]) {
+                            let _: LitStr = inner.value()?.parse()?;
+                        }
+                        Ok(())
+                    })?;
+                }
+                return Ok(());
+            }
+            if meta.path.is_ident("skip") || meta.path.is_ident("skip_deserializing") {
+                out.skip = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("flatten") {
+                out.flatten = true;
+                return Ok(());
+            }
+            if meta.path.is_ident("default") {
+                if meta.input.peek(syn::Token![=]) {
+                    // serde spells the factory as a string path: `default = "f"`.
+                    let lit: LitStr = meta.value()?.parse()?;
+                    let path: syn::Path = lit.parse()?;
+                    out.default_value =
+                        Some(DefaultValue::Expr(syn::parse_quote!(#path())));
+                } else {
+                    out.default_value = Some(DefaultValue::Trait);
+                }
+                return Ok(());
+            }
+            skip_meta_value(&meta)
+        });
+    }
+    Ok(out)
+}
+
+/// Consume (and discard) the value of a serde key this derive does not model,
+/// so parsing keeps going instead of failing the whole attribute.
+fn skip_meta_value(meta: &syn::meta::ParseNestedMeta) -> syn::Result<()> {
+    if meta.input.peek(syn::Token![=]) {
+        let _: syn::Expr = meta.value()?.parse()?;
+    } else if meta.input.peek(syn::token::Paren) {
+        let _content;
+        syn::parenthesized!(_content in meta.input);
+        let _: proc_macro2::TokenStream = _content.parse()?;
+    }
+    Ok(())
 }
 
 pub fn expand(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -76,6 +267,11 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
         }
     };
 
+    // `#[serde(rename_all = "…")]` on the struct renames every field whose
+    // key is derived from its Rust ident — exactly as serde would when the
+    // same struct is deserialized through `Query<T>`.
+    let rename_all = parse_serde_rename_all(&input.attrs)?;
+
     let mut parsed_fields = Vec::new();
 
     for field in fields {
@@ -83,22 +279,37 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
         let ty = field.ty.clone();
         let is_optional = is_option_type(&ty);
 
+        let serde_attrs = parse_serde_field_attrs(&field.attrs)?;
+        // The key this field is read under when nothing names it explicitly:
+        // `#[serde(rename)]` wins over `rename_all`, which wins over the ident.
+        let default_name = match (&serde_attrs.rename, rename_all) {
+            (Some(renamed), _) => renamed.clone(),
+            (None, Some(case)) => case.apply(&ident.to_string()),
+            (None, None) => ident.to_string(),
+        };
+
         let mut source = None;
-        let mut default_value = None;
+        // `#[param(default …)]` wins over `#[serde(default …)]` when both are
+        // present, since the r2e spelling is the more specific one.
+        let mut default_value = serde_attrs.default_value.clone();
         let mut nested_mode = None;
+        let mut has_r2e_attr = false;
 
         for attr in &field.attrs {
             if attr.path().is_ident("query") {
+                has_r2e_attr = true;
                 let custom_name = parse_name_attr(attr)?;
-                let name = custom_name.unwrap_or_else(|| ident.to_string());
+                let name = custom_name.unwrap_or_else(|| default_name.clone());
                 source = Some(ParamSource::Query { name });
             } else if attr.path().is_ident("header") {
+                has_r2e_attr = true;
                 let header_name: LitStr = attr.parse_args()?;
                 source = Some(ParamSource::Header {
                     name: header_name.value(),
                 });
             } else if attr.path().is_ident("param") {
-                let options = parse_param_options(attr, &ident)?;
+                has_r2e_attr = true;
+                let options = parse_param_options(attr, &default_name)?;
                 if let Some(param_source) = options.source {
                     source = Some(param_source);
                 }
@@ -106,6 +317,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
                     default_value = Some(param_default);
                 }
             } else if attr.path().is_ident("params") {
+                has_r2e_attr = true;
                 nested_mode = Some(parse_nested_mode(attr, &ident)?);
             }
         }
@@ -118,9 +330,43 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
             ));
         }
 
+        // `#[serde(skip)]` / `#[serde(skip_deserializing)]`: not a parameter at
+        // all. Filled with `Default::default()`, like serde does.
+        if serde_attrs.skip {
+            if has_r2e_attr {
+                return Err(syn::Error::new_spanned(
+                    &ident,
+                    "#[serde(skip)] cannot be combined with #[query], #[header], #[param], or #[params] \
+                     — a skipped field is never read from the request",
+                ));
+            }
+            parsed_fields.push(ParsedField::Skipped(ident));
+            continue;
+        }
+
+        // `#[serde(flatten)]` reads the nested struct's own keys from the same
+        // request — the exact meaning of a bare `#[params]`.
+        if serde_attrs.flatten && nested_mode.is_none() {
+            if has_r2e_attr {
+                return Err(syn::Error::new_spanned(
+                    &ident,
+                    "#[serde(flatten)] cannot be combined with #[query], #[header] or #[param] \
+                     — a flattened field is a nested parameter group, not a single parameter. \
+                     Use #[params(prefix = \"...\")] to give it a prefix instead",
+                ));
+            }
+            nested_mode = Some(NestedMode::Flatten);
+        }
+
         if let Some(mode) = nested_mode {
             parsed_fields.push(ParsedField::Nested(NestedParamsField { ident, ty, mode }));
-        } else if let Some(source) = source {
+        } else {
+            // No source attribute at all → a query parameter under its
+            // (possibly serde-renamed) name. This is what makes a struct
+            // written for `Query<T>` compile as `Params` untouched.
+            let source = source.unwrap_or(ParamSource::Query {
+                name: default_name.clone(),
+            });
             parsed_fields.push(ParsedField::Param(ParamField {
                 ident,
                 ty,
@@ -129,7 +375,6 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
                 default_value,
             }));
         }
-        // Fields without any recognized attribute are ignored
     }
 
     // Separate param fields and nested fields
@@ -194,12 +439,24 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
         .map(|f| generate_nested_construction(f, &krate))
         .collect();
 
-    // Collect all field idents (both param and nested) in the order they appear
+    // Skipped fields are not extracted — they are defaulted.
+    let skipped_constructions: Vec<TokenStream> = parsed_fields
+        .iter()
+        .filter_map(|f| match f {
+            ParsedField::Skipped(ident) => Some(quote! {
+                let #ident = ::core::default::Default::default();
+            }),
+            _ => None,
+        })
+        .collect();
+
+    // Collect all field idents (param, nested and skipped) in declaration order
     let all_field_idents: Vec<&Ident> = parsed_fields
         .iter()
         .map(|f| match f {
             ParsedField::Param(p) => &p.ident,
             ParsedField::Nested(n) => &n.ident,
+            ParsedField::Skipped(ident) => ident,
         })
         .collect();
 
@@ -226,6 +483,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
 
                     #(#field_constructions)*
                     #(#nested_constructions)*
+                    #(#skipped_constructions)*
 
                     Ok(Self {
                         #(#all_field_idents,)*
@@ -530,7 +788,7 @@ fn parse_nested_mode(attr: &syn::Attribute, field_ident: &Ident) -> syn::Result<
     }
 }
 
-fn parse_param_options(attr: &syn::Attribute, field_ident: &Ident) -> syn::Result<ParamOptions> {
+fn parse_param_options(attr: &syn::Attribute, default_name: &str) -> syn::Result<ParamOptions> {
     let mut is_path = false;
     let mut path_name = None;
     let mut default_value = None;
@@ -573,7 +831,7 @@ fn parse_param_options(attr: &syn::Attribute, field_ident: &Ident) -> syn::Resul
     }
 
     let source = is_path.then(|| ParamSource::Path {
-        name: path_name.unwrap_or_else(|| field_ident.to_string()),
+        name: path_name.unwrap_or_else(|| default_name.to_string()),
     });
 
     Ok(ParamOptions {

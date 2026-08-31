@@ -18,6 +18,7 @@ mod lazy_cell;
 mod lifecycle;
 mod live_config;
 mod module;
+mod module_prefix;
 mod option_config;
 mod option_type;
 mod optional;

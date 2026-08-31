@@ -99,6 +99,21 @@ use crate::type_list::{Here, TAppend, TCons, TNil, There};
 ///     .await
 /// ```
 pub trait FeatureModule {
+    /// HTTP mount point for this module's controllers, e.g. `Some("/api/v1")`.
+    ///
+    /// Every controller in [`Controllers`](Self::Controllers) is nested under
+    /// it, so `#[controller(path = "/users")]` inside a module with
+    /// `prefix = "/api/v1"` serves `/api/v1/users`. The prefix is applied to
+    /// the collected [`RouteInfo`](crate::di::meta::RouteInfo) too, so OpenAPI
+    /// publishes the mounted path.
+    ///
+    /// Non-HTTP endpoints ([`Endpoints`](Self::Endpoints) — gRPC services) are
+    /// **not** path-mounted and ignore this.
+    ///
+    /// `#[module(prefix = "/api/v1")]` generates it; the default is `None`
+    /// (mount at the app root), so hand-written impls need not mention it.
+    const PATH_PREFIX: Option<&'static str> = None;
+
     /// Type-level list ([`TCons`]/[`TNil`]) of the module's provider types.
     ///
     /// Each element must implement [`Registrable`] (emitted by `#[bean]`,
@@ -695,7 +710,36 @@ pub trait ModuleControllers<T: Clone + Send + Sync + 'static, W> {
     /// validate yields [`BeanError::ControllerConfig`](crate::beans::BeanError::ControllerConfig)
     /// rather than a panic, so `try_build_state()` — which runs this fold —
     /// really is non-panicking.
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+    /// `prefix` is the declaring module's
+    /// [`PATH_PREFIX`](FeatureModule::PATH_PREFIX): every controller is nested
+    /// under it (routes **and** collected `RouteInfo`).
+    fn register_all(
+        builder: AppBuilder<T>,
+        prefix: Option<&'static str>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError>;
+}
+
+/// Mount a controller path under a module prefix, the way `Router::nest`
+/// composes them.
+///
+/// `("/api/v1", "/users")` → `/api/v1/users`; a bare `"/"` child keeps the
+/// prefix itself (`/api/v1`) rather than producing a trailing slash. Only
+/// [`RouteInfo`](crate::di::meta::RouteInfo) paths go through this — the
+/// router does its own nesting.
+#[doc(hidden)]
+pub fn join_path_prefix(prefix: &str, path: &str) -> String {
+    let prefix = prefix.trim_end_matches('/');
+    match path {
+        "" | "/" => {
+            if prefix.is_empty() {
+                "/".to_string()
+            } else {
+                prefix.to_string()
+            }
+        }
+        p if p.starts_with('/') => format!("{prefix}{p}"),
+        p => format!("{prefix}/{p}"),
+    }
 }
 
 /// Register one deferred controller, mapping its config-validation failure to
@@ -704,13 +748,14 @@ pub trait ModuleControllers<T: Clone + Send + Sync + 'static, W> {
 /// (see [`ModuleControllers`]).
 fn register_deferred<T, C, W>(
     builder: AppBuilder<T>,
+    prefix: Option<&'static str>,
 ) -> Result<AppBuilder<T>, crate::beans::BeanError>
 where
     T: Clone + Send + Sync + 'static,
     C: Controller<T, W>,
 {
     builder
-        .try_register_controller_unchecked_impl::<C, W>()
+        .try_register_controller_unchecked_at::<C, W>(prefix)
         .map_err(|source| crate::beans::BeanError::ControllerConfig {
             controller: std::any::type_name::<C>(),
             source,
@@ -718,7 +763,10 @@ where
 }
 
 impl<T: Clone + Send + Sync + 'static> ModuleControllers<T, ()> for () {
-    fn register_all(builder: AppBuilder<T>) -> Result<AppBuilder<T>, crate::beans::BeanError> {
+    fn register_all(
+        builder: AppBuilder<T>,
+        _prefix: Option<&'static str>,
+    ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
         Ok(builder)
     }
 }
@@ -732,8 +780,9 @@ macro_rules! impl_module_controllers {
         {
             fn register_all(
                 builder: AppBuilder<T>,
+                prefix: Option<&'static str>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                register_deferred::<T, $C0, $W0>(builder)
+                register_deferred::<T, $C0, $W0>(builder, prefix)
             }
         }
     };
@@ -747,9 +796,10 @@ macro_rules! impl_module_controllers {
         {
             fn register_all(
                 builder: AppBuilder<T>,
+                prefix: Option<&'static str>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                let builder = register_deferred::<T, $C0, $W0>(builder)?;
-                $(let builder = register_deferred::<T, $Cs, $Ws>(builder)?;)+
+                let builder = register_deferred::<T, $C0, $W0>(builder, prefix)?;
+                $(let builder = register_deferred::<T, $Cs, $Ws>(builder, prefix)?;)+
                 Ok(builder)
             }
         }
@@ -799,7 +849,8 @@ where
         // `Mods` grows head-first (the most recently registered module is the
         // head), so recurse into the tail first to preserve registration order.
         let builder = Rest::register_controllers(builder)?;
-        let builder = <M::Controllers as ModuleControllers<T, WC>>::register_all(builder)?;
+        let builder =
+            <M::Controllers as ModuleControllers<T, WC>>::register_all(builder, M::PATH_PREFIX)?;
         // Non-HTTP endpoints (gRPC services) register after the controllers of
         // the same module, from the same retained bean context.
         <M::Endpoints as ModuleEndpoints<T>>::register_all(builder, std::any::type_name::<M>())
@@ -1085,7 +1136,7 @@ macro_rules! impl_plugin_controllers {
             fn register_all(
                 builder: AppBuilder<T>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                register_deferred::<T, $C0, $W0>(builder)
+                register_deferred::<T, $C0, $W0>(builder, None)
             }
         }
     };
@@ -1103,8 +1154,8 @@ macro_rules! impl_plugin_controllers {
             fn register_all(
                 builder: AppBuilder<T>,
             ) -> Result<AppBuilder<T>, crate::beans::BeanError> {
-                let builder = register_deferred::<T, $C0, $W0>(builder)?;
-                $(let builder = register_deferred::<T, $Cs, $Ws>(builder)?;)+
+                let builder = register_deferred::<T, $C0, $W0>(builder, None)?;
+                $(let builder = register_deferred::<T, $Cs, $Ws>(builder, None)?;)+
                 Ok(builder)
             }
         }

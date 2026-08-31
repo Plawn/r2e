@@ -261,7 +261,6 @@ fn generate_route_metadata(
     meta_mod: &syn::Ident,
 ) -> Vec<TokenStream> {
     let krate = r2e_core_path();
-    let tag_name = name.to_string();
 
     def.route_methods
         .iter()
@@ -292,7 +291,6 @@ fn generate_route_metadata(
                 role_strs.extend(ctrl.roles.iter().chain(ctrl.all_roles.iter()));
             }
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
-            let tag = &tag_name;
 
             let path_params = extract_path_params(rm, &krate);
             let handler_param_types = extract_handler_param_types(rm);
@@ -377,7 +375,7 @@ fn generate_route_metadata(
                         __p
                     },
                     roles: vec![#(#roles),*],
-                    tag: Some(#tag.to_string()),
+                    tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
                     deprecated: #deprecated,
                     has_auth: #has_auth,
                 }
@@ -1261,7 +1259,6 @@ fn emit_streaming_route_info(
     summary: &str,
 ) -> TokenStream {
     let krate = r2e_core_path();
-    let tag = controller_name.to_string();
     let op_id = format!("{}_{}", controller_name, fn_ident);
     let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
     let has_roles = !roles.is_empty();
@@ -1293,7 +1290,7 @@ fn emit_streaming_route_info(
             response_unmapped: None,
             params: vec![],
             roles: vec![#(#roles_tokens),*],
-            tag: Some(#tag.to_string()),
+            tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
             deprecated: false,
             has_auth: #has_auth,
         }

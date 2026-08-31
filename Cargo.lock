@@ -6186,6 +6186,7 @@ dependencies = [
  "http",
  "http-body-util",
  "r2e-core",
+ "r2e-macros",
  "schemars 1.2.1",
  "serde",
  "serde_json",

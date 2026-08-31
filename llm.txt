@@ -40,7 +40,8 @@ crate-name-dependent import.
   `AppEnv` as shown below.
 - `App::build(b, env) -> Result<impl BootableApp, BootError>` — assembles the app
   on the builder; **re-run on every hot-patch**. `load_config` is the sole config
-  registration point.
+  registration point that reads disk (`provide_config` is its in-memory
+  counterpart for settings already in hand).
 - **Both phases are fallible.** `BootError` is
   `Box<dyn std::error::Error + Send + Sync>`, so `?` accepts any `std` error.
   Never call `std::process::exit` in `setup`/`build`: that code is linked by the
@@ -1033,6 +1034,24 @@ you must still `.register_module::<OtherModule>()` yourself.
   `type Plugins = (); fn plugins() {}` when they bring nothing, and
   `type Endpoints = ();` when they own no gRPC service.
 
+**Path-prefixed modules — `#[module(prefix = "/api/v1")]`:**
+
+```rust
+#[module(prefix = "/api/v1", controllers(UserController), imports(UserService))]
+pub struct V1Module;      // UserController's #[controller(path = "/users")]
+                          // now serves /api/v1/users
+```
+
+The prefix is declared **on the module**, not at the `register_module` call
+site, so it composes through aggregates (which are purely static folds). It
+concatenates with each controller's own `path`, is validated at compile time
+(must start with `/`, must not end with `/`, no path parameters or wildcards —
+those belong on the controller), and a module's `#[fallback]` becomes
+prefix-scoped. It also rewrites the collected route metadata, so the OpenAPI
+spec and `r2e routes` show the mounted paths. An aggregate takes no prefix (a
+compile error): each member carries its own. gRPC and MCP services are not
+path-mounted and ignore the prefix.
+
 **Module aggregates — one blueprint line shared by the app and its tests:**
 
 ```rust
@@ -1252,6 +1271,25 @@ b.load_config::<RootConfig>()             // typed + children as beans
 #[inject] db_config: DatabaseConfig,      // typed section, injected by type
 #[config("app.greeting")] greeting: String,  // single scalar
 ```
+
+### `provide_config` — a typed config struct already in hand
+
+`provide(settings)` puts only the struct itself in the graph, so a nested
+`#[config(section)]` child stays invisible and every injector of that child
+needs a hand-written producer. `provide_config` also runs `register_children`,
+landing the parent **and** every nested section in the graph — the same set
+`load_config::<C>()` provides, minus the disk read, the `R2eConfig` bean and
+the live-config registry:
+
+```rust
+AppBuilder::new()
+    .provide_config(AppSettings { db: DatabaseSettings { url: ":memory:".into() }, ..d })
+    .register::<UserController>()      // #[inject] db: DatabaseSettings resolves
+```
+
+It is the test/embedding counterpart of `load_config` (same builder phase). The
+value is pinned like any `provide`d bean: nothing rebuilds it from `R2eConfig`
+on a dev-reload cycle.
 
 ### Config providers and rotation
 
@@ -2153,6 +2191,77 @@ async fn get(&self, params: GetUserParams) -> Json<User> { ... }
 ```
 
 All fields appear automatically in the OpenAPI spec.
+
+A field with **no** `#[param]`/`#[query]`/`#[header]` attribute is a query
+parameter named after the field. That makes the derive a drop-in for
+`Query<T>`.
+
+**Serde attributes are read, not duplicated.** There is no `#[params(...)]`
+renaming spelling: the derive honours the `#[serde(...)]` attributes a struct
+already carries, so a shipped `Query<T>` payload migrates untouched.
+
+| Attribute | Effect on the wire name / value |
+|---|---|
+| `#[serde(rename_all = "camelCase")]` (struct) | Renames every field. All serde cases: `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`, `snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case`, `SCREAMING-KEBAB-CASE` |
+| `#[serde(rename = "q")]` (field) | Exact wire name (also `rename(deserialize = "…")`) |
+| `#[serde(default)]` / `#[serde(default = "path")]` | Missing value falls back to `Default` / that function |
+| `#[serde(skip)]` / `#[serde(skip_deserializing)]` | Field is never read from the request; built with `Default` |
+| `#[serde(flatten)]` (field) | The nested `Params` struct's own keys are read from the same request (same as a bare `#[params]`) |
+
+Precedence: an explicit R2E name (`#[query("q")]`, `#[param(path, name = "…")]`,
+`#[header("X-…")]`) wins over `#[serde(rename)]`, which wins over
+`#[serde(rename_all)]`, which wins over the field identifier. Likewise
+`#[param(default = …)]` wins over `#[serde(default)]`. `#[serde(skip)]`
+combined with an R2E param attribute is a compile error.
+
+**Migrating `Query<T>` → `Params`.** Add `Params` to the existing derive list
+and drop the `Query` wrapper in the handler; keep the `Deserialize` derive if
+anything else still deserializes the type. Nothing else changes — the serde
+renames keep producing the same wire names, and every field is now visible in
+the OpenAPI spec:
+
+```rust
+// before
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchQuery {
+    #[serde(rename = "q")]
+    query: String,
+    page_size: Option<u32>,
+}
+
+#[get("/")]
+async fn search(&self, Query(q): Query<SearchQuery>) -> Json<Hits> { ... }
+
+// after — same `?q=…&pageSize=…` contract
+#[derive(Deserialize, Params)]
+#[serde(rename_all = "camelCase")]
+struct SearchQuery {
+    #[serde(rename = "q")]
+    query: String,
+    page_size: Option<u32>,
+}
+
+#[get("/")]
+async fn search(&self, q: SearchQuery) -> Json<Hits> { ... }
+```
+
+The one visible difference is the 400 body. `Query<T>` answers with plain text
+from serde; `Params` answers with a JSON problem body by default. It is an
+**app-level** setting, never a per-struct one, read once at `build_state()`:
+
+```yaml
+server:
+  params-rejection-format: json        # default; { "error": "...", "message": "..." }
+  # params-rejection-format: plain-text  # raw `Query<T>` compatibility
+```
+
+Unknown values fail boot. In Rust the enum is `r2e::ParamsRejectionFormat`
+(`Json` | `PlainText`); the JSON body is `{"error": "<message>"}`.
+
+Axum's own rejection types are re-exported for handlers that take a
+`Result<Query<T>, QueryRejection>`: `QueryRejection`, `PathRejection`,
+`FormRejection`, `JsonRejection` from `r2e::http` (and `r2e::http::rejection`).
 
 ---
 
@@ -3355,6 +3464,18 @@ method, path, and offending return type, and suggesting `#[returns(T)]` /
 The gaps are also available programmatically via
 `r2e::r2e_openapi::spec_warnings(&routes) -> Vec<SpecWarning>` (each carries
 `method`, `path`, a `SchemaGap`, and a `.message()`).
+
+**Tags.** A route's OpenAPI tag defaults to the controller's struct name.
+`#[controller(path = "…", tag = "…")]` overrides it, so several controllers can
+publish under one tag:
+
+```rust
+#[controller(path = "/catalog/items", tag = "Catalog")]
+struct CatalogItemsController;
+
+#[controller(path = "/catalog/categories", tag = "Catalog")]
+struct CatalogCategoriesController;   // both merge under the "Catalog" tag
+```
 
 ---
 
@@ -4753,7 +4874,7 @@ Alongside `&self`:
 | `Path(id): Path<u64>` | URL path parameter |
 | `Query(params): Query<T>` | Query string (T: Deserialize) |
 | `Json(body): Json<T>` | JSON body (auto-validated if T: garde::Validate) |
-| `params: MyParams` | `#[derive(Params)]` aggregation (`#[param(path)]`/`#[query]`/`#[header]`) |
+| `params: MyParams` | `#[derive(Params)]` aggregation (`#[param(path)]`/`#[query]`/`#[header]`; unattributed fields = query, `#[serde(rename…)]` honoured) |
 | `#[inject(identity)] user: AuthenticatedUser` | Identity from JWT (`Option<T>` = adaptive) |
 | `#[managed] tx: &mut Tx<'_, Sqlite>` | Managed resource (transaction) |
 | `TypedMultipart(form): TypedMultipart<T>` | Typed multipart (feature `multipart`) |
@@ -4794,7 +4915,8 @@ Alongside `&self`:
 |--------|-------|---------|
 | `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, Tracing, ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus, Observability, OpenFga, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
-| `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole config registration point) |
+| `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
+| `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |
 | `.r2e_config()` | builder/app | Borrow the loaded `R2eConfig` (available right after `load_config`, so config-driven plugin constructors can read it before `.plugin(..)`) |
 | `.override_config(cfg)` | builder | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
 | `.provide(value)` | builder | Provide a constructed bean |

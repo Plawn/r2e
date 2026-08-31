@@ -1,0 +1,5 @@
+error: `modules(...)` is exclusive with every other #[module] key (found `prefix = "..."`) — an aggregate only composes other modules and mounts nothing of its own. Declare the prefix on each member module instead
+  --> cases/modules/fail/module_aggregate_prefix.rs:20:10
+   |
+20 | #[module(modules(RealModule), prefix = "/api/v1")]
+   |          ^^^^^^^

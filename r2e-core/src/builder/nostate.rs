@@ -181,6 +181,48 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         bundle.provide_into(self)
     }
 
+    /// Provide a **typed config struct** already in hand, registering its
+    /// `#[config(section)]` children exactly as
+    /// [`load_config`](Self::load_config) would.
+    ///
+    /// [`provide`](Self::provide) puts the struct itself in the graph and
+    /// stops there: a nested `#[config(section)] db: DatabaseSettings` field
+    /// stays invisible, so a controller or bean injecting `DatabaseSettings`
+    /// does not resolve and the app has to hand-write a producer per child.
+    /// `provide_config` runs
+    /// [`ConfigProperties::register_children`](crate::config::ConfigProperties::register_children)
+    /// as well, so the parent **and** every (recursively) nested section land
+    /// in the graph — the same set `load_config::<C>()` provides, minus the
+    /// disk read, the [`R2eConfig`](crate::config::R2eConfig) bean and the
+    /// live-config registry.
+    ///
+    /// It is the test/embedding counterpart of `load_config`: build the
+    /// settings in code (or `Default::default()`), hand them over, and inject
+    /// the sections as usual.
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .provide_config(AppSettings { db: DatabaseSettings { url: ":memory:".into() }, .. })
+    ///     .register::<UserController>()   // #[inject] db: DatabaseSettings
+    ///     .build_state().await
+    /// ```
+    ///
+    /// The value is pinned like any [`provide`](Self::provide)d bean: unlike
+    /// `load_config`, nothing rebuilds it from `R2eConfig` on a dev-reload
+    /// cycle.
+    pub fn provide_config<C>(
+        mut self,
+        settings: C,
+    ) -> AppBuilder<NoState, TCons<C, <C::Children as TAppend<P>>::Output>, R, Mods>
+    where
+        C: crate::config::ConfigProperties + Clone + Send + Sync + 'static,
+        C::Children: TAppend<P>,
+    {
+        settings.register_children(&mut self.shared.bean_registry);
+        self.shared.bean_registry.provide(settings);
+        self.with_updated_types()
+    }
+
     /// Declare a **worker-local** bean: exactly one `T` per sharded worker,
     /// built by `factory` on the worker thread before it accepts traffic and
     /// dropped there at shutdown.
@@ -1023,6 +1065,27 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // trusted once the configuration did not load.
         if let Some(err) = self.shared.deferred_boot_error.take() {
             return Err(err);
+        }
+
+        // App-level, resolved once here (and again on every dev-reload cycle,
+        // so a config edit lands): the `#[derive(Params)]` 400 body format.
+        // A mistyped value is a boot error like any other config mismatch.
+        if let Some(config) = &self.shared.config {
+            match config.get_opt::<crate::web::params::ParamsRejectionFormat>(
+                crate::web::params::PARAMS_REJECTION_FORMAT_KEY,
+            ) {
+                Ok(format) => {
+                    crate::web::params::set_params_rejection_format(format.unwrap_or_default())
+                }
+                Err(e) => {
+                    return Err(crate::beans::BeanError::ConfigLoad {
+                        context: "Invalid server.params-rejection-format",
+                        source: Box::new(e),
+                    })
+                }
+            }
+        } else {
+            crate::web::params::set_params_rejection_format(Default::default());
         }
 
         let mut registry = std::mem::take(&mut self.shared.bean_registry);

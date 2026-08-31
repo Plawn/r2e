@@ -50,6 +50,8 @@ Runs 9 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI,
 
 Static source parsing of `src/controllers/*.rs` (no compilation). Extracts controller paths, HTTP methods, handler names, roles. Colored table output.
 
+It also scans all of `src/` for `#[module(prefix = "…", controllers(...))]` and prefixes the rows of every controller a module mounts, so the printed path is the served path (a `#[fallback]` in a prefixed module prints as `/prefix/*`). Still purely textual — the CLI never builds the app — so a controller listed in a module declared outside `src/` keeps its unprefixed path.
+
 ## `r2e docs [<module>]` — Bundled module documentation
 
 Prints per-module documentation embedded in the binary at compile time (the `docs/features/*.md` set, via `include_str!`), so it is always version-matched to the installed `r2e`. Aimed at both agents (raw markdown on stdout, injectable into context) and humans (`--pretty`).

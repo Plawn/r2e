@@ -54,6 +54,17 @@ impl MetaRegistry {
         self.get::<M>().unwrap_or(&[])
     }
 
+    /// Get a mutable reference to all metadata of a given type.
+    ///
+    /// Used to rewrite items a controller just pushed — e.g. prefixing
+    /// [`RouteInfo::path`] when the controller is mounted under a feature
+    /// module's `prefix`, so the published OpenAPI path is the mounted one.
+    pub fn get_mut<M: Any + Send + Sync>(&mut self) -> Option<&mut Vec<M>> {
+        self.inner
+            .get_mut(&TypeId::of::<M>())
+            .and_then(|boxed| boxed.downcast_mut::<Vec<M>>())
+    }
+
     /// Get or create the `Vec<M>` entry for a given type.
     fn entry<M: Any + Send + Sync>(&mut self) -> &mut Vec<M> {
         self.inner

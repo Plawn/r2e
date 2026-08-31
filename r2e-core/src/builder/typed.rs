@@ -633,12 +633,45 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Non-panicking variant of
     /// [`register_controller_unchecked_impl`](Self::register_controller_unchecked_impl).
     pub(crate) fn try_register_controller_unchecked_impl<C, W>(
-        mut self,
+        self,
     ) -> Result<Self, crate::config::ConfigValidationError>
     where
         C: Controller<T, W>,
     {
+        self.try_register_controller_unchecked_at::<C, W>(None)
+    }
+
+    /// Unchecked registration at an HTTP mount point.
+    ///
+    /// `prefix` is a feature module's
+    /// [`PATH_PREFIX`](crate::di::module::FeatureModule::PATH_PREFIX): the
+    /// controller's router is nested under it and the `RouteInfo` this
+    /// registration collected is rewritten to the mounted path, so OpenAPI and
+    /// every other metadata consumer see what is actually served. `None` mounts
+    /// at the app root (the historical behavior).
+    pub(crate) fn try_register_controller_unchecked_at<C, W>(
+        mut self,
+        prefix: Option<&'static str>,
+    ) -> Result<Self, crate::config::ConfigValidationError>
+    where
+        C: Controller<T, W>,
+    {
+        let meta_before = self
+            .meta_registry
+            .get_or_empty::<crate::di::meta::RouteInfo>()
+            .len();
         C::register_meta(&mut self.meta_registry);
+        if let Some(prefix) = prefix {
+            if let Some(routes) = self
+                .meta_registry
+                .get_mut::<crate::di::meta::RouteInfo>()
+                .filter(|r| r.len() > meta_before)
+            {
+                for info in &mut routes[meta_before..] {
+                    info.path = crate::di::module::join_path_prefix(prefix, &info.path);
+                }
+            }
+        }
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
@@ -661,8 +694,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // intercepted `#[scheduled]`/`#[consumer]` methods.
         C::fill_decos(&core, &self.bean_context);
 
-        self.routes
-            .push(C::routes(state, Arc::clone(&core), &self.bean_context));
+        let router = C::routes(state, Arc::clone(&core), &self.bean_context);
+        self.routes.push(match prefix {
+            Some(prefix) => crate::http::Router::new().nest(prefix, router),
+            None => router,
+        });
 
         // Queue this core's `#[post_construct]` hooks — awaited at startup
         // before consumer registrations (no-op future for controllers without

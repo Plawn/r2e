@@ -9,6 +9,10 @@ use crate::util::type_utils::{
 pub struct ControllerStructDef {
     pub name: syn::Ident,
     pub prefix: Option<String>,
+    /// `#[controller(tag = "…")]` — the OpenAPI tag this controller's
+    /// operations are grouped under. `None` means "use the struct name", the
+    /// historical behavior.
+    pub tag: Option<String>,
     pub injected_fields: Vec<InjectedField>,
     pub identity_fields: Vec<IdentityField>,
     pub request_fields: Vec<RequestField>,
@@ -102,18 +106,38 @@ fn inject_qualifier_is(attr: &syn::Attribute, want: &str) -> bool {
     }
 }
 
-/// Parse the `#[controller(path = "...")]` attribute arguments.
+/// The `#[controller(...)]` attribute arguments.
+pub struct ControllerArgs {
+    pub prefix: Option<String>,
+    pub tag: Option<String>,
+}
+
+/// Parse the `#[controller(path = "...", tag = "...")]` attribute arguments.
 pub fn parse_controller_args(
     args: proc_macro2::TokenStream,
     span: proc_macro2::Span,
-) -> syn::Result<Option<String>> {
+) -> syn::Result<ControllerArgs> {
     let mut prefix: Option<String> = None;
+    let mut tag: Option<String> = None;
 
     let parser = syn::meta::parser(|meta| {
         if meta.path.is_ident("path") {
             let value = meta.value()?;
             let lit: syn::LitStr = value.parse()?;
             prefix = Some(lit.value());
+            Ok(())
+        } else if meta.path.is_ident("tag") {
+            let value = meta.value()?;
+            let lit: syn::LitStr = value.parse()?;
+            let value = lit.value();
+            if value.trim().is_empty() {
+                return Err(syn::Error::new_spanned(
+                    &lit,
+                    "`tag` must not be empty — drop the key to keep the struct name as the \
+                     OpenAPI tag",
+                ));
+            }
+            tag = Some(value);
             Ok(())
         } else if meta.path.is_ident("state") {
             Err(meta.error(
@@ -122,20 +146,21 @@ pub fn parse_controller_args(
                  registered on the AppBuilder before build_state()",
             ))
         } else {
-            Err(meta.error("unknown attribute in #[controller(...)]: expected `path`"))
+            Err(meta.error("unknown attribute in #[controller(...)]: expected `path` or `tag`"))
         }
     });
     parser.parse2(args)?;
     let _ = span;
 
-    Ok(prefix)
+    Ok(ControllerArgs { prefix, tag })
 }
 
 /// Parse a `#[controller]` struct into a [`ControllerStructDef`].
 ///
-/// `prefix` comes from the attribute arguments; field scopes are read from
+/// `args` comes from the attribute arguments; field scopes are read from
 /// the struct's named fields.
-pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<ControllerStructDef> {
+pub fn parse(args: ControllerArgs, item: &syn::ItemStruct) -> syn::Result<ControllerStructDef> {
+    let ControllerArgs { prefix, tag } = args;
     let name = item.ident.clone();
 
     let fields: Vec<&syn::Field> = match &item.fields {
@@ -285,6 +310,7 @@ pub fn parse(prefix: Option<String>, item: &syn::ItemStruct) -> syn::Result<Cont
     Ok(ControllerStructDef {
         name,
         prefix,
+        tag,
         injected_fields,
         identity_fields,
         request_fields,

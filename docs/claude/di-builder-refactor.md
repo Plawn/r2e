@@ -246,6 +246,68 @@ frameworks cannot offer.
   (`DuplicateBean` at startup, by design — the graph is `TypeId`-keyed). Use
   newtypes.
 
+## Path-prefixed modules (`#[module(prefix = "…")]`)
+
+**Design note (W17 F12).** A feature module is the unit an API version or a
+bounded context is carved into, but every controller in it had to repeat the
+mount point in its own `#[controller(path = "/api/v1/…")]`. Re-versioning a
+module meant editing every controller in it — and getting one wrong is silent.
+
+**Decision: the prefix is declared on the module, not at the registration
+call site.** `#[module(prefix = "/api/v1", controllers(...))]` — *not*
+`register_module_at("/api/v1")`.
+
+- `ModuleAggregate` / `ModuleGroup` (the `register_modules::<AppModules>()`
+  fold) are **purely static type-level folds with no runtime argument**. A
+  call-site prefix would either not compose through an aggregate at all, or
+  force an aggregate to carry a runtime list of prefixes parallel to its type
+  list. A `const PATH_PREFIX: Option<&'static str>` on `FeatureModule` threads
+  through every existing fold for free, aggregates included.
+- The same module registered twice under two prefixes is not a use case: its
+  beans are `TypeId`-keyed and would collide (`DuplicateBean`) long before the
+  routes did. So the "one module, many mount points" flexibility a call-site
+  argument would buy is unreachable anyway.
+- It keeps the mount point next to the thing being mounted, like
+  `#[controller(path)]` — one place to read, one place to change.
+
+**Composition with `#[controller(path)]`.** The module prefix is the outer
+segment: the controller's own path is appended to it. `#[module(prefix =
+"/api/v1")]` + `#[controller(path = "/users")]` + `#[get("/{id}")]` serves
+`/api/v1/users/{id}`. Controllers stay prefix-agnostic — nothing in the
+controller's own declaration or codegen changes, so the same controller can be
+mounted app-globally in one app and under a module prefix in another. A
+`#[fallback]` inside a prefixed module becomes **prefix-scoped** (it answers
+`/api/v1/*`, not `/*`) — that is `Router::nest`'s semantics and the intended
+one for a versioned module.
+
+**Aggregates take no prefix.** An aggregate owns no controllers; each member
+keeps its own prefix. `prefix` is rejected at macro level next to
+`modules(...)`, like every other key.
+
+**Validation.** The prefix must start with `/`, must not end with `/`, must not
+be `"/"` (drop the key instead), and must not contain a path parameter (`{…}`):
+a parameterized mount would have to be extracted by every controller in the
+module, which is a different feature.
+
+**OpenAPI.** The published spec must show the *mounted* path, so the prefix is
+applied to `RouteInfo.path` at registration — the same place the router is
+nested — rather than being reconstructed later by the openapi plugin. That
+keeps every `RouteInfo` consumer (openapi, `r2e routes`' runtime counterpart,
+any future spec exporter) correct with no per-consumer knowledge of modules.
+`MetaRegistry` grew a `get_mut` for exactly this rewrite.
+
+**`r2e routes` (CLI).** The CLI is a *textual* scanner (it never builds the
+app), so it learns module prefixes the same way it learns controller paths: it
+scans `src/**/*.rs` for `#[module(...)]` declarations, pairs each `prefix` with
+the `controllers(...)` list in the same attribute, and prefixes those
+controllers' rows.
+
+**Out of scope: non-HTTP endpoints.** A module's `grpc_services(...)` (and MCP
+services) are **not** path-mounted — gRPC routes are `/<package>.<Service>/<Method>`
+derived from the proto, and MCP mounts at its own configured path. A module
+prefix affects HTTP controllers only; `ModuleEndpoints::register_all` is
+untouched.
+
 ## Design decisions worth not relitigating
 
 - **Duplicate bean detection stays runtime.** A spike proved compile-time

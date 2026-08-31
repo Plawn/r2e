@@ -13,6 +13,7 @@ mod json;
 mod managed;
 #[cfg(feature = "multipart")]
 mod multipart;
+mod params;
 mod plugins;
 mod request_id;
 mod secure_headers;

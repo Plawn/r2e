@@ -147,11 +147,78 @@ pub struct GetUserParams {
 | `#[query(name = "q")]` | Query string | Custom name |
 | `#[header("X-Custom")]` | HTTP headers | Explicit name (required) |
 
+- A field with **no** attribute is a query parameter named after the field
 - `Option<T>` → optional parameter (absent = `None`)
 - Non-Option `T` → required parameter (absent = 400 Bad Request)
 - `#[param(default)]` → uses `Default::default()` if the parameter is absent
 - `#[param(default = expr)]` → uses the given expression if absent
 - Conversion via `FromStr` for non-String types
+
+### Serde attributes are read, not duplicated
+
+There is no `#[params(...)]` renaming spelling. The derive honours the
+`#[serde(...)]` attributes a struct already carries, so a payload shipped as
+`Query<T>` migrates untouched:
+
+| Attribute | Effect |
+|-----------|--------|
+| `#[serde(rename_all = "camelCase")]` (struct) | Renames every field. All serde cases: `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`, `snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case`, `SCREAMING-KEBAB-CASE` |
+| `#[serde(rename = "q")]` (field) | Exact wire name (also `rename(deserialize = "…")`) |
+| `#[serde(default)]` / `#[serde(default = "path")]` | Fallback when the parameter is absent |
+| `#[serde(skip)]` / `#[serde(skip_deserializing)]` | Never read from the request; built with `Default` |
+| `#[serde(flatten)]` (field) | The nested `Params` struct's own keys are read from the same request — identical to a bare `#[params]` |
+
+Precedence: an explicit R2E name (`#[query(name = "q")]`, `#[param(path, name =
+"…")]`, `#[header("X-…")]`) > `#[serde(rename)]` > `#[serde(rename_all)]` >
+the field identifier. `#[param(default …)]` wins over `#[serde(default …)]`.
+`#[serde(skip)]` combined with an R2E param attribute is a compile error, and so is `#[serde(flatten)]` next to `#[query]`/`#[header]`/`#[param]` (a flattened field is a nested group, not a single parameter — use `#[params(prefix = "...")]` to prefix it).
+
+### Migrating `Query<T>` → `Params`
+
+Add `Params` to the derive list and drop the `Query` wrapper in the handler
+(keep `Deserialize` if the type is still deserialized elsewhere). The wire
+contract is unchanged and every field now appears in the OpenAPI spec:
+
+```rust
+// before
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchQuery {
+    #[serde(rename = "q")]
+    query: String,
+    page_size: Option<u32>,
+}
+
+#[get("/")]
+async fn search(&self, Query(q): Query<SearchQuery>) -> Json<Hits> { /* ... */ }
+
+// after — same `?q=…&pageSize=…`
+#[derive(Deserialize, Params)]
+#[serde(rename_all = "camelCase")]
+struct SearchQuery {
+    #[serde(rename = "q")]
+    query: String,
+    page_size: Option<u32>,
+}
+
+#[get("/")]
+async fn search(&self, q: SearchQuery) -> Json<Hits> { /* ... */ }
+```
+
+The one visible difference is the 400 body: `Query<T>` answers with serde's
+plain text, `Params` with a JSON problem body by default. It is an app-level
+setting, resolved once at `build_state()`:
+
+```yaml
+server:
+  params-rejection-format: json         # default → {"error": "..."}
+  # params-rejection-format: plain-text # byte-for-byte `Query<T>` compatibility
+```
+
+Handlers that want to inspect a raw rejection themselves can take
+`Result<Query<T>, QueryRejection>`: `QueryRejection`, `PathRejection`,
+`FormRejection` and `JsonRejection` are re-exported from `r2e::http` (and
+`r2e::http::rejection`).
 
 ### Usage in a handler
 

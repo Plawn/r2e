@@ -45,9 +45,9 @@ pub mod ws;
 
 pub use self::body::Body;
 pub use self::extract::{
-    ConnectInfo, DefaultBodyLimit, Form, FromRef, FromRequest, FromRequestParts, MatchedPath,
-    OptionalFromRequest, OptionalFromRequestParts, OriginalUri, Path, Query, RawPathParams,
-    Request, State,
+    ConnectInfo, DefaultBodyLimit, Form, FormRejection, FromRef, FromRequest, FromRequestParts,
+    MatchedPath, OptionalFromRequest, OptionalFromRequestParts, OriginalUri, Path, PathRejection,
+    Query, QueryRejection, RawPathParams, Request, State,
 };
 pub use self::header::{
     HeaderMap, HeaderName, HeaderValue, Method, Parts, StatusCode, ACCEPT, AUTHORIZATION,

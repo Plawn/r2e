@@ -26,7 +26,7 @@ Additional types are available via `r2e::http::*` submodules for advanced use (e
 ## Feature Flags
 
 - Validation uses `garde` crate and is always available (no feature flag). Types deriving `garde::Validate` are automatically validated when extracted via `Json<T>`.
-- `#[derive(Params)]` aggregates path, query, and header params into a single DTO (BeanParam-like). Also generates `ParamsMetadata` for automatic OpenAPI parameter documentation.
+- `#[derive(Params)]` aggregates path, query, and header params into a single DTO (BeanParam-like). Also generates `ParamsMetadata` for automatic OpenAPI parameter documentation. An unattributed field is a query parameter named after the field, and the derive reads the struct's existing `#[serde(rename_all/rename/default/skip)]` attributes, so a shipped `Query<T>` type migrates untouched (`docs/features/02-validation.md`). The 400 body format is app-level: `server.params-rejection-format: json | plain-text`.
 
 ## `dev-reload` Feature Flag
 

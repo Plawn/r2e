@@ -18,6 +18,8 @@ serde_json = {workspace = true}
 tracing = {workspace = true}
 
 [dev-dependencies]
+# `controller_tag.rs` drives the real `#[controller(tag = "…")]` codegen.
+r2e-macros = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
 tower = {workspace = true, features = ["util"]}
 http = {workspace = true}
