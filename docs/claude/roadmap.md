@@ -571,13 +571,21 @@ L ≈ needs a design pass first.
   `routes/datasets/export.rs`, E0521). `#[routes]` re-emits signatures — it
   can append `+ use<>` to return-position `impl Trait` lacking a use-clause
   (edition-2024 guard).
-- **F10 — extractor rejections + `Params` parity (S + M).** Only
-  `JsonRejection` is re-exported (`r2e-http/src/lib.rs:57`); the app reaches
-  through `axum_compat` for `QueryRejection` (`routes/clean.rs`). Re-export
+- **F10 — extractor rejections + `Params` parity (S + M) — `Params` half
+  tracked as Tasker #1002 (target r2e, medium).** Only `JsonRejection` is
+  re-exported (`r2e-http/src/lib.rs:57`); the app reaches through
+  `axum_compat` for `QueryRejection` (`routes/clean.rs`). Re-export
   `QueryRejection`/`PathRejection`/`FormRejection`. Separately,
-  `#[derive(Params)]` lacks `rename_all` and rejection-format parity with
-  raw `Query`/`Path`, which is exactly why the 17-handler
-  `ConnectorsController` stayed on raw extractors.
+  `#[derive(Params)]` is unadoptable for any already-shipped API (five query
+  structs stayed on `Query<T>`, two of them in catalog-core). Per #1002 the
+  contract is: (1) the derive READS the existing `#[serde(rename_all)]` /
+  `#[serde(rename)]` attributes — no competing `#[params(...)]` spelling,
+  so an existing struct migrates untouched; (2) the 400-rejection body
+  format is an app-level typed-config enum (`Json` default, `PlainText` =
+  `Query<T>` compat), resolved at app construction, never per struct; (3)
+  llm.txt gains an explicit "migrating `Query<T>` → `Params`" paragraph;
+  (4) tests: camelCase + per-field rename under both spellings, both
+  rejection bodies. The five data-catalog structs are the real-world cases.
 - **F11 — OpenAPI tag welded to the struct name (S).** Splitting
   `ConnectorsController` would change the published spec. Add
   `#[controller(path = "…", tag = "…")]`.
@@ -621,14 +629,25 @@ data-catalog** (which lines does it delete?) before starting the next.
    tracing knob. Deletes `assemble!` and halves `app.rs`; `main.rs` becomes
    the macro one-liner.
 5. **Sprint 5 — HTTP & OpenAPI polish: F10, F11, F7a, F12.**
-   Rejection re-exports + `Params` parity, controller `tag`,
+   Rejection re-exports + `Params` parity (closes Tasker #1002; its
+   acceptance criteria are the sprint's), controller `tag`,
    `provide_config`, nesting seam (F12 needs its short design note first).
 6. **Sprint 6 — optional, explicit go required: F13.**
 
 App-side follow-ups (no framework change, hand to data-catalog): move
 `CatalogServiceImpl` into a module via `grpc_services(...)`, drop `axum`
 from catalog-core (`impl_into_response!` + prelude `from_fn`/`MatchedPath`),
-try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above.
+try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above, and
+**Tasker #1001** (target data-catalog, low): replace the hand-mounted
+`tower-http` `CorsLayer`/`TraceLayer` `with_layer` calls with the r2e `Cors`
+/ `Tracing` plugins (both exist, `r2e-core/src/builtins/mod.rs`) and drop
+`tower-http` from the root manifest — behavioral change, not a rename:
+diff real CORS preflight/simple-request headers before/after, keep the
+`Prometheus` plugin OUT (collides with the app's own `/metrics` +
+`http_metrics`), and remember gRPC traffic bypasses the HTTP layers. If the
+r2e plugins cannot reproduce the current permissive CORS or the
+`TraceLayer` span/log shape, that delta comes BACK here as a framework
+finding (candidate Sprint 5 extension).
 
 ## Open items tracked in their own docs
 
