@@ -35,5 +35,6 @@ The `dev-reload` feature enables Subsecond hot-patching via Dioxus. It is **inte
 - **Facade:** `r2e = { features = ["dev-reload"] }` → enables `r2e-devtools` + `r2e-core/dev-reload`
 - **Re-export:** `r2e::devtools::*` (contains `serve_with_hotreload`, `serve_with_hotreload_env`)
 - **Macro support:** `r2e::app_main!(MyApp)` includes `src/app.rs`, generates the Tokio entry point, and delegates to `launch!`; `launch!` selects the normal or Subsecond loop at compile time
+- **Tracing ordering:** both macros install the global subscriber **after** `App::setup` (once, outside the hot-patch loop), so an app that builds its own subscriber in `setup` wins — `init_tracing` is idempotent, and anything `setup` logs beforehand is dropped. `app_main!(MyApp, tracing = false)` / `launch!(MyApp, tracing = false)` install nothing, which is what lets a `Tracing::from_config(..)` plugin declared in `build` own the subscriber. Core: `launch_with::<A>(opts)` with `opts = LaunchOptions::default()` then `opts.tracing = …` (the struct is `#[non_exhaustive]`, so no literal); `launch::<A>()` is `LaunchOptions::default()`, i.e. `tracing: true`.
 - **CLI:** `r2e dev` runs `dx serve --hot-patch` with `dev-reload` feature enabled
 - **`PreparedApp<T>`** is always available (not gated) — separates app building from serving

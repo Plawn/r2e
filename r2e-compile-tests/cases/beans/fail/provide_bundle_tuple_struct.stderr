@@ -1,0 +1,5 @@
+error: #[derive(ProvideBundle)] requires named fields — each field name is what the generated `.provide(bundle.field)` reads
+  --> cases/beans/fail/provide_bundle_tuple_struct.rs:10:15
+   |
+10 | pub struct Env(pub Pool);
+   |               ^^^^^^^^^^

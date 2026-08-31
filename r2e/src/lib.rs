@@ -142,17 +142,38 @@ pub mod devtools {
 ///
 /// This conventional form expects the application source at `src/app.rs`. Use
 /// `#[r2e::main]` with [`launch!`] directly when a custom entry point is needed.
+///
+/// # Tracing
+///
+/// By default the global `tracing` subscriber is installed **after**
+/// [`App::setup`](r2e_core::App::setup) returns, so an app that builds its own
+/// subscriber in `setup` wins (`init_tracing` is idempotent). Opt out entirely
+/// with the same spelling `#[r2e::main]` uses:
+///
+/// ```ignore
+/// r2e::app_main!(MyApp, tracing = false);
+/// ```
+///
+/// R2E then installs nothing, leaving the subscriber to the app — including to
+/// a `Tracing::from_config(..)` / `ConfiguredTracing` plugin installed in
+/// `build`, which would otherwise lose the race to the entry point.
 #[macro_export]
 macro_rules! app_main {
     ($app:ty) => {
+        $crate::app_main!($app, tracing = true);
+    };
+    ($app:ty, tracing = $tracing:expr) => {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/app.rs"));
 
-        #[$crate::main]
+        // `tracing = false` on the attribute always: the subscriber is
+        // installed by `launch!` *after* `App::setup`, not before the runtime
+        // starts, so the app has the first word on it.
+        #[$crate::main(tracing = false)]
         async fn main() {
             // A boot failure is an operational error, not a bug: print one
             // line (plus the `source()` chain) and exit non-zero, rather than
             // the panic + backtrace + exit code 101 that `unwrap` would give.
-            $crate::exit_on_boot_error($crate::launch!($app).await);
+            $crate::exit_on_boot_error($crate::launch!($app, tracing = $tracing).await);
         }
     };
 }
@@ -190,13 +211,26 @@ macro_rules! app_main {
 /// `App::setup` runs **once** (its `Env` survives hot-patches); `App::build`
 /// and serve re-run on every patch, and `build`'s `load_config` re-reads
 /// `application.yaml` per patch so config edits apply on the next patch.
+///
+/// # Tracing
+///
+/// The global subscriber is installed **after** `App::setup` (and, under
+/// `dev-reload`, once — outside the patch loop). `launch!(MyApp, tracing =
+/// false)` skips it entirely, leaving the subscriber to the app. Calling
+/// `launch!` from a `#[r2e::main]` that already initialised tracing is
+/// harmless: `init_tracing` is idempotent.
 #[macro_export]
 macro_rules! launch {
     ($app:ty) => {
+        $crate::launch!($app, tracing = true)
+    };
+    ($app:ty, tracing = $tracing:expr) => {
         async {
             #[cfg(not(feature = "dev-reload"))]
             {
-                $crate::launch::<$app>().await
+                let mut __opts = $crate::LaunchOptions::default();
+                __opts.tracing = $tracing;
+                $crate::launch_with::<$app>(__opts).await
             }
             #[cfg(feature = "dev-reload")]
             {
@@ -243,6 +277,12 @@ macro_rules! launch {
                     ::core::result::Result::Ok(__e) => __e,
                     ::core::result::Result::Err(__e) => return ::core::result::Result::Err(__e),
                 };
+                // Same ordering as the non-dev arm: the subscriber goes in
+                // after `setup`, once, outside the hot-patch loop (it is a
+                // process-global, one-shot install).
+                if $tracing {
+                    $crate::init_tracing();
+                }
                 // Enable the process-global dev-reload caches (bean-graph
                 // fingerprinting, instance reuse, lifecycle skip): they must
                 // engage only under the actual hot-patch loop, never in a

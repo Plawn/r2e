@@ -254,6 +254,26 @@ impl SearchService {
 
 No manual `.provide()` or `#[config_section]` needed — `load_config` handles it.
 
+## `#[derive(ProvideBundle)]` + `.provide_all(bundle)`
+
+The `App::Env` case: `setup` builds a handful of process-lifetime resources,
+and `build` then needs one `.provide(env.field)` line per field. The derive
+makes the env struct itself the provision list — `.provide_all(env)` expands to
+exactly that chain, in field order, so `P` grows per field and nothing about
+registration semantics changes. Two field rules worth knowing:
+
+- `Option<T>` is provided **as-is** (see the section right below — it is its own
+  bean type), never unwrapped and never conditionally skipped: a compile-time
+  provision list cannot depend on a runtime value.
+- An `R2eConfig` field is applied as `.override_config(value)` instead of being
+  provided as a bean, so `provide_all` belongs **before** `load_config`. At most
+  one; the type is matched **textually** on the written path (an alias is not
+  recognised).
+
+Full design notes in `docs/claude/di-builder-refactor.md` § Registration API;
+trait in `r2e-core/src/di/bundle.rs`, derive in
+`r2e-macros/src/derives/provide_bundle_derive.rs`.
+
 ## `Option<T>` as a first-class bean type
 
 `Option<T>` is a distinct bean type in the graph — its `TypeId` is

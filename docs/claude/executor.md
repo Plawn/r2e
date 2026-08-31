@@ -270,6 +270,38 @@ Hand-written `ServiceComponent` impls get the same hook: `fn enabled(&self)`
 defaults to `true`, and `fn enabled_gate() -> Option<&'static str>` supplies
 the label for the log line.
 
+### `services.enabled` — the global off switch
+
+The profile-level counterpart, and the reason a test boot does not have to
+duplicate the app blueprint minus its workers:
+
+```yaml
+# application-test.yaml
+services:
+  enabled: false
+```
+
+`false` keeps **every** background service out of `run()`, on both spawn paths.
+It composes with the per-service gate — a service runs only when the global
+switch *and* its own `enabled()` both say yes — and defaults to `true` when the
+key is absent (opt-out, never opt-in). It skips exactly what the per-service
+gate skips and nothing more: registration, dependency resolution,
+`from_context` and config validation all still run, so a test with services off
+still fails on a broken service configuration.
+
+There is **no profile sniffing**: it is an ordinary config key
+(`r2e_core::runtime::service::SERVICES_ENABLED_KEY = "services.enabled"`,
+read through `services_enabled(Option<&R2eConfig>)`), so it can equally be
+flipped from `R2E_SERVICES_ENABLED` or
+`override_config_value("services.enabled", false)`. The framework logs one
+`info!` per process — not one per service — naming the key.
+
+Where it is read: `AppBuilder::try_spawn_service_impl` captures it from the
+builder's own config (`shared.config`), and `BeanRegistry::register_service_source`
+(the `#[producer(start)]` / bean-declared path) reads the `R2eConfig` bean out
+of the graph. Both evaluate it inside the service task, at the same moment the
+per-service gate is read.
+
 ## You do NOT need an adapter struct
 
 A recurring anti-pattern in consumer apps: a shared crate declares the worker
@@ -325,6 +357,7 @@ constructor.
 | Periodic / event-driven worker bound to app lifecycle | `#[derive(BackgroundService)]` + `spawn_service::<C>()` |
 | Worker type from a shared crate, with a plain constructor | `#[producer(start)]` — build it from beans/config, no adapter struct |
 | A service the operator can turn off | `#[service(enabled = "…")]` (registration + config validation stay unconditional) |
+| Every service off for a profile (tests) | `services.enabled: false` in `application-<profile>.yaml` |
 | Startup work that must not repeat on an `r2e dev` hot patch | `.on_start_once(...)` / `#[on_start(once)]` |
 | Cron / interval schedule | `#[scheduled]` — requires the `Executor` plugin; ticks run on this pool (drained, bounded, metered) |
 | Submit work from inside a background service | Inject `PoolExecutor` and call `submit*` |

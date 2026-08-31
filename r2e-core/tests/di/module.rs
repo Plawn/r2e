@@ -955,3 +955,86 @@ async fn a_duplicate_module_endpoint_message_names_the_clashing_name() {
          transport-level name: {rendered}"
     );
 }
+
+// ── Module aggregates: `#[module(modules(..))]` + `register_modules` ────────
+//
+// An aggregate names the app's module blueprint once so the app and its tests
+// share a single registration line. It composes only modules — it owns no
+// providers, controllers or scope of its own — and `register_modules` folds
+// `register_module` over the members in the listed order.
+
+/// The app blueprint: two modules, one importing the other's export.
+#[module(modules(UserModule, OrderModule))]
+struct AppModules;
+
+/// An aggregate that also brings a module owning a plugin, to check the
+/// brought plugin is installed through the fold like a direct registration.
+#[module(modules(BringsPluginModule, RequiresBroughtModule))]
+struct PluginModules;
+
+/// One `register_modules::<AppModules>()` registers every member: providers,
+/// controllers and cross-module wiring behave exactly as the hand-written
+/// `register_module` chain.
+#[r2e_core::test]
+async fn register_modules_registers_every_member() {
+    let app = AppBuilder::new()
+        .provide(DbPool("agg-db"))
+        .register_modules::<AppModules>()
+        .build_state()
+        .await;
+
+    // `UserModule`'s private bean stays private; its export is app-global.
+    assert!(app.state().bean::<UserRepo>().is_none());
+    assert!(app.state().bean::<UserService>().is_some());
+
+    let router = app.build();
+    for (path, expected) in [
+        ("/users", "agg-db via GET"),
+        ("/admin", "admin:agg-db"),
+        // Cross-module wiring: OrderModule imports UserModule's export.
+        ("/orders", "orders for agg-db"),
+    ] {
+        let (status, body) = get(&router, path).await;
+        assert_eq!(status, r2e_core::http::StatusCode::OK, "route {path}");
+        assert_eq!(body, expected, "route {path}");
+    }
+}
+
+/// An aggregate composes with the rest of the builder: app-level controllers,
+/// extra `register_module` calls, and plugins a member brings.
+#[r2e_core::test]
+async fn register_modules_composes_with_the_rest_of_the_builder() {
+    use r2e_core::type_list::BeanAccess;
+
+    let app = AppBuilder::new()
+        .register_modules::<PluginModules>()
+        .build_state()
+        .await
+        .register_controller::<AppSeesBroughtController>();
+
+    // The plugin brought by a member is installed by the fold, and its bean is
+    // app-global.
+    assert_eq!(app.state().get::<BroughtBean>(), BroughtBean(11));
+
+    let router = app.build();
+    for (path, expected) in [("/brought", "11+11"), ("/app-sees-brought", "app:11")] {
+        let (status, body) = get(&router, path).await;
+        assert_eq!(status, r2e_core::http::StatusCode::OK, "route {path}");
+        assert_eq!(body, expected, "route {path}");
+    }
+}
+
+/// Tuple sugar: `register_modules::<(A, B)>()` needs no named aggregate.
+#[r2e_core::test]
+async fn register_modules_accepts_a_tuple_of_modules() {
+    let app = AppBuilder::new()
+        .provide(DbPool("tuple-db"))
+        .register_modules::<(UserModule, OrderModule)>()
+        .build_state()
+        .await;
+
+    let router = app.build();
+    let (status, body) = get(&router, "/orders").await;
+    assert_eq!(status, r2e_core::http::StatusCode::OK);
+    assert_eq!(body, "orders for tuple-db");
+}

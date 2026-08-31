@@ -37,6 +37,20 @@
 //! types. `module(A, B)` and repeated `module(A), module(B)` are equivalent.
 //! Importing a module only *requires* its exports — it does NOT register that
 //! module; the app must still `.register_module::<OtherModule>()`.
+//!
+//! `modules(...)` — the **aggregate** form. A type declared as
+//!
+//! ```ignore
+//! #[module(modules(UserModule, OrderModule, BillingModule))]
+//! pub struct AppModules;
+//! ```
+//!
+//! is not a module: it owns no providers, controllers or scope, so
+//! `modules(...)` is exclusive with every other key. It generates a
+//! `ModuleAggregate` impl and is registered with
+//! `.register_modules::<AppModules>()`, which folds `register_module` over the
+//! members in the listed order — exactly as if each had been registered by
+//! hand. This is what lets an app and its tests share one blueprint line.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -63,6 +77,11 @@ struct ModuleArgs {
     plugins: Vec<PluginEntry>,
     /// `grpc_services(...)` — the gRPC services this module owns.
     grpc_services: Vec<Type>,
+    /// `modules(...)` — an **aggregate**: this type composes other modules and
+    /// declares nothing of its own. Exclusive with every other key.
+    modules: Vec<Type>,
+    /// Span of the `modules` key, for the exclusivity diagnostic.
+    modules_span: Option<Span>,
 }
 
 /// One `plugins(...)` entry: `Type = expr`.
@@ -224,13 +243,26 @@ impl Parse for ModuleArgs {
                     reject_repeats(&services, "grpc_services")?;
                     args.grpc_services = services;
                 }
+                "modules" => {
+                    let modules = beans_only(entries, "modules")?;
+                    reject_repeats(&modules, "modules")?;
+                    if modules.is_empty() {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            "`modules(...)` must list at least one module — an empty aggregate \
+                             registers nothing",
+                        ));
+                    }
+                    args.modules = modules;
+                    args.modules_span = Some(key.span());
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown key `{other}` in #[module] — expected `providers`, \
                              `controllers`, `grpc_services`, `exports`, `imports`, `plugins`, \
-                             or `requires_plugins`"
+                             `requires_plugins`, or `modules`"
                         ),
                     ));
                 }
@@ -242,8 +274,35 @@ impl Parse for ModuleArgs {
             }
         }
 
+        // An aggregate composes only other modules: it owns no providers,
+        // controllers, exports, imports or plugins of its own. Mixing the two
+        // forms would silently drop one of them, so it is a hard error.
+        if let Some(span) = args.modules_span {
+            let other: Vec<&String> = seen.iter().filter(|k| *k != "modules").collect();
+            if !other.is_empty() {
+                let listed = other
+                    .iter()
+                    .map(|k| format!("`{k}(...)`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(syn::Error::new(
+                    span,
+                    format!(
+                        "`modules(...)` is exclusive with every other #[module] key (found \
+                         {listed}) — an aggregate only composes other modules. Move the \
+                         providers/controllers/exports/imports/plugins into a real module and \
+                         list that module here"
+                    ),
+                ));
+            }
+        }
+
         Ok(args)
     }
+}
+
+fn to_tokens_of(types: &[Type]) -> Vec<TokenStream2> {
+    types.iter().map(|ty| quote! { #ty }).collect()
 }
 
 pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -261,6 +320,25 @@ pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let name = &item.ident;
     let krate = r2e_core_path();
+
+    // ── Aggregate form: `#[module(modules(A, B, C))]` ──────────────────────
+    //
+    // Emits a `ModuleAggregate` impl instead of a `FeatureModule` one: the
+    // aggregate is not itself a module (it has no providers, controllers or
+    // scope), it is a named list registered by
+    // `.register_modules::<Aggregate>()`, which folds `register_module` over
+    // the members in order.
+    if !args.modules.is_empty() {
+        let members = build_tcons_type(&to_tokens_of(&args.modules), &krate);
+        return quote! {
+            #item
+
+            impl #krate::di::module::ModuleAggregate for #name {
+                type Modules = #members;
+            }
+        }
+        .into();
+    }
 
     let to_tokens =
         |types: &[Type]| -> Vec<TokenStream2> { types.iter().map(|ty| quote! { #ty }).collect() };

@@ -110,6 +110,60 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>
     }
 }
 
+/// Registers a [`ModuleAggregate`] — a whole list of feature modules — in one
+/// call, inferring every member's encapsulation-check witnesses.
+///
+/// The fold is exactly the `.register_module::<..>()` chain the members would
+/// otherwise be written as, in declaration order, so nothing about
+/// encapsulation, plugin ownership, or ordering changes. What it buys is a
+/// **nameable** blueprint: the app's module list becomes a type that production
+/// and tests can both register.
+///
+/// ```ignore
+/// #[module(modules(UserModule, BillingModule))]
+/// pub struct AppModules;
+///
+/// AppBuilder::new()
+///     .provide(db_pool)
+///     .register_modules::<AppModules>()
+///     .build_state()
+///     .await
+///
+/// // …or, without declaring an aggregate type:
+/// //   .register_modules::<(UserModule, BillingModule)>()
+/// ```
+pub trait RegisterModules<P, R, Mods, Idx>: Sized {
+    /// Register every module of an aggregate, in declaration order.
+    fn register_modules<A>(
+        self,
+    ) -> AppBuilder<
+        NoState,
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::OutP,
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::OutR,
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::OutMods,
+    >
+    where
+        A: ModuleAggregate,
+        A::Modules: ModuleGroup<P, R, Mods, Idx>;
+}
+
+impl<P, R, Mods, Idx> RegisterModules<P, R, Mods, Idx> for AppBuilder<NoState, P, R, Mods> {
+    fn register_modules<A>(
+        self,
+    ) -> AppBuilder<
+        NoState,
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::OutP,
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::OutR,
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::OutMods,
+    >
+    where
+        A: ModuleAggregate,
+        A::Modules: ModuleGroup<P, R, Mods, Idx>,
+    {
+        <A::Modules as ModuleGroup<P, R, Mods, Idx>>::register_all(self)
+    }
+}
+
 /// Registers a single [`Controller`], inferring its witnesses.
 ///
 /// A controller injecting a bean that is absent from the application state is

@@ -425,10 +425,19 @@ impl BeanRegistry {
             type_name::<T>(),
             Box::new(|ctx: &BeanContext, shutdown| {
                 let service = T::from_context(ctx);
+                // The global `services.enabled` switch. `R2eConfig` is a bean
+                // whenever the app loaded a config; absent → services enabled.
+                let globally_enabled = crate::runtime::service::services_enabled(
+                    ctx.try_get::<crate::config::R2eConfig>().as_ref(),
+                );
                 Box::pin(async move {
-                    // Same gate as the `spawn_service` path, read at the same
+                    // Same gates as the `spawn_service` path, read at the same
                     // moment (the task is about to run) — see
                     // `ServiceComponent::enabled`.
+                    if !globally_enabled {
+                        crate::runtime::service::log_services_globally_disabled();
+                        return;
+                    }
                     if !service.enabled() {
                         crate::runtime::service::log_service_disabled(
                             type_name::<T>(),

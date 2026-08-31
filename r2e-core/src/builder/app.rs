@@ -141,7 +141,52 @@ pub trait App {
 /// [`try_build_state`](AppBuilder::try_build_state)) or serving itself. The
 /// caller decides the exit status; `app_main!` prints one line and exits `1`.
 pub async fn launch<A: App>() -> Result<(), BootError> {
+    launch_with::<A>(LaunchOptions::default()).await
+}
+
+/// Options for [`launch_with`].
+///
+/// Constructed with `LaunchOptions::default()` and adjusted field by field;
+/// new options are added as fields, so a struct literal is deliberately not
+/// the supported spelling.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct LaunchOptions {
+    /// Initialise the global `tracing` subscriber (via
+    /// [`init_tracing`](crate::init_tracing)) **after** [`App::setup`] returns.
+    ///
+    /// Default `true`. Set it to `false` — `app_main!(MyApp, tracing = false)`
+    /// — when the application installs its own subscriber, either in `setup`
+    /// or through a plugin such as `Tracing::from_config(..)` in `build`.
+    pub tracing: bool,
+}
+
+impl Default for LaunchOptions {
+    fn default() -> Self {
+        Self { tracing: true }
+    }
+}
+
+/// [`launch`] with explicit [`LaunchOptions`].
+///
+/// # Tracing ordering
+///
+/// The subscriber is installed **after** [`App::setup`], not before it, so an
+/// application whose `setup` builds its own subscriber (or reads the
+/// environment to decide on one) wins: `init_tracing` is idempotent and
+/// silently does nothing once a global subscriber is set. The cost is that
+/// anything `setup` logs through `tracing` before installing a subscriber is
+/// dropped — `setup` should print (or install its subscriber first) if it has
+/// something to say.
+///
+/// With `tracing: false` R2E installs nothing at all, leaving the whole
+/// decision to the app; a `Tracing`/`ConfiguredTracing` plugin installed in
+/// `build` then takes effect instead of losing the race to the entry point.
+pub async fn launch_with<A: App>(options: LaunchOptions) -> Result<(), BootError> {
     let env = A::setup().await?;
+    if options.tracing {
+        crate::init_tracing();
+    }
     A::build(AppBuilder::new(), env).await?.serve_auto().await
 }
 

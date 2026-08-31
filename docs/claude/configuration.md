@@ -709,6 +709,12 @@ This is the fix for apps hand-rolling a `build_settings()` helper purely to get
 | `server.quic.key` | `String` | — | PEM private key path (required with `quic.port`) |
 | `server.quic.alt_svc_max_age` | `u32` | `3600` | Alt-Svc header max-age in seconds |
 
+### Background services
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `services.enabled` | `bool` | `true` | Global background-service switch. `false` keeps every `ServiceComponent` out of `run()`, on both spawn paths, and composes with the per-service `#[service(enabled = "…")]` gate (a service runs only when both say yes). It skips **only** `run()`: registration, dependency resolution, `from_context` and the service's `#[config]`/`#[config_section]` validation stay unconditional, so a boot with services off still fails on a broken service configuration. Typically set in `application-test.yaml`. Constant: `r2e_core::runtime::service::SERVICES_ENABLED_KEY`. See `docs/claude/executor.md`. |
+
 ---
 
 ## Reference

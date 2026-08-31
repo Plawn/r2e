@@ -63,6 +63,7 @@ pub use r2e_macros::producer;
 pub use r2e_macros::BackgroundService;
 pub use r2e_macros::Bean;
 pub use r2e_macros::DecoratorBean;
+pub use r2e_macros::ProvideBundle;
 
 // Config macros
 pub use r2e_macros::ConfigProperties;
@@ -79,7 +80,7 @@ pub use r2e_macros::ApiError;
 pub use crate::beans::BootError;
 pub use crate::builder::{
     launch, App, AppBuilder, BootableApp, PreparedApp, RegisterController, RegisterControllers,
-    RegisterModule, SpawnService,
+    RegisterModule, RegisterModules, SpawnService,
 };
 pub use crate::runtime::lifecycle::StopHandle;
 pub use crate::runtime::mailbox::Mailboxes;

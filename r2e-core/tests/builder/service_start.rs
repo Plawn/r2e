@@ -486,3 +486,162 @@ async fn the_gate_is_honoured_on_the_producer_start_path() {
         "the same service must run once its gate returns true"
     );
 }
+
+// ── The global `services.enabled` switch ────────────────────────────────────
+//
+// The profile-level counterpart of the per-service gate: `services.enabled:
+// false` in `application-test.yaml` keeps every background service from
+// running, so a test boot does not start pollers, exporters or queue
+// consumers. It composes with the per-service gate (a service runs only when
+// both say yes) and, like it, skips **only** `start()`: registration,
+// `from_context` and config validation stay unconditional.
+
+static GLOBAL_GATED_STARTED: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone)]
+struct GlobalGatedService;
+
+impl ServiceComponent for GlobalGatedService {
+    type Deps = r2e_core::type_list::TNil;
+
+    fn from_context(_ctx: &BeanContext) -> Self {
+        Self
+    }
+
+    fn config_keys() -> Vec<(&'static str, &'static str, r2e_core::config::ConfigKeyKind)> {
+        vec![(
+            "globally.gated.key",
+            "alloc::string::String",
+            r2e_core::config::ConfigKeyKind::Required,
+        )]
+    }
+
+    async fn start(self, shutdown: CancelToken) {
+        GLOBAL_GATED_STARTED.fetch_add(1, Ordering::SeqCst);
+        shutdown.cancelled().await;
+    }
+}
+
+#[r2e_macros::producer(start)]
+fn make_global_gated_service() -> GlobalGatedService {
+    GlobalGatedService
+}
+
+fn config_with_services(enabled: Option<bool>) -> R2eConfig {
+    let mut config = R2eConfig::empty();
+    config.set("globally.gated.key", ConfigValue::from("present"));
+    if let Some(flag) = enabled {
+        config.set("services.enabled", ConfigValue::Bool(flag));
+    }
+    config
+}
+
+/// `services.enabled: false` must not skip the service's config validation —
+/// a missing key is still an aggregated boot error (the F6 rule).
+#[tokio::test]
+async fn the_global_gate_still_validates_service_config() {
+    let mut config = R2eConfig::empty();
+    config.set("services.enabled", ConfigValue::Bool(false));
+
+    let err = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .register::<MakeGlobalGatedService>()
+        .try_build_state()
+        .await
+        .err()
+        .expect("the global gate must not skip config validation");
+    assert!(err.to_string().contains("globally.gated.key"), "{err}");
+}
+
+async fn run_global_gate_cycle(enabled: Option<bool>) -> usize {
+    GLOBAL_GATED_STARTED.store(0, Ordering::SeqCst);
+
+    let app = AppBuilder::new()
+        .override_config(config_with_services(enabled))
+        .load_config::<()>()
+        .register::<MakeGlobalGatedService>()
+        .build_state()
+        .await;
+
+    let running = app
+        .prepare("127.0.0.1:0")
+        .start_in_process()
+        .await
+        .expect("boot");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    running.shutdown().await;
+
+    GLOBAL_GATED_STARTED.load(Ordering::SeqCst)
+}
+
+/// All three states in one test: the observation is a process-global counter.
+#[tokio::test]
+async fn the_global_gate_is_honoured_on_the_producer_start_path() {
+    assert_eq!(
+        run_global_gate_cycle(Some(false)).await,
+        0,
+        "`services.enabled: false` must keep every service out of run()"
+    );
+    assert_eq!(
+        run_global_gate_cycle(Some(true)).await,
+        1,
+        "`services.enabled: true` runs services normally"
+    );
+    assert_eq!(
+        run_global_gate_cycle(None).await,
+        1,
+        "an absent key defaults to enabled — the gate is opt-out"
+    );
+}
+
+static GLOBAL_GATED_SPAWNED: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Clone)]
+struct SpawnedGatedService;
+
+impl ServiceComponent for SpawnedGatedService {
+    type Deps = r2e_core::type_list::TNil;
+
+    fn from_context(_ctx: &BeanContext) -> Self {
+        Self
+    }
+
+    async fn start(self, shutdown: CancelToken) {
+        GLOBAL_GATED_SPAWNED.fetch_add(1, Ordering::SeqCst);
+        shutdown.cancelled().await;
+    }
+}
+
+/// The same switch on the explicit `spawn_service` path, which reads the
+/// builder's config rather than the bean graph.
+#[tokio::test]
+async fn the_global_gate_is_honoured_on_the_spawn_service_path() {
+    for (flag, expected) in [(false, 0), (true, 1)] {
+        GLOBAL_GATED_SPAWNED.store(0, Ordering::SeqCst);
+
+        let mut config = R2eConfig::empty();
+        config.set("services.enabled", ConfigValue::Bool(flag));
+
+        let app = AppBuilder::new()
+            .override_config(config)
+            .load_config::<()>()
+            .build_state()
+            .await
+            .spawn_service::<SpawnedGatedService>();
+
+        let running = app
+            .prepare("127.0.0.1:0")
+            .start_in_process()
+            .await
+            .expect("boot");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        running.shutdown().await;
+
+        assert_eq!(
+            GLOBAL_GATED_SPAWNED.load(Ordering::SeqCst),
+            expected,
+            "services.enabled = {flag}"
+        );
+    }
+}

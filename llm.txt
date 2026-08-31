@@ -104,7 +104,17 @@ include!("app.rs");
 ```rust
 // src/main.rs — prod serve AND dev hot-reload
 r2e::app_main!(MyApp);                          // include app.rs + generate main + launch
+// r2e::app_main!(MyApp, tracing = false);      // ...and don't install a subscriber
 ```
+
+`app_main!` installs the global `tracing` subscriber **after** `App::setup`
+returns (and, under `dev-reload`, once — outside the patch loop), so an app that
+builds its own subscriber in `setup` wins; `init_tracing` is idempotent. Anything
+`setup` logs before that point is dropped. `app_main!(MyApp, tracing = false)` —
+same spelling as `#[r2e::main(tracing = false)]` — installs nothing at all, which
+is what lets a `Tracing::from_config(&cfg)` / `ConfiguredTracing` plugin declared
+in `build` actually own the subscriber instead of losing the race to the entry
+point. `launch!(MyApp, tracing = false)` is the same knob for a custom `main`.
 
 ```rust
 // src/controllers/hello.rs
@@ -212,11 +222,12 @@ The prelude provides everything a controller needs — no direct `axum` imports.
 Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP verbs,
 `guard`, `pre_guard`, `roles`, `all_roles`, `anonymous`, `request_helper`, `intercept`,
 `managed`, `consumer`, `scheduled`, `bean`, `producer`, `module`, derives `Bean`,
-`DecoratorBean`, `BackgroundService`, `Params`, `ConfigProperties`, `FromConfigValue`,
+`DecoratorBean`, `BackgroundService`, `ProvideBundle`, `Params`, `ConfigProperties`,
+`FromConfigValue`,
 `Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
 `R2eConfig`, `Guard`, `GuardContext`, `PreAuthGuard`, `Identity`, `Interceptor`,
 `ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
-`RegisterModule`, `BeanLookup`), plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`,
+`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
 (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
 `IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,
@@ -622,6 +633,44 @@ witness-free runtime `TypeId` walk down the list. `>127` provisions need
 `#![recursion_limit = "512"]` in every crate root that includes the app
 (`src/main.rs` and `src/lib.rs` in the standard layout).
 
+### `#[derive(ProvideBundle)]` — provide a whole `App::Env` in one call
+
+`App::setup` builds the process-lifetime resources; `App::build` then has to
+hand every one of them to the graph, which is one `.provide(env.field)` line per
+field. The derive turns the env struct itself into the provision list:
+
+```rust
+#[derive(ProvideBundle)]              // in the prelude
+pub struct AppEnv {
+    pub pool: SqlitePool,
+    pub bus: LocalEventBus,
+    pub s3: Option<S3Client>,         // provided as-is: Option<T> is a bean type
+    pub config: R2eConfig,            // special: acts as .override_config(..)
+}
+
+async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+    Ok(b.provide_all(env)             // == .provide(env.pool).provide(env.bus)...
+        .load_config::<()>()
+        .try_build_state().await?)
+}
+```
+
+- One provision per field, **in field order**, exactly as the hand-written
+  `.provide(..)` chain would produce; the provision list `P` grows per field, so
+  a missing bean is still a compile error at the registration that needs it.
+  Every field must be `Clone + Send + Sync + 'static`.
+- `Option<T>` fields are provided **as-is** — R2E treats `Option<T>` as its own
+  bean type (see below), so there is no unwrapping and no "skip if `None`": a
+  compile-time provision list cannot depend on a runtime value.
+- An `R2eConfig` field is **not** provided as a bean: it is applied as
+  `.override_config(value)`, which is why `provide_all` belongs before
+  `load_config`. At most one such field (two is a compile error). Detection is
+  **textual** on the written type — a field written `R2eConfig` is treated as the
+  config even if it is an unrelated type of that name, and a type *alias* for
+  `R2eConfig` is not recognised. Write the type as `R2eConfig`.
+- `provide_all` is a pre-`build_state` builder method. Generic structs, tuple
+  structs, unit structs and enums are rejected with a spanned error.
+
 ### `Option<T>` beans — conditional availability
 
 `Option<T>` is a first-class bean type; the producer decides `Some`/`None`, the
@@ -984,6 +1033,26 @@ you must still `.register_module::<OtherModule>()` yourself.
   `type Plugins = (); fn plugins() {}` when they bring nothing, and
   `type Endpoints = ();` when they own no gRPC service.
 
+**Module aggregates — one blueprint line shared by the app and its tests:**
+
+```rust
+#[module(modules(UserModule, BillingModule, ReportModule))]
+pub struct AppModules;                    // NOT a module: a named list of them
+
+b.register_modules::<AppModules>()        // == register_module::<Each>() in order
+b.register_modules::<(UserModule, BillingModule)>()   // tuple sugar, no named type
+```
+
+`modules(...)` is **exclusive** with every other `#[module]` key (an aggregate
+owns no providers, controllers, exports, imports or plugins — mixing them is a
+compile error). `register_modules::<A>()` folds `register_module` over the
+members left to right, so encapsulation, plugin ownership, `requires_plugins`
+checking, brought-plugin installation and ordering are exactly those of the
+hand-written chain: an aggregate is a naming device, not a new scope. Members'
+`exports` therefore reach the app-global provision list as usual, which is what
+lets one member import another member's export. Tuples up to 16 members are
+aggregates out of the box.
+
 `grpc_services(...)` is the transport peer of `controllers(...)`: the slice owns
 its gRPC services, so they may inject the module's **private** providers (the
 app-level `.register_grpc_service::<S>()` cannot — its deps must be in the
@@ -1053,8 +1122,10 @@ AppBuilder::new()
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
     .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
     .provide(bean)                              // constructed values
+    .provide_all(env)                           // every field of a #[derive(ProvideBundle)] struct
     .register::<CreatePool>()                   // beans / producers (one unified method)
     .register_module::<UserModule>()            // modules: builder phase (may bring plugins)
+    .register_modules::<AppModules>()           // ...or a #[module(modules(..))] aggregate
     .build_state().await
     // ── App phase: controllers, lifecycle ──
     .on_start(|state| async move { Ok(()) })
@@ -1365,7 +1436,9 @@ and is never reported as missing.
 serving (required by `per_worker_service`). `server.drain-timeout` (duration,
 default `30s`) — HTTP drain budget at shutdown; `.drain_timeout(d)` /
 `.drain_timeout_unbounded()` on the builder win over it. `server.tcp_nodelay`
-(default `true`). `server.quic.*` — HTTP/3.
+(default `true`). `server.quic.*` — HTTP/3. `services.enabled` (default `true`)
+— global background-service switch; `false` keeps every `ServiceComponent` out
+of `run()` while leaving registration and config validation untouched.
 
 ---
 
@@ -3891,6 +3964,25 @@ key*, when the derive can see one). The gate is read at spawn time, on the
 constructed instance, on **every** spawn path (`spawn_service` and
 `#[producer(start)]`). Hand-written impls override `fn enabled(&self) -> bool`
 (default `true`) and `fn enabled_gate() -> Option<&'static str>`.
+
+#### Turning **all** services off — `services.enabled: false`
+
+```yaml
+# application-test.yaml — a test boot assembles the app, it does not run workers
+services:
+  enabled: false
+```
+
+The profile-level switch: no background service calls `run()` on any spawn path.
+It composes with the per-service gate (a service runs only when **both** say
+yes), defaults to `true` when the key is absent, and — like the per-service gate
+— skips only `run()`: registration, `from_context` and config validation stay
+unconditional, so a test with services off still fails on a broken service
+config. One `info!` for the whole process, not one per service. There is no
+sniffing of the profile: it is an ordinary config key
+(`r2e_core::runtime::service::SERVICES_ENABLED_KEY`), so it can be flipped from
+`application-<profile>.yaml`, `R2E_SERVICES_ENABLED`, or
+`override_config_value("services.enabled", false)` in a test.
 
 #### You do NOT need an adapter struct — `#[producer(start)]`
 

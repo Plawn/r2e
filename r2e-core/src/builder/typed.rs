@@ -543,11 +543,19 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         let service = C::from_context(&self.bean_context);
         let name = std::any::type_name::<C>();
         let gate = C::enabled_gate();
+        // The global `services.enabled` switch, captured from the same config
+        // the service was validated against.
+        let globally_enabled =
+            crate::runtime::service::services_enabled(self.shared.config.as_ref());
         Ok(self.register_service(name, move |token| async move {
-            // The gate is read at spawn time, on the constructed instance:
+            // Both gates are read at spawn time, on the constructed instance:
             // everything above (registration, `from_context`, config
             // validation) has already happened unconditionally, exactly as it
             // does for an enabled service.
+            if !globally_enabled {
+                crate::runtime::service::log_services_globally_disabled();
+                return;
+            }
             if !service.enabled() {
                 crate::runtime::service::log_service_disabled(name, gate);
                 return;

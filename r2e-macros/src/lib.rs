@@ -17,7 +17,7 @@ use attrs::{
 use derives::{
     api_error_derive, bean_derive, bg_service_derive, cacheable_derive, config_derive,
     decorator_bean_derive, from_config_value_derive, from_multipart, object_params_derive,
-    params_derive,
+    params_derive, provide_bundle_derive,
 };
 use parsing::{grpc_routes_parsing, mcp_routes_parsing};
 
@@ -1202,6 +1202,52 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Bean, attributes(inject, config, live_config, config_section, default))]
 pub fn derive_bean(input: TokenStream) -> TokenStream {
     bean_derive::expand(input)
+}
+
+/// Derive macro for **provision bundles** — collapse one `.provide(env.field)`
+/// line per field into a single
+/// [`provide_all`](r2e_core::AppBuilder::provide_all) call.
+///
+/// Typically applied to an [`App::Env`](r2e_core::App::Env): the generated
+/// [`ProvideBundle`](r2e_core::di::bundle::ProvideBundle) impl emits exactly the
+/// chain you would have written by hand, so the compile-time provision list `P`
+/// grows with one entry per field, **in field order**, and each field type must
+/// be `Clone + Send + Sync + 'static` like any provided bean.
+///
+/// ```ignore
+/// #[derive(Clone, ProvideBundle)]
+/// pub struct AppEnv {
+///     pub config: R2eConfig,      // → override_config(..) — not a bean
+///     pub pool: DbPool,           // → .provide(..)
+///     pub s3: Option<S3Client>,   // → .provide(..) — the bean type is Option<S3Client>
+/// }
+///
+/// // in App::build
+/// b.provide_all(env).load_config::<Settings>()
+/// ```
+///
+/// Field rules:
+///
+/// - **`R2eConfig`** — at most one field may be an
+///   [`R2eConfig`](r2e_core::config::R2eConfig); it becomes
+///   [`override_config`](r2e_core::AppBuilder::override_config) instead of a
+///   provision, which removes the "call `override_config` before `load_config`"
+///   ordering constraint from the app (`provide_all` itself must still run
+///   before `load_config`). Two `R2eConfig` fields are a compile error.
+///   Detection is **textual**: any field whose type path ends in `R2eConfig`
+///   (with no generic arguments) is taken to be the config, so a type alias to
+///   it is *not* recognised and an unrelated type of that name *is*.
+/// - **`Option<T>`** — provided as-is. `Option<T>` is a first-class bean type in
+///   R2E (keyed by `TypeId::of::<Option<T>>()`, injected as a hard dependency),
+///   exactly like a `#[producer] -> Option<T>`; the bundle does not unwrap it
+///   and does not conditionally skip the provision — a compile-time provision
+///   list cannot depend on a runtime value.
+/// - every other field is `.provide(..)`-ed.
+///
+/// Generic structs, tuple structs, unit structs, and enums are rejected.
+#[proc_macro_derive(ProvideBundle)]
+pub fn derive_provide_bundle(input: TokenStream) -> TokenStream {
+    provide_bundle_derive::expand(input)
 }
 
 /// Derive macro for guards/interceptors with bean deps — generates the

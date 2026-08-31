@@ -151,6 +151,36 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self.with_updated_types()
     }
 
+    /// Provide every field of a bundle in one call — the
+    /// [`App::Env`](crate::App::Env) shortcut.
+    ///
+    /// Equivalent to writing one [`provide`](Self::provide) per field, in field
+    /// order: the compile-time provision list `P` grows exactly as the
+    /// hand-written chain would grow it, and each field type must be
+    /// `Clone + Send + Sync + 'static` like any provided bean.
+    ///
+    /// One field may be an [`R2eConfig`](crate::config::R2eConfig); it is
+    /// applied as [`override_config`](Self::override_config) rather than
+    /// provided as a bean, which is why `provide_all` must run **before**
+    /// [`load_config`](Self::load_config) when the bundle carries one.
+    ///
+    /// ```ignore
+    /// #[derive(ProvideBundle)]
+    /// struct AppEnv { config: R2eConfig, pool: DbPool, s3: S3Client }
+    ///
+    /// async fn build(b: AppBuilder, env: AppEnv) -> Result<impl BootableApp, BootError> {
+    ///     Ok(b.provide_all(env)
+    ///         .load_config::<Settings>()
+    ///         .try_build_state().await?)
+    /// }
+    /// ```
+    pub fn provide_all<B>(self, bundle: B) -> AppBuilder<NoState, B::OutP, R, Mods>
+    where
+        B: crate::di::bundle::ProvideBundle<P, R, Mods>,
+    {
+        bundle.provide_into(self)
+    }
+
     /// Declare a **worker-local** bean: exactly one `T` per sharded worker,
     /// built by `factory` on the worker thread before it accepts traffic and
     /// dropped there at shutdown.

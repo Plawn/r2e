@@ -822,6 +822,158 @@ where
     }
 }
 
+// ── Module aggregates ───────────────────────────────────────────────────────
+
+/// A named composition of feature modules — "the application's modules" as one
+/// registrable unit.
+///
+/// The blueprint an app and its tests share is usually the *list of modules*;
+/// `AppBuilder<P>` being unnameable mid-chain is what pushes test harnesses
+/// into duplicating it in a macro. An aggregate makes the list a **type**, so
+/// production and tests both write one call:
+///
+/// ```ignore
+/// #[module(modules(UserModule, BillingModule, AdminModule))]
+/// pub struct AppModules;
+///
+/// // production and tests alike
+/// b.register_modules::<AppModules>()
+/// ```
+///
+/// Registration is a plain fold: every member is registered exactly as
+/// `.register_module::<M>()` at that position would register it, in declaration
+/// order. There is nothing new to learn about visibility — each member's
+/// `Exports` join the app-global `P` (so the aggregate "re-exports" them
+/// automatically, and a member importing another member's export resolves
+/// against `P` like any cross-module import), each member's `Imports` join `R`,
+/// each member's brought plugins are installed at its position, and each
+/// member's `RequiredPlugins` are checked against the provision list as it
+/// stands when that member's turn comes. An aggregate therefore composes only
+/// with itself: it declares no providers, controllers, or plugins of its own.
+///
+/// Implemented by `#[module(modules(..))]` and, for a quick inline list, for
+/// tuples of arity 1..=16 — `b.register_modules::<(UserModule, BillingModule)>()`.
+pub trait ModuleAggregate {
+    /// Type-level list ([`TCons`]/[`TNil`]) of member module types, in
+    /// registration order.
+    type Modules;
+}
+
+/// Fold `register_module` over a type-level list of [`FeatureModule`]s.
+///
+/// The output `P`/`R`/`Mods` are those of the last member: each step threads
+/// the previous step's lists into the next, so the result is identical to
+/// writing the `.register_module::<..>()` chain by hand.
+///
+/// `Idx` is an opaque per-member witness list (the encapsulation-check indices
+/// `register_module` infers), always inferred at the call site — exactly the
+/// [`ControllerTuple`](crate::type_list::ControllerTuple) pattern.
+pub trait ModuleGroup<P, R, Mods, Idx> {
+    /// The provision list after every member is registered.
+    type OutP;
+    /// The requirement list after every member is registered.
+    type OutR;
+    /// The pending-module list after every member is registered.
+    type OutMods;
+
+    /// Register every member, in list order.
+    fn register_all(
+        builder: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods>;
+}
+
+impl<P, R, Mods> ModuleGroup<P, R, Mods, TNil> for TNil {
+    type OutP = P;
+    type OutR = R;
+    type OutMods = Mods;
+
+    fn register_all(
+        builder: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, P, R, Mods> {
+        builder
+    }
+}
+
+impl<M, Rest, P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx, RestIdx>
+    ModuleGroup<P, R, Mods, TCons<(DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx), RestIdx>>
+    for TCons<M, Rest>
+where
+    M: FeatureModule,
+    M::Plugins: ModulePlugins<P, R, Mods>,
+    M::Providers: BeanList,
+    <M::Providers as BeanList>::Provided: TAppend<ModulePluginProvisions<M>>,
+    ModuleProvided<M>: TAppend<M::Imports>,
+    M::Controllers: crate::di::module::ControllerDepsList,
+    <M::Providers as BeanList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, DepIdx>,
+    M::Exports: ExportsProvided<<M::Providers as BeanList>::Provided, ExpIdx>,
+    <M::Controllers as crate::di::module::ControllerDepsList>::Deps:
+        ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
+    <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
+    M::RequiredPlugins: RequiredPluginsInstalled<crate::builder::ModulePluginsP<M, P, R, Mods>, PlugIdx>,
+    M::Exports: TAppend<crate::builder::ModulePluginsP<M, P, R, Mods>>,
+    crate::builder::ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
+    Rest: ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >,
+{
+    type OutP = <Rest as ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >>::OutP;
+    type OutR = <Rest as ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >>::OutR;
+    type OutMods = <Rest as ModuleGroup<
+        crate::builder::ModuleRegisteredP<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredR<M, P, R, Mods>,
+        crate::builder::ModuleRegisteredMods<M, P, R, Mods>,
+        RestIdx,
+    >>::OutMods;
+
+    fn register_all(
+        builder: AppBuilder<NoState, P, R, Mods>,
+    ) -> AppBuilder<NoState, Self::OutP, Self::OutR, Self::OutMods> {
+        Rest::register_all(builder.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>())
+    }
+}
+
+macro_rules! impl_module_aggregate_tuple {
+    ($($M:ident),+) => {
+        impl<$($M),+> ModuleAggregate for ($($M,)+) {
+            type Modules = impl_module_aggregate_tuple!(@list $($M),+);
+        }
+    };
+    (@list $M:ident) => { TCons<$M, TNil> };
+    (@list $M:ident, $($Rest:ident),+) => {
+        TCons<$M, impl_module_aggregate_tuple!(@list $($Rest),+)>
+    };
+}
+
+impl_module_aggregate_tuple!(M0);
+impl_module_aggregate_tuple!(M0, M1);
+impl_module_aggregate_tuple!(M0, M1, M2);
+impl_module_aggregate_tuple!(M0, M1, M2, M3);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14);
+impl_module_aggregate_tuple!(M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, M10, M11, M12, M13, M14, M15);
+
 // ── Deferred-controller entries ─────────────────────────────────────────────
 //
 // The builder's `Mods` list carries every controller set whose registration is
