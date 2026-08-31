@@ -48,6 +48,7 @@ members = [
     "examples/example-sharded-bench",
     "examples/example-worker-udp",
     "r2e-compile-tests",
+    "r2e-edition2024-tests",
 ]
 resolver = "2"
 
@@ -196,7 +197,7 @@ dialoguer = "0.12"
 termimad = "0.31"
 
 # Proc-macro
-syn = { version = "2", features = ["full", "extra-traits", "visit-mut"] }
+syn = { version = "2", features = ["full", "extra-traits", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
 proc-macro-crate = "3"

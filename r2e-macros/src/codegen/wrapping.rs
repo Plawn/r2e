@@ -12,10 +12,22 @@ use crate::codegen::transverse;
 use crate::model::types::*;
 use crate::parsing::routes_parsing::RoutesImplDef;
 
-/// Emit an impl method verbatim (no wrapping). Shared by the route/SSE/WS
-/// façade sites and the anonymous-route core sites, which all just re-emit the
-/// stripped `fn_item` unchanged.
+/// Emit an impl method verbatim (no wrapping). Used for the non-handler sites
+/// (`#[request_helper]`s and plain core helpers), which are re-emitted exactly
+/// as the user wrote them.
 fn emit_verbatim(f: &syn::ImplItemFn) -> TokenStream {
+    quote! { #f }
+}
+
+/// Emit a **handler** method (route / `#[sse]` / `#[ws]`, façade or anonymous
+/// core site): verbatim except for the automatic `+ use<...>` on a
+/// return-position `impl Trait`.
+///
+/// See `codegen::precise_capture` for what the rewrite does and the three
+/// signature shapes where it declines and re-emits unchanged.
+fn emit_handler(f: &syn::ImplItemFn) -> TokenStream {
+    let mut f = f.clone();
+    crate::codegen::precise_capture::add_handler_precise_captures(&mut f.sig);
     quote! { #f }
 }
 
@@ -45,21 +57,21 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .route_methods
         .iter()
         .filter(|rm| !rm.decorators.anonymous)
-        .map(|rm| emit_verbatim(&rm.fn_item))
+        .map(|rm| emit_handler(&rm.fn_item))
         .collect();
 
     let sse_fns: Vec<TokenStream> = def
         .sse_methods
         .iter()
         .filter(|sm| !sm.decorators.anonymous)
-        .map(|sm| emit_verbatim(&sm.fn_item))
+        .map(|sm| emit_handler(&sm.fn_item))
         .collect();
 
     let ws_fns: Vec<TokenStream> = def
         .ws_methods
         .iter()
         .filter(|wm| !wm.decorators.anonymous)
-        .map(|wm| emit_verbatim(&wm.fn_item))
+        .map(|wm| emit_handler(&wm.fn_item))
         .collect();
 
     // Request helpers are emitted verbatim on the façade too, so they can read
@@ -77,7 +89,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .route_methods
         .iter()
         .filter(|rm| rm.decorators.anonymous)
-        .map(|rm| emit_verbatim(&rm.fn_item))
+        .map(|rm| emit_handler(&rm.fn_item))
         .collect();
 
     let anon_sse_ws_fns: Vec<TokenStream> = def
@@ -91,7 +103,7 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 .filter(|wm| wm.decorators.anonymous)
                 .map(|wm| &wm.fn_item),
         )
-        .map(emit_verbatim)
+        .map(emit_handler)
         .collect();
 
     // ── Core (off-request) methods ──

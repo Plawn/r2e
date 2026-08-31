@@ -100,11 +100,26 @@ type. Phase 1 replaced it with membership in `self.config_derived`, populated
 declaratively by `config_derived_scope` rather than by a type list, so any
 future value `load_config` computes from the config is exempt for free.
 
-`forced_rebuild` (`beans.rs:1360-1390`) is seeded from `deco_fills` targets and
-grown along `self.beans`/`self.lazy_beans` dependency edges only — it is a set
-of **registered bean** TypeIds and can never contain a provided value's TypeId.
-So the exemption clause is dead for provided values: the only escape is being
-config-derived.
+`forced_rebuild` (`beans/resolve.rs`) is seeded from `deco_fills` targets, from
+the volatile set, and from **one hard-coded provided value** —
+`rt::ShutdownToken` — then grown along `self.beans`/`self.lazy_beans` dependency
+edges. Everything the propagation loop adds is a registered bean TypeId; the
+shutdown token is the single provided TypeId ever in the set, and it is there on
+purpose (see below). For every other provided value the exemption clause is
+dead, and the only escape is being config-derived.
+
+**Why the shutdown token is never pinned.** `rt::ShutdownToken` is provided by
+`AppBuilder::new()` as a child of that builder's shutdown root (W17/F4). Every
+hot patch builds a fresh builder, hence a fresh root — and the cycle being
+replaced has already had its own root cancelled by the dropped `run()` future's
+guard. Pinning the value would therefore hand cycle N a token that reads
+`is_cancelled() == true` from its first request on: every `#[sse]` stream would
+close immediately and every task selecting on it would exit at once. Seeding the
+TypeId into `forced_rebuild` does both halves of the fix in one line — it skips
+the pinning loop, and the propagation below rebuilds every bean that captured a
+clone of the dead token. The token is deliberately **not** in `config_derived`:
+it has nothing to do with the config, and that set is scoped by
+`config_derived_scope` around `load_config`.
 
 A clone fn is registered by `provide()`/`pin_provide()`
 (`beans.rs:790-812`), so every `.provide()`d value, the `R2eConfig`, the

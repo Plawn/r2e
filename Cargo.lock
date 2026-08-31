@@ -5942,6 +5942,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "r2e-edition2024-tests"
+version = "0.3.0"
+dependencies = [
+ "futures-core",
+ "r2e",
+ "tokio",
+]
+
+[[package]]
 name = "r2e-events"
 version = "0.3.0"
 dependencies = [

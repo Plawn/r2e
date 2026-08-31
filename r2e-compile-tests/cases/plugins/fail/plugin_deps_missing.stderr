@@ -1,4 +1,4 @@
-error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TNil, TCons<MissingBean, TNil>>`, but its trait bounds were not satisfied
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<ShutdownToken, TNil>, TCons<MissingBean, TNil>>`, but its trait bounds were not satisfied
   --> cases/plugins/fail/plugin_deps_missing.rs:37:14
    |
 34 | /         AppBuilder::new()

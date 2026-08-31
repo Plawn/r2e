@@ -5,8 +5,12 @@ use super::*;
 
 // ── NoState phase (pre-state) ───────────────────────────────────────────────
 
-impl AppBuilder<NoState, TNil, TNil, TNil> {
-    /// Create a new, empty builder in the pre-state phase.
+impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
+    /// Create a new builder in the pre-state phase.
+    ///
+    /// Not quite empty: R2E seeds the graph with the one bean only the builder
+    /// can mint, the [`ShutdownToken`](crate::rt::ShutdownToken) — see
+    /// [`BuiltinProvisions`].
     pub fn new() -> Self {
         #[allow(unused_mut)]
         let mut builder = Self {
@@ -66,6 +70,22 @@ impl AppBuilder<NoState, TNil, TNil, TNil> {
             .shared
             .bean_registry
             .provide(super::WsSessions::default());
+
+        // The injectable app shutdown signal. Unlike `WsSessions` this IS on
+        // the provision list `P` (see `BuiltinProvisions`): apps inject it, so
+        // it must satisfy `Contains` like any other bean.
+        //
+        // A CHILD of the app shutdown root, get-or-inserted here so that the
+        // root exists before anything else asks for it — `register_service`
+        // and `PreparedApp::run()` both go through the same memoized
+        // `plugin_data` entry, so the bean is on the very lineage `run()`
+        // cancels at drain (and that its drop guard fires on the uncontrolled
+        // exits). A child, not the root itself, so that user code cancelling
+        // its own scope cannot take the application down with it.
+        let shutdown = crate::rt::ShutdownToken::from_token(
+            shutdown_root(&mut builder.shared.plugin_data).child_token(),
+        );
+        builder.shared.bean_registry.provide(shutdown);
 
         builder
     }

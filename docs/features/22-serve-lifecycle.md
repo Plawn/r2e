@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-A real shutdown contract without hand-rolled drain plumbing. `StopHandle::stop()` triggers the same graceful shutdown as Ctrl-C / SIGTERM — provide it as a bean for an admin/stop endpoint, or get it from `prepared.stop_handle()`. `on_drain` hooks are awaited *before* the listener stops accepting (flip readiness, wait for load-balancer deregistration); `ServeContext::track()` lets serve hooks have spawned tasks (gRPC, QUIC) drained rather than cancelled, bounded by `shutdown_grace_period`. Sequence: on_drain → plugin shutdown → stop accepting (in-flight finish, bounded by `drain_timeout` — 30s by default, `server.drain-timeout` to tune) → await tracked tasks (bounded by `shutdown_grace_period`, per handle) → on_stop (always runs). Upgraded WebSocket sessions are tracked tasks too: `WsStream::next()` sends a `1001 Going Away` frame and ends the loop at shutdown.
+A real shutdown contract without hand-rolled drain plumbing. `StopHandle::stop()` triggers the same graceful shutdown as Ctrl-C / SIGTERM — provide it as a bean for an admin/stop endpoint, or get it from `prepared.stop_handle()`. `on_drain` hooks are awaited *before* the listener stops accepting (flip readiness, wait for load-balancer deregistration); `ServeContext::track()` lets serve hooks have spawned tasks (gRPC, QUIC) drained rather than cancelled, bounded by `shutdown_grace_period`. Sequence: on_drain → plugin shutdown → stop accepting (in-flight finish, bounded by `drain_timeout` — 30s by default, `server.drain-timeout` to tune) → await tracked tasks (bounded by `shutdown_grace_period`, per handle) → on_stop (always runs). Upgraded WebSocket sessions are tracked tasks too: `WsStream::next()` sends a `1001 Going Away` frame and ends the loop at shutdown. Application code gets the signal by injecting `rt::ShutdownToken` (a bean on every builder, child of the app root, no `cancel()`), and `#[sse]` streams already terminate on it so an idle subscriber cannot hold the drain open.
 
 
 ## Goal
@@ -191,6 +191,44 @@ An app that is never served through `run()` — `build_with_consumers()`, `TestA
 
 Under sharded serving (`server.workers`) the guarantee is the same, and it is not free: the socket was accepted by a *worker* runtime while the session runs on the control plane, so the worker's I/O driver has to outlive the session. Workers therefore **park** once their HTTP drain is over and their per-worker services are down — they stay inside `block_on`, driving that I/O driver — until the control plane has finished step 4, and only then drop their runtime. Without that handshake a session that reacted slowly (anything past the first poll after cancellation) would find its socket dead well inside its own grace period, and the peer would see a TCP reset instead of the close frame.
 
+### `rt::ShutdownToken` — the injectable signal
+
+Everything above is framework-side. Application code that wants to react to the drain — a long-lived stream, a poll loop inside a bean, an in-flight batch worth abandoning — needs the signal itself, and before this the only way to get one was to provide your own `CancellationToken` bean and cancel it from an `on_drain` hook. That is now built in:
+
+```rust
+use r2e::rt::ShutdownToken;
+
+#[bean]
+impl Poller {
+    #[new]
+    fn new(#[inject] shutdown: ShutdownToken) -> Self { Self { shutdown } }
+
+    async fn run(&self) {
+        while !self.shutdown.is_cancelled() {
+            // ...
+            r2e::rt::select! {
+                _ = self.shutdown.cancelled() => break,
+                _ = r2e::rt::sleep(Duration::from_secs(1)) => {}
+            }
+        }
+    }
+}
+```
+
+Where it comes from and what it guarantees:
+
+- **Every `AppBuilder::new()` provides it** — it is on the builtin provision list (`BuiltinProvisions`), so `build_state()` materializes it into the state HList and `#[inject] shutdown: ShutdownToken` resolves without any setup. It is **not** an ambient bean: a `#[module]` must still list it in `imports(...)`, like every other dependency.
+- **It is a child of the app shutdown root** — the same token step 3 cancels, and the same one the drop guard fires on the uncontrolled exits (a panicking hook, an aborted boot, an `r2e dev` hot patch dropping the `run()` future). So the signal arrives on every path that ends the process, not only the graceful one.
+- **A child, deliberately** — the bean has no `cancel()`. User code holding it must not be able to take the application down; carve out your own scope with `child_token()` and cancel that instead. A test that wants to drive the signal by hand overrides the bean: `.override_bean(ShutdownToken::from_token(my_token))`.
+- **Timing**: it fires at step 3, i.e. *after* `on_drain` and the plugin hooks, at the moment the listener stops accepting. Work that must finish before the drain begins belongs in `on_drain`, not behind this token.
+- **Under `r2e dev`** it is **cycle-scoped**. Each hot patch builds a fresh builder and therefore a fresh root, and the cycle being replaced has already cancelled its own — so the bean is excluded from the partial-rebuild pinning that carries `.provide()`d values across patches, and every bean that captured a clone of it is rebuilt with the new one. Carrying it over would hand cycle N a token that reads `is_cancelled() == true` from its first request.
+
+### SSE streams end on it, by default
+
+A `#[sse(...)]` route's stream is wrapped in `take_until(shutdown)` by the generated route, using that bean. It costs nothing per request — the token is resolved **once at registration** (`BeanLookup`; absent bean, e.g. a router built without a graph, means no wrapper at all), and there is no user-visible field or parameter.
+
+The reason is step 3: an SSE response is an in-flight HTTP request, so an idle subscriber holds the drain open for the full `drain_timeout` (30s by default) and the app takes half a minute to exit for no work. With the wrapper the stream ends as the listener stops accepting, the response completes, and the drain finishes on time. A stream that genuinely must outlive the drain has to be served outside `#[sse]`.
+
 ## Interactions
 
 - **Sharded serving (`server.workers`)**: the stop handle works identically — workers observe the shared token's cancellation. A cancel-on-drop guard inside the shutdown future guarantees the token fires even if a drain/plugin hook panics. `drain_timeout` is applied by each worker to its own drain, on its own child token, so the sharded and single-listener strategies bound the drain the same way. Worker runtimes are dropped **after** step 4, not at the end of their serve loop, so tracked work that owns a socket a worker accepted (a WebSocket session) still has a live I/O driver for its whole grace period.
@@ -211,6 +249,10 @@ Under sharded serving (`server.workers`) the guarantee is the same, and it is no
 - `r2e-core/src/builder/running.rs` — `RunningApp`: the in-process app (`TestApp`), same startup and shutdown, no serve hooks
 - `r2e-core/src/builder/ws_sessions.rs` — `WsSessions`, the tracked lane for upgraded sockets (§ "Sharded serving" holds the worker-parking invariant)
 - `r2e-core/src/runtime/sharded.rs` — `WorkerPark`: workers outlive the tracked-handle join
+- `r2e-rt/src/lib.rs` — `ShutdownToken`, the injectable signal
+- `r2e-core/src/builder/nostate.rs` — where `AppBuilder::new()` provides it (child of `shutdown_root`)
+- `r2e-core/src/beans/resolve.rs` — the cycle-scoped exemption under `r2e dev`
+- `r2e-core/src/web/sse.rs` — `until_shutdown` / `shutdown_token_of`, the generated `#[sse]` termination
 - `r2e-core/src/web/ws.rs` — `WsStream` shutdown observation + the `1001 Going Away` frame
 - `r2e-grpc/src/server.rs` — tracked gRPC drain
 - `r2e-core/tests/runtime/shutdown_budget.rs`, `r2e-core/tests/runtime/ws_shutdown.rs`, `examples/example-grpc/tests/grpc_serve.rs` — proof

@@ -10,5 +10,6 @@ mod hlist;
 mod overrides;
 mod prepared;
 mod service_start;
+mod shutdown_token;
 mod state_wiring;
 mod type_list;

@@ -319,6 +319,29 @@ found" compile error. `#[request_helper]` cannot be combined with a route verb /
 `#[post_construct]` / `#[pre_destroy]` / `#[on_start]` / `#[anonymous]` /
 `#[intercept]`, and is rejected on a `#[bean]` impl (no façade).
 
+### Returning `impl Trait` — the `+ use<>` clause is automatic
+
+A handler returning a return-position `impl Trait` needs no precise-capture
+clause: `#[routes]` appends `+ use<...>` (the method's own type/const params, no
+lifetimes) to every `impl Trait` in a **route / `#[sse]` / `#[ws]`** return type,
+including one nested a generic argument deep (`Sse<impl Stream<..>>`). Without it
+the same signature fails under edition 2024, where an `impl Trait` captures
+`&self` and the value is then moved into the response — "borrowed data escapes
+outside of method". So this compiles as written:
+
+```rust
+#[sse("/events")]
+async fn events(&self) -> impl Stream<Item = Result<SseEvent, Infallible>> { ... }
+```
+
+The rewrite is applied to handlers only — never to `#[request_helper]`s, plain
+core helpers, consumers or scheduled methods, where returning a value that
+borrows `&self` is legitimate. It also **declines** (leaving the signature
+untouched, so rustc prints its own suggestion) when the handler already has an
+explicit `use<...>`, when the `impl Trait` bounds name a lifetime or a reference
+(`impl Iterator<Item = &str>`, `+ '_`), or when the signature has an
+argument-position `impl Trait`. Writing the clause by hand always wins.
+
 ### Return Type Aliases
 
 ```rust
@@ -1068,6 +1091,42 @@ keeps a live I/O driver for its whole grace period. The grace-period warning nam
 `spawn_service::<C>()` uses `C`'s type name, `ServeContext::track_named(name,
 fut)` the name you give, a `#[ws(...)]` session
 `ws:<Controller>::<method>`, plain `track(fut)` shows `<unnamed>`.
+
+### `rt::ShutdownToken` — the injectable shutdown signal
+
+Every `AppBuilder::new()` provides one, so any bean or controller can inject it
+and stop its own work when the app starts draining:
+
+```rust
+use r2e::rt::ShutdownToken;
+
+#[controller(path = "/feed")]
+pub struct FeedController {
+    #[inject] shutdown: ShutdownToken,
+}
+```
+
+```rust
+pub async fn cancelled(&self);                            // await the signal
+pub fn cancelled_owned(self) -> impl Future<Output = ()> + Send + 'static;
+pub fn is_cancelled(&self) -> bool;
+pub fn child_token(&self) -> CancelToken;                 // your own sub-scope
+pub fn from_token(token: CancelToken) -> Self;            // for `.override_bean(..)` in tests
+```
+
+- It is a **child of the app shutdown token**, cancelled when the drain starts —
+  and by a drop guard on the uncontrolled exits (a panic, an aborted boot, a
+  dropped `run()` future).
+- There is deliberately **no `cancel()`**: user code must not be able to shut the
+  application down by cancelling a bean it happens to hold. Cancel a
+  `child_token()` instead — that stops your scope and nothing else. A test that
+  needs to drive the signal by hand overrides the bean:
+  `.override_bean(ShutdownToken::from_token(my_token))`.
+- It is **a normal bean, not an ambient one**: a `#[module]` still has to list it
+  in `imports(...)` like any other dependency.
+- Under `r2e dev` it is **cycle-scoped**: each hot patch gets a fresh token (the
+  previous cycle's is already cancelled) and every bean that captured a clone is
+  rebuilt with it, so nothing is left holding a dead token.
 
 ---
 
@@ -2584,6 +2643,13 @@ impl SseController {
 ```
 
 Provide the broadcaster: `.provide(SseBroadcaster::new(128))`.
+
+**`#[sse]` streams end at shutdown, by default.** The generated route wraps the
+stream in `take_until(shutdown)` using the app's `rt::ShutdownToken` (resolved
+once per route at registration, not per request), so an idle subscriber does not
+hold the HTTP drain open until `drain_timeout` expires. Nothing to write in the
+handler and nothing to inject; a stream that must outlive the drain has to be
+served outside `#[sse]`.
 
 ---
 

@@ -1,4 +1,4 @@
-error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<PluginBean, TNil>, TNil, TCons<PluginCtrls<ShipsController>, TNil>>`, but its trait bounds were not satisfied
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<ShutdownToken, TCons<PluginBean, TNil>>, TNil, TCons<PluginCtrls<ShipsController>, TNil>>`, but its trait bounds were not satisfied
   --> cases/plugins/fail/plugin_controller_dep_missing.rs:57:14
    |
 54 | /         AppBuilder::new()
@@ -10,4 +10,4 @@ error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoStat
    |
    |
    = note: the following trait bounds were not satisfied:
-           `(ShippedController,): PluginControllerList<ShipsController, BeanState<HCons<PluginBean, HNil>>, _>`
+           `(ShippedController,): PluginControllerList<ShipsController, BeanState<HCons<ShutdownToken, HCons<PluginBean, HNil>>>, _>`

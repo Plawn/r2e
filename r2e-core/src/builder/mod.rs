@@ -545,6 +545,21 @@ impl ServiceHandles {
 #[derive(Clone)]
 struct ShutdownRoot(CancelToken);
 
+/// The provision list every [`AppBuilder::new`] starts from.
+///
+/// R2E provides exactly one bean before the app declares anything: the
+/// [`ShutdownToken`](crate::rt::ShutdownToken). It is a **normal** bean — it
+/// grows the compile-time provision list `P` like a hand-written
+/// `.provide(...)`, it lands in the state HList, and a `#[module]` must list it
+/// in `imports(...)` to inject it (there are no ambient beans). The only thing
+/// special about it is that the builder writes the `.provide` for you, because
+/// only the builder can mint a token on the app's shutdown lineage.
+///
+/// `WsSessions` is deliberately **not** here: generated `#[ws]` code reads it
+/// from the bean context at registration, never from the state, so putting it
+/// on `P` would only widen every app's state for nobody's benefit.
+pub type BuiltinProvisions = TCons<crate::rt::ShutdownToken, TNil>;
+
 /// Get-or-insert the one [`ShutdownRoot`] for this app.
 ///
 /// Called from `register_service` (build time, first writer) and from
@@ -716,7 +731,12 @@ impl BuilderConfig {
 /// phase, *before* the transition: their `build` runs as a graph node inside
 /// `build_state()`. Once in the typed phase (`AppBuilder<T>`), you register
 /// controllers, add hooks, and call `.build()` or `.serve()`.
-pub struct AppBuilder<T: Clone + Send + Sync + 'static = NoState, P = TNil, R = TNil, Mods = TNil> {
+pub struct AppBuilder<
+    T: Clone + Send + Sync + 'static = NoState,
+    P = BuiltinProvisions,
+    R = TNil,
+    Mods = TNil,
+> {
     shared: BuilderConfig,
     state: T,
     /// The resolved bean graph, retained through the typed phase so controller
@@ -901,7 +921,7 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     }
 }
 
-impl Default for AppBuilder<NoState, TNil, TNil, TNil> {
+impl Default for AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }

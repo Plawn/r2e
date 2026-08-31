@@ -2,7 +2,7 @@ error[E0277]: `std::option::Option<Widget>` cannot be extracted from a request a
   --> cases/routing/fail/extractor_option_no_route.rs:35:36
    |
 35 |             .register_controller::<WidgetController>()
-   |              -------------------   ^^^^^^^^^^^^^^^^ the trait `FromRequestPartsVia<BeanState<HNil>, _>` is not implemented for `std::option::Option<Widget>`
+   |              -------------------   ^^^^^^^^^^^^^^^^ the trait `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, _>` is not implemented for `std::option::Option<Widget>`
    |              |
    |              required by a bound introduced by this call
    |
@@ -19,12 +19,12 @@ help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is conditionally implemented
    | |________---------------------------------^
    |          |
    |          unsatisfied requirement introduced here: `_: OptionalFromRequestPartsVia<_, _>`
-note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<BeanState<HNil>>`
+note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<BeanState<HCons<ShutdownToken, HNil>>>`
   --> cases/routing/fail/extractor_option_no_route.rs:16:1
    |
 16 | #[controller(path = "/w")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `WidgetController` to implement `Controller<BeanState<HNil>, ((_,),)>`
+note: required for `WidgetController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((_,),)>`
   --> cases/routing/fail/extractor_option_no_route.rs:22:1
    |
 22 | #[routes]
@@ -48,7 +48,7 @@ error[E0277]: `std::option::Option<Widget>` cannot be extracted from a request a
 33 | |             .build_state()
 34 | |             .await
 35 | |             .register_controller::<WidgetController>()
-   | |______________________________________________________^ the trait `FromRequestPartsVia<BeanState<HNil>, _>` is not implemented for `std::option::Option<Widget>`
+   | |______________________________________________________^ the trait `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, _>` is not implemented for `std::option::Option<Widget>`
    |
    = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
@@ -63,12 +63,12 @@ help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is conditionally implemented
    | |________---------------------------------^
    |          |
    |          unsatisfied requirement introduced here: `_: OptionalFromRequestPartsVia<_, _>`
-note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<BeanState<HNil>>`
+note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<BeanState<HCons<ShutdownToken, HNil>>>`
   --> cases/routing/fail/extractor_option_no_route.rs:16:1
    |
 16 | #[controller(path = "/w")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `WidgetController` to implement `Controller<BeanState<HNil>, ((_,),)>`
+note: required for `WidgetController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((_,),)>`
   --> cases/routing/fail/extractor_option_no_route.rs:22:1
    |
 22 | #[routes]

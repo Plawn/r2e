@@ -354,3 +354,116 @@ async fn sse_topic_serializer_error_is_returned() {
         "nothing should have been broadcast"
     );
 }
+
+// ── Shutdown termination ─────────────────────────────────────────────────
+
+mod shutdown {
+    use std::convert::Infallible;
+    use std::time::Duration;
+
+    use futures_core::Stream;
+    use http_body_util::BodyExt;
+    use r2e_core::http::{Body, Request, SseEvent};
+    use r2e_core::prelude::*;
+    use r2e_core::rt::{CancelToken, ShutdownToken};
+    use r2e_core::web::sse::{until_shutdown, SseBroadcaster};
+    use tower::ServiceExt;
+
+    /// One chunk of the streamed response body, or `None` if the body ended.
+    async fn next_chunk(body: &mut Body) -> Option<String> {
+        loop {
+            let frame = tokio::time::timeout(Duration::from_millis(500), body.frame())
+                .await
+                .expect("body stalled")?;
+            let frame = frame.expect("body error");
+            if let Ok(data) = frame.into_data() {
+                return Some(String::from_utf8_lossy(&data).to_string());
+            }
+        }
+    }
+
+    #[controller(path = "/live")]
+    struct LiveController {
+        #[inject]
+        bus: SseBroadcaster,
+    }
+
+    #[routes]
+    impl LiveController {
+        /// A stream that never ends on its own — only the shutdown wrapper can
+        /// terminate it.
+        #[sse("/events", keep_alive = false)]
+        async fn events(&self) -> impl Stream<Item = Result<SseEvent, Infallible>> {
+            self.bus.subscribe()
+        }
+    }
+
+    #[r2e_core::test]
+    async fn sse_route_ends_when_the_app_shuts_down() {
+        let shutdown = CancelToken::new();
+        let bus = SseBroadcaster::new(16);
+        let router = AppBuilder::new()
+            .override_bean(ShutdownToken::from_token(shutdown.clone()))
+            .provide(bus.clone())
+            .build_state()
+            .await
+            .register_controller::<LiveController>()
+            .build();
+
+        let req = Request::builder()
+            .uri("/live/events")
+            .body(Body::empty())
+            .unwrap();
+        let resp = router.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), r2e_core::http::StatusCode::OK);
+        let mut body = resp.into_body();
+
+        bus.send("one").unwrap();
+        let chunk = next_chunk(&mut body).await.expect("first event");
+        assert!(chunk.contains("one"), "unexpected chunk: {chunk:?}");
+
+        // Nothing ends this stream but the shutdown signal.
+        shutdown.cancel();
+        assert!(
+            next_chunk(&mut body).await.is_none(),
+            "the SSE body must end when the app shuts down"
+        );
+    }
+
+    #[r2e_core::test]
+    async fn until_shutdown_forwards_items_until_cancelled() {
+        use futures_util::StreamExt as _;
+
+        let token = CancelToken::new();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
+        let inner = r2e_core::rt::stream::wrappers::UnboundedReceiverStream::new(rx);
+        let mut stream = Box::pin(until_shutdown(
+            inner,
+            Some(ShutdownToken::from_token(token.clone())),
+        ));
+
+        tx.send(1).unwrap();
+        assert_eq!(stream.next().await, Some(1));
+        token.cancel();
+        assert_eq!(
+            stream.next().await,
+            None,
+            "cancellation must end the stream even though the sender is alive"
+        );
+        drop(tx);
+    }
+
+    #[r2e_core::test]
+    async fn until_shutdown_is_transparent_without_a_token() {
+        use futures_util::StreamExt as _;
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u32>();
+        let inner = r2e_core::rt::stream::wrappers::UnboundedReceiverStream::new(rx);
+        let mut stream = Box::pin(until_shutdown(inner, None));
+
+        tx.send(7).unwrap();
+        assert_eq!(stream.next().await, Some(7));
+        drop(tx);
+        assert_eq!(stream.next().await, None, "the inner stream still ends it");
+    }
+}

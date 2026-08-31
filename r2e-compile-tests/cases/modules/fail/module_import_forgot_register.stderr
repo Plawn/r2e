@@ -1,4 +1,4 @@
-error[E0599]: the method `build_state` exists for struct `AppBuilder<NoState, TCons<OrderSvc, TCons<Pool, TNil>>, TCons<UserSvc, TNil>, TCons<ModEntry<OrderModule>, TNil>>`, but its trait bounds were not satisfied
+error[E0599]: the method `build_state` exists for struct `AppBuilder<NoState, TCons<OrderSvc, TCons<Pool, TCons<ShutdownToken, TNil>>>, TCons<UserSvc, TNil>, TCons<ModEntry<OrderModule>, TNil>>`, but its trait bounds were not satisfied
   --> cases/modules/fail/module_import_forgot_register.rs:50:14
    |
 46 | /         r2e::AppBuilder::new()
