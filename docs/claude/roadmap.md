@@ -471,6 +471,165 @@ legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
 public clients with a Docker-free, one-time Authorization Code + PKCE S256
 flow.
 
+## W17 — data-catalog audit: builder-glue elimination — OPEN (2026-08-31)
+
+Evidence base: audit of **blumana/data-catalog** (Axum→R2E migration, pinned
+at `915199c` = current master; `default-features = false` + `utils, openapi,
+grpc, grpc-reflection, multipart`; Doris/MySQL + Postgres on sqlx 0.8, tonic
+gRPC multiplexed, 9 background services, SSE). The business code lands
+cleanly on modules/producers/controllers/`#[grpc_routes]`; nearly all
+remaining friction is **glue around the builder**: `src/app.rs` (224 lines),
+`src/env.rs` (hand-rolled config validation + tracing), `src/background.rs`
+(9 thin service adapters), `tests/common/mod.rs` (a `macro_rules! assemble!`
+duplicating the app blueprint). Per the north star, those four files
+shrinking is the success metric — re-audit them after every sprint below.
+
+Stale app-side notes were verified **already fixed at HEAD** and are NOT
+findings: module gRPC surface (`grpc_services(...)` exists), `Option<T>` +
+YAML `null` (`get_opt`), TestApp lifecycle hooks, `#[sse]` keep-alive default
+(codegen emits `SseKeepAlive::default()`, identical to the app's hand-rolled
+version). The app also still names axum directly in `catalog-core`
+(`impl IntoResponse` + `from_fn`/`MatchedPath`) although
+`impl_into_response!` and the prelude now cover both — app-side fix, tracked
+in §W17 follow-ups, not a framework gap.
+
+### Findings
+
+Sizes: S ≈ within one session alongside others, M ≈ one focused session,
+L ≈ needs a design pass first.
+
+- **F1 — `load_config` panics on missing keys (S).** The app reimplements
+  `ConfigProperties::from_config` + `validate_section::<Settings>()` in
+  `env.rs` (`build_settings`) purely to get a boot error listing *all*
+  missing keys instead of a panic. `load_config`
+  (`r2e-core/src/builder/nostate.rs:398`) already routes a missing/malformed
+  config *file* through `record_boot_error` → `try_build_state()`; do the
+  same for typed-section validation failures. No new API.
+- **F2 — `App::Env` provisioning is one line per field (M).** Nine
+  `.provide(env.x)` calls plus the `override_config(env.config)`-before-
+  `load_config` ordering constraint. Proposal: `#[derive(ProvideBundle)]` +
+  `.provide_all(env)` — each field becomes a provision; an `R2eConfig` field
+  acts as `override_config`. Compile-time provision list grows exactly as if
+  written out by hand.
+- **F3 — no framework "once per process" under `r2e dev` (M).** The app
+  hand-rolls `booted: Arc<AtomicBool>` + `first_boot` to guard
+  `recover_interrupted_runs` and 9 × `spawn_service` across hot patches.
+  The cycle machinery exists (`r2e-core/src/runtime/dev.rs`,
+  `hot_reload_loop_active`); expose it: `.on_start_once(...)` /
+  `#[on_start(once)]`, and state (or enforce) the `spawn_service`
+  idempotence contract under hot patches in
+  `docs/claude/dev-reload-config-semantics.md`.
+- **F4 — no injectable app shutdown token (M).** The app provides a
+  `tokio_util::CancellationToken` bean, cancels it in
+  `on_drain(|_| shutdown.cancel())`, and every SSE handler hand-writes
+  `take_until(shutdown.cancelled_owned())`. The framework already owns this
+  token (`ServeContext::shutdown_token()`,
+  `r2e-core/src/builder/mod.rs:313`) but it is not a bean. Proposal: a
+  framework-provided `rt::ShutdownToken` bean (child of the app token),
+  `#[inject]`-able; `#[sse]` streams terminate on it by default. NOT an
+  ambient-bean exception: modules still list it in `imports(...)` exactly
+  like the app's hand-rolled token today.
+- **F5 — `app_main!` has no `tracing` knob (S).** `#[r2e::main(tracing =
+  false)]` exists but `app_main!` (`r2e/src/lib.rs:146-158`) does not, so an
+  app owning its subscriber (dotenv + custom formatting in `AppEnv::
+  bootstrap`) writes main by hand and `include!`s `app.rs` twice (the
+  `#[global_allocator]` must live in the bin). Add the knob; longer term let
+  `App::setup` own tracing (`init_tracing_with_config` is already
+  idempotent, `r2e-core/src/runtime/layers.rs:26` — init after `setup`, skip
+  if a global subscriber is set).
+- **F6 — `BackgroundService` rigidity (M).** `background.rs` = 9 adapter
+  structs whose only job is cloning `#[inject]` fields into a catalog-core
+  worker, because the derive rejects non-bean fields
+  (`r2e-macros/src/derives/bg_service_derive.rs:75`, `allow_default:
+  false`). `#[producer(start)]` already covers "build the worker in a
+  producer, start its output" — the app didn't find it (discoverability:
+  llm.txt + migration docs). Remaining real gaps: (1) an opt-in
+  `fn enabled(&self) -> bool` on the service — registration and config
+  validation stay unconditional, only `run()` is skipped with a framework
+  log (the app's 3 conditional services register-then-early-return today);
+  (2) confirm the derive + `ServiceComponent` impl story works from a shared
+  crate on featureless `r2e`.
+- **F7 — config-section gaps (3 × S).**
+  - **F7a** `.provide(Settings)` (test path, no `load_config`) does not
+    register `#[config(section)]` children → `InfraModule` carries three
+    `Arc<XxxSettings>` producers only for tests. Add
+    `provide_config(settings)` that also runs `register_children`.
+  - **F7b** Two same-typed `#[config(section)]` fields (`database` /
+    `run_database: DatabaseSettings`) silently collide — last wins
+    (`config_derive.rs:732-750`). Make it a compile error (newtypes are the
+    sanctioned answer, per the decisions log).
+  - **F7c** Manual `Default` impls duplicate `#[config(default = …)]` —
+    emit `impl Default` from the derive (opt-in or automatic).
+- **F8 — producer ergonomics (S).** (1) Ordering-only dependency edges are
+  spelled as unused params (`create_doris_db(settings, _instance_guard:
+  InstanceGuard)`) → `#[producer(after(InstanceGuard))]`. (2)
+  `anyhow::Result<T>` silently defeats Result detection
+  (`type_utils::is_result_like` is path-textual) → emit a targeted error
+  ("spell `Result<T, E>` literally") instead of misclassifying.
+- **F9 — `+ use<>` is a hand-written trap (S/M).** Three handlers document
+  it as load-bearing (`routes/metrics.rs`, `routes/runs.rs`,
+  `routes/datasets/export.rs`, E0521). `#[routes]` re-emits signatures — it
+  can append `+ use<>` to return-position `impl Trait` lacking a use-clause
+  (edition-2024 guard).
+- **F10 — extractor rejections + `Params` parity (S + M).** Only
+  `JsonRejection` is re-exported (`r2e-http/src/lib.rs:57`); the app reaches
+  through `axum_compat` for `QueryRejection` (`routes/clean.rs`). Re-export
+  `QueryRejection`/`PathRejection`/`FormRejection`. Separately,
+  `#[derive(Params)]` lacks `rename_all` and rejection-format parity with
+  raw `Query`/`Path`, which is exactly why the 17-handler
+  `ConnectorsController` stayed on raw extractors.
+- **F11 — OpenAPI tag welded to the struct name (S).** Splitting
+  `ConnectorsController` would change the published spec. Add
+  `#[controller(path = "…", tag = "…")]`.
+- **F12 — no path-nesting seam (M, design first).** `IconController`
+  hardcodes absolute paths. `register_module_at("/prefix")` or
+  `#[module(prefix = "…")]`; must compose with OpenAPI paths and
+  `r2e routes`.
+- **F13 — Prometheus stack mismatch (L, lowest priority).** The plugin is
+  `prometheus`-crate-based and owns `/metrics`; the app is on `metrics` +
+  `metrics-exporter-prometheus` and hand-writes the `http_metrics`
+  middleware + endpoint. Options: `Prometheus::layer_only()` (HTTP tracking
+  without the endpoint) and/or a `metrics`-recorder backend. It is a stack
+  choice — do not start without an explicit go.
+- **F14 — test assembly duplicates the blueprint (M).** `assemble!` exists
+  because `AppBuilder<P>` is unnameable mid-chain and `App::build` does
+  prod-only work (advisory lock, recovery, 9 spawns). Two levers: (1)
+  `#[module(modules(A, B, C))]` aggregation — one `register_module` shared
+  by app and tests; (2) a profile-driven service gate (`services.enabled:
+  false` in `application-test.yaml` — explicit config, consistent with the
+  "dev services are explicit" decision; registration/validation stay
+  unconditional per F6). Largely falls out of F2/F3/F4/F6.
+
+### Sprint plan — one coherent bundle per session
+
+Each sprint = implement + tests + `llm.txt` + doc updates, then **re-audit
+data-catalog** (which lines does it delete?) before starting the next.
+
+1. **Sprint 1 — boot errors & config correctness: F1, F7b, F7c, F8.**
+   All in the config/boot error surface; every item kills a documented trap
+   in `MIGRATION_R2E.md`. Deletes `build_settings()` from `env.rs`.
+2. **Sprint 2 — shutdown token & SSE/handler codegen: F4, F9.**
+   `rt::ShutdownToken` bean + `#[sse]` default termination + auto
+   `+ use<>`. Deletes the token bean, the `on_drain` wiring, and three
+   `take_until` blocks; unlocks `#[sse]` adoption.
+3. **Sprint 3 — background services & once-semantics: F6, F3.**
+   `enabled` gate, `#[producer(start)]` discoverability (llm.txt), shared-
+   crate derive check, `on_start_once` + hot-patch contract. Deletes most of
+   `background.rs` and the `booted`/`first_boot` machinery.
+4. **Sprint 4 — builder & test assembly: F2, F14, F5.**
+   `ProvideBundle`, module aggregation, profile service gate, `app_main!`
+   tracing knob. Deletes `assemble!` and halves `app.rs`; `main.rs` becomes
+   the macro one-liner.
+5. **Sprint 5 — HTTP & OpenAPI polish: F10, F11, F7a, F12.**
+   Rejection re-exports + `Params` parity, controller `tag`,
+   `provide_config`, nesting seam (F12 needs its short design note first).
+6. **Sprint 6 — optional, explicit go required: F13.**
+
+App-side follow-ups (no framework change, hand to data-catalog): move
+`CatalogServiceImpl` into a module via `grpc_services(...)`, drop `axum`
+from catalog-core (`impl_into_response!` + prelude `from_fn`/`MatchedPath`),
+try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above.
+
 ## Open items tracked in their own docs
 
 Kept where the context lives rather than duplicated here:
