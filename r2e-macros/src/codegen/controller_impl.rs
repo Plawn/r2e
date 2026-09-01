@@ -1188,6 +1188,7 @@ fn generate_sse_route_metadata(
                 has_guards,
                 sm.identity_param.is_some(),
                 sm.decorators.anonymous,
+                &sm.fn_item.attrs,
                 "SSE stream",
             )
         })
@@ -1212,6 +1213,7 @@ fn generate_ws_route_metadata(
                 has_guards,
                 wm.identity_param.is_some(),
                 wm.decorators.anonymous,
+                &wm.fn_item.attrs,
                 "WebSocket endpoint",
             )
         })
@@ -1244,8 +1246,14 @@ fn streaming_effective_auth(
 /// Emit a `RouteInfo` literal for SSE / WS routes.
 ///
 /// Both emit a `GET` with empty body/params/response and a 200 status; they
-/// differ only in summary text. Keeping this in one place makes adding a new
-/// streaming route kind (or a new `RouteInfo` field) a single-edit affair.
+/// differ only in the fallback summary. Keeping this in one place makes adding
+/// a new streaming route kind (or a new `RouteInfo` field) a single-edit
+/// affair.
+///
+/// Summary and description come from the method's doc comment, exactly as for
+/// a verb route (`generate_route_metadata`), so moving a documented `#[get]`
+/// to `#[sse]` keeps its OpenAPI prose. `fallback_summary` — "SSE stream" /
+/// "WebSocket endpoint" — only applies to an undocumented method.
 #[allow(clippy::too_many_arguments)]
 fn emit_streaming_route_info(
     controller_name: &syn::Ident,
@@ -1256,7 +1264,8 @@ fn emit_streaming_route_info(
     has_guards: bool,
     has_identity_param: bool,
     anonymous: bool,
-    summary: &str,
+    attrs: &[syn::Attribute],
+    fallback_summary: &str,
 ) -> TokenStream {
     let krate = r2e_core_path();
     let op_id = format!("{}_{}", controller_name, fn_ident);
@@ -1270,6 +1279,13 @@ fn emit_streaming_route_info(
         meta_mod,
     );
 
+    let (doc_summary, doc_description) = crate::extract::route::extract_doc_comments(attrs);
+    let summary = doc_summary.unwrap_or_else(|| fallback_summary.to_string());
+    let description_token = match doc_description {
+        Some(d) => quote! { Some(#d.to_string()) },
+        None => quote! { None },
+    };
+
     quote! {
         #krate::di::meta::RouteInfo {
             path: match #meta_mod::PATH_PREFIX {
@@ -1279,7 +1295,7 @@ fn emit_streaming_route_info(
             method: "GET".to_string(),
             operation_id: #op_id.to_string(),
             summary: Some(#summary.to_string()),
-            description: None,
+            description: #description_token,
             request_body_type: None,
             request_body_schema: None,
             request_body_content_type: None,
