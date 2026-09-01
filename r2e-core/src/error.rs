@@ -310,22 +310,25 @@ impl<T, E: Into<HttpError>> HttpErrorExt<T> for Result<T, E> {
 /// ```
 #[macro_export]
 macro_rules! map_error {
-    // Form 1: Map to HttpError (original)
-    ( $( $err_ty:ty => $variant:ident ),* $(,)? ) => {
-        $(
-            impl From<$err_ty> for $crate::HttpError {
-                fn from(err: $err_ty) -> Self {
-                    $crate::HttpError::$variant(err.to_string().into())
-                }
-            }
-        )*
-    };
-    // Form 2: Map to a custom error type
+    // Form 2: map to a custom error type. MUST come first: form 1's leading
+    // `$err_ty:ty` would try to parse `for MyError { … }` as a `for<'a> …`
+    // higher-ranked type and abort the whole expansion — a fragment-parse
+    // error is fatal, the next rule is never tried.
     ( for $target:ty { $( $err_ty:ty => $variant:ident ),* $(,)? } ) => {
         $(
             impl From<$err_ty> for $target {
                 fn from(err: $err_ty) -> Self {
                     <$target>::$variant(err.to_string().into())
+                }
+            }
+        )*
+    };
+    // Form 1: map to HttpError (only legal where `HttpError` is local).
+    ( $( $err_ty:ty => $variant:ident ),* $(,)? ) => {
+        $(
+            impl From<$err_ty> for $crate::HttpError {
+                fn from(err: $err_ty) -> Self {
+                    $crate::HttpError::$variant(err.to_string().into())
                 }
             }
         )*
