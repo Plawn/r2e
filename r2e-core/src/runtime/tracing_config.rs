@@ -67,7 +67,7 @@ impl crate::config::FromConfigValue for SpanEvents {
 ///   thread-ids: true
 ///   span-events: full
 /// ```
-#[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
 pub struct TracingConfig {
     /// `EnvFilter` directive string. `RUST_LOG` env var takes priority.
     #[config(default = "info")]

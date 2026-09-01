@@ -5,6 +5,56 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
+/// The configuration the process-global subscriber was actually installed
+/// with, when R2E installed it.
+///
+/// A `tracing` subscriber is a one-shot process global: the first install
+/// wins and every later one is a no-op. Recording what won lets a losing
+/// caller tell the two cases apart — re-installing the *same* knobs (an
+/// entry point and a plugin both reading the same `tracing:` section, or
+/// `#[r2e::test]` calling [`init_tracing`] once per test) is redundant but
+/// harmless, whereas losing with *different* knobs means the output the
+/// caller asked for is silently not the output the process produces.
+static INSTALLED: std::sync::OnceLock<TracingConfig> = std::sync::OnceLock::new();
+
+/// An init that lost the race to a subscriber installed earlier.
+///
+/// `installed` carries the winning configuration when R2E installed it, and
+/// is `None` when the subscriber came from elsewhere (the application, a test
+/// harness, another library).
+#[derive(Debug, Clone)]
+pub struct SubscriberAlreadyInstalled {
+    /// The configuration that actually won, when it is known.
+    pub installed: Option<TracingConfig>,
+}
+
+impl SubscriberAlreadyInstalled {
+    /// Whether the winning subscriber differs from what `requested` asked
+    /// for — i.e. whether losing the race actually changed the output.
+    ///
+    /// An unknown winner counts as different: nothing says it honours the
+    /// requested format or filter.
+    pub fn changes_output(&self, requested: &TracingConfig) -> bool {
+        self.installed.as_ref() != Some(requested)
+    }
+}
+
+impl std::fmt::Display for SubscriberAlreadyInstalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.installed {
+            Some(c) => write!(
+                f,
+                "a global tracing subscriber is already installed (format={:?}, filter={:?})",
+                c.effective_format(),
+                c.filter
+            ),
+            None => write!(f, "a global tracing subscriber is already installed"),
+        }
+    }
+}
+
+impl std::error::Error for SubscriberAlreadyInstalled {}
+
 /// Initialise the global `tracing` subscriber with a standard `fmt` layer.
 ///
 /// Respects the `RUST_LOG` environment variable. Falls back to
@@ -15,16 +65,100 @@ use tracing_subscriber::EnvFilter;
 /// plugin, so you only need to call it manually if you want logs *before* the
 /// plugin is installed (e.g. during state construction).
 ///
+/// It installs the **built-in defaults**, ignoring the application's
+/// `tracing:` section; an entry point that should honour that section calls
+/// [`init_tracing_from_config`] instead.
+///
 /// [`Tracing`]: crate::builtins::Tracing
 pub fn init_tracing() {
     init_tracing_with_config(&TracingConfig::default());
 }
 
+/// Initialise the global `tracing` subscriber from the application's own
+/// configuration — this is what R2E's entry points call.
+///
+/// Loads `application.yaml` (profile overlay and `R2E_*` env overlay
+/// included) and installs its `tracing:` section, so an app that declares
+/// `format: json` gets JSON from its very first log line, without having to
+/// install a subscriber itself.
+///
+/// A missing configuration file is normal and silent. An unreadable or
+/// malformed one falls back to the built-in defaults and warns — through the
+/// subscriber it just installed, so the message is visible — rather than
+/// failing: a bad config file must never cost the app the log line that
+/// explains the boot error that follows.
+pub fn init_tracing_from_config() {
+    let (config, problem) = resolve_tracing_config();
+
+    if let Err(lost) = try_init_tracing_with_config(&config) {
+        warn_if_output_differs(&lost, &config);
+    }
+    if let Some(problem) = problem {
+        tracing::warn!("r2e: falling back to the built-in tracing defaults — {problem}");
+    }
+}
+
+/// The configuration [`init_tracing_from_config`] installs, plus the reason it
+/// fell back to the built-in defaults when it did.
+///
+/// Split out of the install so the *resolution* — the part that reads files —
+/// can be exercised on its own; installing is a one-shot process global and
+/// can be observed only once per process.
+#[doc(hidden)]
+pub fn resolve_tracing_config() -> (TracingConfig, Option<String>) {
+    match crate::config::R2eConfig::load() {
+        Ok(loaded) => {
+            use crate::config::ConfigProperties;
+            match TracingConfig::from_config(&loaded, Some("tracing")) {
+                Ok(config) => (config, None),
+                Err(e) => (
+                    TracingConfig::default(),
+                    Some(format!("the `tracing:` section is invalid: {e}")),
+                ),
+            }
+        }
+        Err(e) => (
+            TracingConfig::default(),
+            Some(format!("the configuration could not be loaded: {e}")),
+        ),
+    }
+}
+
+/// Warn when an init lost the race to a subscriber that logs differently.
+///
+/// Losing with the very same configuration is the common, harmless case (an
+/// entry point and a plugin reading the same section); staying quiet there is
+/// what makes the warning worth reading when it does appear.
+pub fn warn_if_output_differs(lost: &SubscriberAlreadyInstalled, requested: &TracingConfig) {
+    if lost.changes_output(requested) {
+        tracing::warn!(
+            "r2e: this tracing configuration (format={:?}, filter={:?}) is ignored — {lost}. \
+             Install the subscriber before R2E does (in `App::setup`), or opt out of R2E's with \
+             `app_main!(MyApp, tracing = false)`.",
+            requested.effective_format(),
+            requested.filter,
+        );
+    }
+}
+
 /// Initialise the global `tracing` subscriber from a [`TracingConfig`].
 ///
 /// `RUST_LOG` env var always takes priority over `config.filter`.
-/// This function is idempotent — subsequent calls are silently ignored.
+/// This function is idempotent — subsequent calls are silently ignored. Use
+/// [`try_init_tracing_with_config`] to find out whether this call is the one
+/// that took effect.
 pub fn init_tracing_with_config(config: &TracingConfig) {
+    let _ = try_init_tracing_with_config(config);
+}
+
+/// [`init_tracing_with_config`], reporting whether it won the race.
+///
+/// `Err(SubscriberAlreadyInstalled)` means a subscriber was already in place
+/// and this configuration had no effect at all — the case that used to be a
+/// silent no-op.
+pub fn try_init_tracing_with_config(
+    config: &TracingConfig,
+) -> Result<(), SubscriberAlreadyInstalled> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| config.filter.parse().unwrap());
 
@@ -37,34 +171,43 @@ pub fn init_tracing_with_config(config: &TracingConfig) {
     let level = config.level.unwrap_or(true);
     let ansi = config.ansi.unwrap_or(true);
 
-    match config.effective_format() {
-        LogFormat::Json => {
-            let _ = tracing_subscriber::fmt()
-                .json()
-                .with_env_filter(env_filter)
-                .with_target(target)
-                .with_thread_ids(thread_ids)
-                .with_thread_names(thread_names)
-                .with_file(file)
-                .with_line_number(line_number)
-                .with_level(level)
-                .with_ansi(ansi)
-                .with_span_events(span_events)
-                .try_init();
+    let outcome = match config.effective_format() {
+        LogFormat::Json => tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .with_target(target)
+            .with_thread_ids(thread_ids)
+            .with_thread_names(thread_names)
+            .with_file(file)
+            .with_line_number(line_number)
+            .with_level(level)
+            .with_ansi(ansi)
+            .with_span_events(span_events)
+            .try_init(),
+        LogFormat::Pretty => tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(target)
+            .with_thread_ids(thread_ids)
+            .with_thread_names(thread_names)
+            .with_file(file)
+            .with_line_number(line_number)
+            .with_level(level)
+            .with_ansi(ansi)
+            .with_span_events(span_events)
+            .try_init(),
+    };
+
+    match outcome {
+        Ok(()) => {
+            // Best-effort: the race this loses is another thread installing
+            // at the same instant, and then it is that one's config that is
+            // recorded — which is exactly what we want to remember.
+            let _ = INSTALLED.set(config.clone());
+            Ok(())
         }
-        LogFormat::Pretty => {
-            let _ = tracing_subscriber::fmt()
-                .with_env_filter(env_filter)
-                .with_target(target)
-                .with_thread_ids(thread_ids)
-                .with_thread_names(thread_names)
-                .with_file(file)
-                .with_line_number(line_number)
-                .with_level(level)
-                .with_ansi(ansi)
-                .with_span_events(span_events)
-                .try_init();
-        }
+        Err(_) => Err(SubscriberAlreadyInstalled {
+            installed: INSTALLED.get().cloned(),
+        }),
     }
 }
 

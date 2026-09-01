@@ -110,12 +110,19 @@ r2e::app_main!(MyApp);                          // include app.rs + generate mai
 
 `app_main!` installs the global `tracing` subscriber **after** `App::setup`
 returns (and, under `dev-reload`, once — outside the patch loop), so an app that
-builds its own subscriber in `setup` wins; `init_tracing` is idempotent. Anything
-`setup` logs before that point is dropped. `app_main!(MyApp, tracing = false)` —
-same spelling as `#[r2e::main(tracing = false)]` — installs nothing at all, which
-is what lets a `Tracing::from_config(&cfg)` / `ConfiguredTracing` plugin declared
-in `build` actually own the subscriber instead of losing the race to the entry
-point. `launch!(MyApp, tracing = false)` is the same knob for a custom `main`.
+builds its own subscriber in `setup` wins; the install is idempotent. Anything
+`setup` logs before that point is dropped. What it installs is the app's own
+`tracing:` section (`init_tracing_from_config()`), so `format: json` in
+`application.yaml` applies from the first log line, with no plugin and no opt-in;
+an unreadable section falls back to the built-in defaults and warns.
+
+Because that happens before `App::build`, a `Tracing::from_config(&cfg)` /
+`ConfiguredTracing` plugin declared in `build` **loses the race** — silently when
+it reads the same section (same subscriber either way), with a warning naming the
+ignored format/filter when it would have logged differently. To let the plugin
+own the subscriber, opt the entry point out: `app_main!(MyApp, tracing = false)`
+— same spelling as `#[r2e::main(tracing = false)]` — installs nothing at all.
+`launch!(MyApp, tracing = false)` is the same knob for a custom `main`.
 
 ```rust
 // src/controllers/hello.rs
