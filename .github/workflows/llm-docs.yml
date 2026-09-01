@@ -1,0 +1,18 @@
+name: LLM docs
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  llm-docs:
+    name: llm.txt matches llm/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pure text check: no toolchain, no build.
+      - name: llm.txt is the concatenation of llm/*.md
+        run: ./scripts/check-llm-docs.sh

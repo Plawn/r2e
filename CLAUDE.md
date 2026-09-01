@@ -260,7 +260,9 @@ beans, and the `Controller::on_start(core)` override on controllers.
 
 ## Keeping `llm.txt` Fresh
 
-`llm.txt` at the repo root is the canonical AI/agent-facing reference that downstream projects rely on. **Any change to a public API surface (traits, macros, builder methods, renames, removals) MUST update the matching `llm.txt` section in the same PR.** Code agents in consumer apps follow `llm.txt` literally — a stale example (e.g. a removed method) makes them generate non-compiling code.
+The AI/agent-facing reference that downstream projects rely on is a hub + spokes set: `llm.txt` at the repo root (hand-written: golden rules + the routing table "task → topic") and one topic per file under `llm/<topic>.md`. `llm-full.txt` is the **generated** single-file concatenation — never edit it directly. **Any change to a public API surface (traits, macros, builder methods, renames, removals) MUST update the matching topic in the same PR.** Code agents in consumer apps follow these files literally — a stale example (e.g. a removed method) makes them generate non-compiling code.
+
+Rules for a topic file: exact 6-line front matter (`---`, `topic: <slug>` == file stem, `features: …`, `tokens: ~N`, `requires: <slugs>`, `---`), then one `## Title` and a mandatory `### TL;DR`; every topic must be routed from `llm.txt` (the hub is the manifest: first-reference order = concatenation order), and every ```rust block must compile against the `r2e` façade (`cargo test -p llm-doctests`; mark deliberately partial snippets `rust,ignore`). After editing, run `scripts/check-llm-docs.sh --update` (recomputes `tokens:` and regenerates `llm-full.txt`), then commit spoke + `llm-full.txt`; CI (`.github/workflows/llm-docs.yml`) fails on drift. Adding a topic also means adding its slug to `TOPICS` in `r2e-cli/src/commands/llm_docs.rs` (the CLI embeds the set for `r2e docs --llm` / `--export`; `r2e-cli/tests/llm_docs.rs` fails otherwise). Layout decisions live in `plans/llm-docs-split.md`.
 
 ## Language & Documentation
 

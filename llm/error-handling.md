@@ -1,0 +1,128 @@
+---
+topic: error-handling
+features: core
+tokens: ~1200
+requires: core-concepts
+---
+
+## Error Handling
+
+### TL;DR
+
+- `HttpError` is the default error type: `HttpError::not_found/bad_request/internal/from_status`, plus `.http_context("...")` (from `HttpErrorExt`) to add context to a `?`.
+- `HttpError` is `#[non_exhaustive]` — always include a wildcard arm when matching it.
+- Prefer `#[derive(ApiError)]` for custom error enums: `#[error(status = ..., message = "...")]`, `#[from]` for sources, `#[error(transparent)]` to wrap `HttpError`.
+- For a hand-written response type implement `IntoHttpResponse` and emit the bridge with `r2e::http::impl_into_response!(Ty)` (non-generic types only) — never implement axum's `IntoResponse` yourself.
+- Constant bodies use `r2e::http::response::static_json(status, r#"..."#)`; anything holding a runtime value must go through `Json` / `json!` for escaping.
+- `r2e::map_error! { for MyError { Err => Variant, ... } }` generates the `From`
+  impls so `?` converts into your error type; the bare `{ Err => Variant }` form
+  targets `HttpError` and is orphan-rule-illegal outside `r2e-core` — convert at
+  the call site with `.map_err(|e| HttpError::internal(e.to_string()))` instead.
+
+### HttpError (built-in)
+
+`HttpError` is the default error type (`#[non_exhaustive]` — wildcard arm when
+matching). Variants: `NotFound`, `Unauthorized`, `Forbidden`, `BadRequest`,
+`Internal` (all `Cow<'static, str>`), `Validation(...)`, `Custom { status, body }`,
+`WithSource { status, message, source }`.
+
+```rust
+# async fn __doc(db: Db, u: NewUser, e: std::io::Error) -> Result<(), HttpError> {
+HttpError::not_found("User not found");     // zero-alloc with static strings
+HttpError::internal(format!("DB: {e}"));
+HttpError::bad_request("invalid input");
+HttpError::from_status(StatusCode::CONFLICT, "already exists");
+
+// context
+let user = db.insert(&u).await.http_context("inserting user")?;  // via HttpErrorExt
+# Ok(()) }
+```
+
+### `#[derive(ApiError)]` — custom error types (recommended)
+
+Generates `Display`, `IntoHttpResponse` (plus the `IntoResponse` bridge impl,
+so the type is returnable from a handler), and `std::error::Error`:
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum MyError {
+    #[error(status = NOT_FOUND, message = "User not found: {0}")]
+    NotFound(String),
+
+    #[error(status = INTERNAL_SERVER_ERROR)]
+    Io(#[from] std::io::Error),          // From impl + Error::source()
+
+    #[error(status = 429, message = "Too many requests")]
+    RateLimited,
+
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+```
+
+### Hand-written response types
+
+When `#[derive(ApiError)]` does not fit, implement **`IntoHttpResponse`** (R2E's
+contract) and emit the backend bridge with one macro line — do NOT implement
+axum's `IntoResponse` yourself:
+
+```rust
+use r2e::prelude::*;                       // IntoHttpResponse, Response, ...
+
+#[derive(Debug)]
+pub struct Conflict;
+
+impl IntoHttpResponse for Conflict {
+    fn into_http_response(self) -> Response {
+        (StatusCode::CONFLICT, Json(serde_json::json!({ "error": "conflict" })))
+            .into_response()
+    }
+}
+
+r2e::http::impl_into_response!(Conflict);  // bridge; non-generic types only
+```
+
+`impl_into_response!` is what keeps handler composition working: `Result<T, E>`
+and `(StatusCode, T)` reach the HTTP backend through it.
+
+For a **constant** body, skip `json!` entirely — it allocates a `Value` and runs
+the serializer on every response:
+
+```rust
+use r2e::http::response::static_json;
+
+# fn __doc() -> Response {
+static_json(StatusCode::UNAUTHORIZED, r#"{"error":"Unauthorized"}"#)
+# }
+```
+
+`static_json` sets `content-type: application/json` and sends the `&'static str`
+as `Bytes::from_static` (zero-copy). Only for literal constants — a body holding
+a runtime value must keep going through `Json`/`json!` for escaping.
+
+### `map_error!` — bulk From impls
+
+`map_error!` writes the `From` impls that make `?` convert. In an application
+crate use the `for <YourError>` form: the bare form targets `HttpError`, and an
+`impl From<sqlx::Error> for HttpError` written in your crate is an orphan-rule
+error (both types are foreign), so that form only compiles inside `r2e-core`.
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum MyError {
+    #[error(status = INTERNAL_SERVER_ERROR, message = "{0}")]
+    Internal(String),
+
+    #[error(status = BAD_REQUEST, message = "{0}")]
+    BadRequest(String),
+}
+
+r2e::map_error! { for MyError {
+    sqlx::Error => Internal,
+    r2e::json::JsonError => BadRequest,
+}}
+// `?` on sqlx::Error now auto-converts to MyError::Internal
+```
+
+For a one-off, convert at the call site instead:
+`.map_err(|e| HttpError::internal(e.to_string()))?`.

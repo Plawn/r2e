@@ -561,7 +561,9 @@ cargo run -p example-app       # run the demo app on port 3001
 
 ## For AI agents
 
-If you are an AI agent or LLM, read [llm.txt](llm.txt) for a comprehensive API reference.
+If you are an AI agent or LLM, start at [llm.txt](llm.txt) — golden rules plus a routing table that maps your task to one topic file under [llm/](llm/) (read only those). [llm-full.txt](llm-full.txt) is the same reference as a single document, for tools that ingest one file.
+
+Inside a project, `r2e docs --llm --export` writes the reference matching the installed R2E version into `docs/r2e/` (`r2e new` does it for you, `r2e doctor` warns when the copy is stale); `r2e docs --llm [<topic>] [--full]` prints it.
 
 ## License
 
