@@ -122,18 +122,39 @@ builder
 
 ### Tracing under the canonical entrypoint
 
-The canonical entrypoint — `r2e::app_main!(MyApp)` / `r2e::launch!` — does **not**
-initialize tracing for you. Install the `Tracing` plugin inside `App::setup`
-(or in `App::build`, before `build_state()`) with `.plugin(Tracing)` — or the
-config-driven `.plugin(Tracing::from_config(builder.r2e_config().unwrap()))`
-shown above, since `r2e_config()` is available as soon as `load_config` has
-run. With no plugin, the app emits no tracing subscriber.
+The canonical entrypoint — `r2e::app_main!(MyApp)` / `r2e::launch!` — installs
+the subscriber **for you**, right after `App::setup` returns and before
+`App::build` runs. It reads your own `tracing:` section to do it, so the YAML
+above applies with no plugin and no code:
 
-Only the custom-entrypoint macro `#[r2e::main]` auto-initializes tracing before
-config is loaded. If you use that form and want configurable tracing instead:
+```yaml
+tracing:
+  format: json
+  filter: "info,my_app=debug"
+```
 
-1. Disable the default tracing: `#[r2e::main(tracing = false)]`
-2. Load config first, then install the configured `Tracing` plugin
+A missing `application.yaml` is silent (built-in defaults); an unreadable file
+or an invalid `tracing:` section falls back to the defaults and warns through
+the subscriber it just installed, so a bad config never costs you the log line
+explaining the boot error that follows.
+
+**A subscriber is a one-shot process global: the first install wins.** Since
+the entrypoint installs before `App::build`, a `Tracing` / `ConfiguredTracing`
+/ `Observability` plugin declared in `build` *loses that race*. Losing is
+harmless when the plugin reads the same `tracing:` section — it is the same
+subscriber either way, and R2E stays quiet. It is not harmless when the plugin
+would have logged differently, or adds a layer of its own (OTLP!): R2E then
+warns, naming the format and filter it had to ignore.
+
+So: to let a plugin own the subscriber, opt the entrypoint out.
+
+```rust
+r2e::app_main!(MyApp, tracing = false);   // R2E installs nothing at all
+```
+
+`launch!(MyApp, tracing = false)` and `#[r2e::main(tracing = false)]` are the
+same knob for a custom `main`. Use it whenever you install `Observability`, or
+a `Tracing` plugin built from something other than the `tracing:` section.
 
 ## OpenTelemetry observability
 
@@ -152,11 +173,21 @@ builder
 `from_env` reads the standard OTLP endpoint, service-name, protocol, and
 sampler variables. With no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
 `OTEL_EXPORTER_OTLP_ENDPOINT`, it installs ordinary R2E tracing without an
-exporter. This makes the canonical one-line `r2e::app_main!(MyApp)` entrypoint
-work in both local and deployed environments without conditional subscriber
-initialization. A custom `#[r2e::main]` entrypoint must still specify
-`tracing = false`, since that macro initializes its subscriber before the app
-is built.
+exporter — the same plugin therefore works locally and deployed, without
+conditional subscriber initialization in your code.
+
+`Observability` installs its own subscriber (fmt **plus** the OpenTelemetry
+layer) from `App::build`, so it needs the entrypoint to stand down:
+
+```rust
+r2e::app_main!(MyApp, tracing = false);
+```
+
+Without that, the entrypoint's subscriber is already installed when the plugin
+runs, the OTel layer is skipped, and you get logs but **no exported spans**.
+R2E says so — "Observability tracing layer skipped" — rather than failing
+silently, but the fix is the `tracing = false` above. The same applies to a
+custom `#[r2e::main(tracing = false)]` entrypoint.
 
 R2E exports OTLP/HTTP to `http://localhost:4318/v1/traces` by default. A
 pathless HTTP(S) endpoint receives `/v1/traces` automatically; requesting gRPC

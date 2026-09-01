@@ -100,7 +100,14 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
                 .with(tracing_opentelemetry::layer().with_tracer(tracer));
 
             if tracing::subscriber::set_global_default(subscriber).is_err() {
-                tracing::warn!("A global tracing subscriber was already set (e.g. by dioxus-devtools). Observability tracing layer skipped.");
+                tracing::warn!(
+                    "A global tracing subscriber was already installed, so the OpenTelemetry \
+                     layer was skipped: this process logs, but exports no spans. The usual \
+                     cause is R2E's own entry point, which installs the `tracing:` section \
+                     before `App::build` runs — opt it out with `app_main!(MyApp, tracing = \
+                     false)` (or `#[r2e::main(tracing = false)]`) so this plugin owns the \
+                     subscriber."
+                );
             }
         }
         LogFormat::Pretty => {
@@ -122,7 +129,14 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
                 .with(tracing_opentelemetry::layer().with_tracer(tracer));
 
             if tracing::subscriber::set_global_default(subscriber).is_err() {
-                tracing::warn!("A global tracing subscriber was already set (e.g. by dioxus-devtools). Observability tracing layer skipped.");
+                tracing::warn!(
+                    "A global tracing subscriber was already installed, so the OpenTelemetry \
+                     layer was skipped: this process logs, but exports no spans. The usual \
+                     cause is R2E's own entry point, which installs the `tracing:` section \
+                     before `App::build` runs — opt it out with `app_main!(MyApp, tracing = \
+                     false)` (or `#[r2e::main(tracing = false)]`) so this plugin owns the \
+                     subscriber."
+                );
             }
         }
     }
