@@ -439,7 +439,11 @@ ergonomic layer over axum: declarative controllers, compile-time DI, and
 zero runtime reflection. R2E wraps axum — **always reach for the R2E
 construct first**; dropping to raw axum forfeits DI, guards, interceptors,
 OpenAPI, and TestApp integration. The full AI-facing API reference is
-`llm.txt` at the root of the R2E repository.
+exported in this project under `docs/r2e/`: read `docs/r2e/llm.txt` first
+(golden rules + a routing table "task → topic"), then only the
+`docs/r2e/llm/<topic>.md` files it maps your task to. It matches the R2E
+version this project was scaffolded with; after upgrading R2E, refresh it with
+`r2e docs --llm --export` (`r2e doctor` warns when the copy is stale).
 
 ## Architecture rules
 
@@ -500,6 +504,32 @@ OpenAPI, and TestApp integration. The full AI-facing API reference is
 /// the tool-agnostic AGENTS.md.
 pub fn claude_md() -> &'static str {
     "@AGENTS.md\n"
+}
+
+/// `.claude/skills/r2e/SKILL.md` — a Claude Code skill routing agents to the
+/// exported reference instead of guessing R2E APIs.
+pub fn r2e_skill_md() -> &'static str {
+    r#"---
+name: r2e
+description: Use when writing or changing R2E (Rust web framework) code — controllers, beans, plugins, guards, config, tests. Routes to the version-matched R2E reference exported under docs/r2e/.
+---
+
+# R2E reference
+
+R2E is a Quarkus-like layer over axum with compile-time DI. Do not guess its
+APIs from axum or from memory: the framework changes fast and this project
+carries the reference for the exact version it depends on.
+
+1. Read `docs/r2e/llm.txt` — golden rules and the routing table.
+2. Match your task to the routing table and read only the
+   `docs/r2e/llm/<topic>.md` files it points to (each lists its own
+   `requires:` prerequisites in its front matter).
+3. Prefer the R2E construct over raw axum in every case the reference covers.
+
+`docs/r2e/llm-full.txt` is not exported; if you need the whole reference in
+one document run `r2e docs --llm --full`. After an R2E upgrade, refresh the
+exported copy with `r2e docs --llm --export`.
+"#
 }
 
 pub fn greeter_proto(project_name: &str) -> String {

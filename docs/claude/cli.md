@@ -44,7 +44,7 @@ Subcommands:
 
 ## `r2e doctor` — Project health diagnostics
 
-Runs 9 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI, migrations, R2E entrypoint, DI recursion limit). The entrypoint check recognizes `app_main!`, `launch!`, `serve()`, and `serve_auto()`. Reports `Ok`/`Warning`/`Error` with colored indicators.
+Runs 10 checks (Cargo.toml, r2e dep, config file, controllers dir, rustc, dx CLI, migrations, R2E entrypoint, DI recursion limit, exported agent docs `docs/r2e/llm.txt` present and stamped with the CLI's version). The entrypoint check recognizes `app_main!`, `launch!`, `serve()`, and `serve_auto()`. Reports `Ok`/`Warning`/`Error` with colored indicators.
 
 ## `r2e routes` — Route listing
 
@@ -68,6 +68,17 @@ Prints per-module documentation embedded in the binary at compile time (the `doc
 **Source of truth:** the `## TL;DR` block lives once in each `docs/features/NN-*.md` file — it renders in the docs/mdBook *and* is extracted by this command (slice from `## TL;DR` to the next `## ` heading). Slugs are clean English, decoupled from the (sometimes French) file names. Implementation: `commands/docs.rs` (`DOCS` manifest + `tldr()` extractor).
 
 > **Packaging note:** `include_str!` reads `../../../docs/features/*.md`, outside the `r2e-cli` crate dir. This works for in-workspace builds; publishing `r2e-cli` to crates.io will need the docs mirrored under the crate (or a `build.rs`) first.
+
+## `r2e docs --llm [<topic>]` — AI/agent-facing reference
+
+The same delivery for the hub + spokes reference (`llm.txt` + `llm/<topic>.md` at the repo root, see `plans/llm-docs-split.md`). Embedded with `include_str!` like the module docs, so the printed/exported text is the one for the installed `r2e` version.
+
+- **`r2e docs --llm`** — the hub: golden rules + routing table "task → topic".
+- **`r2e docs --llm <topic>`** — one topic file, front matter included (`--pretty` strips it and renders).
+- **`--full`** — hub + every topic in routing order, one document (what `llm-full.txt` is in the repo), stamped with the version.
+- **`--export [DIR]`** — writes `DIR/llm.txt` (stamped `<!-- R2E vX.Y.Z — exported by … -->`) and `DIR/llm/<topic>.md`; default `DIR` is `docs/r2e`. `r2e new` runs this export for every scaffolded project and writes `.claude/skills/r2e/SKILL.md` pointing at it; the generated `AGENTS.md` routes agents to `docs/r2e/llm.txt`. `r2e doctor` (check 10) warns when `docs/r2e/llm.txt` is missing or its stamp is not the CLI's version.
+
+Implementation: `commands/llm_docs.rs` (`HUB`, `TOPICS` — one entry per `llm/*.md`, kept in sync by `tests/llm_docs.rs`, `full()`, `export()`, `stamped_version()`).
 
 ## `r2e dev` — Development server with hot-reload
 

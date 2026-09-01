@@ -24,10 +24,19 @@ pub mod docs;
 
 /// Project diagnostics — `r2e doctor`.
 ///
-/// Runs 9 health checks: Cargo.toml, R2E dependency, config file,
+/// Runs 10 health checks: Cargo.toml, R2E dependency, config file,
 /// controllers directory, Rust toolchain, Dioxus CLI, migrations,
-/// application entrypoint, and bean-count recursion limits.
+/// application entrypoint, bean-count recursion limits, and the exported
+/// agent docs (`docs/r2e/`) being present and version-matched.
 pub mod doctor;
+
+/// AI/agent-facing reference — `r2e docs --llm [<topic>] [--full] [--export [DIR]]`.
+///
+/// The hub `llm.txt` (golden rules + routing table) and the per-topic files
+/// under `llm/` are embedded at compile time, so the printed or exported
+/// reference always matches the installed R2E version. `r2e new` exports the
+/// set into `docs/r2e/`; `r2e doctor` warns when that copy is stale.
+pub mod llm_docs;
 
 /// Code generation — `r2e generate`.
 ///

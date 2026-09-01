@@ -199,6 +199,14 @@ fn generate_project(opts: &ProjectOptions) -> Result<(), Box<dyn std::error::Err
         project_dir.join("CLAUDE.md"),
         templates::project::claude_md(),
     )?;
+    //    The version-matched R2E reference the two files route to, plus a
+    //    Claude Code skill that points agents at it.
+    super::llm_docs::export(&project_dir.join(super::llm_docs::DEFAULT_EXPORT_DIR))?;
+    fs::create_dir_all(project_dir.join(".claude/skills/r2e"))?;
+    fs::write(
+        project_dir.join(".claude/skills/r2e/SKILL.md"),
+        templates::project::r2e_skill_md(),
+    )?;
 
     // 6. Migrations directory if DB selected
     if opts.db.is_some() {

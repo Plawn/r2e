@@ -1,7 +1,7 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
-use commands::{add, dev, docs, doctor, generate, new_project, routes, test};
+use commands::{add, dev, docs, doctor, generate, llm_docs, new_project, routes, test};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -98,14 +98,20 @@ enum Commands {
     Routes,
     /// Print module documentation (bundled, version-matched)
     Docs {
-        /// Module slug or crate name (omit to list all)
+        /// Module slug or crate name (omit to list all); with --llm, a topic slug
         module: Option<String>,
-        /// Print the full doc instead of just the TL;DR
+        /// Print the full doc instead of just the TL;DR (with --llm: the single-file reference)
         #[arg(long)]
         full: bool,
         /// Render markdown for a terminal instead of raw output
         #[arg(long, short)]
         pretty: bool,
+        /// Use the AI/agent-facing reference (llm.txt + llm/<topic>.md) instead of module docs
+        #[arg(long)]
+        llm: bool,
+        /// With --llm: write the whole reference into DIR (default docs/r2e) for agents to read locally
+        #[arg(long, value_name = "DIR", num_args = 0..=1, default_missing_value = llm_docs::DEFAULT_EXPORT_DIR, requires = "llm")]
+        export: Option<PathBuf>,
     },
 }
 
@@ -205,6 +211,15 @@ fn main() {
             module,
             full,
             pretty,
+            llm: true,
+            export,
+        } => llm_docs::run(module.as_deref(), full, export.as_deref(), pretty),
+        Commands::Docs {
+            module,
+            full,
+            pretty,
+            llm: false,
+            ..
         } => docs::run(module.as_deref(), full, pretty),
     };
 

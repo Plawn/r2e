@@ -14,6 +14,7 @@
 //! | `r2e doctor` | Run project health diagnostics |
 //! | `r2e routes` | List all declared routes from source |
 //! | `r2e docs [<module>]` | Print bundled, version-matched per-module docs |
+//! | `r2e docs --llm [<topic>]` | Print or `--export` the AI/agent-facing reference |
 //!
 //! ## Architecture
 //!
@@ -27,6 +28,7 @@
 //! - [`commands::doctor`] — project diagnostics (`r2e doctor`)
 //! - [`commands::routes`] — route listing (`r2e routes`)
 //! - [`commands::docs`] — bundled module documentation (`r2e docs`)
+//! - [`commands::llm_docs`] — embedded AI/agent reference (`r2e docs --llm`)
 //! - [`commands::templates`] — shared template helpers and code templates
 
 pub mod commands;
