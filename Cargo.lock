@@ -4194,6 +4194,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
+name = "llm-doctests"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "diesel",
+ "diesel_migrations",
+ "futures-core",
+ "futures-util",
+ "garde",
+ "http",
+ "jsonwebtoken",
+ "prost 0.14.4",
+ "r2e",
+ "r2e-devservices",
+ "r2e-grpc-build",
+ "r2e-test",
+ "reqwest 0.13.4",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tonic",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+]
+
+[[package]]
 name = "lock_api"
 version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
