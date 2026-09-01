@@ -80,7 +80,10 @@ pub use plugin::{
 };
 pub use runtime::harness::WorkerHarness;
 pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
-pub use runtime::layers::{default_cors, default_trace, init_tracing, init_tracing_with_config};
+pub use runtime::layers::{
+    default_cors, default_trace, init_tracing, init_tracing_from_config, init_tracing_with_config,
+    try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
+};
 pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
 pub use runtime::service::ServiceComponent;

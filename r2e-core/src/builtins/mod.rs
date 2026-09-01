@@ -163,8 +163,14 @@ impl Plugin for ConfiguredTracing {
     type Config = ();
     type Controllers = ();
 
+    // An explicit configuration that loses the race to an earlier subscriber
+    // is not honoured at all, so it says so — unless the winner already logs
+    // exactly what this one asked for, which is what happens when the entry
+    // point read the same `tracing:` section a moment earlier.
     fn setup(&mut self, _ctx: &mut PluginSetupContext) {
-        crate::runtime::layers::init_tracing_with_config(&self.0);
+        if let Err(lost) = crate::runtime::layers::try_init_tracing_with_config(&self.0) {
+            crate::runtime::layers::warn_if_output_differs(&lost, &self.0);
+        }
     }
 
     async fn build(

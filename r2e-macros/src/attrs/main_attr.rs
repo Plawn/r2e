@@ -1,7 +1,7 @@
 //! `#[r2e::main]` and `#[r2e::test]` attribute macros.
 //!
 //! These wrap the user's `async fn main()` / `async fn test_*()` in a Tokio
-//! runtime and optionally call `init_tracing()`.
+//! runtime and optionally call `init_tracing_from_config()`.
 //!
 //! The canonical way to declare an app is `impl r2e::App` + a parameterless
 //! `#[r2e::main]` that calls [`r2e::launch`](r2e_core::launch):
@@ -224,7 +224,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
     };
 
     let tracing_init = if args.tracing {
-        quote! { #krate::init_tracing(); }
+        quote! { #krate::init_tracing_from_config(); }
     } else {
         quote! {}
     };

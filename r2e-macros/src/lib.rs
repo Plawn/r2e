@@ -1719,7 +1719,8 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 /// Marks an `async fn main()` as the R2E application entry point.
 ///
 /// Wraps the function body in a Tokio multi-thread runtime and calls
-/// `init_tracing()` automatically (unless disabled).
+/// `init_tracing_from_config()` automatically (unless disabled) — the global
+/// subscriber comes from the application's own `tracing:` section.
 ///
 /// The canonical entry point declares the app via `impl r2e::App` and calls
 /// [`r2e::launch`](r2e_core::launch) from a **parameterless** main:
@@ -1738,7 +1739,7 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 ///
 /// | Argument | Default | Description |
 /// |----------|---------|-------------|
-/// | `tracing` | `true` | Call `init_tracing()` before the body |
+/// | `tracing` | `true` | Call `init_tracing_from_config()` before the body |
 /// | `flavor` | `"multi_thread"` | Tokio runtime flavor |
 /// | `worker_threads` | Tokio default | Number of worker threads |
 /// | `max_blocking_threads` | Tokio default (512) | Max threads for blocking tasks |

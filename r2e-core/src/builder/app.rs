@@ -152,8 +152,9 @@ pub async fn launch<A: App>() -> Result<(), BootError> {
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct LaunchOptions {
-    /// Initialise the global `tracing` subscriber (via
-    /// [`init_tracing`](crate::init_tracing)) **after** [`App::setup`] returns.
+    /// Initialise the global `tracing` subscriber **after** [`App::setup`]
+    /// returns, from the application's own `tracing:` section (via
+    /// [`init_tracing_from_config`](crate::init_tracing_from_config)).
     ///
     /// Default `true`. Set it to `false` — `app_main!(MyApp, tracing = false)`
     /// — when the application installs its own subscriber, either in `setup`
@@ -173,11 +174,18 @@ impl Default for LaunchOptions {
 ///
 /// The subscriber is installed **after** [`App::setup`], not before it, so an
 /// application whose `setup` builds its own subscriber (or reads the
-/// environment to decide on one) wins: `init_tracing` is idempotent and
-/// silently does nothing once a global subscriber is set. The cost is that
-/// anything `setup` logs through `tracing` before installing a subscriber is
-/// dropped — `setup` should print (or install its subscriber first) if it has
-/// something to say.
+/// environment to decide on one) wins: the install is idempotent and does
+/// nothing once a global subscriber is set. The cost is that anything `setup`
+/// logs through `tracing` before installing a subscriber is dropped — `setup`
+/// should print (or install its subscriber first) if it has something to say.
+///
+/// What R2E installs is the app's own `tracing:` section
+/// ([`init_tracing_from_config`](crate::init_tracing_from_config)), not the
+/// built-in defaults, so `format: json` in `application.yaml` applies from the
+/// first log line without any opt-in. It still happens **before**
+/// [`App::build`], so a `Tracing`/`ConfiguredTracing` plugin installed there
+/// loses the race — harmlessly when it reads the same section (it is the same
+/// configuration), with a warning when it would have logged differently.
 ///
 /// With `tracing: false` R2E installs nothing at all, leaving the whole
 /// decision to the app; a `Tracing`/`ConfiguredTracing` plugin installed in
@@ -185,7 +193,7 @@ impl Default for LaunchOptions {
 pub async fn launch_with<A: App>(options: LaunchOptions) -> Result<(), BootError> {
     let env = A::setup().await?;
     if options.tracing {
-        crate::init_tracing();
+        crate::init_tracing_from_config();
     }
     A::build(AppBuilder::new(), env).await?.serve_auto().await
 }

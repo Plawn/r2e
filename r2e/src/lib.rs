@@ -147,9 +147,11 @@ pub mod devtools {
 /// # Tracing
 ///
 /// By default the global `tracing` subscriber is installed **after**
-/// [`App::setup`](r2e_core::App::setup) returns, so an app that builds its own
-/// subscriber in `setup` wins (`init_tracing` is idempotent). Opt out entirely
-/// with the same spelling `#[r2e::main]` uses:
+/// [`App::setup`](r2e_core::App::setup) returns, from the application's own
+/// `tracing:` section (`format: json` in `application.yaml` applies from the
+/// first log line), so an app that builds its own subscriber in `setup` still
+/// wins — the install is idempotent. Opt out entirely with the same spelling
+/// `#[r2e::main]` uses:
 ///
 /// ```ignore
 /// r2e::app_main!(MyApp, tracing = false);
@@ -216,10 +218,14 @@ macro_rules! app_main {
 /// # Tracing
 ///
 /// The global subscriber is installed **after** `App::setup` (and, under
-/// `dev-reload`, once — outside the patch loop). `launch!(MyApp, tracing =
-/// false)` skips it entirely, leaving the subscriber to the app. Calling
-/// `launch!` from a `#[r2e::main]` that already initialised tracing is
-/// harmless: `init_tracing` is idempotent.
+/// `dev-reload`, once — outside the patch loop), from the application's own
+/// `tracing:` section. `launch!(MyApp, tracing = false)` skips it entirely,
+/// leaving the subscriber to the app — including to a `Tracing` /
+/// `ConfiguredTracing` plugin installed in `build`, which otherwise loses the
+/// race to the entry point (silently when it reads the same section, with a
+/// warning when it would have logged differently). Calling `launch!` from a
+/// `#[r2e::main]` that already initialised tracing is harmless: the install is
+/// idempotent.
 #[macro_export]
 macro_rules! launch {
     ($app:ty) => {
@@ -282,7 +288,7 @@ macro_rules! launch {
                 // after `setup`, once, outside the hot-patch loop (it is a
                 // process-global, one-shot install).
                 if $tracing {
-                    $crate::init_tracing();
+                    $crate::init_tracing_from_config();
                 }
                 // Enable the process-global dev-reload caches (bean-graph
                 // fingerprinting, instance reuse, lifecycle skip): they must

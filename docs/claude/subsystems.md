@@ -94,6 +94,30 @@ tracing:
 - `Tracing::from_config(&R2eConfig)` → `ConfiguredTracing` — reads `tracing.*` keys
 - `init_tracing_with_config(&TracingConfig)` — low-level function (idempotent)
 
+**Who installs the subscriber (a one-shot process global — first install wins):**
+- The **entry point** (`launch_with` when `LaunchOptions::tracing`, i.e.
+  `app_main!` / `launch!` / `#[r2e::main]`) calls `init_tracing_from_config()`
+  right after `App::setup`: it loads `application.yaml` itself and installs the
+  app's `tracing:` section. So `format: json` applies from the first log line
+  with no plugin involved; an unreadable file or section falls back to
+  `TracingConfig::default()` and warns through the subscriber it just installed.
+- A `Tracing` / `ConfiguredTracing` plugin installs in `Plugin::setup`, i.e.
+  inside `App::build` — **after** the entry point. It therefore loses the race
+  unless the app opts the entry point out with `app_main!(MyApp, tracing =
+  false)`. Losing is silent when both sides resolve to the same `TracingConfig`
+  (the usual case: both read `tracing.*`) and warns otherwise.
+- `init_tracing()` installs the **built-in defaults**, ignoring the app's
+  section. It is what `#[r2e::test]` and the bare `Tracing` plugin call, and it
+  stays silent when it loses.
+- `try_init_tracing_with_config(&cfg) -> Result<(), SubscriberAlreadyInstalled>`
+  is the reporting form; `SubscriberAlreadyInstalled::changes_output(&cfg)` says
+  whether losing actually changed the output (an unknown winner always counts as
+  different), and `warn_if_output_differs(&lost, &cfg)` is the warning both the
+  entry point and `ConfiguredTracing` emit. The winning config is recorded in a
+  process-global `OnceLock`, which is what makes "same config, stay quiet"
+  possible.
+  Tests: `r2e-core/tests/tracing_install/` (own target — one-shot global).
+
 **In ObservabilityConfig:**
 `ObservabilityConfig` embeds `tracing: TracingConfig`. The `from_r2e_config()` loader reads from `observability.tracing.*`. Convenience method: `.with_log_format(LogFormat)` delegates to the embedded `TracingConfig`.
 
