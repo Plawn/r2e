@@ -94,8 +94,8 @@ pub use crate::runtime::worker_set::{WorkerHealth, WorkerSet};
 pub use crate::builtins::request_id::{RequestId, RequestIdPlugin};
 pub use crate::builtins::secure_headers::SecureHeaders;
 pub use crate::builtins::{
-    AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, NormalizePath,
-    Tracing,
+    AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, HttpTrace,
+    HttpTraceBuilder, HttpTraceConfig, NormalizePath, Tracing,
 };
 pub use crate::config::{
     ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
@@ -119,6 +119,7 @@ pub use crate::error::{HttpError, HttpErrorExt};
 pub use crate::plugin::{
     GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext,
 };
+pub use crate::runtime::http_trace::{MakeRequestSpan, RequestOutcome};
 pub use crate::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::type_list::BeanLookup;
 pub use crate::web::extract::{

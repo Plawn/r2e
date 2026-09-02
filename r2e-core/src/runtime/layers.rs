@@ -2,7 +2,6 @@ use crate::http::StatusCode;
 use crate::runtime::tracing_config::{LogFormat, TracingConfig};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
 /// The configuration the process-global subscriber was actually installed
@@ -57,8 +56,8 @@ impl std::error::Error for SubscriberAlreadyInstalled {}
 
 /// Initialise the global `tracing` subscriber with a standard `fmt` layer.
 ///
-/// Respects the `RUST_LOG` environment variable. Falls back to
-/// `info,tower_http=debug` when `RUST_LOG` is not set.
+/// Respects the `RUST_LOG` environment variable. Falls back to the
+/// [`TracingConfig`] default filter (`info`) when `RUST_LOG` is not set.
 ///
 /// This function is idempotent — calling it more than once is safe (subsequent
 /// calls are silently ignored). It is called automatically by the [`Tracing`]
@@ -220,16 +219,6 @@ pub fn default_cors() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
-}
-
-/// Returns a `TraceLayer` configured for HTTP request/response tracing.
-///
-/// Uses `tower_http`'s default classification which logs at the `DEBUG` level
-/// for requests and responses.
-pub fn default_trace(
-) -> TraceLayer<tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>>
-{
-    TraceLayer::new_for_http()
 }
 
 /// Returns a `CatchPanicLayer` that converts panics into JSON 500 responses.

@@ -3,6 +3,7 @@
 pub mod dev;
 pub mod drain;
 pub mod harness;
+pub mod http_trace;
 pub mod ingress;
 pub mod layers;
 pub mod lifecycle;

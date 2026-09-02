@@ -39,11 +39,10 @@ pub use beans::{
 };
 pub use builder::{
     boot_error_report, exit_on_boot_error, launch, launch_with, App, AppBuilder, BootableApp,
-    LaunchOptions, PreparedApp,
-    RegisterController, RegisterControllers, RegisterModule, RegisterModules, RunningApp,
-    ServeContext,
-    SpawnService, TaskRegistryHandle,
+    LaunchOptions, PreparedApp, RegisterController, RegisterControllers, RegisterModule,
+    RegisterModules, RunningApp, ServeContext, SpawnService, TaskRegistryHandle,
 };
+pub use builtins::http_trace::{HttpTrace, HttpTraceBuilder, HttpTraceConfig};
 pub use builtins::request_id::{RequestId, RequestIdPlugin};
 pub use builtins::secure_headers::SecureHeaders;
 pub use builtins::{AdvancedHealth, ConfiguredTracing};
@@ -79,9 +78,12 @@ pub use plugin::{
     PluginInstall, PluginSetupContext, RoutesContext,
 };
 pub use runtime::harness::WorkerHarness;
+pub use runtime::http_trace::{
+    DefaultRequestSpan, HttpTraceLayer, HttpTraceSettings, MakeRequestSpan, RequestOutcome,
+};
 pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
 pub use runtime::layers::{
-    default_cors, default_trace, init_tracing, init_tracing_from_config, init_tracing_with_config,
+    default_cors, init_tracing, init_tracing_from_config, init_tracing_with_config,
     try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
 };
 pub use runtime::lifecycle::{LifecycleController, StopHandle};

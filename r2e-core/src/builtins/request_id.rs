@@ -100,7 +100,11 @@ async fn request_id_middleware(
 /// Generate a fresh UUID v4 into a stack buffer and build the matching
 /// `HeaderValue` without paying for `HeaderValue::from_str`'s validation —
 /// the hyphenated UUID encoding is always valid visible ASCII.
-fn fresh_request_id() -> (String, HeaderValue) {
+///
+/// Shared with the [`HttpTrace`](crate::builtins::HttpTrace) layer, which mints
+/// the same shape of id when no `RequestId` extension and no inbound
+/// `x-request-id` header resolved one.
+pub(crate) fn fresh_request_id() -> (String, HeaderValue) {
     let mut buf = [0u8; uuid::fmt::Hyphenated::LENGTH];
     let encoded = uuid::Uuid::new_v4().as_hyphenated().encode_lower(&mut buf);
     // Safety note: `encode_lower` writes only `[0-9a-f-]`, which is valid
@@ -115,6 +119,13 @@ fn fresh_request_id() -> (String, HeaderValue) {
 /// ```ignore
 /// .plugin(RequestIdPlugin)
 /// ```
+///
+/// [`HttpTrace`](crate::builtins::HttpTrace) **includes this behaviour**
+/// (`trace.request-id`, on by default): it resolves or mints the id, publishes
+/// it as the `RequestId` extension *and* the inbound `x-request-id` header, and
+/// echoes it on the response. Installing both plugins in either order is
+/// harmless — they agree on one id per request — so reach for this one only
+/// when you want request ids **without** request tracing.
 pub struct RequestIdPlugin;
 
 impl Plugin for RequestIdPlugin {

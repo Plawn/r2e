@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! AppBuilder::new()
-//!     .plugin(Tracing)
+//!     .plugin(HttpTrace::new())
 //!     .plugin(Cors::permissive())
 //!     .plugin(Health)
 //!     .build_state()
@@ -16,11 +16,14 @@
 //! ```
 
 pub mod health;
+pub mod http_trace;
 pub mod request_id;
 pub mod secure_headers;
 
 use crate::plugin::{Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext};
 use tower_http::cors::CorsLayer;
+
+pub use http_trace::{HttpTrace, HttpTraceBuilder, HttpTraceConfig};
 
 /// CORS plugin.
 ///
@@ -63,34 +66,32 @@ impl Plugin for Cors {
     }
 }
 
-/// HTTP request/response tracing plugin.
+/// Log **subscriber** plugin — installs the global `tracing` subscriber with
+/// R2E's built-in defaults.
 ///
-/// Initialises the global `tracing` subscriber (via [`init_tracing()`], in
-/// `setup` — before any bean is built, so boot logs are captured) and adds a
-/// tower-http `TraceLayer` that logs requests and responses at the `DEBUG`
-/// level.
+/// It contributes **no HTTP layer**: per-request spans and the request summary
+/// line are [`HttpTrace`]'s job, and the two are installed independently.
 ///
-/// This is the **lightweight** tracing option bundled with `r2e-core`. It
-/// writes structured logs to stdout but does **not** export traces to an
-/// external collector.
+/// The subscriber is a process-global, one-shot install, done from `setup`
+/// (before any bean is built, so boot logs are captured).
 ///
-/// # When to use `Tracing` vs `Observability`
+/// # Do I need it?
 ///
-/// | | `Tracing` | `Observability` |
-/// |---|---|---|
-/// | Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
-/// | Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
-/// | HTTP trace layer | tower-http `TraceLayer` | tower-http `TraceLayer` + `OtelTraceLayer` |
-/// | Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
-/// | Context propagation | No | Yes (W3C `traceparent`) |
-/// | Configuration | None (RUST_LOG only) | `ObservabilityConfig` builder + YAML |
+/// | Entry point | Subscriber comes from |
+/// |---|---|
+/// | `r2e::launch` / `#[r2e::main]` / `app_main!` / `#[r2e::test]` | the entry point, from the app's own `tracing:` section — **do not** add this plugin |
+/// | a hand-written `main` / an embedded `AppBuilder` | `.plugin(Tracing)` (built-in defaults) or [`Tracing::from_config`] (the `tracing:` section) |
+/// | `r2e_observability::Observability` | that plugin (fmt + `tracing-opentelemetry`) |
 ///
-/// **Rule of thumb:** use `Tracing` for local development and simple services.
-/// Switch to `Observability` when you need distributed tracing across
-/// microservices.
+/// # Who owns what
 ///
-/// **Do not** install both — `Observability` already includes the
-/// `TraceLayer` and its own log subscriber.
+/// | Plugin | Owns |
+/// |---|---|
+/// | `Tracing` / [`ConfiguredTracing`] | the subscriber: format, filter, ansi, span events |
+/// | [`HttpTrace`] | the per-request span, summary event, request id, exclusions |
+/// | `r2e_observability::Observability` | subscriber **+** OTLP export/propagation; installs the `HttpTrace` layer with an OpenTelemetry span shape |
+///
+/// `Observability` supersedes `Tracing` — do not install both.
 ///
 /// [`init_tracing()`]: crate::init_tracing
 ///
@@ -98,7 +99,8 @@ impl Plugin for Cors {
 ///
 /// ```ignore
 /// AppBuilder::new()
-///     .plugin(Tracing)
+///     .plugin(Tracing)              // subscriber
+///     .plugin(HttpTrace::new())     // one span + one summary line per request
 ///     .build_state()
 ///     .await
 ///     .serve("0.0.0.0:3000")
@@ -141,20 +143,23 @@ impl Plugin for Tracing {
         crate::runtime::layers::init_tracing();
     }
 
+    // The subscriber is the whole plugin: no router effect at all. Per-request
+    // spans, the summary line and request ids come from [`HttpTrace`].
     async fn build(
         self,
         _deps: Self::Deps,
         _config: Option<Self::Config>,
-        ctx: &mut PluginBuildContext,
+        _ctx: &mut PluginBuildContext,
     ) -> Result<Self::Provided, PluginBuildError> {
-        ctx.add_layer(|router| router.layer(crate::runtime::layers::default_trace()));
         Ok(())
     }
 }
 
-/// Tracing plugin with explicit configuration.
+/// Subscriber plugin with explicit configuration.
 ///
-/// Created via [`Tracing::configured()`] or [`Tracing::from_config()`].
+/// Created via [`Tracing::configured()`] or [`Tracing::from_config()`]. Like
+/// [`Tracing`] it installs **only** the subscriber — pair it with
+/// [`HttpTrace`] for per-request spans.
 pub struct ConfiguredTracing(pub crate::runtime::tracing_config::TracingConfig);
 
 impl Plugin for ConfiguredTracing {
@@ -173,13 +178,13 @@ impl Plugin for ConfiguredTracing {
         }
     }
 
+    // No router effect — see [`Tracing`].
     async fn build(
         self,
         _deps: Self::Deps,
         _config: Option<Self::Config>,
-        ctx: &mut PluginBuildContext,
+        _ctx: &mut PluginBuildContext,
     ) -> Result<Self::Provided, PluginBuildError> {
-        ctx.add_layer(|router| router.layer(crate::runtime::layers::default_trace()));
         Ok(())
     }
 }
