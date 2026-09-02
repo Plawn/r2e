@@ -94,7 +94,7 @@ impl App for MyApp {
     async fn build(b: AppBuilder, _env: AppEnv) -> Result<impl BootableApp, BootError> {
         Ok(b.load_config::<()>()
             .plugin(Health)
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .try_build_state().await?
             .register_controller::<HelloController>())
     }
@@ -254,7 +254,7 @@ impl App for MyApp {
         Ok(b.load_config::<()>()
             .register::<services::UserService>()
             .plugin(Health)
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .try_build_state().await?
             .register_controllers::<(HelloController, UserController)>())
     }

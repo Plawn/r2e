@@ -130,6 +130,7 @@ src/
   builtins/
     mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, Tracing, ErrorHandling, DevReload, NormalizePath
     health.rs               HealthIndicator trait, HealthBuilder, HealthState, /health endpoints
+    http_trace.rs           HttpTrace plugin + HttpTraceBuilder + HttpTraceConfig (`trace.*`)
     request_id.rs           RequestId extractor and RequestIdPlugin
     secure_headers.rs       SecureHeaders plugin + builder (CSP, HSTS, X-Frame-Options, ...)
   config/
@@ -158,7 +159,8 @@ src/
   plugin/                   Plugin machinery: Plugin, Plugin, DeferredAction, contexts, graph handle
   runtime/
     dev.rs                  Dev-reload statics + endpoints (feature = "dev-reload" consumers)
-    layers.rs               Tower layer utilities: default_cors(), default_trace(), init_tracing()
+    layers.rs               Tower layer utilities: default_cors(), init_tracing()
+    http_trace.rs           HttpTraceLayer + MakeRequestSpan (per-request span, summary, request id)
     lifecycle.rs            LifecycleController for on_start/on_stop hooks
     service.rs              ServiceComponent trait
     sharded.rs              SO_REUSEPORT sharded serving (server.workers)
@@ -405,7 +407,7 @@ tests/
 src/
   lib.rs                    Entry point
   config.rs                 Observability configuration
-  middleware.rs              Tracing middleware
+  span.rs                   OtelRequestSpan: the OTel span shape for r2e-core's HttpTraceLayer
   propagation.rs            OpenTelemetry context propagation
   tracing_setup.rs          Tracing subscriber setup
 ```

@@ -124,7 +124,7 @@ extra).
 | Your task involves… | Read | features |
 |---|---|---|
 | HTTP metrics, the `Prometheus` plugin, `layer_only`, `MetricsFacade` | `llm/prometheus.md` | prometheus |
-| OpenTelemetry tracing, OTLP export, context propagation | `llm/observability.md` | observability |
+| per-request logging: the `HttpTrace` plugin, `trace.*`, request ids, `MakeRequestSpan`; OpenTelemetry tracing, OTLP export, context propagation | `llm/observability.md` | core, observability |
 | `RequestIdPlugin`, `SecureHeaders`, `Health` / `Health::builder()`, `NormalizePath` | `llm/additional-plugins.md` | core |
 
 ### Testing & tooling
@@ -222,7 +222,7 @@ impl App for MyApp {
         Ok(b
             .load_config::<()>()                 // application.yaml + env (sole config entry)
             .plugin(Health)                      // /health → 200 "OK"
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())            // one span + one log line per request
             .plugin(ErrorHandling)               // panics → JSON 500
             .try_build_state()                   // resolve bean graph (state is inferred)
             .await?                              // a bean that fails to build aborts boot
@@ -259,6 +259,10 @@ builds its own subscriber in `setup` wins; the install is idempotent. Anything
 `tracing:` section (`init_tracing_from_config()`), so `format: json` in
 `application.yaml` applies from the first log line, with no plugin and no opt-in;
 an unreadable section falls back to the built-in defaults and warns.
+
+The subscriber is only *where logs go*: per-request spans and the
+`request completed` line come from `.plugin(HttpTrace::new())` (see
+llm/observability.md), which is what an app installs in `build`.
 
 Because that happens before `App::build`, a `Tracing::from_config(&cfg)` /
 `ConfiguredTracing` plugin declared in `build` **loses the race** — silently when
@@ -400,7 +404,7 @@ Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP ver
 `Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
 `R2eConfig`, `Guard`, `GuardContext`, `PreAuthGuard`, `Identity`, `Interceptor`,
 `ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
-`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `Tracing`, `Health`, `ErrorHandling`,
+`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`, `ErrorHandling`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
 (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
 `IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,
@@ -1590,7 +1594,8 @@ AppBuilder::new()
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
     .plugin(Health)
     .plugin(Cors::permissive())
-    .plugin(Tracing)                            // or Tracing::from_config(b.r2e_config().unwrap())
+    .plugin(HttpTrace::new())                   // per-request span + summary line (`trace.*`)
+    // subscriber: the entry point installs it; `.plugin(Tracing)` only if you opted it out
     .plugin(ErrorHandling)
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
     .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
@@ -2208,7 +2213,7 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, Tracing, ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
+| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, HttpTrace, Tracing [subscriber only], ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
 | `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |
@@ -5681,13 +5686,32 @@ portable. R2E's `prometheus` registry is never installed in this mode, and
 
 ---
 
-## Observability (OpenTelemetry)
+## Request tracing (HttpTrace) and OpenTelemetry
 
 ### TL;DR
 
+- **Per-request logging is the `HttpTrace` plugin** (core, no feature):
+  `.plugin(HttpTrace::new())` → one span `request` (target `r2e::http`) + one
+  `request completed` line (INFO, ERROR at 5xx) per request, with request ids.
+- `Tracing` / `ConfiguredTracing` install the **subscriber only** (`tracing:`
+  section) and add no HTTP layer. `r2e::launch` / `#[r2e::main]` /
+  `#[r2e::test]` already install a subscriber, so most apps name only
+  `HttpTrace`.
+- The span carries the **bounded route template** (`/users/{id}`), never the raw
+  path. `trace.record-path` / `record-query` put the raw values on the summary
+  **event** only.
+- Configure with the `trace:` YAML section or `HttpTrace::builder()`; a builder
+  knob beats the file, and `HttpTrace::preset(cfg)` is the shared-baseline lane
+  that the file beats. `trace.enabled: false` removes the layer entirely.
+- `HttpTrace` resolves/echoes `x-request-id` itself; `RequestIdPlugin` is
+  redundant with it but harmless in either order.
+- Custom span shape: implement `MakeRequestSpan` and pass it to
+  `HttpTrace::builder().make_span(..)` — exclusions, request id, timing and the
+  summary stay with the layer.
 - Enable feature `observability` and install
   `Observability::new(ObservabilityConfig::new("my-service"))`; it is a superset
-  of `Tracing` — never install both.
+  of `Tracing` **and** `HttpTrace` (it installs the same layer with an OTel span
+  shape) — never install those alongside it.
 - Alternatives to the code form: `Observability::from_config(&config, "my-service")`
   (YAML `observability.*`) or `Observability::from_env("my-service")` (`OTEL_*`).
 - Export is OTLP/HTTP: default `http://localhost:4318/v1/traces`, a pathless
@@ -5705,7 +5729,54 @@ portable. R2E's `prometheus` registry is never installed in this mode, and
 - `from_env` with no endpoint installs the normal R2E tracing subscriber and no
   OTLP exporter.
 
-Requires feature: `observability`. **Superset of `Tracing`** — do NOT install both.
+### HttpTrace (core, no feature)
+
+```rust
+# fn __doc(b: AppBuilder) -> impl Sized {
+b.plugin(HttpTrace::new())                       // defaults, still overridable from `trace:`
+ .plugin(
+     HttpTrace::builder()
+         .exclude_paths(["/health", "/metrics", "/internal"])  // prefix: raw path OR route label
+         .capture_header("user-agent")                          // recorded on the span
+         .record_path(true)                                     // raw path on the EVENT only
+         .build(),
+ )
+# }
+```
+
+```yaml
+trace:
+  enabled: true
+  exclude-paths: ["/health", "/metrics"]   # default; [] traces everything
+  request-id: true                         # read x-request-id or mint a UUID v4, echo it back
+  record-path: false                       # raw path on the summary event (never the span)
+  record-query: false
+  capture-headers: []                      # invalid header name = boot error
+  summary: true                            # the one-line "request completed"
+  request-event: false                     # opt-in DEBUG "request started"
+```
+
+Emitted per request:
+
+```text
+INFO  r2e::http: request completed status=200 latency_ms=3.2
+ERROR r2e::http: request completed status=503 latency_ms=12.0
+```
+
+The span is **entered for the whole handler future**, so every line the handler
+logs inherits `route` and `request_id`. `latency_ms` stops at the response head
+(a streamed body is not counted — that is why the Prometheus layer keeps its own
+timer). An excluded path gets no span, no event and no request id.
+
+### OpenTelemetry
+
+Requires feature: `observability`. **Superset of `Tracing` and `HttpTrace`** —
+do NOT install those alongside it. `Observability` installs the very same
+`HttpTraceLayer` with an OpenTelemetry span shape (semconv
+`http.request.method` / `http.route` / `http.response.status_code`, `otel.kind =
+"server"`, parent context from the inbound `traceparent`), so there is exactly
+one span per request, and it reads the same `trace:` section for exclusions,
+request ids and `record-path`.
 
 ```rust
 use r2e::r2e_observability::{Observability, ObservabilityConfig};
@@ -5760,14 +5831,15 @@ installs the normal R2E tracing subscriber/layer and no OTLP exporter.
 
 - Install each of these with `.plugin(..)` during the builder phase, like any other
   plugin. See llm/plugins.md.
-- `RequestIdPlugin` — X-Request-Id propagation.
+- `RequestIdPlugin` — X-Request-Id propagation. `HttpTrace` already does this
+  (llm/observability.md); installing both, in either order, is harmless.
 - `SecureHeaders::default()` — security headers.
 - `Health` — `/health`; use `Health::builder()` instead when you need live/ready probes.
 - `NormalizePath` — trailing-slash normalization; its install order is irrelevant.
 
 ```rust
 # fn __doc(b: AppBuilder) -> impl Sized {
-b.plugin(RequestIdPlugin)                   // X-Request-Id propagation
+b.plugin(RequestIdPlugin)                   // X-Request-Id propagation (HttpTrace also does it)
 .plugin(SecureHeaders::default())          // security headers
 .plugin(Health)                            // /health, or Health::builder() for live/ready probes
 .plugin(NormalizePath)                     // trailing-slash normalization (order irrelevant)

@@ -31,7 +31,7 @@ Source of truth: `r2e-core/src/plugin/` (`pre_state.rs` = the trait +
 | Effects | three stages: Graph → Routes → Finalize |
 | Escape hatch | `PluginInstall` (`#[doc(hidden)]`, blanket impl over `Plugin`) |
 
-`Health`, `Cors`, `Tracing`, `ErrorHandling`, `NormalizePath`, `DevReload`,
+`Health`, `Cors`, `Tracing`, `HttpTrace`, `ErrorHandling`, `NormalizePath`, `DevReload`,
 `SecureHeaders`, `RequestIdPlugin`, `OpenApiPlugin`, `EmbeddedFrontend` are
 ordinary `.plugin()` calls now, exactly like `Scheduler` or `Prometheus`.
 Nothing needs to be installed last: what used to require "install me after

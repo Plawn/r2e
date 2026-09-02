@@ -2,25 +2,135 @@
 
 R2E provides built-in observability through request tracing, request IDs, and metric interceptors. These tools work together to give visibility into your application's behavior.
 
-## Tracing plugin
+Two concerns, two plugins — keep them apart:
 
-The `Tracing` plugin initializes structured logging and adds HTTP-level trace spans to every request.
+| Concern | Owner | Config section |
+|---|---|---|
+| **Where logs go** — format, filter, ansi (the subscriber) | the entry point (`r2e::launch` / `#[r2e::main]`), or the `Tracing` plugin | `tracing:` |
+| **What each request logs** — span, summary line, request id, exclusions | the `HttpTrace` plugin | `trace:` |
+| Both, plus OTLP export and `traceparent` propagation | `Observability` (feature `observability`) | `observability:` + `trace:` |
+
+## HttpTrace plugin
+
+`HttpTrace` is the per-request HTTP layer: **one** span and **one** summary line
+per request, request-id resolution, and path exclusions.
 
 ```rust
 use r2e::prelude::*;
 
 AppBuilder::new()
-    .plugin(Tracing)
+    .plugin(HttpTrace::new())
     .build_state()
     .await
     .serve("0.0.0.0:3000")
     .await;
 ```
 
-### What it does
+### What it emits
 
-1. Initializes the global `tracing` subscriber using `tracing_subscriber::fmt`.
-2. Adds a `tower_http::TraceLayer` that logs requests and responses at the `DEBUG` level.
+A span named `request` at INFO on target `r2e::http`, **entered for the whole
+handler future** — so every line your handler logs is decorated with the
+request's `route` and `request_id`. Its fields are `method`, `route` (the
+bounded route template, e.g. `/users/{id}` — never the raw path), `request_id`,
+and the configured `capture-headers`. Inside it, one summary event:
+
+```text
+INFO  r2e::http: request completed status=200 latency_ms=3.2
+ERROR r2e::http: request completed status=503 latency_ms=12.0
+```
+
+The level is INFO below 500 and ERROR at 5xx. `latency_ms` is measured to the
+response **head**, so a streaming body is not counted (which is why the
+Prometheus layer keeps its own timer).
+
+The raw path and query string are deliberately **off**: they carry ids and
+tokens, and the span decorates every handler log line. Opt in per app with
+`record-path` / `record-query`, which put them on the summary **event** only —
+never on the span.
+
+### Request ids
+
+Unless `request-id: false`, the layer reads an inbound `x-request-id`, mints a
+UUID v4 when there is none, records it on the span, publishes it as the
+`RequestId` request extension (so handlers can extract it), and echoes it on the
+response. `RequestIdPlugin` does exactly this and nothing else; installing both,
+in either order, is harmless — the id is resolved once and both agree.
+
+### Configuration
+
+```yaml
+trace:
+  enabled: true
+  exclude-paths: ["/health", "/metrics"]   # prefix match, raw path OR route label
+  request-id: true
+  record-path: false                       # raw path on the summary event only
+  record-query: false
+  capture-headers: []                      # recorded on the span
+  summary: true                            # the one-line "request completed"
+  request-event: false                     # opt-in DEBUG "request started"
+```
+
+`enabled: false` removes the layer entirely — no span, no event, no request id.
+An excluded path is passed through untouched.
+
+The same knobs are available on the builder, which **wins over the file** — it
+is the "I mean exactly this" lane:
+
+```rust
+AppBuilder::new()
+    .plugin(
+        HttpTrace::builder()
+            .exclude_paths(["/health", "/metrics", "/internal"])
+            .capture_header("user-agent")
+            .record_path(true)
+            .build(),
+    )
+```
+
+Precedence per knob: **explicit builder setting > the app's `trace:` section >
+`HttpTrace::preset(..)` > built-in default**. `preset` is the shared-baseline
+lane: a company crate ships the house HTTP-log contract there and each service's
+own `application.yaml` still has the last word without touching code.
+
+### A custom span shape
+
+`MakeRequestSpan` is the seam. Implement it to change the span's name and
+fields; exclusions, request id, timing and the summary event stay with the
+layer. That is exactly how `Observability` swaps in OpenTelemetry semantic
+conventions without a second layer.
+
+```rust,ignore
+use r2e::{MakeRequestSpan, RequestOutcome, RequestHead};
+
+struct MySpan;
+
+impl MakeRequestSpan for MySpan {
+    fn make_span(&self, req: &RequestHead<'_>, route: &str, request_id: Option<&str>) -> tracing::Span {
+        tracing::info_span!(target: "r2e::http", "request", route, request_id)
+    }
+}
+
+AppBuilder::new().plugin(HttpTrace::builder().make_span(MySpan).build())
+```
+
+## Tracing plugin (the subscriber)
+
+The `Tracing` plugin installs the global `tracing` subscriber
+(`tracing_subscriber::fmt`) and **nothing else** — no HTTP layer. Under the
+canonical entry point the subscriber is installed for you (see below), so most
+applications never install it.
+
+```rust
+use r2e::prelude::*;
+
+AppBuilder::new()
+    .plugin(Tracing)              // subscriber only
+    .plugin(HttpTrace::new())     // the per-request span
+    .build_state()
+    .await
+    .serve("0.0.0.0:3000")
+    .await;
+```
 
 ### Controlling log levels
 
@@ -37,7 +147,7 @@ RUST_LOG="debug"
 RUST_LOG="warn"
 
 # Fine-grained control
-RUST_LOG="info,my_app=debug,tower_http=trace"
+RUST_LOG="info,my_app=debug,r2e::http=debug"
 ```
 
 The `init_tracing()` function is idempotent. If you need logs before the plugin is installed (e.g., during state construction), call it manually:
@@ -228,12 +338,14 @@ call in your own `otel.kind = "client"` span if you need one.
 
 ## RequestId plugin
 
-The `RequestIdPlugin` assigns a unique identifier to every request, enabling correlation across log lines and distributed systems.
+The `RequestIdPlugin` assigns a unique identifier to every request, enabling correlation across log lines and distributed systems. `HttpTrace` already does this
+(unless `trace.request-id: false`), so this plugin is for apps that want request
+ids **without** the HTTP trace layer; installing both, in either order, is
+harmless — the id is resolved once and both agree on it.
 
 ```rust
 AppBuilder::new()
     .plugin(RequestIdPlugin)
-    .plugin(Tracing)
     .build_state()
     .await
     .serve("0.0.0.0:3000")
@@ -358,8 +470,8 @@ let builder = AppBuilder::new().load_config::<RootConfig>();
 let tracing = Tracing::from_config(builder.r2e_config().unwrap());
 
 builder
-    .plugin(RequestIdPlugin)     // Assign request IDs
-    .plugin(tracing)             // Configurable tracing
+    .plugin(tracing)             // Configurable subscriber
+    .plugin(HttpTrace::new())    // Per-request span, summary line, request IDs
     .plugin(Health)              // Health check endpoint
     .build_state()
     .await
@@ -399,21 +511,29 @@ This produces structured log output with:
 - Entry/exit logging for all methods (via `Logged::info()`)
 - Per-endpoint invocation counts (via `Counted`)
 - Per-endpoint duration metrics (via `MetricTimed`)
-- HTTP-level request/response traces (via `Tracing` plugin)
+- HTTP-level request spans and summary lines (via the `HttpTrace` plugin)
 
-## `Tracing` vs `Observability` plugin
+## `Tracing` vs `HttpTrace` vs `Observability`
 
-R2E offers two levels of tracing support:
+Three plugins, three jobs — mix them freely, except the two that own a
+subscriber:
 
-| | `Tracing` / `ConfiguredTracing` | `Observability` |
-|---|---|---|
-| Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
-| Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
-| HTTP trace layer | tower-http `TraceLayer` | tower-http `TraceLayer` + `OtelTraceLayer` |
-| Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
-| Context propagation | No | Yes (W3C `traceparent`) |
-| Configuration | `TracingConfig` (YAML + builder) | `ObservabilityConfig` (embeds `TracingConfig`) |
+| | `Tracing` / `ConfiguredTracing` | `HttpTrace` | `Observability` |
+|---|---|---|---|
+| Crate | `r2e-core` (always available) | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
+| Log subscriber | `tracing_subscriber::fmt` | — | `fmt` + `tracing-opentelemetry` |
+| Per-request span | — | `request` (short field names) | `request` (OTel semconv names) |
+| Distributed tracing | No | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
+| Context propagation | No | No | Yes (W3C `traceparent`) |
+| Configuration | `TracingConfig` — `tracing.*` | `HttpTraceConfig` — `trace.*` | `ObservabilityConfig` — `observability.*` (+ `trace.*` for the span) |
 
-Use `Tracing` for local development and simple services. Switch to `Observability` when you need distributed tracing across microservices. Do not install both -- `Observability` already includes the `TraceLayer` and its own log subscriber.
+Install `HttpTrace` in every HTTP service: the entry point already gives you a
+subscriber, so it is usually the only one of the three you name. Switch to
+`Observability` when you need distributed tracing across microservices — it
+installs `HttpTrace`'s layer itself with an OpenTelemetry span shape, so there
+is still exactly **one** span per request; adding `HttpTrace` next to it would
+give you two. `Observability` also owns the subscriber, so do not pair it with
+`Tracing` either. It reads the same `trace:` section, so exclusions, request ids
+and `record-path` are configured in one place either way.
 
 Both `ConfiguredTracing` and `Observability` use `TracingConfig` for subscriber formatting options (format, ansi, thread IDs, etc.). The `Observability` plugin embeds a `TracingConfig` in its `ObservabilityConfig`, so YAML keys live under `observability.tracing.*` instead of `tracing.*`.

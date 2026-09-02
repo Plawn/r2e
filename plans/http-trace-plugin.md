@@ -1,6 +1,6 @@
 # `HttpTrace` — one reusable per-request tracing plugin
 
-Status: **proposal** (2026-09-01). Origin: Tasker #1014 (blumana-survey had to
+Status: **implemented** (2026-09-02, branch `task/1014-http-trace`). Origin: Tasker #1014 (blumana-survey had to
 drop `.plugin(tracing)` entirely to own its request log), #1001 (data-catalog
 cannot reproduce its `TraceLayer` shape with the r2e plugins).
 
@@ -98,6 +98,15 @@ Span, name `request`, level INFO, target `r2e::http`:
 | `route` | `/users/{id}` or the unmatched sentinel | `MatchedPath`, never the raw path — `add_layer` layers run after routing so it is always there (`builder/typed.rs:995`) |
 | `request_id` | uuid / inbound `x-request-id` | absent when `request-id: false` |
 | `header.<name>` | inbound header value | only for `capture-headers` |
+
+**Implementation note (deviation, 2026-09-02).** `header.<name>` is not
+expressible with `tracing`: a span's field names come from `&'static` callsite
+metadata, so a name derived from configuration at runtime cannot exist.
+`DefaultRequestSpan` therefore records **one** `headers` field holding
+`name=value name=value` for the captured headers. `OtelRequestSpan` is not
+constrained this way — OTel attributes are a runtime map — so it emits true
+per-header attributes `http.request.header.<name>`. Everything else in this
+table is as specified.
 
 Summary event, once per request, target `r2e::http`, emitted **inside** the span:
 

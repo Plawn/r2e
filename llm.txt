@@ -122,7 +122,7 @@ extra).
 | Your task involves… | Read | features |
 |---|---|---|
 | HTTP metrics, the `Prometheus` plugin, `layer_only`, `MetricsFacade` | `llm/prometheus.md` | prometheus |
-| OpenTelemetry tracing, OTLP export, context propagation | `llm/observability.md` | observability |
+| per-request logging: the `HttpTrace` plugin, `trace.*`, request ids, `MakeRequestSpan`; OpenTelemetry tracing, OTLP export, context propagation | `llm/observability.md` | core, observability |
 | `RequestIdPlugin`, `SecureHeaders`, `Health` / `Health::builder()`, `NormalizePath` | `llm/additional-plugins.md` | core |
 
 ### Testing & tooling

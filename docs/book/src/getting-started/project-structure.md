@@ -70,7 +70,7 @@ impl App for MyApp {
         Ok(b.load_config::<()>()
             .register::<UserService>()
             .plugin(Health)
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .try_build_state().await?
             .register_controller::<UserController>())
     }

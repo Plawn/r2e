@@ -540,7 +540,7 @@ async fn main() {
         .plugin(oidc)
         .register::<UserService>()
         .plugin(Health)
-        .plugin(Tracing)
+        .plugin(HttpTrace::new())
         .build_state().await
         .register_controller::<ApiController>()
         .serve("0.0.0.0:3000").await.unwrap();

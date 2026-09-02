@@ -13,7 +13,8 @@ AppBuilder::new()
     .plugin(Scheduler)                     // scheduler runtime
     .plugin(Health)                        // /health → 200 "OK"
     .plugin(Cors::permissive())            // or Cors::custom(layer)
-    .plugin(Tracing)                       // default tracing (RUST_LOG only)
+    .plugin(HttpTrace::new())              // per-request span + summary line (trace.* keys)
+    // subscriber: installed by the entry point; .plugin(Tracing) only if you opted it out
     // or: .plugin(Tracing::configured(config))     // with TracingConfig (format, ansi, etc.)
     // or: .plugin(Tracing::from_config(&r2e_config)) // from YAML tracing.* keys
     .plugin(ErrorHandling)                 // catch panics → JSON 500
@@ -88,8 +89,8 @@ tracing:
 - `LogFormat` — `Pretty` (default) | `Json`. Derives `serde::Deserialize` + `FromConfigValue`.
 - `SpanEvents` — `None` | `New` | `Close` (default) | `Active` | `Full`. `.to_fmt_span()` converts to `tracing_subscriber::fmt::format::FmtSpan`.
 
-**Plugin integration:**
-- `Tracing` (unit struct) — uses defaults (backward compatible)
+**Plugin integration** (subscriber only — the per-request span is `HttpTrace`):
+- `Tracing` (unit struct) — uses defaults
 - `Tracing::configured(TracingConfig)` → `ConfiguredTracing` — uses explicit config
 - `Tracing::from_config(&R2eConfig)` → `ConfiguredTracing` — reads `tracing.*` keys
 - `init_tracing_with_config(&TracingConfig)` — low-level function (idempotent)
@@ -121,12 +122,54 @@ tracing:
 **In ObservabilityConfig:**
 `ObservabilityConfig` embeds `tracing: TracingConfig`. The `from_r2e_config()` loader reads from `observability.tracing.*`. Convenience method: `.with_log_format(LogFormat)` delegates to the embedded `TracingConfig`.
 
+## HttpTrace (r2e-core)
+
+The per-request HTTP layer: **one** span + **one** summary event per request.
+Plugin/builder/config in `src/builtins/http_trace.rs`, layer in
+`src/runtime/http_trace.rs`. `Tracing` says where logs go; `HttpTrace` says what
+each request logs.
+
+- Span: `request`, INFO, target `r2e::http`, **entered for the whole handler
+  future** (so handler logs inherit `route`/`request_id`). `DefaultRequestSpan`
+  fields: `method`, `route` (the bounded `MatchedPath` template — never the raw
+  path), `request_id`, `headers` (the configured `capture-headers`, recorded as
+  one `name=value name=value` field: `tracing` field names are `&'static`
+  callsite metadata, so per-header field names are impossible; the OTel shape
+  does emit real per-header attributes), `status`.
+- Summary event inside the span: `request completed` at INFO, ERROR at 5xx, with
+  `status` + `latency_ms` (measured to the response **head**, not the streamed
+  body — that is why the Prometheus layer keeps its own timer).
+- `record-path` / `record-query` add the raw path/query to the **event only**,
+  never to the span (a span decorates every handler log line; paths carry ids).
+- Request id: reuses an existing `RequestId` extension, else an inbound
+  `x-request-id`, else mints a UUID v4 (`fresh_request_id`, shared with
+  `RequestIdPlugin`); publishes it as both the extension and the request header
+  and echoes it on the response. Installing `RequestIdPlugin` too, in either
+  order, is harmless.
+- Exclusions: prefix match on the raw path **or** the route label, via the
+  shared `r2e_core::http::labels::path_excluded` (same helper as
+  `prometheus.exclude-paths`). An excluded request gets no span, no event, no
+  request id — untouched pass-through. Default `["/health", "/metrics"]`.
+- Config: `HttpTraceConfig` (`ConfigProperties`, kebab keys), section `trace`,
+  gate `trace.enabled` (false = no layer at all). Precedence per knob:
+  **explicit builder setting > app `trace:` section > `HttpTrace::preset(cfg)` >
+  built-in default**. `capture-headers` are parsed into `HeaderName`s at build —
+  an invalid name is a boot error.
+- `MakeRequestSpan` is the span-shape seam (`make_span` + `on_response(&Span,
+  &RequestOutcome)`, the latter defaulting to the standard field recording +
+  summary event). `HttpTraceBuilder::make_span(..)` swaps it; that is exactly
+  how `Observability` reuses this layer.
+- Tests: `r2e-core/tests/http/http_trace.rs`.
+
 ## Observability (r2e-observability)
 
-`Observability` is the OpenTelemetry superset of the core `Tracing` plugin. It
-exports with OTLP/HTTP, installs W3C propagation, correlates logs with
-`trace_id`/`span_id`, and adds the server request span layer. Do not install it
-alongside `Tracing`.
+`Observability` is the OpenTelemetry superset of `Tracing` **and** `HttpTrace`.
+It exports with OTLP/HTTP, installs W3C propagation, correlates logs with
+`trace_id`/`span_id`, and installs `r2e-core`'s `HttpTraceLayer` with the
+`OtelRequestSpan` shape (`src/span.rs`) — so there is exactly **one** span per
+request. Do not install it alongside `Tracing` (it owns the subscriber) or
+alongside `HttpTrace` (two layers = two spans); it reads the same `trace:`
+section either way, with its own `capture_headers` filling the preset slot.
 
 - `Observability::new(config)` — explicit OTLP configuration.
 - `Observability::from_config(&r2e_config, service_name)` — reads

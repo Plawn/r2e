@@ -145,7 +145,7 @@ async fn main() {
         .build();
 
     AppBuilder::new()
-        .plugin(Tracing)
+        .plugin(HttpTrace::new())
         .plugin(ErrorHandling)
         .plugin(secure)
         .plugin(Health)

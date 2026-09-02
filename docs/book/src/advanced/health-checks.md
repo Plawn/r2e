@@ -260,7 +260,7 @@ async fn main() {
         .build();
 
     AppBuilder::new()
-        .plugin(Tracing)
+        .plugin(HttpTrace::new())
         .plugin(health)
         .build_state()
         .await
