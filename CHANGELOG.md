@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+> **Tags vs versions.** Since tag `v0.3.0`, git tags follow the workspace
+> version: `vX.Y.*` is the compatibility series declared in the root
+> `Cargo.toml`, and the patch is a monotone release counter within that series
+> (a breaking change bumps `X.Y` in `Cargo.toml`, which starts a new tag
+> series). Earlier tags were a pure release counter detached from the manifest:
+> tags `v0.2.132`–`v0.2.163` actually contain workspace version `0.3.0`, and
+> the 0.3 plugin-API rework ships from **`v0.2.140`** onward (see
+> [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)).
+
 ## [Unreleased]
 
 ### Added
@@ -348,6 +357,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   asked for it.
 
 ### Changed
+
+- **Release tags now follow the workspace version** (task #1011). The release
+  workflow no longer bumps the patch of whatever the latest tag was: it reads
+  `version` from the root `Cargo.toml`, tags in that `vX.Y.*` series (patch =
+  release counter), and refuses member crates that don't use
+  `version.workspace = true`. First aligned tag: `v0.3.0`. The tag ↔ version
+  correspondence for the pre-alignment series is documented at the top of this
+  file.
 
 - **Perf: one `AuthenticatedUser` per authenticated MCP request** (task #993).
   The auth layer deposited the caller twice — standalone for the identity
