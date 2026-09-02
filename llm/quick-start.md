@@ -1,7 +1,7 @@
 ---
 topic: quick-start
 features: default
-tokens: ~2000
+tokens: ~2100
 requires: runtime-facade
 ---
 
@@ -90,7 +90,7 @@ impl App for MyApp {
         Ok(b
             .load_config::<()>()                 // application.yaml + env (sole config entry)
             .plugin(Health)                      // /health → 200 "OK"
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())            // one span + one log line per request
             .plugin(ErrorHandling)               // panics → JSON 500
             .try_build_state()                   // resolve bean graph (state is inferred)
             .await?                              // a bean that fails to build aborts boot
@@ -127,6 +127,10 @@ builds its own subscriber in `setup` wins; the install is idempotent. Anything
 `tracing:` section (`init_tracing_from_config()`), so `format: json` in
 `application.yaml` applies from the first log line, with no plugin and no opt-in;
 an unreadable section falls back to the built-in defaults and warns.
+
+The subscriber is only *where logs go*: per-request spans and the
+`request completed` line come from `.plugin(HttpTrace::new())` (see
+llm/observability.md), which is what an app installs in `build`.
 
 Because that happens before `App::build`, a `Tracing::from_config(&cfg)` /
 `ConfiguredTracing` plugin declared in `build` **loses the race** — silently when

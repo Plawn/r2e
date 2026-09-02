@@ -28,7 +28,7 @@ impl App for ProductApp {
                 .register::<services::ProductService>()
                 .plugin(Health)
                 .plugin(Cors::permissive())
-                .plugin(Tracing)
+                .plugin(HttpTrace::new())
                 .plugin(ErrorHandling)
                 .plugin(OpenApiPlugin::new(
                     OpenApiConfig::new("Product Service", "1.0.0")

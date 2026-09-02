@@ -9,6 +9,7 @@ mod api_error;
 mod error;
 mod extract;
 mod health;
+mod http_trace;
 mod json;
 mod managed;
 #[cfg(feature = "multipart")]

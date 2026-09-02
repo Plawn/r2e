@@ -66,7 +66,7 @@ impl App for ChatApp {
             .register::<services::ChatService>()
             .plugin(Health)
             .plugin(Cors::permissive())
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .plugin(ErrorHandling)
             .build_state()
             .await

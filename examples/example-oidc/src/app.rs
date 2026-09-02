@@ -147,7 +147,7 @@ impl App for OidcApp {
         b.plugin(env.oidc)
             .plugin(Health)
             .plugin(Cors::permissive())
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Example OIDC API", "0.1.0")

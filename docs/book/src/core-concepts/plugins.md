@@ -11,7 +11,7 @@ Install plugins with `.plugin(p)` on the builder — **always before**
 AppBuilder::new()
     .plugin(Health)
     .plugin(Cors::permissive())
-    .plugin(Tracing)
+    .plugin(HttpTrace::new())
     .plugin(ErrorHandling)
     .plugin(NormalizePath)
     .build_state()
@@ -28,9 +28,11 @@ AppBuilder::new()
 | `Health` | `GET /health` returning 200 "OK" |
 | `Cors::permissive()` | Permissive CORS headers |
 | `Cors::new(layer)` | Custom CORS configuration |
-| `Tracing` | Request tracing via `tracing` + `tower-http` (default config) |
-| `Tracing::configured(config)` | Configurable tracing (format, ansi, thread IDs, etc.) |
-| `Tracing::from_config(&r2e_config)` | Tracing configured from YAML (`tracing.*` keys) |
+| `HttpTrace::new()` | Per-request span + summary line, request ids, exclusions (`trace.*` keys) |
+| `HttpTrace::builder()…build()` | Same, configured in code (a builder knob beats the YAML) |
+| `Tracing` | Installs the log **subscriber** only — redundant under `r2e::launch` / `#[r2e::main]` |
+| `Tracing::configured(config)` | Configurable subscriber (format, ansi, thread IDs, etc.) |
+| `Tracing::from_config(&r2e_config)` | Subscriber configured from YAML (`tracing.*` keys) |
 | `ErrorHandling` | Catches panics, returns JSON 500 |
 | `NormalizePath` | Trailing-slash normalization |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
@@ -162,7 +164,7 @@ Within a stage, effects apply in install order, and a later layer ends up
 
 - `NormalizePath` can be installed at any point: it is applied at build time as a pre-routing URI rewrite wrapping the whole router
 - `EmbeddedFrontend` and `OpenApiPlugin` can be installed anywhere — their routes are mounted from a Routes-stage effect
-- `Tracing` early keeps it inside (and therefore observing) later layers
+- `HttpTrace` early keeps it inside (and therefore observed by) later layers
 - `ErrorHandling`'s panic-to-JSON layer is installed by the framework as the outermost HTTP layer regardless
 
 ## Custom Tower layers

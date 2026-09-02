@@ -23,20 +23,21 @@
 
 pub mod client;
 pub mod config;
-pub mod middleware;
 pub mod propagation;
+pub mod span;
 pub mod tracing_setup;
 
 pub use client::{
-    inject_current_context, traced_reqwest_client, DisableOtelPropagation, OtelName,
-    OtelPathNames, R2eSpanBackend, TraceContextMiddleware,
+    inject_current_context, traced_reqwest_client, DisableOtelPropagation, OtelName, OtelPathNames,
+    R2eSpanBackend, TraceContextMiddleware,
 };
 pub use config::{ObservabilityConfig, OtlpProtocol, PropagationFormat};
+pub use span::OtelRequestSpan;
 // LogFormat is re-exported from r2e_core for backward compatibility.
 pub use r2e_core::LogFormat;
 pub use tracing_setup::OtelGuard;
 
-use r2e_core::Plugin;
+use r2e_core::{HttpTraceConfig, Plugin};
 
 /// Full-stack observability plugin — OpenTelemetry tracing, context
 /// propagation, and HTTP request logging.
@@ -49,25 +50,28 @@ use r2e_core::Plugin;
 ///
 /// 1. Initialises a `tracing-subscriber` stack (fmt layer + OTel layer).
 /// 2. Installs a W3C `traceparent` propagator for cross-service context.
-/// 3. Adds a tower-http `TraceLayer` (same as the `Tracing` plugin).
-/// 4. Adds an `OtelTraceLayer` that creates OTel spans for each HTTP request.
-/// 5. Registers a shutdown hook that flushes pending traces on shutdown.
-/// 6. Adds `trace_id` and `span_id` to logs emitted inside traced spans.
+/// 3. Installs `r2e-core`'s [`HttpTraceLayer`](r2e_core::HttpTraceLayer) with
+///    the [`OtelRequestSpan`] shape — **one** span per request, semconv field
+///    names, parent context from the inbound `traceparent`.
+/// 4. Registers a shutdown hook that flushes pending traces on shutdown.
+/// 5. Adds `trace_id` and `span_id` to logs emitted inside traced spans.
 ///
-/// # When to use `Observability` vs `Tracing`
+/// # Who owns what
 ///
-/// | | `Tracing` | `Observability` |
-/// |---|---|---|
-/// | Crate | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
-/// | Log subscriber | `tracing_subscriber::fmt` | `tracing_subscriber::fmt` + `tracing-opentelemetry` |
-/// | HTTP trace layer | tower-http `TraceLayer` | tower-http `TraceLayer` + `OtelTraceLayer` |
-/// | Distributed tracing | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
-/// | Context propagation | No | Yes (W3C `traceparent`) |
-/// | OTLP transport | — | HTTP/protobuf (normally port 4318) |
-/// | Configuration | None (`RUST_LOG` only) | `ObservabilityConfig` builder + YAML |
+/// | | `Tracing` | `HttpTrace` | `Observability` |
+/// |---|---|---|---|
+/// | Crate | `r2e-core` | `r2e-core` | `r2e-observability` (feature `observability`) |
+/// | Log subscriber | `tracing_subscriber::fmt` | — | `fmt` + `tracing-opentelemetry` |
+/// | Per-request span | — | `request` (short field names) | `request` (OTel semconv names) |
+/// | Distributed tracing | No | No | Yes (OTLP export to Jaeger, Tempo, …) |
+/// | Context propagation | No | No | Yes (W3C `traceparent`) |
+/// | Configuration | `tracing.*` | `trace.*` | `observability.*` (+ `trace.*` for the span) |
 ///
-/// **Do not** install both `Tracing` and `Observability` — this plugin
-/// already includes everything `Tracing` provides.
+/// **Do not** install `Tracing` alongside `Observability` — this plugin owns
+/// the subscriber too. `HttpTrace` is likewise redundant here: `Observability`
+/// installs that layer itself (installing both means two spans per request),
+/// but it *reads the same `trace:` section*, so exclusions, request-id and
+/// `record-path` are configured in exactly one place either way.
 ///
 /// # Example
 ///
@@ -164,18 +168,38 @@ impl Plugin for Observability {
         _config: Option<Self::Config>,
         ctx: &mut r2e_core::plugin::PluginBuildContext,
     ) -> Result<Self::Provided, r2e_core::plugin::PluginBuildError> {
-        // tower-http TraceLayer (replaces the `Tracing` plugin) + OTel context
-        // middleware.
-        let capture_headers = self.config.capture_headers.clone();
-        let otlp_enabled = self.otlp_enabled;
-        ctx.add_layer(move |router| {
-            let router = router.layer(r2e_core::runtime::layers::default_trace());
-            if otlp_enabled {
-                router.layer(middleware::OtelTraceLayer::new(capture_headers))
-            } else {
-                router
-            }
-        });
+        // The one HTTP tracing layer: `r2e-core`'s, with the OTel span shape.
+        // The knobs come from the app's `trace:` section — the same one
+        // `HttpTrace` reads — with this plugin's `capture_headers` filling the
+        // preset slot, so `trace.capture-headers` still wins in YAML.
+        let raw = ctx.config_raw();
+        let trace_enabled = raw
+            .map(|cfg| cfg.get::<bool>("trace.enabled").unwrap_or(true))
+            .unwrap_or(true);
+        let file = raw
+            .map(|cfg| {
+                <HttpTraceConfig as r2e_core::config::PluginConfig>::plugin_load(cfg, "trace")
+            })
+            .transpose()?;
+        let preset = HttpTraceConfig {
+            capture_headers: (!self.config.capture_headers.is_empty())
+                .then(|| self.config.capture_headers.clone()),
+            ..HttpTraceConfig::default()
+        };
+        let settings = r2e_core::builtins::http_trace::resolve_settings(
+            HttpTraceConfig::default(),
+            file,
+            Some(preset),
+        )?;
+
+        if trace_enabled {
+            let make_span = OtelRequestSpan::new(std::sync::Arc::clone(&settings.capture_headers));
+            ctx.add_layer(move |router| {
+                router.layer(r2e_core::HttpTraceLayer::with_make_span(
+                    settings, make_span,
+                ))
+            });
+        }
 
         // Keep the tracer-provider guard alive for the app lifetime and drop
         // it (flushing spans) at shutdown.

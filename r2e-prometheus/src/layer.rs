@@ -3,7 +3,7 @@ use crate::recorder::{HttpMetricsRecorder, PrometheusRecorder};
 use http::{Request, Response};
 use pin_project_lite::pin_project;
 use r2e_core::http::extract::MatchedPath;
-use r2e_core::http::labels::{method_label, route_label};
+use r2e_core::http::labels::{method_label, path_excluded, route_label};
 use std::{
     future::Future,
     pin::Pin,
@@ -120,11 +120,7 @@ where
         // sentinel), so either spelling in `exclude_paths` works.
         let raw_path = req.uri().path();
         let label_path = route_label(matched_path.as_ref());
-        let should_track = !self
-            .config
-            .exclude_paths
-            .iter()
-            .any(|p| raw_path.starts_with(p) || label_path.starts_with(p));
+        let should_track = !path_excluded(raw_path, label_path, &self.config.exclude_paths);
 
         HttpMetricsResponseFuture {
             inner: self.inner.call(req),

@@ -48,3 +48,19 @@ pub fn route_label(matched_path: Option<&MatchedPath>) -> &str {
         .map(MatchedPath::as_str)
         .unwrap_or(UNMATCHED_PATH_LABEL)
 }
+
+/// Whether a request is excluded from telemetry by a prefix list.
+///
+/// `raw` is the request path as it arrived (`/users/5`) and `label` is the
+/// bounded [`route_label`] the request would be recorded under
+/// (`/users/{id}` or [`UNMATCHED_PATH_LABEL`]). A prefix hit on **either**
+/// spelling excludes the request, so `exclude_paths: ["/users"]` works
+/// whether the operator thinks in raw paths or in route templates.
+///
+/// Shared by `r2e-prometheus` (`prometheus.exclude-paths`) and the
+/// `HttpTrace` layer (`trace.exclude-paths`) so one mental model covers both.
+pub fn path_excluded(raw: &str, label: &str, exclude_paths: &[String]) -> bool {
+    exclude_paths
+        .iter()
+        .any(|p| raw.starts_with(p.as_str()) || label.starts_with(p.as_str()))
+}

@@ -66,7 +66,7 @@ Layers stack from inside to outside. At runtime, the request traverses them in r
 Incoming HTTP request
         |
         v
- [TraceLayer]          -- request/response logging (outermost)
+ [HttpTraceLayer]      -- per-request span + summary line (outermost)
  [CatchPanicLayer]     -- catches panics → JSON 500
  [CorsLayer]           -- CORS validation (closest to the handler)
         |
@@ -74,7 +74,7 @@ Incoming HTTP request
    Axum Handler
 ```
 
-**Implication**: `TraceLayer` sees all requests, including those rejected by CORS. Panics in the handler are caught by `CatchPanicLayer` and converted into a clean JSON 500 response.
+**Implication**: `HttpTraceLayer` sees all requests, including those rejected by CORS. Panics in the handler are caught by `CatchPanicLayer` and converted into a clean JSON 500 response.
 
 ### 1.4 Startup Sequence (`serve`)
 
@@ -137,7 +137,7 @@ If the hooks (plugin + user) do not finish within the delay, the process forces 
 HTTP request
     |
     v
-[Tower Layers]  ← TraceLayer → CatchPanicLayer → CorsLayer
+[Tower Layers]  ← HttpTraceLayer → CatchPanicLayer → CorsLayer
     |
     v
 [Axum Routing]  ← path + method matching

@@ -30,7 +30,7 @@ impl App for OrderApp {
                 .register::<services::OrderService>()
                 .plugin(Health)
                 .plugin(Cors::permissive())
-                .plugin(Tracing)
+                .plugin(HttpTrace::new())
                 .plugin(ErrorHandling)
                 .plugin(OpenApiPlugin::new(
                     OpenApiConfig::new("Order Service", "1.0.0")

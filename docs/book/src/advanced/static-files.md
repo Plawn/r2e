@@ -150,7 +150,7 @@ struct Assets;
 #[r2e::main]
 async fn main() {
     AppBuilder::new()
-        .plugin(Tracing)
+        .plugin(HttpTrace::new())
         .plugin(Health)
         .plugin(
             EmbeddedFrontend::builder::<Assets>()

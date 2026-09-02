@@ -1,10 +1,11 @@
-//! Span-field cardinality of the OTel trace middleware.
+//! Span-field cardinality and propagation of the OTel span shape installed by
+//! `Observability` on `r2e-core`'s shared `HttpTraceLayer`.
 //!
 //! `http.route` must stay bounded under arbitrary-path traffic: matched
 //! requests carry the route template (`/users/{id}`), unmatched requests
-//! collapse into the `UNMATCHED_PATH_LABEL` sentinel, and non-standard
-//! methods collapse into `OTHER_METHOD_LABEL`. The raw path is recorded as
-//! `url.path`, an unbounded per-span attribute.
+//! collapse into the `UNMATCHED_PATH_LABEL` sentinel, and non-standard methods
+//! collapse into `OTHER_METHOD_LABEL`. The raw path is never a span field — it
+//! reaches the summary event only under `trace.record-path`.
 
 use http_body_util::BodyExt;
 use opentelemetry::trace::TracerProvider;
@@ -13,8 +14,8 @@ use opentelemetry_sdk::trace::SdkTracerProvider;
 use r2e_core::http::labels::{OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 use r2e_core::http::routing::get;
 use r2e_core::http::{Body, Request, Router};
-use r2e_observability::inject_current_context;
-use r2e_observability::middleware::OtelTraceLayer;
+use r2e_core::{HttpTraceLayer, HttpTraceSettings};
+use r2e_observability::{inject_current_context, OtelRequestSpan};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
@@ -24,7 +25,7 @@ use tracing::Subscriber;
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::Registry;
 
-/// Records the fields of every span named "HTTP request" created while active.
+/// Records the fields of every span named "request" created while active.
 #[derive(Default, Clone)]
 struct SpanCapture {
     spans: Arc<Mutex<Vec<HashMap<String, String>>>>,
@@ -45,7 +46,7 @@ impl Visit for FieldRecorder<'_> {
 
 impl<S: Subscriber> Layer<S> for SpanCapture {
     fn on_new_span(&self, attrs: &Attributes<'_>, _id: &Id, _ctx: Context<'_, S>) {
-        if attrs.metadata().name() != "HTTP request" {
+        if attrs.metadata().name() != "request" {
             return;
         }
         let mut fields = HashMap::new();
@@ -54,8 +55,17 @@ impl<S: Subscriber> Layer<S> for SpanCapture {
     }
 }
 
-/// Send one request through a router wrapped in `OtelTraceLayer` and return
-/// the fields of the request span it created.
+/// Send one request through a router wrapped in the OTel-shaped
+/// `HttpTraceLayer` and return the fields of the request span it created.
+/// The layer exactly as `Observability` installs it: core's `HttpTraceLayer`
+/// with the OTel span shape.
+fn otel_layer() -> HttpTraceLayer<OtelRequestSpan> {
+    HttpTraceLayer::with_make_span(
+        HttpTraceSettings::default(),
+        OtelRequestSpan::new(Arc::from(Vec::new())),
+    )
+}
+
 async fn request_span_fields(method: &str, path: &str) -> HashMap<String, String> {
     let capture = SpanCapture::default();
     let subscriber = Registry::default().with(capture.clone());
@@ -63,7 +73,7 @@ async fn request_span_fields(method: &str, path: &str) -> HashMap<String, String
 
     let router = Router::new()
         .route("/users/{id}", get(|| async { "user" }))
-        .layer(OtelTraceLayer::new(vec![]));
+        .layer(otel_layer());
     let req = Request::builder()
         .method(method)
         .uri(path)
@@ -80,8 +90,10 @@ async fn request_span_fields(method: &str, path: &str) -> HashMap<String, String
 async fn matched_requests_record_the_route_template() {
     let fields = request_span_fields("GET", "/users/7").await;
     assert_eq!(fields["http.route"], "/users/{id}");
-    assert_eq!(fields["url.path"], "/users/7");
-    assert_eq!(fields["http.method"], "GET");
+    assert_eq!(fields["http.request.method"], "GET");
+    // The raw path is deliberately absent from the span: it belongs on the
+    // summary event, and only under `trace.record-path`.
+    assert!(!fields.contains_key("url.path"), "fields: {fields:?}");
 }
 
 #[tokio::test]
@@ -89,14 +101,17 @@ async fn unmatched_requests_collapse_into_the_sentinel_route() {
     let junk = "/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php";
     let fields = request_span_fields("GET", junk).await;
     assert_eq!(fields["http.route"], UNMATCHED_PATH_LABEL);
-    // The raw path stays available as a per-span attribute.
-    assert_eq!(fields["url.path"], junk);
+    // Not even the unmatched raw path leaks onto the span.
+    assert!(
+        !fields.values().any(|v| v.contains("phpunit")),
+        "fields: {fields:?}"
+    );
 }
 
 #[tokio::test]
 async fn extension_methods_collapse_into_the_other_label() {
     let fields = request_span_fields("PURGE", "/users/7").await;
-    assert_eq!(fields["http.method"], OTHER_METHOD_LABEL);
+    assert_eq!(fields["http.request.method"], OTHER_METHOD_LABEL);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -116,7 +131,7 @@ async fn incoming_traceparent_is_used_for_downstream_propagation() {
                 headers["traceparent"].to_str().unwrap().to_string()
             }),
         )
-        .layer(OtelTraceLayer::new(vec![]));
+        .layer(otel_layer());
     let incoming_trace_id = "11111111111111111111111111111111";
     let request = Request::builder()
         .uri("/propagate")
