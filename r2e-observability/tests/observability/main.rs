@@ -1,4 +1,4 @@
 mod client;
 mod config;
-mod middleware;
+mod span;
 mod tracing_setup;
