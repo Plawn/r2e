@@ -258,7 +258,8 @@ async fn jwt_validator(
     }
 
     lines.push("            .plugin(Health)".to_string());
-    lines.push("            .plugin(Tracing)".to_string());
+    // The subscriber comes from `app_main!`; this is the per-request span.
+    lines.push("            .plugin(HttpTrace::new())".to_string());
 
     if opts.openapi {
         lines.push(

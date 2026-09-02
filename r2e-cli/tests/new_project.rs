@@ -102,6 +102,10 @@ fn new_creates_shared_app_source_and_library_wrapper() {
     assert!(!app.contains("build_state!"));
     assert!(!app.contains("AppState"));
     assert!(app.contains(".register_controller::<HelloController>()"));
+    // The per-request span comes from `HttpTrace`; `Tracing` (subscriber only)
+    // is redundant with the subscriber `app_main!` already installs.
+    assert!(app.contains(".plugin(HttpTrace::new())"));
+    assert!(!app.contains(".plugin(Tracing)"));
     // recursion_limit belongs in the crate roots, not the included app source.
     assert!(!app.contains("recursion_limit"));
 
