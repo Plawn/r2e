@@ -1,7 +1,7 @@
 ---
 topic: observability
 features: core, observability
-tokens: ~1700
+tokens: ~2400
 requires: plugins
 ---
 
@@ -27,6 +27,10 @@ requires: plugins
 - Custom span shape: implement `MakeRequestSpan` and pass it to
   `HttpTrace::builder().make_span(..)` — exclusions, request id, timing and the
   summary stay with the layer.
+- Per-request enrichment: handlers take `RequestSpan` as a parameter and
+  `record` domain fields the span shape declared `Empty` (`session_id`, …); a
+  `MakeRequestSpan::make_state` slot (`SpanState`) carries values written
+  during the request to `on_response` for a custom summary line.
 - Enable feature `observability` and install
   `Observability::new(ObservabilityConfig::new("my-service"))`; it is a superset
   of `Tracing` **and** `HttpTrace` (it installs the same layer with an OTel span
@@ -86,6 +90,82 @@ The span is **entered for the whole handler future**, so every line the handler
 logs inherits `route` and `request_id`. `latency_ms` stops at the response head
 (a streamed body is not counted — that is why the Prometheus layer keeps its own
 timer). An excluded path gets no span, no event and no request id.
+
+### Enriching the request span with domain fields
+
+The span maker is one shared `Arc`, so per-request data flows through the layer
+instead: every traced request carries its span as the `RequestSpan` request
+extension, and `MakeRequestSpan::make_state` may allocate a per-request
+`SpanState` slot that is published as a request extension **and** handed back to
+`on_response`. Declare the domain fields (`Empty`) in your own `make_span` —
+`tracing` field names are compile-time, so there is no generic
+`record(name, value)` on the layer.
+
+A handler records directly on the span (works at any call depth, no task
+locals; on an excluded path the extractor yields `Span::none()` and `record` is
+a no-op):
+
+```rust
+#[controller(path = "/session")]
+pub struct SessionController;
+
+#[routes]
+impl SessionController {
+    #[get("/current")]
+    async fn current(&self, span: RequestSpan) -> &'static str {
+        span.record("session_id", "sess-42");
+        "ok"
+    }
+}
+# fn main() {}
+```
+
+When the summary **event** must carry values produced during the request (span
+fields are write-only), round-trip them through `make_state`:
+
+```rust
+use std::sync::Mutex;
+
+#[derive(Default)]
+struct Facts {
+    session_id: Mutex<Option<String>>,
+}
+
+struct AppSpan;
+
+impl MakeRequestSpan for AppSpan {
+    fn make_span(&self, _req: &RequestHead<'_>, route: &str, request_id: Option<&str>) -> tracing::Span {
+        let span = tracing::info_span!(target: "r2e::http", "request", route,
+            request_id = tracing::field::Empty,
+            session_id = tracing::field::Empty, status = tracing::field::Empty);
+        if let Some(id) = request_id {
+            span.record("request_id", id);
+        }
+        span
+    }
+
+    fn make_state(&self, _req: &RequestHead<'_>) -> Option<SpanState> {
+        Some(SpanState::new(Facts::default())) // handlers reach it via the `SpanState` extension
+    }
+
+    fn on_response(&self, span: &tracing::Span, outcome: &RequestOutcome<'_>, state: Option<&SpanState>) {
+        let session = state
+            .and_then(|s| s.get::<Facts>())
+            .and_then(|f| f.session_id.lock().unwrap().clone());
+        span.record("status", outcome.status.map(|s| s.as_u16()));
+        let _enter = span.enter();
+        tracing::info!(target: "r2e::http",
+            status = outcome.status.map(|s| s.as_u16()),
+            latency_ms = outcome.latency_ms(),
+            session_id = session.as_deref(),
+            "request completed");
+    }
+}
+
+# fn __doc(b: AppBuilder) -> impl Sized {
+b.plugin(HttpTrace::builder().make_span(AppSpan).build())
+# }
+```
 
 ### OpenTelemetry
 

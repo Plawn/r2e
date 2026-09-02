@@ -12,7 +12,7 @@ use opentelemetry::propagation::Extractor;
 use r2e_core::http::labels::method_label;
 use r2e_core::http::{HeaderMap, HeaderName};
 use r2e_core::web::request_head::RequestHead;
-use r2e_core::{MakeRequestSpan, RequestOutcome};
+use r2e_core::{MakeRequestSpan, RequestOutcome, SpanState};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// Header extractor for OpenTelemetry propagation.
@@ -93,7 +93,12 @@ impl MakeRequestSpan for OtelRequestSpan {
         span
     }
 
-    fn on_response(&self, span: &tracing::Span, outcome: &RequestOutcome<'_>) {
+    fn on_response(
+        &self,
+        span: &tracing::Span,
+        outcome: &RequestOutcome<'_>,
+        _state: Option<&SpanState>,
+    ) {
         span.record(
             "http.response.status_code",
             outcome.status.map(|status| status.as_u16()),

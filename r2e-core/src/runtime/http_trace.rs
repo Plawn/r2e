@@ -13,6 +13,7 @@
 //! tower-http span + OTel span pair.
 
 use std::{
+    any::Any,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -37,6 +38,104 @@ pub const TRACE_TARGET: &str = "r2e::http";
 pub const SPAN_NAME: &str = "request";
 
 static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
+
+/// The per-request span, published as a **request extension** for every traced
+/// request — the enrichment channel for handlers and services.
+///
+/// A handler (or anything downstream that sees the request extensions) records
+/// domain fields the app's [`MakeRequestSpan`] declared `Empty` — a
+/// `session_id`, a `tenant_id` — directly on the request span, without task
+/// locals and regardless of how deep the call site is nested in its own spans
+/// (where `Span::current()` would resolve to the wrong span):
+///
+/// ```ignore
+/// #[get("/orders/{id}")]
+/// async fn get(&self, span: RequestSpan, id: Uuid) -> ... {
+///     span.record("order_id", tracing::field::display(id));
+/// }
+/// ```
+///
+/// Excluded paths are a pure pass-through: no span, no extension — like
+/// [`RequestId`](crate::builtins::request_id::RequestId). The infallible
+/// extractor below falls back to [`tracing::Span::none()`] in that case, so
+/// `record` degrades to a no-op instead of a failure.
+#[derive(Clone, Debug)]
+pub struct RequestSpan(pub tracing::Span);
+
+impl RequestSpan {
+    /// Record a value on a field the span declared (`Empty` or not).
+    ///
+    /// Sugar over `self.0.record(..)`; a field the span shape did not declare
+    /// is silently ignored — `tracing`'s own contract.
+    pub fn record<V: tracing::field::Value>(&self, field: &str, value: V) -> &Self {
+        self.0.record(field, value);
+        self
+    }
+
+    /// The underlying span.
+    #[must_use]
+    pub fn span(&self) -> &tracing::Span {
+        &self.0
+    }
+}
+
+/// Named bridge point (plan §5.3b): route-method parameters are extracted by
+/// the HTTP backend, not through `FromRequestPartsVia` — same rationale as
+/// [`RequestId`](crate::builtins::request_id::RequestId).
+impl<S: Send + Sync> crate::http::extract::FromRequestParts<S> for RequestSpan {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut crate::http::header::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(parts
+            .extensions
+            .get::<RequestSpan>()
+            .cloned()
+            .unwrap_or_else(|| RequestSpan(tracing::Span::none())))
+    }
+}
+
+/// Type-erased per-request state of a [`MakeRequestSpan`] — the channel between
+/// [`make_state`](MakeRequestSpan::make_state) (creation), the handler
+/// (writes, via the request extension), and
+/// [`on_response`](MakeRequestSpan::on_response) (reads).
+///
+/// The span maker is shared (`Arc<dyn MakeRequestSpan>`, one instance for every
+/// request) and `tracing` spans are write-only, so without this slot a custom
+/// summary line could not carry values produced *during* the request. The slot
+/// is an `Arc`: the layer keeps one handle for `on_response` and publishes a
+/// clone as a request extension, so interior mutability
+/// (`Mutex<...>`, atomics) is the implementor's job.
+#[derive(Clone)]
+pub struct SpanState(Arc<dyn Any + Send + Sync>);
+
+impl SpanState {
+    /// Wrap a per-request state value.
+    #[must_use]
+    pub fn new<T: Any + Send + Sync>(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+
+    /// Borrow the state as `T`, or `None` when the slot holds another type.
+    #[must_use]
+    pub fn get<T: Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+
+    /// Clone the state handle as `Arc<T>` — for moving into a spawned task.
+    #[must_use]
+    pub fn get_arc<T: Any + Send + Sync>(&self) -> Option<Arc<T>> {
+        Arc::clone(&self.0).downcast().ok()
+    }
+}
+
+impl std::fmt::Debug for SpanState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SpanState(..)")
+    }
+}
 
 /// Resolved per-request tracing contract — what the layer actually does, after
 /// the [`HttpTrace`](crate::builtins::HttpTrace) plugin has merged the explicit
@@ -129,6 +228,18 @@ impl RequestOutcome<'_> {
 /// declares its field set at compile time. Runtime-named fields (one per
 /// configured `capture-headers` entry, say) are not expressible: see
 /// [`DefaultRequestSpan`] for what it does instead.
+///
+/// # Per-request enrichment
+///
+/// The implementation is shared across requests (one `Arc`), so it cannot hold
+/// per-request data itself. The layer provides the channel instead:
+///
+/// - the built span is published as the [`RequestSpan`] request extension, so
+///   handlers record declared-`Empty` fields on it mid-request;
+/// - [`make_state`](Self::make_state) may allocate a [`SpanState`] slot, which
+///   the layer publishes as a request extension **and** hands back to
+///   [`on_response`](Self::on_response) — the way values produced during the
+///   request reach a custom summary event (span fields are write-only).
 pub trait MakeRequestSpan: Send + Sync + 'static {
     /// Build the span for one request. `route` is the bounded route label and
     /// `request_id` is already resolved (`None` when `trace.request-id` is
@@ -140,13 +251,31 @@ pub trait MakeRequestSpan: Send + Sync + 'static {
         request_id: Option<&str>,
     ) -> tracing::Span;
 
-    /// Record the outcome on the span **and** emit the summary event.
+    /// Allocate the per-request state slot, `None` by default (zero cost).
+    ///
+    /// A `Some` is published as the [`SpanState`] request extension and handed
+    /// back to [`on_response`](Self::on_response). Called once per traced
+    /// request, right after [`make_span`](Self::make_span).
+    fn make_state(&self, req: &RequestHead<'_>) -> Option<SpanState> {
+        let _ = req;
+        None
+    }
+
+    /// Record the outcome on the span **and** emit the summary event. `state`
+    /// is exactly what [`make_state`](Self::make_state) returned for this
+    /// request.
     ///
     /// One method owns both the field names and the event shape on purpose:
     /// there is deliberately no "the layer records `status` by name, declare it
     /// `Empty`" contract, so a custom span with different field names overrides
     /// this too and nothing is lost silently.
-    fn on_response(&self, span: &tracing::Span, outcome: &RequestOutcome<'_>) {
+    fn on_response(
+        &self,
+        span: &tracing::Span,
+        outcome: &RequestOutcome<'_>,
+        state: Option<&SpanState>,
+    ) {
+        let _ = state;
         default_on_response(span, outcome);
     }
 }
@@ -342,6 +471,9 @@ struct Traced<M: ?Sized> {
     start: Instant,
     /// The id to echo back as `x-request-id`, when `trace.request-id` is on.
     request_id: Option<HeaderValue>,
+    /// The [`MakeRequestSpan::make_state`] slot — the same `Arc` published as
+    /// the request extension, read back in `on_response`.
+    state: Option<SpanState>,
     /// Raw path/query, captured only when the matching knob is on so an
     /// excluded-by-default secret never even reaches the future.
     path: Option<String>,
@@ -405,6 +537,15 @@ where
         let span =
             self.make_span
                 .make_span(&head, label, request_id.as_ref().map(|(id, _)| id.as_str()));
+        let state = self.make_span.make_state(&head);
+
+        // 4. Publish the enrichment channel: the span (and the state slot,
+        //    when the span maker allocated one) become request extensions, so
+        //    handlers record domain fields mid-request — see [`RequestSpan`].
+        req.extensions_mut().insert(RequestSpan(span.clone()));
+        if let Some(state) = &state {
+            req.extensions_mut().insert(state.clone());
+        }
 
         let path = self
             .settings
@@ -429,6 +570,7 @@ where
                 settings: Arc::clone(&self.settings),
                 start: Instant::now(),
                 request_id: request_id.map(|(_, header)| header),
+                state,
                 path,
                 query,
             }),
@@ -501,7 +643,9 @@ where
             query: traced.query.as_deref(),
             emit_summary: traced.settings.summary,
         };
-        traced.make_span.on_response(&traced.span, &outcome);
+        traced
+            .make_span
+            .on_response(&traced.span, &outcome, traced.state.as_ref());
 
         if let (Ok(response), Some(id)) = (result.as_mut(), traced.request_id.as_ref()) {
             response

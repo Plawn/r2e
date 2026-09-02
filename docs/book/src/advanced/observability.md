@@ -113,6 +113,69 @@ impl MakeRequestSpan for MySpan {
 AppBuilder::new().plugin(HttpTrace::builder().make_span(MySpan).build())
 ```
 
+### Enriching the span from a handler
+
+The span maker is shared across requests, so it cannot carry per-request data
+itself. The layer provides the channel instead, in two pieces.
+
+**`RequestSpan`** — every traced request carries its span as a request
+extension. A handler takes it as a parameter and records fields the span shape
+declared `Empty`:
+
+```rust,ignore
+#[get("/current")]
+async fn current(&self, span: RequestSpan) -> &'static str {
+    span.record("session_id", "sess-42");
+    "ok"
+}
+```
+
+This works at any call depth (unlike `Span::current()`, which resolves to the
+innermost entered span) and needs no task-local plumbing. On an excluded path
+the extractor falls back to `Span::none()`, so `record` degrades to a no-op.
+
+**`SpanState`** — when the summary *event* must carry values produced during
+the request (span fields are write-only), implement
+`MakeRequestSpan::make_state` to allocate a per-request slot. The layer
+publishes it as a request extension (handlers write into it, through interior
+mutability) and hands it back to `on_response`, which reads the values and
+emits its own summary line:
+
+```rust,ignore
+use std::sync::Mutex;
+
+#[derive(Default)]
+struct Facts { session_id: Mutex<Option<String>> }
+
+impl MakeRequestSpan for MySpan {
+    fn make_span(&self, req: &RequestHead<'_>, route: &str, request_id: Option<&str>) -> tracing::Span {
+        tracing::info_span!(target: "r2e::http", "request", route,
+            session_id = tracing::field::Empty, status = tracing::field::Empty)
+    }
+
+    fn make_state(&self, _req: &RequestHead<'_>) -> Option<SpanState> {
+        Some(SpanState::new(Facts::default()))
+    }
+
+    fn on_response(&self, span: &tracing::Span, outcome: &RequestOutcome<'_>, state: Option<&SpanState>) {
+        let session = state
+            .and_then(|s| s.get::<Facts>())
+            .and_then(|f| f.session_id.lock().unwrap().clone());
+        span.record("status", outcome.status.map(|s| s.as_u16()));
+        let _enter = span.enter();
+        tracing::info!(target: "r2e::http",
+            status = outcome.status.map(|s| s.as_u16()),
+            latency_ms = outcome.latency_ms(),
+            session_id = session.as_deref(),
+            "request completed");
+    }
+}
+```
+
+Field *names* remain compile-time (`tracing` derives them from static callsite
+metadata) — that is why the enrichment point is your own `MakeRequestSpan`
+rather than a generic `record(name, value)` on the layer.
+
 ## Tracing plugin (the subscriber)
 
 The `Tracing` plugin installs the global `tracing` subscriber
