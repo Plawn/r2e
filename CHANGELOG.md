@@ -219,6 +219,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`#[sse]` / `#[ws]` routes publish their parameters in the OpenAPI spec**
+  (task #1013, follow-up of #1009). Streaming metadata hardcoded
+  `params: vec![]`, so a `#[derive(Params)]` argument — which the generated
+  handler really does extract from the request — never appeared in
+  `/openapi.json`, and neither did a `Path<T>` argument. Both route kinds now
+  build their `RouteInfo.params` through the same code path as a verb route
+  (`Path(name): Path<T>` literals + the `ParamsMetadata` autoref probe, then
+  deduplicated), so moving a documented `#[get]` to `#[sse]` keeps its
+  parameters as well as its prose. A WebSocket method's `WsStream`/`WebSocket`
+  argument comes from the upgrade rather than an extractor and is excluded.
+
 - **`r2e-core`'s `runtime` test target is green under `--features dev-reload`
   again** (task #995). Two independent causes, neither of which CI saw (no
   workflow runs the `dev-reload` feature). (1) The builder-level per-worker

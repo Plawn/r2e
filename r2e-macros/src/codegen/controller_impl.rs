@@ -292,8 +292,7 @@ fn generate_route_metadata(
             }
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
 
-            let path_params = extract_path_params(rm, &krate);
-            let handler_param_types = extract_handler_param_types(rm);
+            let params_expr = params_expr(&rm.fn_item.sig, None, &krate);
             let (body_type_token, body_schema_token, body_content_type_token) =
                 extract_body_info(rm);
             let (response_type_token, response_schema_token) = extract_response_info(rm);
@@ -330,21 +329,6 @@ fn generate_route_metadata(
                 meta_mod,
             );
 
-            // Autoref specialization: for each handler param type, probe for ParamsMetadata.
-            // Types implementing ParamsMetadata return their param infos; others return empty vec.
-            let probe_blocks: Vec<TokenStream> = handler_param_types
-                .iter()
-                .map(|ty| {
-                    quote! {
-                        {
-                            let __probe = #krate::web::params::__ParamMetaProbe::<#ty>(::core::marker::PhantomData);
-                            use #krate::web::params::__NoParamsMeta as _;
-                            __p.extend((&__probe).param_infos());
-                        }
-                    }
-                })
-                .collect();
-
             quote! {
                 #krate::di::meta::RouteInfo {
                     path: match #meta_mod::PATH_PREFIX {
@@ -363,17 +347,7 @@ fn generate_route_metadata(
                     response_schema: #response_schema_token,
                     response_status: #status_code,
                     response_unmapped: #response_unmapped_token,
-                    params: {
-                        let mut __p: Vec<#krate::di::meta::ParamInfo> = vec![#(#path_params),*];
-                        #(#probe_blocks)*
-                        // Deduplicate params by (name, location) — possible when
-                        // a Params struct includes #[param(path)] fields alongside Path<T>.
-                        {
-                            let mut seen = ::std::collections::HashSet::new();
-                            __p.retain(|p| seen.insert((p.name.clone(), format!("{:?}", p.location))));
-                        }
-                        __p
-                    },
+                    params: #params_expr,
                     roles: vec![#(#roles),*],
                     tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
                     deprecated: #deprecated,
@@ -411,57 +385,94 @@ fn has_auth_expr(
     }
 }
 
-/// Extract path parameters from route method signature.
-fn extract_path_params(
-    rm: &crate::model::types::RouteMethod,
+/// The `RouteInfo.params` expression for a handler signature.
+///
+/// Two sources, folded into one deduplicated vec: `Path(name): Path<T>`
+/// parameters contribute a path `ParamInfo` literal, and every parameter type
+/// is probed for `ParamsMetadata` so `#[derive(Params)]` structs publish their
+/// own fields.
+///
+/// Shared by verb routes and `#[sse]` / `#[ws]` routes — a streaming route
+/// extracts its parameters exactly like a verb route, so it documents them the
+/// same way. `skip_param` (an index over the *typed* parameters, `&self`
+/// excluded) drops the WS socket parameter, which the upgrade supplies rather
+/// than an extractor.
+fn params_expr(
+    sig: &syn::Signature,
+    skip_param: Option<usize>,
     krate: &TokenStream,
-) -> Vec<TokenStream> {
-    rm.fn_item
-        .sig
+) -> TokenStream {
+    let params: Vec<&syn::PatType> = sig
         .inputs
         .iter()
-        .filter_map(|arg| {
-            if let syn::FnArg::Typed(pt) = arg {
-                let ty = &pt.ty;
-                if type_last_segment_is(ty, "Path") {
-                    if let syn::Pat::TupleStruct(ts) = pt.pat.as_ref() {
-                        if let Some(elem) = ts.elems.first() {
-                            let param_name = quote!(#elem).to_string();
-                            let param_type = infer_path_param_openapi_type(&pt.ty);
-                            return Some(quote! {
-                                #krate::di::meta::ParamInfo {
-                                    name: #param_name.to_string(),
-                                    location: #krate::di::meta::ParamLocation::Path,
-                                    param_type: #param_type.to_string(),
-                                    required: true,
-                                }
-                            });
-                        }
-                    }
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pt) => Some(pt),
+            // skip &self
+            syn::FnArg::Receiver(_) => None,
+        })
+        .enumerate()
+        .filter(|(i, _)| Some(*i) != skip_param)
+        .map(|(_, pt)| pt)
+        .collect();
+
+    let path_params = extract_path_params(&params, krate);
+
+    // Autoref specialization: for each handler param type, probe for ParamsMetadata.
+    // Types implementing ParamsMetadata return their param infos; others return empty vec.
+    // Wrapper types like `Query<T>` / `Path<T>` are unwrapped first, since `T` is
+    // where `ParamsMetadata` would be implemented.
+    let probe_blocks: Vec<TokenStream> = params
+        .iter()
+        .map(|pt| {
+            let ty = unwrap_extractor_inner(&pt.ty);
+            quote! {
+                {
+                    let __probe = #krate::web::params::__ParamMetaProbe::<#ty>(::core::marker::PhantomData);
+                    use #krate::web::params::__NoParamsMeta as _;
+                    __p.extend((&__probe).param_infos());
                 }
-                None
-            } else {
-                None
             }
         })
-        .collect()
+        .collect();
+
+    quote! {
+        {
+            let mut __p: Vec<#krate::di::meta::ParamInfo> = vec![#(#path_params),*];
+            #(#probe_blocks)*
+            // Deduplicate params by (name, location) — possible when
+            // a Params struct includes #[param(path)] fields alongside Path<T>.
+            {
+                let mut seen = ::std::collections::HashSet::new();
+                __p.retain(|p| seen.insert((p.name.clone(), format!("{:?}", p.location))));
+            }
+            __p
+        }
+    }
 }
 
-/// Extract the types to probe for `ParamsMetadata` from handler parameters.
-///
-/// For wrapper types like `Query<T>`, `Path<T>`, we unwrap to probe the inner
-/// type `T` instead, since `T` is where `ParamsMetadata` would be implemented.
-fn extract_handler_param_types(rm: &crate::model::types::RouteMethod) -> Vec<syn::Type> {
-    rm.fn_item
-        .sig
-        .inputs
+/// Extract path parameters from the handler's typed parameters.
+fn extract_path_params(params: &[&syn::PatType], krate: &TokenStream) -> Vec<TokenStream> {
+    params
         .iter()
-        .filter_map(|arg| {
-            if let syn::FnArg::Typed(pt) = arg {
-                Some(unwrap_extractor_inner(&pt.ty))
-            } else {
-                None // skip &self
+        .filter_map(|pt| {
+            let ty = &pt.ty;
+            if type_last_segment_is(ty, "Path") {
+                if let syn::Pat::TupleStruct(ts) = pt.pat.as_ref() {
+                    if let Some(elem) = ts.elems.first() {
+                        let param_name = quote!(#elem).to_string();
+                        let param_type = infer_path_param_openapi_type(&pt.ty);
+                        return Some(quote! {
+                            #krate::di::meta::ParamInfo {
+                                name: #param_name.to_string(),
+                                location: #krate::di::meta::ParamLocation::Path,
+                                param_type: #param_type.to_string(),
+                                required: true,
+                            }
+                        });
+                    }
+                }
             }
+            None
         })
         .collect()
 }
@@ -1183,12 +1194,13 @@ fn generate_sse_route_metadata(
                 name,
                 meta_mod,
                 &sm.path,
-                &sm.fn_item.sig.ident,
+                &sm.fn_item.sig,
                 &roles,
                 has_guards,
                 sm.identity_param.is_some(),
                 sm.decorators.anonymous,
                 &sm.fn_item.attrs,
+                None,
                 "SSE stream",
             )
         })
@@ -1208,12 +1220,15 @@ fn generate_ws_route_metadata(
                 name,
                 meta_mod,
                 &wm.path,
-                &wm.fn_item.sig.ident,
+                &wm.fn_item.sig,
                 &roles,
                 has_guards,
                 wm.identity_param.is_some(),
                 wm.decorators.anonymous,
                 &wm.fn_item.attrs,
+                // The socket itself comes from the upgrade, not from an
+                // extractor — it is not a documentable parameter.
+                wm.ws_param.as_ref().map(|p| p.index),
                 "WebSocket endpoint",
             )
         })
@@ -1245,30 +1260,37 @@ fn streaming_effective_auth(
 
 /// Emit a `RouteInfo` literal for SSE / WS routes.
 ///
-/// Both emit a `GET` with empty body/params/response and a 200 status; they
-/// differ only in the fallback summary. Keeping this in one place makes adding
-/// a new streaming route kind (or a new `RouteInfo` field) a single-edit
-/// affair.
+/// Both emit a `GET` with empty body/response and a 200 status; they differ
+/// only in the fallback summary and in which parameter the socket occupies.
+/// Keeping this in one place makes adding a new streaming route kind (or a new
+/// `RouteInfo` field) a single-edit affair.
 ///
 /// Summary and description come from the method's doc comment, exactly as for
 /// a verb route (`generate_route_metadata`), so moving a documented `#[get]`
 /// to `#[sse]` keeps its OpenAPI prose. `fallback_summary` — "SSE stream" /
 /// "WebSocket endpoint" — only applies to an undocumented method.
+///
+/// Parameters go through the same `params_expr` as a verb route: a streaming
+/// method extracts `Path<T>` / `#[derive(Params)]` arguments like any other
+/// handler, so it documents them the same way. `ws_param` is the index of the
+/// socket parameter, excluded from that list.
 #[allow(clippy::too_many_arguments)]
 fn emit_streaming_route_info(
     controller_name: &syn::Ident,
     meta_mod: &syn::Ident,
     path: &str,
-    fn_ident: &syn::Ident,
+    sig: &syn::Signature,
     roles: &[String],
     has_guards: bool,
     has_identity_param: bool,
     anonymous: bool,
     attrs: &[syn::Attribute],
+    ws_param: Option<usize>,
     fallback_summary: &str,
 ) -> TokenStream {
     let krate = r2e_core_path();
-    let op_id = format!("{}_{}", controller_name, fn_ident);
+    let op_id = format!("{}_{}", controller_name, sig.ident);
+    let params_expr = params_expr(sig, ws_param, &krate);
     let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
     let has_roles = !roles.is_empty();
     let has_auth = has_auth_expr(
@@ -1304,7 +1326,7 @@ fn emit_streaming_route_info(
             response_schema: None,
             response_status: 200,
             response_unmapped: None,
-            params: vec![],
+            params: #params_expr,
             roles: vec![#(#roles_tokens),*],
             tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
             deprecated: false,
