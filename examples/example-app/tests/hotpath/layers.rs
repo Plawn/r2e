@@ -67,9 +67,7 @@ fn drive(rt: &r2e::rt::Runtime, router: &Router) -> Alloc {
 fn many_paths(n: usize) -> Vec<String> {
     // Long, distinct entries: a deep clone costs one allocation AND ~64 bytes
     // each, so both halves of the invariant have something to catch.
-    (0..n)
-        .map(|i| format!("/excluded/{i:0>52}"))
-        .collect()
+    (0..n).map(|i| format!("/excluded/{i:0>52}")).collect()
 }
 
 /// `MetricsConfig.exclude_paths` (and `buckets`) must not be re-allocated per
@@ -95,13 +93,7 @@ fn prometheus_config_is_shared_not_copied_per_request() {
 
     // A deep clone of the large config would cost >= 64 allocations and >= 4 KiB
     // per request; the slack is two orders of magnitude below that.
-    assert_config_size_invariant(
-        "PrometheusService / MetricsConfig",
-        small,
-        large,
-        4,
-        512,
-    );
+    assert_config_size_invariant("PrometheusService / MetricsConfig", small, large, 4, 512);
 }
 
 /// `HttpTraceSettings.capture_headers` must not be re-allocated per request. It
@@ -119,13 +111,7 @@ fn observability_capture_headers_are_shared_not_copied_per_request() {
     let small = drive(&rt, &router(base(), header("x-request-id")));
     let large = drive(&rt, &router(base(), many_headers(64)));
 
-    assert_config_size_invariant(
-        "HttpTraceService / capture_headers",
-        small,
-        large,
-        4,
-        512,
-    );
+    assert_config_size_invariant("HttpTraceService / capture_headers", small, large, 4, 512);
 }
 
 /// The absolute figure, for visibility: what one request through the full

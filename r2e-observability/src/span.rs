@@ -86,10 +86,7 @@ impl MakeRequestSpan for OtelRequestSpan {
 
         for name in self.capture_headers.iter() {
             if let Some(value) = req.headers.get(name).and_then(|v| v.to_str().ok()) {
-                span.set_attribute(
-                    format!("http.request.header.{name}"),
-                    value.to_owned(),
-                );
+                span.set_attribute(format!("http.request.header.{name}"), value.to_owned());
             }
         }
 

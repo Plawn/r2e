@@ -28,8 +28,8 @@ pub mod span;
 pub mod tracing_setup;
 
 pub use client::{
-    inject_current_context, traced_reqwest_client, DisableOtelPropagation, OtelName,
-    OtelPathNames, R2eSpanBackend, TraceContextMiddleware,
+    inject_current_context, traced_reqwest_client, DisableOtelPropagation, OtelName, OtelPathNames,
+    R2eSpanBackend, TraceContextMiddleware,
 };
 pub use config::{ObservabilityConfig, OtlpProtocol, PropagationFormat};
 pub use span::OtelRequestSpan;
@@ -177,20 +177,27 @@ impl Plugin for Observability {
             .map(|cfg| cfg.get::<bool>("trace.enabled").unwrap_or(true))
             .unwrap_or(true);
         let file = raw
-            .map(|cfg| <HttpTraceConfig as r2e_core::config::PluginConfig>::plugin_load(cfg, "trace"))
+            .map(|cfg| {
+                <HttpTraceConfig as r2e_core::config::PluginConfig>::plugin_load(cfg, "trace")
+            })
             .transpose()?;
         let preset = HttpTraceConfig {
             capture_headers: (!self.config.capture_headers.is_empty())
                 .then(|| self.config.capture_headers.clone()),
             ..HttpTraceConfig::default()
         };
-        let settings =
-            r2e_core::builtins::http_trace::resolve_settings(HttpTraceConfig::default(), file, Some(preset))?;
+        let settings = r2e_core::builtins::http_trace::resolve_settings(
+            HttpTraceConfig::default(),
+            file,
+            Some(preset),
+        )?;
 
         if trace_enabled {
             let make_span = OtelRequestSpan::new(std::sync::Arc::clone(&settings.capture_headers));
             ctx.add_layer(move |router| {
-                router.layer(r2e_core::HttpTraceLayer::with_make_span(settings, make_span))
+                router.layer(r2e_core::HttpTraceLayer::with_make_span(
+                    settings, make_span,
+                ))
             });
         }
 
