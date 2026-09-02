@@ -155,10 +155,21 @@ each request logs.
   **explicit builder setting > app `trace:` section > `HttpTrace::preset(cfg)` >
   built-in default**. `capture-headers` are parsed into `HeaderName`s at build —
   an invalid name is a boot error.
-- `MakeRequestSpan` is the span-shape seam (`make_span` + `on_response(&Span,
-  &RequestOutcome)`, the latter defaulting to the standard field recording +
-  summary event). `HttpTraceBuilder::make_span(..)` swaps it; that is exactly
-  how `Observability` reuses this layer.
+- `MakeRequestSpan` is the span-shape seam (`make_span` + optional `make_state`
+  + `on_response(&Span, &RequestOutcome, Option<&SpanState>)`, the latter
+  defaulting to the standard field recording + summary event).
+  `HttpTraceBuilder::make_span(..)` swaps it; that is exactly how
+  `Observability` reuses this layer.
+- Per-request enrichment channel (task #1015): the layer publishes the built
+  span as the `RequestSpan` request extension (infallible extractor, falls back
+  to `Span::none()` on excluded routes) so handlers record declared-`Empty`
+  domain fields (`session_id`, `tenant_id`, …) mid-request without task locals.
+  `make_state` may allocate a type-erased `SpanState` (`Arc<dyn Any>`) that is
+  published as a request extension **and** handed back to `on_response` — the
+  only way values produced during the request reach a custom summary event,
+  since span fields are write-only and the span maker is a shared `Arc`. Field
+  *names* stay static (tracing callsite metadata) — deliberately not
+  generalized; the app's own `MakeRequestSpan` declares them.
 - Tests: `r2e-core/tests/http/http_trace.rs`.
 
 ## Observability (r2e-observability)

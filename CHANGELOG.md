@@ -16,6 +16,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Per-request span enrichment channel** (task #1015): the `HttpTrace` layer
+  now publishes the request span as the `RequestSpan` request extension —
+  handlers take it as a parameter and `record(..)` domain fields their
+  `MakeRequestSpan` declared `Empty` (`session_id`, `tenant_id`, …), at any
+  call depth and without task-local plumbing (excluded routes yield a no-op
+  `Span::none()`). A new defaulted `MakeRequestSpan::make_state` allocates an
+  optional per-request `SpanState` slot (type-erased `Arc`), published as a
+  request extension and handed back to `on_response` — the way values written
+  *during* the request reach a custom summary event, since span fields are
+  write-only. **Breaking**: `MakeRequestSpan::on_response` gains a
+  `state: Option<&SpanState>` parameter (default impl unchanged otherwise).
+
 - **`TestApp` can reuse an `App::Env` across boots** (task #988): three new
   boots skip `A::setup()` and build on an environment the caller already owns —
   `TestApp::boot_env::<A>(env)`, `TestApp::boot_with_env::<A>(env, configure)`,

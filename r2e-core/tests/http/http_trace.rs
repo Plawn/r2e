@@ -341,6 +341,157 @@ async fn record_path_puts_the_path_on_the_event_only() {
     );
 }
 
+// ── Enrichment channel ─────────────────────────────────────────────────────
+
+use r2e_core::http::Extension;
+use r2e_core::{MakeRequestSpan, RequestOutcome, RequestSpan, SpanState};
+use r2e_core::web::request_head::RequestHead;
+
+use crate::support::body_string;
+
+/// The app-side per-request state: one fact written by the handler, read back
+/// by `on_response`.
+#[derive(Default)]
+struct Facts(Mutex<Option<String>>);
+
+/// A span shape declaring a domain field (`session_id`) plus a state slot.
+struct EnrichedSpan;
+
+impl MakeRequestSpan for EnrichedSpan {
+    fn make_span(
+        &self,
+        _req: &RequestHead<'_>,
+        route: &str,
+        _request_id: Option<&str>,
+    ) -> tracing::Span {
+        tracing::info_span!(
+            target: "r2e::http",
+            "request",
+            route,
+            session_id = tracing::field::Empty,
+            status = tracing::field::Empty,
+        )
+    }
+
+    fn make_state(&self, _req: &RequestHead<'_>) -> Option<SpanState> {
+        Some(SpanState::new(Facts::default()))
+    }
+
+    fn on_response(
+        &self,
+        span: &tracing::Span,
+        outcome: &RequestOutcome<'_>,
+        state: Option<&SpanState>,
+    ) {
+        let session = state
+            .and_then(|s| s.get::<Facts>())
+            .and_then(|f| f.0.lock().unwrap().clone());
+        let _enter = span.enter();
+        tracing::info!(
+            target: "r2e::http",
+            status = outcome.status.map(|s| s.as_u16()),
+            session_id = session.as_deref(),
+            "request completed"
+        );
+    }
+}
+
+fn enrichment_routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
+    Router::new()
+        .route(
+            "/session",
+            get(
+                |span: RequestSpan, Extension(state): Extension<SpanState>| async move {
+                    span.record("session_id", "sess-42");
+                    if let Some(facts) = state.get::<Facts>() {
+                        *facts.0.lock().unwrap() = Some("sess-42".into());
+                    }
+                    "ok"
+                },
+            ),
+        )
+        // Reports whether the request carried a live `RequestSpan` extension —
+        // the extractor is infallible and falls back to `Span::none()`.
+        .route(
+            "/probe",
+            get(|span: RequestSpan| async move {
+                if span.span().is_none() {
+                    "no-span"
+                } else {
+                    "span"
+                }
+            }),
+        )
+        .route(
+            "/health",
+            get(|span: RequestSpan| async move {
+                if span.span().is_none() {
+                    "no-span"
+                } else {
+                    "span"
+                }
+            }),
+        )
+}
+
+async fn enrichment_app(plugin: HttpTrace) -> Router {
+    AppBuilder::new()
+        .override_config(R2eConfig::from_yaml_str(NO_CONFIG).expect("valid yaml"))
+        .load_config::<()>()
+        .plugin(plugin)
+        .build_state()
+        .await
+        .merge_router(enrichment_routes())
+        .build()
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_handler_records_declared_fields_through_the_request_span_extension() {
+    let plugin = HttpTrace::builder().make_span(EnrichedSpan).build();
+    let router = enrichment_app(plugin).await;
+    let (capture, response) = drive(router, "/session", &[]).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        capture.request_span().field("session_id"),
+        Some("sess-42"),
+        "the handler's record must land on the request span"
+    );
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn make_state_roundtrips_from_the_handler_to_on_response() {
+    let plugin = HttpTrace::builder().make_span(EnrichedSpan).build();
+    let router = enrichment_app(plugin).await;
+    let (capture, _) = drive(router, "/session", &[]).await;
+
+    let summaries = capture.summaries();
+    assert_eq!(summaries.len(), 1, "{summaries:?}");
+    assert_eq!(
+        summaries[0].field("session_id"),
+        Some("sess-42"),
+        "the fact written by the handler must reach the custom summary event"
+    );
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn the_default_span_shape_also_publishes_the_request_span_extension() {
+    let router = enrichment_app(HttpTrace::new()).await;
+    let (_, response) = drive(router, "/probe", &[]).await;
+
+    assert_eq!(body_string(response).await, "span");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn an_excluded_request_publishes_no_request_span_extension() {
+    // `/health` is excluded by default: the extractor falls back to a no-op
+    // `Span::none()` instead of failing.
+    let router = enrichment_app(HttpTrace::new()).await;
+    let (_, response) = drive(router, "/health", &[]).await;
+
+    assert_eq!(body_string(response).await, "no-span");
+}
+
 // ── Gate + precedence ──────────────────────────────────────────────────────
 
 #[r2e_core::test(flavor = "current_thread")]

@@ -80,6 +80,7 @@ pub use plugin::{
 pub use runtime::harness::WorkerHarness;
 pub use runtime::http_trace::{
     DefaultRequestSpan, HttpTraceLayer, HttpTraceSettings, MakeRequestSpan, RequestOutcome,
+    RequestSpan, SpanState,
 };
 pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
 pub use runtime::layers::{
