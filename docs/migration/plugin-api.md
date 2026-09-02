@@ -6,6 +6,16 @@ fails to build with an error that names this page (`r2e-compile-tests/cases/
 plugins/fail/plugin_old_install_signature.rs`, `plugin_with_removed.rs` pin
 those diagnostics).
 
+## Which tag am I on?
+
+The tag series lagged behind the workspace version when this break shipped
+(tags stayed `v0.2.*` while `Cargo.toml` already said `0.3.0`; fixed by task
+#1011, tags align with the workspace version from `v0.3.0` onward). The rule:
+
+- pinned **≤ `v0.2.139`** → old plugin API, this migration is ahead of you;
+- pinned **`v0.2.140` or later** (including every `v0.3.x`) → new plugin API,
+  this migration is behind you.
+
 ## What changed
 
 | Old (pre-`820a5a8`) | New |

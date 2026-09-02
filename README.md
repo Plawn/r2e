@@ -58,7 +58,7 @@ Add R2E to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["full"] }
+r2e = { git = "https://github.com/Plawn/r2e", tag = "v0.3.0", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -559,6 +559,20 @@ cargo check --workspace        # type-check (faster)
 cargo test --workspace         # run all tests
 cargo run -p example-app       # run the demo app on port 3001
 ```
+
+## Versioning
+
+R2E is consumed as a git dependency pinned to a tag. Since `v0.3.0`, tags
+follow the workspace version: **`vX.Y.*` is the compatibility series** declared
+in the root `Cargo.toml` (a breaking change bumps `X.Y` and starts a new tag
+series), and the **patch is a monotone release counter** — every merge to
+`master` cuts the next tag in the current series. Pin the latest tag of the
+series you target; upgrading within a series is non-breaking.
+
+Historical note: tags up to `v0.2.163` were a pure release counter detached
+from the manifest — `v0.2.132`–`v0.2.163` actually contain workspace version
+`0.3.0`, and the 0.3 plugin-API rework ships from `v0.2.140` onward (see
+[`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)).
 
 ## For AI agents
 

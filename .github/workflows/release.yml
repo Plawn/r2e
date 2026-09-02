@@ -20,30 +20,48 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Get latest tag from remote
-        id: latest_tag
+      - name: Check member crates inherit the workspace version
         run: |
-          tag=$(git ls-remote --tags --sort=-version:refname origin 'v*' \
-                | grep -v '\^{}' \
-                | head -n1 \
-                | sed 's|.*refs/tags/||')
-          if [ -z "$tag" ]; then
-            echo "version=0.2.0" >> "$GITHUB_OUTPUT"
-            echo "No tags found, starting from 0.2.0"
-          else
-            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-            echo "Latest tag: $tag"
+          bad=$(grep -rl --include=Cargo.toml '^version *= *"' . \
+                | sed 's|^\./||' \
+                | grep -v -e '^Cargo.toml$' -e '^vendor/' -e '^examples/' -e '^target/' || true)
+          if [ -n "$bad" ]; then
+            echo "These member crates declare their own version instead of 'version.workspace = true':"
+            echo "$bad"
+            exit 1
           fi
 
-      - name: Bump patch version
+      - name: Read workspace version
+        id: workspace
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          if [ -z "$version" ]; then
+            echo "Could not read the workspace version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Workspace version: ${version}"
+
+      # The tag series follows the workspace version: vX.Y.* is the
+      # compatibility series declared in Cargo.toml, the patch is a monotone
+      # release counter within it. Bumping major/minor in Cargo.toml starts a
+      # new series (its first tag uses the declared patch as-is).
+      - name: Compute next tag in the workspace series
         id: bump
         run: |
-          IFS='.' read -r major minor patch <<< "${{ steps.latest_tag.outputs.version }}"
-          new_patch=$((patch + 1))
-          new_version="${major}.${minor}.${new_patch}"
+          IFS='.' read -r major minor patch <<< "${{ steps.workspace.outputs.version }}"
+          series="${major}.${minor}"
+          git fetch --tags origin
+          last=$(git tag -l "v${series}.*" --sort=-version:refname | head -n1)
+          if [ -z "$last" ]; then
+            new_version="${series}.${patch}"
+          else
+            last_patch="${last##*.}"
+            new_version="${series}.$((last_patch + 1))"
+          fi
           echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${new_version}" >> "$GITHUB_OUTPUT"
-          echo "Next version: v${new_version}"
+          echo "Next tag: v${new_version} (series v${series}, last tag in series: ${last:-none})"
 
       - name: Generate changelog
         id: changelog
