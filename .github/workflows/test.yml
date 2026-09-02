@@ -39,13 +39,16 @@ jobs:
       # r2e-compile-tests); `libprotobuf-dev` carries the well-known-type
       # `.proto` includes that prost-wkt-types compiles against. librdkafka
       # (r2e-events-kafka, static cmake build) needs the curl / zlib / ssl
-      # headers; cmake itself the image already ships.
+      # headers; cmake itself the image already ships. `llm-doctests` compiles
+      # the diesel snippets with the `sqlite` + `postgres` backends, which link
+      # libsqlite3 / libpq.
       - name: Install native build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             protobuf-compiler libprotobuf-dev \
-            libcurl4-openssl-dev zlib1g-dev libssl-dev
+            libcurl4-openssl-dev zlib1g-dev libssl-dev \
+            libsqlite3-dev libpq-dev
 
       # The runner ships rustup; `rustup show` installs whatever
       # `rust-toolchain.toml` pins (the nightly the trybuild `.stderr`

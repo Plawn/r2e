@@ -1,0 +1,50 @@
+# Compiles every ```rust block of the agent-facing reference (`llm/*.md`) as a
+# rustdoc doctest, so a public-API change that leaves a stale snippet behind
+# fails `cargo test --workspace` instead of teaching downstream code agents a
+# method that no longer exists. `build.rs` copies each topic into OUT_DIR with
+# its fences rewritten to `rust,no_run` (compile, never execute) and a hidden
+# `use r2e::prelude::*;` line, then `src/lib.rs` includes the copies as module
+# docs. Blocks that are deliberately partial carry `rust,ignore` in the source.
+#
+# Scaffolding a snippet needs (the `UserService` it injects, the `User` it
+# returns) lives in `src/fixtures/<topic>.rs`, glob-imported by a second hidden
+# line — never as `# ` lines in the markdown, which agents read raw. Hidden
+# lines in a topic are reserved for wrapping a body fragment in an async fn.
+# Dependencies are regular (not dev-) dependencies so the fixtures can use them.
+#
+# Edition 2024 so rustdoc merges the doctests into one binary (one link
+# instead of one per block).
+[package]
+name = "llm-doctests"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+r2e = {workspace = true, features = ["full", "sqlx-sqlite", "sqlx-postgres", "diesel-sqlite", "diesel-postgres", "tenant-sqlx", "tenant-diesel", "mcp-testing", "test-util", "metrics-facade"]}
+r2e-test = {workspace = true, features = ["ws"]}
+r2e-devservices = {workspace = true, features = ["postgres", "redis", "openfga", "keycloak"]}
+r2e-grpc-build = {workspace = true}
+serde = {workspace = true}
+serde_json = {workspace = true}
+garde = {workspace = true}
+schemars = {workspace = true}
+sqlx = {workspace = true, features = ["sqlite", "postgres"]}
+diesel = {workspace = true, features = ["sqlite", "postgres", "r2d2"]}
+diesel_migrations = {workspace = true}
+tracing = {workspace = true}
+reqwest = {workspace = true}
+tonic = {workspace = true}
+prost = {workspace = true}
+tower = {workspace = true, features = ["util"]}
+tower-http = {workspace = true, features = ["cors"]}
+http = {workspace = true}
+jsonwebtoken = {workspace = true}
+chrono = {workspace = true}
+futures-core = {workspace = true}
+futures-util = {workspace = true}
+anyhow = "1"

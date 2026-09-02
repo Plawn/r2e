@@ -50,6 +50,7 @@ members = [
     "r2e-compile-tests",
     "r2e-edition2024-tests",
     "r2e-featureless-tests",
+    "llm-doctests",
 ]
 resolver = "2"
 

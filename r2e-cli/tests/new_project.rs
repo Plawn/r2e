@@ -148,6 +148,18 @@ fn new_creates_agent_docs() {
     // CLAUDE.md imports AGENTS.md — single source of truth.
     let claude = fs::read_to_string("myapp/CLAUDE.md").unwrap();
     assert_eq!(claude.trim(), "@AGENTS.md");
+
+    // The version-matched reference AGENTS.md routes to, plus the skill.
+    assert!(agents.contains("docs/r2e/llm.txt"));
+    let hub = fs::read_to_string("myapp/docs/r2e/llm.txt").unwrap();
+    assert_eq!(
+        r2e_cli::commands::llm_docs::stamped_version(&hub),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    assert!(Path::new("myapp/docs/r2e/llm/quick-start.md").exists());
+    let skill = fs::read_to_string("myapp/.claude/skills/r2e/SKILL.md").unwrap();
+    assert!(skill.starts_with("---\nname: r2e\n"));
+    assert!(skill.contains("docs/r2e/llm.txt"));
 }
 
 #[test]

@@ -10,7 +10,7 @@ enum CheckResult {
 
 /// Run project health diagnostics.
 ///
-/// Checks 9 aspects of the current directory:
+/// Checks 10 aspects of the current directory:
 /// 1. `Cargo.toml` exists (Error if missing)
 /// 2. R2E dependency in Cargo.toml (Error if missing)
 /// 3. `application.yaml` exists (Warning if missing)
@@ -21,6 +21,8 @@ enum CheckResult {
 /// 8. `src/main.rs` declares an R2E entrypoint (Warning if missing)
 /// 9. Bean registration count vs. recursion limit (Warning if over ~120
 ///    registrations and any existing crate root lacks `#![recursion_limit]`)
+/// 10. Exported agent docs (`docs/r2e/llm.txt`) present and stamped with this
+///     R2E version (Warning if missing or stale — `r2e docs --llm --export`)
 ///
 /// Results are printed with colored indicators. Always returns `Ok(())`.
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -211,6 +213,39 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                      add #![recursion_limit = \"512\"] to each crate root \
                      (src/main.rs and src/lib.rs when both exist)"
                 ))
+            }
+        },
+        &mut issues,
+    );
+
+    // 10. Exported agent docs. `r2e new` writes docs/r2e/ so coding agents
+    // read the reference for the installed R2E version; after an upgrade the
+    // copy goes stale until `r2e docs --llm --export` is run again.
+    check(
+        "R2E agent docs",
+        || {
+            let hub = Path::new(super::llm_docs::DEFAULT_EXPORT_DIR).join("llm.txt");
+            let Ok(content) = std::fs::read_to_string(&hub) else {
+                return CheckResult::Warning(format!(
+                    "{} not found — run `r2e docs --llm --export` so coding agents \
+                     get the version-matched R2E reference",
+                    hub.display()
+                ));
+            };
+            match super::llm_docs::stamped_version(&content) {
+                Some(v) if v == super::llm_docs::VERSION => {
+                    CheckResult::Ok(format!("{} matches R2E v{v}", hub.display()))
+                }
+                Some(v) => CheckResult::Warning(format!(
+                    "{} was exported by R2E v{v}, this CLI is v{} — \
+                     run `r2e docs --llm --export` to refresh",
+                    hub.display(),
+                    super::llm_docs::VERSION
+                )),
+                None => CheckResult::Warning(format!(
+                    "{} has no R2E version stamp — run `r2e docs --llm --export` to refresh",
+                    hub.display()
+                )),
             }
         },
         &mut issues,
