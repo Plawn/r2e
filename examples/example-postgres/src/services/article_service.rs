@@ -1,4 +1,5 @@
 use r2e::prelude::*;
+use r2e::r2e_data_sqlx::DbPool;
 use sqlx::Postgres;
 
 use crate::error::HttpError;

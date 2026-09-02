@@ -327,11 +327,23 @@ pub mod prelude {
     #[cfg(feature = "security")]
     pub use r2e_security::prelude::*;
 
-    #[cfg(feature = "data-sqlx")]
+    // The two data backends deliberately export mirrored names (`DbPool`,
+    // `DbTx`, `Tx`, `DataSourceHealth`, `TenantPools`, `TenantTx`), so their
+    // preludes can only join the app prelude when exactly one backend is
+    // enabled — with both, every use of a mirrored name would trip the
+    // deny-by-default `ambiguous_glob_imports` lint in the app. A
+    // dual-backend build keeps the backend-unique names here and imports the
+    // mirrored ones from `r2e::r2e_data_sqlx` / `r2e::r2e_data_diesel`.
+    #[cfg(all(feature = "data-sqlx", not(feature = "data-diesel")))]
     pub use r2e_data_sqlx::prelude::*;
 
-    #[cfg(feature = "data-diesel")]
+    #[cfg(all(feature = "data-diesel", not(feature = "data-sqlx")))]
     pub use r2e_data_diesel::prelude::*;
+
+    #[cfg(all(feature = "data-sqlx", feature = "data-diesel"))]
+    pub use r2e_data_diesel::{DieselDataSource, DieselTx};
+    #[cfg(all(feature = "data-sqlx", feature = "data-diesel"))]
+    pub use r2e_data_sqlx::{SqlxDataSource, SqlxTx};
 
     #[cfg(feature = "events")]
     pub use r2e_events::prelude::*;
