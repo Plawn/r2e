@@ -240,6 +240,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`r2e::prelude` no longer ambiguous with both data backends enabled**
+  (task #1016). The prelude glob-re-exported `r2e_data_sqlx::prelude::*` and
+  `r2e_data_diesel::prelude::*` unconditionally, and the two backends
+  deliberately export mirrored names (`DbPool`, `DbTx`, `Tx`,
+  `DataSourceHealth`, `TenantPools`, `TenantTx`) — so any build enabling both
+  `data-sqlx` and `data-diesel` (a dual-backend app, or a workspace sibling
+  pulling the other backend through cargo feature unification) made every use
+  of a mirrored name a deny-by-default `ambiguous_glob_imports` error. With
+  exactly one backend enabled its prelude joins `r2e::prelude` as before; with
+  both, only the backend-unique names (`SqlxDataSource`, `SqlxTx`,
+  `DieselDataSource`, `DieselTx`) remain and the mirrored ones are imported
+  explicitly from `r2e::r2e_data_sqlx` / `r2e::r2e_data_diesel` (an explicit
+  import shadows the glob, so it is stable under both modes).
+
 - **`#[sse]` / `#[ws]` routes publish their parameters in the OpenAPI spec**
   (task #1013, follow-up of #1009). Streaming metadata hardcoded
   `params: vec![]`, so a `#[derive(Params)]` argument — which the generated

@@ -2,6 +2,7 @@ use crate::error::AppError;
 use crate::models::{CreateUserRequest, User};
 use crate::services::UserService;
 use r2e::prelude::*;
+use r2e::r2e_data_sqlx::Tx;
 use r2e::r2e_rate_limit::RateLimit;
 use sqlx::Sqlite;
 use std::future::Future;
