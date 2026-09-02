@@ -133,7 +133,7 @@ impl App for MultiTenantApp {
             .register::<services::ProjectService>()
             .plugin(Health)
             .plugin(Cors::permissive())
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Multi-Tenant API", "1.0.0")

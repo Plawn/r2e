@@ -79,7 +79,7 @@ impl App for OpenFgaApp {
             .plugin(OpenFga::model(authz::MODEL))
             .plugin(Health)
             .plugin(Cors::permissive())
-            .plugin(Tracing)
+            .plugin(HttpTrace::new())
             .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Documents API", "1.0.0")
