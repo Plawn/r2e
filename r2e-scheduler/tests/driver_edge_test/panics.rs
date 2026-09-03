@@ -1,12 +1,19 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use r2e_core::rt::CancelToken;
+use r2e_core::{PanicHook, PanicHookSlot, PanicOrigin, PANIC_TARGET};
+use r2e_executor::{ExecutorConfig, PoolExecutor};
 use r2e_scheduler::{
     OverlapPolicy, ScheduleConfig, ScheduledJobRegistry, ScheduledTask, ScheduledTaskDef,
     SchedulerCommands,
 };
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+use tracing_subscriber::Registry;
 
 use crate::support::{counting_task, start_one, test_pool};
 
@@ -45,6 +52,134 @@ async fn panicking_tick_increments_panic_count() {
         info.panic_count >= 1,
         "at least one contained panic should be recorded, got {}",
         info.panic_count
+    );
+}
+
+// ── A panicking tick reaches the app's on_panic hook (ticket #1027) ─────────
+//
+// The pool is the single reporter: the tick submitted through
+// `submit_scheduled` reports as `PanicOrigin::Scheduled { task }`, the driver
+// logs nothing of its own, and the registry's `panic_count` still moves.
+
+/// Event-only capture of the `r2e::panic` target.
+#[derive(Default, Clone)]
+struct PanicCapture {
+    events: Arc<Mutex<Vec<HashMap<String, String>>>>,
+}
+
+impl PanicCapture {
+    fn events(&self) -> Vec<HashMap<String, String>> {
+        self.events.lock().unwrap().clone()
+    }
+}
+
+struct FieldRecorder<'a>(&'a mut HashMap<String, String>);
+
+impl Visit for FieldRecorder<'_> {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .insert(field.name().to_string(), format!("{value:?}"));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0.insert(field.name().to_string(), value.to_string());
+    }
+}
+
+impl<S: Subscriber> Layer<S> for PanicCapture {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        if event.metadata().target() != PANIC_TARGET {
+            return;
+        }
+        let mut fields = HashMap::new();
+        event.record(&mut FieldRecorder(&mut fields));
+        self.events.lock().unwrap().push(fields);
+    }
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_panicking_tick_reports_the_scheduled_origin_exactly_once() {
+    // `(message, label, task)` of every hook call; `task` is `Some` only when
+    // the origin really was `Scheduled`.
+    type Seen = Arc<Mutex<Vec<(String, String, Option<String>)>>>;
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_h = Arc::clone(&seen);
+    let hook: PanicHook = Arc::new(move |report| {
+        let task = match report.origin() {
+            PanicOrigin::Scheduled { task } => Some(task.to_owned()),
+            _ => None,
+        };
+        seen_h
+            .lock()
+            .unwrap()
+            .push((report.message().to_owned(), report.label().to_owned(), task));
+    });
+    let slot = PanicHookSlot::default();
+    slot.set(hook);
+    let pool = PoolExecutor::with_panic_hook_slot(ExecutorConfig::default(), slot);
+
+    let capture = PanicCapture::default();
+    let _guard = tracing::subscriber::set_default(Registry::default().with(capture.clone()));
+
+    let registry = ScheduledJobRegistry::new();
+    let cancel = CancelToken::new();
+    let task = ScheduledTaskDef::new(
+        "panicker",
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
+        (),
+        |()| async {
+            panic!("tick boom");
+            #[allow(unreachable_code)]
+            ()
+        },
+    );
+    start_one(task, cancel.clone(), pool, registry.clone());
+
+    // Wait for at least one contained panic, then stop the cadence.
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the hook must fire for a panicking tick");
+    cancel.cancel();
+    // Let the in-flight bookkeeping settle before counting.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let seen = seen.lock().unwrap().clone();
+    for (message, label, task) in &seen {
+        assert_eq!(message, "tick boom");
+        assert_eq!(label, "panicker", "label() is the task name");
+        assert_eq!(
+            task.as_deref(),
+            Some("panicker"),
+            "the origin must be Scheduled with the task name"
+        );
+    }
+
+    // Single reporter: one `r2e::panic` line per hook call — the driver adds
+    // no duplicate line of its own — and each carries `task`, not `job`.
+    let events = capture.events();
+    assert_eq!(
+        events.len(),
+        seen.len(),
+        "one log line per panic: {events:?}"
+    );
+    for event in &events {
+        assert_eq!(event.get("task").map(String::as_str), Some("panicker"));
+        assert_eq!(event.get("job"), None, "not reported as an executor job");
+        assert_eq!(
+            event.get("panic_message").map(String::as_str),
+            Some("tick boom")
+        );
+    }
+
+    // Containment unchanged: the registry still counts the panics.
+    let info = registry.job("panicker").expect("job registered");
+    assert!(
+        info.panic_count as usize >= seen.len().min(1),
+        "panic_count must move: {info:?}"
     );
 }
 

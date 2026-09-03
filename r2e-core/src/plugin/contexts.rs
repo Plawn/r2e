@@ -270,6 +270,7 @@ pub struct PluginBuildContext {
     enabled: bool,
     graph: GraphHandle,
     config: Option<crate::config::R2eConfig>,
+    panic_hook: crate::runtime::panic::PanicHookSlot,
     effects: EffectSet,
 }
 
@@ -297,11 +298,13 @@ impl PluginBuildContext {
         enabled: bool,
         graph: GraphHandle,
         config: Option<crate::config::R2eConfig>,
+        panic_hook: crate::runtime::panic::PanicHookSlot,
     ) -> Self {
         Self {
             enabled,
             graph,
             config,
+            panic_hook,
             effects: EffectSet::default(),
         }
     }
@@ -344,6 +347,18 @@ impl PluginBuildContext {
     /// parameter, for reading keys outside the plugin's own section.
     pub fn config_raw(&self) -> Option<&crate::config::R2eConfig> {
         self.config.as_ref()
+    }
+
+    /// The app's [`PanicHookSlot`](crate::runtime::panic::PanicHookSlot) — for
+    /// plugins that catch panics on their own surface (the executor pool) and
+    /// must report them through the application's
+    /// [`on_panic`](crate::AppBuilder::on_panic) hook.
+    ///
+    /// The slot is set-late: read it at **panic time** via
+    /// [`get()`](crate::runtime::panic::PanicHookSlot::get), never at build
+    /// time — the hook may be registered on the builder after `build_state()`.
+    pub fn panic_hook_slot(&self) -> crate::runtime::panic::PanicHookSlot {
+        self.panic_hook.clone()
     }
 
     /// **Graph stage.** Escape hatch: run a closure against the full

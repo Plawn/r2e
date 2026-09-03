@@ -1001,7 +1001,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // still sits — see below), the unwind would skip all of that and the
         // request span guard would already be dropped, so the error line
         // could not carry `request_id`. See `runtime::panic`.
-        let panic_hook = self.shared.panic_hook;
+        let panic_hook = self.shared.panic_hook.get();
         app = app.layer(crate::runtime::layers::catch_panic_layer_with(
             panic_hook.clone(),
         ));

@@ -690,7 +690,7 @@ pub(crate) fn async_exec_method(
             #(#wrapper_params),*
         ) -> ::core::result::Result<#exec_krate::JobHandle<#return_ty>, #exec_krate::RejectedError> #where_clause {
             let __self = ::core::clone::Clone::clone(self);
-            self.#executor_field.submit(async move {
+            self.#executor_field.submit_named(stringify!(#original_name), async move {
                 __self.#inner_name(#(#arg_forwards),*).await
             })
         }

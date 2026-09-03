@@ -129,8 +129,7 @@ pub type ModuleRegisteredR<M, P, R, Mods> =
     <ModulePluginsR<M, P, R, Mods> as TAppend<<M as FeatureModule>::Imports>>::Output;
 
 /// The pending-module list [`ModuleRegistered`] carries.
-pub type ModuleRegisteredMods<M, P, R, Mods> =
-    TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>;
+pub type ModuleRegisteredMods<M, P, R, Mods> = TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>;
 
 type ConsumerReg<T> =
     Box<dyn FnOnce(T) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
@@ -659,8 +658,11 @@ struct BuilderConfig {
     /// Whether to install the pre-routing trailing-slash normalization rewrite.
     normalize_path: bool,
     /// Application callback invoked once per caught panic, set via
-    /// [`AppBuilder::on_panic`]. Handed to both catch-panic install slots.
-    panic_hook: Option<crate::runtime::panic::PanicHook>,
+    /// [`AppBuilder::on_panic`]. A set-late shared slot: the two HTTP
+    /// catch-panic install slots resolve it at `build()`, the executor pool
+    /// (which the registry hands the same slot) reads it at panic time — so
+    /// `on_panic` may be called before or after `build_state()`.
+    panic_hook: crate::runtime::panic::PanicHookSlot,
     /// Whether the DevReload plugin has been applied (prevents double-install).
     dev_reload_applied: bool,
     /// Maximum time allowed for the tracked-handle join phase, applied to each
@@ -877,34 +879,40 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
         }
     }
 
-    /// Register the application callback invoked once per **caught panic**.
+    /// Register the application callback invoked once per **caught panic** —
+    /// on every catching surface: HTTP handlers, `#[scheduled]` ticks, and
+    /// executor pool jobs (`#[async_exec]`, `executor.submit*`).
     ///
-    /// R2E already answers a panicking handler with a JSON 500 and logs one
-    /// structured `error` event carrying the request span's `request_id` and
-    /// `route`. This hook is the counting seam on top of that: R2E
-    /// deliberately increments no metric of its own, because every service
-    /// owns its registry and its metric prefix.
+    /// R2E already contains each of those panics (JSON 500 / failed job / next
+    /// tick still scheduled) and logs one structured `error` event per panic.
+    /// This hook is the counting seam on top of that: R2E deliberately
+    /// increments no metric of its own, because every service owns its
+    /// registry and its metric prefix.
     ///
     /// ```ignore
     /// let panics = counter.clone();
     /// AppBuilder::new().on_panic(move |report| {
-    ///     panics.with_label_values(&[report.route_label()]).inc();
+    ///     panics.with_label_values(&[report.label()]).inc();
     /// })
     /// ```
     ///
-    /// The hook runs on the request task while the panic is being converted
-    /// to a response, with the request span current. Keep it short and
-    /// non-blocking. It cannot break the response: a panic inside the hook is
-    /// caught, logged once, and the same JSON 500 still goes out. Calling
-    /// `on_panic` twice replaces the previous hook.
+    /// [`PanicReport::origin`](crate::PanicReport::origin) says which surface
+    /// panicked; [`PanicReport::label`](crate::PanicReport::label) is the
+    /// bounded label for all of them (route template, task name, job name).
+    ///
+    /// The hook runs on the panicking task while the panic is being contained
+    /// — for HTTP with the request span current. Keep it short and
+    /// non-blocking. It cannot break the containment: a panic inside the hook
+    /// is caught, logged once, and the surface behaves as if the hook did not
+    /// exist. Calling `on_panic` twice replaces the previous hook.
     ///
     /// See [`PanicReport`](crate::PanicReport) for what it is told, and
-    /// [`crate::runtime::panic`] for where the layer sits.
-    pub fn on_panic<F>(mut self, hook: F) -> Self
+    /// [`crate::runtime::panic`] for where the HTTP layer sits.
+    pub fn on_panic<F>(self, hook: F) -> Self
     where
         F: Fn(&crate::runtime::panic::PanicReport<'_>) + Send + Sync + 'static,
     {
-        self.shared.panic_hook = Some(Arc::new(hook));
+        self.shared.panic_hook.set(Arc::new(hook));
         self
     }
 

@@ -223,6 +223,12 @@ pub struct BeanRegistry {
     /// `Arc<BeanContext>`. Fresh per registry, so each dev-reload cycle's
     /// plugins see that cycle's graph.
     pub(super) graph_handle: crate::plugin::GraphHandle,
+    /// The app's shared panic-hook slot, deposited by `AppBuilder::new` and
+    /// handed to each plugin's [`PluginBuildContext`] so panic-catching
+    /// surfaces (the executor pool) report through the application's
+    /// `on_panic` hook. Fresh (detached) per registry until the builder shares
+    /// its own — dev-reload rebuilds thus never see a previous cycle's slot.
+    pub(super) panic_hook_slot: crate::runtime::panic::PanicHookSlot,
 }
 
 pub(super) struct BeanRegistration {
