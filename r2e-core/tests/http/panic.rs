@@ -14,7 +14,7 @@ use r2e_core::builtins::http_trace::HttpTrace;
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
 use r2e_core::http::{Response, Router, StatusCode};
-use r2e_core::PanicHook;
+use r2e_core::{PanicHook, PanicOrigin};
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
@@ -156,6 +156,37 @@ async fn the_application_hook_fires_exactly_once_with_the_message_and_route() {
     assert_eq!(
         seen.lock().unwrap().as_slice(),
         &[("boom".to_owned(), Some("/panic/{id}".to_owned()))]
+    );
+}
+
+/// Ticket #1027: the report now says WHERE the panic came from. On the HTTP
+/// stack that is `PanicOrigin::Http` carrying the matched route template, and
+/// `label()` is that template — the one bounded string a hook can use as a
+/// metric label whatever the origin.
+#[r2e_core::test(flavor = "current_thread")]
+async fn the_report_exposes_the_http_origin_and_label() {
+    let seen: Arc<Mutex<Vec<(String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let seen_h = Arc::clone(&seen);
+    let hook: PanicHook = Arc::new(move |report| {
+        seen_h.lock().unwrap().push((
+            report.label().to_owned(),
+            matches!(
+                report.origin(),
+                PanicOrigin::Http {
+                    route: Some("/panic/{id}")
+                }
+            ),
+        ));
+    });
+
+    let (_capture, response) = drive("/panic/7", Some(hook)).await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[("/panic/{id}".to_owned(), true)],
+        "one invocation, label = route template, origin = Http with the template"
     );
 }
 

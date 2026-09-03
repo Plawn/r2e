@@ -17,6 +17,8 @@ tracing = {workspace = true}
 
 [dev-dependencies]
 tokio = {workspace = true, features = ["full", "test-util"]}
+# tests/panic.rs captures the `r2e::panic` log line with a test subscriber.
+tracing-subscriber = {workspace = true}
 # `#[derive(BackgroundService)]` still emits `::tokio_util::sync::CancellationToken`
 # into user code (flipped in phase 2e/2f), so the derive tests need it linked.
 tokio-util = {workspace = true}

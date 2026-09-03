@@ -6096,6 +6096,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -6345,6 +6346,7 @@ dependencies = [
  "r2e-executor",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
