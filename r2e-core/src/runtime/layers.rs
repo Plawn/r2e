@@ -413,4 +413,3 @@ pub(crate) fn graph_keep_alive<S>(
         graph: std::sync::Arc::clone(&graph),
     })
 }
-

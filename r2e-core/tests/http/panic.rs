@@ -14,6 +14,7 @@ use r2e_core::builtins::http_trace::HttpTrace;
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
 use r2e_core::http::{Response, Router, StatusCode};
+use r2e_core::runtime::panic::PanicHook;
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
@@ -31,7 +32,11 @@ fn routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
     Router::new()
         .route(
             "/panic/{id}",
-            get(|| async { panic!("boom"); #[allow(unreachable_code)] "" }),
+            get(|| async {
+                panic!("boom");
+                #[allow(unreachable_code)]
+                ""
+            }),
         )
         .route(
             "/panic-string",
@@ -44,6 +49,9 @@ fn routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
         .route("/ok", get(|| async { "ok" }))
 }
 
+/// `(message, route)` of every hook invocation, in order.
+type Reports = Arc<Mutex<Vec<(String, Option<String>)>>>;
+
 /// The panic events of the request just driven.
 fn panics(capture: &Capture) -> Vec<Rec> {
     capture
@@ -55,10 +63,7 @@ fn panics(capture: &Capture) -> Vec<Rec> {
 
 /// Build a traced app, optionally with a panic hook, and drive one GET under
 /// a fresh thread-local capture.
-async fn drive(
-    path: &str,
-    hook: Option<Arc<dyn Fn(&r2e_core::runtime::panic::PanicReport<'_>) + Send + Sync>>,
-) -> (Capture, Response) {
+async fn drive(path: &str, hook: Option<PanicHook>) -> (Capture, Response) {
     let builder = AppBuilder::new()
         .override_config(R2eConfig::from_yaml_str(NO_CONFIG).expect("valid yaml"))
         .load_config::<()>()
@@ -67,11 +72,7 @@ async fn drive(
         Some(hook) => builder.on_panic(move |report| hook(report)),
         None => builder,
     };
-    let router = builder
-        .build_state()
-        .await
-        .merge_router(routes())
-        .build();
+    let router = builder.build_state().await.merge_router(routes()).build();
 
     let capture = Capture::default();
     let subscriber = Registry::default().with(capture.clone());
@@ -103,7 +104,11 @@ async fn one_error_line_carries_the_request_id_the_message_and_the_route() {
     let (capture, response) = drive("/panic/7", None).await;
 
     let events = panics(&capture);
-    assert_eq!(events.len(), 1, "expected exactly one panic event: {events:?}");
+    assert_eq!(
+        events.len(),
+        1,
+        "expected exactly one panic event: {events:?}"
+    );
     let event = &events[0];
     assert_eq!(event.level, Level::ERROR);
     assert_eq!(event.field("panic_message"), Some("boom"));
@@ -133,17 +138,16 @@ async fn an_owned_string_payload_is_downcast_too() {
 #[r2e_core::test(flavor = "current_thread")]
 async fn the_application_hook_fires_exactly_once_with_the_message_and_route() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let seen: Arc<Mutex<Vec<(String, Option<String>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen: Reports = Arc::new(Mutex::new(Vec::new()));
 
     let (calls_h, seen_h) = (Arc::clone(&calls), Arc::clone(&seen));
-    let hook: Arc<dyn Fn(&r2e_core::runtime::panic::PanicReport<'_>) + Send + Sync> =
-        Arc::new(move |report| {
-            calls_h.fetch_add(1, Ordering::SeqCst);
-            seen_h.lock().unwrap().push((
-                report.message().to_owned(),
-                report.route().map(str::to_owned),
-            ));
-        });
+    let hook: PanicHook = Arc::new(move |report| {
+        calls_h.fetch_add(1, Ordering::SeqCst);
+        seen_h.lock().unwrap().push((
+            report.message().to_owned(),
+            report.route().map(str::to_owned),
+        ));
+    });
 
     let (_capture, response) = drive("/panic/7", Some(hook)).await;
 
@@ -182,7 +186,11 @@ async fn the_panic_still_travels_the_instrumented_response_path() {
     assert_eq!(capture.request_span().field("status"), Some("500"));
 
     let summaries = capture.summaries();
-    assert_eq!(summaries.len(), 1, "expected one summary line: {summaries:?}");
+    assert_eq!(
+        summaries.len(),
+        1,
+        "expected one summary line: {summaries:?}"
+    );
     assert_eq!(summaries[0].level, Level::ERROR);
     assert_eq!(summaries[0].field("status"), Some("500"));
 }
