@@ -39,14 +39,18 @@
 //! }
 //! ```
 
+use std::any::Any;
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use r2e_core::rt::sync::{Notify, Semaphore};
 use r2e_core::rt::{self, CancelToken};
+use r2e_core::runtime::panic::{report_caught_panic, PanicHookSlot, PanicOrigin};
 
 pub use r2e_core::rt::{JobHandle, JoinError};
 
@@ -130,6 +134,41 @@ pub struct ExecutorMetrics {
 
 // ── PoolExecutor ──────────────────────────────────────────────────────────
 
+/// What a job is called in a panic report: nothing (`submit`/`try_submit`/
+/// `submit_detached`), a static method name (`#[async_exec]` via
+/// [`PoolExecutor::submit_named`]), or a scheduled task's configured name
+/// (the scheduler driver via [`PoolExecutor::submit_scheduled`]).
+enum JobLabel {
+    Unnamed,
+    Named(&'static str),
+    Scheduled(String),
+}
+
+impl JobLabel {
+    fn origin(&self) -> PanicOrigin<'_> {
+        match self {
+            JobLabel::Unnamed => PanicOrigin::Executor { job: None },
+            JobLabel::Named(name) => PanicOrigin::Executor { job: Some(name) },
+            JobLabel::Scheduled(task) => PanicOrigin::Scheduled { task },
+        }
+    }
+}
+
+/// Run `fut` with every `poll` under `catch_unwind`, so a panicking job hands
+/// the payload back instead of unwinding past the pool's bookkeeping (permit,
+/// drain count, completed counter, idle notification for `shutdown_graceful`).
+async fn catch_unwind<F: Future>(fut: F) -> Result<F::Output, Box<dyn Any + Send>> {
+    let mut fut = std::pin::pin!(fut);
+    std::future::poll_fn(move |cx| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
+            Ok(Poll::Pending) => Poll::Pending,
+            Ok(Poll::Ready(value)) => Poll::Ready(Ok(value)),
+            Err(payload) => Poll::Ready(Err(payload)),
+        }
+    })
+    .await
+}
+
 struct Inner {
     semaphore: Arc<Semaphore>,
     max_concurrent: u64,
@@ -145,6 +184,11 @@ struct Inner {
     rejected: AtomicU64,
     notify_idle: Notify,
     shutdown_timeout: Duration,
+    /// The app's `on_panic` hook, shared through
+    /// [`PluginBuildContext::panic_hook_slot`]. Read at panic time — the hook
+    /// may be registered on the builder after the pool is built. Detached
+    /// (never set) for a pool constructed with [`PoolExecutor::new`].
+    panic_hook: PanicHookSlot,
 }
 
 /// Cloneable handle to a managed Tokio task pool.
@@ -157,7 +201,21 @@ pub struct PoolExecutor {
 
 impl PoolExecutor {
     /// Build a [`PoolExecutor`] from an [`ExecutorConfig`].
+    ///
+    /// The pool's panic-hook slot is detached: job panics are still contained
+    /// and logged, but no application `on_panic` hook fires. The `Executor`
+    /// plugin constructs the pool with
+    /// [`with_panic_hook_slot`](Self::with_panic_hook_slot) instead, wiring it
+    /// to [`AppBuilder::on_panic`](r2e_core::AppBuilder::on_panic).
     pub fn new(config: ExecutorConfig) -> Self {
+        Self::with_panic_hook_slot(config, PanicHookSlot::default())
+    }
+
+    /// Build a [`PoolExecutor`] whose job panics report through the given
+    /// [`PanicHookSlot`] — the slot handed out by
+    /// [`PluginBuildContext::panic_hook_slot`]. The slot is read at panic
+    /// time, so a hook registered after construction is still seen.
+    pub fn with_panic_hook_slot(config: ExecutorConfig, panic_hook: PanicHookSlot) -> Self {
         let max_concurrent = config.max_concurrent.max(1) as usize;
         Self {
             inner: Arc::new(Inner {
@@ -171,6 +229,7 @@ impl PoolExecutor {
                 rejected: AtomicU64::new(0),
                 notify_idle: Notify::new(),
                 shutdown_timeout: config.shutdown_timeout,
+                panic_hook,
             }),
         }
     }
@@ -186,11 +245,51 @@ impl PoolExecutor {
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
+        self.submit_labeled(JobLabel::Unnamed, fut)
+    }
+
+    /// [`submit`](Self::submit) with a job name for the panic report.
+    ///
+    /// A panicking named job reaches the app's `on_panic` hook as
+    /// [`PanicOrigin::Executor`] `{ job: Some(name) }` and its `r2e::panic`
+    /// log line carries `job = name`; an unnamed job reports `job: None`
+    /// (label `<unnamed>`). `#[async_exec]` submits through here with the
+    /// method's name.
+    pub fn submit_named<F, T>(
+        &self,
+        name: &'static str,
+        fut: F,
+    ) -> Result<JobHandle<T>, RejectedError>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.submit_labeled(JobLabel::Named(name), fut)
+    }
+
+    /// [`submit`](Self::submit) tagging the job as a scheduled tick, so a
+    /// panic reports as [`PanicOrigin::Scheduled`] `{ task }` rather than an
+    /// executor job. Called by the scheduler driver; the pool stays the single
+    /// reporter — the driver logs nothing of its own for a tick panic.
+    #[doc(hidden)]
+    pub fn submit_scheduled<F, T>(&self, task: &str, fut: F) -> Result<JobHandle<T>, RejectedError>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.submit_labeled(JobLabel::Scheduled(task.to_owned()), fut)
+    }
+
+    fn submit_labeled<F, T>(&self, label: JobLabel, fut: F) -> Result<JobHandle<T>, RejectedError>
+    where
+        F: Future<Output = T> + Send + 'static,
+        T: Send + 'static,
+    {
         if self.inner.shutdown.is_cancelled() {
             self.inner.rejected.fetch_add(1, Ordering::Relaxed);
             return Err(RejectedError::Shutdown);
         }
-        Ok(self.spawn_job(fut))
+        Ok(self.spawn_job(fut, label))
     }
 
     /// Submit a fire-and-forget future. No handle is returned.
@@ -221,12 +320,20 @@ impl PoolExecutor {
                 Err(rt::sync::TryAcquireError::Closed) => return,
             };
             inner.drain_count.fetch_add(1, Ordering::Relaxed);
-            fut.await;
+            let outcome = catch_unwind(fut).await;
             drop(permit);
             let prev = inner.drain_count.fetch_sub(1, Ordering::Relaxed);
             inner.completed.fetch_add(1, Ordering::Relaxed);
             if prev == 1 && inner.shutdown.is_cancelled() {
                 inner.notify_idle.notify_waiters();
+            }
+            if let Err(payload) = outcome {
+                report_caught_panic(
+                    payload.as_ref(),
+                    PanicOrigin::Executor { job: None },
+                    inner.panic_hook.get().as_ref(),
+                );
+                std::panic::resume_unwind(payload);
             }
         });
     }
@@ -251,10 +358,10 @@ impl PoolExecutor {
             self.inner.rejected.fetch_add(1, Ordering::Relaxed);
             return Err(RejectedError::QueueFull);
         }
-        Ok(self.spawn_job(fut))
+        Ok(self.spawn_job(fut, JobLabel::Unnamed))
     }
 
-    fn spawn_job<F, T>(&self, fut: F) -> JobHandle<T>
+    fn spawn_job<F, T>(&self, fut: F, label: JobLabel) -> JobHandle<T>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -288,14 +395,30 @@ impl PoolExecutor {
                 }
             };
             inner.drain_count.fetch_add(1, Ordering::Relaxed);
-            let result = fut.await;
+            // The catch exists for the bookkeeping below: an unwind straight
+            // out of `fut.await` would leak the drain count (shutdown would
+            // wait out its whole timeout) and undercount `completed`.
+            let outcome = catch_unwind(fut).await;
             drop(permit);
             let prev = inner.drain_count.fetch_sub(1, Ordering::Relaxed);
             inner.completed.fetch_add(1, Ordering::Relaxed);
             if prev == 1 && inner.shutdown.is_cancelled() {
                 inner.notify_idle.notify_waiters();
             }
-            result
+            match outcome {
+                Ok(result) => result,
+                Err(payload) => {
+                    report_caught_panic(
+                        payload.as_ref(),
+                        label.origin(),
+                        inner.panic_hook.get().as_ref(),
+                    );
+                    // Resume so the `JobHandle` still resolves to a panicked
+                    // `JoinError` (`is_panic() == true`) exactly as before the
+                    // catch — the report above is the only added behavior.
+                    std::panic::resume_unwind(payload);
+                }
+            }
         })
     }
 
@@ -405,7 +528,8 @@ impl Plugin for Executor {
                  shutdown; use `executor.max-concurrent` to bound it."
             );
         }
-        let executor = PoolExecutor::new(config.unwrap_or_default());
+        let executor =
+            PoolExecutor::with_panic_hook_slot(config.unwrap_or_default(), ctx.panic_hook_slot());
         let shutdown_handle = executor.clone();
 
         ctx.on_shutdown_async(move || async move {
