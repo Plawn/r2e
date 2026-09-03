@@ -1,106 +1,12 @@
-//! The built-in HTTP plugins wired through `AppBuilder`: panic capture,
-//! trailing-slash normalization, the dev-reload endpoints, and CORS.
+//! The built-in HTTP plugins wired through `AppBuilder`: trailing-slash
+//! normalization, the dev-reload endpoints, and CORS. Panic capture is not a
+//! plugin — see `panic.rs`.
 
 use r2e_core::builder::AppBuilder;
-use r2e_core::builtins::{Cors, DevReload, ErrorHandling, Health, NormalizePath};
+use r2e_core::builtins::{Cors, DevReload, Health, NormalizePath};
 use r2e_core::http::{Body, Request, StatusCode};
 
 use crate::support::{raw, raw_get_with, send_get};
-
-// ── ErrorHandling plugin ────────────────────────────────────────────────
-
-#[r2e_core::test]
-async fn error_handling_catches_panic() {
-    use r2e_core::http::routing::get;
-
-    let app = AppBuilder::new()
-        .plugin(ErrorHandling)
-        .build_state()
-        .await
-        .register_routes(r2e_core::http::Router::new().route(
-            "/panic",
-            get(|| async {
-                panic!("boom");
-                #[allow(unreachable_code)]
-                "never"
-            }),
-        ))
-        .build();
-
-    let (status, body) = send_get(app, "/panic").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert_eq!(json["error"], "Internal server error");
-}
-
-/// `ErrorHandling` installs a catch-panic layer **at its own install slot**, so
-/// instrumentation installed after it (tracing, metrics) sits *outside* and
-/// records the panic as a 500 instead of being unwound through.
-///
-/// This pins the ordering contract: layers apply in install order, and a later
-/// install is the outer layer.
-#[r2e_core::test]
-async fn error_handling_installed_first_lets_later_layers_observe_the_500() {
-    use r2e_core::http::routing::get;
-    use std::sync::{Arc, Mutex};
-
-    /// Stand-in for the tracing/metrics layer: records the status it observes.
-    struct Observer(Arc<Mutex<Vec<u16>>>);
-
-    impl r2e_core::Plugin for Observer {
-        type Provided = ();
-        type Deps = ();
-        type Config = ();
-        type Controllers = ();
-
-        async fn build(
-            self,
-            _deps: (),
-            _config: Option<()>,
-            ctx: &mut r2e_core::PluginBuildContext,
-        ) -> Result<(), r2e_core::PluginBuildError> {
-            let seen = Arc::clone(&self.0);
-            ctx.add_layer(move |router| {
-                router.layer(r2e_core::http::middleware::from_fn(
-                    move |req, next: r2e_core::http::middleware::Next| {
-                        let seen = Arc::clone(&seen);
-                        async move {
-                            let resp = next.run(req).await;
-                            seen.lock().unwrap().push(resp.status().as_u16());
-                            resp
-                        }
-                    },
-                ))
-            });
-            Ok(())
-        }
-    }
-
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let app = AppBuilder::new()
-        // Install order: catch-panic first (inner), observer second (outer).
-        .plugin(ErrorHandling)
-        .plugin(Observer(Arc::clone(&seen)))
-        .build_state()
-        .await
-        .register_routes(r2e_core::http::Router::new().route(
-            "/panic",
-            get(|| async {
-                panic!("boom");
-                #[allow(unreachable_code)]
-                "never"
-            }),
-        ))
-        .build();
-
-    let (status, _) = send_get(app, "/panic").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(
-        *seen.lock().unwrap(),
-        vec![500],
-        "a layer installed after ErrorHandling must observe the converted 500"
-    );
-}
 
 // ── NormalizePath plugin ────────────────────────────────────────────────
 

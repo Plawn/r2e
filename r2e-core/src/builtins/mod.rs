@@ -319,35 +319,6 @@ impl Plugin for AdvancedHealth {
     }
 }
 
-/// Error-handling plugin.
-///
-/// Adds a catch-panic layer that converts panics into JSON 500 responses.
-///
-/// **Rarely needed.** R2E already installs that layer twice on its own — once
-/// *innermost*, below every `add_layer`, so a handler panic is recorded as a
-/// 500 by the instrumentation instead of unwinding through it, and once
-/// outermost as a last-resort net (see [`crate::runtime::panic`]). This plugin
-/// adds a third copy at its own install slot, which only changes anything for
-/// a panic raised by a layer installed *after* it.
-pub struct ErrorHandling;
-
-impl Plugin for ErrorHandling {
-    type Provided = ();
-    type Deps = ();
-    type Config = ();
-    type Controllers = ();
-
-    async fn build(
-        self,
-        _deps: Self::Deps,
-        _config: Option<Self::Config>,
-        ctx: &mut PluginBuildContext,
-    ) -> Result<Self::Provided, PluginBuildError> {
-        ctx.add_layer(|router| router.layer(crate::runtime::layers::catch_panic_layer()));
-        Ok(())
-    }
-}
-
 /// Dev-mode reload endpoints plugin.
 ///
 /// Adds `/__r2e_dev/status` and `/__r2e_dev/ping` endpoints for

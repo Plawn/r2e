@@ -148,7 +148,6 @@ impl App for OidcApp {
             .plugin(Health)
             .plugin(Cors::permissive())
             .plugin(HttpTrace::new())
-            .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Example OIDC API", "0.1.0")
                     .with_description("Embedded OAuth/JWT issuer")

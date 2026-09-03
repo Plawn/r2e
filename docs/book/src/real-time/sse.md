@@ -273,7 +273,6 @@ async fn main() {
     AppBuilder::new()
         .load_config::<()>()
         .provide(broadcaster)
-        .plugin(ErrorHandling)
         .build_state()
         .await
         .register_controller::<LiveController>()

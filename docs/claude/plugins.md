@@ -31,7 +31,7 @@ Source of truth: `r2e-core/src/plugin/` (`pre_state.rs` = the trait +
 | Effects | three stages: Graph → Routes → Finalize |
 | Escape hatch | `PluginInstall` (`#[doc(hidden)]`, blanket impl over `Plugin`) |
 
-`Health`, `Cors`, `Tracing`, `HttpTrace`, `ErrorHandling`, `NormalizePath`, `DevReload`,
+`Health`, `Cors`, `Tracing`, `HttpTrace`, `NormalizePath`, `DevReload`,
 `SecureHeaders`, `RequestIdPlugin`, `OpenApiPlugin`, `EmbeddedFrontend` are
 ordinary `.plugin()` calls now, exactly like `Scheduler` or `Prometheus`.
 Nothing needs to be installed last: what used to require "install me after
@@ -46,7 +46,6 @@ every controller" registers a **Routes**-stage effect, and what used to require
 | `.with(Health::builder().check(..).build())` | `.plugin(Health::builder().check(..).build())` |
 | `.with(Cors::permissive())` | `.plugin(Cors::permissive())` |
 | `.with(Tracing)` / `.with(Tracing::configured(cfg))` | `.plugin(Tracing)` / `.plugin(Tracing::configured(cfg))` |
-| `.with(ErrorHandling)` | `.plugin(ErrorHandling)` |
 | `.with(NormalizePath)` | `.plugin(NormalizePath)` |
 | `.with(DevReload)` | `.plugin(DevReload)` |
 | `.with(SecureHeaders::default())` | `.plugin(SecureHeaders::default())` |
@@ -748,8 +747,9 @@ In-tree contributor: `DataSourceHealth<DB, Tag>` in `r2e-data-sqlx` /
 - Stages: `r2e-core/tests/plugin/stages.rs` pins stage order
   (Graph → Routes → Finalize), install order within a stage, the disabled-plugin
   semantics, and that `after_routes` sees a controller registered *after* the
-  plugin. Layer order across plugins (e.g. `ErrorHandling` first, an observer
-  layer after it seeing the 500) is pinned in `r2e-core/tests/http/plugins.rs`.
+  plugin. The catch-panic slots (innermost + outermost, no plugin) and what a
+  handler panic looks like to the layers above are pinned in
+  `r2e-core/tests/http/panic.rs`.
 - Plugin controllers: `r2e-core/tests/plugin/controllers.rs` (injecting the
   plugin's own `Provided` + app beans);
   `r2e-compile-tests/cases/plugins/fail/plugin_controller_dep_missing.rs` pins

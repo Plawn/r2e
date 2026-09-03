@@ -16,7 +16,7 @@ requires: app-builder, dev-experience
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, HttpTrace, Tracing [subscriber only], ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
+| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, HttpTrace, Tracing [subscriber only], NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
 | `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |

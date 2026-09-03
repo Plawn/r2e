@@ -12,7 +12,6 @@ AppBuilder::new()
     .plugin(Health)
     .plugin(Cors::permissive())
     .plugin(HttpTrace::new())
-    .plugin(ErrorHandling)
     .plugin(NormalizePath)
     .build_state()
     .await
@@ -33,7 +32,6 @@ AppBuilder::new()
 | `Tracing` | Installs the log **subscriber** only — redundant under `r2e::launch` / `#[r2e::main]` |
 | `Tracing::configured(config)` | Configurable subscriber (format, ansi, thread IDs, etc.) |
 | `Tracing::from_config(&r2e_config)` | Subscriber configured from YAML (`tracing.*` keys) |
-| `ErrorHandling` | Catches panics, returns JSON 500 |
 | `NormalizePath` | Trailing-slash normalization |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
 | `RequestIdPlugin` | X-Request-Id propagation |
@@ -165,7 +163,7 @@ Within a stage, effects apply in install order, and a later layer ends up
 - `NormalizePath` can be installed at any point: it is applied at build time as a pre-routing URI rewrite wrapping the whole router
 - `EmbeddedFrontend` and `OpenApiPlugin` can be installed anywhere — their routes are mounted from a Routes-stage effect
 - `HttpTrace` early keeps it inside (and therefore observed by) later layers
-- Panic capture is installed by the framework regardless — innermost (so a handler panic is a plain 500 to the tracing and metrics layers) plus an outermost last-resort net; `ErrorHandling` only adds a redundant copy
+- Panic capture is not a plugin: the framework installs it innermost (so a handler panic is a plain 500 to the tracing and metrics layers) plus an outermost last-resort net
 
 ## Custom Tower layers
 

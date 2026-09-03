@@ -67,7 +67,6 @@ async fn setup() -> TestApp {
             .override_config(config)
             .load_config::<()>()
             .provide(RateLimitRegistry::default())
-            .plugin(ErrorHandling)
             .build_state()
             .await
             .register_controllers::<(RespondController, PreviewController, ConfiguredController)>(),
@@ -168,7 +167,6 @@ async fn live_server_propagates_the_peer_address_to_guards() {
     let router = AppBuilder::new()
         .load_config::<()>()
         .provide(RateLimitRegistry::default())
-        .plugin(ErrorHandling)
         .build_state()
         .await
         .register_controller::<PeerController>()

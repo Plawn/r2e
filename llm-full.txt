@@ -223,7 +223,6 @@ impl App for MyApp {
             .load_config::<()>()                 // application.yaml + env (sole config entry)
             .plugin(Health)                      // /health → 200 "OK"
             .plugin(HttpTrace::new())            // one span + one log line per request
-            .plugin(ErrorHandling)               // panics → JSON 500
             .try_build_state()                   // resolve bean graph (state is inferred)
             .await?                              // a bean that fails to build aborts boot
             .register_controller::<HelloController>())
@@ -404,7 +403,7 @@ Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP ver
 `Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
 `R2eConfig`, `Guard`, `GuardContext`, `PreAuthGuard`, `Identity`, `Interceptor`,
 `ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
-`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`, `ErrorHandling`,
+`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
 (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
 `IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,
@@ -1629,7 +1628,6 @@ AppBuilder::new()
     .plugin(Cors::permissive())
     .plugin(HttpTrace::new())                   // per-request span + summary line (`trace.*`)
     // subscriber: the entry point installs it; `.plugin(Tracing)` only if you opted it out
-    .plugin(ErrorHandling)
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
     .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
     .provide(bean)                              // constructed values
@@ -2246,7 +2244,7 @@ Alongside `&self`:
 
 | Method | Phase | Purpose |
 |--------|-------|---------|
-| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, HttpTrace, Tracing [subscriber only], ErrorHandling, NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
+| `.plugin(p)` | builder | **Every** plugin — the only install call (Health, Cors, HttpTrace, Tracing [subscriber only], NormalizePath, SecureHeaders, RequestIdPlugin, DevReload, OpenApiPlugin, EmbeddedFrontend, Executor, Scheduler [requires Executor], SqlxDataSource/DieselDataSource, DataSourceHealth, GrpcServer, OidcServer, Prometheus [or MetricsFacade, feature `metrics-facade`], Observability, OpenFga, Tenancy/PerTenant) |
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
 | `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |

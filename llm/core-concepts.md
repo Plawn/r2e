@@ -34,7 +34,7 @@ Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP ver
 `Cacheable`, `ApiError`, `FromMultipart`), core types (`AppBuilder`, `HttpError`,
 `R2eConfig`, `Guard`, `GuardContext`, `PreAuthGuard`, `Identity`, `Interceptor`,
 `ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
-`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`, `ErrorHandling`,
+`RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
 (`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
 `IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,

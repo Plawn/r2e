@@ -642,7 +642,7 @@ struct BuilderConfig {
     config: Option<crate::config::R2eConfig>,
     custom_layers: Vec<LayerFn>,
     /// Transport-level router transforms, applied OUTERMOST — after
-    /// `custom_layers` and `catch_panic_layer`. The wrapped service sees
+    /// `custom_layers` and both catch-panic slots. The wrapped service sees
     /// every request before any HTTP middleware; the inner HTTP router keeps
     /// its full middleware stack. Used by transport multiplexers (e.g. gRPC
     /// content-type routing) so non-HTTP traffic never crosses HTTP-shaped

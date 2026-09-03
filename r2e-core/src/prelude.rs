@@ -94,7 +94,7 @@ pub use crate::runtime::worker_set::{WorkerHealth, WorkerSet};
 pub use crate::builtins::request_id::{RequestId, RequestIdPlugin};
 pub use crate::builtins::secure_headers::SecureHeaders;
 pub use crate::builtins::{
-    AdvancedHealth, ConfiguredTracing, Cors, DevReload, ErrorHandling, Health, HttpTrace,
+    AdvancedHealth, ConfiguredTracing, Cors, DevReload, Health, HttpTrace,
     HttpTraceBuilder, HttpTraceConfig, NormalizePath, Tracing,
 };
 pub use crate::config::{

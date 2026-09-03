@@ -128,7 +128,7 @@ src/
   beans/                    DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry, graph resolve
   builder/                  AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
   builtins/
-    mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, Tracing, ErrorHandling, DevReload, NormalizePath
+    mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, Tracing, DevReload, NormalizePath
     health.rs               HealthIndicator trait, HealthBuilder, HealthState, /health endpoints
     http_trace.rs           HttpTrace plugin + HttpTraceBuilder + HttpTraceConfig (`trace.*`)
     request_id.rs           RequestId extractor and RequestIdPlugin

@@ -17,7 +17,6 @@ AppBuilder::new()
     // subscriber: installed by the entry point; .plugin(Tracing) only if you opted it out
     // or: .plugin(Tracing::configured(config))     // with TracingConfig (format, ansi, etc.)
     // or: .plugin(Tracing::from_config(&r2e_config)) // from YAML tracing.* keys
-    .plugin(ErrorHandling)                 // catch panics → JSON 500
     .plugin(DevReload)                     // /__r2e_dev/* endpoints
     .plugin(OpenApiPlugin::new(openapi_cfg)) // /openapi.json (+ /docs if docs_ui enabled)
     .load_config::<RootConfig>()             // load yaml + env, construct typed config, auto-register children (sole config entry)

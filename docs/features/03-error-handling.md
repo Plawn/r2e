@@ -181,8 +181,7 @@ is being converted to a response, so keep it short and non-blocking. It cannot
 break the response: a panic inside the hook is caught and logged once, and the
 JSON 500 still goes out.
 
-The `ErrorHandling` plugin still exists and adds one more catch-panic layer
-at its own install slot, but it is no longer needed for panic capture.
+There is no plugin to install: panic capture is part of the router assembly.
 
 ## Combination with other features
 

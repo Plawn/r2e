@@ -155,7 +155,6 @@ impl App for ExampleApp {
                     .with_service_version("0.1.0")
                     .capture_header("x-request-id"),
             ))
-            .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("R2E Example API", "0.1.1")
                     .with_description("Demo application showcasing all R2E features")

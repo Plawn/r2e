@@ -319,7 +319,6 @@ async fn setup() -> (TestApp, TestJwt) {
             .provide(r2e::r2e_rate_limit::RateLimitRegistry::default())
             .provide(r2e::r2e_cache::InMemoryStore::shared())
             .plugin(Health)
-            .plugin(ErrorHandling)
             .plugin(NormalizePath)
             .plugin(DevReload)
             .plugin(r2e::r2e_openapi::OpenApiPlugin::new(openapi_config))

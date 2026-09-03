@@ -27,7 +27,6 @@ AppBuilder::new()
     .register::<UserService>()            // 4. #[bean] / #[producer] beans
     .plugin(Health)                         // 6. HTTP plugins
     .plugin(Cors::permissive())
-    .plugin(ErrorHandling)
     .build_state()                        // 5. Graph resolution → inferred HList state
     .await
     .on_start(|_state| async move { Ok(()) })  // 7. Hooks

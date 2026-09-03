@@ -38,7 +38,6 @@ impl App for PostgresApp {
             .plugin(Health)
             .plugin(Cors::permissive())
             .plugin(HttpTrace::new())
-            .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Articles API", "1.0.0")
                     .with_description("PostgreSQL CRUD example")

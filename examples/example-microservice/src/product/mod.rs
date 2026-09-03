@@ -29,7 +29,6 @@ impl App for ProductApp {
                 .plugin(Health)
                 .plugin(Cors::permissive())
                 .plugin(HttpTrace::new())
-                .plugin(ErrorHandling)
                 .plugin(OpenApiPlugin::new(
                     OpenApiConfig::new("Product Service", "1.0.0")
                         .with_description("Product catalog microservice")
