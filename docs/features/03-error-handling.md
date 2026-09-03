@@ -177,8 +177,9 @@ bounded route template as `route() -> Option<&str>` or `route_label() -> &str`
 (the template, or the same `unmatched` label the HTTP metrics use, so a panic
 counter lines up with the RED series). Nothing request-borne: no body, no
 headers, no path parameters. It runs on the request task while the panic
-is being converted to a response, so keep it short, non-blocking, and
-panic-free.
+is being converted to a response, so keep it short and non-blocking. It cannot
+break the response: a panic inside the hook is caught and logged once, and the
+JSON 500 still goes out.
 
 The `ErrorHandling` plugin still exists and adds one more catch-panic layer
 at its own install slot, but it is no longer needed for panic capture.

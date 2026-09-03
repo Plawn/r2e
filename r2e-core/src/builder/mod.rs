@@ -894,8 +894,9 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     ///
     /// The hook runs on the request task while the panic is being converted
     /// to a response, with the request span current. Keep it short and
-    /// non-blocking, and do not panic inside it. Calling `on_panic` twice
-    /// replaces the previous hook.
+    /// non-blocking. It cannot break the response: a panic inside the hook is
+    /// caught, logged once, and the same JSON 500 still goes out. Calling
+    /// `on_panic` twice replaces the previous hook.
     ///
     /// See [`PanicReport`](crate::PanicReport) for what it is told, and
     /// [`crate::runtime::panic`] for where the layer sits.

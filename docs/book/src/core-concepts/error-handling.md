@@ -253,7 +253,8 @@ AppBuilder::new()
 ```
 
 Keep the hook short and non-blocking: it runs on the request task while the
-panic is being converted to a response.
+panic is being converted to a response. It cannot break that response — a
+panic inside the hook is caught and logged, and the JSON 500 still goes out.
 
 ## Error wrappers for managed resources
 
