@@ -32,7 +32,7 @@ requires: app-builder, dev-experience
 | `.bridge_sse::<Bus, E>()` | app | EventBus → SSE topic bridge |
 | `.schedule_task(def)` | app | Dynamic scheduled task |
 | `.merge_router(r)` / `.with_layer_fn(f)` | app | Raw axum escape hatches (last resort) |
-| `.on_panic(f)` | any | App callback per caught panic (`PanicReport` = message + route). R2E logs + answers 500 either way; this is the counting seam |
+| `.on_panic(f)` | any | App callback per caught panic — HTTP handlers, `#[scheduled]` ticks, executor jobs (`PanicReport` = message + `origin()` + `label()`). R2E logs + contains either way; this is the counting seam |
 | `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks (`on_stop` always runs at shutdown, outside every budget) |
 | `.on_start_once(f)` | app | Like `.on_start`, but once per **process**: skipped on later `r2e dev` hot-patch cycles |
 | `.on_drain(f)` | app | Awaited hooks run at shutdown trigger, BEFORE the listener stops accepting |

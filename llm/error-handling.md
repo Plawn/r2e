@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~1600
+tokens: ~1800
 requires: core-concepts
 ---
 
@@ -20,7 +20,8 @@ requires: core-concepts
   the call site with `.map_err(|e| HttpError::internal(e.to_string()))` instead.
 - Panics are caught automatically (no plugin): JSON 500, plus one `error` event
   on target `r2e::panic` inside the request span (so `request_id` + `route`).
-  Count them with `.on_panic(|report| ...)`.
+  Count them with `.on_panic(|report| ...)` — one hook for HTTP handlers,
+  `#[scheduled]` ticks and executor jobs (`report.origin()` / `report.label()`).
 
 ### HttpError (built-in)
 
@@ -143,19 +144,31 @@ The payload is downcast from `&'static str` and `String`; anything else logs
 `<non-string panic payload>`. Backtraces are left to the `std` panic hook.
 
 R2E increments no metric of its own — every service owns its registry and
-prefix. `AppBuilder::on_panic` is the seam:
+prefix. `AppBuilder::on_panic` is the seam, and it is **unified**: it fires
+once per panic caught anywhere the framework contains one — HTTP handlers,
+`#[scheduled]` ticks, and `PoolExecutor` jobs (`#[async_exec]`,
+`executor.submit`) all reach the same hook. `PanicReport::origin()` says
+where; `label()` is one bounded metric label for every origin:
 
 ```rust,ignore
 AppBuilder::new()
     .on_panic(|report| {
-        // report.message() -> &str; report.route() -> Option<&str>;
-        // report.route_label() -> &str (template, or the metrics' `unmatched` label)
-        metrics::counter!("app_panics_total", "route" => report.route_label().to_owned())
+        // report.message() -> &str
+        // report.origin() -> PanicOrigin<'_>:
+        //   Http { route: Option<&str> } | Scheduled { task: &str } | Executor { job: Option<&str> }
+        // report.label() -> &str — route template (or the metrics' `unmatched`),
+        //   task name, or job name (`<unnamed>`; `#[async_exec]` = method name)
+        // report.route() -> Option<&str> — Some only for Http
+        metrics::counter!("app_panics_total", "at" => report.label().to_owned())
             .increment(1);
     })
 ```
 
-`PanicReport` (prelude; `PanicHook` / `PANIC_TARGET` at the crate root) is
-deliberately minimal — message and route only, nothing request-borne. The hook runs on the request task while the panic is converted
-to a response: keep it short and non-blocking. A panic inside the hook is caught
-and logged; the JSON 500 is unchanged.
+`PanicReport` / `PanicOrigin` (prelude; `PanicHook` / `PANIC_TARGET` at the
+crate root) are deliberately minimal — message, origin, label, nothing
+request-borne. The hook runs on the panicking task while the panic is
+converted to its outcome: keep it short and non-blocking. A panic inside the
+hook is caught and logged; the outcome — the JSON 500, the failed job
+(`JoinError::is_panic()`), the next scheduled tick — is unchanged. Each origin
+emits exactly one `r2e::panic` line, with `route`, `task`, or `job` as the
+field.

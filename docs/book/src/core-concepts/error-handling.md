@@ -239,22 +239,33 @@ request span, so it carries the request's `request_id`; the request still gets
 its `request completed` summary line and its 5xx metric series. Backtraces are
 left to the `std` panic hook.
 
+The same containment covers background work: a panicking `#[scheduled]` tick or
+`PoolExecutor` job (`#[async_exec]`, `executor.submit`) is caught in the pool,
+the job is marked failed (`JoinError::is_panic()`), the next tick is still
+scheduled, and one `r2e::panic` error line is emitted with `task = <name>` or
+`job = <name>` instead of `route`.
+
 R2E increments no metric of its own. To count panics in your own registry,
-register a hook:
+register a hook — it fires once per panic, whatever the origin:
 
 ```rust
 AppBuilder::new()
     .on_panic(move |report| {
-        // report.message(), report.route() -> Option<&str>,
-        // report.route_label() -> template or the metrics' `unmatched` label
-        panics.with_label_values(&[report.route_label()]).inc();
+        // report.message() -> &str
+        // report.origin() -> PanicOrigin<'_>:
+        //   Http { route: Option<&str> } | Scheduled { task: &str } | Executor { job: Option<&str> }
+        // report.label() -> &str — bounded label for any origin: route template
+        //   (or the metrics' `unmatched`), task name, or job name (`<unnamed>`)
+        // report.route() / report.route_label() -> HTTP-oriented accessors
+        panics.with_label_values(&[report.label()]).inc();
     })
     // ...
 ```
 
-Keep the hook short and non-blocking: it runs on the request task while the
-panic is being converted to a response. It cannot break that response — a
-panic inside the hook is caught and logged, and the JSON 500 still goes out.
+Keep the hook short and non-blocking: it runs on the panicking task while the
+panic is being converted to its outcome. It cannot break that outcome — a
+panic inside the hook is caught and logged, and the JSON 500 (or the failed
+job) is unchanged.
 
 ## Error wrappers for managed resources
 

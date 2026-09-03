@@ -167,21 +167,47 @@ and its metric prefix. Register a hook instead:
 let panics = panic_counter.clone(); // your own metric
 AppBuilder::new()
     .on_panic(move |report| {
-        panics.with_label_values(&[report.route_label()]).inc();
+        panics.with_label_values(&[report.label()]).inc();
     })
     // ...
 ```
 
-The hook receives a `PanicReport` (in the prelude) — `message()`, and the
-bounded route template as `route() -> Option<&str>` or `route_label() -> &str`
-(the template, or the same `unmatched` label the HTTP metrics use, so a panic
-counter lines up with the RED series). Nothing request-borne: no body, no
-headers, no path parameters. It runs on the request task while the panic
-is being converted to a response, so keep it short and non-blocking. It cannot
-break the response: a panic inside the hook is caught and logged once, and the
-JSON 500 still goes out.
+The hook is **unified across the app's contained-panic surfaces** — it fires
+once per panic wherever the framework catches one, and `PanicReport::origin()`
+says where:
 
-There is no plugin to install: panic capture is part of the router assembly.
+```rust
+pub enum PanicOrigin<'a> {
+    /// A handler panicked; the JSON 500 above went out.
+    Http { route: Option<&'a str> },
+    /// A `#[scheduled]` tick panicked; the next tick is still scheduled.
+    Scheduled { task: &'a str },
+    /// A `PoolExecutor` job panicked; the job is marked failed
+    /// (`JoinError::is_panic()`), the pool keeps running.
+    Executor { job: Option<&'a str> },
+}
+```
+
+The report carries `message()`, `origin()`, and `label()` — one bounded,
+low-cardinality string whatever the origin: the route template (or the same
+`unmatched` label the HTTP metrics use, so a panic counter lines up with the
+RED series), the scheduled task's name, or the executor job's name
+(`<unnamed>` for a plain `submit`; `#[async_exec]` methods report their method
+name). `route()` / `route_label()` remain the HTTP-oriented accessors —
+`route()` is `Some` only for `PanicOrigin::Http`.
+
+Nothing request-borne reaches the hook: no body, no headers, no path
+parameters. It runs on the panicking task while the panic is being converted
+into its outcome (the 500, the failed job), so keep it short and
+non-blocking. It cannot break that outcome: a panic inside the hook is caught
+and logged once, and the JSON 500 / failed job / next tick are unchanged.
+
+Each origin also keeps exactly one `r2e::panic` error line per panic —
+`route`, `task`, or `job` is the line's field, matching the origin.
+
+There is no plugin to install: panic capture is part of the router assembly,
+and the `Executor` plugin (which the scheduler runs on) wires the same hook
+into the pool.
 
 ## Combination with other features
 

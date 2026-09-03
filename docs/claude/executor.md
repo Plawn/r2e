@@ -73,6 +73,33 @@ exec.submit_detached(async move { /* ... */ });
 let m = exec.metrics(); // running / queued / completed / rejected (u64)
 ```
 
+### Panic reporting (#1027)
+
+A panicking job is contained at the poll level (`catch_unwind` around every
+poll), so the pool's bookkeeping always lands even mid-unwind: the permit is
+released, the drain count decremented, `completed` incremented, and the idle
+notification fired — a graceful shutdown after a panicked job drains promptly
+instead of sitting out its timeout. The payload is then reported through
+`report_caught_panic` (one `r2e::panic` error line + the app's
+`AppBuilder::on_panic` hook, contained) and re-raised with `resume_unwind`, so
+the `JobHandle` still resolves to a `JoinError` with `is_panic() == true`.
+
+Origins: a plain `submit`/`try_submit`/`submit_detached` job reports
+`PanicOrigin::Executor { job: None }` (label `<unnamed>`); `submit_named`
+carries a job name — `#[async_exec]` submits through it with the method's
+name; the hidden `submit_scheduled` tags the job as a scheduled tick so it
+reports `PanicOrigin::Scheduled { task }` — the pool is the single reporter
+for scheduled ticks (the scheduler driver logs nothing of its own).
+
+The hook reaches the pool as a `PanicHookSlot` (from
+`PluginBuildContext::panic_hook_slot()`, stored on `Inner`), read **at panic
+time** — `on_panic` registered after `build_state()` still fires, and each
+dev-reload cycle's rebuilt pool gets the fresh registry's slot. A pool built
+with `PoolExecutor::new` has a detached slot: panics are still contained and
+logged, no app hook fires. The framework-generated "executor shut down while
+job was queued/pending" panics stay *outside* the catch on purpose — they are
+cancellation signals, not user-job panics, and must not reach the hook.
+
 ### Shutdown
 
 The plugin registers an async `on_shutdown` hook that calls
