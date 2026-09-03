@@ -232,18 +232,28 @@ compiles, but it couples the type to that backend.
 
 ## Panic catching
 
-Install the `ErrorHandling` plugin to catch panics and return JSON 500 responses instead of crashing:
+Panic capture is always on — no plugin, no opt-in. A panicking handler answers
+`500 {"error":"Internal server error"}` and R2E emits **one** structured `error`
+event on target `r2e::panic` (`panic_message` + `route`) from inside the
+request span, so it carries the request's `request_id`; the request still gets
+its `request completed` summary line and its 5xx metric series. Backtraces are
+left to the `std` panic hook.
+
+R2E increments no metric of its own. To count panics in your own registry,
+register a hook:
 
 ```rust
 AppBuilder::new()
-    // ... .provide(...) / .register::<...>() ...
-    .plugin(ErrorHandling)
-    .build_state()
-    .await
+    .on_panic(move |report| {
+        // report.message(), report.route() -> Option<&str>,
+        // report.route_label() -> template or the metrics' `unmatched` label
+        panics.with_label_values(&[report.route_label()]).inc();
+    })
     // ...
 ```
 
-Without this, a panic in a handler will drop the connection with no response.
+Keep the hook short and non-blocking: it runs on the request task while the
+panic is being converted to a response.
 
 ## Error wrappers for managed resources
 

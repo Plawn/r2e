@@ -167,16 +167,16 @@ and its metric prefix. Register a hook instead:
 let panics = panic_counter.clone(); // your own metric
 AppBuilder::new()
     .on_panic(move |report| {
-        panics
-            .with_label_values(&[report.route().unwrap_or("<unrouted>")])
-            .inc();
+        panics.with_label_values(&[report.route_label()]).inc();
     })
     // ...
 ```
 
-The hook receives a `PanicReport` — the panic message and, when routing
-already happened, the bounded route template. Nothing request-borne: no body,
-no headers, no path parameters. It runs on the request task while the panic
+The hook receives a `PanicReport` (in the prelude) — `message()`, and the
+bounded route template as `route() -> Option<&str>` or `route_label() -> &str`
+(the template, or the same `unmatched` label the HTTP metrics use, so a panic
+counter lines up with the RED series). Nothing request-borne: no body, no
+headers, no path parameters. It runs on the request task while the panic
 is being converted to a response, so keep it short, non-blocking, and
 panic-free.
 

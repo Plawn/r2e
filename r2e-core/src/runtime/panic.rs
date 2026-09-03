@@ -77,6 +77,15 @@ impl<'a> PanicReport<'a> {
     pub fn route(&self) -> Option<&'a str> {
         self.route
     }
+
+    /// [`route`](Self::route) as a bounded metric label: the template, or the
+    /// same [`UNMATCHED_PATH_LABEL`](crate::http::labels::UNMATCHED_PATH_LABEL)
+    /// the HTTP metrics use for unrouted requests — so a panic counter
+    /// labelled with it lines up with the RED series.
+    pub fn route_label(&self) -> &'a str {
+        self.route
+            .unwrap_or(crate::http::labels::UNMATCHED_PATH_LABEL)
+    }
 }
 
 /// Application callback invoked once per caught panic, before the 500 is built.
@@ -121,18 +130,20 @@ fn handle_panic(
     route: Option<&MatchedPath>,
     hook: Option<&PanicHook>,
 ) -> Response {
-    let message = panic_message(payload.as_ref());
-    let route = route.map(MatchedPath::as_str);
+    let report = PanicReport {
+        message: panic_message(payload.as_ref()),
+        route: route.map(MatchedPath::as_str),
+    };
 
     tracing::error!(
         target: PANIC_TARGET,
-        panic_message = %message,
-        route = route.unwrap_or(crate::http::labels::UNMATCHED_PATH_LABEL),
+        panic_message = %report.message,
+        route = report.route_label(),
         "handler panicked; responding 500"
     );
 
     if let Some(hook) = hook {
-        hook(&PanicReport { message, route });
+        hook(&report);
     }
 
     panic_response()

@@ -888,7 +888,7 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     /// ```ignore
     /// let panics = counter.clone();
     /// AppBuilder::new().on_panic(move |report| {
-    ///     panics.with_label_values(&[report.route().unwrap_or("<unrouted>")]).inc();
+    ///     panics.with_label_values(&[report.route_label()]).inc();
     /// })
     /// ```
     ///
@@ -897,8 +897,8 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     /// non-blocking, and do not panic inside it. Calling `on_panic` twice
     /// replaces the previous hook.
     ///
-    /// See [`PanicReport`](crate::runtime::panic::PanicReport) for what it is
-    /// told, and [`crate::runtime::panic`] for where the layer sits.
+    /// See [`PanicReport`](crate::PanicReport) for what it is told, and
+    /// [`crate::runtime::panic`] for where the layer sits.
     pub fn on_panic<F>(mut self, hook: F) -> Self
     where
         F: Fn(&crate::runtime::panic::PanicReport<'_>) + Send + Sync + 'static,

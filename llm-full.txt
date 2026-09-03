@@ -720,14 +720,15 @@ prefix. `AppBuilder::on_panic` is the seam:
 ```rust,ignore
 AppBuilder::new()
     .on_panic(|report| {
-        // report.message() -> &str, report.route() -> Option<&str>
-        metrics::counter!("app_panics_total", "route" => report.route().unwrap_or("<unrouted>").to_owned())
+        // report.message() -> &str; report.route() -> Option<&str>;
+        // report.route_label() -> &str (template, or the metrics' `unmatched` label)
+        metrics::counter!("app_panics_total", "route" => report.route_label().to_owned())
             .increment(1);
     })
 ```
 
-`PanicReport` is deliberately minimal — message and route only, nothing
-request-borne. The hook runs on the request task while the panic is converted
+`PanicReport` (prelude; `PanicHook` / `PANIC_TARGET` at the crate root) is
+deliberately minimal — message and route only, nothing request-borne. The hook runs on the request task while the panic is converted
 to a response: keep it short, non-blocking, and do not panic inside it.
 
 ---

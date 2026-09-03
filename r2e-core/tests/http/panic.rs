@@ -14,7 +14,7 @@ use r2e_core::builtins::http_trace::HttpTrace;
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
 use r2e_core::http::{Response, Router, StatusCode};
-use r2e_core::runtime::panic::PanicHook;
+use r2e_core::PanicHook;
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
