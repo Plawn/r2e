@@ -358,17 +358,6 @@ fn build_tick(runtime: &JobRuntime, registry: &ScheduledJobRegistry) -> BuiltTic
     }
 }
 
-/// Best-effort human text for a caught panic payload.
-fn panic_text(payload: &(dyn std::any::Any + Send)) -> &str {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        s
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.as_str()
-    } else {
-        "<non-string panic payload>"
-    }
-}
-
 /// Submit one tick of job `idx` to the pool. `rearm` records whether the tick's
 /// completion should re-arm the job (true only for `Skip` scheduled ticks).
 ///
@@ -400,13 +389,16 @@ fn submit_tick(
         Err(payload) => {
             tracing::error!(
                 task = %runtimes[idx].name,
-                panic = %panic_text(payload.as_ref()),
+                panic = %r2e_core::runtime::panic::panic_message(payload.as_ref()),
                 "Scheduled tick factory panicked; disabling the job"
             );
             return Submission::FactoryPanicked;
         }
     };
-    match executor.submit(fut) {
+    // Submitted with the task's name so the pool — the single reporter for a
+    // job panic — tags the report `PanicOrigin::Scheduled { task }` and emits
+    // the one `r2e::panic` line. The completion arm below only counts.
+    match executor.submit_scheduled(&runtimes[idx].name, fut) {
         Ok(handle) => {
             runtimes[idx].in_flight += 1;
             // Skip-predicated jobs record last_run/run_count inside the tick
@@ -752,10 +744,10 @@ async fn run_driver(
             }
             // 2. A tick finished: update stats and (for Skip scheduled ticks) re-arm.
             Some((idx, rearm, elapsed, skipped, res)) = in_flight.next(), if !in_flight.is_empty() => {
+                // A panicking tick was already reported (one `r2e::panic` line
+                // + the `on_panic` hook, origin `Scheduled`) by the executor
+                // pool that ran it — here it is only counted.
                 let panicked = res.as_ref().err().is_some_and(JoinError::is_panic);
-                if panicked {
-                    tracing::error!(task = %runtimes[idx].name, "Scheduled tick panicked");
-                }
                 runtimes[idx].in_flight = runtimes[idx].in_flight.saturating_sub(1);
                 registry.update_job(&runtimes[idx].name, |i| {
                     // A predicate-skipped tick never ran its body: keep the
@@ -915,7 +907,10 @@ async fn run_driver(
     // read by nobody. On a clean shutdown this loop is already empty — the
     // executor drained the pool before the framework joined this task.
     if !in_flight.is_empty() {
-        tracing::debug!(count = in_flight.len(), "Draining in-flight scheduled ticks");
+        tracing::debug!(
+            count = in_flight.len(),
+            "Draining in-flight scheduled ticks"
+        );
         while in_flight.next().await.is_some() {}
     }
 
