@@ -64,7 +64,14 @@ impl BeanRegistry {
             plugin_owner: None,
             plugin_owners: HashMap::new(),
             graph_handle: crate::plugin::GraphHandle::new(),
+            panic_hook_slot: Default::default(),
         }
+    }
+
+    /// Share the app's panic-hook slot with this registry (see the field doc).
+    /// Called once by `AppBuilder::new`.
+    pub(crate) fn set_panic_hook_slot(&mut self, slot: crate::runtime::panic::PanicHookSlot) {
+        self.panic_hook_slot = slot;
     }
 
     /// The deferred-fill graph handle tied to this registry. The builder

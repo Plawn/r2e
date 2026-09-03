@@ -1,5 +1,12 @@
-//! Panic capture for the HTTP stack: the layer that turns a panicking handler
-//! into a JSON 500 **and** into something an operator can see.
+//! Panic capture: the report/hook contract shared by every execution surface
+//! ([`PanicReport`], [`PanicOrigin`], [`PanicHook`]), plus the HTTP layer that
+//! turns a panicking handler into a JSON 500 **and** into something an
+//! operator can see.
+//!
+//! The HTTP catch-panic layer lives here; the executor pool (and, through it,
+//! `#[scheduled]` ticks) catches its own unwinds in `r2e-executor` and reports
+//! them through the same [`report_caught_panic`] seam — one hook, one
+//! [`PANIC_TARGET`] line per panic, whatever the origin.
 //!
 //! # Why R2E owns this instead of `tower_http::catch_panic`
 //!
@@ -48,16 +55,41 @@ pub const PANIC_TARGET: &str = "r2e::panic";
 /// Message used when the unwind payload is neither `&str` nor `String`.
 pub const UNKNOWN_PAYLOAD: &str = "<non-string panic payload>";
 
+/// Label used by [`PanicReport::label`] for an executor job submitted without
+/// a name (`submit`/`try_submit`/`submit_detached`, as opposed to
+/// `#[async_exec]`, whose jobs carry the method name).
+pub const UNNAMED_JOB_LABEL: &str = "<unnamed>";
+
+/// Which execution surface a caught panic unwound out of.
+///
+/// Carried by every [`PanicReport`]: the same [`PanicHook`] observes HTTP
+/// handlers, `#[scheduled]` ticks, and executor pool jobs, and this is how it
+/// tells them apart (e.g. to label a per-origin counter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanicOrigin<'a> {
+    /// An HTTP request unwound: a handler, or a layer between the two
+    /// catch-panic install slots. `route` is the matched route template
+    /// (`/users/{id}`) when routing already happened, `None` otherwise.
+    Http { route: Option<&'a str> },
+    /// A `#[scheduled]` tick body panicked (inside the executor pool, which
+    /// runs every tick). `task` is the scheduled task's name.
+    Scheduled { task: &'a str },
+    /// An executor pool job panicked: `#[async_exec]` (where `job` is the
+    /// method name) or a direct `submit`/`try_submit`/`submit_detached`
+    /// (`None`).
+    Executor { job: Option<&'a str> },
+}
+
 /// What a [`PanicHook`] is told about a caught panic.
 ///
-/// Deliberately minimal — a message and, when routing already happened, the
-/// bounded route template. Enough to drive a per-route counter without
-/// freezing a wide API, and with nothing request-borne in it: never a body,
-/// never a header, never a path parameter.
+/// Deliberately minimal — a message and the [`PanicOrigin`] (which carries the
+/// bounded route template / task name / job name). Enough to drive a
+/// per-origin counter without freezing a wide API, and with nothing
+/// request-borne in it: never a body, never a header, never a path parameter.
 #[derive(Debug, Clone, Copy)]
 pub struct PanicReport<'a> {
     message: &'a str,
-    route: Option<&'a str>,
+    origin: PanicOrigin<'a>,
 }
 
 impl<'a> PanicReport<'a> {
@@ -69,37 +101,101 @@ impl<'a> PanicReport<'a> {
         self.message
     }
 
-    /// The matched route template (`/users/{id}`), when the panic happened
-    /// after routing.
+    /// Which execution surface the panic unwound out of.
+    pub fn origin(&self) -> PanicOrigin<'a> {
+        self.origin
+    }
+
+    /// A bounded label for the panic's origin, whatever it is: the route
+    /// template (or [`UNMATCHED_PATH_LABEL`](crate::http::labels::UNMATCHED_PATH_LABEL))
+    /// for HTTP, the task name for a `#[scheduled]` tick, the job name (or
+    /// [`UNNAMED_JOB_LABEL`]) for an executor job.
     ///
-    /// `None` for the outermost install slot (routing has not happened from
-    /// its point of view) and for a request that matched no route.
+    /// Every value is bounded (templates, compile-time names), so it is safe
+    /// as a metric label.
+    pub fn label(&self) -> &'a str {
+        match self.origin {
+            PanicOrigin::Http { route } => {
+                route.unwrap_or(crate::http::labels::UNMATCHED_PATH_LABEL)
+            }
+            PanicOrigin::Scheduled { task } => task,
+            PanicOrigin::Executor { job } => job.unwrap_or(UNNAMED_JOB_LABEL),
+        }
+    }
+
+    /// The matched route template (`/users/{id}`), when the panic came from
+    /// the HTTP stack and routing already happened.
+    ///
+    /// `None` for every non-HTTP origin, for the outermost install slot
+    /// (routing has not happened from its point of view), and for a request
+    /// that matched no route.
     pub fn route(&self) -> Option<&'a str> {
-        self.route
+        match self.origin {
+            PanicOrigin::Http { route } => route,
+            _ => None,
+        }
     }
 
     /// [`route`](Self::route) as a bounded metric label: the template, or the
     /// same [`UNMATCHED_PATH_LABEL`](crate::http::labels::UNMATCHED_PATH_LABEL)
     /// the HTTP metrics use for unrouted requests — so a panic counter
     /// labelled with it lines up with the RED series.
+    ///
+    /// HTTP-oriented: a non-HTTP origin also answers `UNMATCHED_PATH_LABEL`
+    /// here. A hook observing every origin wants [`label`](Self::label).
     pub fn route_label(&self) -> &'a str {
-        self.route
+        self.route()
             .unwrap_or(crate::http::labels::UNMATCHED_PATH_LABEL)
     }
 }
 
-/// Application callback invoked once per caught panic, before the 500 is built.
+/// Application callback invoked once per caught panic — for HTTP, before the
+/// 500 is built.
 ///
 /// Registered with
-/// [`AppBuilder::on_panic`](crate::builder::AppBuilder::on_panic). R2E
+/// [`AppBuilder::on_panic`](crate::builder::AppBuilder::on_panic), and called
+/// for **every** origin the framework contains: HTTP handlers, `#[scheduled]`
+/// ticks, and executor pool jobs — [`PanicReport::origin`] says which. R2E
 /// deliberately does not increment a metric of its own here: every service has
 /// its own registry and its own metric prefix, so counting is the app's call.
 ///
-/// The hook runs **inside the unwind's catch**, on the request task, with the
-/// request span current. Keep it short and non-blocking. It cannot break the
-/// response: a panic inside the hook is caught too, logged once (target
-/// [`PANIC_TARGET`]), and the same JSON 500 is still returned.
+/// The hook runs **inside the unwind's catch**, on the panicking task (for
+/// HTTP: with the request span current). Keep it short and non-blocking. It
+/// cannot break the containment: a panic inside the hook is caught too, logged
+/// once (target [`PANIC_TARGET`]), and the surface's behavior is unchanged —
+/// the same JSON 500 goes out, the job is still marked failed, the next tick
+/// is still scheduled.
 pub type PanicHook = Arc<dyn Fn(&PanicReport<'_>) + Send + Sync>;
+
+/// The one place an app's [`PanicHook`] is stored: a shared, set-late slot.
+///
+/// The builder mints one per app
+/// ([`on_panic`](crate::builder::AppBuilder::on_panic) writes into it), the
+/// catch-panic layers resolve it at `build()`, and plugins that catch panics
+/// on their own execution surface (the executor pool) take a clone through
+/// [`PluginBuildContext::panic_hook_slot`](crate::plugin::PluginBuildContext::panic_hook_slot)
+/// and read it **at panic time** via [`get`](Self::get) — so `on_panic` works
+/// whether it is called before or after `build_state()`.
+///
+/// Cheap to clone (one `Arc`); the read is a cold-path `RwLock` acquisition
+/// that only ever happens on a caught panic.
+#[derive(Clone, Default)]
+pub struct PanicHookSlot {
+    inner: Arc<std::sync::RwLock<Option<PanicHook>>>,
+}
+
+impl PanicHookSlot {
+    /// Store the hook, replacing any previous one.
+    #[doc(hidden)]
+    pub fn set(&self, hook: PanicHook) {
+        *self.inner.write().expect("PanicHookSlot poisoned") = Some(hook);
+    }
+
+    /// The hook currently registered, if any.
+    pub fn get(&self) -> Option<PanicHook> {
+        self.inner.read().expect("PanicHookSlot poisoned").clone()
+    }
+}
 
 /// Downcast an unwind payload to its message.
 pub fn panic_message(payload: &(dyn Any + Send)) -> &str {
@@ -121,44 +217,91 @@ fn panic_response() -> Response {
     )
 }
 
-/// Emit the error line, run the hook, and build the 500.
+/// Emit the one [`PANIC_TARGET`] error line for a caught panic and run the
+/// hook, contained — the reporting seam every catching surface goes through.
 ///
-/// Called from inside the catch, so the request span (when this layer sits
-/// below [`HttpTrace`](crate::builtins::HttpTrace)) is still current and the
-/// event inherits its `request_id` / `route` fields.
+/// The HTTP layer calls it from inside its catch (request span current, so the
+/// event inherits `request_id` / `route`); the executor pool calls it from the
+/// panicking job's task before resuming the unwind into its `JoinError`.
+#[doc(hidden)]
+pub fn report_caught_panic(
+    payload: &(dyn Any + Send),
+    origin: PanicOrigin<'_>,
+    hook: Option<&PanicHook>,
+) {
+    let report = PanicReport {
+        message: panic_message(payload),
+        origin,
+    };
+
+    // One arm per origin so each line carries its natural field name (`route`
+    // / `task` / `job`) — log pipelines filter on the field, not on `label`.
+    match report.origin {
+        PanicOrigin::Http { .. } => tracing::error!(
+            target: PANIC_TARGET,
+            panic_message = %report.message,
+            route = report.label(),
+            "handler panicked; responding 500"
+        ),
+        PanicOrigin::Scheduled { task } => tracing::error!(
+            target: PANIC_TARGET,
+            panic_message = %report.message,
+            task,
+            "scheduled tick panicked"
+        ),
+        PanicOrigin::Executor { .. } => tracing::error!(
+            target: PANIC_TARGET,
+            panic_message = %report.message,
+            job = report.label(),
+            "executor job panicked"
+        ),
+    }
+
+    if let Some(hook) = hook {
+        // The hook is observability: it must never change the containment. Its
+        // own panic is caught here (this path only runs on a panic, so the
+        // extra `catch_unwind` costs nothing on the hot path) and logged, and
+        // the surface's behavior is unchanged — for HTTP the 500 goes out as
+        // is; otherwise it would unwind into the outermost net, which reports
+        // it as a routeless second panic.
+        if let Err(hook_payload) = std::panic::catch_unwind(AssertUnwindSafe(|| hook(&report))) {
+            match report.origin {
+                PanicOrigin::Http { .. } => tracing::error!(
+                    target: PANIC_TARGET,
+                    panic_message = panic_message(hook_payload.as_ref()),
+                    route = report.label(),
+                    "on_panic hook panicked; response unchanged"
+                ),
+                PanicOrigin::Scheduled { task } => tracing::error!(
+                    target: PANIC_TARGET,
+                    panic_message = panic_message(hook_payload.as_ref()),
+                    task,
+                    "on_panic hook panicked"
+                ),
+                PanicOrigin::Executor { .. } => tracing::error!(
+                    target: PANIC_TARGET,
+                    panic_message = panic_message(hook_payload.as_ref()),
+                    job = report.label(),
+                    "on_panic hook panicked"
+                ),
+            }
+        }
+    }
+}
+
+/// Report the panic (line + hook) and build the 500 — the HTTP catch's exit.
 fn handle_panic(
     payload: Box<dyn Any + Send>,
     route: Option<&MatchedPath>,
     hook: Option<&PanicHook>,
 ) -> Response {
-    let report = PanicReport {
-        message: panic_message(payload.as_ref()),
-        route: route.map(MatchedPath::as_str),
-    };
-
-    tracing::error!(
-        target: PANIC_TARGET,
-        panic_message = %report.message,
-        route = report.route_label(),
-        "handler panicked; responding 500"
+    report_caught_panic(
+        payload.as_ref(),
+        PanicOrigin::Http {
+            route: route.map(MatchedPath::as_str),
+        },
+        hook,
     );
-
-    if let Some(hook) = hook {
-        // The hook is observability: it must never change the response. Its
-        // own panic is caught here (this path only runs on a panic, so the
-        // extra `catch_unwind` costs nothing on the hot path) and logged, and
-        // the 500 goes out unchanged — otherwise it would unwind into the
-        // outermost net, which reports it as a routeless second panic.
-        if let Err(hook_payload) = std::panic::catch_unwind(AssertUnwindSafe(|| hook(&report))) {
-            tracing::error!(
-                target: PANIC_TARGET,
-                panic_message = panic_message(hook_payload.as_ref()),
-                route = report.route_label(),
-                "on_panic hook panicked; response unchanged"
-            );
-        }
-    }
-
     panic_response()
 }
 

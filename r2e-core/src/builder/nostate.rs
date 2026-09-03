@@ -23,7 +23,7 @@ impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
                 plugin_data: HashMap::new(),
                 routes_effects: Vec::new(),
                 normalize_path: false,
-                panic_hook: None,
+                panic_hook: Default::default(),
                 dev_reload_applied: false,
                 shutdown_grace_period: None,
                 drain_timeout: None,
@@ -87,6 +87,15 @@ impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
             shutdown_root(&mut builder.shared.plugin_data).child_token(),
         );
         builder.shared.bean_registry.provide(shutdown);
+
+        // Share the app's panic-hook slot with the registry so plugin `build`
+        // contexts can hand it to panic-catching surfaces (the executor pool).
+        // Cloning shares the inner slot: `on_panic` on the builder is seen by
+        // everything the registry handed it to, whenever it is called.
+        builder
+            .shared
+            .bean_registry
+            .set_panic_hook_slot(builder.shared.panic_hook.clone());
 
         builder
     }

@@ -35,6 +35,7 @@ impl BeanRegistry {
             .1
             .push(self.plugin_owner);
         let graph_handle = self.graph_handle.clone();
+        let panic_hook_slot = self.panic_hook_slot.clone();
         let base_version = {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
@@ -59,8 +60,12 @@ impl BeanRegistry {
                         crate::plugin::plugin_config_enabled(config.as_ref(), Pl::CONFIG_PREFIX);
                     let typed = crate::plugin::load_plugin_config_from::<Pl>(config.as_ref(), name);
                     let deps = <Pl::Deps as PluginDeps>::resolve_from_context(&ctx);
-                    let mut bctx =
-                        crate::plugin::PluginBuildContext::new(enabled, graph_handle, config);
+                    let mut bctx = crate::plugin::PluginBuildContext::new(
+                        enabled,
+                        graph_handle,
+                        config,
+                        panic_hook_slot,
+                    );
                     // Fully qualified so a plugin's own inherent `build` method
                     // (e.g. a builder-style `fn build(self)`) can't shadow it.
                     let provided = crate::plugin::Plugin::build(plugin, deps, typed, &mut bctx)
