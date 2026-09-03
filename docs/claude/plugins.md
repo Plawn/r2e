@@ -120,9 +120,19 @@ Which stage do I want?
 
 - **Graph** — a middleware layer, plugin data, a serve-time task, a
   full-graph escape hatch. The default.
-- **Routes** — anything that must see the *complete* route table: OpenAPI spec
-  generation, a route dump, a router mounted from route metadata. `after_routes`
-  hands you a `RoutesContext`; see below.
+- **Routes** — **every route a plugin mounts**, plus anything that must see the
+  *complete* route table: OpenAPI spec generation, a route dump, a router
+  mounted from route metadata. `after_routes` hands you a `RoutesContext`; see
+  below.
+
+**`add_layer` wraps, it never mounts.** `Router::layer` only wraps the routes
+(and fallback) that exist when it is called, so a `.route(..)` / `.merge(..)` /
+`.fallback(..)` done inside an `add_layer` closure lands *above* the inner
+catch-panic slot and above every layer installed before that plugin: no
+`request_id` on a panic there, no tracing or metrics from the earlier plugins.
+Mount with `after_routes` + `register_routes` (`Prometheus` `/metrics`,
+`OidcServer`, `EmbeddedFrontend`'s SPA fallback all do), and keep the
+`add_layer` closure to `router.layer(..)`.
 - **Finalize** — a transport-level wrap that must sit outside every HTTP layer:
   a gRPC/HTTP multiplexer, a protocol switch. A JSON 500 from `catch_panic` is
   garbage to a gRPC client, hence "outside everything HTTP-shaped".

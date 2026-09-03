@@ -499,7 +499,7 @@ R2E ships with built-in plugins. There is one plugin kind and one install call â
 | `GrpcServer` | gRPC server on a dedicated port |
 | `OidcServer` | Embedded issuer (`/oauth/authorize`, `/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
-| `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install after other router plugins) |
+| `EmbeddedFrontend` | Embedded static file serving with SPA fallback |
 | `Scheduler` | Background task scheduling â€” requires `Executor`; ticks run on its pool |
 
 ## Crate map

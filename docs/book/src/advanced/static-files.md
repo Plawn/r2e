@@ -167,4 +167,4 @@ async fn main() {
 }
 ```
 
-> **Note:** `EmbeddedFrontend` installs its SPA fallback as a **Graph**-stage router effect, and Graph effects apply in install order. A fallback must be the last word on unmatched paths, so install `EmbeddedFrontend` *after* every other plugin that touches the router.
+> **Note:** `EmbeddedFrontend` mounts its SPA fallback as a **Routes**-stage effect, inside the layer stack — static responses go through the same tracing, metrics and panic-catching layers your controllers do, whatever the plugin install order. The router allows a single fallback, so combining the plugin with a controller `#[fallback]` panics at boot.

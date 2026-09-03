@@ -148,6 +148,35 @@ async fn status_of(router: r2e_core::http::Router, path: &str) -> StatusCode {
     router.oneshot(req).await.unwrap().status()
 }
 
+/// `/metrics` is mounted in the Routes stage, inside the layer stack: a layer
+/// installed before the plugin (here `HttpTrace`, which echoes `x-request-id`)
+/// wraps it like any controller route.
+#[r2e_core::test]
+async fn metrics_endpoint_is_served_inside_the_layer_stack() {
+    // `HttpTrace` skips `/metrics` by default (scrape traffic); trace it here
+    // so the wrap is observable.
+    let router = AppBuilder::new()
+        .plugin(
+            r2e_core::HttpTrace::builder()
+                .exclude_paths(Vec::<String>::new())
+                .build(),
+        )
+        .plugin(Prometheus::new("/metrics"))
+        .build_state()
+        .await
+        .build();
+
+    let response = router
+        .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response.headers().contains_key("x-request-id"),
+        "HttpTrace installed before the plugin must wrap /metrics"
+    );
+}
+
 #[r2e_core::test]
 async fn endpoint_is_driven_by_file_config() {
     // The builder does NOT set an endpoint, so the `prometheus.endpoint` file

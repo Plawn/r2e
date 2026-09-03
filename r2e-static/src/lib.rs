@@ -545,11 +545,13 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
     type Config = ();
     type Controllers = ();
 
-    /// Installs the SPA fallback as a Graph-stage router effect.
+    /// Installs the SPA fallback as a Routes-stage router effect.
     ///
-    /// Effects apply in **install order**, and a fallback must be the last
-    /// word on unmatched paths — so install this plugin *after* every other
-    /// plugin that touches the router.
+    /// The fallback is merged into the application router **inside** the layer
+    /// stack, so static responses go through the same tracing, metrics and
+    /// catch-panic layers controller routes do, whatever the install order.
+    /// The router allows a single fallback: combining this plugin with a
+    /// controller `#[fallback]` is a boot-time panic.
     async fn build(
         self,
         _deps: Self::Deps,
@@ -561,28 +563,30 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
             config: self.config,
         });
 
-        ctx.add_layer(move |router| {
-            let handler = handler.clone();
-            router.fallback(move |req: r2e_core::http::extract::Request| async move {
-                let path = req.uri().path().to_string();
+        ctx.after_routes(move |routes| {
+            let fallback = r2e_core::http::Router::new().fallback(
+                move |req: r2e_core::http::extract::Request| async move {
+                    let path = req.uri().path().to_string();
 
-                let effective_path = if let Some(ref base) = handler.config.base_path {
-                    match path.strip_prefix(base.as_str()) {
-                        Some(rest) => {
-                            if rest.is_empty() || rest.starts_with('/') {
-                                rest
-                            } else {
-                                return not_found();
+                    let effective_path = if let Some(ref base) = handler.config.base_path {
+                        match path.strip_prefix(base.as_str()) {
+                            Some(rest) => {
+                                if rest.is_empty() || rest.starts_with('/') {
+                                    rest
+                                } else {
+                                    return not_found();
+                                }
                             }
+                            None => return not_found(),
                         }
-                        None => return not_found(),
-                    }
-                } else {
-                    &path
-                };
+                    } else {
+                        &path
+                    };
 
-                handler.serve(effective_path, req.headers())
-            })
+                    handler.serve(effective_path, req.headers())
+                },
+            );
+            routes.register_routes(fallback);
         });
 
         Ok(())

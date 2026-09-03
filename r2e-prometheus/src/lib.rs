@@ -368,16 +368,20 @@ impl Plugin for Prometheus {
                 .map_err(|e| format!("Failed to register custom Prometheus collector: {e}"))?;
         }
 
-        // Install the tracking layer — plus the /metrics route unless this is a
-        // layer-only install — as router effects.
-        ctx.add_layer(move |router| {
-            let router = if expose_endpoint {
-                router.route(&endpoint, get(metrics_handler))
-            } else {
-                router
-            };
-            router.layer(PrometheusLayer::new(metrics_config))
-        });
+        // The /metrics route (unless this is a layer-only install) is mounted
+        // as a Routes-stage effect, so it lands INSIDE the layer stack like a
+        // controller route — below the catch-panic slot and every layer
+        // installed before this plugin. Mounting it from the `add_layer`
+        // closure instead would place it above all of those (see
+        // `docs/claude/plugins.md`, "`add_layer` wraps, it never mounts").
+        if expose_endpoint {
+            ctx.after_routes(move |routes| {
+                routes.register_routes(
+                    r2e_core::http::Router::new().route(&endpoint, get(metrics_handler)),
+                );
+            });
+        }
+        ctx.add_layer(move |router| router.layer(PrometheusLayer::new(metrics_config)));
 
         Ok((PrometheusRegistry,))
     }
