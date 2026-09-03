@@ -658,6 +658,9 @@ struct BuilderConfig {
     routes_effects: Vec<RoutesEffect>,
     /// Whether to install the pre-routing trailing-slash normalization rewrite.
     normalize_path: bool,
+    /// Application callback invoked once per caught panic, set via
+    /// [`AppBuilder::on_panic`]. Handed to both catch-panic install slots.
+    panic_hook: Option<crate::runtime::panic::PanicHook>,
     /// Whether the DevReload plugin has been applied (prevents double-install).
     dev_reload_applied: bool,
     /// Maximum time allowed for the tracked-handle join phase, applied to each
@@ -872,6 +875,36 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
         } else {
             self
         }
+    }
+
+    /// Register the application callback invoked once per **caught panic**.
+    ///
+    /// R2E already answers a panicking handler with a JSON 500 and logs one
+    /// structured `error` event carrying the request span's `request_id` and
+    /// `route`. This hook is the counting seam on top of that: R2E
+    /// deliberately increments no metric of its own, because every service
+    /// owns its registry and its metric prefix.
+    ///
+    /// ```ignore
+    /// let panics = counter.clone();
+    /// AppBuilder::new().on_panic(move |report| {
+    ///     panics.with_label_values(&[report.route().unwrap_or("<unrouted>")]).inc();
+    /// })
+    /// ```
+    ///
+    /// The hook runs on the request task while the panic is being converted
+    /// to a response, with the request span current. Keep it short and
+    /// non-blocking, and do not panic inside it. Calling `on_panic` twice
+    /// replaces the previous hook.
+    ///
+    /// See [`PanicReport`](crate::runtime::panic::PanicReport) for what it is
+    /// told, and [`crate::runtime::panic`] for where the layer sits.
+    pub fn on_panic<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&crate::runtime::panic::PanicReport<'_>) + Send + Sync + 'static,
+    {
+        self.shared.panic_hook = Some(Arc::new(hook));
+        self
     }
 
     /// Wire a user-created [`StopHandle`] into the server lifecycle.

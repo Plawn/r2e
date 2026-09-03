@@ -991,6 +991,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
 
+        // Catch panics BELOW every layer added via `add_layer` (tracing,
+        // metrics, CORS, the app's own). This is the slot that makes a
+        // panicking handler observable: the unwind is converted to a 500
+        // *here*, and that 500 then travels back out through the
+        // instrumentation like any other error response — `request completed`
+        // at 500, RED series incremented, `x-request-id` echoed. Installed
+        // outside them instead (where it used to live, and where a bare net
+        // still sits — see below), the unwind would skip all of that and the
+        // request span guard would already be dropped, so the error line
+        // could not carry `request_id`. See `runtime::panic`.
+        let panic_hook = self.shared.panic_hook;
+        app = app.layer(crate::runtime::layers::catch_panic_layer_with(
+            panic_hook.clone(),
+        ));
+
         // Apply layers (in registration order). Layers added via
         // `Router::layer` run after routing, so they observe `MatchedPath`
         // (and any controller `#[fallback]`) on the routed request.
@@ -1009,10 +1024,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             app = crate::runtime::layers::normalize_path_router(app);
         }
 
-        // Always install the CatchPanicLayer as the outermost HTTP layer so
-        // that panics anywhere in the stack are caught and turned into JSON
-        // 500 responses instead of crashing the process.
-        app = app.layer(crate::runtime::layers::catch_panic_layer());
+        // Last-resort net, outermost: a panic raised by one of the layers
+        // above (or by the pre-routing rewrite) never reaches the inner slot,
+        // and would otherwise kill the connection task with no response at
+        // all. It never fires for a handler panic — the inner layer already
+        // turned that into a plain 500 — so a panic still produces exactly
+        // one error line. Its report carries no route: from out here routing
+        // has not happened.
+        app = app.layer(crate::runtime::layers::catch_panic_layer_with(panic_hook));
 
         // Transport-level wraps go outside EVERYTHING HTTP-shaped (custom
         // layers and catch-panic included): a multiplexer's non-HTTP branch
