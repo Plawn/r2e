@@ -80,7 +80,6 @@ impl App for OpenFgaApp {
             .plugin(Health)
             .plugin(Cors::permissive())
             .plugin(HttpTrace::new())
-            .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Documents API", "1.0.0")
                     .with_description("OpenFGA fine-grained authorization example")

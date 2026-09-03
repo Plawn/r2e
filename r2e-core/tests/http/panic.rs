@@ -175,6 +175,31 @@ async fn a_healthy_request_fires_neither_the_hook_nor_a_panic_event() {
     assert!(panics(&capture).is_empty());
 }
 
+/// The hook is observability: its own panic must neither change the response
+/// nor unwind into the outermost net as a second, routeless panic.
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_panicking_hook_is_contained_and_the_500_is_unchanged() {
+    let hook: PanicHook = Arc::new(|_| panic!("hook exploded"));
+
+    let (capture, response) = drive("/panic/7", Some(hook)).await;
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(
+        body_string(response).await,
+        r#"{"error":"Internal server error"}"#
+    );
+    let events = panics(&capture);
+    assert_eq!(events.len(), 2, "handler line + hook line: {events:?}");
+    assert_eq!(events[0].field("panic_message"), Some("boom"));
+    assert_eq!(events[1].field("panic_message"), Some("hook exploded"));
+    assert_eq!(events[1].field("route"), Some("/panic/{id}"));
+    assert_eq!(
+        capture.summaries().len(),
+        1,
+        "no second panic reached the outer net"
+    );
+}
+
 /// The whole reason the layer moved *below* `HttpTrace`: the unwind used to
 /// cross it, so a panicking request produced no summary line and no recorded
 /// status — nothing to build a 5xx alert on.

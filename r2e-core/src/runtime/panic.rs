@@ -96,8 +96,9 @@ impl<'a> PanicReport<'a> {
 /// its own registry and its own metric prefix, so counting is the app's call.
 ///
 /// The hook runs **inside the unwind's catch**, on the request task, with the
-/// request span current. Keep it short and non-blocking, and do not panic in
-/// it — a panic inside the hook escapes this layer.
+/// request span current. Keep it short and non-blocking. It cannot break the
+/// response: a panic inside the hook is caught too, logged once (target
+/// [`PANIC_TARGET`]), and the same JSON 500 is still returned.
 pub type PanicHook = Arc<dyn Fn(&PanicReport<'_>) + Send + Sync>;
 
 /// Downcast an unwind payload to its message.
@@ -143,7 +144,19 @@ fn handle_panic(
     );
 
     if let Some(hook) = hook {
-        hook(&report);
+        // The hook is observability: it must never change the response. Its
+        // own panic is caught here (this path only runs on a panic, so the
+        // extra `catch_unwind` costs nothing on the hot path) and logged, and
+        // the 500 goes out unchanged — otherwise it would unwind into the
+        // outermost net, which reports it as a routeless second panic.
+        if let Err(hook_payload) = std::panic::catch_unwind(AssertUnwindSafe(|| hook(&report))) {
+            tracing::error!(
+                target: PANIC_TARGET,
+                panic_message = panic_message(hook_payload.as_ref()),
+                route = report.route_label(),
+                "on_panic hook panicked; response unchanged"
+            );
+        }
     }
 
     panic_response()

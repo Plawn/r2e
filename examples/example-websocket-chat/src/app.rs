@@ -67,7 +67,6 @@ impl App for ChatApp {
             .plugin(Health)
             .plugin(Cors::permissive())
             .plugin(HttpTrace::new())
-            .plugin(ErrorHandling)
             .build_state()
             .await
             .register_controllers::<(ChatController, HistoryController, MessagePersistenceConsumer)>()

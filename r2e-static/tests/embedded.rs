@@ -36,6 +36,32 @@ async fn make_app(frontend: EmbeddedFrontend) -> Router {
         .build()
 }
 
+// ── Layer stack ────────────────────────────────────────────────────────────
+
+/// The SPA fallback is mounted in the Routes stage, INSIDE the layer stack:
+/// a layer installed before the plugin (here `HttpTrace`, which echoes
+/// `x-request-id`) wraps static responses too. Mounted from an `add_layer`
+/// closure, as it used to be, the fallback sat above every earlier layer and
+/// static responses were neither traced nor counted.
+#[r2e_core::test]
+async fn spa_fallback_is_served_inside_the_layer_stack() {
+    let app = r2e_core::AppBuilder::new()
+        .plugin(r2e_core::HttpTrace::new())
+        .plugin(EmbeddedFrontend::new::<TestAssets>())
+        .build_state()
+        .await
+        .build();
+
+    let (status, headers, body) = get(app, "/some/spa/route").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("<h1>Hello</h1>"));
+    assert!(
+        headers.contains_key("x-request-id"),
+        "HttpTrace installed before the plugin must wrap the fallback"
+    );
+}
+
 // ── Existing behavior ──────────────────────────────────────────────────────
 
 #[r2e_core::test]

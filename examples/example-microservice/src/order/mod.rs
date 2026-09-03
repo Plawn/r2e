@@ -31,7 +31,6 @@ impl App for OrderApp {
                 .plugin(Health)
                 .plugin(Cors::permissive())
                 .plugin(HttpTrace::new())
-                .plugin(ErrorHandling)
                 .plugin(OpenApiPlugin::new(
                     OpenApiConfig::new("Order Service", "1.0.0")
                         .with_description("Order management microservice")

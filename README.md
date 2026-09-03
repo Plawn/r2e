@@ -126,7 +126,6 @@ async fn main() {
     app.plugin(Health)                // GET /health
         .plugin(Cors::permissive())
         .plugin(HttpTrace::new())     // one span + one summary line per request
-        .plugin(ErrorHandling)
         .build_state()                // no type args; async â€” resolves the bean graph
         .await
         .register_controller::<UserController>()   // after build_state
@@ -454,7 +453,6 @@ async fn test_list_users() {
             .provide(std::sync::Arc::new(jwt.claims_validator()))  // Arc<JwtClaimsValidator> bean
             .register::<UserService>()
             .plugin(Health)
-            .plugin(ErrorHandling)
             .build_state()
             .await
             .register_controller::<UserController>(),
@@ -488,7 +486,6 @@ R2E ships with built-in plugins. There is one plugin kind and one install call â
 | `Cors::permissive()` | Permissive CORS headers (or `Cors::custom(layer)` for a custom `CorsLayer`) |
 | `Tracing` | Installs the log **subscriber** (`tracing_subscriber::fmt`). Redundant under `r2e::launch` / `#[r2e::main]`, which install it already |
 | `HttpTrace::new()` | Per-request span + summary line, request ids, path exclusions (`trace.*`) |
-| `ErrorHandling` | Catches panics, returns JSON 500 |
 | `NormalizePath` | Trailing-slash normalization (install order irrelevant) |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
 | `RequestIdPlugin` | X-Request-Id propagation |
@@ -499,7 +496,7 @@ R2E ships with built-in plugins. There is one plugin kind and one install call â
 | `GrpcServer` | gRPC server on a dedicated port |
 | `OidcServer` | Embedded issuer (`/oauth/authorize`, `/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
-| `EmbeddedFrontend` | Embedded static file serving with SPA fallback (install after other router plugins) |
+| `EmbeddedFrontend` | Embedded static file serving with SPA fallback |
 | `Scheduler` | Background task scheduling â€” requires `Executor`; ticks run on its pool |
 
 ## Crate map

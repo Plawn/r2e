@@ -28,7 +28,6 @@ impl App for MyApp {
         Ok(b.load_config::<AppConfig>()
             .register::<UserService>()
             .plugin(Health)
-            .plugin(ErrorHandling)
             .try_build_state().await?
             .register_controllers::<(UserController,)>())
     }

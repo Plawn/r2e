@@ -134,7 +134,6 @@ impl App for MultiTenantApp {
             .plugin(Health)
             .plugin(Cors::permissive())
             .plugin(HttpTrace::new())
-            .plugin(ErrorHandling)
             .plugin(OpenApiPlugin::new(
                 OpenApiConfig::new("Multi-Tenant API", "1.0.0")
                     .with_description("Tenant isolation via JWT claims and custom guards")

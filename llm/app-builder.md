@@ -52,7 +52,6 @@ AppBuilder::new()
     .plugin(Cors::permissive())
     .plugin(HttpTrace::new())                   // per-request span + summary line (`trace.*`)
     // subscriber: the entry point installs it; `.plugin(Tracing)` only if you opted it out
-    .plugin(ErrorHandling)
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
     .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
     .provide(bean)                              // constructed values

@@ -91,7 +91,6 @@ async fn setup() -> (TestApp, TestJwt) {
             .load_config::<()>()
             .provide(UserService::new())
             .provide(Arc::new(jwt.claims_validator()))
-            .plugin(ErrorHandling)
             .build_state()
             .await
             .register_controller::<MixedTestController>(),

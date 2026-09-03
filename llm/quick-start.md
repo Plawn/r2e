@@ -91,7 +91,6 @@ impl App for MyApp {
             .load_config::<()>()                 // application.yaml + env (sole config entry)
             .plugin(Health)                      // /health → 200 "OK"
             .plugin(HttpTrace::new())            // one span + one log line per request
-            .plugin(ErrorHandling)               // panics → JSON 500
             .try_build_state()                   // resolve bean graph (state is inferred)
             .await?                              // a bean that fails to build aborts boot
             .register_controller::<HelloController>())

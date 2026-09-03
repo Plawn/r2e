@@ -487,7 +487,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Escape hatch: merge a raw Axum router alongside controllers.
     ///
-    /// Raw routes benefit from global plugins (Tracing, CORS, ErrorHandling)
+    /// Raw routes benefit from global plugins (HttpTrace, CORS) and panic capture,
     /// but do NOT get controller-level DI, interceptors, or guards.
     ///
     /// This is a convenience alias for [`register_routes`](Self::register_routes).

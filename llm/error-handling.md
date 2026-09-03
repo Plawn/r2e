@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~1500
+tokens: ~1600
 requires: core-concepts
 ---
 
@@ -157,4 +157,5 @@ AppBuilder::new()
 
 `PanicReport` (prelude; `PanicHook` / `PANIC_TARGET` at the crate root) is
 deliberately minimal — message and route only, nothing request-borne. The hook runs on the request task while the panic is converted
-to a response: keep it short, non-blocking, and do not panic inside it.
+to a response: keep it short and non-blocking. A panic inside the hook is caught
+and logged; the JSON 500 is unchanged.

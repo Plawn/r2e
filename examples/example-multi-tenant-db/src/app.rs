@@ -95,7 +95,6 @@ impl App for MultiTenantDbApp {
             .plugin(PerTenant::<Branding>::from::<Brandings>().fallback_to_default())
             .plugin(Health)
             .plugin(HttpTrace::new())
-            .plugin(ErrorHandling)
             .build_state()
             .await
             .register_controllers::<(

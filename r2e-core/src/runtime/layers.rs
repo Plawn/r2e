@@ -220,16 +220,11 @@ pub fn default_cors() -> CorsLayer {
 }
 
 /// Returns the layer that converts panics into JSON 500 responses, logs one
-/// structured `error` event, and invokes the application panic hook.
-///
-/// See [`crate::runtime::panic`] for why the primary install slot is the
-/// *innermost* one rather than the outermost.
-pub fn catch_panic_layer() -> crate::runtime::panic::CatchPanicLayer {
-    crate::runtime::panic::CatchPanicLayer::new()
-}
-
-/// Same, with the application hook from
+/// structured `error` event, and invokes the application hook from
 /// [`AppBuilder::on_panic`](crate::builder::AppBuilder::on_panic).
+///
+/// Installed by `build_inner` alone (twice — see [`crate::runtime::panic`]
+/// for why the primary slot is the *innermost* one); there is no plugin for it.
 pub fn catch_panic_layer_with(
     hook: Option<crate::runtime::panic::PanicHook>,
 ) -> crate::runtime::panic::CatchPanicLayer {

@@ -19,7 +19,6 @@ AppBuilder::new()
     .plugin(Health)
     .plugin(Cors::permissive())
     .plugin(Tracing)
-    .plugin(ErrorHandling)
     .load_config::<AppConfig>()             // load yaml + type + provide (the sole config registration point)
     .provide(my_pool.clone())              // pre-built instance
     .register::<UserService>()            // sync bean
@@ -85,7 +84,6 @@ mark public exceptions with `#[anonymous]` (fail-closed, @PermitAll-style).
 | `Cors::permissive()` | Permissive CORS headers |
 | `Cors::custom(layer)` | Custom CORS configuration |
 | `Tracing` | Request tracing via `tracing` + `tower-http` |
-| `ErrorHandling` | Catches panics → JSON 500 |
 | `NormalizePath` | Trailing-slash normalization |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
 | `RequestIdPlugin` | X-Request-Id propagation (UUID v4) |

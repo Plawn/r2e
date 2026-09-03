@@ -9,7 +9,7 @@
 - **DI / state:** `RegisterController`, `RegisterControllers` (extension traits for post-`build_state` controller registration), `RegisterModule` (`register_module::<M>()` — feature modules) + `FeatureModule` + the `module` attribute macro, `BeanLookup` (`state.bean::<T>() -> Option<T>` — the dynamic vocabulary for guards/interceptors/`ManagedResource`), `FromRequestPartsVia`, `OptionalFromRequestPartsVia`, `Via`, `BeanExtract`. **Not** in the prelude: `BeanAccess` (`state.get::<T>()`) — import explicitly with `use r2e_core::type_list::BeanAccess;` (its blanket `get` would shadow `Deref`-reached inherent `get`s).
 - **Events** (feature `events`): `EventBus` (trait), `LocalEventBus` (default in-process impl)
 - **Executor** (feature `executor`): `Executor` plugin, `PoolExecutor`, `RejectedError`, `ExecutorMetrics`, `ExecutorConfig` — managed task pool exposed as `r2e::r2e_executor::*`. See `executor.md`.
-- **Plugins:** `Cors`, `Tracing`, `ConfiguredTracing`, `Health`, `ErrorHandling`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
+- **Plugins:** `Cors`, `Tracing`, `ConfiguredTracing`, `Health`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
 - **Tracing config:** `TracingConfig`, `LogFormat`, `SpanEvents`
 - **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`
 - **Extractors:** `Path`, `Query`, `Form`, `State`, `Request`, `FromRef`, `FromRequest`, `FromRequestParts`, `ConnectInfo`, `DefaultBodyLimit`, `MatchedPath`, `OriginalUri`

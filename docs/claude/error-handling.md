@@ -173,7 +173,7 @@ async fn error_enrichment(req: Request, next: Next) -> Response {
 
 **Panic capture is always on** (no plugin needed): the catch-panic layer is installed twice by `build_inner`, and the slot that matters is the *innermost* one, below every `add_layer` — so a handler panic becomes a 500 that travels the tracing/metrics response path (summary line, RED series, `x-request-id`) instead of unwinding past it, and the `error` event it emits on target `r2e::panic` is inside the request span, hence correlated by `request_id`. The payload is downcast (`&'static str` / `String`, else `<non-string panic payload>`); backtraces are left to the `std` hook. `AppBuilder::on_panic(|report| …)` is the counting seam — R2E increments no metric itself. The outer slot is a bare net for panics raised by the outer layers; it never fires for a handler panic, so one panic = one error line. See `r2e-core/src/runtime/panic.rs` and `r2e-core/tests/http/panic.rs`.
 
-**Automatic 5xx logging:** the `ErrorHandling` plugin adds a third catch-panic layer at its own install slot; it is no longer needed for panic capture. For custom 5xx logging, add a middleware layer that inspects response status codes.
+**Automatic 5xx logging:** there is no `ErrorHandling` plugin any more (removed with #1017 — panic capture is part of the router assembly). For custom 5xx logging, add a middleware layer that inspects response status codes.
 
 **Key files:** `r2e-core/src/error.rs` (HttpError, `error_response()`, `map_error!`, `HttpErrorExt`), `r2e-macros/src/derives/api_error_derive.rs` (derive implementation), `r2e-core/tests/api_error.rs` (comprehensive tests)
 

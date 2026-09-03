@@ -309,7 +309,9 @@ impl Plugin for OidcRuntime {
             claims_validator,
             base_path,
         } = self;
-        ctx.add_layer(move |router| router.merge(oidc_routes(state, &base_path)));
+        // Routes-stage mount: the issuer endpoints land inside the layer
+        // stack (tracing, metrics, catch-panic) like controller routes do.
+        ctx.after_routes(move |routes| routes.register_routes(oidc_routes(state, &base_path)));
         Ok((claims_validator,))
     }
 }
