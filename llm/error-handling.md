@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~1200
+tokens: ~1500
 requires: core-concepts
 ---
 
@@ -18,6 +18,9 @@ requires: core-concepts
   impls so `?` converts into your error type; the bare `{ Err => Variant }` form
   targets `HttpError` and is orphan-rule-illegal outside `r2e-core` — convert at
   the call site with `.map_err(|e| HttpError::internal(e.to_string()))` instead.
+- Panics are caught automatically (no plugin): JSON 500, plus one `error` event
+  on target `r2e::panic` inside the request span (so `request_id` + `route`).
+  Count them with `.on_panic(|report| ...)`.
 
 ### HttpError (built-in)
 
@@ -126,3 +129,31 @@ r2e::map_error! { for MyError {
 
 For a one-off, convert at the call site instead:
 `.map_err(|e| HttpError::internal(e.to_string()))?`.
+
+### Panics
+
+Panic capture is always on — no plugin, no opt-in. A panicking handler answers
+`500 {"error":"Internal server error"}` and R2E emits **one** `error` event on
+target `r2e::panic` with `panic_message` and the matched `route`. The layer sits
+*below* the tracing and metrics layers, so the event is inside the request span
+(it carries `request_id`) and the request still gets its `request completed`
+summary line, its 5xx metric series and its `x-request-id` echo.
+
+The payload is downcast from `&'static str` and `String`; anything else logs
+`<non-string panic payload>`. Backtraces are left to the `std` panic hook.
+
+R2E increments no metric of its own — every service owns its registry and
+prefix. `AppBuilder::on_panic` is the seam:
+
+```rust,ignore
+AppBuilder::new()
+    .on_panic(|report| {
+        // report.message() -> &str, report.route() -> Option<&str>
+        metrics::counter!("app_panics_total", "route" => report.route().unwrap_or("<unrouted>").to_owned())
+            .increment(1);
+    })
+```
+
+`PanicReport` is deliberately minimal — message and route only, nothing
+request-borne. The hook runs on the request task while the panic is converted
+to a response: keep it short, non-blocking, and do not panic inside it.

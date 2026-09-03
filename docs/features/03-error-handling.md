@@ -130,18 +130,8 @@ impl From<serde_json::Error> for HttpError {
 
 ### 5. Catch panic (Tower layer)
 
-Enable panic capture in the `AppBuilder`:
-
-```rust
-AppBuilder::new()
-    // .provide(...) / .register::<...>() ...
-    .plugin(ErrorHandling)  // Enables catch_panic_layer
-    .build_state()
-    .await
-    // ...
-```
-
-If a handler panics, instead of a crash, the client receives:
+Panic capture is **always on** — no plugin, no opt-in. If a handler panics,
+instead of a crash the client receives:
 
 ```http
 HTTP/1.1 500 Internal Server Error
@@ -149,6 +139,49 @@ Content-Type: application/json
 
 {"error": "Internal server error"}
 ```
+
+The layer sits *below* the tracing and metrics layers, so the panicking
+request is still instrumented like any other 500: the `request completed`
+summary line, the 5xx metric series and the `x-request-id` echo all happen.
+On top of that the layer emits one structured `error` event on target
+`r2e::panic`, inside the request span — so it carries the request's
+`request_id` and `route`:
+
+```
+ERROR r2e::panic: handler panicked; responding 500
+      panic_message="boom" route="/users/{id}"
+      (span) request_id="c0ffee…" route="/users/{id}"
+```
+
+The panic payload is downcast from `&'static str` and `String`; anything else
+(a `panic_any` with a custom type) logs `<non-string panic payload>`. The
+backtrace is deliberately left to the `std` panic hook — capturing one per
+panic inside the layer is expensive and rarely what a service wants.
+
+#### Counting panics: `on_panic`
+
+R2E increments no metric of its own here — every service owns its registry
+and its metric prefix. Register a hook instead:
+
+```rust
+let panics = panic_counter.clone(); // your own metric
+AppBuilder::new()
+    .on_panic(move |report| {
+        panics
+            .with_label_values(&[report.route().unwrap_or("<unrouted>")])
+            .inc();
+    })
+    // ...
+```
+
+The hook receives a `PanicReport` — the panic message and, when routing
+already happened, the bounded route template. Nothing request-borne: no body,
+no headers, no path parameters. It runs on the request task while the panic
+is being converted to a response, so keep it short, non-blocking, and
+panic-free.
+
+The `ErrorHandling` plugin still exists and adds one more catch-panic layer
+at its own install slot, but it is no longer needed for panic capture.
 
 ## Combination with other features
 

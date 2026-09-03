@@ -321,13 +321,14 @@ impl Plugin for AdvancedHealth {
 
 /// Error-handling plugin.
 ///
-/// Adds a `CatchPanicLayer` that converts panics into JSON 500 responses.
+/// Adds a catch-panic layer that converts panics into JSON 500 responses.
 ///
-/// A catch-panic layer is **always** installed as the outermost HTTP layer;
-/// this plugin adds a second one at its own install slot, i.e. *inside* the
-/// layers installed after it. Install it before the instrumentation plugins
-/// (tracing, metrics) when you want a panicking handler to still be recorded
-/// as a 500 by them rather than unwinding through them.
+/// **Rarely needed.** R2E already installs that layer twice on its own — once
+/// *innermost*, below every `add_layer`, so a handler panic is recorded as a
+/// 500 by the instrumentation instead of unwinding through it, and once
+/// outermost as a last-resort net (see [`crate::runtime::panic`]). This plugin
+/// adds a third copy at its own install slot, which only changes anything for
+/// a panic raised by a layer installed *after* it.
 pub struct ErrorHandling;
 
 impl Plugin for ErrorHandling {
