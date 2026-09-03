@@ -5,6 +5,8 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod fixtures;
+
 mod api_error;
 mod error;
 mod extract;
@@ -14,6 +16,7 @@ mod json;
 mod managed;
 #[cfg(feature = "multipart")]
 mod multipart;
+mod panic;
 mod params;
 mod plugins;
 mod request_id;

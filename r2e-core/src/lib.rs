@@ -88,6 +88,7 @@ pub use runtime::layers::{
     try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
 };
 pub use runtime::lifecycle::{LifecycleController, StopHandle};
+pub use runtime::panic::{PanicHook, PanicReport, PANIC_TARGET};
 pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
 pub use runtime::service::ServiceComponent;
 pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};

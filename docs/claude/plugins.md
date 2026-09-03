@@ -99,12 +99,22 @@ controller routes (app + module + plugin)
   → meta consumers
   → .with_state(state)
   → ROUTES effects            (routers merged here, so they get the layers below)
+  → catch_panic_layer         (always — INNERMOST, below every `add_layer`)
   → Graph `add_layer`s        (install order, later = outer)
   → NormalizePath (if any)
-  → catch_panic_layer         (always)
+  → catch_panic_layer         (always — outermost last-resort net)
   → FINALIZE `wrap_router`s   (install order, later = outer)
   → graph keep-alive          (outermost, framework-owned)
 ```
+
+The catch-panic layer is installed **twice**, and the inner slot is the one
+that matters: a handler panic becomes a 500 *below* the tracing and metrics
+layers, so it travels their response path like any other error (summary line
+at 500, RED series, `x-request-id` echoed) and the panic's `error` event is
+emitted while the request span is still current — which is what puts
+`request_id` on it. The outer slot only catches panics raised by the layers
+above it, and never fires for a handler panic. See `runtime::panic` and
+[`AppBuilder::on_panic`] for the application hook.
 
 Which stage do I want?
 

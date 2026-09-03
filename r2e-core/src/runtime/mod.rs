@@ -8,6 +8,7 @@ pub mod ingress;
 pub mod layers;
 pub mod lifecycle;
 pub mod mailbox;
+pub mod panic;
 pub mod service;
 pub mod sharded;
 pub mod tracing_config;

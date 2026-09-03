@@ -64,7 +64,7 @@ extra).
 
 | Your task involves… | Read | features |
 |---|---|---|
-| `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses | `llm/error-handling.md` | core |
+| `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, panic capture / `on_panic` | `llm/error-handling.md` | core |
 | `#[bean]`, `#[producer]`, `AsyncBean`, `.provide` / `.register`, `ProvideBundle`, `Option<T>` beans, same-typed beans (newtypes) | `llm/di-beans.md` | core |
 | writing a `Plugin`, `Provided` / `Deps`, plugin config, plugin-shipped controllers, `HealthRegistry` | `llm/plugins.md` | core |
 | `#[post_construct]`, `#[pre_destroy]`, `#[on_start]`, startup/shutdown hooks | `llm/lifecycle-hooks.md` | core |

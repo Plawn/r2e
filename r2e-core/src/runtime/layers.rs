@@ -1,6 +1,4 @@
-use crate::http::StatusCode;
 use crate::runtime::tracing_config::{LogFormat, TracingConfig};
-use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
@@ -221,10 +219,21 @@ pub fn default_cors() -> CorsLayer {
         .allow_headers(Any)
 }
 
-/// Returns a `CatchPanicLayer` that converts panics into JSON 500 responses.
-pub fn catch_panic_layer(
-) -> CatchPanicLayer<fn(Box<dyn std::any::Any + Send>) -> crate::http::Response> {
-    CatchPanicLayer::custom(panic_handler as fn(_) -> _)
+/// Returns the layer that converts panics into JSON 500 responses, logs one
+/// structured `error` event, and invokes the application panic hook.
+///
+/// See [`crate::runtime::panic`] for why the primary install slot is the
+/// *innermost* one rather than the outermost.
+pub fn catch_panic_layer() -> crate::runtime::panic::CatchPanicLayer {
+    crate::runtime::panic::CatchPanicLayer::new()
+}
+
+/// Same, with the application hook from
+/// [`AppBuilder::on_panic`](crate::builder::AppBuilder::on_panic).
+pub fn catch_panic_layer_with(
+    hook: Option<crate::runtime::panic::PanicHook>,
+) -> crate::runtime::panic::CatchPanicLayer {
+    crate::runtime::panic::CatchPanicLayer::with_hook(hook)
 }
 
 /// Wrap a fully-built router in pre-routing trailing-slash normalization.
@@ -403,11 +412,4 @@ pub(crate) fn graph_keep_alive<S>(
         inner,
         graph: std::sync::Arc::clone(&graph),
     })
-}
-
-fn panic_handler(_err: Box<dyn std::any::Any + Send>) -> crate::http::Response {
-    crate::http::response::static_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        r#"{"error":"Internal server error"}"#,
-    )
 }
