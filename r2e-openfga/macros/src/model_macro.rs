@@ -59,7 +59,10 @@ impl Parse for ModelInput {
 fn r2e_openfga_path() -> TokenStream {
     static CACHE: OnceLock<String> = OnceLock::new();
     let rendered = CACHE.get_or_init(|| {
-        for (candidate, suffix) in [("r2e", "r2e_openfga"), ("r2e-openfga", "")] {
+        // A direct `r2e-openfga` dependency wins over the facade re-export: a crate
+        // that names the runtime itself must not be routed through `r2e`, which may
+        // not re-export it (the `openfga` feature can be off, or absent entirely).
+        for (candidate, suffix) in [("r2e-openfga", ""), ("r2e", "r2e_openfga")] {
             if let Ok(found) = crate_name(candidate) {
                 return match found {
                     FoundCrate::Itself if suffix.is_empty() => "crate".to_string(),
