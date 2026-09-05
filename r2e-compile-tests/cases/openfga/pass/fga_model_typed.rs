@@ -5,11 +5,11 @@
 //! file-path form is exercised by `examples/example-openfga`.)
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::typed::{DirectlyAssignable, WildcardOf};
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::typed::{DirectlyAssignable, WildcardOf};
+use r2e_openfga::FgaCheck;
 use r2e::r2e_security::AuthenticatedUser;
 
-r2e::r2e_openfga::model!(pub mod authz = inline r#"
+r2e_openfga::model!(pub mod authz = inline r#"
 model
   schema 1.1
 
@@ -65,11 +65,11 @@ fn main() {
     // subject to `FgaClient::{check,grant,revoke}` allocates nothing per call
     // (docs/claude/hot-path-clone-audit.md).
     assert_eq!(
-        <authz::user::Ty as r2e::r2e_openfga::typed::FgaType>::WILDCARD,
+        <authz::user::Ty as r2e_openfga::typed::FgaType>::WILDCARD,
         Some("user:*")
     );
     assert_eq!(
-        r2e::r2e_openfga::typed::FgaSubject::subject_str(&authz::user::wildcard()),
+        r2e_openfga::typed::FgaSubject::subject_str(&authz::user::wildcard()),
         "user:*"
     );
 

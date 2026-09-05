@@ -3,9 +3,9 @@
 //! `directly_related_user_types` is a compile error. Here `editor` only
 //! allows `[user]`, so a `team#member` userset subject is rejected.
 
-use r2e::r2e_openfga::{FgaClient, MockBackend, OpenFgaRegistry};
+use r2e_openfga::{FgaClient, MockBackend, OpenFgaRegistry};
 
-r2e::r2e_openfga::model!(pub mod authz = inline r#"
+r2e_openfga::model!(pub mod authz = inline r#"
 model
   schema 1.1
 

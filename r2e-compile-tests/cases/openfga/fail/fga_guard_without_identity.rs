@@ -6,7 +6,7 @@
 //! placement at compile time instead of leaving it to production.
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 
 #[controller(path = "/docs")]
 pub struct DocController;

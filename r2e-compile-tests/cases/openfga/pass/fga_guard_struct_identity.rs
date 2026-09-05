@@ -2,7 +2,7 @@
 //! `guard_identity` yields `Some(&user)`, so the identity requirement is met.
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 use r2e::r2e_security::AuthenticatedUser;
 
 #[controller(path = "/docs")]

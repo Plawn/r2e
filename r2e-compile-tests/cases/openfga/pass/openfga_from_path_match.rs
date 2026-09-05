@@ -7,9 +7,10 @@
 
 use r2e::prelude::*;
 use r2e::r2e_security::AuthenticatedUser;
+// `r2e-openfga` directly: the facade's `openfga` feature is held back from the
+// crates.io release, so `r2e::prelude` no longer re-exports `FgaCheck`.
+use r2e_openfga::FgaCheck;
 
-// `FgaCheck` comes from `r2e_openfga::prelude`, re-exported by `r2e::prelude`
-// under the `openfga` feature (included in `full`).
 // Both controllers carry an identity: FGA guards require one (`REQUIRES_IDENTITY`),
 // and this fixture only exercises the `from_path` placeholder check.
 

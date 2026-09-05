@@ -1,9 +1,9 @@
 error: model!: <inline> is not a valid model:
          - type `document`, relation `viewer`: relation `editor` does not exist on type `document`
-  --> cases/openfga/fail/fga_invalid_model.rs:4:49
+  --> cases/openfga/fail/fga_invalid_model.rs:4:44
    |
- 4 |   r2e::r2e_openfga::model!(pub mod authz = inline r#"
-   |  _________________________________________________^
+ 4 |   r2e_openfga::model!(pub mod authz = inline r#"
+   |  ____________________________________________^
  5 | | model
  6 | |   schema 1.1
 ...  |

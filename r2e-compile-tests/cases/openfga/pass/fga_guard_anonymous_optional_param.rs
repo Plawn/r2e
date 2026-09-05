@@ -4,7 +4,7 @@
 //! the identity-requiring FGA guard is accepted.
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 use r2e::r2e_security::AuthenticatedUser;
 
 #[controller(path = "/docs")]

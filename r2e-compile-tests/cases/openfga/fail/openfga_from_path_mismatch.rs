@@ -5,6 +5,7 @@
 
 use r2e::prelude::*;
 use r2e::r2e_security::AuthenticatedUser;
+use r2e_openfga::FgaCheck;
 
 // The identity satisfies the guard's `REQUIRES_IDENTITY` so this fixture
 // exercises ONLY the `from_path` placeholder mismatch.

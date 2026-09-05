@@ -4,7 +4,7 @@
 //! its own `Option<..>` identity parameter (adaptive route).
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 use r2e::r2e_security::AuthenticatedUser;
 
 #[controller(path = "/docs")]

@@ -2,10 +2,10 @@
 //! site — not a stringly-typed permanent 403.
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 use r2e::r2e_security::AuthenticatedUser;
 
-r2e::r2e_openfga::model!(pub mod authz = inline r#"
+r2e_openfga::model!(pub mod authz = inline r#"
 model
   schema 1.1
 

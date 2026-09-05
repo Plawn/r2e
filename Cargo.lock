@@ -5912,6 +5912,7 @@ dependencies = [
  "prost 0.14.4",
  "r2e",
  "r2e-grpc-build",
+ "r2e-openfga",
  "r2e-test",
  "schemars 1.2.1",
  "serde",

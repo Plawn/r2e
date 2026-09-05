@@ -1,8 +1,8 @@
 error: model!: relation `Viewer` on type `document` collides with its generated marker struct `Viewer` — use a lowercase relation name
-  --> cases/openfga/fail/fga_uppercase_relation.rs:5:49
+  --> cases/openfga/fail/fga_uppercase_relation.rs:5:44
    |
- 5 |   r2e::r2e_openfga::model!(pub mod authz = inline r#"
-   |  _________________________________________________^
+ 5 |   r2e_openfga::model!(pub mod authz = inline r#"
+   |  ____________________________________________^
  6 | | model
  7 | |   schema 1.1
 ...  |

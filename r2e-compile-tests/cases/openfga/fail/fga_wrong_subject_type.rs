@@ -2,9 +2,9 @@
 //! `editor` only allows `[user]`, so a `team#member` subject marker does not
 //! satisfy the bound (this is what the typed write API checks on `grant`).
 
-use r2e::r2e_openfga::typed::DirectlyAssignable;
+use r2e_openfga::typed::DirectlyAssignable;
 
-r2e::r2e_openfga::model!(pub mod authz = inline r#"
+r2e_openfga::model!(pub mod authz = inline r#"
 model
   schema 1.1
 

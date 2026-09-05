@@ -3,9 +3,9 @@
 //! `viewer`; direct user on `editor`. `check` needs no `DirectlyAssignable`
 //! bound (checks may target computed relations).
 
-use r2e::r2e_openfga::{FgaClient, MockBackend, OpenFgaRegistry};
+use r2e_openfga::{FgaClient, MockBackend, OpenFgaRegistry};
 
-r2e::r2e_openfga::model!(pub mod authz = inline r#"
+r2e_openfga::model!(pub mod authz = inline r#"
 model
   schema 1.1
 

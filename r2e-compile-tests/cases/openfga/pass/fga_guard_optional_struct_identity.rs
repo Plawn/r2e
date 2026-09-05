@@ -3,7 +3,7 @@
 //! passes; the runtime `None` → 401 in `FgaGuard::check` stays as the backstop.
 
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 use r2e::r2e_security::AuthenticatedUser;
 
 #[controller(path = "/docs")]
