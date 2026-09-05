@@ -123,6 +123,49 @@ if bad:
 print("  ok — the published set is closed")
 PY
 
+# crates.io validates package metadata server-side and answers 400. Cargo does
+# not pre-check it, so the failure lands mid-run — after a rate-limit token has
+# been spent, with part of the release already up. These are the rules this
+# workspace has actually hit, with the observed limits (crates.io says keywords
+# must be "less than 20 characters"; 20 is in fact accepted — r2e-core ships
+# `dependency-injection` — and 22 is not).
+say "Validating package metadata"
+python3 - "${HELD_BACK[@]}" <<'PY'
+import json, re, subprocess, sys
+
+held = set(sys.argv[1:])
+meta = json.loads(subprocess.check_output(
+    ["cargo", "metadata", "--no-deps", "--format-version", "1"]))
+shape = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+bad = []
+for pkg in sorted(meta["packages"], key=lambda p: p["name"]):
+    name = pkg["name"]
+    if pkg.get("publish") == [] or name in held:
+        continue
+    keywords = pkg.get("keywords") or []
+    if len(keywords) > 5:
+        bad.append(f"{name}: {len(keywords)} keywords (max 5)")
+    for kw in keywords:
+        if len(kw) > 20:
+            bad.append(f"{name}: keyword {kw!r} is {len(kw)} chars (max 20)")
+        elif not shape.match(kw):
+            bad.append(f"{name}: keyword {kw!r} — alphanumeric start, then [A-Za-z0-9_-]")
+    if len(pkg.get("categories") or []) > 5:
+        bad.append(f"{name}: more than 5 categories")
+    if not pkg.get("description"):
+        bad.append(f"{name}: no description")
+    if not (pkg.get("license") or pkg.get("license_file")):
+        bad.append(f"{name}: no license")
+
+if bad:
+    print("crates.io would reject this metadata:", file=sys.stderr)
+    for line in bad:
+        print("  " + line, file=sys.stderr)
+    sys.exit(1)
+print("  ok — keywords, categories, description and license are publishable")
+PY
+
 # ---------------------------------------------------------------------------
 # Publish
 # ---------------------------------------------------------------------------
