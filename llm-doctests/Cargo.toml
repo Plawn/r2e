@@ -17,7 +17,8 @@
 [package]
 name = "llm-doctests"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 

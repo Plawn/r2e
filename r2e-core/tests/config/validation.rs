@@ -58,12 +58,12 @@ struct EnvOnlyConfig {
 #[test]
 fn test_validate_section_env_var_satisfies_required_field() {
     let _env = crate::support::env_lock();
-    std::env::set_var("TEST_R2E_VALIDATION_ENV_ONLY", "postgres://from-env/db");
+    crate::support::set_env("TEST_R2E_VALIDATION_ENV_ONLY", "postgres://from-env/db");
 
     let config = R2eConfig::empty();
     let errors = validate_section::<EnvOnlyConfig>(&config, Some("db"));
 
-    std::env::remove_var("TEST_R2E_VALIDATION_ENV_ONLY");
+    crate::support::remove_env("TEST_R2E_VALIDATION_ENV_ONLY");
     assert!(
         errors.is_empty(),
         "env-only required field must not be reported missing: {errors:?}"
@@ -129,9 +129,9 @@ fn test_property_meta_resolvable_probe() {
     assert!(!name.is_resolvable(&empty));
 
     // Custom env var satisfies only the `#[config(env)]` property.
-    std::env::set_var("TEST_R2E_VALIDATION_PROBE", "postgres://from-env/db");
+    crate::support::set_env("TEST_R2E_VALIDATION_PROBE", "postgres://from-env/db");
     let url_via_env = url.is_resolvable(&empty);
-    std::env::remove_var("TEST_R2E_VALIDATION_PROBE");
+    crate::support::remove_env("TEST_R2E_VALIDATION_PROBE");
     assert!(url_via_env);
 
     // Key in the config map satisfies a plain property.
@@ -383,12 +383,12 @@ struct EnvDeserializeConfig {
 #[test]
 fn test_validate_section_reports_bad_env_value_as_deserialize_error() {
     let _env = crate::support::env_lock();
-    std::env::set_var("TEST_R2E_VALIDATION_ENV_BOGUS", "not-a-mode");
+    crate::support::set_env("TEST_R2E_VALIDATION_ENV_BOGUS", "not-a-mode");
 
     let config = R2eConfig::empty();
     let errors = validate_section::<EnvDeserializeConfig>(&config, Some("log"));
 
-    std::env::remove_var("TEST_R2E_VALIDATION_ENV_BOGUS");
+    crate::support::remove_env("TEST_R2E_VALIDATION_ENV_BOGUS");
     assert_eq!(
         errors.len(),
         1,

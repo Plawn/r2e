@@ -1090,7 +1090,13 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
 
     let (invocation_return, invocation_body) = if !has_guards && !has_ctrl_guards {
         (
-            quote! { -> impl #krate::http::response::IntoResponse },
+            // `+ use<>` for the same reason `codegen::precise_capture` puts one
+            // on the handler's own return type: this function takes the façade
+            // by reference and its value is moved out past that borrow. Under
+            // edition 2024 a bare `impl Trait` here would capture the `&__ctrl`
+            // lifetime, and the caller — which binds the façade to a local
+            // inside the per-request async block — fails with E0716.
+            quote! { -> impl #krate::http::response::IntoResponse + use<> },
             quote! {
                 let __stream = #krate::web::sse::until_shutdown(#call_expr, __r2e_shutdown);
                 #keep_alive_expr

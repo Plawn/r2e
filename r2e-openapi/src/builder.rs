@@ -37,7 +37,7 @@ fn insert_schema(
     type_name: &str,
     root_schema: &Option<Value>,
 ) {
-    if let Some(ref root) = root_schema {
+    if let Some(root) = root_schema {
         let mut schema = root.clone();
         if let Some(obj) = schema.as_object_mut() {
             obj.remove("$schema");

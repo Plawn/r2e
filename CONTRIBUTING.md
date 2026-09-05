@@ -23,7 +23,10 @@ Thank you for your interest in contributing to R2E! This guide will help you get
    cargo test --workspace
    ```
 
-**Requirements:** Rust edition 2021 (stable toolchain). No nightly features required.
+**Requirements:** Rust edition 2024, stable toolchain, 1.94 or newer (the MSRV is
+declared once in `[workspace.package]` and checked in CI). No nightly features
+required — `rust-toolchain.toml` pins a nightly only because the trybuild
+`.stderr` expectations in `r2e-compile-tests` are blessed on one.
 
 ## Workspace structure
 

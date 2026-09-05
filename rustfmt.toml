@@ -1,0 +1,5 @@
+# Edition 2024 also flips rustfmt's *style* edition, which reorders imports and
+# collapses short if/else — a 390-file reformat unrelated to the language
+# migration, in a repo where CI does not gate on `cargo fmt`. Pin the style at
+# 2021 so `cargo fmt` stays a no-op diff; flipping it to 2024 is its own change.
+style_edition = "2021"

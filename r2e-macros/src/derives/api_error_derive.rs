@@ -76,7 +76,7 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
             return Err(syn::Error::new_spanned(
                 name,
                 "ApiError can only be derived for enums",
-            ))
+            ));
         }
     };
 
@@ -324,7 +324,7 @@ fn gen_display_arm(enum_name: &Ident, variant: &ApiErrorVariant) -> TokenStream2
     match &variant.error_attr {
         ErrorAttr::Transparent => {
             // Delegate to inner Display
-            let (pattern, inner_expr) = single_field_pattern(enum_name, variant, false);
+            let (pattern, inner_expr) = single_field_pattern(enum_name, variant);
             quote! {
                 #pattern => ::core::fmt::Display::fmt(#inner_expr, f),
             }
@@ -366,7 +366,7 @@ fn gen_display_arm(enum_name: &Ident, variant: &ApiErrorVariant) -> TokenStream2
                             } else if fields.len() == 1 && is_string_type(&fields[0].ty) {
                                 // Single String field → use field value
                                 quote! {
-                                    #enum_name::#vname(ref _0) => write!(f, "{}", _0),
+                                    #enum_name::#vname(_0) => write!(f, "{}", _0),
                                 }
                             } else {
                                 let humanized = humanize_ident(vname);
@@ -389,12 +389,12 @@ fn gen_display_arm(enum_name: &Ident, variant: &ApiErrorVariant) -> TokenStream2
                             if let Some(ff) = from_field {
                                 let src_name = &ff.name;
                                 quote! {
-                                    #enum_name::#vname { #(ref #field_names),* } => write!(f, "{}", #src_name),
+                                    #enum_name::#vname { #(#field_names),* } => write!(f, "{}", #src_name),
                                 }
                             } else if fields.len() == 1 && is_string_type(&fields[0].ty) {
                                 let fname = &fields[0].name;
                                 quote! {
-                                    #enum_name::#vname { ref #fname } => write!(f, "{}", #fname),
+                                    #enum_name::#vname { #fname } => write!(f, "{}", #fname),
                                 }
                             } else {
                                 let humanized = humanize_ident(vname);
@@ -434,7 +434,7 @@ fn gen_response_arm(
 ) -> TokenStream2 {
     match &variant.error_attr {
         ErrorAttr::Transparent => {
-            let (pattern, inner_expr) = single_field_pattern(enum_name, variant, true);
+            let (pattern, inner_expr) = single_field_pattern(enum_name, variant);
             quote! {
                 #pattern => #krate::http::response::IntoResponse::into_response(#inner_expr),
             }
@@ -501,8 +501,8 @@ fn gen_response_arm_with_pattern(
                         }
                     } else if fields.len() == 1 && is_string_type(&fields[0].ty) {
                         quote! {
-                            #enum_name::#vname(ref _0) => {
-                                #krate::error::error_response(#status_tokens, _0.clone())
+                            #enum_name::#vname(_0) => {
+                                #krate::error::error_response(#status_tokens, _0)
                             }
                         }
                     } else {
@@ -528,15 +528,15 @@ fn gen_response_arm_with_pattern(
                     if let Some(ff) = from_field {
                         let src_name = &ff.name;
                         quote! {
-                            #enum_name::#vname { #(ref #field_names),* } => {
+                            #enum_name::#vname { #(#field_names),* } => {
                                 #krate::error::error_response(#status_tokens, #src_name.to_string())
                             }
                         }
                     } else if fields.len() == 1 && is_string_type(&fields[0].ty) {
                         let fname = &fields[0].name;
                         quote! {
-                            #enum_name::#vname { ref #fname } => {
-                                #krate::error::error_response(#status_tokens, #fname.clone())
+                            #enum_name::#vname { #fname } => {
+                                #krate::error::error_response(#status_tokens, #fname)
                             }
                         }
                     } else {
@@ -710,29 +710,21 @@ fn is_string_type(ty: &Type) -> bool {
 }
 
 /// Returns (match_pattern, inner_value_expr) for a single-field variant.
-/// When `owned` is true, generates move bindings (for IntoResponse which takes `self`).
-/// When false, generates `ref` bindings (for Display/source which take `&self`).
+///
+/// The same pattern serves both scrutinees. `Display`/`source` match on `&self`,
+/// where match ergonomics binds by reference on their own — writing `ref` there
+/// is an error as of edition 2024. `IntoResponse` matches on an owned `self`,
+/// where the binding moves. Neither site needs the distinction spelled out.
 fn single_field_pattern(
     enum_name: &Ident,
     variant: &ApiErrorVariant,
-    owned: bool,
 ) -> (TokenStream2, TokenStream2) {
     let vname = &variant.ident;
     match &variant.fields {
-        VariantFields::Tuple(_) => {
-            if owned {
-                (quote!(#enum_name::#vname(__inner)), quote!(__inner))
-            } else {
-                (quote!(#enum_name::#vname(ref __inner)), quote!(__inner))
-            }
-        }
+        VariantFields::Tuple(_) => (quote!(#enum_name::#vname(__inner)), quote!(__inner)),
         VariantFields::Named(fields) => {
             let fname = &fields[0].name;
-            if owned {
-                (quote!(#enum_name::#vname { #fname }), quote!(#fname))
-            } else {
-                (quote!(#enum_name::#vname { ref #fname }), quote!(#fname))
-            }
+            (quote!(#enum_name::#vname { #fname }), quote!(#fname))
         }
         VariantFields::Unit => unreachable!("transparent requires one field"),
     }
@@ -752,7 +744,7 @@ fn from_source_pattern(
                 .enumerate()
                 .map(|(i, _)| {
                     let id = format_ident!("_{}", i);
-                    quote!(ref #id)
+                    quote!(#id)
                 })
                 .collect();
             let src = format_ident!("_{}", from_idx);
@@ -765,7 +757,7 @@ fn from_source_pattern(
                 .iter()
                 .map(|f| {
                     let n = &f.name;
-                    quote!(ref #n)
+                    quote!(#n)
                 })
                 .collect();
             Some((
@@ -805,7 +797,7 @@ fn interpolated_message_pattern(
                 .enumerate()
                 .map(|(i, _)| {
                     let id = format_ident!("_{}", i);
-                    quote!(ref #id)
+                    quote!(#id)
                 })
                 .collect();
 
@@ -822,7 +814,7 @@ fn interpolated_message_pattern(
                 .iter()
                 .map(|f| {
                     let n = &f.name;
-                    quote!(ref #n)
+                    quote!(#n)
                 })
                 .collect();
 

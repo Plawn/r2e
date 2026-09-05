@@ -52,14 +52,22 @@ members = [
     "r2e-featureless-tests",
     "llm-doctests",
 ]
-resolver = "2"
+# Resolver 3 (the edition-2024 default) is MSRV-aware: `cargo update` will not
+# pull a dependency whose `rust-version` is above the one declared below.
+resolver = "3"
 
 [patch.crates-io]
 openfga-rs = { path = "vendor/openfga-rs" }
 
 [workspace.package]
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
+# The floor is empirical, not aspirational: it is the highest `rust-version` in
+# the resolved dependency graph (sqlx 0.9 = 1.94), verified by
+# `cargo +1.94.0 check --workspace --all-targets`. One MSRV for the whole
+# workspace rather than a per-crate ladder — a per-crate figure that nothing
+# builds against is a figure that rots. Raise it only with a reason.
+rust-version = "1.94"
 license = "Apache-2.0"
 repository = "https://github.com/plawn/r2e"
 homepage = "https://github.com/plawn/r2e"

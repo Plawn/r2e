@@ -177,7 +177,9 @@ impl WsStream {
     /// `Sync`, so a future holding `&self` across an await would make the whole
     /// session future non-`Send` — and a session must be `Send` to be spawned
     /// and tracked.
-    pub fn shutdown_requested(&self) -> impl std::future::Future<Output = ()> + Send + 'static {
+    pub fn shutdown_requested(
+        &self,
+    ) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
         let token = self.shutdown.clone();
         async move {
             match token {

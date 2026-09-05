@@ -316,11 +316,11 @@ fn test_option_with_env_treats_null_as_absent() {
     let _env = crate::support::env_lock();
     let config = R2eConfig::from_yaml_str("token: null\n").unwrap();
 
-    std::env::set_var("R2E_TEST_OPT_NULL_ENV", "from-env");
+    crate::support::set_env("R2E_TEST_OPT_NULL_ENV", "from-env");
     let c = OptionEnvConfig::from_config(&config, None).unwrap();
     assert_eq!(c.token.as_deref(), Some("from-env"));
 
-    std::env::remove_var("R2E_TEST_OPT_NULL_ENV");
+    crate::support::remove_env("R2E_TEST_OPT_NULL_ENV");
     let c = OptionEnvConfig::from_config(&config, None).unwrap();
     assert_eq!(c.token, None);
 }

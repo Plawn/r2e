@@ -1,16 +1,21 @@
-# Edition-2024 canary for the `#[routes]` codegen.
+# Edition-2024 regression tests for the `#[routes]` codegen.
 #
-# The rest of the workspace is edition 2021, where a return-position
-# `impl Trait` captures no lifetimes and the automatic `+ use<...>` clause
-# (`r2e_macros::codegen::precise_capture`) is a no-op. Under edition 2024 the
-# same `impl Trait` captures `&self`, and a handler returning one without a
-# precise-capture clause fails to compile — which is exactly what the clause
-# exists to prevent. This crate is the only place in the workspace where that
-# difference is observable, so the tests here are compile-time assertions.
+# Under edition 2024 a return-position `impl Trait` captures every lifetime in
+# scope, `&self` included — so an ordinary handler returning one cannot have its
+# value moved out into the response, and every route in this crate would fail to
+# compile if `#[routes]` re-emitted it verbatim. The automatic `+ use<...>`
+# clause (`r2e_macros::codegen::precise_capture`) is what keeps them compiling.
+#
+# The whole workspace is edition 2024, so nothing here is special-cased; this
+# crate exists to pin the rewrite's *shape* — the cases it must cover (a bare
+# stream, one nested a generic argument deep, an explicit clause it must not
+# duplicate) and the case it must leave alone (`#[request_helper]`, where
+# borrowing from the receiver is legitimate). The compile is the assertion.
 [package]
 name = "r2e-edition2024-tests"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 

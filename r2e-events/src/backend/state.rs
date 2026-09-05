@@ -672,7 +672,7 @@ impl BackendState {
                         let mut captured = false;
                         if let Some(ref policy) = retry_policy {
                             if let Some(ref dlq_topic) = policy.dead_letter_topic {
-                                if let (Some((ref pl, ref meta)), Some(ref publisher)) =
+                                if let (Some((pl, meta)), Some(publisher)) =
                                     (&dlq_data, &state.dlq_publisher)
                                 {
                                     match publisher(

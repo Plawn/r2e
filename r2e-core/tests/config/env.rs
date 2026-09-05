@@ -17,19 +17,19 @@ struct DbEnvConfig {
 #[test]
 fn test_config_env_override() {
     let _env = crate::support::env_lock();
-    std::env::set_var("TEST_R2E_DATABASE_URL", "postgres://from-env/mydb");
+    crate::support::set_env("TEST_R2E_DATABASE_URL", "postgres://from-env/mydb");
 
     let config = R2eConfig::empty();
     let db = DbEnvConfig::from_config(&config, Some("db")).unwrap();
     assert_eq!(db.url, "postgres://from-env/mydb");
 
-    std::env::remove_var("TEST_R2E_DATABASE_URL");
+    crate::support::remove_env("TEST_R2E_DATABASE_URL");
 }
 
 #[test]
 fn test_config_env_override_yaml_takes_priority() {
     let _env = crate::support::env_lock();
-    std::env::set_var("TEST_R2E_DATABASE_URL", "postgres://from-env/mydb");
+    crate::support::set_env("TEST_R2E_DATABASE_URL", "postgres://from-env/mydb");
 
     let yaml = r#"
 db:
@@ -39,7 +39,7 @@ db:
     let db = DbEnvConfig::from_config(&config, Some("db")).unwrap();
     assert_eq!(db.url, "postgres://from-yaml/mydb");
 
-    std::env::remove_var("TEST_R2E_DATABASE_URL");
+    crate::support::remove_env("TEST_R2E_DATABASE_URL");
 }
 
 // =========================================================================

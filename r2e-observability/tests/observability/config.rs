@@ -5,6 +5,23 @@ use r2e_observability::{Observability, ObservabilityConfig, OtlpProtocol};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+/// `std::env::set_var` / `remove_var` are `unsafe` as of edition 2024: the
+/// environment is process-wide mutable state and a concurrent reader on
+/// another thread is undefined behaviour. Every test here holds `ENV_LOCK` for
+/// its whole body, so the safety argument is stated once here rather than at
+/// each call.
+fn set_env(key: &str, value: &str) {
+    // SAFETY: the caller holds `ENV_LOCK`, which serialises every test in this
+    // target that reads or writes the environment.
+    unsafe { std::env::set_var(key, value) }
+}
+
+/// Unset an environment variable. Same contract as [`set_env`].
+fn remove_env(key: &str) {
+    // SAFETY: as in `set_env` — serialised by `ENV_LOCK`.
+    unsafe { std::env::remove_var(key) }
+}
+
 const OTEL_KEYS: &[&str] = &[
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -26,7 +43,7 @@ impl EnvSnapshot {
             .map(|key| (key, std::env::var(key).ok()))
             .collect();
         for key in OTEL_KEYS {
-            std::env::remove_var(key);
+            remove_env(key);
         }
         Self(values)
     }
@@ -36,8 +53,8 @@ impl Drop for EnvSnapshot {
     fn drop(&mut self) {
         for (key, value) in &self.0 {
             match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
+                Some(value) => set_env(key, value),
+                None => remove_env(key),
             }
         }
     }
@@ -47,11 +64,11 @@ impl Drop for EnvSnapshot {
 fn from_env_uses_standard_otel_variables() {
     let _lock = ENV_LOCK.lock().unwrap();
     let _snapshot = EnvSnapshot::clear();
-    std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318");
-    std::env::set_var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf");
-    std::env::set_var("OTEL_SERVICE_NAME", "env-service");
-    std::env::set_var("OTEL_TRACES_SAMPLER", "parentbased_traceidratio");
-    std::env::set_var("OTEL_TRACES_SAMPLER_ARG", "0.25");
+    set_env("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318");
+    set_env("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf");
+    set_env("OTEL_SERVICE_NAME", "env-service");
+    set_env("OTEL_TRACES_SAMPLER", "parentbased_traceidratio");
+    set_env("OTEL_TRACES_SAMPLER_ARG", "0.25");
 
     let config = ObservabilityConfig::from_env("fallback-service");
     assert_eq!(config.service_name, "env-service");

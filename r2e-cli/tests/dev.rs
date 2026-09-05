@@ -120,6 +120,23 @@ fn purge_on_missing_target_dir_is_a_no_op() {
     assert!(purge_now(&temp.path().join("does-not-exist")).is_empty());
 }
 
+/// `std::env::set_var` / `remove_var` are `unsafe` as of edition 2024: the
+/// environment is process-wide mutable state and a concurrent reader on
+/// another thread is undefined behaviour. Every test here that touches it is
+/// `#[serial]`, so the safety argument is stated once, next to the guard that
+/// makes it true, rather than at each call.
+fn set_env(key: &str, value: impl AsRef<std::ffi::OsStr>) {
+    // SAFETY: the callers are `#[serial]` tests — nothing else in this process
+    // reads or writes the environment while one of them runs.
+    unsafe { std::env::set_var(key, value) }
+}
+
+/// Unset an environment variable. Same contract as [`set_env`].
+fn remove_env(key: &str) {
+    // SAFETY: as in `set_env` — the callers are `#[serial]`.
+    unsafe { std::env::remove_var(key) }
+}
+
 /// Restores any pre-existing `CARGO_TARGET_DIR` on drop so env-mutating tests
 /// cannot leak into each other or drop a developer's setting.
 struct EnvGuard(Option<std::ffi::OsString>);
@@ -133,8 +150,8 @@ impl EnvGuard {
 impl Drop for EnvGuard {
     fn drop(&mut self) {
         match &self.0 {
-            Some(value) => std::env::set_var("CARGO_TARGET_DIR", value),
-            None => std::env::remove_var("CARGO_TARGET_DIR"),
+            Some(value) => set_env("CARGO_TARGET_DIR", value),
+            None => remove_env("CARGO_TARGET_DIR"),
         }
     }
 }
@@ -145,13 +162,13 @@ fn resolve_target_dir_honors_cargo_target_dir_env() {
     let _guard = EnvGuard::capture();
     let temp = tempfile::tempdir().unwrap();
 
-    std::env::set_var("CARGO_TARGET_DIR", "/tmp/custom-target");
+    set_env("CARGO_TARGET_DIR", "/tmp/custom-target");
     assert_eq!(
         resolve_target_dir(temp.path()),
         PathBuf::from("/tmp/custom-target")
     );
 
-    std::env::set_var("CARGO_TARGET_DIR", "relative-target");
+    set_env("CARGO_TARGET_DIR", "relative-target");
     assert_eq!(
         resolve_target_dir(temp.path()),
         temp.path().join("relative-target")
@@ -163,7 +180,7 @@ fn resolve_target_dir_honors_cargo_target_dir_env() {
 fn resolve_target_dir_falls_back_to_project_target() {
     let _guard = EnvGuard::capture();
     let temp = tempfile::tempdir().unwrap();
-    std::env::remove_var("CARGO_TARGET_DIR");
+    remove_env("CARGO_TARGET_DIR");
     // An invalid manifest makes `cargo metadata` fail deterministically (a
     // bare dir would let cargo walk up to an ancestor workspace), so the
     // resolver falls back to `<root>/target`.

@@ -2,6 +2,7 @@
 name = "example-sharded-bench"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 # Minimal r2e app used to benchmark SO_REUSEPORT sharded serving

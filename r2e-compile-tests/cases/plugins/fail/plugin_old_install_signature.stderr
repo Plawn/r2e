@@ -16,4 +16,4 @@ error[E0046]: not all trait items implemented, missing: `Provided`, `Deps`, `Con
    = help: implement the missing item: `type Deps = /* Type */;`
    = help: implement the missing item: `type Config = /* Type */;`
    = help: implement the missing item: `type Controllers = /* Type */;`
-   = help: implement the missing item: `fn build(self, _: <Self as Plugin>::Deps, _: std::option::Option<<Self as Plugin>::Config>, _: &mut PluginBuildContext) -> impl Future<Output = Result<<Self as Plugin>::Provided, Box<(dyn std::error::Error + std::marker::Send + Sync + 'static)>>> { todo!() }`
+   = help: implement the missing item: `fn build(self, _: <Self as Plugin>::Deps, _: Option<<Self as Plugin>::Config>, _: &mut PluginBuildContext) -> impl Future<Output = Result<<Self as Plugin>::Provided, Box<(dyn std::error::Error + std::marker::Send + Sync + 'static)>>> { todo!() }`

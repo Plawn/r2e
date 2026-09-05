@@ -217,7 +217,7 @@ impl BoundListener {
     pub fn stop_signal(
         &self,
         shutdown: CancelToken,
-    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+    ) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
         let handover = self.handover.clone();
         let released = self.release.0.clone();
         async move {
@@ -359,8 +359,10 @@ impl ServeContext {
         &self,
         owner: &'static str,
         addr: &str,
-    ) -> impl std::future::Future<Output = Result<BoundListener, crate::beans::BootError>> + Send + 'static
-    {
+    ) -> impl std::future::Future<Output = Result<BoundListener, crate::beans::BootError>>
+           + Send
+           + 'static
+           + use<> {
         let addr = addr.to_string();
         async move {
             #[cfg(feature = "dev-reload")]

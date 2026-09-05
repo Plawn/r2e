@@ -2,6 +2,7 @@
 name = "example-worker-udp"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 # Minimal per-worker service example: one SO_REUSEPORT UDP echo socket per

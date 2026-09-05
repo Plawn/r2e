@@ -100,7 +100,7 @@ r2e-grpc-build = {{ git = "{R2E_GIT}" }}
         r#"[package]
 name = "{name}"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [features]
 dev-reload = ["r2e/dev-reload"]

@@ -132,31 +132,35 @@ impl WorkerCollector {
             last.resize(snaps.len(), Last::default());
         }
         for snap in &snaps {
+            // Every label below goes in as `w.as_str()`, never `&w`: the
+            // two-label calls put it in one array literal next to a `&str`,
+            // and a slice whose elements would need different coercions is not
+            // inferred the same way on every rustc back to the MSRV.
             let w = snap.id.to_string();
             for st in WorkerState::ALL {
                 self.state
-                    .with_label_values(&[&w, st.as_str()])
+                    .with_label_values(&[w.as_str(), st.as_str()])
                     .set(i64::from(st == snap.state));
             }
             self.cpu
-                .with_label_values(&[&w])
+                .with_label_values(&[w.as_str()])
                 .set(snap.cpu.map_or(-1, |c| c as i64));
             self.mailbox_depth
-                .with_label_values(&[&w])
+                .with_label_values(&[w.as_str()])
                 .set(snap.mailbox_depth as i64);
             let prev = &mut last[snap.id];
             self.crossings
-                .with_label_values(&[&w, "local"])
+                .with_label_values(&[w.as_str(), "local"])
                 .inc_by(snap.local_crossings.saturating_sub(prev.local));
             self.crossings
-                .with_label_values(&[&w, "remote"])
+                .with_label_values(&[w.as_str(), "remote"])
                 .inc_by(snap.remote_crossings.saturating_sub(prev.remote));
             self.mailbox_sends
-                .with_label_values(&[&w])
+                .with_label_values(&[w.as_str()])
                 .inc_by(snap.mailbox_sends.saturating_sub(prev.sends));
             let wait_nanos = snap.mailbox_wait_total.as_nanos();
             self.mailbox_wait
-                .with_label_values(&[&w])
+                .with_label_values(&[w.as_str()])
                 .inc_by(wait_nanos.saturating_sub(prev.wait_nanos) as f64 / 1e9);
             *prev = Last {
                 local: snap.local_crossings,

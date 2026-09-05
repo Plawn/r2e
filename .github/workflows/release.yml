@@ -20,16 +20,24 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Check member crates inherit the workspace version
+      # version, edition and rust-version are single-sourced in
+      # [workspace.package]. A member that spells one out drifts silently: the
+      # release tags one version while the crate publishes another, or a crate
+      # ships under an edition/MSRV nobody verified.
+      - name: Check member crates inherit version, edition and MSRV
         run: |
-          bad=$(grep -rl --include=Cargo.toml '^version *= *"' . \
-                | sed 's|^\./||' \
-                | grep -v -e '^Cargo.toml$' -e '^vendor/' -e '^examples/' -e '^target/' || true)
-          if [ -n "$bad" ]; then
-            echo "These member crates declare their own version instead of 'version.workspace = true':"
-            echo "$bad"
-            exit 1
-          fi
+          status=0
+          for key in version edition rust-version; do
+            bad=$(grep -rl --include=Cargo.toml "^${key} *= *\"" . \
+                  | sed 's|^\./||' \
+                  | grep -v -e '^Cargo.toml$' -e '^vendor/' -e '^examples/' -e '^target/' || true)
+            if [ -n "$bad" ]; then
+              echo "These member crates declare their own ${key} instead of '${key}.workspace = true':"
+              echo "$bad"
+              status=1
+            fi
+          done
+          exit $status
 
       - name: Read workspace version
         id: workspace

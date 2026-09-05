@@ -2,6 +2,7 @@
 name = "example-microservice"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [[bin]]

@@ -93,3 +93,22 @@ pub fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+/// Set a process environment variable for the duration of a test.
+///
+/// `std::env::set_var` is `unsafe` as of edition 2024: the environment is
+/// process-wide mutable state, and another thread reading it concurrently is
+/// undefined behaviour. The whole safety argument lives here rather than at
+/// every call site: a test that touches the environment holds [`env_lock`] for
+/// its whole body, so no other test is reading or writing it at the same time.
+pub fn set_env(key: &str, value: &str) {
+    // SAFETY: the caller holds `env_lock`, which serialises every test in this
+    // process that reads or writes the environment.
+    unsafe { std::env::set_var(key, value) }
+}
+
+/// Unset a process environment variable. Same contract as [`set_env`].
+pub fn remove_env(key: &str) {
+    // SAFETY: as in `set_env` — serialised by `env_lock`.
+    unsafe { std::env::remove_var(key) }
+}
