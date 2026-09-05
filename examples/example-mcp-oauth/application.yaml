@@ -1,0 +1,76 @@
+# Minimal authenticated MCP server, wired to any OIDC issuer and published
+# through a public tunnel (ngrok, Cloudflare, …).
+#
+# Everything deployment-specific is a `${VAR:default}` placeholder: copy
+# `.env.example` to `.env` and fill it in rather than editing this file.
+
+server:
+  # 3000 collides with a lot of dev tooling; point the tunnel at this one.
+  port: ${PORT:3333}
+  # The app's EXTERNAL origin. Combined with `mcp.path` it yields the
+  # canonical resource URI (RFC 8707) used as the token audience, the PRM
+  # `resource` and the 401 challenge URL. Never derived from Host headers.
+  public-url: ${MCP_PUBLIC_URL:https://your-tunnel.ngrok-free.dev}
+
+mcp:
+  path: /mcp
+  name: example-mcp-oauth
+  instructions: >-
+    Example authenticated MCP server. One tool, `whoami`, reports the identity
+    carried by the caller's OAuth access token.
+
+  # rmcp's Host allowlist is loopback-only by default: behind a proxy or a
+  # tunnel every request is rejected until the public hostname is listed.
+  # This check runs INSIDE rmcp, after the auth layer — a missing entry looks
+  # like a post-login connection failure, never like an auth error.
+  allowed-hosts:
+    - ${MCP_PUBLIC_HOST:your-tunnel.ngrok-free.dev}
+    - localhost:3333
+    - 127.0.0.1:3333
+
+  cors:
+    # Browser origins granted CORS access. Defaults cover the Claude origins;
+    # ChatGPT's connector UI needs its own entry.
+    allowed-origins:
+      - https://claude.ai
+      - https://claude.com
+      - https://chatgpt.com
+      - https://chat.openai.com
+
+  auth:
+    # The ONE required key: JWKS, endpoints and algorithms all derive from
+    # `{issuer}/.well-known/openid-configuration`.
+    issuer: ${MCP_ISSUER:https://id.example.com/realms/acme}
+
+    # IdPs that block anonymous dynamic client registration (Keycloak) or
+    # don't implement it at all (Google, Entra, Okta) need the DCR shim: it
+    # hands every MCP client this pre-created PUBLIC client id. The shim
+    # registers nothing — the client must already exist on the IdP with the
+    # redirect URIs below.
+    public-client-id: ${MCP_CLIENT_ID:mcp-public}
+
+    # ── Audience ───────────────────────────────────────────────────────
+    # R2E's default (`resource`) requires `aud` to contain the canonical
+    # resource URI. Keycloak only puts it there if the client carries an
+    # AUDIENCE MAPPER for that exact URI — without one it issues
+    # `aud: ["account"]` and every request is a 401.
+    #
+    # `skip` gets a smoke test running with zero IdP changes, at the cost of
+    # accepting any token that issuer minted for any service. Add the mapper
+    # and switch to `resource` for anything real.
+    audience: ${MCP_AUDIENCE_MODE:skip}
+
+    # A custom allowlist REPLACES the defaults, so the Claude / Inspector /
+    # localhost callbacks are repeated here alongside ChatGPT's.
+    redirect-uri-allowlist:
+      - "http://localhost:*"
+      - "http://127.0.0.1:*"
+      - "https://claude.ai/api/mcp/auth_callback"
+      - "https://claude.com/api/mcp/auth_callback"
+      - "https://inspector.modelcontextprotocol.io/*"
+      - "https://chatgpt.com/*"
+      - "https://chat.openai.com/*"
+
+    # Advertised in the protected-resource metadata (what clients show in the
+    # consent screen). Keep it to what the public client can actually grant.
+    scopes-supported: ["openid", "profile", "email"]

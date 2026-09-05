@@ -2590,6 +2590,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-mcp-oauth"
+version = "0.1.0"
+dependencies = [
+ "r2e",
+ "schemars 1.2.1",
+ "serde",
+ "tracing",
+]
+
+[[package]]
 name = "example-microservice"
 version = "0.3.0"
 dependencies = [

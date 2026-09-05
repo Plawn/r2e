@@ -41,6 +41,7 @@ members = [
     "examples/example-websocket-chat",
     "examples/example-grpc",
     "examples/example-mcp",
+    "examples/example-mcp-oauth",
     "examples/example-microservice",
     "examples/example-oidc",
     "examples/example-openfga",
