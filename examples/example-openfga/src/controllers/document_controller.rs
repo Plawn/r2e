@@ -13,7 +13,7 @@
 
 use crate::authz;
 use r2e::prelude::*;
-use r2e::r2e_openfga::{FgaCheck, FgaClient};
+use r2e_openfga::{FgaCheck, FgaClient};
 
 #[controller(path = "/documents")]
 pub struct DocumentController {

@@ -37,5 +37,10 @@ futures-util = {workspace = true, optional = true}
 [dev-dependencies]
 base64 = {workspace = true}
 # The facade, for the macros only: `tests/suite.rs` drives `#[r2e::test_suite]`
-# end-to-end. Dev-only, and `r2e` does not depend on `r2e-test`, so no cycle.
-r2e = {workspace = true}
+# end-to-end. Deliberately NOT `workspace = true`: the workspace entry carries a
+# `version`, and a versioned dev-dependency survives into the published manifest,
+# where it closes a publish-time cycle (`r2e` -> `r2e-mcp`/`testing` ->
+# `r2e-test` -> `r2e`) that no publication order can break. Cargo strips a
+# path-only dev-dependency when packaging, so this keeps the tests building in
+# the workspace while leaving the published `r2e-test` acyclic.
+r2e = { path = "../r2e" }

@@ -28,6 +28,9 @@ path = "src/lib.rs"
 r2e = {workspace = true, features = ["full", "sqlx-sqlite", "sqlx-postgres", "diesel-sqlite", "diesel-postgres", "tenant-sqlx", "tenant-diesel", "mcp-testing", "test-util", "metrics-facade"]}
 r2e-test = {workspace = true, features = ["ws"]}
 r2e-devservices = {workspace = true, features = ["postgres", "redis", "openfga", "keycloak"]}
+# `r2e-openfga` directly, not via the facade's `openfga` feature: that feature
+# is held back from the crates.io release (see `r2e/Cargo.toml`).
+r2e-openfga = {workspace = true}
 r2e-grpc-build = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}

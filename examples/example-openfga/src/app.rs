@@ -9,7 +9,7 @@ use std::sync::Arc;
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use r2e::prelude::*;
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
-use r2e::r2e_openfga::OpenFga;
+use r2e_openfga::OpenFga;
 use r2e::r2e_security::{JwtClaimsValidator, SecurityConfig};
 
 pub mod controllers;
@@ -19,7 +19,7 @@ use controllers::document_controller::DocumentController;
 // Typed authorization API generated from the checked-in model: `authz::MODEL`
 // (the schema 1.1 JSON) plus compile-checked markers — a typo in
 // `authz::document::viewer` is a build error, not a prod 403.
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
 /// HS256 secret for the demo validator. Tests replace the validator entirely
 /// via the `#[r2e::test]` / `TestApp::boot` harness, so this only matters for

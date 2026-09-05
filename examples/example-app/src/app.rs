@@ -11,7 +11,7 @@ use r2e::r2e_observability::{Observability, ObservabilityConfig};
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 use r2e::r2e_prometheus::Prometheus;
 use r2e::r2e_executor::Executor;
-use r2e::r2e_openfga::{MockBackend, OpenFgaRegistry};
+use r2e_openfga::{MockBackend, OpenFgaRegistry};
 use r2e::r2e_scheduler::Scheduler;
 
 pub mod controllers;

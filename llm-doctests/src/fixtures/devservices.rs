@@ -2,7 +2,7 @@
 
 use r2e::prelude::*;
 
-pub use r2e::r2e_openfga::{FgaClient, FgaObject};
+pub use r2e_openfga::{FgaClient, FgaObject};
 
 /// The typed authorization model the OpenFGA block seeds a tuple into —
 /// `model!(pub mod authz = "fga/model.fga")`, see `llm/openfga.md`.

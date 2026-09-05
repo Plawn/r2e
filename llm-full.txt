@@ -2755,7 +2755,7 @@ then `.provide(RateLimitRegistry::new(MyBackend))`.
 
 ### TL;DR
 
-- Enable feature `openfga` and install the `OpenFga::model(authz::MODEL)`
+- Depend on `r2e-openfga` directly and install the `OpenFga::model(authz::MODEL)`
   plugin: it owns the store/model lifecycle at boot and provides
   `OpenFgaRegistry`, `FgaClient` and `OpenFgaHandle`.
 - Check the `.fga` model into the repo and generate the typed module with
@@ -2783,7 +2783,8 @@ then `.provide(RateLimitRegistry::new(MyBackend))`.
 This is the guard family for relationship-based authorization: `FgaCheck` is a
 decorator spec applied with `#[guard(...)]` like any other (see llm/guards.md).
 
-Requires feature `openfga` (crate `r2e-openfga`). Zanzibar-style
+Requires the `r2e-openfga` crate as a direct dependency — it is not reached
+through the facade. Zanzibar-style
 relationship checks: "does `user:<sub>` have `<relation>` on `<type>:<id>`?".
 The `FgaCheck` guard runs post-auth, so the route **requires an identity**
 (struct-level `#[inject(identity)]` or an identity handler param); the subject
@@ -2800,9 +2801,9 @@ lifecycle and provides the beans (`OpenFgaRegistry` — the guard's only dep;
 
 ```rust
 # async fn __doc(b: AppBuilder) -> impl Sized {
-use r2e::r2e_openfga::OpenFga;
+use r2e_openfga::OpenFga;
 
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
 b.load_config::<()>()
     .plugin(OpenFga::model(authz::MODEL))   // order vs load_config doesn't matter
@@ -2850,7 +2851,7 @@ beans yourself; the store/model must already exist:
 
 ```rust
 # async fn __doc() -> Result<(), Box<dyn std::error::Error>> { let _ = {
-use r2e::r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
+use r2e_openfga::{FgaClient, GrpcBackend, OpenFgaConfig, OpenFgaRegistry};
 
 let config = OpenFgaConfig::new("http://localhost:8080", "store-id")
     .with_model_id("01H…")   // optional; latest model if omitted
@@ -2888,9 +2889,9 @@ relation is a build error, not a silent permanent 403:
 //     relations
 //       define viewer: [user]
 //       define editor: [user]
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+r2e_openfga::model!(pub mod authz = "fga/model.fga");
 // tests / tiny models: inline DSL instead of a path
-r2e::r2e_openfga::model!(pub mod tiny_authz = inline r#"model
+r2e_openfga::model!(pub mod tiny_authz = inline r#"model
   schema 1.1
 type user"#);
 ```
@@ -2929,9 +2930,9 @@ rejected. The standalone parser is `r2e_openfga::model_parser`
 resolver supplies the object id:
 
 ```rust
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");   // or `use crate::authz;`
+r2e_openfga::model!(pub mod authz = "fga/model.fga");   // or `use crate::authz;`
 
 #[controller(path = "/documents")]
 pub struct DocumentController {
@@ -2981,9 +2982,9 @@ request sees the change). `check` goes through the registry (cached) and has
 no assignability bound (checks may target computed relations):
 
 ```rust
-use r2e::r2e_openfga::FgaClient;
+use r2e_openfga::FgaClient;
 
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");   // or `use crate::authz;`
+r2e_openfga::model!(pub mod authz = "fga/model.fga");   // or `use crate::authz;`
 
 #[controller(path = "/documents")]
 pub struct DocumentController {
@@ -2998,8 +2999,8 @@ impl DocumentController {
         -> Result<Json<bool>, HttpError> {
         // `InvalidObjectId` / `OpenFgaError` do NOT convert into `HttpError`:
         // map them explicitly (400 for bad input, 500 for a backend failure).
-        let bad = |e: r2e::r2e_openfga::InvalidObjectId| HttpError::bad_request(e.to_string());
-        let fail = |e: r2e::r2e_openfga::OpenFgaError| HttpError::internal(e.to_string());
+        let bad = |e: r2e_openfga::InvalidObjectId| HttpError::bad_request(e.to_string());
+        let fail = |e: r2e_openfga::OpenFgaError| HttpError::internal(e.to_string());
 
         let grantee = authz::user::try_id(&user_id).map_err(bad)?;   // rejects `:`/`#`/`*` → 400
         let doc = authz::document::try_id(&doc_id).map_err(bad)?;
@@ -3033,7 +3034,7 @@ the raw client; invalidate the cache manually:
 
 ```rust
 # async fn __doc(backend: GrpcBackend, registry: OpenFgaRegistry) -> Result<(), Box<dyn std::error::Error>> {
-use r2e::r2e_openfga::openfga_rs::{tonic, TupleKey, WriteRequest, WriteRequestWrites};
+use r2e_openfga::openfga_rs::{tonic, TupleKey, WriteRequest, WriteRequestWrites};
 let mut client = backend.client().clone();
 client.write(tonic::Request::new(WriteRequest {
     store_id: backend.store_id().into(),
@@ -3052,7 +3053,7 @@ tuple lookup, no transitive eval) and seed tuples:
 
 ```rust
 # fn __doc(builder: AppBuilder) -> impl Sized {
-use r2e::r2e_openfga::{MockBackend, OpenFgaRegistry};
+use r2e_openfga::{MockBackend, OpenFgaRegistry};
 let mock = MockBackend::new();
 mock.add_tuple("user:alice", "viewer", "document:readme");
 // provide during app boot / test override:

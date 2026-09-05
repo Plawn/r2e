@@ -4,13 +4,13 @@ use r2e::prelude::*;
 
 pub use serde::{Deserialize, Serialize};
 
-pub use r2e::r2e_openfga::{
+pub use r2e_openfga::{
     FgaCheck, FgaClient, GrpcBackend, MockBackend, OpenFga, OpenFgaConfig, OpenFgaRegistry,
 };
 
 // The typed module the snippets refer to as `authz` — generated from the
 // same `fga/model.fga` the blocks name.
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
 /// The document a route returns.
 #[derive(Clone, Serialize)]

@@ -2,19 +2,22 @@
 
 ## TL;DR
 
-Zanzibar-style relationship-based access control via [OpenFGA](https://openfga.dev/), schema-first: the `.fga` model checked into the repo is the single source of truth. `model!(pub mod authz = "fga/model.fga")` parses and validates it at **compile time** and generates a typed API — guards are declared as `#[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]`, where a typo'd relation is a build error (with a did-you-mean) instead of a silent permanent 403. In handlers, `FgaClient` is the typed client: `grant`/`revoke` compile only for subject types the model allows (`DirectlyAssignable`) and invalidate the decision cache write-through; `check` covers handler-level checks. (No `list_objects` — OpenFGA cannot signal truncation, see below.) Setup is one line: `.plugin(OpenFga::model(authz::MODEL))` owns the store lifecycle at boot — ensure/create the store, apply the model when it differs (dev/test), or *verify* the live store matches and fail startup otherwise (prod, `openfga.apply_model: false`), pinning the resolved `model_id` for all checks. Requires feature `openfga`. Dynamic resolvers and `id()`/`try_id()` reject the FGA metacharacters `:`/`#`/`*` (injection guard), and so does the identity subject.
+Zanzibar-style relationship-based access control via [OpenFGA](https://openfga.dev/), schema-first: the `.fga` model checked into the repo is the single source of truth. `model!(pub mod authz = "fga/model.fga")` parses and validates it at **compile time** and generates a typed API — guards are declared as `#[guard(FgaCheck::has(authz::document::viewer).from_path(path::doc_id))]`, where a typo'd relation is a build error (with a did-you-mean) instead of a silent permanent 403. In handlers, `FgaClient` is the typed client: `grant`/`revoke` compile only for subject types the model allows (`DirectlyAssignable`) and invalidate the decision cache write-through; `check` covers handler-level checks. (No `list_objects` — OpenFGA cannot signal truncation, see below.) Setup is one line: `.plugin(OpenFga::model(authz::MODEL))` owns the store lifecycle at boot — ensure/create the store, apply the model when it differs (dev/test), or *verify* the live store matches and fail startup otherwise (prod, `openfga.apply_model: false`), pinning the resolved `model_id` for all checks. Dynamic resolvers and `id()`/`try_id()` reject the FGA metacharacters `:`/`#`/`*` (injection guard), and so does the identity subject.
 
 ## Objective
 
 Fine-grained, relationship-based authorization ("does `user:alice` have `viewer` on `document:readme`?") with the same compile-time safety as the rest of R2E: relations, object types, and assignable subject types are all checked against the authorization model at build time.
 
-## Feature Flag
+## Dependency
 
 ```toml
-r2e = { features = ["openfga"] }
+r2e-openfga = "0.3"
 ```
 
-Included in `full`. Crates: `r2e-openfga` (runtime + guard), `r2e-openfga-model` (standalone `.fga` parser, no proc-macro deps), `r2e-openfga-macros` (`model!`).
+A direct dependency, not a facade feature: `r2e-openfga` is held back from the
+crates.io release while its gRPC client is a `[patch.crates-io]` fork (see
+`vendor/README.md` and `scripts/publish-crates.sh`), so the facade does not
+re-export it. Crates: `r2e-openfga` (runtime + guard), `r2e-openfga-model` (standalone `.fga` parser, no proc-macro deps), `r2e-openfga-macros` (`model!`).
 
 ## Core Concepts
 
@@ -43,7 +46,7 @@ type document
 Then generate the typed API (path is relative to the crate root):
 
 ```rust
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+r2e_openfga::model!(pub mod authz = "fga/model.fga");
 ```
 
 The file is parsed **and semantically validated at compile time**: unknown types, relations (`[team#membr]`), or conditions in the model fail the build at the invocation with the offending `.fga` line. Editing the `.fga` retriggers compilation (the source is embedded via `include_str!`).
@@ -69,7 +72,7 @@ For tests and tiny models, the DSL can be inlined: `model!(pub mod authz = inlin
 
 ```rust
 use r2e::prelude::*;
-use r2e::r2e_openfga::FgaCheck;
+use r2e_openfga::FgaCheck;
 use crate::authz;
 
 #[controller(path = "/documents")]
@@ -140,9 +143,9 @@ FGA metacharacters are rejected on both sides of a check, fail-closed:
 One line; the plugin provides the beans (`OpenFgaRegistry`, `FgaClient`, `OpenFgaHandle`) and owns the store lifecycle:
 
 ```rust
-use r2e::r2e_openfga::OpenFga;
+use r2e_openfga::OpenFga;
 
-r2e::r2e_openfga::model!(pub mod authz = "fga/model.fga");
+r2e_openfga::model!(pub mod authz = "fga/model.fga");
 
 b.load_config::<()>()                       // config must be loaded first
     .plugin(OpenFga::model(authz::MODEL))

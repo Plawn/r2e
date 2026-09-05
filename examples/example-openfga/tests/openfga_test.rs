@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use example_openfga::{authz, OpenFgaApp};
-use r2e::r2e_openfga::FgaClient;
+use r2e_openfga::FgaClient;
 use r2e_devservices::DevOpenFga;
 use r2e_test::TestApp;
 
