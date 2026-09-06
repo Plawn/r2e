@@ -25,6 +25,7 @@
 //! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
 //! | `prometheus`  | no      | `r2e-prometheus`          |
 //! | `metrics-facade` | no   | `r2e-prometheus/metrics-facade` — HTTP metrics through the `metrics` facade into the app's own recorder (**not** in `full`) |
+//! | `events-iggy`     | no  | `r2e-events-iggy` (Apache Iggy backend) |
 //! | `events-kafka`    | no  | `r2e-events-kafka` (Apache Kafka backend) |
 //! | `events-pulsar`   | no  | `r2e-events-pulsar` (Apache Pulsar backend) |
 //! | `events-rabbitmq` | no  | `r2e-events-rabbitmq` (RabbitMQ/AMQP backend) |

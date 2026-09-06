@@ -166,6 +166,39 @@ if bad:
 print("  ok — keywords, categories, description and license are publishable")
 PY
 
+# `cargo package` only packs files under the crate root, so the LICENSE at the
+# workspace root travels with nothing. Apache-2.0 §4(a) asks that every
+# recipient get a copy of the License, and a .crate is a distribution — hence
+# one real copy per crate root (what tokio and serde do). They are checked, not
+# regenerated: a publish run that rewrites the tree it is publishing is the very
+# drift this script exists to prevent.
+say "Checking the per-crate LICENSE copies"
+python3 <<'PY'
+import hashlib, json, os, subprocess, sys
+
+meta = json.loads(subprocess.check_output(
+    ["cargo", "metadata", "--no-deps", "--format-version", "1"]))
+root = meta["workspace_root"]
+want = hashlib.sha256(open(os.path.join(root, "LICENSE"), "rb").read()).hexdigest()
+
+bad = []
+for pkg in sorted(meta["packages"], key=lambda p: p["name"]):
+    if pkg.get("publish") == []:
+        continue
+    path = os.path.join(os.path.dirname(pkg["manifest_path"]), "LICENSE")
+    if not os.path.isfile(path):
+        bad.append(f"{pkg['name']}: no LICENSE in the crate root")
+    elif hashlib.sha256(open(path, "rb").read()).hexdigest() != want:
+        bad.append(f"{pkg['name']}: LICENSE differs from the workspace root copy")
+
+if bad:
+    for line in bad:
+        print("  " + line, file=sys.stderr)
+    print("fix with: scripts/sync-licenses.sh", file=sys.stderr)
+    sys.exit(1)
+print("  ok — every publishable crate carries the license")
+PY
+
 # ---------------------------------------------------------------------------
 # Publish
 # ---------------------------------------------------------------------------

@@ -11,6 +11,15 @@ keywords.workspace = true
 categories.workspace = true
 description = "Quarkus-like ergonomic layer over Axum — declarative controllers, compile-time DI, and zero runtime reflection"
 
+# Without this, docs.rs builds the facade with its *default* features and the
+# page users land on documents only security/events/utils — scheduler, executor,
+# cache, openapi, grpc, mcp, tenant and the rest are simply absent. `full` rather
+# than `all-features`: the latter would also pull the event backends (rdkafka +
+# cmake), diesel, QUIC and dev-reload into the docs build, none of which belong
+# on the front page and each of which is a way for it to fail.
+[package.metadata.docs.rs]
+features = ["full"]
+
 [features]
 default = ["security", "events", "utils"]
 full = ["security", "events", "utils", "scheduler", "executor", "cache", "rate-limit", "openapi", "oidc", "prometheus", "observability", "ws", "multipart", "grpc", "grpc-reflection", "grpc-web", "static", "tenant", "mcp"]
