@@ -237,7 +237,7 @@ Covers `boot()`, `resolve_store()`, `stores_by_name()`, `resolve_model()`, `late
 
 ### Option A: tonic mock service (unit tests, fast)
 
-Build a `MockOpenFgaService` implementing `OpenFgaService` (the openfga-rs trait), start a tonic server on a random port, connect `GrpcBackend` / the plugin to it.
+Build a `MockOpenFgaService` implementing the `OpenFgaService` server trait, start a tonic server on a random port, connect `GrpcBackend` / the plugin to it. Note: the checked-in client is generated with `build_server(false)`, so this needs `r2e-openfga/codegen` to emit the server trait too (behind its own file, kept out of the published crate).
 
 ### Option B: DevOpenFga container (integration tests, thorough)
 

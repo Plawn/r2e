@@ -9,7 +9,8 @@ requires: guards
 
 ### TL;DR
 
-- Depend on `r2e-openfga` directly and install the `OpenFga::model(authz::MODEL)`
+- Enable the facade feature `openfga` (or depend on `r2e-openfga` directly) and
+  install the `OpenFga::model(authz::MODEL)`
   plugin: it owns the store/model lifecycle at boot and provides
   `OpenFgaRegistry`, `FgaClient` and `OpenFgaHandle`.
 - Check the `.fga` model into the repo and generate the typed module with
@@ -37,8 +38,8 @@ requires: guards
 This is the guard family for relationship-based authorization: `FgaCheck` is a
 decorator spec applied with `#[guard(...)]` like any other (see llm/guards.md).
 
-Requires the `r2e-openfga` crate as a direct dependency — it is not reached
-through the facade. Zanzibar-style
+Enabled by the facade feature `openfga`, or by depending on `r2e-openfga`
+directly. Zanzibar-style
 relationship checks: "does `user:<sub>` have `<relation>` on `<type>:<id>`?".
 The `FgaCheck` guard runs post-auth, so the route **requires an identity**
 (struct-level `#[inject(identity)]` or an identity handler param); the subject
@@ -288,7 +289,8 @@ the raw client; invalidate the cache manually:
 
 ```rust
 # async fn __doc(backend: GrpcBackend, registry: OpenFgaRegistry) -> Result<(), Box<dyn std::error::Error>> {
-use r2e_openfga::openfga_rs::{tonic, TupleKey, WriteRequest, WriteRequestWrites};
+use r2e_openfga::proto::{TupleKey, WriteRequest, WriteRequestWrites};
+use r2e_openfga::tonic;
 let mut client = backend.client().clone();
 client.write(tonic::Request::new(WriteRequest {
     store_id: backend.store_id().into(),

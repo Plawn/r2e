@@ -18,7 +18,7 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["openfga"] }
+r2e = { version = "0.3", features = ["openfga"] }
 ```
 
 ## Setup
@@ -97,12 +97,13 @@ impl DocumentController {
 ### Managing relationship tuples
 
 Writes, deletes, and `list_objects` are **not** on the registry — they go
-through the raw `openfga-rs` client exposed by `GrpcBackend::client()`. After
+through the raw generated client exposed by `GrpcBackend::client()`. After
 mutating tuples you must invalidate the affected cache entries yourself (the
 cache only tracks direct decisions):
 
 ```rust
-use r2e::r2e_openfga::openfga_rs::{tonic, TupleKey, WriteRequest, WriteRequestWrites};
+use r2e::r2e_openfga::proto::{TupleKey, WriteRequest, WriteRequestWrites};
+use r2e::r2e_openfga::tonic;
 
 // Grant access via the raw gRPC client.
 let mut client = backend.client().clone();

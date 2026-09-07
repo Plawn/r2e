@@ -132,9 +132,9 @@ Dependency flow: `r2e-rt` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2
 
 **`r2e-rt` is the same rule for the runtime**: go through `r2e_core::rt` (or `r2e_rt` directly, in crates below `r2e-core`) rather than naming `tokio` / `tokio-util` / `tokio-stream`. Both boundaries are enforced in CI by `scripts/check-dep-boundary.sh` (manifests) and `scripts/check-source-boundary.sh` (source occurrences, against a baseline that only ever shrinks). Migration status and the by-design exceptions (`r2e-rt` itself plus the `r2e-test` / `r2e-devservices` harnesses, which own a runtime on purpose) live in `plans/runtime-http-dependency-containment.md`. Both baselines are at their end state: the tokio source baseline is **empty** and the tokio dep allowlist is exactly those three crates; the axum source baseline is confined to `r2e-http/src/`.
 
-### Vendored Dependencies
+### Generated Code Checked Into the Tree
 
-`vendor/openfga-rs/` — patched copy using tonic ~0.12 with `features = ["tls", "channel", "codegen", "prost"]` to avoid dual axum-core conflict. See `vendor/README.md`.
+`r2e-openfga/src/proto/openfga.v1.rs` — the OpenFGA gRPC client, generated from `r2e-openfga/proto/**.proto`. There is **no `build.rs`**, deliberately: a build script would make `protoc` a hard requirement for anyone enabling the `openfga` feature, even though such a consumer never authors a proto. Regenerate with `scripts/generate-openfga-proto.sh` (the only thing needing protoc) and commit the result; CI runs it with `--check` and fails on drift. The generator is `r2e-openfga/codegen` (`publish = false`). Client only — R2E consumes OpenFGA, it never serves the API — and no serde derive: prost tags oneof variants by Rust variant name, which does not match OpenFGA's JSON, so `model_convert.rs` converts the AST by hand.
 
 ### Core Concepts
 

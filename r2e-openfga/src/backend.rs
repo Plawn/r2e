@@ -4,14 +4,13 @@
 //! custom authorization check (REST proxy, in-process evaluation, etc.).
 //!
 //! Provided implementations:
-//! - [`GrpcBackend`] — production gRPC client wrapping `openfga-rs`
+//! - [`GrpcBackend`] — production gRPC client over the generated [`crate::proto`] stubs
 //! - [`MockBackend`] — in-memory mock for tests
 
 use crate::config::OpenFgaConfig;
 use crate::error::OpenFgaError;
-use openfga_rs::open_fga_service_client::OpenFgaServiceClient;
-use openfga_rs::tonic;
-use openfga_rs::{
+use crate::proto::open_fga_service_client::OpenFgaServiceClient;
+use crate::proto::{
     CheckRequest, CheckRequestTupleKey, TupleKey, TupleKeyWithoutCondition, WriteRequest,
     WriteRequestDeletes, WriteRequestWrites,
 };
@@ -71,7 +70,7 @@ pub trait OpenFgaBackend: Send + Sync + 'static {
 
 // ── GrpcBackend ────────────────────────────────────────────────────────
 
-/// Production gRPC backend wrapping the `openfga-rs` client.
+/// Production gRPC backend over the generated [`crate::proto`] client.
 ///
 /// Use [`client()`](Self::client) for raw access to the full OpenFGA API
 /// (batch writes, list objects, model management, etc.).
@@ -82,7 +81,8 @@ pub trait OpenFgaBackend: Send + Sync + 'static {
 ///
 /// ```ignore
 /// use r2e_openfga::{OpenFgaConfig, GrpcBackend};
-/// use openfga_rs::{ListObjectsRequest, TupleKey, WriteRequest, WriteRequestWrites};
+/// use r2e_openfga::proto::{ListObjectsRequest, TupleKey, WriteRequest, WriteRequestWrites};
+/// use r2e_openfga::tonic;
 ///
 /// let config = OpenFgaConfig::new("http://localhost:8080", "store-id");
 /// let backend = GrpcBackend::connect(&config).await?;

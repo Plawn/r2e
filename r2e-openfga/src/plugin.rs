@@ -56,9 +56,9 @@
 
 use std::sync::Arc;
 
-use openfga_rs::open_fga_service_client::OpenFgaServiceClient;
-use openfga_rs::tonic::transport::Channel;
-use openfga_rs::{
+use crate::proto::open_fga_service_client::OpenFgaServiceClient;
+use tonic::transport::Channel;
+use crate::proto::{
     AuthorizationModel, CreateStoreRequest, GetStoreRequest, ListStoresRequest,
     ReadAuthorizationModelRequest, ReadAuthorizationModelsRequest, Store,
     WriteAuthorizationModelRequest,

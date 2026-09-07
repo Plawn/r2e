@@ -15,7 +15,10 @@ description = "OpenFGA fine-grained authorization for R2E - Zanzibar-style relat
 r2e-core = {workspace = true}
 r2e-openfga-model = {workspace = true}
 r2e-openfga-macros = {workspace = true}
-openfga-rs = {workspace = true}
+tonic = {workspace = true, features = ["tls-ring", "tls-webpki-roots", "channel", "codegen"]}
+tonic-prost = {workspace = true}
+prost = {workspace = true}
+prost-types = {workspace = true}
 dashmap = {workspace = true}
 tracing = {workspace = true}
 serde = {workspace = true}

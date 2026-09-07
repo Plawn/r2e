@@ -9,21 +9,6 @@
 #
 # HELD BACK from the release, and why:
 #
-#   r2e-openfga         depends on `openfga-rs` through the `[patch.crates-io]`
-#   r2e-openfga-macros  entry pointing at vendor/openfga-rs. A `[patch]` is a
-#   r2e-openfga-model   workspace-local construct: it does NOT travel with a
-#                       published crate. A consumer enabling this would resolve
-#                       the real openfga-rs 0.1.0 (tonic ~0.11), which drags in
-#                       axum-core 0.4 next to R2E's 0.5 — the dual axum-core
-#                       that vendor/README.md exists to avoid. `model` and
-#                       `macros` are themselves clean (a pure .fga parser and a
-#                       proc-macro), but shipping them alone would publish a
-#                       macro whose generated code names a crate that is not on
-#                       crates.io, so the trio ships together or not at all.
-#                       Unblock: publish the fork under a name we own, or
-#                       generate the gRPC client inside r2e-openfga, then drop
-#                       both this exclusion and the [patch.crates-io] section.
-#
 #   r2e-cli             `src/commands/docs.rs` and `llm_docs.rs` reach outside
 #                       the package with include_str!("../../../docs/...") and
 #                       ../../../llm/*.md. `cargo package` only packs files
@@ -58,7 +43,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-HELD_BACK=(r2e-openfga r2e-openfga-macros r2e-openfga-model r2e-cli)
+HELD_BACK=(r2e-cli)
 
 DRY_RUN=0
 RESUME=0
@@ -253,7 +238,4 @@ Follow-ups:
   * r2e-test ships without its dev-dependency on the facade (path-only on
     purpose — see the comment in r2e-test/Cargo.toml). Nothing to do; it is
     stripped at packaging and the tests still run in the workspace.
-  * The facade's `openfga` feature is commented out in r2e/Cargo.toml. Restore
-    it, the optional dependency, and the two re-exports in r2e/src/lib.rs in the
-    same change that unblocks r2e-openfga.
 EOF

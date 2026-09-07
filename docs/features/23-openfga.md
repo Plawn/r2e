@@ -14,10 +14,8 @@ Fine-grained, relationship-based authorization ("does `user:alice` have `viewer`
 r2e-openfga = "0.3"
 ```
 
-A direct dependency, not a facade feature: `r2e-openfga` is held back from the
-crates.io release while its gRPC client is a `[patch.crates-io]` fork (see
-`vendor/README.md` and `scripts/publish-crates.sh`), so the facade does not
-re-export it. Crates: `r2e-openfga` (runtime + guard), `r2e-openfga-model` (standalone `.fga` parser, no proc-macro deps), `r2e-openfga-macros` (`model!`).
+Also available as the facade feature `openfga` (`r2e = { version = "0.3",
+features = ["openfga"] }`), which re-exports the crate and its prelude. Crates: `r2e-openfga` (runtime + guard), `r2e-openfga-model` (standalone `.fga` parser, no proc-macro deps), `r2e-openfga-macros` (`model!`).
 
 ## Core Concepts
 

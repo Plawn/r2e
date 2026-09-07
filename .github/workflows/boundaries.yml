@@ -20,3 +20,17 @@ jobs:
 
       - name: Source boundary (src/ occurrences)
         run: ./scripts/check-source-boundary.sh
+
+  openfga-proto:
+    name: OpenFGA generated client is in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `r2e-openfga` ships the generated gRPC client instead of a build.rs, so
+      # protoc is a CI-only tool: it must never be needed to *build* the crate.
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Regenerate and diff
+        run: ./scripts/generate-openfga-proto.sh --check

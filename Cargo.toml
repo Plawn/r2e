@@ -19,6 +19,7 @@ members = [
     "r2e-prometheus",
     "r2e-observability",
     "r2e-openfga",
+    "r2e-openfga/codegen",
     "r2e-openfga/model",
     "r2e-openfga/macros",
     "r2e-grpc",
@@ -55,9 +56,6 @@ members = [
 # Resolver 3 (the edition-2024 default) is MSRV-aware: `cargo update` will not
 # pull a dependency whose `rust-version` is above the one declared below.
 resolver = "3"
-
-[patch.crates-io]
-openfga-rs = { path = "vendor/openfga-rs" }
 
 [workspace.package]
 version = "0.3.0"
@@ -226,7 +224,6 @@ mime_guess = "2"
 dioxus-devtools = { version = "0.7", features = ["serve"] }
 
 # Misc
-openfga-rs = "0.1"
 inventory = "0.3"
 
 # QUIC / HTTP3

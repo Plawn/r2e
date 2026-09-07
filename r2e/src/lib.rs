@@ -24,6 +24,7 @@
 //! | `rate-limit`  | no      | `r2e-rate-limit`          |
 //! | `openapi`     | no      | `r2e-openapi` (also add `schemars = "1"` to your deps) |
 //! | `prometheus`  | no      | `r2e-prometheus`          |
+//! | `openfga`     | no      | `r2e-openfga`             |
 //! | `metrics-facade` | no   | `r2e-prometheus/metrics-facade` — HTTP metrics through the `metrics` facade into the app's own recorder (**not** in `full`) |
 //! | `events-kafka`    | no  | `r2e-events-kafka` (Apache Kafka backend) |
 //! | `events-pulsar`   | no  | `r2e-events-pulsar` (Apache Pulsar backend) |
@@ -94,6 +95,9 @@ pub use r2e_openapi;
 
 #[cfg(feature = "prometheus")]
 pub use r2e_prometheus;
+
+#[cfg(feature = "openfga")]
+pub use r2e_openfga;
 
 #[cfg(feature = "grpc")]
 pub use r2e_grpc;
@@ -364,6 +368,9 @@ pub mod prelude {
 
     #[cfg(feature = "oidc")]
     pub use r2e_oidc::prelude::*;
+
+    #[cfg(feature = "openfga")]
+    pub use r2e_openfga::prelude::*;
 
     #[cfg(feature = "grpc")]
     pub use r2e_grpc::prelude::*;

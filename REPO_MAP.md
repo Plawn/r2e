@@ -11,7 +11,7 @@ Quick-reference guide to the R2E workspace. Each section lists every file with a
 ## Workspace root
 
 ```
-Cargo.toml              Workspace manifest (all members, patch.crates-io for vendored deps)
+Cargo.toml              Workspace manifest (all members)
 Cargo.lock              Dependency lock file
 application.yaml        Base configuration (loaded by R2eConfig)
 CLAUDE.md               AI coding guidelines and full architecture reference
@@ -603,17 +603,19 @@ application-product.yaml    Product service config
 
 ---
 
-## vendor/
+## r2e-openfga/proto + codegen
 
-### openfga-rs — Vendored OpenFGA client
-
-Patched to use tonic ~0.12 with `channel`-only features (avoids axum-core version conflict).
+### The OpenFGA gRPC client, generated and committed
 
 ```
-vendor/openfga-rs/
-  src/lib.rs                OpenFGA gRPC client
-  proto/                    Protobuf definitions (openfga, google, validate)
-  README.md                 Vendor rationale and patch details
+r2e-openfga/proto/          Protobuf definitions (openfga, google, validate, openapiv2)
+r2e-openfga/src/proto.rs    Module doc + `include!` of the generated file
+r2e-openfga/src/proto/      openfga.v1.rs — generated, committed, client-only
+r2e-openfga/codegen/        The generator (publish = false); the only protoc consumer
+scripts/generate-openfga-proto.sh   Regenerate, or `--check` for CI drift
 ```
 
-The workspace `[patch.crates-io]` section in the root `Cargo.toml` points to this directory.
+`r2e-openfga` has no `build.rs` on purpose: one would make `protoc` a hard build
+requirement for every consumer enabling the `openfga` feature. Committing the
+output keeps the crate buildable with nothing but cargo, and the CI drift check
+(`.github/workflows/boundaries.yml`) keeps it honest.

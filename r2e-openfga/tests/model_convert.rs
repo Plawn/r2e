@@ -44,9 +44,9 @@ fn model_json(dsl: &str) -> String {
 }
 
 fn find_type<'a>(
-    types: &'a [openfga_rs::TypeDefinition],
+    types: &'a [r2e_openfga::proto::TypeDefinition],
     name: &str,
-) -> &'a openfga_rs::TypeDefinition {
+) -> &'a r2e_openfga::proto::TypeDefinition {
     types
         .iter()
         .find(|t| t.r#type == name)
@@ -55,7 +55,7 @@ fn find_type<'a>(
 
 #[test]
 fn converts_every_construct_to_prost() {
-    use openfga_rs::userset::Userset as Oneof;
+    use r2e_openfga::proto::userset::Userset as Oneof;
 
     let compiled = compile_model(&model_json(RICH_DSL)).expect("compiles");
 
@@ -145,7 +145,7 @@ fn converts_every_construct_to_prost() {
         .expect("wildcard reference present");
     assert!(matches!(
         wildcard_ref.relation_or_wildcard,
-        Some(openfga_rs::relation_reference::RelationOrWildcard::Wildcard(_))
+        Some(r2e_openfga::proto::relation_reference::RelationOrWildcard::Wildcard(_))
     ));
     assert_eq!(wildcard_ref.r#type, "user");
 
@@ -156,7 +156,7 @@ fn converts_every_construct_to_prost() {
         .find(|r| r.r#type == "team")
         .expect("team#member reference present");
     match team_ref.relation_or_wildcard.as_ref().unwrap() {
-        openfga_rs::relation_reference::RelationOrWildcard::Relation(rel) => {
+        r2e_openfga::proto::relation_reference::RelationOrWildcard::Relation(rel) => {
             assert_eq!(rel, "member");
         }
         other => panic!("expected Relation, got {other:?}"),
@@ -171,7 +171,7 @@ fn converts_every_construct_to_prost() {
     let param = &cond.parameters["x"];
     assert_eq!(
         param.type_name,
-        openfga_rs::condition_param_type_ref::TypeName::String as i32
+        r2e_openfga::proto::condition_param_type_ref::TypeName::String as i32
     );
     assert!(param.generic_types.is_empty());
 }
@@ -182,7 +182,7 @@ fn round_trip_equality_ignores_server_noise() {
 
     // Build a "live" model from the SAME compiled parts, then inject noise:
     // an id, module/source_info annotations, and empty-vs-absent metadata.
-    let mut live = openfga_rs::AuthorizationModel {
+    let mut live = r2e_openfga::proto::AuthorizationModel {
         id: "01G5JAVJ41T49E9TT3SKVS7X1J".to_owned(),
         schema_version: compiled.schema_version.clone(),
         type_definitions: compiled.type_definitions.clone(),
@@ -192,12 +192,12 @@ fn round_trip_equality_ignores_server_noise() {
     for td in &mut live.type_definitions {
         if let Some(md) = td.metadata.as_mut() {
             md.module = "core".to_owned();
-            md.source_info = Some(openfga_rs::SourceInfo {
+            md.source_info = Some(r2e_openfga::proto::SourceInfo {
                 file: "model.fga".to_owned(),
             });
             for rm in md.relations.values_mut() {
                 rm.module = "core".to_owned();
-                rm.source_info = Some(openfga_rs::SourceInfo {
+                rm.source_info = Some(r2e_openfga::proto::SourceInfo {
                     file: "model.fga".to_owned(),
                 });
             }
@@ -206,9 +206,9 @@ fn round_trip_equality_ignores_server_noise() {
 
     // Store adds condition metadata noise.
     for cond in live.conditions.values_mut() {
-        cond.metadata = Some(openfga_rs::ConditionMetadata {
+        cond.metadata = Some(r2e_openfga::proto::ConditionMetadata {
             module: "core".to_owned(),
-            source_info: Some(openfga_rs::SourceInfo {
+            source_info: Some(r2e_openfga::proto::SourceInfo {
                 file: "model.fga".to_owned(),
             }),
         });
@@ -222,7 +222,7 @@ fn round_trip_equality_ignores_server_noise() {
         .find(|t| t.r#type == "user")
         .unwrap();
     assert!(live_user.metadata.is_none());
-    live_user.metadata = Some(openfga_rs::Metadata {
+    live_user.metadata = Some(r2e_openfga::proto::Metadata {
         relations: HashMap::new(),
         module: String::new(),
         source_info: None,
@@ -236,7 +236,7 @@ fn round_trip_equality_ignores_server_noise() {
         .unwrap();
     live_team.metadata.as_mut().unwrap().relations.insert(
         "ghost".to_owned(),
-        openfga_rs::RelationMetadata {
+        r2e_openfga::proto::RelationMetadata {
             directly_related_user_types: Vec::new(),
             module: "core".to_owned(),
             source_info: None,
@@ -256,10 +256,10 @@ fn round_trip_equality_ignores_server_noise() {
 
 #[test]
 fn inequality_userset_change_names_type() {
-    use openfga_rs::userset::Userset as Oneof;
+    use r2e_openfga::proto::userset::Userset as Oneof;
 
     let compiled = compile_model(&model_json(RICH_DSL)).expect("compiles");
-    let mut live = openfga_rs::AuthorizationModel {
+    let mut live = r2e_openfga::proto::AuthorizationModel {
         id: "01G5JAVJ41T49E9TT3SKVS7X1J".to_owned(),
         schema_version: compiled.schema_version.clone(),
         type_definitions: compiled.type_definitions.clone(),
@@ -274,8 +274,8 @@ fn inequality_userset_change_names_type() {
         .unwrap();
     doc.relations.insert(
         "viewer".to_owned(),
-        openfga_rs::Userset {
-            userset: Some(Oneof::This(openfga_rs::DirectUserset {})),
+        r2e_openfga::proto::Userset {
+            userset: Some(Oneof::This(r2e_openfga::proto::DirectUserset {})),
         },
     );
 
@@ -290,7 +290,7 @@ fn inequality_userset_change_names_type() {
 #[test]
 fn inequality_schema_version_mentioned() {
     let compiled = compile_model(&model_json(RICH_DSL)).expect("compiles");
-    let live = openfga_rs::AuthorizationModel {
+    let live = r2e_openfga::proto::AuthorizationModel {
         id: String::new(),
         schema_version: "1.2".to_owned(),
         type_definitions: compiled.type_definitions.clone(),
@@ -312,7 +312,7 @@ fn inequality_type_present_only_on_one_side() {
     let compiled = compile_model(&model_json(RICH_DSL)).expect("compiles");
 
     // Live side drops the `team` type entirely.
-    let mut live = openfga_rs::AuthorizationModel {
+    let mut live = r2e_openfga::proto::AuthorizationModel {
         id: String::new(),
         schema_version: compiled.schema_version.clone(),
         type_definitions: compiled.type_definitions.clone(),
@@ -405,7 +405,7 @@ type document
     let compiled_a = compile_model(&model_json(a)).expect("a compiles");
     let compiled_b = compile_model(&model_json(b)).expect("b compiles");
 
-    let live_b = openfga_rs::AuthorizationModel {
+    let live_b = r2e_openfga::proto::AuthorizationModel {
         id: "01G5JAVJ41T49E9TT3SKVS7X1J".to_owned(),
         schema_version: compiled_b.schema_version.clone(),
         type_definitions: compiled_b.type_definitions.clone(),

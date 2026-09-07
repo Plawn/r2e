@@ -1,0 +1,11 @@
+[package]
+name = "r2e-openfga-codegen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Regenerates the checked-in OpenFGA gRPC client (not published)"
+
+[dependencies]
+tonic-prost-build = { workspace = true }

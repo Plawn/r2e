@@ -51,13 +51,7 @@ prometheus = ["dep:r2e-prometheus"]
 # the recorder/exporter and the scrape endpoint. Not in `full` — it is a stack
 # choice, not a feature to accumulate.
 metrics-facade = ["prometheus", "r2e-prometheus/metrics-facade"]
-# `openfga` is HELD BACK from the crates.io release: `r2e-openfga` depends on
-# the fork in `vendor/openfga-rs`, reached through a `[patch.crates-io]` that
-# does not travel with a published crate (a consumer would resolve the real
-# openfga-rs 0.1.0 on tonic ~0.11 and get a dual axum-core). Restore this
-# feature, the optional dependency below, and the two `r2e_openfga` re-exports
-# in `src/lib.rs` once that client ships under a name we own.
-# openfga = ["dep:r2e-openfga"]
+openfga = ["dep:r2e-openfga"]
 observability = ["dep:r2e-observability"]
 grpc = ["dep:r2e-grpc", "r2e-security?/grpc"]
 mcp = ["dep:r2e-mcp"]
@@ -96,7 +90,7 @@ r2e-rate-limit = {workspace = true, optional = true}
 r2e-oidc = {workspace = true, optional = true}
 r2e-openapi = {workspace = true, optional = true}
 r2e-prometheus = {workspace = true, optional = true}
-# r2e-openfga = {workspace = true, optional = true}  # see the `openfga` note above
+r2e-openfga = {workspace = true, optional = true}
 r2e-grpc = {workspace = true, optional = true}
 r2e-mcp = {workspace = true, optional = true}
 r2e-static = {workspace = true, optional = true}

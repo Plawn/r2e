@@ -1,19 +1,19 @@
-//! Conversion of the `model!`-generated schema-1.1 JSON into the prost
-//! request types of `openfga_rs`, plus structural comparison with a live
-//! store model.
+//! Conversion of the `model!`-generated schema-1.1 JSON into the generated
+//! prost request types (see [`crate::proto`]), plus structural comparison with
+//! a live store model.
 //!
 //! The `model!` macro emits `authz::MODEL`: a `&'static str` holding the
 //! authorization model as schema-1.1 JSON (the serde shape of
 //! [`r2e_openfga_model::AuthorizationModel`]). The `OpenFga` plugin needs the
-//! same model as `openfga_rs` wire types — both to write it over gRPC
+//! same model as wire types — both to write it over gRPC
 //! (`WriteAuthorizationModel`) and to compare it structurally against a live
 //! model fetched from the store (`ReadAuthorizationModels`).
 //!
-//! The `openfga_rs` prost types derive serde, but their oneof enums serialize
-//! with Rust variant-name external tagging, which does **not** match the
-//! OpenFGA JSON. So the JSON is first deserialized back into the
-//! `r2e_openfga_model` AST, then converted AST → prost by hand. Never try to
-//! serde-deserialize the OpenFGA JSON directly into the prost types.
+//! The wire types carry no serde derive, and deliberately so: prost tags oneof
+//! variants by Rust variant name, which does **not** match the OpenFGA JSON, so
+//! a derived impl would be a trap rather than a shortcut. The JSON is instead
+//! deserialized back into the `r2e_openfga_model` AST and converted AST → prost
+//! by hand below.
 //!
 //! Comparison ignores server-side noise — the model `id`, `module` /
 //! `source_info` annotations, and empty-vs-absent metadata containers — and
@@ -28,7 +28,7 @@ use r2e_openfga_model as ast;
 
 use crate::error::OpenFgaError;
 
-/// The compiled-in authorization model, converted to `openfga_rs` wire types.
+/// The compiled-in authorization model, converted to the generated wire types.
 ///
 /// The fields mirror `WriteAuthorizationModelRequest` (minus `store_id`), so a
 /// write request is a direct field-for-field construction.
@@ -37,10 +37,10 @@ pub struct CompiledModel {
     /// Schema version, e.g. `"1.1"`.
     pub schema_version: String,
     /// Type definitions in source order.
-    pub type_definitions: Vec<openfga_rs::TypeDefinition>,
+    pub type_definitions: Vec<crate::proto::TypeDefinition>,
     /// Conditions keyed by name (same map type as
     /// `WriteAuthorizationModelRequest.conditions`).
-    pub conditions: HashMap<String, openfga_rs::Condition>,
+    pub conditions: HashMap<String, crate::proto::Condition>,
 }
 
 /// Parse the schema-1.1 JSON emitted by `model!` and convert it to wire types.
@@ -75,27 +75,27 @@ pub fn compile_model(model_json: &str) -> Result<CompiledModel, OpenFgaError> {
 // AST → prost conversion
 // ---------------------------------------------------------------------------
 
-fn convert_type_def(td: &ast::TypeDefinition) -> openfga_rs::TypeDefinition {
+fn convert_type_def(td: &ast::TypeDefinition) -> crate::proto::TypeDefinition {
     let relations = td
         .relations
         .iter()
         .map(|(name, us)| (name.clone(), convert_userset(us)))
         .collect();
 
-    openfga_rs::TypeDefinition {
+    crate::proto::TypeDefinition {
         r#type: td.type_name.clone(),
         relations,
         metadata: td.metadata.as_ref().map(convert_metadata),
     }
 }
 
-fn convert_userset(us: &ast::Userset) -> openfga_rs::Userset {
-    use openfga_rs::userset::Userset as Oneof;
+fn convert_userset(us: &ast::Userset) -> crate::proto::Userset {
+    use crate::proto::userset::Userset as Oneof;
 
     let inner = match us {
-        ast::Userset::This {} => Oneof::This(openfga_rs::DirectUserset {}),
+        ast::Userset::This {} => Oneof::This(crate::proto::DirectUserset {}),
         ast::Userset::ComputedUserset { relation } => {
-            Oneof::ComputedUserset(openfga_rs::ObjectRelation {
+            Oneof::ComputedUserset(crate::proto::ObjectRelation {
                 object: String::new(),
                 relation: relation.clone(),
             })
@@ -103,52 +103,52 @@ fn convert_userset(us: &ast::Userset) -> openfga_rs::Userset {
         ast::Userset::TupleToUserset {
             tupleset,
             computed_userset,
-        } => Oneof::TupleToUserset(openfga_rs::TupleToUserset {
+        } => Oneof::TupleToUserset(crate::proto::TupleToUserset {
             tupleset: Some(object_relation(&tupleset.relation)),
             computed_userset: Some(object_relation(&computed_userset.relation)),
         }),
-        ast::Userset::Union { child } => Oneof::Union(openfga_rs::Usersets {
+        ast::Userset::Union { child } => Oneof::Union(crate::proto::Usersets {
             child: child.iter().map(convert_userset).collect(),
         }),
-        ast::Userset::Intersection { child } => Oneof::Intersection(openfga_rs::Usersets {
+        ast::Userset::Intersection { child } => Oneof::Intersection(crate::proto::Usersets {
             child: child.iter().map(convert_userset).collect(),
         }),
         ast::Userset::Difference { base, subtract } => {
-            Oneof::Difference(Box::new(openfga_rs::Difference {
+            Oneof::Difference(Box::new(crate::proto::Difference {
                 base: Some(Box::new(convert_userset(base))),
                 subtract: Some(Box::new(convert_userset(subtract))),
             }))
         }
     };
 
-    openfga_rs::Userset {
+    crate::proto::Userset {
         userset: Some(inner),
     }
 }
 
-fn object_relation(relation: &str) -> openfga_rs::ObjectRelation {
-    openfga_rs::ObjectRelation {
+fn object_relation(relation: &str) -> crate::proto::ObjectRelation {
+    crate::proto::ObjectRelation {
         object: String::new(),
         relation: relation.to_owned(),
     }
 }
 
-fn convert_metadata(md: &ast::Metadata) -> openfga_rs::Metadata {
+fn convert_metadata(md: &ast::Metadata) -> crate::proto::Metadata {
     let relations = md
         .relations
         .iter()
         .map(|(name, rm)| (name.clone(), convert_relation_metadata(rm)))
         .collect();
 
-    openfga_rs::Metadata {
+    crate::proto::Metadata {
         relations,
         module: String::new(),
         source_info: None,
     }
 }
 
-fn convert_relation_metadata(rm: &ast::RelationMetadata) -> openfga_rs::RelationMetadata {
-    openfga_rs::RelationMetadata {
+fn convert_relation_metadata(rm: &ast::RelationMetadata) -> crate::proto::RelationMetadata {
+    crate::proto::RelationMetadata {
         directly_related_user_types: rm
             .directly_related_user_types
             .iter()
@@ -159,33 +159,33 @@ fn convert_relation_metadata(rm: &ast::RelationMetadata) -> openfga_rs::Relation
     }
 }
 
-fn convert_relation_reference(rr: &ast::RelationReference) -> openfga_rs::RelationReference {
-    use openfga_rs::relation_reference::RelationOrWildcard;
+fn convert_relation_reference(rr: &ast::RelationReference) -> crate::proto::RelationReference {
+    use crate::proto::relation_reference::RelationOrWildcard;
 
     // `relation` and `wildcard` are mutually exclusive in the DSL; prefer
     // `relation` if both were somehow present.
     let relation_or_wildcard = if let Some(rel) = &rr.relation {
         Some(RelationOrWildcard::Relation(rel.clone()))
     } else if rr.wildcard.is_some() {
-        Some(RelationOrWildcard::Wildcard(openfga_rs::Wildcard {}))
+        Some(RelationOrWildcard::Wildcard(crate::proto::Wildcard {}))
     } else {
         None
     };
 
-    openfga_rs::RelationReference {
+    crate::proto::RelationReference {
         r#type: rr.type_name.clone(),
         condition: rr.condition.clone().unwrap_or_default(),
         relation_or_wildcard,
     }
 }
 
-fn convert_condition(cond: &ast::Condition) -> Result<openfga_rs::Condition, OpenFgaError> {
+fn convert_condition(cond: &ast::Condition) -> Result<crate::proto::Condition, OpenFgaError> {
     let mut parameters = HashMap::with_capacity(cond.parameters.len());
     for (name, param) in &cond.parameters {
         parameters.insert(name.clone(), convert_param_type(param)?);
     }
 
-    Ok(openfga_rs::Condition {
+    Ok(crate::proto::Condition {
         name: cond.name.clone(),
         expression: cond.expression.clone(),
         parameters,
@@ -195,8 +195,8 @@ fn convert_condition(cond: &ast::Condition) -> Result<openfga_rs::Condition, Ope
 
 fn convert_param_type(
     param: &ast::ConditionParamType,
-) -> Result<openfga_rs::ConditionParamTypeRef, OpenFgaError> {
-    use openfga_rs::condition_param_type_ref::TypeName;
+) -> Result<crate::proto::ConditionParamTypeRef, OpenFgaError> {
+    use crate::proto::condition_param_type_ref::TypeName;
 
     let type_name = TypeName::from_str_name(&param.type_name).ok_or_else(|| {
         OpenFgaError::InvalidConfig(format!(
@@ -210,7 +210,7 @@ fn convert_param_type(
         generic_types.push(convert_param_type(gt)?);
     }
 
-    Ok(openfga_rs::ConditionParamTypeRef {
+    Ok(crate::proto::ConditionParamTypeRef {
         type_name: type_name as i32,
         generic_types,
     })
@@ -226,8 +226,8 @@ fn convert_param_type(
 struct Canonical {
     schema_version: String,
     /// Types sorted by name.
-    types: Vec<openfga_rs::TypeDefinition>,
-    conditions: HashMap<String, openfga_rs::Condition>,
+    types: Vec<crate::proto::TypeDefinition>,
+    conditions: HashMap<String, crate::proto::Condition>,
 }
 
 fn canonical_compiled(compiled: &CompiledModel) -> Canonical {
@@ -238,7 +238,7 @@ fn canonical_compiled(compiled: &CompiledModel) -> Canonical {
     }
 }
 
-fn canonical_live(live: &openfga_rs::AuthorizationModel) -> Canonical {
+fn canonical_live(live: &crate::proto::AuthorizationModel) -> Canonical {
     Canonical {
         schema_version: live.schema_version.clone(),
         types: normalize_types(&live.type_definitions),
@@ -246,7 +246,7 @@ fn canonical_live(live: &openfga_rs::AuthorizationModel) -> Canonical {
     }
 }
 
-fn normalize_types(types: &[openfga_rs::TypeDefinition]) -> Vec<openfga_rs::TypeDefinition> {
+fn normalize_types(types: &[crate::proto::TypeDefinition]) -> Vec<crate::proto::TypeDefinition> {
     let mut out = types.to_vec();
     for td in &mut out {
         normalize_type_def(td);
@@ -255,7 +255,7 @@ fn normalize_types(types: &[openfga_rs::TypeDefinition]) -> Vec<openfga_rs::Type
     out
 }
 
-fn normalize_type_def(td: &mut openfga_rs::TypeDefinition) {
+fn normalize_type_def(td: &mut crate::proto::TypeDefinition) {
     for us in td.relations.values_mut() {
         normalize_userset(us);
     }
@@ -285,8 +285,8 @@ fn normalize_type_def(td: &mut openfga_rs::TypeDefinition) {
 /// `tupleToUserset` keep their fields — those are semantically ordered. The
 /// sort key is the derived `Debug` rendering of the already-normalized child:
 /// deterministic and total, which is all canonicalization needs.
-fn normalize_userset(us: &mut openfga_rs::Userset) {
-    use openfga_rs::userset::Userset as Oneof;
+fn normalize_userset(us: &mut crate::proto::Userset) {
+    use crate::proto::userset::Userset as Oneof;
 
     match us.userset.as_mut() {
         Some(Oneof::Union(children)) | Some(Oneof::Intersection(children)) => {
@@ -308,8 +308,8 @@ fn normalize_userset(us: &mut openfga_rs::Userset) {
 }
 
 fn normalize_conditions(
-    conditions: &HashMap<String, openfga_rs::Condition>,
-) -> HashMap<String, openfga_rs::Condition> {
+    conditions: &HashMap<String, crate::proto::Condition>,
+) -> HashMap<String, crate::proto::Condition> {
     conditions
         .iter()
         .map(|(name, cond)| {
@@ -325,7 +325,7 @@ fn normalize_conditions(
 /// empty-vs-absent metadata containers, and the ordering of
 /// order-independent lists (`union`/`intersection` children,
 /// `directly_related_user_types`).
-pub fn models_equal(compiled: &CompiledModel, live: &openfga_rs::AuthorizationModel) -> bool {
+pub fn models_equal(compiled: &CompiledModel, live: &crate::proto::AuthorizationModel) -> bool {
     let c = canonical_compiled(compiled);
     let l = canonical_live(live);
     c.schema_version == l.schema_version && c.types == l.types && c.conditions == l.conditions
@@ -338,7 +338,7 @@ pub fn models_equal(compiled: &CompiledModel, live: &openfga_rs::AuthorizationMo
 /// over the same canonicalized forms as [`models_equal`], so ignored noise
 /// never shows up as a difference. Returns `"models are structurally equal"`
 /// when nothing differs.
-pub fn diff_summary(compiled: &CompiledModel, live: &openfga_rs::AuthorizationModel) -> String {
+pub fn diff_summary(compiled: &CompiledModel, live: &crate::proto::AuthorizationModel) -> String {
     let c = canonical_compiled(compiled);
     let l = canonical_live(live);
 
@@ -351,9 +351,9 @@ pub fn diff_summary(compiled: &CompiledModel, live: &openfga_rs::AuthorizationMo
         ));
     }
 
-    let compiled_types: HashMap<&str, &openfga_rs::TypeDefinition> =
+    let compiled_types: HashMap<&str, &crate::proto::TypeDefinition> =
         c.types.iter().map(|t| (t.r#type.as_str(), t)).collect();
-    let live_types: HashMap<&str, &openfga_rs::TypeDefinition> =
+    let live_types: HashMap<&str, &crate::proto::TypeDefinition> =
         l.types.iter().map(|t| (t.r#type.as_str(), t)).collect();
 
     let only_compiled = names_only_in(&compiled_types, &live_types);
@@ -393,8 +393,8 @@ pub fn diff_summary(compiled: &CompiledModel, live: &openfga_rs::AuthorizationMo
 }
 
 fn names_only_in(
-    a: &HashMap<&str, &openfga_rs::TypeDefinition>,
-    b: &HashMap<&str, &openfga_rs::TypeDefinition>,
+    a: &HashMap<&str, &crate::proto::TypeDefinition>,
+    b: &HashMap<&str, &crate::proto::TypeDefinition>,
 ) -> Vec<String> {
     let mut names: Vec<String> = a
         .keys()
@@ -406,8 +406,8 @@ fn names_only_in(
 }
 
 fn condition_diffs(
-    compiled: &HashMap<String, openfga_rs::Condition>,
-    live: &HashMap<String, openfga_rs::Condition>,
+    compiled: &HashMap<String, crate::proto::Condition>,
+    live: &HashMap<String, crate::proto::Condition>,
 ) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     for (name, cond) in compiled {

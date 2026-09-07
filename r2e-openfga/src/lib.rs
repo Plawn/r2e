@@ -41,7 +41,7 @@
 //!   `grant`/`revoke` (compile-checked subject types, write-through cache
 //!   invalidation) and `check`. **This is the idiomatic write path.**
 //! - **[`GrpcBackend`]** — the concrete gRPC implementation. Exposes the raw
-//!   `openfga-rs` client via [`client()`](GrpcBackend::client) for anything
+//!   generated client via [`client()`](GrpcBackend::client) for anything
 //!   beyond single tuples (batch writes, conditional tuples, list objects,
 //!   model management).
 //!
@@ -182,8 +182,14 @@ pub mod plugin;
 pub mod registry;
 pub mod typed;
 
-// Re-export openfga-rs so users can access raw types.
-pub use openfga_rs;
+// The generated OpenFGA wire types and gRPC client, for users who need to drop
+// below `FgaClient` (raw `Write`, `ListObjects`, `Expand`, …).
+pub mod proto;
+
+// Re-exported so a caller building a raw request never has to add tonic or
+// prost-types to their own manifest just to name `tonic::Request`.
+pub use prost_types;
+pub use tonic;
 
 // The `.fga` parser, for standalone use (build scripts, tooling).
 pub use r2e_openfga_model as model_parser;

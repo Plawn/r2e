@@ -2449,17 +2449,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "erased-serde"
-version = "0.4.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2add8a07dd6a8d93ff627029c51de145e12686fbc36ecb298ac22e74cf02dec"
-dependencies = [
- "serde",
- "serde_core",
- "typeid",
-]
-
-[[package]]
 name = "err_trail"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4811,22 +4800,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openfga-rs"
-version = "0.1.0"
-dependencies = [
- "prost 0.14.4",
- "prost-types 0.14.4",
- "prost-wkt",
- "prost-wkt-build",
- "prost-wkt-types",
- "serde",
- "tonic",
- "tonic-build",
- "tonic-prost",
- "tonic-prost-build",
-]
-
-[[package]]
 name = "openidconnect"
 version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5590,52 +5563,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "prost-wkt"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd3de5e9c9e84fcb5efa204b8e283d23e615a8bc8c777bf1d6622bb01dc61445"
-dependencies = [
- "chrono",
- "inventory",
- "prost 0.14.4",
- "serde",
- "serde_derive",
- "serde_json",
- "typetag",
-]
-
-[[package]]
-name = "prost-wkt-build"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe500dc80e757a75e1e8fb7290e448d62dfba3105ece1d058579cb00b58151cd"
-dependencies = [
- "heck",
- "prost 0.14.4",
- "prost-build 0.14.4",
- "prost-types 0.14.4",
- "quote",
-]
-
-[[package]]
-name = "prost-wkt-types"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13807eaa7e15833d06e899008371926201cdcd11d74b6d490f49130cdb3f415e"
-dependencies = [
- "chrono",
- "prost 0.14.4",
- "prost-build 0.14.4",
- "prost-types 0.14.4",
- "prost-wkt",
- "prost-wkt-build",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
 name = "protobuf"
 version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5868,6 +5795,7 @@ dependencies = [
  "r2e-observability",
  "r2e-oidc",
  "r2e-openapi",
+ "r2e-openfga",
  "r2e-prometheus",
  "r2e-rate-limit",
  "r2e-scheduler",
@@ -6270,7 +6198,8 @@ name = "r2e-openfga"
 version = "0.3.0"
 dependencies = [
  "dashmap",
- "openfga-rs",
+ "prost 0.14.4",
+ "prost-types 0.14.4",
  "r2e-core",
  "r2e-devservices",
  "r2e-openfga-macros",
@@ -6278,8 +6207,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tonic",
+ "tonic-prost",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "r2e-openfga-codegen"
+version = "0.3.0"
+dependencies = [
+ "tonic-prost-build",
 ]
 
 [[package]]
@@ -8937,40 +8875,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "typeid"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc7d623258602320d5c55d1bc22793b57daff0ec7efc270ea7d55ce1d5f5471c"
-
-[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
-
-[[package]]
-name = "typetag"
-version = "0.2.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c5a897b12c6c1151ad0b138b8db50252dc301f93bc3b027db05eec82aeed298c"
-dependencies = [
- "erased-serde",
- "inventory",
- "once_cell",
- "serde",
- "typetag-impl",
-]
-
-[[package]]
-name = "typetag-impl"
-version = "0.2.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf808357c6ed7e13ba0f3277ec8d8f21b2d501274895104263985330c726c1c5"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.118",
-]
 
 [[package]]
 name = "ulid"
