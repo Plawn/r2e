@@ -24,7 +24,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-HELD_BACK=(r2e-openfga r2e-openfga-macros r2e-openfga-model r2e-cli)
+HELD_BACK=(r2e-cli)
 
 die() { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 

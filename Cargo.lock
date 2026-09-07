@@ -2518,7 +2518,7 @@ dependencies = [
 
 [[package]]
 name = "example-app"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dashmap",
  "futures-core",
@@ -2540,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "example-executor"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "serde",
@@ -2549,7 +2549,7 @@ dependencies = [
 
 [[package]]
 name = "example-grpc"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2590,7 +2590,7 @@ dependencies = [
 
 [[package]]
 name = "example-microservice"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "reqwest 0.13.4",
@@ -2603,7 +2603,7 @@ dependencies = [
 
 [[package]]
 name = "example-multi-tenant"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "jsonwebtoken",
  "r2e",
@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "example-multi-tenant-db"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "r2e-test",
@@ -2630,7 +2630,7 @@ dependencies = [
 
 [[package]]
 name = "example-oidc"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "serde",
@@ -2640,7 +2640,7 @@ dependencies = [
 
 [[package]]
 name = "example-openfga"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "jsonwebtoken",
  "r2e",
@@ -2654,7 +2654,7 @@ dependencies = [
 
 [[package]]
 name = "example-postgres"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "garde",
@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "example-sharded-bench"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "serde",
@@ -2681,7 +2681,7 @@ dependencies = [
 
 [[package]]
 name = "example-websocket-chat"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "schemars 1.2.1",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "example-worker-udp"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "serde",
@@ -4196,7 +4196,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llm-doctests"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5786,7 +5786,7 @@ dependencies = [
 
 [[package]]
 name = "r2e"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e-cache",
  "r2e-core",
@@ -5817,7 +5817,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-cache"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "dashmap",
@@ -5827,7 +5827,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-cli"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "clap",
@@ -5842,7 +5842,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-compile-tests"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "futures-core",
@@ -5864,7 +5864,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -5898,7 +5898,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-data-diesel"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arc-swap",
  "diesel",
@@ -5914,7 +5914,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-data-sqlx"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arc-swap",
  "async-stream",
@@ -5931,7 +5931,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-devservices"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "reqwest 0.13.4",
  "serde_json",
@@ -5943,14 +5943,14 @@ dependencies = [
 
 [[package]]
 name = "r2e-devtools"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dioxus-devtools",
 ]
 
 [[package]]
 name = "r2e-edition2024-tests"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-core",
  "r2e",
@@ -5959,7 +5959,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-events"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arc-swap",
  "futures-core",
@@ -5973,7 +5973,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-events-iggy"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "futures-util",
@@ -5988,7 +5988,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-events-kafka"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-util",
  "r2e-core",
@@ -6002,7 +6002,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-events-pulsar"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-util",
  "pulsar",
@@ -6016,7 +6016,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-events-rabbitmq"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "futures-util",
  "lapin",
@@ -6030,7 +6030,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-executor"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e-core",
  "r2e-macros",
@@ -6042,7 +6042,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-featureless-tests"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "r2e",
  "tokio",
@@ -6050,7 +6050,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-grpc"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "futures-util",
@@ -6073,7 +6073,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-grpc-build"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "prost 0.14.4",
  "prost-types 0.14.4",
@@ -6082,7 +6082,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-http"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "axum",
  "bytes",
@@ -6108,7 +6108,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-macros"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "cron",
  "proc-macro-crate",
@@ -6119,7 +6119,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-mcp"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "http-body-util",
  "percent-encoding",
@@ -6141,7 +6141,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-observability"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "http",
@@ -6166,7 +6166,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-oidc"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "argon2",
  "base64 0.22.1",
@@ -6189,7 +6189,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-openapi"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "http",
  "http-body-util",
@@ -6205,7 +6205,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-openfga"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dashmap",
  "prost 0.14.4",
@@ -6225,14 +6225,14 @@ dependencies = [
 
 [[package]]
 name = "r2e-openfga-codegen"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "tonic-prost-build",
 ]
 
 [[package]]
 name = "r2e-openfga-macros"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -6244,7 +6244,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-openfga-model"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -6252,7 +6252,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-prometheus"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "http",
  "metrics",
@@ -6267,7 +6267,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-rate-limit"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dashmap",
  "r2e-core",
@@ -6277,7 +6277,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-rt"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -6287,7 +6287,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-scheduler"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "chrono",
  "cron",
@@ -6302,7 +6302,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-security"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "http-body-util",
  "jsonwebtoken",
@@ -6318,7 +6318,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-static"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "http-body-util",
  "mime_guess",
@@ -6330,7 +6330,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-tenant"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dashmap",
  "http-body-util",
@@ -6344,7 +6344,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-test"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -6367,7 +6367,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-utils"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bytes",
  "r2e-cache",

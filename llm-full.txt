@@ -1,4 +1,4 @@
-<!-- R2E v0.3.0 — generated from llm.txt + llm/*.md by scripts/check-llm-docs.sh; do not edit. -->
+<!-- R2E v0.3.2 — generated from llm.txt + llm/*.md by scripts/check-llm-docs.sh; do not edit. -->
 
 # R2E Framework — LLM Reference (index)
 
