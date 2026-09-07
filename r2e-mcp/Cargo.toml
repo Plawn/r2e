@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-keywords = ["mcp", "model-context-protocol", "web", "framework"]
+keywords = ["mcp", "llm", "web", "framework"]
 categories = ["web-programming"]
 description = "MCP (Model Context Protocol) server support for R2E framework"
 

@@ -1,0 +1,15 @@
+[package]
+name = "example-mcp-oauth"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+dev-reload = ["r2e/dev-reload"]
+
+[dependencies]
+r2e = { path = "../../r2e", features = ["mcp"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }

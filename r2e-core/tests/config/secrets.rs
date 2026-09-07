@@ -93,3 +93,69 @@ fn test_default_value_empty_string() {
     let result = resolve_placeholders("${TEST_R2E_EMPTY_DEF:}", &resolver).unwrap();
     assert_eq!(result, "");
 }
+
+// ── Placeholders inside containers ─────────────────────────────────────
+//
+// A YAML sequence is flattened into one `ConfigValue::List` under the parent
+// key, so a placeholder inside a list is not a top-level string value. It
+// used to survive resolution verbatim, which silently handed plugins the
+// literal `"${VAR}"` (`mcp.allowed-hosts` being the case that surfaced it).
+
+#[test]
+fn resolves_placeholders_inside_list_values() {
+    let _env = crate::support::env_lock();
+    unsafe { std::env::set_var("TEST_R2E_LIST_HOST", "api.example.com") };
+
+    let mut config = r2e_core::R2eConfig::from_yaml_str(
+        r#"
+mcp:
+  allowed-hosts:
+    - ${TEST_R2E_LIST_HOST}
+    - ${TEST_R2E_LIST_MISSING:fallback.example.com}
+    - literal.example.com
+"#,
+    )
+    .unwrap();
+    config
+        .resolve_placeholders_with(&DefaultSecretResolver)
+        .unwrap();
+
+    assert_eq!(
+        config.get::<Vec<String>>("mcp.allowed-hosts").unwrap(),
+        vec![
+            "api.example.com".to_string(),
+            "fallback.example.com".to_string(),
+            "literal.example.com".to_string(),
+        ]
+    );
+
+    unsafe { std::env::remove_var("TEST_R2E_LIST_HOST") };
+}
+
+#[test]
+fn resolves_placeholders_inside_nested_map_values() {
+    let _env = crate::support::env_lock();
+    unsafe { std::env::set_var("TEST_R2E_NESTED_AUD", "https://api.example.com/mcp") };
+
+    let mut config = r2e_core::R2eConfig::from_yaml_str(
+        r#"
+mcp:
+  auth:
+    extra-authorize-params:
+      audience: ${TEST_R2E_NESTED_AUD}
+"#,
+    )
+    .unwrap();
+    config
+        .resolve_placeholders_with(&DefaultSecretResolver)
+        .unwrap();
+
+    assert_eq!(
+        config
+            .get::<String>("mcp.auth.extra-authorize-params.audience")
+            .unwrap(),
+        "https://api.example.com/mcp"
+    );
+
+    unsafe { std::env::remove_var("TEST_R2E_NESTED_AUD") };
+}
