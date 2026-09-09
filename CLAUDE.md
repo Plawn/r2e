@@ -6,6 +6,10 @@ AGENTS.md-aware agents are bound through `AGENTS.md`, which delegates to this
 file. Keep cross-agent guidance changes visible from both `CLAUDE.md` and
 `AGENTS.md`.
 
+This file is a **hub**: golden rules + a routing table. Subsystem detail lives in
+`docs/claude/*.md` and `docs/features/*.md` — match your task to the routing table below
+and read only the matched file(s).
+
 ## Project Status
 
 R2E is **not in production yet**. Breaking changes are always allowed — no need to gate them behind feature flags or maintain backward compatibility. Just mention breaking changes explicitly in plans so they are acknowledged.
@@ -24,139 +28,76 @@ cargo expand -p example-app        # Expand macros (requires cargo-expand)
 
 ## Testing Conventions
 
-**Tests live in `<crate>/tests/` directories, not inline.** Do NOT use `#[cfg(test)] mod tests { ... }` blocks inside source files.
-
-- One test module per source module: `src/foo.rs` → `tests/<subsystem>/foo.rs`
-- Use external imports (`use <crate_name>::...`) instead of `use super::*`
-- Keep test-only helpers in the test file, not in the source
-- If a test needs access to an internal item, add a `pub` accessor or `pub` + `#[doc(hidden)]` — do NOT use `#[cfg(test)] pub(crate)` visibility hacks
-
-**Group test modules into one target per subsystem.** Cargo turns each
-`tests/<name>/main.rs` into a target named `<name>`; the sibling files are
-plain `mod`s. One binary per subsystem instead of one per file keeps link time
-down and gives shared fixtures a home. Do NOT add new top-level `tests/*.rs`
-files to a crate that already uses this layout — add a `mod` to the matching
-target.
-
-`r2e-core/tests/` is the reference layout:
-
-```
-support/mod.rs   # helpers shared across targets (not a target: no main.rs).
-                 # Each main.rs pulls it in with
-                 #   #[path = "../support/mod.rs"] mod support;
-config/          # R2eConfig, ConfigProperties, sections, env overlay,
-                 #   secrets, loading, startup validation
-di/              # bean graph, async beans, producers, optional/lazy beans,
-                 #   defaults, pinned overrides, lifecycle, modules
-builder/         # AppBuilder: HList state, overrides, prepared, App trait
-controller/      # request façade, core-only path, #[anonymous], injection
-                 #   scopes, proxy/catch-all routing
-decorators/      # DecoratorSpec, guards, interceptors
-plugin/          # Provided/Deps/Late, deferred surface, config, lifecycle
-http/            # extractors, errors, SSE/WS, managed resources, HTTP plugins
-runtime/         # rt, sharded serving, socket options, tracing
-dev_reload/      # hot-patch cycles, live config, rollback — its OWN target:
-                 #   `mark_hot_reload_loop()` is process-global and one-way,
-                 #   and would make every serving test in a shared binary skip
-                 #   its startup lifecycle
-```
-
-Conventions inside a target:
-
-- Fixtures used by more than one module go in `<target>/fixtures.rs`; keep
-  single-use fixtures next to the test that needs them.
-- Feature gates go on the `mod` declaration in `main.rs`
-  (`#[cfg(feature = "ws")] mod ws;`), not as `#![cfg(...)]` inside the file.
-- Tests that mutate `std::env` share a process now — take
-  `crate::support::env_lock()` for the whole test, even when variable names
-  don't overlap.
+**Tests live in `<crate>/tests/` directories, not inline** — no `#[cfg(test)] mod tests`
+blocks in source files. One test module per source module; modules are grouped into **one
+Cargo target per subsystem** (`tests/<name>/main.rs` + plain `mod`s) — do NOT add new
+top-level `tests/*.rs` files to a crate that already uses this layout; add a `mod` to the
+matching target. Use external imports (`use <crate_name>::...`), keep helpers in the test
+file, and expose internals via `pub` + `#[doc(hidden)]` (never `#[cfg(test)] pub(crate)`).
+Env-mutating tests take `crate::support::env_lock()`. `r2e-core/tests/` is the reference
+layout — full target map and conventions: `docs/claude/testing-conventions.md`.
 
 ```bash
-cargo test --workspace                    # all tests
-cargo test -p r2e-core                    # single crate
-cargo test -p r2e-core --test config      # one subsystem target
+cargo test -p r2e-core --test config              # one subsystem target
 cargo test -p r2e-core --test config sections::   # one module within it
 ```
 
 ## Architecture
 
-R2E is a **Quarkus-like ergonomic layer over Axum** for Rust. It provides declarative controllers with compile-time dependency injection, JWT/OIDC security, and zero runtime reflection.
+R2E is a **Quarkus-like ergonomic layer over Axum** for Rust: declarative controllers with
+compile-time dependency injection, JWT/OIDC security, zero runtime reflection.
 
-### Workspace Crates
+### Workspace Crates (one line each — full detail: `docs/claude/architecture.md`)
 
 ```
-r2e             → Facade crate. Re-exports all subcrates behind feature flags. Users depend on this.
-r2e-rt          → Async-runtime facade. The ONLY workspace crate that names tokio/tokio-util/tokio-stream directly, and it sits at the BOTTOM of the graph (below r2e-http). Owns spawn/spawn_ctl/spawn_blocking + JobHandle, sleep/timeout/interval, bind_tcp, shutdown_signal, CancelToken/CancelDropGuard, the `sync` re-exports (mpsc/oneshot/broadcast/watch/Mutex/RwLock/Notify/Semaphore/OnceCell), select!/pin!/join!/JoinSet, `stream`, TcpListener/TcpStream, the `io` module (AsyncRead/AsyncWrite + Ext traits), and RuntimeBuilder/Runtime/block_on. Re-exported as `r2e_core::rt` (hence `r2e::rt`).
-r2e-macros      → Proc-macro crate. #[controller] + #[routes] generate Axum handlers.
-r2e-http        → HTTP abstraction layer. Sole owner of the axum dependency; re-exports Router, extractors, responses, middleware, routing, WebSocket, multipart, and QUIC/HTTP3 types. Owns `IntoHttpResponse` (R2E's response contract) + the `impl_into_response!` bridge macro, `axum_compat` (the explicit raw-axum escape hatch), and the JSON codec façade `json` (`to_vec`/`from_slice`/`JsonError`, re-exported as `r2e_core::json`) with R2E's own `Json<T>` extractor/response + `JsonRejection`; codec selected by feature (`json-sonic` = sonic-rs, default serde_json). QUIC support (feature `quic`) provides HTTP/3 via h3+h3-quinn (bridged to axum Router) and raw QUIC streams via quinn.
-r2e-core        → Runtime foundation. AppBuilder (load_config, with_config, build_state → HList state, serve_auto), Controller trait, ContextConstruct, PostConstruct, HttpError, Guard, Interceptor, R2eConfig, lifecycle hooks. Re-exports r2e-http as `http` module.
-r2e-security    → JWT validation, JWKS cache, AuthenticatedUser extractor, RoleExtractor trait. Feature `grpc`: `JwtClaimsValidator` implements `r2e_grpc::JwtClaimsValidatorLike` (same bean authenticates HTTP + gRPC).
-r2e-events      → In-process EventBus with typed pub/sub (emit/subscribe fan-out) plus point-to-point request-reply (request/respond). Shared backend utilities in `backend` module. Distributed backends live in `r2e-events/backends/`.
-  backends/iggy     → Apache Iggy EventBus backend: persistent distributed event streaming.
-  backends/kafka    → Apache Kafka EventBus backend: distributed event streaming via rdkafka.
-  backends/pulsar   → Apache Pulsar EventBus backend: distributed event streaming.
-  backends/rabbitmq → RabbitMQ (AMQP 0-9-1) EventBus backend: durable message queuing via lapin.
-r2e-scheduler   → Background task scheduling (interval, cron, initial delay). CancelToken-based shutdown. All schedules are driven by a single driver task (min-heap of next-fire times), not one Tokio task per schedule. Requires the Executor plugin (`type Deps = (PoolExecutor,)`); each tick runs as a pool job (`executor.submit`) so ticks drain on shutdown, panics stay contained, and scheduled work is bounded by `executor.max-concurrent` and visible in `ExecutorMetrics`. Per-task overlap policy (`#[scheduled(overlap = "skip"|"concurrent")]` / `ScheduledTaskDef::with_overlap`, default skip) + skip predicate (`#[scheduled(skip_if = "method")]` / `ScheduledTaskDef::with_skip_if` — Quarkus skipExecutionIf; skips counted in `ScheduledJobInfo::skip_count`). Runtime control via `SchedulerHandle::{pause,resume,trigger_now}` + live `ScheduledJobInfo` stats. Optional dedicated pool + `scheduler.enabled` gate via `scheduler.*` config (`SchedulerConfig`, `CONFIG_PREFIX = "scheduler"`).
-r2e-executor    → Managed task pool (PoolExecutor) + #[async_exec] + #[derive(BackgroundService)]. Bounded concurrency, graceful drain.
-r2e-core        → Also owns Page/Pageable and the cancellation-safe ManagedResource lifecycle.
-  r2e-data/backends/sqlx   → Managed SQLx transactions (SQLite/Postgres/MySQL). `SqlxDataSource<DB, Tag>` plugin: `datasource.*` config → connected `DbPool<DB, Tag>` bean, `migrate-at-start` runs the attached `sqlx::migrate!` inside `build_state()`, pool closed at shutdown; named datasources via `datasource_tag!`. `DataSourceHealth<DB, Tag>` (`Deps = (DbPool<DB, Tag>, HealthRegistry)`) contributes a `SELECT 1` health indicator (`.liveness_only()` to keep it out of readiness). Feature `tenant`: per-tenant pools (`TenantPools<DB>`, `PoolSource<DB>`) + `TenantTx<'_, DB>`.
-  r2e-data/backends/diesel → Managed Diesel transactions (SQLite/Postgres/MySQL). `DieselDataSource<Conn, Tag>` mirrors `SqlxDataSource` (same `datasource.*` section, `embed_migrations!`, same `DataSourceHealth<Conn, Tag>`). Feature `tenant`: per-tenant r2d2 pools (`TenantPools<Conn>`, `PoolSource<Conn>`) + `TenantTx<Conn>`.
-r2e-grpc        → Tonic-based gRPC server support, on a separate port or multiplexed with HTTP (content-type routed). Feature `web` (`grpc-web` on the facade): `GrpcServer::multiplexed().with_grpc_web()` adds a `tonic-web` + CORS arm for browser clients; otherwise `application/grpc-web*` is answered 415. `include_protos!()` includes the modules generated by the build helper.
-  build/            → r2e-grpc-build: build-script helper — compiles every proto/**/*.proto (tonic-prost-build), emits an aggregated per-package module + combined FileDescriptorSet into OUT_DIR (one-line build.rs, rerun-if-changed).
-r2e-mcp         → MCP (Model Context Protocol) server: `#[mcp_routes]` + `#[tool]`/`#[resource]`/`#[prompt]` expose all three MCP member families over rmcp's streamable-HTTP transport, dispatched by R2E (rmcp = wire only, `default-features = false`). `McpService::routes(ctx)` bundles tool/resource/prompt routes (one wrapper + one deco-set build per service). Schemas from `schemars` (`Params<T: ObjectParams>` → object inputSchema, `Json<T>` → outputSchema + structuredContent; prompt arguments derived from the Params schema), guards/interceptors SHARED with HTTP (`Guard<I>`/`DecoratorSpec`, prebuilt at registration with compile-time deps), `McpServer` plugin (config `mcp.*`, path validation, shared session map across SO_REUSEPORT workers, shutdown-token relay terminating SSE streams). Duplicate tool name / fixed resource URI / URI template / prompt name across services = boot panic. Resources support fixed URIs and RFC 6570 templates (`ResourceCall::variables`) plus update subscriptions through the injectable `McpResourceUpdates`; errors on resources/prompts stay on the JSON-RPC plane (`McpError::Tool` degrades to `-32603`; unknown URI = `-32002`, unknown prompt = `-32602`). Auth (`mcp.auth.*`): IdP-agnostic OAuth 2.1 resource server — issuer discovery (RFC 8414 incl. path-insertion), token validation via `McpTokenValidator` (local JWT/JWKS default, aud = canonical resource URI from `server.public-url`; RFC 7662 introspection + OIDC userinfo backends for opaque tokens, per-token cache), RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, static DCR shim (`public-client-id`), per-tool `#[tool(scopes/any_scopes)]` + shared `#[roles]` guards, member-list filtering; test fast path `pin_mcp_validator` (feature `testing` / facade `mcp-testing`).
-r2e-cache       → TtlCache, pluggable CacheStore trait. The store is a bean: `.provide(InMemoryStore::shared())` (no global).
-r2e-rate-limit  → Token-bucket RateLimiter, pluggable RateLimitBackend, RateLimitRegistry.
-r2e-openapi     → OpenAPI 3.1.0 spec generation, Swagger UI at /docs.
-r2e-prometheus   → HTTP metrics. Three separable responsibilities (tracking layer / registry / `/metrics` route), three modes: `Prometheus::new()` (all three, default), `Prometheus::layer_only()` = `prometheus.expose_endpoint: false` (layer + registry, app owns exposition), and `MetricsFacade` (feature `metrics-facade`) which installs only the tracking layer and emits through the `metrics` facade so an app on `metrics` + its own exporter keeps owning the recorder/buckets/endpoint. Both backends go through the `HttpMetricsRecorder` seam and emit identical series. `metrics-exporter-prometheus` is deliberately not a dependency.
-r2e-observability → OpenTelemetry plugin: distributed tracing and context propagation via OTLP.
-r2e-oidc        → Embedded OAuth/JWT issuer: RS256 access tokens, local browser login, public-client Authorization Code + mandatory PKCE S256, client_credentials, optional development password grant; exact redirect allowlists and one-time bound codes, no ID tokens/federation.
-r2e-openfga     → OpenFGA fine-grained authorization: Zanzibar-style relationship-based access control. Schema-first typed API via `model!` (guards: `FgaCheck::has(authz::document::viewer)`). `OpenFga` plugin owns the store lifecycle at boot: ensure/create store, apply model when changed (dev) or verify + fail-fast (prod, `openfga.apply_model: false`), pinned `model_id`.
-  model/            → r2e-openfga-model: pure `.fga` DSL parser (schema 1.1) → typed model → JSON. Syntax (`parse`) and semantic (`validate`) layers; validated against the vendored openfga/language corpus. No proc-macro deps.
-  macros/           → r2e-openfga-macros: `model!(pub mod authz = "fga/model.fga")` — compile-time parse+validate, generates typed markers (`FgaType`/`FgaRel` consts/`DirectlyAssignable` impls) + `authz::MODEL` JSON.
-r2e-utils       → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
-r2e-test        → TestApp (HTTP client + App boot: TestApp::boot::<A>() / #[r2e::test(app = MyApp)], bean::<T>() access, .as_user() via auto-wired TestJwt; boot runs the production startup phase — `#[on_start]`, builder `on_start`, `spawn_service` — and `TestApp::shutdown().await` runs on_drain → disposers → drain → join → on_stop under the app's `drain_timeout`/`shutdown_grace_period`), TestJwt (local HS256 tokens + validators), TestSession (cookie persistence), assertion helpers (JSON contains/shape/path), TestServer (live TCP), WsTestClient (WebSocket, feature "ws"), FiniteStream/ParsedSseEvent (SSE), SetCookie (cookie attributes), multipart file upload builders.
-r2e-devservices → Dev services for tests (testcontainers): DevPostgres/DevRedis, workspace-session shared containers reaped by Ryuk after the final test process exits, URL injected via override_config_value. `DevPostgres`/`DevRedis` take a full spec on both the isolated and shared paths — image (`PostgresImage::new("pgvector/pgvector", "pg18")`, `RedisImage::new("valkey/valkey", "8-alpine")`) plus credentials for Postgres (`PostgresSpec::with_user/with_password/with_database`) — one shared container per distinct spec. `DevService`/`DevServiceSpec` (ungated) is the generic form they are built on: any testcontainers `Image` gets the same labelling/reaping/sharing (`testcontainers` + `testcontainers_modules` re-exported). `DevKeycloak` (feature `keycloak`): `start-dev --import-realm` with a bundled MCP realm (`r2e-mcp`: `mcp-public` PKCE client + audience mapper, direct-grant `test-cli`, users alice/bob) or a custom realm JSON; `issuer()`/`password_token()`/`client_token()`/`admin_token()`. Features `postgres`, `redis`, `openfga`, `keycloak`.
-r2e-devtools    → Subsecond hot-reload support (wraps dioxus-devtools). Feature-gated behind `dev-reload`.
-r2e-static      → Embedded static file serving with SPA support. Plugin-based, wraps rust_embed.
-r2e-tenant      → Multi-tenant bean routing. `TenantResolver` (request → `TenantId`) + `TenantSource<T>` (tenant → `T`) + `Tenanted<T>` (per-tenant map: single-flight create, negative cache, idle/LRU eviction with dispose, drain on shutdown). Request-scoped `Tenant<T>` / `TenantId` extractors (`FromRequestPartsVia` + `ViaBean` — no axum `FromRequestParts` impl, so a missing plugin is a compile error). Two plugins: `Tenancy::resolver::<R>()` (provides `TenantRouter`) and `PerTenant::<T>::from::<Src>()` (provides `Tenanted<T>`). Config under `tenancy.*`.
-r2e-cli         → CLI: r2e new, r2e add, r2e dev, r2e generate, r2e doctor, r2e routes, r2e docs (bundled per-module TL;DR docs).
-r2e-compile-tests → Compile-time tests (trybuild) verifying macro error messages.
-example-app     → Demo app (lib + bin) exercising all features. `lib.rs` declares the app via `impl App for ...` (`setup`/`build`); `main.rs` runs `r2e::launch::<App>()` and the integration tests boot the same type via `#[r2e::test(app = ...)]`.
+r2e               → Facade crate; re-exports subcrates behind feature flags. Users depend on this.
+r2e-rt            → Async-runtime facade; the ONLY crate naming tokio; bottom of the graph; re-exported as r2e_core::rt.
+r2e-macros        → Proc macros: #[controller] + #[routes] generate Axum handlers.
+r2e-http          → HTTP abstraction; sole owner of axum; IntoHttpResponse, axum_compat escape hatch, json codec façade, QUIC/HTTP3.
+r2e-core          → Runtime foundation: AppBuilder → HList state, Controller trait, guards/interceptors, R2eConfig, HttpError, lifecycle, ManagedResource, Page/Pageable. Re-exports r2e-http as `http`.
+r2e-security      → JWT/JWKS validation, AuthenticatedUser, RoleExtractor; feature grpc shares the validator with gRPC.
+r2e-events        → In-process EventBus (typed pub/sub + request-reply); distributed backends in backends/ (iggy, kafka, pulsar, rabbitmq).
+r2e-scheduler     → Interval/cron scheduling on the Executor pool (single driver task); overlap/skip_if policies; SchedulerHandle; scheduler.* config.
+r2e-executor      → Managed task pool (PoolExecutor), #[async_exec], #[derive(BackgroundService)]; bounded concurrency, graceful drain.
+r2e-data/backends/{sqlx,diesel} → Managed transactions + DataSource plugins (datasource.* config, migrate-at-start, DataSourceHealth); feature tenant: per-tenant pools + TenantTx.
+r2e-grpc (+build/) → Tonic gRPC, separate port or HTTP-multiplexed; grpc-web; r2e-grpc-build proto build helper.
+r2e-mcp           → MCP server: #[mcp_routes] + #[tool]/#[resource]/#[prompt]; guards shared with HTTP; McpServer plugin; OAuth 2.1 resource-server auth (mcp.auth.*).
+r2e-cache         → TtlCache + pluggable CacheStore bean (no global).
+r2e-rate-limit    → Token-bucket RateLimiter, pluggable backend, RateLimitRegistry.
+r2e-openapi       → OpenAPI 3.1.0 generation, Swagger UI at /docs.
+r2e-prometheus    → HTTP metrics; three modes (full / layer_only / MetricsFacade) over the HttpMetricsRecorder seam.
+r2e-observability → OpenTelemetry tracing + context propagation via OTLP.
+r2e-oidc          → Embedded OAuth/JWT issuer (RS256, PKCE code flow, client_credentials; no ID tokens/federation).
+r2e-openfga (+model/, macros/) → OpenFGA authorization: .fga parser, model! macro, typed FgaCheck guards, store-lifecycle plugin.
+r2e-utils         → Built-in interceptors: Logged, Timed, Cache, CacheInvalidate.
+r2e-test          → TestApp (real boot + shutdown), TestJwt, TestSession, TestServer, WsTestClient, SSE helpers, assertions.
+r2e-devservices   → Testcontainers dev services: DevPostgres/DevRedis/DevKeycloak + generic DevService; workspace-shared containers.
+r2e-devtools      → Subsecond hot-reload (feature dev-reload).
+r2e-static        → Embedded static files / SPA (rust_embed, plugin-based).
+r2e-tenant        → Multi-tenant bean routing: TenantResolver/TenantSource/Tenanted<T>, Tenancy + PerTenant plugins, tenancy.* config.
+r2e-cli           → r2e new/add/dev/generate/doctor/routes/docs.
+r2e-compile-tests → trybuild tests for macro error messages.
+example-app       → Demo app (App trait in lib.rs; main.rs + integration tests boot the same type).
 ```
 
-Dependency flow: `r2e-rt` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← `r2e-security` / `r2e-events` / `r2e-scheduler` / `r2e-devtools` / `r2e-static` / `r2e-tenant` / `r2e-data-sqlx` / `r2e-data-diesel` / other integrations ← `r2e` ← applications. The data backends' `tenant` feature adds `r2e-tenant`, so `r2e-tenant` precedes them.
+Dependency flow: `r2e-rt` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← integrations (`r2e-security`, `r2e-events`, `r2e-tenant`, data backends, …) ← `r2e` ← applications.
 
-**Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`). R2E code implements **R2E's** contracts, not the backend's: `IntoHttpResponse` + `r2e::http::impl_into_response!(Ty)` for responses, `FromRequestPartsVia`/`Via<T, M>` for extraction. The few surviving impls of axum's own traits are named bridge points, tabulated in `plans/runtime-http-dependency-containment.md` §5.3b and annotated in the source. The public promise to users is "R2E types" (§5.3d decision A, 2026-08-24); raw axum is reachable only through `r2e::http::axum_compat`.
+### Containment Boundaries (CI-enforced — details: `docs/claude/architecture.md`)
 
-**`r2e_core::json` is the same rule for the JSON codec**: typed (de)serialization (`to_vec`, `to_string`, `from_slice`, `from_str`) goes through the façade, never `serde_json::…` directly. `serde_json::Value` / `json!` / `to_value` / `from_value` are the dynamic-tree type and deliberately stay `serde_json` — only codec calls are counted by the boundary check (`serde_json` group, `plans/json-codec-containment.md` §1.3). JWT claims are typed (`StandardClaims`, in `r2e-core`), not `Value`.
+- **axum**: only `r2e-http` depends on it. Everything else goes through `r2e_core::http` and implements **R2E's** contracts (`IntoHttpResponse` + `impl_into_response!`, `FromRequestPartsVia`/`Via<T, M>`); raw axum only via `r2e::http::axum_compat`.
+- **JSON codec**: typed (de)serialization goes through `r2e_core::json` (`to_vec`/`from_slice`/…), never `serde_json::…` directly. `serde_json::Value` / `json!` (dynamic tree) deliberately stays `serde_json`. JWT claims are typed (`StandardClaims`), not `Value`.
+- **tokio**: go through `r2e_core::rt` (or `r2e_rt` below core), never `tokio`/`tokio-util`/`tokio-stream`. By-design exceptions: `r2e-rt`, `r2e-test`, `r2e-devservices`.
 
-**`r2e-rt` is the same rule for the runtime**: go through `r2e_core::rt` (or `r2e_rt` directly, in crates below `r2e-core`) rather than naming `tokio` / `tokio-util` / `tokio-stream`. Both boundaries are enforced in CI by `scripts/check-dep-boundary.sh` (manifests) and `scripts/check-source-boundary.sh` (source occurrences, against a baseline that only ever shrinks). Migration status and the by-design exceptions (`r2e-rt` itself plus the `r2e-test` / `r2e-devservices` harnesses, which own a runtime on purpose) live in `plans/runtime-http-dependency-containment.md`. Both baselines are at their end state: the tokio source baseline is **empty** and the tokio dep allowlist is exactly those three crates; the axum source baseline is confined to `r2e-http/src/`.
+Enforced by `scripts/check-dep-boundary.sh` + `scripts/check-source-boundary.sh` (baselines only ever shrink).
 
-### Generated Code Checked Into the Tree
+### Core Concepts (summary — full detail: `docs/claude/core-concepts.md`)
 
-`r2e-openfga/src/proto/openfga.v1.rs` — the OpenFGA gRPC client, generated from `r2e-openfga/proto/**.proto`. There is **no `build.rs`**, deliberately: a build script would make `protoc` a hard requirement for anyone enabling the `openfga` feature, even though such a consumer never authors a proto. Regenerate with `scripts/generate-openfga-proto.sh` (the only thing needing protoc) and commit the result; CI runs it with `--check` and fails on drift. The generator is `r2e-openfga/codegen` (`publish = false`). Client only — R2E consumes OpenFGA, it never serves the API — and no serde derive: prost tags oneof variants by Rust variant name, which does not match OpenFGA's JSON, so `model_convert.rs` converts the AST by hand.
-
-### Core Concepts
-
-**The application state is inferred** — there is no hand-written state struct. `AppBuilder::new().provide(bean).register::<T>().build_state().await` materializes the compile-time provision list `P` into a type-level HList of resolved beans (the axum state). Beans are read by type: `state.get::<T>()` (via `BeanAccess`, NOT in the prelude — import explicitly) monomorphizes to a fixed-offset field access; `BeanLookup` (`state.bean::<T>() -> Option<T>`) is the witness-free dynamic form used by `ManagedResource`. Guards/interceptors do NOT read the state: they are built once at registration via `DecoratorSpec` (`#[guard]`/`#[intercept]` expressions name a spec type; bean deps are fields, folded into `Controller::Deps` and compile-checked). The resolved graph is also retained as `Arc<BeanContext>` on the typed builder (`bean_context()`). Apps with >~127 registrations need `#![recursion_limit = "512"]` at the crate root.
-
-**Four injection scopes, all resolved at compile time — two app-scoped, two request-scoped:**
-- `#[inject]` — App-scoped. Resolved from the bean graph BY TYPE (`ctx.get::<FieldType>()`) at registration. Type must be `Clone + Send + Sync + 'static` and provided/registered on the builder — a missing bean is a compile error at `register_controller`. Lives on the controller core (built once).
-- `#[config("key")]` — App-scoped. Resolved from `R2eConfig`. Type must implement `FromConfigValue`. Lives on the controller core.
-- `#[inject(identity)]` — Request-scoped. Extracted via `FromRequestParts` (e.g., `AuthenticatedUser`). Type must implement `Identity`. Drives guards/roles. Lives on the per-request façade.
-- `#[inject(request)]` — Request-scoped. Any type implementing `FromRequestParts` (e.g. a tenant id, correlation/trace context, a request-scoped handle). Use it for everything request-scoped that is *not* the auth identity. Lives on the per-request façade. (Not modeled in OpenAPI yet.)
-
-`Option<T>` is supported for both `#[inject(identity)]` and `#[inject(request)]`.
-
-**Handler parameter-level identity injection:**
-- `#[inject(identity)]` on handler parameters enables mixed controllers (public + protected endpoints), with each endpoint opting into authentication individually.
-- **Optional identity:** `#[inject(identity)] user: Option<AuthenticatedUser>` for endpoints working with or without auth.
-
-**`#[anonymous]` — fail-closed auth with per-route opt-out:** a struct-level identity authenticates **every** route by default; mark the public exceptions with `#[anonymous]` (@PermitAll-style). Anonymous routes are emitted on the controller **core** (like consumers/scheduled): identity extraction is skipped entirely (no JWT cost) and reading the identity or any request-scoped field in the body is a compile error. Guards still run there — with `identity: None` unless the route declares its own optional identity param; OpenAPI drops the security requirement unless explicit `#[guard]`s remain. Rejected combinations (compile errors): `#[anonymous]` + `#[roles]`/`#[all_roles]`, + a **required** `#[inject(identity)]` param (an `Option<T>` identity param is allowed — adaptive public route), or on a controller without a **required** struct identity (no identity or `Option<T>` identity = nothing fail-closed to opt out of — const-assert on `STRUCT_IDENTITY_IS_REQUIRED`). Prefer struct identity + `#[anonymous]` for mostly-protected controllers (forgetting the marker fails closed with a 401); use param-level identity for mostly-public ones.
-
-**Controller declaration uses two macros:**
-1. `#[controller(path = "...")]` — a transforming attribute on the struct (no `state` key — controllers are state-generic; optional `tag = "..."` sets the OpenAPI tag, which otherwise defaults to the struct name). It strips request-scoped fields from the physical core struct and generates the metadata module, the request-data extractor, the per-request façade, and the `ContextConstruct` impl (always — the core never holds request-scoped fields).
-2. `#[routes]` on the impl block — generates Axum handler functions and the state-generic `Controller<S, W>` trait impl (`S: Clone + Send + Sync + 'static + BeanLookup`; `W` carries inferred extraction markers). Route methods run on the generated façade.
+- **State is inferred** — no hand-written state struct. `AppBuilder::new().provide(..).register::<T>().build_state().await` → type-level HList of beans (the axum state). Read by type via `state.get::<T>()` (`BeanAccess`, NOT in the prelude). >~127 registrations need `#![recursion_limit = "512"]`.
+- **Four compile-time injection scopes**: `#[inject]` (app-scoped bean, by type; missing bean = compile error), `#[config("key")]` (app-scoped config), `#[inject(identity)]` (request-scoped auth identity — drives guards/roles), `#[inject(request)]` (any other request-scoped `FromRequestParts`). `Option<T>` supported on both request scopes; identity can also be a handler **parameter** for mixed public/protected controllers.
+- **Fail-closed auth**: a required struct-level identity authenticates every route; opt public routes out with `#[anonymous]` (identity extraction skipped entirely; combining it with `#[roles]` or a required identity param is a compile error).
+- **Controllers = two macros**: `#[controller(path = "...")]` on the struct (strips request-scoped fields, generates metadata + extractor + per-request façade + `ContextConstruct`) and `#[routes]` on the impl (generates handlers + state-generic `Controller<S, W>` impl). Register with `register_controller()`. Per request: one `Arc` clone of the core + one extraction — no per-request DI.
+- **Guards/interceptors don't read the state**: built once at registration via `DecoratorSpec`; bean deps are compile-checked through `Controller::Deps`.
+- **Lifecycle hooks on beans AND controller impls**: `#[post_construct]` (build time; `Err` aborts startup), `#[on_start(order = N)]` (boot, after graph + cores; `Err` aborts), `#[pre_destroy]` (graceful shutdown, reverse order; `Err` logged and swallowed).
 
 ```rust
 #[controller(path = "/users")]
@@ -176,47 +117,6 @@ impl UserController {
 }
 ```
 
-**Generated items (hidden):**
-- A physical **core** struct (the source struct with request-scoped fields stripped) — holds `#[inject]` + `#[config]` fields plus a hidden `__r2e_decos: DecoSlot` (prebuilt `#[scheduled]`/`#[consumer]`-method interceptor sets, filled at registration via `Controller::fill_decos`), built once into an `Arc` by `register_controller()`. Cores are not literal-constructible — build via `ContextConstruct::from_context`. The controller core reuses the same bean-level transverse machinery (`r2e-macros/src/codegen/transverse.rs`) for `#[scheduled]`/`#[consumer]`/`#[intercept]`/`#[post_construct]` ("the controller core IS a bean").
-- `mod __r2e_meta_<Name>` — `type IdentityType`, `const PATH_PREFIX`, `fn guard_identity()`, `fn bind_request()`, `fn validate_config()`.
-- `struct __R2eRequestData_<Name><__M>` — state-generic `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`), extracted through `FromRequestPartsVia<S, M>` (R2E-owned trait with a marker slot where bean-backed extractors park their `HasBean` index witnesses — E0207). Marker-only + infallible when there are none.
-- `struct __R2eRequest_<Name>` — the per-request façade: `{ __core: Arc<Core>, <request-scoped fields> }`, with `Deref<Target = Core>`. Route methods run on this; `self.<injected/config>` resolves through `Deref`, `self.<identity/request>` is a direct façade field.
-- `impl ContextConstruct for Name` — always generated; `from_context(ctx)` pulls each `#[inject]` field with `ctx.get::<Ty>()` and declares `type Deps` (checked via `AllSatisfied` at registration).
-- `impl<S, ...markers> Controller<S, W> for Name` — receives the core built by `register_controller()` (an extension-trait method: `RegisterController`/`RegisterControllers`, in the prelude) and wires routes, consumers, and scheduled tasks to that same instance. Per request: one `Arc` clone of the core + one `FromRequestParts` extraction binding the stack façade. No DI re-resolution per request, no `Extension<Arc<Controller>>`, no task-local identity.
-
-### Macro Crate Internals (r2e-macros)
-
-`src/` is grouped by role: `attrs/` (transforming attribute macros: `bean_attr`, `controller_attr`, `main_attr`, `module_attr`, `producer_attr`, `routes_attr`, `test_suite_attr`), `derives/` (derive macros: `api_error_derive`, `config_derive`, `params_derive`, …), `parsing/` (`controller_parsing`, `routes_parsing`, `grpc_routes_parsing`), `codegen/` (emission: `controller_codegen`, `controller_impl`, `handlers`, `decorators`, `scheduled`, `transverse`, `wrapping`), `model/` (shared parsed-definition types), `util/` (`crate_path`, `type_utils`, `hash_tokens`, `runtime_args`), plus `extract/` and `grpc_codegen/`.
-
-**Controller path:** `lib.rs` → `attrs/controller_attr.rs` → `parsing/controller_parsing.rs` (`ControllerStructDef`) → `codegen/controller_codegen.rs`
-
-**Routes path:** `lib.rs` → `attrs/routes_attr.rs` → `parsing/routes_parsing.rs` (`RoutesImplDef`) → `codegen/` (handlers, controller_impl, …)
-
-**Shared modules:**
-- `model/types.rs` — `InjectedField`, `IdentityField`, `RequestField`, `ConfigField`, `RouteMethod`, `ConsumerMethod`, `ScheduledMethod`, etc.
-- `model/route.rs` — `HttpMethod` enum and `RoutePath` parser
-- `extract/` — attribute extraction (`route`, `consumer`, `scheduled`, `async_exec`, `managed`, `plugins`, `duration`)
-
-**Inter-macro liaison:** `#[controller]` generates `__r2e_meta_<Name>` (with `bind_request`), `__R2eRequestData_<Name>`, and the `__R2eRequest_<Name>` façade. `#[routes]` references these by naming convention and emits route methods on the façade.
-
-**No-op attribute macros:** `#[get]`, `#[any]`, `#[fallback]`, `#[roles]`, `#[anonymous]`, `#[intercept]`, `#[guard]`, `#[consumer]`, `#[scheduled]`, `#[middleware]`, `#[post_construct]`, `#[on_start]`, `#[pre_destroy]`, etc. are no-op `#[proc_macro_attribute]` parsed by `#[routes]` or `#[bean]`. `#[inject]` (incl. `#[inject(identity)]` / `#[inject(request)]`), `#[config]`, and `#[config_section]` are field helper attributes consumed by `#[controller]`.
-
-**`#[post_construct]`** — lifecycle hook on `#[bean]` methods **and on `#[routes]` controller impls**. `&self` only, may be async, returns `()` or `Result<(), Box<dyn Error + Send + Sync>>`. Generates a `PostConstruct` trait impl. Timing differs by host: bean hooks run inside `build_state()` (after the graph resolves, before subscribers); controller-core hooks run at startup during `register_controller`/`build_with_consumers`, **before** consumer registrations (later than bean hooks, since cores are built after the graph). An `Err` aborts startup. On controllers, `#[post_construct]` combined with a route/`#[scheduled]`/`#[consumer]` marker, or with params, or with `#[intercept]`, is a compile error.
-
-**`#[on_start]`** — startup observer on `#[bean]` methods **and** `#[routes]`
-controller impls. Same signature/rejection rules as `#[post_construct]`, plus an
-optional `#[on_start(order = N)]` (`i32`, default 0). Runs at boot **after** the
-whole graph and every controller core are built (so a hook may read anything the
-app declares) and after consumer registrations, **before** the plugins' serve
-hooks, the builder's `.on_start` closures and the TCP bind. All hooks (beans +
-controllers) are sorted ascending by `order`, ties in registration order; an
-`Err` **aborts boot** like a builder `.on_start` error. A pinned `override_bean`
-skips the hook. It runs under `TestApp::boot` and `build_with_consumers` too (a
-test boot is a real startup). Generates `impl OnStart` + `register_on_start` on
-beans, and the `Controller::on_start(core)` override on controllers.
-
-**`#[pre_destroy]`** — disposal hook (the `@PreDestroy` counterpart of `#[post_construct]`), on `#[bean]` methods **and** `#[routes]` controller impls. Same signature/rejection rules as `#[post_construct]`. Runs at **graceful shutdown** in the async shutdown phase — controller hooks first, then bean hooks, each in reverse registration order. An `Err` is logged and swallowed (never aborts shutdown); a pinned `override_bean` skips the hook. `#[bean]` generates `impl PreDestroy` + `register_pre_destroy`; a controller core (not `Clone`) uses the `Controller::pre_destroy(core)` override. In tests it fires on `TestApp::shutdown().await`, which runs the production shutdown sequence; the router-only `build_with_consumers` has no shutdown, so nothing fires there.
-
 ## Detailed Reference — Read Before You Code
 
 **DO NOT guess APIs or patterns. Match your task to the keyword table below and READ only the matching file(s).** Each file is the authoritative source for its subsystem. Reading all files wastes context — be selective.
@@ -225,6 +125,9 @@ beans, and the `Controller::on_start(core)` override on controllers.
 
 | If your task involves… | Read this file |
 |---|---|
+| workspace layout, crate responsibilities in detail, dependency flow, axum/json/tokio boundary baselines and bridge points, checked-in generated code (OpenFGA proto client) | `docs/claude/architecture.md` |
+| test layout, adding a test target/module, `tests/<name>/main.rs` grouping, fixtures, `env_lock()` | `docs/claude/testing-conventions.md` |
+| injection scopes detail, `#[anonymous]` rules, generated items (`__r2e_meta`, façade, request-data extractor), lifecycle hook semantics (`#[post_construct]`/`#[on_start]`/`#[pre_destroy]`), r2e-macros internal layout | `docs/claude/core-concepts.md` |
 | `R2eConfig`, `ConfigProperties`, `ConfigValue`, `FromConfigValue`, `#[config(...)]`, `load_config`, `with_config`, secrets (`${...}`), YAML config, typed sections, `#[config(section)]`, env overlay, `serve_auto` | `docs/claude/configuration.md` |
 | `Guard`, `PreAuthGuard`, `GuardContext`, `#[guard]`, `#[roles]`, `Identity`, `RolesGuard`, `RateLimitGuard`, `PreRateLimit`, `Interceptor`, `#[intercept]`, `DecoratorSpec`, `SelfBuilt`, `#[derive(DecoratorBean)]`, `build_decorator`, `Logged`, `Timed`, `Cache` store bean, middleware ordering | `docs/claude/guards-interceptors.md` |
 | OpenFGA schema-first: `model!`, `.fga` DSL parser, `FgaCheck::has`, `FgaType`/`FgaRel`/`FgaObject`, `DirectlyAssignable`, `authz::MODEL` | `docs/features/23-openfga.md` (user guide) + `docs/claude/roadmap.md` § W12 |
@@ -260,9 +163,7 @@ beans, and the `Controller::on_start(core)` override on controllers.
 
 ## Keeping `llm.txt` Fresh
 
-The AI/agent-facing reference that downstream projects rely on is a hub + spokes set: `llm.txt` at the repo root (hand-written: golden rules + the routing table "task → topic") and one topic per file under `llm/<topic>.md`. `llm-full.txt` is the **generated** single-file concatenation — never edit it directly. **Any change to a public API surface (traits, macros, builder methods, renames, removals) MUST update the matching topic in the same PR.** Code agents in consumer apps follow these files literally — a stale example (e.g. a removed method) makes them generate non-compiling code.
-
-Rules for a topic file: exact 6-line front matter (`---`, `topic: <slug>` == file stem, `features: …`, `tokens: ~N`, `requires: <slugs>`, `---`), then one `## Title` and a mandatory `### TL;DR`; every topic must be routed from `llm.txt` (the hub is the manifest: first-reference order = concatenation order), and every ```rust block must compile against the `r2e` façade (`cargo test -p llm-doctests`; mark deliberately partial snippets `rust,ignore`). After editing, run `scripts/check-llm-docs.sh --update` (recomputes `tokens:` and regenerates `llm-full.txt`), then commit spoke + `llm-full.txt`; CI (`.github/workflows/llm-docs.yml`) fails on drift. Adding a topic also means adding its slug to `TOPICS` in `r2e-cli/src/commands/llm_docs.rs` (the CLI embeds the set for `r2e docs --llm` / `--export`; `r2e-cli/tests/llm_docs.rs` fails otherwise). Layout decisions live in `plans/llm-docs-split.md`.
+`llm.txt` (hub: golden rules + routing table) + `llm/<topic>.md` (spokes) are the agent-facing reference downstream projects follow **literally**; `llm-full.txt` is generated — never edit it directly. **Any change to a public API surface (traits, macros, builder methods, renames, removals) MUST update the matching topic in the same PR** — a stale example makes consumer agents generate non-compiling code. Every ```rust block must compile against the `r2e` façade (`cargo test -p llm-doctests`; mark deliberately partial snippets `rust,ignore`). After editing, run `scripts/check-llm-docs.sh --update` (recomputes `tokens:` and regenerates `llm-full.txt`), then commit spoke + `llm-full.txt`; CI (`.github/workflows/llm-docs.yml`) fails on drift. Adding a topic also means routing it from `llm.txt` and adding its slug to `TOPICS` in `r2e-cli/src/commands/llm_docs.rs` (`r2e-cli/tests/llm_docs.rs` fails otherwise). Front-matter format and layout decisions: `plans/llm-docs-split.md`.
 
 ## Language & Documentation
 
