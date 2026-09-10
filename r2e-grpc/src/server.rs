@@ -340,7 +340,8 @@ pub struct GrpcMarker(pub(crate) ());
 /// must fail startup loudly, not degrade into a silently reflection-less
 /// server. Both call sites run at startup, before any traffic.
 #[cfg(feature = "reflection")]
-fn apply_reflection(
+#[doc(hidden)] // exposed for the non-regression test in tests/reflection.rs (task #1037)
+pub fn apply_reflection(
     mut services: RegisteredServices,
     reflection: &Option<Vec<&'static [u8]>>,
 ) -> RegisteredServices {
@@ -359,13 +360,7 @@ fn apply_reflection(
         );
     }
 
-    let register = |mut builder: tonic_reflection::server::Builder<'static>| {
-        for descriptor in &services.descriptors {
-            builder = builder.register_encoded_file_descriptor_set(descriptor);
-        }
-        builder
-    };
-    let v1 = register(tonic_reflection::server::Builder::configure())
+    let v1 = reflection_builder(&services.descriptors)
         .build_v1()
         .expect(
             "gRPC reflection: a registered file descriptor set failed to decode — check the \
@@ -373,7 +368,7 @@ fn apply_reflection(
              `with_reflection_descriptor` (must be `tonic_prost_build` \
              `file_descriptor_set_path` output)",
         );
-    let v1alpha = register(tonic_reflection::server::Builder::configure())
+    let v1alpha = reflection_builder(&services.descriptors)
         .build_v1alpha()
         .expect("gRPC reflection: v1alpha build failed on descriptor sets v1 accepted");
     services.routes = services.routes.add_service(v1).add_service(v1alpha);
@@ -382,4 +377,28 @@ fn apply_reflection(
         .names
         .push("grpc.reflection.v1alpha.ServerReflection");
     services
+}
+
+/// Builds one reflection builder with every registered descriptor set.
+///
+/// `#[inline(never)]` is load-bearing, not a style choice: on Linux targets,
+/// rustc 1.94–1.96.1 (LLVM) miscompiles two inlined back-to-back
+/// `Builder::configure()` + register chains — the second builder's descriptor
+/// `Vec` ends up aliasing the first builder's buffer, which `build_v1()` has
+/// already freed, and startup dies with a silent SIGSEGV inside
+/// `FileDescriptorSet::decode` (task #1037; fixed upstream in Rust 1.97.1).
+/// Keeping each builder's construction behind an opaque call boundary defeats
+/// the bad optimization (`std::hint::black_box` does NOT). Do not re-inline
+/// this into `apply_reflection` while toolchains ≤ 1.96 are in the support
+/// window.
+#[cfg(feature = "reflection")]
+#[inline(never)]
+fn reflection_builder(
+    descriptors: &[&'static [u8]],
+) -> tonic_reflection::server::Builder<'static> {
+    let mut builder = tonic_reflection::server::Builder::configure();
+    for descriptor in descriptors {
+        builder = builder.register_encoded_file_descriptor_set(descriptor);
+    }
+    builder
 }
