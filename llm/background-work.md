@@ -1,7 +1,7 @@
 ---
 topic: background-work
 features: executor
-tokens: ~2700
+tokens: ~2900
 requires: di-beans
 ---
 
@@ -67,6 +67,14 @@ impl ReportService {
 
 The `Scheduler` plugin runs every `#[scheduled]` tick on this pool, so scheduled
 work is drained, bounded, and metered alongside submitted jobs.
+
+A panicking job is contained (its `JobHandle` resolves to a `JoinError` with
+`is_panic()`) and reported once: one `r2e::panic` error line plus the app's
+`AppBuilder::on_panic` hook, with `PanicOrigin::Executor { job }`. `#[async_exec]`
+names the job after the method; `executor.submit_named("name", fut)` does the
+same by hand; plain `submit`/`spawn` report `job: None` (label `<unnamed>`).
+The hook only reaches pools built by the `Executor` plugin — a pool made with
+`PoolExecutor::new` still contains and logs panics, but fires no hook.
 
 Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown.
 

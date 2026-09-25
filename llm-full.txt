@@ -4327,8 +4327,10 @@ only while a live driver holds a deadline, so it also reads `None` for every job
 the driver stops), while
 `Concurrent` re-arms at fire time, before the tick is built. Different jobs always run
 concurrently. Consequences: in-flight ticks drain on shutdown (bounded by
-`executor.shutdown-timeout`), a panicking tick is contained/logged and the driver keeps
-running, and scheduled work is globally bounded by `executor.max-concurrent` and shows up
+`executor.shutdown-timeout`), a panicking tick is contained and the driver keeps
+running — reported once as an `r2e::panic` line plus the app's `on_panic` hook with
+`PanicOrigin::Scheduled { task }` (tick bodies and tick-factory panics alike, on the
+shared or the `dedicated` pool), and scheduled work is globally bounded by `executor.max-concurrent` and shows up
 in `ExecutorMetrics`.
 
 ```rust
@@ -4581,6 +4583,14 @@ impl ReportService {
 
 The `Scheduler` plugin runs every `#[scheduled]` tick on this pool, so scheduled
 work is drained, bounded, and metered alongside submitted jobs.
+
+A panicking job is contained (its `JobHandle` resolves to a `JoinError` with
+`is_panic()`) and reported once: one `r2e::panic` error line plus the app's
+`AppBuilder::on_panic` hook, with `PanicOrigin::Executor { job }`. `#[async_exec]`
+names the job after the method; `executor.submit_named("name", fut)` does the
+same by hand; plain `submit`/`spawn` report `job: None` (label `<unnamed>`).
+The hook only reaches pools built by the `Executor` plugin — a pool made with
+`PoolExecutor::new` still contains and logs panics, but fires no hook.
 
 Prefer this over raw `tokio::spawn` — jobs are tracked and drained on shutdown.
 

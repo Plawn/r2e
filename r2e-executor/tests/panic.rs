@@ -181,7 +181,7 @@ async fn a_scheduled_tagged_job_reports_the_scheduled_origin() {
     let (exec, seen, capture, _guard) = pool_with_hook();
 
     let handle = exec
-        .submit_scheduled("nightly-cleanup", async {
+        .submit_scheduled(&Arc::from("nightly-cleanup"), async {
             panic!("tick boom");
             #[allow(unreachable_code)]
             ()

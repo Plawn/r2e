@@ -89,7 +89,13 @@ Origins: a plain `submit`/`try_submit`/`submit_detached` job reports
 carries a job name — `#[async_exec]` submits through it with the method's
 name; the hidden `submit_scheduled` tags the job as a scheduled tick so it
 reports `PanicOrigin::Scheduled { task }` — the pool is the single reporter
-for scheduled ticks (the scheduler driver logs nothing of its own).
+for scheduled ticks (the scheduler driver logs nothing of its own). A tick
+*factory* panic unwinds on the driver's stack before any pool job exists; the
+driver hands the payload to the hidden `report_scheduled_panic` so it goes
+through the same reporter (one line, one hook call, `Scheduled` origin). The
+scheduler's `dedicated` pool is built with `with_panic_hook_slot` on the app's
+slot, so it reports exactly like the shared pool. `JobLabel::Scheduled` holds
+an `Arc<str>` shared with the driver's job table — no per-tick allocation.
 
 The hook reaches the pool as a `PanicHookSlot` (from
 `PluginBuildContext::panic_hook_slot()`, stored on `Inner`), read **at panic

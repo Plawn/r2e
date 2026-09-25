@@ -44,8 +44,10 @@ only while a live driver holds a deadline, so it also reads `None` for every job
 the driver stops), while
 `Concurrent` re-arms at fire time, before the tick is built. Different jobs always run
 concurrently. Consequences: in-flight ticks drain on shutdown (bounded by
-`executor.shutdown-timeout`), a panicking tick is contained/logged and the driver keeps
-running, and scheduled work is globally bounded by `executor.max-concurrent` and shows up
+`executor.shutdown-timeout`), a panicking tick is contained and the driver keeps
+running — reported once as an `r2e::panic` line plus the app's `on_panic` hook with
+`PanicOrigin::Scheduled { task }` (tick bodies and tick-factory panics alike, on the
+shared or the `dedicated` pool), and scheduled work is globally bounded by `executor.max-concurrent` and shows up
 in `ExecutorMetrics`.
 
 ```rust

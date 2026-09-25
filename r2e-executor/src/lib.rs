@@ -141,7 +141,7 @@ pub struct ExecutorMetrics {
 enum JobLabel {
     Unnamed,
     Named(&'static str),
-    Scheduled(String),
+    Scheduled(Arc<str>),
 }
 
 impl JobLabel {
@@ -271,13 +271,35 @@ impl PoolExecutor {
     /// panic reports as [`PanicOrigin::Scheduled`] `{ task }` rather than an
     /// executor job. Called by the scheduler driver; the pool stays the single
     /// reporter — the driver logs nothing of its own for a tick panic.
+    ///
+    /// Takes the driver's shared `Arc<str>` name so a tick costs a refcount
+    /// bump, not a `String` allocation.
     #[doc(hidden)]
-    pub fn submit_scheduled<F, T>(&self, task: &str, fut: F) -> Result<JobHandle<T>, RejectedError>
+    pub fn submit_scheduled<F, T>(
+        &self,
+        task: &Arc<str>,
+        fut: F,
+    ) -> Result<JobHandle<T>, RejectedError>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
-        self.submit_labeled(JobLabel::Scheduled(task.to_owned()), fut)
+        self.submit_labeled(JobLabel::Scheduled(Arc::clone(task)), fut)
+    }
+
+    /// Report a scheduled-task panic caught *outside* a pool job — the
+    /// scheduler driver catches a panicking tick factory on its own stack
+    /// before any job exists. Goes through the same seam as a job panic (one
+    /// `r2e::panic` line, the app's `on_panic` hook with
+    /// [`PanicOrigin::Scheduled`]), so every tick-related panic reaches the
+    /// hook regardless of where it unwound.
+    #[doc(hidden)]
+    pub fn report_scheduled_panic(&self, task: &str, payload: &(dyn Any + Send)) {
+        report_caught_panic(
+            payload,
+            PanicOrigin::Scheduled { task },
+            self.inner.panic_hook.get().as_ref(),
+        );
     }
 
     fn submit_labeled<F, T>(&self, label: JobLabel, fut: F) -> Result<JobHandle<T>, RejectedError>
