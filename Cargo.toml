@@ -242,3 +242,15 @@ tempfile = "3"
 serial_test = "3"
 trybuild = "1"
 rcgen = "0.14"
+
+# The OIDC issuer generates RSA-2048 keys and hashes client secrets with
+# argon2; unoptimized, that dominates the r2e-oidc test run (minutes on CI).
+# Optimizing only these leaf crates keeps debug builds of our own code intact.
+[profile.dev.package.rsa]
+opt-level = 3
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

@@ -58,10 +58,17 @@ jobs:
           rustup show
           cargo --version
 
+      # Only master writes the cache: PR runs restore it but never save, so
+      # branch caches cannot evict master's from the 10 GB repo quota (a cold
+      # workspace build costs ~6 min).
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
+      # trybuild runs in its own step below (so a `.stderr` drift is named in
+      # the job summary); excluding it here keeps it from running twice.
       - name: cargo test --workspace
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude r2e-compile-tests
 
       # `dev-reload` is off by default and changes `run()`'s serving path
       # (single cached listener, sharding refused); `mark_hot_reload_loop()`
@@ -76,7 +83,7 @@ jobs:
       - name: cargo test -p r2e-core --features dev-reload --test dev_reload
         run: cargo test -p r2e-core --features dev-reload --test dev_reload
 
-      # Already part of `--workspace`; kept as its own leg so a trybuild
+      # Excluded from `--workspace` above; its own leg so a trybuild
       # `.stderr` drift is named in the job summary rather than buried.
       - name: compile-tests (trybuild)
         run: cargo test -p r2e-compile-tests
@@ -120,6 +127,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          save-if: ${{ github.ref == 'refs/heads/master' }}
           key: msrv-${{ steps.msrv.outputs.version }}
 
       # The explicit `+<toolchain>` overrides `rust-toolchain.toml`, which pins
