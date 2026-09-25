@@ -405,8 +405,10 @@ impl Default for ScheduledJobRegistry {
 /// somewhere in the builder chain. This is enforced at compile time via the
 /// plugin's `Deps`: a missing `PoolExecutor` is a guided compile error at
 /// `build_state()`, not a runtime failure. Running ticks on the pool also means
-/// a panicking tick body is contained in its pool job — the driver logs it and
-/// keeps ticking every job instead of dying.
+/// a panicking tick body is contained in its pool job — the pool reports it
+/// once (one `r2e::panic` line + the app's `on_panic` hook, with
+/// `PanicOrigin::Scheduled`) and the driver keeps ticking every job instead of
+/// dying.
 ///
 /// # Example
 ///
@@ -603,7 +605,9 @@ fn resolve_executor(
                 shutdown_timeout: config.shutdown_timeout.unwrap_or(defaults.shutdown_timeout),
             };
             let timeout = exec_config.shutdown_timeout;
-            let pool = PoolExecutor::new(exec_config);
+            // Same app-wide `on_panic` slot as the shared pool: a tick panic on
+            // the private pool must still reach the hook.
+            let pool = PoolExecutor::with_panic_hook_slot(exec_config, ctx.panic_hook_slot());
             let drain = pool.clone();
             // Drain the private pool on shutdown (mirrors the Executor plugin).
             ctx.on_shutdown_async(move || async move {

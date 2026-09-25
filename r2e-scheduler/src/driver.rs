@@ -162,7 +162,7 @@ enum Rearm {
 
 /// Per-job state retained by the driver.
 struct JobRuntime {
-    name: String,
+    name: Arc<str>,
     run: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
     /// Optional skip predicate evaluated at the start of every tick.
     skip: Option<SkipFn>,
@@ -387,9 +387,12 @@ fn submit_tick(
     let (fut, skipped_flag) = match built {
         Ok(built) => built,
         Err(payload) => {
-            tracing::error!(
+            // Same seam as a tick-body panic: one `r2e::panic` line + the
+            // app's `on_panic` hook (`PanicOrigin::Scheduled`). The warning
+            // only adds what the report cannot say — the job is now disabled.
+            executor.report_scheduled_panic(&runtimes[idx].name, payload.as_ref());
+            tracing::warn!(
                 task = %runtimes[idx].name,
-                panic = %r2e_core::runtime::panic::panic_message(payload.as_ref()),
                 "Scheduled tick factory panicked; disabling the job"
             );
             return Submission::FactoryPanicked;
@@ -511,7 +514,7 @@ fn set_paused(
     runtimes: &mut [JobRuntime],
     registry: &ScheduledJobRegistry,
 ) -> bool {
-    match runtimes.iter_mut().find(|j| j.name == name) {
+    match runtimes.iter_mut().find(|j| &*j.name == name) {
         Some(job) => {
             job.paused = paused;
             registry.update_job(name, |i| i.paused = paused);
@@ -600,7 +603,7 @@ async fn run_driver(
             registry.update_job(&job.name, |i| i.next_run = Some(instant_to_datetime(t)));
         }
         runtimes.push(JobRuntime {
-            name: job.name,
+            name: job.name.into(),
             run: job.run,
             skip: job.skip,
             rearm,
@@ -813,7 +816,7 @@ async fn run_driver(
                         //   cron: next matching slot) and report the outcome. A
                         //   schedule that can never fire again stays unarmed:
                         //   the paused flag is cleared, the reply is `false`.
-                        let ok = match runtimes.iter().position(|j| j.name == name) {
+                        let ok = match runtimes.iter().position(|j| *j.name == *name) {
                             None => false,
                             Some(idx) => {
                                 set_paused(&name, false, &mut runtimes, &registry);
@@ -839,7 +842,7 @@ async fn run_driver(
                         // explicit answer), then the driver leaves through the
                         // common drain.
                         let mut pool_closed = false;
-                        let ok = match runtimes.iter().position(|j| j.name == name) {
+                        let ok = match runtimes.iter().position(|j| *j.name == *name) {
                             None => false,
                             // A Skip job already running refuses the extra tick.
                             Some(idx)

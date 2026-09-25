@@ -61,16 +61,41 @@ async fn panicking_tick_increments_panic_count() {
 // `submit_scheduled` reports as `PanicOrigin::Scheduled { task }`, the driver
 // logs nothing of its own, and the registry's `panic_count` still moves.
 
-/// Event-only capture of the `r2e::panic` target.
+/// Event capture across every target: `events()` is the `r2e::panic` lines,
+/// `others()` everything else — so a duplicate report under some other target
+/// (e.g. the driver module's default one) cannot slip past the single-line
+/// assertion.
+/// One captured event: `(target, fields)`.
+type Captured = (String, HashMap<String, String>);
+
 #[derive(Default, Clone)]
 struct PanicCapture {
-    events: Arc<Mutex<Vec<HashMap<String, String>>>>,
+    events: Arc<Mutex<Vec<Captured>>>,
 }
 
 impl PanicCapture {
     fn events(&self) -> Vec<HashMap<String, String>> {
-        self.events.lock().unwrap().clone()
+        self.by_target(|t| t == PANIC_TARGET)
     }
+
+    fn others(&self) -> Vec<HashMap<String, String>> {
+        self.by_target(|t| t != PANIC_TARGET)
+    }
+
+    fn by_target(&self, keep: impl Fn(&str) -> bool) -> Vec<HashMap<String, String>> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(target, _)| keep(target))
+            .map(|(_, fields)| fields.clone())
+            .collect()
+    }
+}
+
+/// Does any captured field value mention `needle` (the panic message)?
+fn mentions(fields: &HashMap<String, String>, needle: &str) -> bool {
+    fields.values().any(|v| v.contains(needle))
 }
 
 struct FieldRecorder<'a>(&'a mut HashMap<String, String>);
@@ -88,12 +113,12 @@ impl Visit for FieldRecorder<'_> {
 
 impl<S: Subscriber> Layer<S> for PanicCapture {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
-        if event.metadata().target() != PANIC_TARGET {
-            return;
-        }
         let mut fields = HashMap::new();
         event.record(&mut FieldRecorder(&mut fields));
-        self.events.lock().unwrap().push(fields);
+        self.events
+            .lock()
+            .unwrap()
+            .push((event.metadata().target().to_owned(), fields));
     }
 }
 
@@ -174,6 +199,16 @@ async fn a_panicking_tick_reports_the_scheduled_origin_exactly_once() {
             Some("tick boom")
         );
     }
+
+    let dupes: Vec<_> = capture
+        .others()
+        .into_iter()
+        .filter(|f| mentions(f, "tick boom"))
+        .collect();
+    assert!(
+        dupes.is_empty(),
+        "no second report of the panic under another target: {dupes:?}"
+    );
 
     // Containment unchanged: the registry still counts the panics.
     let info = registry.job("panicker").expect("job registered");
@@ -277,4 +312,80 @@ async fn a_panicking_tick_factory_disables_its_job_without_killing_the_driver() 
         state.finished.load(Ordering::SeqCst),
         "the tick already in flight must still be drained"
     );
+}
+
+// ── A tick FACTORY panic reaches the app's on_panic hook too ────────────────
+//
+// The factory unwinds on the driver's stack, before any pool job exists — the
+// driver hands the payload to the pool's reporter so the app still sees one
+// `PanicOrigin::Scheduled` report and one `r2e::panic` line.
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_panicking_tick_factory_reports_the_scheduled_origin_once() {
+    type Seen = Arc<Mutex<Vec<(String, Option<String>)>>>;
+    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+    let seen_h = Arc::clone(&seen);
+    let hook: PanicHook = Arc::new(move |report| {
+        let task = match report.origin() {
+            PanicOrigin::Scheduled { task } => Some(task.to_owned()),
+            _ => None,
+        };
+        seen_h
+            .lock()
+            .unwrap()
+            .push((report.message().to_owned(), task));
+    });
+    let slot = PanicHookSlot::default();
+    slot.set(hook);
+    let pool = PoolExecutor::with_panic_hook_slot(ExecutorConfig::default(), slot);
+
+    let capture = PanicCapture::default();
+    let _guard = tracing::subscriber::set_default(Registry::default().with(capture.clone()));
+
+    let registry = ScheduledJobRegistry::new();
+    let cancel = CancelToken::new();
+    let task = ScheduledTaskDef::new(
+        "factory_panicker",
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_millis(50).unwrap()),
+        (),
+        |()| {
+            // Synchronous, before the future exists: the factory itself panics.
+            panic!("factory boom");
+            #[allow(unreachable_code)]
+            async {}
+        },
+    );
+    start_one(task, cancel.clone(), pool, registry.clone());
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while seen.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the hook must fire for a panicking tick factory");
+    // The job is disabled after the first factory panic: nothing else fires.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    cancel.cancel();
+
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        [("factory boom".to_owned(), Some("factory_panicker".to_owned()))],
+        "one report, Scheduled origin, task name"
+    );
+    let events = capture.events();
+    assert_eq!(events.len(), 1, "one r2e::panic line: {events:?}");
+    assert_eq!(
+        events[0].get("task").map(String::as_str),
+        Some("factory_panicker")
+    );
+    let dupes: Vec<_> = capture
+        .others()
+        .into_iter()
+        .filter(|f| mentions(f, "factory boom"))
+        .collect();
+    assert!(dupes.is_empty(), "no duplicate report elsewhere: {dupes:?}");
+
+    let info = registry.job("factory_panicker").expect("job registered");
+    assert!(info.paused && info.panic_count == 1, "disabled + counted: {info:?}");
 }
