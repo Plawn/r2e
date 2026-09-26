@@ -466,3 +466,51 @@ database:
         "nested sections stay registered as beans"
     );
 }
+
+// --- load_config: garde violations fail the boot with every offending key ---
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, garde::Validate, Clone, Debug)]
+struct GardedDbSettings {
+    #[garde(skip)]
+    pub url: String,
+    #[config(default = 20)]
+    #[garde(range(min = 1))]
+    pub max_connections: u32,
+    #[config(default = 5)]
+    #[garde(range(min = 1))]
+    pub min_idle: u32,
+}
+
+#[allow(dead_code)]
+#[derive(r2e_macros::ConfigProperties, garde::Validate, Clone, Debug)]
+struct GardedSettings {
+    #[config(section)]
+    #[garde(skip)]
+    pub database: GardedDbSettings,
+}
+
+#[tokio::test]
+async fn load_config_reports_every_garde_violation_at_once() {
+    let yaml = r#"
+database:
+  url: postgres://localhost
+  max_connections: 0
+  min_idle: 0
+"#;
+    let err = r2e_core::AppBuilder::new()
+        .override_config(R2eConfig::from_yaml_str(yaml).unwrap())
+        .load_config::<GardedSettings>()
+        .try_build_state()
+        .await
+        .err()
+        .expect("a garde violation must fail the boot");
+
+    let rendered = err.to_string();
+    for key in ["database.max_connections", "database.min_idle"] {
+        assert!(
+            rendered.contains(key),
+            "every garde violation must be listed, `{key}` is not: {rendered}"
+        );
+    }
+}
