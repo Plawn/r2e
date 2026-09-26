@@ -341,10 +341,6 @@ impl SessionView {
             .or_else(|| self.resources.route(uri))
     }
 
-    pub(crate) fn has_resource(&self, uri: &str) -> bool {
-        self.resource_route(uri).is_some()
-    }
-
     /// The families whose served members differ between `self` and `next`.
     pub(crate) fn diff(&self, next: &SessionView) -> Changed {
         Changed {
@@ -547,7 +543,12 @@ impl Catalog {
         Family::build("prompt name", false, family_members(&prompts, &all_enabled))
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let dynamic = uses_session || options.session_init || groups.iter().any(|g| g.opt_in);
+        // Every persistent session can be changed through the McpSessions bean,
+        // including applications whose members never take McpSession explicitly.
+        let dynamic = options.stateful
+            || uses_session
+            || options.session_init
+            || groups.iter().any(|g| g.opt_in);
 
         let mut info = ServerInfo::default();
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();

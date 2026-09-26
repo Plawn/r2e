@@ -44,9 +44,9 @@ impl ToolsOnly {
 }
 
 #[r2e_core::test]
-async fn absent_families_are_not_advertised() {
+async fn stateless_absent_families_are_not_advertised() {
     let router = AppBuilder::new()
-        .plugin(McpServer::new())
+        .plugin(McpServer::new().stateless(true))
         .build_state()
         .await
         .register_mcp_service::<ToolsOnly>()

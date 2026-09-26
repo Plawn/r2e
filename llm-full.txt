@@ -5801,8 +5801,20 @@ b.provide(RoleToolsets)                                    // the hook is a bean
 - Sessions are **bound to the principal that opened them**: under `mcp.auth`,
   the same session id with another token's subject gets HTTP `404` (identical
   to an unknown session) on `POST`, SSE `GET` and `DELETE`.
-- Once lists are dynamic (any `opt_in` group, a `session_init`, or a member
-  taking `McpSession`), all three families advertise `listChanged: true`.
+- Stateful endpoints always advertise all three families with
+  `listChanged: true`, plus completion: `McpSessions` and raw call contexts
+  can add members even without an explicit `McpSession` parameter. Stateless
+  endpoints do the same when a `session_init` or an `opt_in` group exists.
+- Modern `subscriptions/listen` acknowledges URI interests, then runs the
+  async session-init hook before delivering updates. Each update must match
+  a resource in the initialized view and the caller's scope/role requirements;
+  unknown or unauthorized URI interests receive no updates. Legacy
+  `resources/subscribe` refuses an unauthorized URI exactly like an unknown
+  one (`-32002`), and invalidates delivery when the URI disappears or resolves
+  to a replacement route. A replacement requires a new `resources/subscribe`,
+  with a fresh access check.
+- Typed dynamic tool/prompt handlers retain the original arguments in
+  `ToolCall.arguments` / `PromptCall.arguments` alongside their typed input.
 - `mcp.stateless: true`: groups and `session_init` work (recomputed per
   request); a member taking `McpSession` is a **boot panic** (mutations would
   not outlive the request).

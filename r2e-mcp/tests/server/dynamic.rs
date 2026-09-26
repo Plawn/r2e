@@ -486,3 +486,360 @@ async fn enabling_a_group_notifies_tools_list_changed() {
         "{seen}"
     );
 }
+
+#[r2e_core::test]
+async fn dynamic_preserves_raw_arguments() {
+    let (router, sessions) = dynamic_app().await;
+    let sid = initialize(&router, "/mcp").await;
+    sessions.all()[0]
+        .add_tool(
+            DynamicTool::new("raw_args")
+                .handler(|_p: EchoIn, call: ToolCall| async move { call.arguments.to_string() }),
+        )
+        .unwrap();
+    let result = tools_call(&router, "/mcp", &sid, "raw_args", json!({"text":"hello"})).await;
+    assert_eq!(text_of(&result), r#"{"text":"hello"}"#);
+    sessions.all()[0]
+        .add_prompt(
+            DynamicPrompt::new("raw_prompt")
+                .handler(|_p: EchoIn, call: PromptCall| async move { call.arguments.to_string() }),
+        )
+        .unwrap();
+    let result =
+        support::prompts_get(&router, "/mcp", &sid, "raw_prompt", json!({"text":"hello"})).await;
+    assert_eq!(
+        result["result"]["messages"][0]["content"]["text"],
+        r#"{"text":"hello"}"#
+    );
+}
+
+#[r2e_core::test]
+async fn external_mutations_advertise_capabilities() {
+    let app = AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<AdminTools>();
+    let sessions = app.bean_context().try_get::<McpSessions>().unwrap();
+    let router = app.build();
+    let init = support::post(&router, "/mcp", None, &support::initialize_body()).await;
+    let caps = &init.result()["capabilities"];
+    sessions.all()[0]
+        .add_resource(
+            DynamicResource::new("r2e://new", "new").handler(|_call: ResourceCall| async { "new" }),
+        )
+        .unwrap();
+    for family in ["tools", "resources", "prompts"] {
+        assert_eq!(caps[family]["listChanged"], true, "{caps}");
+    }
+    assert!(caps.get("completions").is_some(), "{caps}");
+}
+
+#[derive(Clone)]
+struct ResourceSubscriptionInit;
+impl McpSessionInit for ResourceSubscriptionInit {
+    async fn init(&self, s: &SessionInit) -> Result<SessionToolset, McpError> {
+        assert_eq!(s.header("x-resource-view"), Some("private"));
+        Ok(SessionToolset::new()
+            .resource(
+                DynamicResource::new("r2e://private", "private")
+                    .handler(|_call: ResourceCall| async { "private" }),
+            )
+            .resource(
+                DynamicResource::new("r2e://admin", "admin")
+                    .roles(&["admin"])
+                    .handler(|_call: ResourceCall| async { "admin" }),
+            ))
+    }
+}
+
+#[r2e_core::test]
+async fn modern_subscription_runs_init() {
+    let updates = r2e_mcp::McpResourceUpdates::default();
+    let router = AppBuilder::new()
+        .provide(ResourceSubscriptionInit)
+        .plugin(
+            McpServer::new()
+                .session_init::<ResourceSubscriptionInit>()
+                .with_resource_updates(updates.clone()),
+        )
+        .build_state()
+        .await
+        .register_mcp_service::<AdminTools>()
+        .build();
+    let req = json!({"jsonrpc":"2.0","id":1,"method":"subscriptions/listen",
+        "params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},
+            "notifications":{"resourceSubscriptions":["r2e://private", "r2e://admin", "r2e://unknown"]}}});
+    let request = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("host", "localhost")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("x-resource-view", "private")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "subscriptions/listen")
+        .body(Body::from(req.to_string()))
+        .unwrap();
+    let response = router.oneshot(request).await.unwrap();
+    if response.status() != StatusCode::OK {
+        panic!(
+            "{}",
+            String::from_utf8_lossy(&response.into_body().collect().await.unwrap().to_bytes())
+        );
+    }
+    let mut body = response.into_body();
+    let acknowledged = r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        let mut raw = String::new();
+        while let Some(frame) = body.frame().await {
+            if let Ok(data) = frame.unwrap().into_data() {
+                raw.push_str(&String::from_utf8_lossy(&data));
+                if raw.contains("notifications/subscriptions/acknowledged") {
+                    return raw;
+                }
+            }
+        }
+        raw
+    })
+    .await
+    .unwrap();
+    assert!(acknowledged.contains("r2e://private"), "{acknowledged}");
+    // Wait for the initialized listener, then put denied/unknown updates ahead
+    // of the visible one. Only the visible URI may reach the client.
+    r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        while updates.notify("r2e://unknown") == 0 {
+            r2e_core::rt::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    updates.notify("r2e://admin");
+    updates.notify("r2e://private");
+    let received = r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        let mut raw = String::new();
+        loop {
+            let frame = body.frame().await.expect("subscription ended").unwrap();
+            if let Some(data) = frame.data_ref() {
+                raw.push_str(&String::from_utf8_lossy(data));
+                if raw.contains("r2e://private") {
+                    return raw;
+                }
+            }
+        }
+    })
+    .await
+    .expect("initialized resource update was not delivered");
+    assert!(
+        received.contains("notifications/resources/updated"),
+        "{received}"
+    );
+    assert!(!received.contains("r2e://admin"), "{received}");
+    assert!(!received.contains("r2e://unknown"), "{received}");
+}
+
+fn legacy_subscribe_body(uri: &str) -> Value {
+    json!({"jsonrpc":"2.0","id":10,"method":"resources/subscribe","params":{"uri":uri}})
+}
+
+#[r2e_core::test]
+async fn legacy_subscribe_refuses_unauthorized_like_unknown() {
+    let (router, sessions) = dynamic_app().await;
+    let sid = initialize(&router, "/mcp").await;
+    let session = &sessions.all()[0];
+    session
+        .add_resource(
+            DynamicResource::new("r2e://public", "public")
+                .handler(|_call: ResourceCall| async { "public" }),
+        )
+        .unwrap();
+    session
+        .add_resource(
+            DynamicResource::new("r2e://admin", "admin")
+                .roles(&["admin"])
+                .handler(|_call: ResourceCall| async { "admin" }),
+        )
+        .unwrap();
+
+    let public = support::post(
+        &router,
+        "/mcp",
+        Some(&sid),
+        &legacy_subscribe_body("r2e://public"),
+    )
+    .await;
+    assert!(
+        public.message().get("error").is_none(),
+        "{}",
+        public.raw_body
+    );
+
+    let admin = support::post(
+        &router,
+        "/mcp",
+        Some(&sid),
+        &legacy_subscribe_body("r2e://admin"),
+    )
+    .await;
+    let unknown = support::post(
+        &router,
+        "/mcp",
+        Some(&sid),
+        &legacy_subscribe_body("r2e://unknown"),
+    )
+    .await;
+    let (admin, unknown) = (&admin.message()["error"], &unknown.message()["error"]);
+    assert_eq!(admin["code"], unknown["code"], "{admin} vs {unknown}");
+    assert_eq!(admin["message"], "unknown resource: r2e://admin");
+    assert_eq!(unknown["message"], "unknown resource: r2e://unknown");
+}
+
+#[r2e_core::test]
+async fn legacy_subscription_stops_after_removal() {
+    let updates = r2e_mcp::McpResourceUpdates::default();
+    let (router, sessions) =
+        dynamic_app_with(McpServer::new().with_resource_updates(updates.clone())).await;
+    let sid = initialize(&router, "/mcp").await;
+    let session = &sessions.all()[0];
+    for uri in ["r2e://gone", "r2e://kept"] {
+        session
+            .add_resource(
+                DynamicResource::new(uri, uri).handler(|_call: ResourceCall| async { "x" }),
+            )
+            .unwrap();
+        let sub = support::post(&router, "/mcp", Some(&sid), &legacy_subscribe_body(uri)).await;
+        assert!(sub.message().get("error").is_none(), "{}", sub.raw_body);
+    }
+    let stream = router
+        .clone()
+        .oneshot(
+            Request::get("/mcp")
+                .header("host", "localhost")
+                .header("accept", "text/event-stream")
+                .header("mcp-session-id", &sid)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut body = stream.into_body();
+    assert!(session.remove_resource("r2e://gone").unwrap());
+    // The removed URI is published first; only the kept one may arrive.
+    updates.notify("r2e://gone");
+    updates.notify("r2e://kept");
+    let received = r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        let mut raw = String::new();
+        loop {
+            let frame = body.frame().await.expect("SSE stream ended").unwrap();
+            if let Some(data) = frame.data_ref() {
+                raw.push_str(&String::from_utf8_lossy(data));
+                if raw.contains("r2e://kept") {
+                    return raw;
+                }
+            }
+        }
+    })
+    .await
+    .expect("kept resource update was not delivered");
+    assert!(!received.contains("r2e://gone"), "{received}");
+}
+
+#[r2e_core::test]
+async fn legacy_subscription_is_invalidated_on_replacement() {
+    let updates = r2e_mcp::McpResourceUpdates::default();
+    let (router, sessions) =
+        dynamic_app_with(McpServer::new().with_resource_updates(updates.clone())).await;
+    let sid = initialize(&router, "/mcp").await;
+    let session = &sessions.all()[0];
+    for uri in ["r2e://gone", "r2e://kept"] {
+        session
+            .add_resource(
+                DynamicResource::new(uri, uri).handler(|_call: ResourceCall| async { "x" }),
+            )
+            .unwrap();
+        let sub = support::post(&router, "/mcp", Some(&sid), &legacy_subscribe_body(uri)).await;
+        assert!(sub.message().get("error").is_none(), "{}", sub.raw_body);
+    }
+    let stream = router
+        .clone()
+        .oneshot(
+            Request::get("/mcp")
+                .header("host", "localhost")
+                .header("accept", "text/event-stream")
+                .header("mcp-session-id", &sid)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut body = stream.into_body();
+    assert!(session.remove_resource("r2e://gone").unwrap());
+    session
+        .add_resource(
+            DynamicResource::new("r2e://gone", "restricted replacement")
+                .roles(&["admin"])
+                .handler(|_call: ResourceCall| async { "restricted" }),
+        )
+        .unwrap();
+    // Replacing a public resource with an admin-only one must revoke delivery.
+    updates.notify("r2e://gone");
+    updates.notify("r2e://kept");
+    let received = r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        let mut raw = String::new();
+        loop {
+            let frame = body.frame().await.expect("SSE stream ended").unwrap();
+            if let Some(data) = frame.data_ref() {
+                raw.push_str(&String::from_utf8_lossy(data));
+                if raw.contains("r2e://kept") {
+                    return raw;
+                }
+            }
+        }
+    })
+    .await
+    .expect("kept resource update was not delivered");
+    assert!(!received.contains("r2e://gone"), "{received}");
+    let denied = support::post(
+        &router,
+        "/mcp",
+        Some(&sid),
+        &legacy_subscribe_body("r2e://gone"),
+    )
+    .await;
+    assert_eq!(denied.message()["error"]["code"], -32002);
+
+    assert!(session.remove_resource("r2e://gone").unwrap());
+    session
+        .add_resource(
+            DynamicResource::new("r2e://gone", "public replacement")
+                .handler(|_call: ResourceCall| async { "public" }),
+        )
+        .unwrap();
+    let subscribed = support::post(
+        &router,
+        "/mcp",
+        Some(&sid),
+        &legacy_subscribe_body("r2e://gone"),
+    )
+    .await;
+    assert!(
+        subscribed.message().get("error").is_none(),
+        "{}",
+        subscribed.raw_body
+    );
+    updates.notify("r2e://gone");
+    r2e_core::rt::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let frame = body.frame().await.expect("SSE stream ended").unwrap();
+            if let Some(data) = frame.data_ref() {
+                let data = String::from_utf8_lossy(data);
+                if data.contains("notifications/resources/updated") && data.contains("r2e://gone") {
+                    return;
+                }
+            }
+        }
+    })
+    .await
+    .expect("a fresh subscription must deliver updates for the replacement");
+}

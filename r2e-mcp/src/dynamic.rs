@@ -25,7 +25,6 @@ use std::sync::Arc;
 
 use r2e_core::http::Parts;
 use schemars::JsonSchema;
-use serde_json::Value;
 
 use crate::auth::tools::{check_access, ToolRequirements};
 use crate::catalog::principal_in;
@@ -149,12 +148,12 @@ where
 
     fn into_invoke(self, name: Arc<str>, requirements: ToolRequirements) -> ToolInvoke {
         let handler = Arc::new(self);
-        Arc::new(move |mut call: ToolCall| {
+        Arc::new(move |call: ToolCall| {
             let handler = Arc::clone(&handler);
             let name = Arc::clone(&name);
             Box::pin(async move {
                 check_member_access(call.parts.as_deref(), "tool", &name, &requirements)?;
-                let arguments = std::mem::replace(&mut call.arguments, Value::Null);
+                let arguments = call.arguments.clone();
                 let params = P::from_arguments(arguments)?;
                 handler(params, call).await.into_tool_result()
             })
@@ -397,13 +396,13 @@ where
         requirements: ToolRequirements,
     ) -> PromptInvoke {
         let handler = Arc::new(self);
-        Arc::new(move |mut call: PromptCall| {
+        Arc::new(move |call: PromptCall| {
             let handler = Arc::clone(&handler);
             let name = Arc::clone(&name);
             let description = description.clone();
             Box::pin(async move {
                 check_member_access(call.parts.as_deref(), "prompt", &name, &requirements)?;
-                let arguments = std::mem::replace(&mut call.arguments, Value::Null);
+                let arguments = call.arguments.clone();
                 let params = P::from_arguments(arguments)?;
                 handler(params, call)
                     .await

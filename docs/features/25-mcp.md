@@ -170,8 +170,9 @@ impl MathTools {
   `GetPromptResult`, and `Result<_, E: Into<McpError>>`; the doc-comment
   description is attached to the result unless it already carries one.
 
-`resources` / `prompts` capabilities are only advertised when at least one
-member of that family exists. **Error mapping differs from tools**: resources
+`resources` / `prompts` capabilities are advertised when sessions are enabled
+(since `McpSessions` can add members), a session-init hook is installed, or
+members of that family exist. **Error mapping differs from tools**: resources
 and prompts have no in-result error plane, so `McpError::Tool` degrades to a
 JSON-RPC `-32603` internal error (message preserved, structured data
 attached); everything else maps as in the table above. An unknown resource
@@ -184,7 +185,14 @@ changing a resource. R2E sends `notifications/resources/updated` only to
 sessions subscribed to that exact URI. Both legacy `resources/subscribe` /
 `resources/unsubscribe` and the current `subscriptions/listen` filter are
 handled; lagging sessions skip stale update hints (clients re-read the
-resource for the actual contents).
+resource for the actual contents). Modern `subscriptions/listen` acknowledges
+URI interests before running the asynchronous session-init hook. Each update
+is then filtered against the initialized view and the caller's scope/role
+requirements; unknown or unauthorized URI interests receive no updates.
+Legacy `resources/subscribe` refuses an unauthorized URI with the same
+`-32002` "unknown resource" error as an unknown one, and stops relaying a
+URI once it leaves the session's view or resolves to a replacement route.
+A replacement requires a new `resources/subscribe`, with a fresh access check.
 
 Auth is uniform across families: `scopes`/`any_scopes` on the marker,
 `#[roles]`/`#[all_roles]`/`#[guard]` via the shared guard machinery, and
@@ -491,8 +499,10 @@ held weakly and listed from their `initialize` handshake on.
   byte-identical to an unknown id (no oracle that the session exists; the
   client recovers by re-initializing). The handler keeps a JSON-RPC `-32600`
   "belongs to another principal" check as a backstop.
-- As soon as lists can change (an `opt_in` group, a `session_init`, or a
-  member taking `McpSession`), all three families advertise
+- With sessions enabled, all three families and completion are advertised,
+  even when initially empty: `McpSessions` and raw call contexts can add
+  members at any time. A stateless endpoint with a `session_init` or an
+  `opt_in` group also advertises all three families with
   `listChanged: true`. Changes are pushed to legacy sessions via their peer and
   to 2026 `subscriptions/listen` streams that accepted `*_list_changed`.
 - `mcp.stateless: true`: groups and `session_init` work (recomputed per

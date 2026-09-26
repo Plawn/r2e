@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::fixtures::fixture_app;
+use crate::fixtures::fixture_app_with;
 use crate::support;
 
 #[derive(Deserialize, JsonSchema, ObjectParams)]
@@ -386,7 +386,7 @@ async fn capability_follows_the_providers() {
     let with = capabilities(&app().await).await;
     assert!(with.get("completions").is_some(), "{with}");
 
-    let (plain, _log) = fixture_app().await;
+    let (plain, _log) = fixture_app_with(McpServer::new().stateless(true)).await;
     let without = capabilities(&plain).await;
     assert!(without.get("completions").is_none(), "{without}");
 }

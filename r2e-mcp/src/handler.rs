@@ -1,9 +1,9 @@
 //! The rmcp `ServerHandler` implementation dispatching to registered R2E
 //! tools, resources and prompts.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 
 use r2e_core::http::Parts;
@@ -28,7 +28,9 @@ use crate::error::McpError;
 use crate::pagination::{paginate, ListKey};
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
-use crate::route::{Completion, CompletionRef, Completions, PromptCall, ResourceCall, ToolCall};
+use crate::route::{
+    Completion, CompletionRef, Completions, PromptCall, ResourceCall, ResourceRoute, ToolCall,
+};
 use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState};
 
 /// Extract the per-call HTTP parts from the request context, by value.
@@ -136,7 +138,7 @@ pub(crate) struct Endpoint {
 pub(crate) struct R2eMcpHandler {
     endpoint: Arc<Endpoint>,
     state: Arc<SessionState>,
-    legacy_subscriptions: Arc<RwLock<HashSet<String>>>,
+    legacy_subscriptions: Arc<RwLock<HashMap<String, Weak<ResourceRoute>>>>,
     /// Whether a forwarder task is currently alive for this session. Reset
     /// by the task itself on exit, so a later `resources/subscribe` starts a
     /// fresh one instead of silently succeeding with nothing delivering.
@@ -148,7 +150,7 @@ impl R2eMcpHandler {
         R2eMcpHandler {
             state: Arc::new(SessionState::new(Arc::clone(&endpoint.catalog))),
             endpoint,
-            legacy_subscriptions: Arc::new(RwLock::new(HashSet::new())),
+            legacy_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             legacy_forwarder_alive: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -186,6 +188,15 @@ impl R2eMcpHandler {
         Ok(())
     }
 
+    /// Resource interests do not grant access: resolve against the initialized
+    /// view and enforce scope/role visibility even when list filtering is off.
+    fn resource_visible(&self, uri: &str, context: &RequestContext<RoleServer>) -> bool {
+        let view = self.state.view();
+        let principal = principal_in(context.extensions.get::<Parts>());
+        view.resource_route(uri)
+            .is_some_and(|(route, _)| requirements_visible(principal, &route.requirements))
+    }
+
     /// The session handle a member call carries.
     fn session(&self) -> McpSession {
         McpSession::new(Arc::clone(&self.state))
@@ -207,12 +218,17 @@ impl R2eMcpHandler {
 
 /// Legacy (pre-2026-07-28) `resources/subscribe` delivery for one session:
 /// relays published updates whose URI is in the session's set to the peer.
+/// Access was checked at `subscribe` (the session is bound to its
+/// principal); each update is re-checked against the current view so a
+/// resource removed or replaced after subscribing invalidates the subscription.
+/// Weak route identity ties authorization to the exact route checked at subscribe.
 /// Ends with the transport (shutdown token / peer gone), when the session's
 /// handler is dropped, or on a delivery failure — never leaving a dead task
 /// counted as "alive".
 async fn forward_legacy_updates(
     mut updates: broadcast::Receiver<String>,
-    subscriptions: std::sync::Weak<RwLock<HashSet<String>>>,
+    subscriptions: Weak<RwLock<HashMap<String, Weak<ResourceRoute>>>>,
+    state: std::sync::Weak<SessionState>,
     peer: rmcp::service::Peer<RoleServer>,
     shutdown: CancelToken,
 ) {
@@ -232,10 +248,22 @@ async fn forward_legacy_updates(
                 let Some(subscriptions) = subscriptions.upgrade() else {
                     return;
                 };
-                let subscribed = subscriptions
-                    .read()
-                    .expect("MCP subscription lock poisoned")
-                    .contains(&uri);
+                let subscribed = {
+                    let mut subscriptions = subscriptions
+                        .write()
+                        .expect("MCP subscription lock poisoned");
+                    let matches = subscriptions.get(&uri).is_some_and(|subscribed_route| {
+                        state.upgrade().is_some_and(|state| {
+                            state.view().resource_route(&uri).is_some_and(|(route, _)| {
+                                Weak::ptr_eq(subscribed_route, &Arc::downgrade(route))
+                            })
+                        })
+                    });
+                    if !matches {
+                        subscriptions.remove(&uri);
+                    }
+                    matches
+                };
                 #[allow(deprecated)]
                 if subscribed
                     && peer
@@ -429,18 +457,14 @@ impl ServerHandler for R2eMcpHandler {
         &self,
         requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
-        let mut accepted = requested.supported_by(&self.endpoint.catalog.info.capabilities);
-        if let Some(uris) = accepted.resource_subscriptions.as_mut() {
-            let view = self.state.view();
-            uris.retain(|uri| view.has_resource(uri));
-            if uris.is_empty() {
-                accepted.resource_subscriptions = None;
-            }
-        }
-        Some(accepted)
+        // rmcp acknowledges this synchronous filter before calling `listen`.
+        // Accept URI interests independently of the initial catalog: the async
+        // init hook may add resources. Delivery below checks the caller's view.
+        Some(requested.supported_by(&self.endpoint.catalog.info.capabilities))
     }
 
     async fn listen(&self, context: SubscriptionContext) -> Result<(), ErrorData> {
+        self.prepare(context.request_context()).await?;
         let mut updates = self.endpoint.updates.subscribe();
         let mut list_changes = self.endpoint.sessions.subscribe_changes();
         loop {
@@ -458,6 +482,7 @@ impl ServerHandler for R2eMcpHandler {
                     Ok(uri) => {
                         if context.accepted().resource_subscriptions.as_ref()
                             .is_some_and(|uris| uris.contains(&uri))
+                            && self.resource_visible(&uri, context.request_context())
                             && context.sink().notify_resource_updated(uri).await.is_err()
                         {
                             return Ok(());
@@ -477,26 +502,35 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
         self.prepare(&context).await?;
-        if !self.state.view().has_resource(&request.uri) {
+        // Authorize and bind from the SAME snapshot: a concurrent replacement
+        // must not inherit the authorization checked on the previous route.
+        let view = self.state.view();
+        let principal = principal_in(context.extensions.get::<Parts>());
+        let Some((route, _)) = view
+            .resource_route(&request.uri)
+            .filter(|(route, _)| requirements_visible(principal, &route.requirements))
+        else {
+            // Same answer for unknown and unauthorized URIs: no existence oracle.
             return Err(ErrorData::new(
                 ErrorCode::RESOURCE_NOT_FOUND,
                 format!("unknown resource: {}", request.uri),
                 None,
             ));
-        }
+        };
         self.legacy_subscriptions
             .write()
             .expect("MCP subscription lock poisoned")
-            .insert(request.uri);
+            .insert(request.uri, Arc::downgrade(route));
 
         if !self.legacy_forwarder_alive.swap(true, Ordering::AcqRel) {
             let alive = Arc::clone(&self.legacy_forwarder_alive);
             let subscriptions = Arc::downgrade(&self.legacy_subscriptions);
+            let state = Arc::downgrade(&self.state);
             let updates = self.endpoint.updates.subscribe();
             let shutdown = self.endpoint.shutdown.clone();
             let peer = context.peer;
             r2e_core::rt::spawn_ctl(async move {
-                forward_legacy_updates(updates, subscriptions, peer, shutdown).await;
+                forward_legacy_updates(updates, subscriptions, state, peer, shutdown).await;
                 alive.store(false, Ordering::Release);
             });
         }
