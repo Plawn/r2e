@@ -74,6 +74,7 @@ pub struct McpServer {
     allowed_origins: Option<Vec<String>>,
     max_request_body_bytes: Option<u64>,
     elicitation_timeout: Option<Duration>,
+    page_size: Option<u32>,
     cors_allowed_origins: Option<Vec<String>>,
     auth: Option<McpAuthConfig>,
     token_validator: Option<McpTokenValidator>,
@@ -158,6 +159,13 @@ impl McpServer {
     /// answer (overrides `mcp.elicitation-timeout-secs`; default 5 minutes).
     pub fn with_elicitation_timeout(mut self, timeout: Duration) -> Self {
         self.elicitation_timeout = Some(timeout);
+        self
+    }
+
+    /// Maximum entries per `*/list` page (overrides `mcp.page-size`); `0`
+    /// serves every list in one page (the default).
+    pub fn with_page_size(mut self, page_size: u32) -> Self {
+        self.page_size = Some(page_size);
         self
     }
 
@@ -306,6 +314,11 @@ impl Plugin for McpServer {
             .elicitation_timeout
             .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
             .unwrap_or(DEFAULT_ELICITATION_TIMEOUT);
+        let page_size = self
+            .page_size
+            .or(cfg.page_size)
+            .filter(|&size| size > 0)
+            .map(|size| size as usize);
 
         // rmcp's default `Host` allowlist is loopback-only (DNS-rebinding
         // protection): a non-loopback deployment without `mcp.allowed-hosts`
@@ -474,6 +487,7 @@ impl Plugin for McpServer {
                 init: init_slot.get().cloned(),
                 shutdown: mcp_cancel.clone(),
                 elicitation_timeout,
+                page_size,
             });
             let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite

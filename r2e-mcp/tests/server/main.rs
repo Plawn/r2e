@@ -13,6 +13,7 @@ mod dynamic;
 mod elicitation;
 mod interceptors;
 mod lifecycle;
+mod pagination;
 mod plugin;
 mod progress;
 mod prompts;

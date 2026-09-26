@@ -45,6 +45,7 @@ pub mod elicitation;
 pub mod error;
 pub mod guard;
 pub mod handler;
+mod pagination;
 pub mod params;
 pub mod plugin;
 pub mod progress;

@@ -515,6 +515,7 @@ mcp:
   stateless: false            # true → no MCP sessions
   json-response: false        # true (stateless only) → plain application/json responses
   elicitation-timeout-secs: 300 # how long an elicitation waits for the user
+  page-size: 100              # paginate the */list results (unset/0 = one page)
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
   allowed-origins: []         # reject browser requests from other Origins
   cors:
@@ -527,6 +528,17 @@ transport-level request rejection list (empty disables that check), while
 `mcp.cors.allowed-origins` controls the CORS response headers. CORS defaults
 to `https://claude.ai` and `https://claude.com`, plus localhost origins under
 the `dev` profile.
+
+**Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
+`tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`
+return at most that many entries plus a `nextCursor`. The cursor is bound to
+the caller's visible list and subject: when the list changes (a group
+toggled, a private member added) or another caller replays it, the request
+fails with `-32602` and the client restarts from the first page, as the
+`list_changed` notification already asks it to. Cursors need no session, so
+they work under `mcp.stateless`. They are not secrets: a forged offset can
+only page the caller's own list. Each page costs one pass over the caller's
+visible list, which is fine up to thousands of members.
 
 **`allowed-hosts` matters in deployment**: rmcp's default `Host` allowlist is
 loopback-only, so an MCP endpoint behind a proxy or public hostname silently

@@ -5691,6 +5691,8 @@ Config under `mcp.*` (all optional; builder methods override config):
 `path` (default `/mcp`), `enabled` (true), `name`/`version`/`instructions`,
 `sse-keep-alive-secs` (15; 0 disables), `stateless` (false),
 `json-response` (false; stateless only), `elicitation-timeout-secs` (300),
+`page-size` (unset/0 = unpaginated; else `*/list` pages + `nextCursor`, a
+stale or replayed cursor → -32602),
 `allowed-hosts` (DNS-rebinding
 protection — REQUIRED behind a proxy/public hostname; default accepts loopback
 `Host` headers only), `allowed-origins`, `max-request-body-bytes`.

@@ -25,6 +25,7 @@ use crate::auth::tools::requirements_visible;
 use crate::catalog::{principal_in, Catalog};
 use crate::elicitation::ClientChannel;
 use crate::error::McpError;
+use crate::pagination::{paginate, ListKey};
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
 use crate::route::{Completion, CompletionRef, Completions, PromptCall, ResourceCall, ToolCall};
@@ -125,6 +126,8 @@ pub(crate) struct Endpoint {
     pub(crate) shutdown: CancelToken,
     /// `mcp.elicitation-timeout-secs`.
     pub(crate) elicitation_timeout: Duration,
+    /// `mcp.page-size` (`None` = unpaginated lists).
+    pub(crate) page_size: Option<usize>,
 }
 
 /// The `ServerHandler` handed to rmcp's streamable-HTTP service. rmcp's
@@ -186,6 +189,19 @@ impl R2eMcpHandler {
     /// The session handle a member call carries.
     fn session(&self) -> McpSession {
         McpSession::new(Arc::clone(&self.state))
+    }
+
+    /// The page of a `*/list` result the request's cursor asks for
+    /// (`mcp.page-size`; the whole list when unset).
+    fn page<W: ListKey>(
+        &self,
+        list: Vec<W>,
+        request: Option<PaginatedRequestParams>,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<(Vec<W>, Option<String>), ErrorData> {
+        let subject = principal_in(context.extensions.get::<Parts>()).map(|p| p.user.sub.as_str());
+        let cursor = request.and_then(|r| r.cursor);
+        paginate(list, cursor.as_deref(), self.endpoint.page_size, subject)
     }
 }
 
@@ -306,13 +322,15 @@ impl ServerHandler for R2eMcpHandler {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         self.prepare(&context).await?;
-        Ok(ListToolsResult::with_all_items(
-            self.state.view().tools.visible_list(&context),
-        ))
+        let list = self.state.view().tools.visible_list(&context);
+        let (page, next_cursor) = self.page(list, request, &context)?;
+        let mut result = ListToolsResult::with_all_items(page);
+        result.next_cursor = next_cursor;
+        Ok(result)
     }
 
     /// Returning the real `Tool` lets rmcp validate `Mcp-Param-*` headers
@@ -354,24 +372,28 @@ impl ServerHandler for R2eMcpHandler {
 
     async fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         self.prepare(&context).await?;
-        Ok(ListResourcesResult::with_all_items(
-            self.state.view().resources.visible_list(&context),
-        ))
+        let list = self.state.view().resources.visible_list(&context);
+        let (page, next_cursor) = self.page(list, request, &context)?;
+        let mut result = ListResourcesResult::with_all_items(page);
+        result.next_cursor = next_cursor;
+        Ok(result)
     }
 
     async fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
         self.prepare(&context).await?;
-        Ok(ListResourceTemplatesResult::with_all_items(
-            self.state.view().resource_templates.visible_list(&context),
-        ))
+        let list = self.state.view().resource_templates.visible_list(&context);
+        let (page, next_cursor) = self.page(list, request, &context)?;
+        let mut result = ListResourceTemplatesResult::with_all_items(page);
+        result.next_cursor = next_cursor;
+        Ok(result)
     }
 
     async fn read_resource(
@@ -497,13 +519,15 @@ impl ServerHandler for R2eMcpHandler {
 
     async fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
         self.prepare(&context).await?;
-        Ok(ListPromptsResult::with_all_items(
-            self.state.view().prompts.visible_list(&context),
-        ))
+        let list = self.state.view().prompts.visible_list(&context);
+        let (page, next_cursor) = self.page(list, request, &context)?;
+        let mut result = ListPromptsResult::with_all_items(page);
+        result.next_cursor = next_cursor;
+        Ok(result)
     }
 
     async fn get_prompt(

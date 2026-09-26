@@ -1,6 +1,6 @@
 # W16 P4 — MCP protocol gaps (progress, elicitation, completion, pagination)
 
-Status: **§1 Progress DONE** (f065a3e4), **§2a Elicitation DONE** (00010c06), **§3 Completion DONE** (2026-09-26, branch `feat/mcp-dynamic-session-members`; shipped as an owned `Completion` — no lifetime — with public fields, `complete(arg = "fn")` per argument, compile-checked wiring); §4 next. Origin:
+Status: **§1 Progress DONE** (f065a3e4), **§2a Elicitation DONE** (00010c06), **§3 Completion DONE** (2026-09-26, branch `feat/mcp-dynamic-session-members`; shipped as an owned `Completion` — no lifetime — with public fields, `complete(arg = "fn")` per argument, compile-checked wiring); **§4 Pagination DONE** (fingerprint = hash of the caller's visible keys + subject instead of a view generation: sessionless-safe, per-family invalidation; cursor `v1.<off>.<fp>`, no base64). MRTR (§2c) next, separate PR. Origin:
 W16 "what is left" review — `r2e-mcp` answers the member surface (tools /
 resources / templates / prompts / subscriptions / list_changed) but five
 protocol areas are either rmcp's default stub or absent.
