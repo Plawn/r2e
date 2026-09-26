@@ -2,19 +2,20 @@
 //! that opened it, private `Dynamic*` members keep their scope/role gates,
 //! and `session_init` / `McpSessions` see the authenticated identity.
 
-use r2e_core::http::Router;
+use r2e_core::http::{Body, Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{
     AppBuilderMcpExt, DynamicTool, McpError, McpServer, McpSession, McpSessionInit, McpSessions,
     SessionInit, SessionToolset, ToolCall,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::fixtures::{
-    initialize_auth, offline_auth, pinned, post_auth, test_jwt, tool_names, tools_call_auth,
-    tools_list_auth,
+    get, initialize_auth, offline_auth, pinned, post_auth, send, test_jwt, tool_names,
+    tools_call_auth, tools_list_auth,
 };
+use crate::support;
 
 // ── Services ───────────────────────────────────────────────────────────────
 
@@ -92,13 +93,6 @@ fn token(sub: &str, scopes: &[&str], roles: &[&str]) -> String {
         .build()
 }
 
-fn error_message(msg: &Value) -> String {
-    msg["error"]["message"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string()
-}
-
 // ── Session ↔ principal binding ────────────────────────────────────────────
 
 #[r2e_core::test]
@@ -111,6 +105,8 @@ async fn replayed_session_id_with_another_principal_is_refused() {
     let ok = tools_call_auth(&router, "/mcp", &session, &alice, "ping", json!({})).await;
     assert_eq!(ok["result"]["content"][0]["text"], "pong", "{ok}");
 
+    // Refused at the HTTP layer with rmcp's own "unknown session" answer:
+    // bob learns nothing about whether the session exists.
     let response = post_auth(
         &router,
         "/mcp",
@@ -119,22 +115,97 @@ async fn replayed_session_id_with_another_principal_is_refused() {
         &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
     )
     .await;
-    let msg = response.message();
-    assert!(
-        msg.get("result").is_none(),
-        "bob must not list alice's session: {msg}"
-    );
-    assert!(
-        error_message(msg).contains("belongs to another principal"),
-        "{msg}"
-    );
-
-    let call = tools_call_auth(&router, "/mcp", &session, &bob, "ping", json!({})).await;
-    assert!(call.get("result").is_none(), "{call}");
+    assert_eq!(response.status, StatusCode::NOT_FOUND, "{}", response.raw_body);
+    assert!(response.messages.is_empty(), "{}", response.raw_body);
+    let unknown = post_auth(
+        &router,
+        "/mcp",
+        Some("no-such-session"),
+        &bob,
+        &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
+    assert_eq!(response.status, unknown.status);
+    assert_eq!(response.raw_body, unknown.raw_body);
 
     // The owner is unaffected by the rejected replay.
     let still = tools_call_auth(&router, "/mcp", &session, &alice, "ping", json!({})).await;
     assert_eq!(still["result"]["content"][0]["text"], "pong", "{still}");
+}
+
+fn session_headers<'a>(bearer: &'a str, session: &'a str) -> [(&'a str, &'a str); 4] {
+    [
+        ("authorization", bearer),
+        ("mcp-session-id", session),
+        ("mcp-protocol-version", support::PROTOCOL_VERSION),
+        ("accept", "text/event-stream"),
+    ]
+}
+
+#[r2e_core::test]
+async fn foreign_principal_cannot_open_the_sse_stream_of_a_session() {
+    let (router, _) = app_with(McpServer::new()).await;
+    let alice = token("alice", &[], &[]);
+    let session = initialize_auth(&router, "/mcp", &alice).await;
+
+    let bob = format!("Bearer {}", token("bob", &[], &[]));
+    // Refused before a stream opens: a regression would hang, not fail.
+    let (status, _, body) = r2e_core::rt::timeout(
+        std::time::Duration::from_secs(5),
+        get(&router, "/mcp", &session_headers(&bob, &session)),
+    )
+    .await
+    .expect("the foreign GET opened alice's SSE stream");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}
+
+#[r2e_core::test]
+async fn foreign_principal_cannot_delete_a_session() {
+    let (router, sessions) = app_with(McpServer::new()).await;
+    let alice = token("alice", &[], &[]);
+    let session = initialize_auth(&router, "/mcp", &alice).await;
+
+    let bob = format!("Bearer {}", token("bob", &[], &[]));
+    let (status, _, body) = send(
+        &router,
+        "DELETE",
+        "/mcp",
+        &session_headers(&bob, &session),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let still = tools_call_auth(&router, "/mcp", &session, &alice, "ping", json!({})).await;
+    assert_eq!(still["result"]["content"][0]["text"], "pong", "{still}");
+
+    // The owner still can.
+    let owner = format!("Bearer {alice}");
+    let (status, _, body) = send(
+        &router,
+        "DELETE",
+        "/mcp",
+        &session_headers(&owner, &session),
+        Body::empty(),
+    )
+    .await;
+    assert!(status.is_success(), "{status}: {body}");
+    let gone = post_auth(
+        &router,
+        "/mcp",
+        Some(&session),
+        &alice,
+        &json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" }),
+    )
+    .await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.raw_body);
+    // rmcp drops the closed session's handler in the background.
+    for _ in 0..100 {
+        if sessions.for_subject("alice").is_empty() {
+            break;
+        }
+        r2e_core::rt::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(sessions.for_subject("alice").is_empty());
 }
 
 // ── Private members keep their gates ───────────────────────────────────────

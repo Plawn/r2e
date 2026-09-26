@@ -333,10 +333,13 @@ held weakly and listed from their `initialize` handshake on.
 
 ### Security, capabilities, stateless
 
-- A session is **bound to the principal that opened it** (`sub`): the same
-  session id presented with another subject's token is refused (`-32600`,
-  "this MCP session belongs to another principal"). The standalone SSE `GET`
-  stream is not yet subject-checked — it only carries notifications.
+- A session is **bound to the principal that opened it** (`sub`). Under
+  `mcp.auth`, the same session id presented with another subject's token is
+  refused by the auth layer on every method — `POST`, the standalone SSE
+  `GET` and `DELETE` — with rmcp's own `404 Not Found: Session not found`,
+  byte-identical to an unknown id (no oracle that the session exists; the
+  client recovers by re-initializing). The handler keeps a JSON-RPC `-32600`
+  "belongs to another principal" check as a backstop.
 - As soon as lists can change (an `opt_in` group, a `session_init`, or a
   member taking `McpSession`), all three families advertise
   `listChanged: true`. Changes are pushed to legacy sessions via their peer and

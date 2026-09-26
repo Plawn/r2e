@@ -14,6 +14,7 @@
 //! `notifications/*/list_changed` to the session.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -402,6 +403,55 @@ impl SessionState {
                 let _ = peer.notify_prompt_list_changed().await;
             }
         });
+    }
+}
+
+/// Deposited by the auth layer in the extensions of a request that carries
+/// no `Mcp-Session-Id`: if it turns out to be an `initialize` that opens a
+/// session, the handler hands the new session back through it, and the
+/// layer keys it by the id rmcp puts in the response header.
+#[derive(Clone, Default)]
+pub(crate) struct SessionLink(Arc<Mutex<Option<Weak<SessionState>>>>);
+
+impl SessionLink {
+    pub(crate) fn set(&self, state: &Arc<SessionState>) {
+        *self.0.lock().expect("MCP session link poisoned") = Some(Arc::downgrade(state));
+    }
+
+    pub(crate) fn take(&self) -> Option<Weak<SessionState>> {
+        self.0.lock().expect("MCP session link poisoned").take()
+    }
+}
+
+/// `Mcp-Session-Id` → session, for the auth layer's session ↔ principal
+/// check on every method (POST, the standalone SSE `GET`, `DELETE`).
+///
+/// Entries are weak: a session closed by `DELETE` or expired by rmcp drops
+/// its handler, and the entry is pruned on the next insert.
+#[derive(Clone, Default)]
+pub(crate) struct SessionBindings(Arc<Mutex<HashMap<Box<str>, Weak<SessionState>>>>);
+
+impl SessionBindings {
+    pub(crate) fn insert(&self, id: &str, state: Weak<SessionState>) {
+        let mut map = self.0.lock().expect("MCP session bindings poisoned");
+        map.retain(|_, s| s.strong_count() > 0);
+        map.insert(id.into(), state);
+    }
+
+    /// Whether `subject` may use the session `id`. `false` only when a live
+    /// session with that id is bound to another subject; an unknown id
+    /// passes (rmcp answers 404, or the handler binds a restored session).
+    pub(crate) fn admits(&self, id: &str, subject: &str) -> bool {
+        let state = self
+            .0
+            .lock()
+            .expect("MCP session bindings poisoned")
+            .get(id)
+            .and_then(Weak::upgrade);
+        match state.as_deref().and_then(SessionState::subject) {
+            Some(bound) => bound == subject,
+            None => true,
+        }
     }
 }
 

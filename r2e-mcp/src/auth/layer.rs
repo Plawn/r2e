@@ -9,6 +9,12 @@
 //! Mounted only around the MCP service itself (inside the plugin's
 //! `wrap_router` closure); the well-known routes are merged NEXT TO the
 //! service and never pass through here.
+//!
+//! It also owns the session ↔ principal binding: an `initialize` that opens
+//! a session records it under the `Mcp-Session-Id` of the response, and any
+//! later request presenting that id — POST, the standalone SSE `GET`,
+//! `DELETE` — from another subject gets rmcp's own 404 "session not found"
+//! (no oracle that the session exists).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -16,11 +22,15 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use r2e_core::http::response::IntoResponse;
-use r2e_core::http::{HeaderMap, Method, Request, Response, AUTHORIZATION};
+use r2e_core::http::{HeaderMap, Method, Request, Response, StatusCode, AUTHORIZATION};
 use tower::{Layer, Service};
 
 use super::error::{auth_error_response, McpAuthError};
 use super::validator::{McpPrincipal, McpTokenValidator};
+use crate::session::{SessionBindings, SessionLink};
+
+/// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
+const SESSION_ID: &str = "mcp-session-id";
 
 /// Everything the auth service needs per request, prebuilt once at plugin
 /// build time.
@@ -37,6 +47,9 @@ pub(crate) struct AuthState {
     /// match (DNS-rebinding guard); requests without `Origin` (non-browser
     /// clients) pass.
     pub allowed_origins: Option<Arc<[String]>>,
+    /// Session id → session, shared by every worker (the layer is built
+    /// once, before the router is cloned per worker).
+    pub bindings: SessionBindings,
 }
 
 /// Tower layer enforcing `mcp.auth.*` on the MCP endpoint.
@@ -83,6 +96,13 @@ pub(crate) fn origin_allowed(allowed: &[String], origin: &str) -> bool {
             entry == origin
         }
     })
+}
+
+/// rmcp's answer to an unknown or terminated session, byte for byte.
+fn session_not_found() -> Response {
+    let mut response = Response::new("Not Found: Session not found".into());
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
 }
 
 /// Run the pre-call checks; `Ok` carries what to insert into extensions.
@@ -161,6 +181,26 @@ where
             // the boxed future.
             match authorize(&state, req.headers()).await {
                 Ok(principal) => {
+                    let link = match req.headers().get(SESSION_ID) {
+                        Some(id) => {
+                            let id = id.to_str().unwrap_or_default();
+                            if !state.bindings.admits(id, &principal.user.sub) {
+                                tracing::warn!(
+                                    caller = %principal.user.sub,
+                                    "MCP session id presented by a different principal; \
+                                     request refused"
+                                );
+                                return Ok(session_not_found());
+                            }
+                            None
+                        }
+                        None => {
+                            let link = SessionLink::default();
+                            req.extensions_mut().insert(link.clone());
+                            Some(link)
+                        }
+                    };
+
                     // rmcp copies `http::request::Parts` extensions into each
                     // JSON-RPC message's `RequestContext.extensions`, so tools
                     // read these via `ToolCall.parts` / identity params.
@@ -173,7 +213,16 @@ where
                     // actually declares `#[inject(identity)]`.
                     req.extensions_mut().insert(Arc::clone(&principal.user));
                     req.extensions_mut().insert(principal);
-                    inner.call(req).await.map(IntoResponse::into_response)
+                    let response = inner.call(req).await?.into_response();
+                    if let Some(opened) = link.and_then(|link| link.take())
+                        && let Some(id) = response
+                            .headers()
+                            .get(SESSION_ID)
+                            .and_then(|v| v.to_str().ok())
+                    {
+                        state.bindings.insert(id, opened);
+                    }
+                    Ok(response)
                 }
                 Err(err) => Ok(auth_error_response(&err, &state.resource_metadata_url)),
             }

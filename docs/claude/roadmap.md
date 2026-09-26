@@ -490,8 +490,10 @@ Locked decisions:
 - A private member cannot shadow any catalog name.
 - `listChanged: true` on all three families as soon as dynamism is used.
 - Under `mcp.stateless`, a member taking `McpSession` is a boot panic.
-- A session binds to the `sub` of its `initialize`; another subject gets
-  `-32600` "belongs to another principal".
+- A session binds to the `sub` of its `initialize`. Under `mcp.auth` the
+  auth layer refuses another subject on every method with rmcp's own 404
+  (see follow-up (a)); the handler's `-32600` "belongs to another
+  principal" stays as a backstop.
 - A session is persistent and registered with `McpSessions` in `initialize`.
   Under stateful serving, rmcp only hands the handshake to a handler it built
   for a new or restored session, so no `Mcp-Session-Id` header check is needed.
@@ -503,16 +505,22 @@ BREAKING: new pub fields on hand-built literals:
 
 Also, `McpServer::Provided` gains `McpSessions`.
 
-Open follow-ups:
-- (a) The standalone SSE `GET` stream is not subject-checked. Only
-  notifications flow on it, but it should reuse the binding. Fix: move the
-  session ↔ principal binding into `auth/layer.rs`, keyed on
-  `mcp-session-id`, so it covers POST, GET and DELETE alike (the handler
-  `prepare` check then becomes a backstop).
-- (c) A single choke point for `prepare`: a wrapper implementing
-  `Service<RoleServer>` that runs it in `handle_request`. Today each
-  `ServerHandler` method calls it by hand. `ping`, `completion` and
-  `set_level` stay on rmcp's defaults and read no session state.
+Follow-ups:
+- (a) SHIPPED 2026-09-26: the session ↔ principal binding lives in
+  `auth/layer.rs`. A session-less request carries a `SessionLink` in its
+  extensions; `initialize` deposits the new `SessionState` there, and the
+  layer keys it by the response's `Mcp-Session-Id` in `SessionBindings`
+  (weak entries, pruned on insert, shared across workers). A foreign subject
+  presenting that id on POST, SSE `GET` or `DELETE` gets rmcp's exact
+  `404 Not Found: Session not found` (no existence oracle; a foreign
+  `DELETE` used to close the victim's session). Unknown ids pass through
+  (rmcp answers 404). Without `mcp.auth` there is no subject to bind.
+- (c) NOT FEASIBLE on rmcp 3.1: `StreamableHttpService<S, M>` requires
+  `S: ServerHandler`, not `Service<RoleServer>`, so a `Service` wrapper
+  running `prepare` in `handle_request` cannot be mounted, and a
+  `ServerHandler` wrapper would have to re-delegate every method anyway.
+  The per-method `prepare` calls stay; with (a) its binding check is a
+  backstop only. Revisit if rmcp loosens the bound.
 - (b) `McpSessions::each`/bulk ops and per-tenant filtering, if a real app
   asks for them.
 

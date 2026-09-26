@@ -24,7 +24,7 @@ use crate::catalog::{principal_in, Catalog};
 use crate::error::McpError;
 use crate::resource_updates::McpResourceUpdates;
 use crate::route::{PromptCall, ResourceCall, ToolCall};
-use crate::session::{McpSession, McpSessions, SessionInitFn, SessionState};
+use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState};
 
 /// Extract the per-call HTTP parts from the request context, by value.
 ///
@@ -74,7 +74,9 @@ impl R2eMcpHandler {
     /// 1. capture the peer (the `list_changed` channel);
     /// 2. bind the session to the caller's subject on first use and refuse
     ///    a later request from another subject — a leaked session id must
-    ///    not hand one principal another's list (or its private members);
+    ///    not hand one principal another's list (or its private members).
+    ///    Under `mcp.auth` the layer already refuses a foreign session id on
+    ///    every HTTP method (`SessionBindings`); this is the backstop;
     /// 3. run the [`McpSessionInit`](crate::McpSessionInit) hook once.
     async fn prepare(&self, context: &RequestContext<RoleServer>) -> Result<(), ErrorData> {
         self.state.capture_peer(&context.peer);
@@ -193,6 +195,15 @@ impl ServerHandler for R2eMcpHandler {
     ) -> Result<InitializeResult, ErrorData> {
         if self.state.open() {
             self.endpoint.sessions.register(&self.state);
+            // Under `mcp.auth`, let the layer key this session by the id
+            // rmcp is about to assign (see `SessionBindings`).
+            if let Some(link) = context
+                .extensions
+                .get::<Parts>()
+                .and_then(|parts| parts.extensions.get::<SessionLink>())
+            {
+                link.set(&self.state);
+            }
         }
         self.prepare(&context).await?;
         context.peer.set_peer_info(request.clone());

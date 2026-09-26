@@ -272,9 +272,9 @@ b.provide(RoleToolsets)                                    // the hook is a bean
 - `McpSessions` (plugin-provided bean — `#[inject] sessions: McpSessions`):
   `for_subject(sub)`, `all()`, `len()`; each item is an `McpSession`. Use it
   from an admin route or a `#[consumer]` to change a live user's toolset.
-- Sessions are **bound to the principal that opened them**: the same session
-  id with another token's subject is refused (`-32600`, "belongs to another
-  principal").
+- Sessions are **bound to the principal that opened them**: under `mcp.auth`,
+  the same session id with another token's subject gets HTTP `404` (identical
+  to an unknown session) on `POST`, SSE `GET` and `DELETE`.
 - Once lists are dynamic (any `opt_in` group, a `session_init`, or a member
   taking `McpSession`), all three families advertise `listChanged: true`.
 - `mcp.stateless: true`: groups and `session_init` work (recomputed per
