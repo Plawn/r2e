@@ -82,7 +82,11 @@ pub use runtime::http_trace::{
     DefaultRequestSpan, HttpTraceLayer, HttpTraceSettings, MakeRequestSpan, RequestOutcome,
     RequestSpan, SpanState,
 };
-pub use runtime::ingress::{reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError};
+#[cfg(unix)]
+pub use runtime::ingress::attach_reuseport_cbpf;
+pub use runtime::ingress::{
+    reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError, CbpfInsn,
+};
 pub use runtime::layers::{
     default_cors, init_tracing, init_tracing_from_config, init_tracing_with_config,
     try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
