@@ -1,22 +1,53 @@
 name: Release
 
+# A release is a change of [workspace.package] version on master — made by
+# scripts/bump-version.sh in a `release: X.Y.Z` PR. Every other push is a no-op
+# here: no tag, no GitHub release, nothing published.
+#
+# It runs after the Tests workflow succeeds on the pushed commit, so nothing is
+# published from a red tree. Order: publish to crates.io, then tag `vX.Y.Z` on
+# that exact commit, then create the GitHub release from the CHANGELOG section.
+# The tag comes last on purpose: "tag exists" means "the release is complete".
+#
+# A failed publish is resumed by re-running this workflow run ("Re-run failed
+# jobs"): it runs on the same commit, and publish-crates.sh skips every crate
+# already on crates.io at that version. Do not release from a later commit —
+# the run refuses to (see "Decide").
 on:
-  push:
+  workflow_run:
+    workflows: [Tests]
+    types: [completed]
     branches: [master]
 
 permissions:
   contents: write
+  # crates.io trusted publishing (OIDC) — see the "Authenticate" step.
+  id-token: write
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
 jobs:
   release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
+    # A plain version release fits in minutes. The margin covers a release that
+    # adds new crate names, which crates.io rate-limits (see publish-crates.sh).
+    timeout-minutes: 300
+    env:
+      HAS_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -39,66 +70,107 @@ jobs:
           done
           exit $status
 
-      - name: Read workspace version
-        id: workspace
+      # release=true only when this commit changed the version (against its
+      # first parent: the previous master) and v<version> is not tagged yet.
+      # Tag missing but version unchanged means an earlier release did not
+      # finish and master moved on since: publishing the rest from this newer
+      # tree would ship crates that do not match the ones already uploaded.
+      - name: Decide
+        id: decide
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
-          if [ -z "$version" ]; then
-            echo "Could not read the workspace version from Cargo.toml" >&2
+          read_version() { sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1; }
+          version=$(read_version < Cargo.toml)
+          previous=$(git show HEAD^1:Cargo.toml | read_version)
+          [ -n "$version" ] || { echo "cannot read the workspace version" >&2; exit 1; }
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} is already tagged — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif [ "$version" = "$previous" ]; then
+            echo "::error::v${version} is not tagged, but this commit did not change the version: \
+          the ${version} release is incomplete. Re-run the Release run of the 'release: ${version}' \
+          commit (it resumes), or bump to a new version."
+            exit 1
+          else
+            echo "Releasing ${version} (previous: ${previous})."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Same native deps and disk budget as the Tests job: the publish preflight
+      # checks the whole workspace on stable, and `cargo publish` verifies every
+      # crate by building it.
+      - name: Free disk space
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h /
+
+      - name: Install native build deps
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler libprotobuf-dev \
+            libcurl4-openssl-dev zlib1g-dev libssl-dev \
+            libsqlite3-dev libpq-dev
+
+      # The published crates must build on stable; rust-toolchain.toml's
+      # nightly is still installed for the cargo metadata calls.
+      - name: Install toolchains
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          rustup show
+          rustup toolchain install stable --profile minimal
+
+      # Restore master's Tests cache (never save: this job would evict it).
+      - uses: Swatinem/rust-cache@v2
+        if: steps.decide.outputs.release == 'true'
+        with:
+          save-if: false
+
+      - name: Extract release notes
+        if: steps.decide.outputs.release == 'true'
+        run: |
+          version='${{ steps.decide.outputs.version }}'
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no non-empty '## [${version}]' section — run scripts/bump-version.sh"
             exit 1
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Workspace version: ${version}"
+          # Not part of the tree being published (publish-crates.sh wants a clean tree).
+          mv release-notes.md "$RUNNER_TEMP/release-notes.md"
 
-      # The tag series follows the workspace version: vX.Y.* is the
-      # compatibility series declared in Cargo.toml, the patch is a monotone
-      # release counter within it. Bumping major/minor in Cargo.toml starts a
-      # new series (its first tag uses the declared patch as-is).
-      - name: Compute next tag in the workspace series
-        id: bump
-        run: |
-          IFS='.' read -r major minor patch <<< "${{ steps.workspace.outputs.version }}"
-          series="${major}.${minor}"
-          git fetch --tags origin
-          last=$(git tag -l "v${series}.*" --sort=-version:refname | head -n1)
-          if [ -z "$last" ]; then
-            new_version="${series}.${patch}"
-          else
-            last_patch="${last##*.}"
-            new_version="${series}.$((last_patch + 1))"
-          fi
-          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${new_version}" >> "$GITHUB_OUTPUT"
-          echo "Next tag: v${new_version} (series v${series}, last tag in series: ${last:-none})"
+      # Trusted publishing when no CARGO_REGISTRY_TOKEN secret is set: every
+      # crate must list this repo + release.yml as a trusted publisher on
+      # crates.io. The token it mints lives 30 minutes.
+      - name: Authenticate to crates.io (trusted publishing)
+        id: auth
+        if: steps.decide.outputs.release == 'true' && env.HAS_REGISTRY_TOKEN != 'true'
+        uses: rust-lang/crates-io-auth-action@v1
 
-      - name: Generate changelog
-        id: changelog
-        run: |
-          git fetch --tags origin
-          latest_tag=$(git tag -l 'v*' --sort=-version:refname | head -n1)
-          if [ -z "$latest_tag" ]; then
-            log=$(git log --pretty=format:"- %s (%h)" HEAD)
-          else
-            log=$(git log --pretty=format:"- %s (%h)" "${latest_tag}..HEAD")
-          fi
-          {
-            echo "log<<EOF"
-            echo "$log"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+      - name: Publish to crates.io
+        if: steps.decide.outputs.release == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token || secrets.CARGO_REGISTRY_TOKEN }}
+        run: scripts/publish-crates.sh --yes --resume
 
-      - name: Create tag
+      - name: Tag the release
+        if: steps.decide.outputs.release == 'true'
         run: |
-          git tag ${{ steps.bump.outputs.tag }}
-          git push origin ${{ steps.bump.outputs.tag }}
+          tag='v${{ steps.decide.outputs.version }}'
+          git tag "$tag" '${{ github.event.workflow_run.head_sha }}'
+          git push origin "$tag"
 
       - name: Create GitHub Release
+        if: steps.decide.outputs.release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.bump.outputs.tag }}
-          name: ${{ steps.bump.outputs.tag }}
-          body: |
-            ## Changes
-
-            ${{ steps.changelog.outputs.log }}
+          tag_name: v${{ steps.decide.outputs.version }}
+          name: v${{ steps.decide.outputs.version }}
+          body_path: ${{ runner.temp }}/release-notes.md
           generate_release_notes: false

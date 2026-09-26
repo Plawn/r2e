@@ -35,6 +35,9 @@
 #   scripts/publish-crates.sh --dry-run   # package + verify everything, upload nothing
 #   scripts/publish-crates.sh             # one attempt (asks once, then uploads)
 #   scripts/publish-crates.sh --resume    # attempt, wait out 429s, repeat until done
+#   scripts/publish-crates.sh --yes [--resume]
+#                                         # no confirmation prompt — for CI
+#                                         # (.github/workflows/release.yml)
 #
 # Publication is IRREVERSIBLE: a version can be yanked but never replaced, and a
 # name is never freed. Run --dry-run first, and read its output.
@@ -47,12 +50,17 @@ HELD_BACK=(r2e-cli)
 
 DRY_RUN=0
 RESUME=0
-case "${1:-}" in
-    --dry-run) DRY_RUN=1 ;;
-    --resume)  RESUME=1 ;;
-    "")        ;;
-    *)         printf 'usage: %s [--dry-run|--resume]\n' "$0" >&2; exit 2 ;;
-esac
+YES=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        --resume)  RESUME=1 ;;
+        --yes)     YES=1 ;;
+        *)         printf 'usage: %s [--dry-run | [--yes] [--resume]]\n' "$0" >&2; exit 2 ;;
+    esac
+done
+[[ $DRY_RUN -eq 0 || ($RESUME -eq 0 && $YES -eq 0) ]] \
+    || { printf -- '--dry-run takes no other flag\n' >&2; exit 2; }
 
 # Seconds to wait after a 429 before re-attempting. The bucket refills one token
 # per 10 minutes; the extra 10s keeps us on the safe side of the clock.
@@ -266,8 +274,10 @@ fi
 say "About to publish to crates.io — this cannot be undone"
 printf 'Held back: %s\n' "${HELD_BACK[*]}"
 printf 'To upload: %s crate(s)\n' "$REMAINING"
-read -r -p 'Type the release version to confirm (e.g. 0.3.0): ' answer
-[[ "$answer" == "$version" ]] || die "got '$answer', workspace is at '$version' — aborting"
+if [[ $YES -eq 0 ]]; then
+    read -r -p 'Type the release version to confirm (e.g. 0.3.0): ' answer
+    [[ "$answer" == "$version" ]] || die "got '$answer', workspace is at '$version' — aborting"
+fi
 
 # One attempt. Returns 0 when the whole remaining set went up, 1 when the
 # new-crate bucket ran dry (retryable), and dies on anything else — a genuine
@@ -310,7 +320,8 @@ say "Published $version"
 cat <<'EOF'
 
 Follow-ups:
-  * Tag the release and push the tag.
+  * In CI, release.yml tags v<version> and creates the GitHub release next.
+    Run by hand, tag the commit you published from: git tag v<version>.
   * r2e-test ships without its dev-dependency on the facade (path-only on
     purpose — see the comment in r2e-test/Cargo.toml). Nothing to do; it is
     stripped at packaging and the tests still run in the workspace.

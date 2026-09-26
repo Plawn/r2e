@@ -3,18 +3,36 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-> **Tags vs versions.** Since tag `v0.3.0`, git tags follow the workspace
-> version: `vX.Y.*` is the compatibility series declared in the root
-> `Cargo.toml`, and the patch is a monotone release counter within that series
-> (a breaking change bumps `X.Y` in `Cargo.toml`, which starts a new tag
-> series). Earlier tags were a pure release counter detached from the manifest:
-> tags `v0.2.132`–`v0.2.163` actually contain workspace version `0.3.0`, and
-> the 0.3 plugin-API rework ships from **`v0.2.140`** onward (see
-> [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)).
+> **Tags vs versions.** A tag `vX.Y.Z` means "`X.Y.Z` is published on
+> crates.io from this commit" — nothing else creates one. A release is a
+> `release: X.Y.Z` PR made by `scripts/bump-version.sh` (workspace version, pins,
+> lockfile, this file's `[Unreleased]` → `[X.Y.Z]`); once it is merged and Tests
+> pass, `.github/workflows/release.yml` publishes, tags, and uses the `[X.Y.Z]`
+> section below as the GitHub release notes.
+>
+> Before that, tags were a release counter pushed on every merge, detached from
+> what crates.io serves: `v0.2.132`–`v0.2.163` contain workspace version
+> `0.3.0` (the 0.3 plugin-API rework ships from **`v0.2.140`** onward, see
+> [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)), and
+> `v0.3.3`–`v0.3.15` are snapshots of master that were never published —
+> crates.io went from `0.3.2` straight to the next release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Releases are version-driven** (see the note above): `release.yml` no longer
+  tags every merge; it publishes to crates.io, then tags `vX.Y.Z`, only when a
+  `release: X.Y.Z` PR changes the workspace version, and only after Tests
+  pass. New `scripts/bump-version.sh`; `publish-crates.sh --yes` for CI.
+
 ### Added
+
+- **`attach_reuseport_cbpf` ingress helper** (PR #75): installs a classic-BPF
+  steering program on a `SO_REUSEPORT` group (`SO_ATTACH_REUSEPORT_CBPF`,
+  Linux) — the program returns the target socket's group index, i.e. its bind
+  order — with `CbpfInsn` in the kernel `sock_filter` layout. **Breaking**:
+  new `AffinityError::ReuseportFilterUnsupported` variant (returned off Linux).
 
 - **Per-request span enrichment channel** (task #1015): the `HttpTrace` layer
   now publishes the request span as the `RequestSpan` request extension —
