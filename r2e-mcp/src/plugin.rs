@@ -14,8 +14,9 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use crate::auth::config::McpAuthConfig;
 use crate::auth::setup::{build_auth, cors_layer, default_cors_origins, AuthInputs};
 use crate::auth::validator::McpTokenValidator;
-use crate::config::McpConfig;
 use crate::catalog::{Catalog, CatalogOptions, ServerIdentity};
+use crate::config::McpConfig;
+use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
 use crate::resource_updates::McpResourceUpdates;
@@ -72,6 +73,7 @@ pub struct McpServer {
     allowed_hosts: Option<Vec<String>>,
     allowed_origins: Option<Vec<String>>,
     max_request_body_bytes: Option<u64>,
+    elicitation_timeout: Option<Duration>,
     cors_allowed_origins: Option<Vec<String>>,
     auth: Option<McpAuthConfig>,
     token_validator: Option<McpTokenValidator>,
@@ -149,6 +151,13 @@ impl McpServer {
     /// Maximum POST body size in bytes (default 4 MiB).
     pub fn with_max_request_body_bytes(mut self, bytes: u64) -> Self {
         self.max_request_body_bytes = Some(bytes);
+        self
+    }
+
+    /// How long an elicitation (`McpClient::elicit`) waits for the user's
+    /// answer (overrides `mcp.elicitation-timeout-secs`; default 5 minutes).
+    pub fn with_elicitation_timeout(mut self, timeout: Duration) -> Self {
+        self.elicitation_timeout = Some(timeout);
         self
     }
 
@@ -293,6 +302,10 @@ impl Plugin for McpServer {
             .max_request_body_bytes
             .or(cfg.max_request_body_bytes)
             .map(|b| b as usize);
+        let elicitation_timeout = self
+            .elicitation_timeout
+            .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
+            .unwrap_or(DEFAULT_ELICITATION_TIMEOUT);
 
         // rmcp's default `Host` allowlist is loopback-only (DNS-rebinding
         // protection): a non-loopback deployment without `mcp.allowed-hosts`
@@ -460,6 +473,7 @@ impl Plugin for McpServer {
                 sessions: sessions_slot.get().cloned().unwrap_or(sessions_fallback),
                 init: init_slot.get().cloned(),
                 shutdown: mcp_cancel.clone(),
+                elicitation_timeout,
             });
             let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite

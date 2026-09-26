@@ -18,6 +18,7 @@ use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
 use serde_json::Value;
 
 use crate::auth::ToolRequirements;
+use crate::elicitation::{ClientChannel, McpClient};
 use crate::error::McpError;
 use crate::progress::Progress;
 use crate::session::McpSession;
@@ -89,14 +90,25 @@ pub struct ToolCall {
     /// `Progress` member parameter resolves to. [`Progress::disabled`] for
     /// hand-built calls.
     pub progress: Progress,
+    /// The back channel an [`McpClient`] borrows — use
+    /// [`client`](Self::client). Disabled for hand-built calls.
+    #[doc(hidden)]
+    pub channel: ClientChannel,
 }
 
 impl ToolCall {
+    /// Requests to the client (elicitation) for the duration of this call —
+    /// what an `McpClient` member parameter resolves to.
+    pub fn client(&self) -> McpClient<'_> {
+        McpClient::new(&self.channel)
+    }
+
     /// A hand-built call (tests, adapters) with the given raw `arguments`.
     ///
     /// The transport-provided fields start empty: no parts, an empty
-    /// request id, a fresh [`CancelToken`], no session and a
-    /// [`Progress::disabled`] reporter. Set the public fields as needed.
+    /// request id, a fresh [`CancelToken`], no session, a
+    /// [`Progress::disabled`] reporter and no client back channel. Set the
+    /// public fields as needed.
     pub fn new(arguments: Value) -> Self {
         ToolCall {
             arguments,
@@ -105,6 +117,7 @@ impl ToolCall {
             cancel: CancelToken::new(),
             session: None,
             progress: Progress::disabled(),
+            channel: ClientChannel::disabled(),
         }
     }
 
@@ -290,14 +303,25 @@ pub struct ResourceCall {
     pub session: Option<McpSession>,
     /// Progress reporter — same semantics as [`ToolCall::progress`].
     pub progress: Progress,
+    /// The back channel an [`McpClient`] borrows — use
+    /// [`client`](Self::client). Disabled for hand-built calls.
+    #[doc(hidden)]
+    pub channel: ClientChannel,
 }
 
 impl ResourceCall {
+    /// Requests to the client (elicitation) for the duration of this call —
+    /// what an `McpClient` member parameter resolves to.
+    pub fn client(&self) -> McpClient<'_> {
+        McpClient::new(&self.channel)
+    }
+
     /// A hand-built read (tests, adapters) of `uri`, with no template variables.
     ///
     /// The transport-provided fields start empty: no parts, an empty
-    /// request id, a fresh [`CancelToken`], no session and a
-    /// [`Progress::disabled`] reporter. Set the public fields as needed.
+    /// request id, a fresh [`CancelToken`], no session, a
+    /// [`Progress::disabled`] reporter and no client back channel. Set the
+    /// public fields as needed.
     pub fn new(uri: impl Into<String>) -> Self {
         ResourceCall {
             uri: uri.into(),
@@ -307,6 +331,7 @@ impl ResourceCall {
             cancel: CancelToken::new(),
             session: None,
             progress: Progress::disabled(),
+            channel: ClientChannel::disabled(),
         }
     }
 
@@ -420,14 +445,25 @@ pub struct PromptCall {
     pub session: Option<McpSession>,
     /// Progress reporter — same semantics as [`ToolCall::progress`].
     pub progress: Progress,
+    /// The back channel an [`McpClient`] borrows — use
+    /// [`client`](Self::client). Disabled for hand-built calls.
+    #[doc(hidden)]
+    pub channel: ClientChannel,
 }
 
 impl PromptCall {
+    /// Requests to the client (elicitation) for the duration of this call —
+    /// what an `McpClient` member parameter resolves to.
+    pub fn client(&self) -> McpClient<'_> {
+        McpClient::new(&self.channel)
+    }
+
     /// A hand-built expansion (tests, adapters) with the given raw `arguments`.
     ///
     /// The transport-provided fields start empty: no parts, an empty
-    /// request id, a fresh [`CancelToken`], no session and a
-    /// [`Progress::disabled`] reporter. Set the public fields as needed.
+    /// request id, a fresh [`CancelToken`], no session, a
+    /// [`Progress::disabled`] reporter and no client back channel. Set the
+    /// public fields as needed.
     pub fn new(arguments: Value) -> Self {
         PromptCall {
             arguments,
@@ -436,6 +472,7 @@ impl PromptCall {
             cancel: CancelToken::new(),
             session: None,
             progress: Progress::disabled(),
+            channel: ClientChannel::disabled(),
         }
     }
 

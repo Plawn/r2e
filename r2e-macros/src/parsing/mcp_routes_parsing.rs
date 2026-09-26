@@ -110,6 +110,8 @@ pub enum McpToolArg {
     Session,
     /// A `Progress` parameter (`notifications/progress` reporter).
     Progress,
+    /// An `McpClient<'_>` parameter (requests to the client: elicitation).
+    Client,
 }
 
 /// A single `#[tool]` / `#[resource]` / `#[prompt]` method with parsed
@@ -426,6 +428,7 @@ fn classify_args(
     let mut has_cancel = false;
     let mut has_session = false;
     let mut has_progress = false;
+    let mut has_client = false;
 
     for arg in method.sig.inputs.iter_mut() {
         let syn::FnArg::Typed(pat_type) = arg else {
@@ -507,6 +510,17 @@ fn classify_args(
             args.push(McpToolArg::Progress);
             continue;
         }
+        if type_last_segment_is(&pat_type.ty, "McpClient") {
+            if has_client {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!("only one McpClient parameter is allowed per #[{marker}] method"),
+                ));
+            }
+            has_client = true;
+            args.push(McpToolArg::Client);
+            continue;
+        }
         let params_part = if kind.takes_params() {
             "`Params<T>` (typed arguments), "
         } else {
@@ -516,7 +530,7 @@ fn classify_args(
             pat_type,
             format!(
                 "unsupported #[{marker}] parameter: expected {params_part}\
-                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, `CancelToken`, `McpSession`, or `Progress`. \
+                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, `CancelToken`, `McpSession`, `Progress`, or `McpClient`. \
                  Beans and config go on the struct (`#[inject]`/`#[config]` fields)"
             ),
         ));

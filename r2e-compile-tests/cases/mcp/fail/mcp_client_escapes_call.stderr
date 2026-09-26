@@ -1,0 +1,14 @@
+error[E0521]: borrowed data escapes outside of method
+  --> cases/mcp/fail/mcp_client_escapes_call.rs:15:9
+   |
+14 |       async fn broken(&self, client: McpClient<'_>) -> String {
+   |                              ------            -- let's call the lifetime of this reference `'1`
+   |                              |
+   |                              `client` is a reference that is only valid in the method body
+15 | /         r2e::rt::spawn(async move {
+16 | |             let _ = client.supports_elicitation();
+17 | |         });
+   | |          ^
+   | |          |
+   | |__________`client` escapes the method body here
+   |            argument requires that `'1` must outlive `'static`

@@ -18,6 +18,7 @@ use r2e_core::prelude::ConfigProperties;
 ///   allowed-hosts: ["mcp.example.com"]
 ///   allowed-origins: ["https://claude.ai"]
 ///   max-request-body-bytes: 4194304
+///   elicitation-timeout-secs: 300  # how long `McpClient::elicit` waits
 /// ```
 ///
 /// Precedence for each knob: **programmatic builder setting
@@ -56,6 +57,10 @@ pub struct McpConfig {
     /// Maximum POST body size in bytes (default 4 MiB).
     #[config(key = "max-request-body-bytes")]
     pub max_request_body_bytes: Option<u64>,
+    /// How long an elicitation (`McpClient::elicit`) waits for the user's
+    /// answer, in seconds (default 300).
+    #[config(key = "elicitation-timeout-secs")]
+    pub elicitation_timeout_secs: Option<u64>,
     /// Browser CORS policy for the MCP endpoint.
     #[config(section)]
     pub cors: Option<McpCorsConfig>,

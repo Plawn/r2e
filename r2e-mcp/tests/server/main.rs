@@ -9,6 +9,7 @@ mod fixtures;
 
 mod dispatch;
 mod dynamic;
+mod elicitation;
 mod interceptors;
 mod lifecycle;
 mod plugin;

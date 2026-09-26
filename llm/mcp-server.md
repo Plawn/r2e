@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~5100
+tokens: ~5500
 requires: guards, security
 ---
 
@@ -20,8 +20,8 @@ requires: guards, security
 - A member takes `&self` plus at most one of `Params<T>` (typed arguments →
   `inputSchema`, needs `Deserialize + JsonSchema + ObjectParams`),
   `ToolCall`/`ResourceCall`/
-  `PromptCall`, `CancelToken`, `McpSession`, `Progress`. Beans and config go
-  on the struct, never as parameters.
+  `PromptCall`, `CancelToken`, `McpSession`, `Progress`, `McpClient<'_>`.
+  Beans and config go on the struct, never as parameters.
 - Return `Json<T>` for structured output (`structuredContent` + `outputSchema`),
   `String`/`&str`/`()`, `CallToolResult`, or `Result<_, E: Into<McpError>>`;
   `McpError::tool(...)` is an agent-readable `isError` result, other variants
@@ -114,7 +114,8 @@ Tool signatures — `&self` plus at most one of each: `Params<T>` (typed
 arguments; `T: Deserialize + JsonSchema + ObjectParams` becomes the
 `inputSchema`), `ToolCall`
 (raw arguments, HTTP request parts, JSON-RPC id, cancellation token),
-`CancelToken`, `Progress` (`notifications/progress` reporter). Returns: `String`/`&str`/`()`, `Json<T: Serialize + JsonSchema>`
+`CancelToken`, `Progress` (`notifications/progress` reporter), `McpClient<'_>`
+(elicitation). Returns: `String`/`&str`/`()`, `Json<T: Serialize + JsonSchema>`
 (dual-encoded: `structuredContent` + JSON text, advertises `outputSchema`),
 `CallToolResult`, or `Result<_, E: Into<McpError>>`. `McpError::tool(...)` →
 `isError: true` result the agent can read; other variants map to JSON-RPC
@@ -184,6 +185,42 @@ impl Indexer {
 strictly increasing), nothing is sent unless the request carried
 `_meta.progressToken` (`progress.is_requested()`), and reports after the member
 returns are dropped. Works under `json-response` (the reply switches to SSE).
+
+Elicitation — an `McpClient<'_>` parameter (any family; also
+`ToolCall::client()`) asks the user for input mid-call:
+
+```rust
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+struct Confirm {
+    /// Really wipe the index?
+    confirmed: bool,
+}
+# #[controller]
+# pub struct Wiper;
+#[mcp_routes]
+impl Wiper {
+    /// Wipe the index after asking the user.
+    #[tool]
+    async fn wipe(&self, client: McpClient<'_>) -> Result<String, McpError> {
+        if !client.supports_elicitation() {
+            return Err(McpError::tool("this client cannot confirm"));
+        }
+        match client.elicit::<Confirm>("Wipe the whole index?").await? {   // ElicitError → tool error via `?`
+            Elicited::Accept(Confirm { confirmed: true }) => Ok("wiped".into()),
+            Elicited::Accept(_) | Elicited::Decline | Elicited::Cancel => Ok("kept".into()),
+        }
+    }
+}
+# fn main() {}
+```
+
+`T` must be a flat object of primitive properties (else `ElicitError::InvalidSchema`,
+nothing sent). URL mode: `client.elicit_url(message, url, elicitation_id)` →
+`Elicited<()>`. Waits `mcp.elicitation-timeout-secs` (300) then `Timeout`;
+call cancellation → `Cancelled`. `McpClient` borrows the call — it cannot be
+moved into a spawned task. Live elicitation needs an MCP session: under
+`mcp.stateless` and for sessionless 2026-07-28 clients it fails fast with
+`ElicitError::NoChannel`.
 Sampling, roots and logging (deprecated by SEP-2577) are NOT implemented — no
 API, no capability.
 
@@ -194,7 +231,8 @@ a thin HTTP controller and a thin MCP service instead (see
 Config under `mcp.*` (all optional; builder methods override config):
 `path` (default `/mcp`), `enabled` (true), `name`/`version`/`instructions`,
 `sse-keep-alive-secs` (15; 0 disables), `stateless` (false),
-`json-response` (false; stateless only), `allowed-hosts` (DNS-rebinding
+`json-response` (false; stateless only), `elicitation-timeout-secs` (300),
+`allowed-hosts` (DNS-rebinding
 protection — REQUIRED behind a proxy/public hostname; default accepts loopback
 `Host` headers only), `allowed-origins`, `max-request-body-bytes`.
 

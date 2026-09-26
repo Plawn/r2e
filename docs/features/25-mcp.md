@@ -75,6 +75,7 @@ bad `#[config]` key is caught at `register_mcp_service` — a missing
 | `CancelToken` | Just the cancellation token. |
 | `McpSession` | The caller's session handle: change what this session sees (see Dynamic members). At most one. |
 | `Progress` | Reports `notifications/progress` for this call (see Progress). Also on `ToolCall::progress`. |
+| `McpClient<'_>` | Asks the user for input mid-call (see Elicitation). Also `ToolCall::client()`. |
 | `#[inject(identity)] user: I` / `Option<I>` | The authenticated caller (wired by the MCP auth layer — see the Auth section). |
 
 Anything else is a targeted compile error — beans and config go on the
@@ -220,6 +221,56 @@ async fn reindex(&self, progress: Progress) -> Result<String, McpError> {
   sent (no report is lost); a call that sends none stays plain JSON.
 - Once the member returns the stream closes: reports sent later (e.g. from a
   task the member spawned) are dropped.
+
+## Elicitation
+
+A member takes an `McpClient<'_>` parameter (tools, resources and prompts
+alike — also `ToolCall::client()` / `ResourceCall::client()` /
+`PromptCall::client()`) to ask the user for input while it runs
+(`elicitation/create`):
+
+```rust
+#[derive(serde::Deserialize, JsonSchema)]
+struct Confirm {
+    /// Really delete it?
+    confirmed: bool,
+}
+
+#[tool]
+async fn delete_repo(&self, args: Params<Repo>, client: McpClient<'_>) -> Result<String, McpError> {
+    match client.elicit::<Confirm>(format!("Delete {}?", args.0.name)).await? {
+        Elicited::Accept(Confirm { confirmed: true }) => { /* … */ Ok("deleted".into()) }
+        _ => Ok("kept".into()),
+    }
+}
+```
+
+- **Form mode** — `elicit::<T>(message)`: `T`'s JSON schema is the form. The
+  spec only allows a flat object of primitive properties (string, number,
+  integer, boolean, enum); any other `T` fails with
+  `ElicitError::InvalidSchema` before anything is sent.
+- **URL mode** — `elicit_url(message, url, elicitation_id)`: sends the user
+  to an out-of-band page (OAuth consent, payment). `Accept` only means the
+  user agreed to open it, so confirm the outcome server-side.
+- The answer is `Elicited::{Accept(T), Decline, Cancel}`. Failures are
+  `ElicitError`: `Unsupported` (the client did not advertise that mode, so
+  check `supports_elicitation()` / `supports_url_elicitation()` first),
+  `NoChannel`, `Timeout`, `Cancelled` (the call was cancelled while
+  waiting), `InvalidResponse` (the answer does not match `T`), `InvalidSchema`,
+  `Transport`. `?` turns them into a tool error result the agent reads.
+  `InvalidSchema` and `Transport` are server bugs and become internal errors.
+- A member waits at most `mcp.elicitation-timeout-secs` (default 300) or
+  `McpServer::with_elicitation_timeout`.
+- The `'_` lifetime ties the client to the call: a request can only be
+  delivered while the call is in flight, so moving an `McpClient` into a
+  spawned task is a compile error.
+- **Live elicitation needs an MCP session.** The client's answer arrives
+  on a separate POST that rmcp routes by `Mcp-Session-Id`. Under
+  `mcp.stateless: true`, and for sessionless 2026-07-28 clients (which
+  negotiate per request), rmcp drops that POST. So every elicitation there
+  fails fast with `NoChannel` instead of hanging until the timeout.
+  Supporting sessionless clients needs the multi-round-trip flow
+  (SEP-2322), which is planned.
 
 ## Not implemented (deliberately)
 
@@ -402,6 +453,7 @@ mcp:
   sse-keep-alive-secs: 15     # 0 disables keep-alive pings
   stateless: false            # true → no MCP sessions
   json-response: false        # true (stateless only) → plain application/json responses
+  elicitation-timeout-secs: 300 # how long an elicitation waits for the user
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
   allowed-origins: []         # reject browser requests from other Origins
   cors:

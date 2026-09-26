@@ -41,6 +41,7 @@ pub mod auth;
 mod catalog;
 pub mod config;
 pub mod dynamic;
+pub mod elicitation;
 pub mod error;
 pub mod guard;
 pub mod handler;
@@ -66,6 +67,7 @@ pub use dynamic::{
     DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
     NoParams, WithParams,
 };
+pub use elicitation::{ElicitError, Elicited, McpClient};
 pub use error::McpError;
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
@@ -192,6 +194,7 @@ where
 #[doc(hidden)]
 pub mod __macro_support {
     pub use crate::auth::tools::{check_access, ToolRequirements};
+    pub use crate::elicitation::McpClient;
     pub use crate::error::McpError;
     pub use crate::guard::{guard_response_to_error, member_guard_context};
     pub use crate::params::private::Sealed as ObjectParamsSeal;
@@ -214,6 +217,7 @@ pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
     pub use crate::auth::{McpAuthConfig, McpTokenValidator};
     pub use crate::dynamic::{DynamicPrompt, DynamicResource, DynamicTool};
+    pub use crate::elicitation::{ElicitError, Elicited, McpClient};
     pub use crate::error::McpError;
     pub use crate::params::{ObjectParams, Params};
     pub use crate::plugin::McpServer;

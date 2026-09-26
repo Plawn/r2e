@@ -1,6 +1,6 @@
 # W16 P4 — MCP protocol gaps (progress, elicitation, completion, pagination)
 
-Status: **§1 Progress DONE** (2026-09-26, branch `feat/mcp-dynamic-session-members`, uncommitted); §2a next. Origin:
+Status: **§1 Progress DONE** (f065a3e4), **§2a Elicitation DONE** (2026-09-26, branch `feat/mcp-dynamic-session-members`); §3 next. Origin:
 W16 "what is left" review — `r2e-mcp` answers the member surface (tools /
 resources / templates / prompts / subscriptions / list_changed) but five
 protocol areas are either rmcp's default stub or absent.
@@ -91,6 +91,17 @@ apply to progress — tested in `tests/server/progress.rs`.
 
 Enable rmcp feature `elicitation` (pulls `url`) behind an `r2e-mcp` feature
 `elicitation` (on by default in `r2e`'s `mcp` feature — tiny dep).
+
+**As shipped (deviations):** no feature gate — rmcp's `elicitation` feature
+only adds `url`, which `r2e-mcp` already depends on, so it is enabled
+unconditionally in the workspace rmcp dep. No per-`TypeId` schema cache (the
+human round trip dominates; `ElicitationSchema::from_type` validates the
+flat shape) and no `ElicitationSafe` (it would leak rmcp macros to users).
+`elicit_url` takes an `elicitation_id` (spec-required). Config key is
+`mcp.elicitation-timeout-secs` (+ `McpServer::with_elicitation_timeout`).
+`ElicitError` also has `Cancelled` and `InvalidSchema`. Call structs carry a
+`#[doc(hidden)] channel: ClientChannel` (peer + live flag + timeout +
+cancel), not a raw `Option<Peer>`.
 
 #### API
 
@@ -261,5 +272,16 @@ Before P4-a: fold the three `*Call` construction sites in `handler.rs` into one
 
 Open questions to settle during impl (not user decisions — verify in rmcp):
 1. rmcp behaviour of `notify_progress` / `create_elicitation` under `json_response = true`.
+   **Answered:** rmcp switches the reply to SSE on the first notification /
+   request. In session mode requests always get SSE, so `json_response` only
+   matters stateless — where elicitation is impossible anyway (see 2).
 2. Whether rmcp accepts a live `create_elicitation` toward a sessionless 2026-07-28 peer, or forces MRTR (decides whether 2c is required for 2026 clients).
+   **Answered:** rmcp sends it (SEP-2260 association holds inside the
+   handler), but only legacy session mode routes the client's answer POST
+   back (`Mcp-Session-Id` → `accept_message`). Stateless and 2026
+   per-request (`serve_negotiated_request_directly`, one-shot transport)
+   accept the answer with 202 and drop it → the request would hang. So live
+   elicitation is gated on `McpSession::is_persistent()` and fails fast with
+   `NoChannel` elsewhere; **2c (MRTR) is required for 2026 sessionless
+   clients.**
 3. Catalog list ordering determinism (pagination prerequisite).

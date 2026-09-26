@@ -232,6 +232,15 @@ fn generate_invoke_method(
         let progress = (has_call && has_progress).then(|| {
             quote! { let __progress = __call.progress.clone(); }
         });
+        // `McpClient<'_>` borrows the channel: an owned copy that outlives
+        // the method call (the call itself may be moved into it).
+        let channel = tool
+            .args
+            .iter()
+            .any(|arg| matches!(arg, McpToolArg::Client))
+            .then(|| {
+                quote! { let __channel = __call.channel.clone(); }
+            });
         let resource_uri = (has_call && kind == McpMemberKind::Resource).then(|| {
             quote! { let __resource_uri = __call.uri.clone(); }
         });
@@ -263,6 +272,7 @@ fn generate_invoke_method(
         quote! {
             #cancel
             #progress
+            #channel
             #resource_uri
             #session
         }
@@ -281,6 +291,7 @@ fn generate_invoke_method(
             McpToolArg::Session => quote! { __session },
             McpToolArg::Progress if has_call => quote! { __progress },
             McpToolArg::Progress => quote! { __call.progress.clone() },
+            McpToolArg::Client => quote! { #mcp::__macro_support::McpClient::new(&__channel) },
         })
         .collect();
 

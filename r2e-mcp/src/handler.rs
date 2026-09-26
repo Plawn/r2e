@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use r2e_core::http::Parts;
 use r2e_core::rt::sync::broadcast;
@@ -21,6 +22,7 @@ use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
 
 use crate::catalog::{principal_in, Catalog};
+use crate::elicitation::ClientChannel;
 use crate::error::McpError;
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
@@ -45,15 +47,30 @@ struct CallContext {
     cancel: CancelToken,
     session: McpSession,
     progress: Progress,
+    channel: ClientChannel,
 }
 
 impl CallContext {
-    fn new(mut context: RequestContext<RoleServer>, session: McpSession) -> Self {
+    fn new(
+        mut context: RequestContext<RoleServer>,
+        session: McpSession,
+        elicitation_timeout: Duration,
+    ) -> Self {
+        let parts = take_parts(&mut context);
+        let cancel: CancelToken = context.ct.into();
         CallContext {
-            parts: take_parts(&mut context),
+            parts,
             request_id: context.id.to_string(),
             progress: Progress::new(context.meta.get_progress_token(), &context.peer),
-            cancel: context.ct.into(),
+            // Only a real session routes the client's answer back to this
+            // peer; sessionless requests fail fast with `NoChannel`.
+            channel: ClientChannel::new(
+                &context.peer,
+                session.is_persistent(),
+                elicitation_timeout,
+                &cancel,
+            ),
+            cancel,
             session,
         }
     }
@@ -66,6 +83,7 @@ impl CallContext {
             cancel: self.cancel,
             session: Some(self.session),
             progress: self.progress,
+            channel: self.channel,
         }
     }
 
@@ -78,6 +96,7 @@ impl CallContext {
             cancel: self.cancel,
             session: Some(self.session),
             progress: self.progress,
+            channel: self.channel,
         }
     }
 
@@ -89,6 +108,7 @@ impl CallContext {
             cancel: self.cancel,
             session: Some(self.session),
             progress: self.progress,
+            channel: self.channel,
         }
     }
 }
@@ -102,6 +122,8 @@ pub(crate) struct Endpoint {
     /// Transport-wide shutdown token (the plugin's `mcp_cancel`): ends the
     /// legacy forwarder task with the sessions it serves.
     pub(crate) shutdown: CancelToken,
+    /// `mcp.elicitation-timeout-secs`.
+    pub(crate) elicitation_timeout: Duration,
 }
 
 /// The `ServerHandler` handed to rmcp's streamable-HTTP service. rmcp's
@@ -320,7 +342,8 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let call = CallContext::new(context, self.session()).tool(request.arguments);
+        let call = CallContext::new(context, self.session(), self.endpoint.elicitation_timeout)
+            .tool(request.arguments);
 
         match (route.invoke)(call).await {
             Ok(result) => Ok(CallToolResponse::Complete(result)),
@@ -366,7 +389,8 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let call = CallContext::new(context, self.session()).resource(request.uri, variables);
+        let call = CallContext::new(context, self.session(), self.endpoint.elicitation_timeout)
+            .resource(request.uri, variables);
 
         match (route.invoke)(call).await {
             Ok(contents) => Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
@@ -497,7 +521,8 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let call = CallContext::new(context, self.session()).prompt(request.arguments);
+        let call = CallContext::new(context, self.session(), self.endpoint.elicitation_timeout)
+            .prompt(request.arguments);
 
         match (route.invoke)(call).await {
             Ok(result) => Ok(GetPromptResponse::Complete(result)),

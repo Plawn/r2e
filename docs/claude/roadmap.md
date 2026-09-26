@@ -524,8 +524,8 @@ Follow-ups:
 - (b) `McpSessions::each`/bulk ops and per-tenant filtering, if a real app
   asks for them.
 
-**P4 — protocol gaps (IN PROGRESS 2026-09-26; progress shipped):** progress, elicitation
-(MRTR later), `completion/complete`, list pagination. SEP-2577-deprecated
+**P4 — protocol gaps (IN PROGRESS 2026-09-26; progress + live elicitation shipped):** progress, elicitation
+(live = MCP sessions only; MRTR — required for 2026 sessionless clients — later), `completion/complete`, list pagination. SEP-2577-deprecated
 sampling, roots and logging are deliberately NOT implemented. Plan:
 `plans/w16-p4-mcp-protocol-gaps.md`.
 
