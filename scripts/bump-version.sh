@@ -49,8 +49,11 @@ if key(new) <= key(old):
     sys.exit(f"error: {new} is not greater than the current {old}")
 PY
 
-git rev-parse -q --verify "refs/tags/v$new" >/dev/null \
-  && die "tag v$new already exists — pick a version that was never tagged"
+# Remote too: a local clone does not necessarily have every tag CI pushed.
+if git rev-parse -q --verify "refs/tags/v$new" >/dev/null \
+   || [[ -n "$(git ls-remote --tags origin "refs/tags/v$new")" ]]; then
+    die "tag v$new already exists — pick a version that was never tagged"
+fi
 
 python3 - "$old" "$new" <<'PY'
 import datetime, re, sys
