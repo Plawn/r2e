@@ -1,0 +1,5 @@
+error: `opt_in` needs a group: #[tool(group = "…", opt_in)] — only a named group can be enabled later by a session
+  --> cases/mcp/fail/mcp_opt_in_without_group.rs:12:5
+   |
+12 |     #[tool(opt_in)]
+   |     ^^^^^^^^^^^^^^^

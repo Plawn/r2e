@@ -1,4 +1,4 @@
-error: #[resource] methods take no Params<T> — a resource has a fixed URI and `resources/read` carries no arguments
+error: #[resource] methods take no Params<T> — `resources/read` carries no arguments (template variables arrive in `ResourceCall::variables`)
   --> cases/mcp/fail/mcp_resource_with_params.rs:20:28
    |
 20 |     async fn broken(&self, Params(p): Params<Filter>) -> String {

@@ -194,3 +194,59 @@ async fn method_level_http_guard_gates_the_tool(app: TestApp) {
     let text = cleared["result"]["content"][0]["text"].as_str().unwrap();
     assert!(text.contains("cleared"), "{cleared}");
 }
+
+async fn rpc(app: &TestApp, session: &str, method: &str, params: Value) -> Value {
+    let response = mcp_post(
+        app,
+        Some(session),
+        None,
+        &json!({ "jsonrpc": "2.0", "id": 7, "method": method, "params": params }),
+    )
+    .await;
+    response.assert_ok();
+    response_message(response)
+}
+
+async fn tool_names(app: &TestApp, session: &str) -> Vec<String> {
+    let list = rpc(app, session, "tools/list", json!({})).await;
+    list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+#[r2e::test(app = McpApp)]
+async fn toolsets_are_per_session(app: TestApp) {
+    let (a, init) = initialize(&app, None).await;
+    let (b, _) = initialize(&app, None).await;
+    assert_eq!(
+        init["result"]["capabilities"]["tools"]["listChanged"], true,
+        "{init}"
+    );
+    assert!(!tool_names(&app, &a).await.contains(&"sqrt".to_string()));
+
+    let call =
+        |name: &'static str, arguments: Value| json!({ "name": name, "arguments": arguments });
+    rpc(&app, &a, "tools/call", call("enable_scientific", json!({}))).await;
+    let root = rpc(&app, &a, "tools/call", call("sqrt", json!({ "x": 9.0 }))).await;
+    assert_eq!(root["result"]["structuredContent"]["value"], 3.0, "{root}");
+
+    // Session B never enabled the group: `sqrt` is unknown there.
+    let hidden = rpc(&app, &b, "tools/call", call("sqrt", json!({ "x": 9.0 }))).await;
+    assert_eq!(hidden["error"]["code"], -32601, "{hidden}");
+
+    rpc(
+        &app,
+        &b,
+        "tools/call",
+        call("remember", json!({ "name": "half", "value": 0.5 })),
+    )
+    .await;
+    let half = rpc(&app, &b, "tools/call", call("const_half", json!({}))).await;
+    assert_eq!(half["result"]["content"][0]["text"], "0.5", "{half}");
+    assert!(!tool_names(&app, &a)
+        .await
+        .contains(&"const_half".to_string()));
+}

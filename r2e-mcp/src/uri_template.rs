@@ -76,6 +76,17 @@ impl UriTemplate {
         &self.raw
     }
 
+    /// Every variable name, in template order.
+    pub(crate) fn variables(&self) -> impl Iterator<Item = &str> {
+        self.tokens
+            .iter()
+            .flat_map(|token| match token {
+                Token::Expression(expression) => expression.variables.as_slice(),
+                Token::Literal(_) => &[],
+            })
+            .map(String::as_str)
+    }
+
     /// The template with variable names erased (`r2e://users/{id}` and
     /// `r2e://users/{uid}` both give `r2e://users/{}`): two templates with
     /// the same shape match exactly the same URIs, so registering both is a
@@ -167,8 +178,23 @@ fn parse_variable(raw: &str) -> Result<String, String> {
 fn is_reserved(c: char) -> bool {
     matches!(
         c,
-        ':' | '/' | '?' | '#' | '[' | ']' | '@' | '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+'
-            | ',' | ';' | '='
+        ':' | '/'
+            | '?'
+            | '#'
+            | '['
+            | ']'
+            | '@'
+            | '!'
+            | '$'
+            | '&'
+            | '\''
+            | '('
+            | ')'
+            | '*'
+            | '+'
+            | ','
+            | ';'
+            | '='
     )
 }
 
@@ -266,7 +292,9 @@ impl Expression {
         };
         (values.len() <= self.variables.len()).then_some(())?;
         for (index, name) in self.variables.iter().enumerate() {
-            let value = values.get(index).map_or(Some(String::new()), |v| decode(v))?;
+            let value = values
+                .get(index)
+                .map_or(Some(String::new()), |v| decode(v))?;
             captures.insert(name.clone(), value);
         }
         Some(())
@@ -292,7 +320,9 @@ impl Expression {
             }
         }
         for name in &self.variables {
-            let value = found.get(name.as_str()).map_or(Some(String::new()), |v| decode(v))?;
+            let value = found
+                .get(name.as_str())
+                .map_or(Some(String::new()), |v| decode(v))?;
             captures.insert(name.clone(), value);
         }
         Some(())

@@ -1,0 +1,5 @@
+error: only one McpSession parameter is allowed per #[tool] method
+  --> cases/mcp/fail/mcp_two_sessions.rs:12:43
+   |
+12 |     async fn broken(&self, a: McpSession, b: McpSession) -> String {
+   |                                           ^^^^^^^^^^^^^

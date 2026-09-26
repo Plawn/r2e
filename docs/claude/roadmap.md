@@ -471,6 +471,64 @@ legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
 public clients with a Docker-free, one-time Authorization Code + PKCE S256
 flow.
 
+SHIPPED 2026-09-26 (branch feat/mcp-dynamic-session-members): per-session
+member lists for tools, resources and prompts. The boot-time `Catalog`
+(immutable, `Arc`) is split from a copy-on-write `SessionView`; sessions that
+never change share one default view, so the hotpath allocation guard is
+unchanged. There are three ways to shape a session's list:
+- groups: `#[mcp_routes(group, opt_in)]` or a per-member `group` override;
+- the `McpSession` member parameter, which can enable/disable groups and
+  add/remove private `DynamicTool`/`DynamicResource`/`DynamicPrompt` members;
+- the `McpServer::session_init::<T: McpSessionInit>()` hook, plus the
+  plugin-provided `McpSessions` bean (`for_subject`/`all`).
+
+Locked decisions:
+- A hidden member answers like an unknown one (fail-closed; no enumeration
+  oracle).
+- `get_tool` stays catalog-wide, because rmcp caches it per name; visibility
+  is enforced in `call_tool`.
+- A private member cannot shadow any catalog name.
+- `listChanged: true` on all three families as soon as dynamism is used.
+- Under `mcp.stateless`, a member taking `McpSession` is a boot panic.
+- A session binds to the `sub` of its `initialize`. Under `mcp.auth` the
+  auth layer refuses another subject on every method with rmcp's own 404
+  (see follow-up (a)); the handler's `-32600` "belongs to another
+  principal" stays as a backstop.
+- A session is persistent and registered with `McpSessions` in `initialize`.
+  Under stateful serving, rmcp only hands the handshake to a handler it built
+  for a new or restored session, so no `Mcp-Session-Id` header check is needed.
+
+BREAKING: new pub fields on hand-built literals:
+- `group` on `ToolRoute`/`ResourceRoute`/`PromptRoute`;
+- `session` on `ToolCall`/`ResourceCall`/`PromptCall`;
+- `uses_session` on `McpRoutes`.
+
+Also, `McpServer::Provided` gains `McpSessions`.
+
+Follow-ups:
+- (a) SHIPPED 2026-09-26: the session ↔ principal binding lives in
+  `auth/layer.rs`. A session-less request carries a `SessionLink` in its
+  extensions; `initialize` deposits the new `SessionState` there, and the
+  layer keys it by the response's `Mcp-Session-Id` in `SessionBindings`
+  (weak entries, pruned on insert, shared across workers). A foreign subject
+  presenting that id on POST, SSE `GET` or `DELETE` gets rmcp's exact
+  `404 Not Found: Session not found` (no existence oracle; a foreign
+  `DELETE` used to close the victim's session). Unknown ids pass through
+  (rmcp answers 404). Without `mcp.auth` there is no subject to bind.
+- (c) NOT FEASIBLE on rmcp 3.1: `StreamableHttpService<S, M>` requires
+  `S: ServerHandler`, not `Service<RoleServer>`, so a `Service` wrapper
+  running `prepare` in `handle_request` cannot be mounted, and a
+  `ServerHandler` wrapper would have to re-delegate every method anyway.
+  The per-method `prepare` calls stay; with (a) its binding check is a
+  backstop only. Revisit if rmcp loosens the bound.
+- (b) `McpSessions::each`/bulk ops and per-tenant filtering, if a real app
+  asks for them.
+
+**P4 — protocol gaps (IN PROGRESS 2026-09-26; progress + live elicitation + completion + pagination shipped; MRTR open):** progress, elicitation
+(live = MCP sessions only; MRTR — required for 2026 sessionless clients — later), `completion/complete`, list pagination. SEP-2577-deprecated
+sampling, roots and logging are deliberately NOT implemented. Plan:
+`plans/w16-p4-mcp-protocol-gaps.md`.
+
 ## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
 
 **All 6 sprints landed on `task/w17-sprints`, one commit per sprint**

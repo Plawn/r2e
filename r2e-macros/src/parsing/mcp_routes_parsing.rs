@@ -21,6 +21,9 @@ pub enum McpMemberKind {
     Resource,
     /// `#[prompt]` — `prompts/get`.
     Prompt,
+    /// `#[completion]` — a `completion/complete` provider, wired to a prompt
+    /// argument or template variable by `complete(...)`. No route of its own.
+    Completion,
 }
 
 impl McpMemberKind {
@@ -30,6 +33,7 @@ impl McpMemberKind {
             McpMemberKind::Tool => "tool",
             McpMemberKind::Resource => "resource",
             McpMemberKind::Prompt => "prompt",
+            McpMemberKind::Completion => "completion",
         }
     }
 
@@ -39,13 +43,21 @@ impl McpMemberKind {
             McpMemberKind::Tool => "ToolCall",
             McpMemberKind::Resource => "ResourceCall",
             McpMemberKind::Prompt => "PromptCall",
+            McpMemberKind::Completion => "Completion",
         }
     }
 
     /// Whether methods of this family may take a `Params<T>` parameter
-    /// (resources have a fixed URI and no arguments).
+    /// (resources and completions carry no argument object).
     pub fn takes_params(self) -> bool {
-        !matches!(self, McpMemberKind::Resource)
+        matches!(self, McpMemberKind::Tool | McpMemberKind::Prompt)
+    }
+
+    /// Whether methods of this family may take the per-call extras
+    /// (`McpSession`, `Progress`, `McpClient`). A completion request is a
+    /// per-keystroke lookup: none of them apply.
+    pub fn takes_call_extras(self) -> bool {
+        !matches!(self, McpMemberKind::Completion)
     }
 }
 
@@ -79,6 +91,21 @@ pub struct McpToolMeta {
     /// Scopes of which the caller must hold at least one (`any_scopes = ...`,
     /// same forms as `scopes`).
     pub any_scopes: Vec<String>,
+    /// Member group (`group = "..."`), overriding the service's.
+    pub group: Option<String>,
+    /// `opt_in`: the group is hidden until a session enables it.
+    pub opt_in: bool,
+    /// `complete(arg = "method", …)`: the `#[completion]` method providing
+    /// suggestions for each prompt argument / template variable, in order.
+    pub complete: Vec<(syn::Ident, syn::LitStr)>,
+}
+
+/// A resolved member group: `#[mcp_routes(group = "...", opt_in)]` or the
+/// member's own `group`/`opt_in`.
+#[derive(Clone)]
+pub struct McpGroupSpec {
+    pub name: String,
+    pub opt_in: bool,
 }
 
 /// One (typed, non-receiver) parameter of a member method, in declaration
@@ -94,10 +121,16 @@ pub enum McpToolArg {
     Call,
     /// A `CancelToken` parameter.
     Cancel,
+    /// An `McpSession` parameter (the caller's session handle).
+    Session,
+    /// A `Progress` parameter (`notifications/progress` reporter).
+    Progress,
+    /// An `McpClient<'_>` parameter (requests to the client: elicitation).
+    Client,
 }
 
-/// A single `#[tool]` / `#[resource]` / `#[prompt]` method with parsed
-/// attributes.
+/// A single `#[tool]` / `#[resource]` / `#[prompt]` / `#[completion]` method
+/// with parsed attributes.
 pub struct McpTool {
     /// Which family the method belongs to.
     pub kind: McpMemberKind,
@@ -113,6 +146,8 @@ pub struct McpTool {
     pub decorators: MethodDecorators,
     /// Typed parameters in declaration order.
     pub args: Vec<McpToolArg>,
+    /// The member's group: its own `group`, else the service's.
+    pub group: Option<McpGroupSpec>,
     /// The original method item (with known attrs stripped).
     pub fn_item: syn::ImplItemFn,
 }
@@ -159,6 +194,8 @@ pub struct McpRoutesImplDef {
     pub controller_all_roles: Vec<String>,
     /// `#[tool]` / `#[resource]` / `#[prompt]` methods, in declaration order.
     pub members: Vec<McpTool>,
+    /// Some member takes an `McpSession` parameter.
+    pub uses_session: bool,
     /// The original inherent impl with only MCP-owned attributes stripped.
     /// Keeping the complete item preserves helper ordering, associated items,
     /// and passive impl attributes instead of reconstructing a lossy impl.
@@ -179,6 +216,8 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "open_world",
             "scopes",
             "any_scopes",
+            "group",
+            "opt_in",
         ],
         McpMemberKind::Resource => &[
             "uri",
@@ -188,8 +227,21 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "mime_type",
             "scopes",
             "any_scopes",
+            "group",
+            "opt_in",
+            "complete",
         ],
-        McpMemberKind::Prompt => &["name", "title", "description", "scopes", "any_scopes"],
+        McpMemberKind::Prompt => &[
+            "name",
+            "title",
+            "description",
+            "scopes",
+            "any_scopes",
+            "group",
+            "opt_in",
+            "complete",
+        ],
+        McpMemberKind::Completion => &[],
     }
 }
 
@@ -202,6 +254,12 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
         return Ok(meta);
     }
     let allowed = allowed_meta_keys(kind);
+    if allowed.is_empty() {
+        return Err(syn::Error::new_spanned(
+            attr,
+            format!("#[{}] takes no arguments", kind.attr_name()),
+        ));
+    }
     attr.parse_nested_meta(|nested| {
         let ident = nested
             .path
@@ -222,15 +280,6 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
         let parse_str = |nested: &syn::meta::ParseNestedMeta| -> syn::Result<String> {
             let lit: syn::LitStr = nested.value()?.parse()?;
             Ok(lit.value())
-        };
-        // Flags: bare = true, `= <bool>` accepted.
-        let parse_flag = |nested: &syn::meta::ParseNestedMeta| -> syn::Result<bool> {
-            if nested.input.peek(syn::Token![=]) {
-                let lit: syn::LitBool = nested.value()?.parse()?;
-                Ok(lit.value())
-            } else {
-                Ok(true)
-            }
         };
         // Scope lists: `= "a,b"` (comma/whitespace separated, the OAuth
         // `scope` parameter shape) or `= ["a", "b"]`.
@@ -271,12 +320,93 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
             "mime_type" => meta.mime_type = Some(parse_str(&nested)?),
             "scopes" => meta.scopes = parse_scope_list(&nested)?,
             "any_scopes" => meta.any_scopes = parse_scope_list(&nested)?,
+            "group" => meta.group = Some(parse_group_name(&nested)?),
+            "opt_in" => meta.opt_in = parse_flag(&nested)?,
+            "complete" => nested.parse_nested_meta(|entry| {
+                let arg = entry
+                    .path
+                    .get_ident()
+                    .ok_or_else(|| entry.error("expected `argument = \"completion_method\"`"))?
+                    .clone();
+                let provider: syn::LitStr = entry.value()?.parse()?;
+                if meta.complete.iter().any(|(a, _)| *a == arg) {
+                    return Err(syn::Error::new_spanned(
+                        &arg,
+                        format!("`{arg}` already has a completion provider"),
+                    ));
+                }
+                meta.complete.push((arg, provider));
+                Ok(())
+            })?,
             // Every key passed the allowed-list check above.
             _ => unreachable!(),
         }
         Ok(())
     })?;
+    if meta.opt_in && meta.group.is_none() {
+        return Err(opt_in_without_group(attr, kind.attr_name()));
+    }
     Ok(meta)
+}
+
+/// A flag: bare = true, `= <bool>` accepted.
+fn parse_flag(nested: &syn::meta::ParseNestedMeta) -> syn::Result<bool> {
+    if nested.input.peek(syn::Token![=]) {
+        let lit: syn::LitBool = nested.value()?.parse()?;
+        Ok(lit.value())
+    } else {
+        Ok(true)
+    }
+}
+
+fn opt_in_without_group(span: impl quote::ToTokens, attr_name: &str) -> syn::Error {
+    syn::Error::new_spanned(
+        span,
+        format!(
+            "`opt_in` needs a group: #[{attr_name}(group = \"…\", opt_in)] — only a named \
+             group can be enabled later by a session"
+        ),
+    )
+}
+
+/// `group = "..."`: a non-empty group name.
+fn parse_group_name(nested: &syn::meta::ParseNestedMeta) -> syn::Result<String> {
+    let lit: syn::LitStr = nested.value()?.parse()?;
+    let name = lit.value();
+    if name.trim().is_empty() || name.trim() != name {
+        return Err(syn::Error::new_spanned(
+            lit,
+            "an MCP group name must be non-empty, without surrounding whitespace",
+        ));
+    }
+    Ok(name)
+}
+
+/// Parse the `#[mcp_routes(group = "...", opt_in)]` arguments.
+pub fn parse_impl_args(args: proc_macro2::TokenStream) -> syn::Result<Option<McpGroupSpec>> {
+    if args.is_empty() {
+        return Ok(None);
+    }
+    let mut group = None;
+    let mut opt_in = false;
+    let parser = syn::meta::parser(|nested| {
+        if nested.path.is_ident("group") {
+            group = Some(parse_group_name(&nested)?);
+        } else if nested.path.is_ident("opt_in") {
+            opt_in = parse_flag(&nested)?;
+        } else {
+            return Err(nested.error(
+                "unknown #[mcp_routes] argument; expected `group = \"…\"` and/or `opt_in`",
+            ));
+        }
+        Ok(())
+    });
+    syn::parse::Parser::parse2(parser, args.clone())?;
+    match group {
+        Some(name) => Ok(Some(McpGroupSpec { name, opt_in })),
+        None if opt_in => Err(opt_in_without_group(args, "mcp_routes")),
+        None => Ok(None),
+    }
 }
 
 /// If `ty` is `Params<T>` (by last path segment), return `T`.
@@ -336,6 +466,9 @@ fn classify_args(
     let mut has_params = false;
     let mut has_call = false;
     let mut has_cancel = false;
+    let mut has_session = false;
+    let mut has_progress = false;
+    let mut has_client = false;
 
     for arg in method.sig.inputs.iter_mut() {
         let syn::FnArg::Typed(pat_type) = arg else {
@@ -357,11 +490,17 @@ fn classify_args(
         }
         if let Some(inner) = unwrap_params_type(&pat_type.ty) {
             if !kind.takes_params() {
-                return Err(syn::Error::new_spanned(
-                    pat_type,
-                    "#[resource] methods take no Params<T> — a resource has a fixed URI \
-                     and `resources/read` carries no arguments",
-                ));
+                let reason = match kind {
+                    McpMemberKind::Completion => {
+                        "#[completion] methods take no Params<T> — read the typed value and \
+                         the other arguments from `Completion`"
+                    }
+                    _ => {
+                        "#[resource] methods take no Params<T> — `resources/read` carries no \
+                         arguments (template variables arrive in `ResourceCall::variables`)"
+                    }
+                };
+                return Err(syn::Error::new_spanned(pat_type, reason));
             }
             if has_params {
                 return Err(syn::Error::new_spanned(
@@ -395,16 +534,67 @@ fn classify_args(
             args.push(McpToolArg::Cancel);
             continue;
         }
+        let extra = ["McpSession", "Progress", "McpClient"]
+            .into_iter()
+            .find(|name| type_last_segment_is(&pat_type.ty, name));
+        if let (Some(extra), false) = (extra, kind.takes_call_extras()) {
+            return Err(syn::Error::new_spanned(
+                pat_type,
+                format!(
+                    "#[{marker}] methods cannot take {extra}: a completion request is a \
+                     per-keystroke lookup — take `Completion`, `CancelToken` or \
+                     `#[inject(identity)]`"
+                ),
+            ));
+        }
+        if type_last_segment_is(&pat_type.ty, "McpSession") {
+            if has_session {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!("only one McpSession parameter is allowed per #[{marker}] method"),
+                ));
+            }
+            has_session = true;
+            args.push(McpToolArg::Session);
+            continue;
+        }
+        if type_last_segment_is(&pat_type.ty, "Progress") {
+            if has_progress {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!("only one Progress parameter is allowed per #[{marker}] method"),
+                ));
+            }
+            has_progress = true;
+            args.push(McpToolArg::Progress);
+            continue;
+        }
+        if type_last_segment_is(&pat_type.ty, "McpClient") {
+            if has_client {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!("only one McpClient parameter is allowed per #[{marker}] method"),
+                ));
+            }
+            has_client = true;
+            args.push(McpToolArg::Client);
+            continue;
+        }
         let params_part = if kind.takes_params() {
             "`Params<T>` (typed arguments), "
         } else {
             ""
         };
+        let extras_part = if kind.takes_call_extras() {
+            "`CancelToken`, `McpSession`, `Progress`, or `McpClient`"
+        } else {
+            "or `CancelToken`"
+        };
         return Err(syn::Error::new_spanned(
             pat_type,
             format!(
                 "unsupported #[{marker}] parameter: expected {params_part}\
-                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, or `CancelToken`. \
+                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, {extras_part}. \
                  Beans and config go on the struct (`#[inject]`/`#[config]` fields)"
             ),
         ));
@@ -413,7 +603,10 @@ fn classify_args(
 }
 
 /// Parse an `#[mcp_routes] impl Name { ... }` block.
-pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
+pub fn parse(
+    mut item: syn::ItemImpl,
+    service_group: Option<McpGroupSpec>,
+) -> syn::Result<McpRoutesImplDef> {
     if let Some((_, trait_path, _)) = &item.trait_ {
         return Err(syn::Error::new_spanned(
             trait_path,
@@ -479,6 +672,8 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
                 McpMemberKind::Resource
             } else if attr.path().is_ident("prompt") {
                 McpMemberKind::Prompt
+            } else if attr.path().is_ident("completion") {
+                McpMemberKind::Completion
             } else {
                 continue;
             };
@@ -505,8 +700,8 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
                         return Err(syn::Error::new_spanned(
                             attr,
                             format!(
-                                "#[{name}] on a method without #[tool], #[resource] or \
-                                 #[prompt] does nothing in an #[mcp_routes] impl — add a \
+                                "#[{name}] on a method without #[tool], #[resource], \
+                                 #[prompt] or #[completion] does nothing in an #[mcp_routes] impl — add a \
                                  member marker or remove the decorator"
                             ),
                         ));
@@ -551,13 +746,21 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
             .filter(|a| {
                 !(a.path().is_ident("tool")
                     || a.path().is_ident("resource")
-                    || a.path().is_ident("prompt"))
+                    || a.path().is_ident("prompt")
+                    || a.path().is_ident("completion"))
             })
             .collect();
 
         let args = classify_args(&mut method, kind)?;
         let name = method.sig.ident.clone();
 
+        let group = match &meta.group {
+            Some(name) => Some(McpGroupSpec {
+                name: name.clone(),
+                opt_in: meta.opt_in,
+            }),
+            None => service_group.clone(),
+        };
         let member = McpTool {
             kind,
             name,
@@ -565,6 +768,7 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
             doc_text,
             decorators,
             args,
+            group,
             fn_item: method.clone(),
         };
         let (seen, key, what, hint) = match kind {
@@ -586,6 +790,12 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
                 "prompt name",
                 "use #[prompt(name = \"...\")] to disambiguate",
             ),
+            // Keyed by method name, which Rust already keeps unique.
+            McpMemberKind::Completion => {
+                members.push(member);
+                impl_items.push(syn::ImplItem::Fn(method));
+                continue;
+            }
         };
         if let Some(prev) = seen.insert(key.clone(), member.name.clone()) {
             return Err(syn::Error::new_spanned(
@@ -598,8 +808,13 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
     }
 
     item.items = impl_items;
+    check_completion_wiring(&members)?;
+    let uses_session = members
+        .iter()
+        .any(|m| m.args.iter().any(|a| matches!(a, McpToolArg::Session)));
 
     Ok(McpRoutesImplDef {
+        uses_session,
         controller_name,
         controller_guards,
         controller_intercepts,
@@ -608,4 +823,104 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
         members,
         impl_block: item,
     })
+}
+
+/// `complete(...)` wiring: every provider names a `#[completion]` method of
+/// this impl and a real argument (prompt: it needs `Params<T>`, whose
+/// property names are checked at boot) or URI-template variable (resource);
+/// every `#[completion]` method is wired at least once.
+fn check_completion_wiring(members: &[McpTool]) -> syn::Result<()> {
+    let completions: Vec<&syn::Ident> = members
+        .iter()
+        .filter(|m| m.kind == McpMemberKind::Completion)
+        .map(|m| &m.name)
+        .collect();
+    let mut used = std::collections::HashSet::new();
+    for member in members {
+        let Some((first_arg, _)) = member.meta.complete.first() else {
+            continue;
+        };
+        match member.kind {
+            McpMemberKind::Prompt if member.params_type().is_none() => {
+                return Err(syn::Error::new_spanned(
+                    first_arg,
+                    "`complete(...)` on a #[prompt] without `Params<T>`: the prompt declares \
+                     no argument to complete",
+                ));
+            }
+            McpMemberKind::Resource => {
+                let uri = member.meta.uri.as_deref().unwrap_or_default();
+                let variables = uri_template_variables(uri);
+                if variables.is_empty() {
+                    return Err(syn::Error::new_spanned(
+                        first_arg,
+                        format!(
+                            "`complete(...)` on a fixed-URI #[resource] (`{uri}`): only URI \
+                             template variables can be completed"
+                        ),
+                    ));
+                }
+                for (arg, _) in &member.meta.complete {
+                    if !variables.iter().any(|v| arg == v) {
+                        return Err(syn::Error::new_spanned(
+                            arg,
+                            format!(
+                                "`{arg}` is not a variable of the URI template `{uri}` \
+                                 (variables: {})",
+                                variables.join(", ")
+                            ),
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        for (_, provider) in &member.meta.complete {
+            let name = provider.value();
+            if !completions.iter().any(|c| **c == name) {
+                return Err(syn::Error::new_spanned(
+                    provider,
+                    format!(
+                        "no #[completion] method `{name}` in this #[mcp_routes] impl — a \
+                         completion provider is an `async fn {name}(&self, c: Completion)` \
+                         marked #[completion]"
+                    ),
+                ));
+            }
+            used.insert(name);
+        }
+    }
+    if let Some(unused) = completions.iter().find(|c| !used.contains(&c.to_string())) {
+        return Err(syn::Error::new_spanned(
+            unused,
+            format!(
+                "#[completion] method `{unused}` is not wired to any argument — reference it \
+                 from #[prompt(complete(arg = \"{unused}\"))] or \
+                 #[resource(uri = \"…\", complete(var = \"{unused}\"))]"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The variable names of an RFC 6570 URI template (`{a}`, `{+path}`,
+/// `{?q,page}`, `{id:3}`, `{list*}`), in order. Empty for a fixed URI.
+fn uri_template_variables(uri: &str) -> Vec<String> {
+    let mut variables = Vec::new();
+    let mut rest = uri;
+    while let Some(open) = rest.find('{') {
+        let Some(close) = rest[open..].find('}') else {
+            break;
+        };
+        let body = &rest[open + 1..open + close];
+        let body = body.trim_start_matches(|c| "+#./;?&".contains(c));
+        for var in body.split(',') {
+            let var = var.split(':').next().unwrap_or(var).trim_end_matches('*');
+            if !var.is_empty() {
+                variables.push(var.to_string());
+            }
+        }
+        rest = &rest[open + close + 1..];
+    }
+    variables
 }

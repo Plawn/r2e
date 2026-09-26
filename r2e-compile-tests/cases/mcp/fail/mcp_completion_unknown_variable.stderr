@@ -1,0 +1,5 @@
+error: `path` is not a variable of the URI template `files://{name}` (variables: name)
+  --> cases/mcp/fail/mcp_completion_unknown_variable.rs:11:49
+   |
+11 |     #[resource(uri = "files://{name}", complete(path = "paths"))]
+   |                                                 ^^^^

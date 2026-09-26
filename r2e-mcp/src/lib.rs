@@ -38,17 +38,23 @@
 //! ```
 
 pub mod auth;
+mod catalog;
 pub mod config;
+pub mod dynamic;
+pub mod elicitation;
 pub mod error;
 pub mod guard;
 pub mod handler;
+mod pagination;
 pub mod params;
 pub mod plugin;
+pub mod progress;
 pub mod registry;
 pub mod resource_updates;
 pub mod result;
 pub mod route;
 pub mod service;
+pub mod session;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod uri_template;
@@ -58,18 +64,28 @@ use r2e_core::EndpointDeps;
 
 pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements};
 pub use config::McpConfig;
+pub use dynamic::{
+    DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
+    NoParams, WithParams,
+};
+pub use elicitation::{ElicitError, Elicited, McpClient};
 pub use error::McpError;
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
+pub use progress::Progress;
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use resource_updates::McpResourceUpdates;
 pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 pub use route::{
-    McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
-    ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
-    ToolCall, ToolFuture, ToolInvoke, ToolRoute,
+    Completion, CompletionFuture, CompletionInvoke, CompletionProvider, CompletionRef, Completions,
+    IntoCompletion, McpGroup, McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke,
+    PromptRoute, ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject,
+    ToolAnnotations, ToolCall, ToolFuture, ToolInvoke, ToolRoute,
 };
 pub use service::McpService;
+pub use session::{
+    McpSession, McpSessionError, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+};
 
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
 pub use rmcp::model::Role as PromptMessageRole;
@@ -180,18 +196,22 @@ where
 #[doc(hidden)]
 pub mod __macro_support {
     pub use crate::auth::tools::{check_access, ToolRequirements};
+    pub use crate::elicitation::McpClient;
     pub use crate::error::McpError;
     pub use crate::guard::{guard_response_to_error, member_guard_context};
     pub use crate::params::private::Sealed as ObjectParamsSeal;
     pub use crate::params::{
         empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,
     };
+    pub use crate::progress::Progress;
     pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
     pub use crate::route::{
+        Completion, CompletionFuture, CompletionProvider, Completions, IntoCompletion, McpGroup,
         McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
         ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolRoute,
     };
     pub use crate::service::McpService;
+    pub use crate::session::McpSession;
     pub use r2e_core::NoIdentity;
     pub use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
 }
@@ -199,11 +219,19 @@ pub mod __macro_support {
 pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
     pub use crate::auth::{McpAuthConfig, McpTokenValidator};
+    pub use crate::dynamic::{DynamicPrompt, DynamicResource, DynamicTool};
+    pub use crate::elicitation::{ElicitError, Elicited, McpClient};
     pub use crate::error::McpError;
     pub use crate::params::{ObjectParams, Params};
     pub use crate::plugin::McpServer;
+    pub use crate::progress::Progress;
     pub use crate::resource_updates::McpResourceUpdates;
-    pub use crate::route::{PromptCall, ResourceCall, ToolCall};
+    pub use crate::route::{
+        Completion, CompletionRef, Completions, PromptCall, ResourceCall, ToolCall,
+    };
     pub use crate::service::McpService;
+    pub use crate::session::{
+        McpSession, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+    };
     pub use crate::AppBuilderMcpExt;
 }

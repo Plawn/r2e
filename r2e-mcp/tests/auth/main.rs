@@ -7,12 +7,15 @@ mod support;
 mod fixtures;
 
 mod backends;
+mod completion;
 mod config;
 mod discovery;
 mod identity;
 mod keycloak;
 mod layer;
+mod pagination;
 mod scopes;
+mod sessions;
 mod shim;
 mod tools;
 mod wellknown;

@@ -57,7 +57,7 @@ impl ToolRequirements {
         self.any_scopes.is_empty() || self.any_scopes.iter().any(|s| principal.has_scope(s))
     }
 
-    fn roles_ok(&self, principal: &McpPrincipal) -> bool {
+    pub(crate) fn roles_ok(&self, principal: &McpPrincipal) -> bool {
         let user = &principal.user;
         (self.roles.is_empty() || self.roles.iter().any(|r| user.has_role(r)))
             && self.all_roles.iter().all(|r| user.has_role(r))

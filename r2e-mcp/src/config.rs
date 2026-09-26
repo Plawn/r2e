@@ -18,6 +18,8 @@ use r2e_core::prelude::ConfigProperties;
 ///   allowed-hosts: ["mcp.example.com"]
 ///   allowed-origins: ["https://claude.ai"]
 ///   max-request-body-bytes: 4194304
+///   elicitation-timeout-secs: 300  # how long `McpClient::elicit` waits
+///   page-size: 100           # paginate the */list results (unset/0 = one page)
 /// ```
 ///
 /// Precedence for each knob: **programmatic builder setting
@@ -56,6 +58,15 @@ pub struct McpConfig {
     /// Maximum POST body size in bytes (default 4 MiB).
     #[config(key = "max-request-body-bytes")]
     pub max_request_body_bytes: Option<u64>,
+    /// How long an elicitation (`McpClient::elicit`) waits for the user's
+    /// answer, in seconds (default 300).
+    #[config(key = "elicitation-timeout-secs")]
+    pub elicitation_timeout_secs: Option<u64>,
+    /// Maximum entries per `tools/list`, `resources/list`,
+    /// `resources/templates/list` and `prompts/list` page; clients follow
+    /// `nextCursor` for the rest. Unset or `0` = every list in one page.
+    #[config(key = "page-size")]
+    pub page_size: Option<u32>,
     /// Browser CORS policy for the MCP endpoint.
     #[config(section)]
     pub cors: Option<McpCorsConfig>,

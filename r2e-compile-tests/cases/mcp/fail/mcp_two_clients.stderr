@@ -1,0 +1,5 @@
+error: only one McpClient parameter is allowed per #[tool] method
+  --> cases/mcp/fail/mcp_two_clients.rs:13:46
+   |
+13 |     async fn broken(&self, a: McpClient<'_>, b: McpClient<'_>) -> String {
+   |                                              ^^^^^^^^^^^^^^^^

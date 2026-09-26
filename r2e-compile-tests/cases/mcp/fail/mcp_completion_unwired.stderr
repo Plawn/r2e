@@ -1,0 +1,5 @@
+error: #[completion] method `orphan` is not wired to any argument — reference it from #[prompt(complete(arg = "orphan"))] or #[resource(uri = "…", complete(var = "orphan"))]
+  --> cases/mcp/fail/mcp_completion_unwired.rs:11:14
+   |
+11 |     async fn orphan(&self, _c: Completion) -> Vec<String> {
+   |              ^^^^^^

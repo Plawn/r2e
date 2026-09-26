@@ -384,6 +384,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         } else {
             Some(inputs.allowed_origins.to_vec().into())
         },
+        bindings: Default::default(),
     });
 
     // ── Well-known routes (PRM + optional DCR shim) ─────────────────────────

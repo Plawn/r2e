@@ -146,7 +146,16 @@ pub fn initialize_body() -> Value {
 /// Full session handshake: initialize → capture `Mcp-Session-Id` →
 /// `notifications/initialized`. Returns the session id.
 pub async fn initialize(router: &Router, path: &str) -> String {
-    let response = post(router, path, None, &initialize_body()).await;
+    initialize_with_headers(router, path, &[]).await
+}
+
+/// [`initialize`], sending `headers` on both handshake requests.
+pub async fn initialize_with_headers(
+    router: &Router,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> String {
+    let response = post_with_headers(router, path, None, headers, &initialize_body()).await;
     assert_eq!(
         response.status,
         StatusCode::OK,
@@ -157,15 +166,39 @@ pub async fn initialize(router: &Router, path: &str) -> String {
         .session_id
         .clone()
         .expect("initialize response carries no Mcp-Session-Id header");
-    let notified = post(
+    let notified = post_with_headers(
         router,
         path,
         Some(&session),
+        headers,
         &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
     )
     .await;
     assert_eq!(notified.status, StatusCode::ACCEPTED);
     session
+}
+
+/// The member names in a list result's `family` array (`"tools"`,
+/// `"prompts"`, …), sorted.
+pub fn names(list: &Value, family: &str) -> Vec<String> {
+    let mut names: Vec<String> = list[family]
+        .as_array()
+        .unwrap_or_else(|| panic!("no `{family}` array in {list}"))
+        .iter()
+        .map(|m| {
+            m.get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// The names in a `tools/list` result, sorted.
+pub fn tool_names(list: &Value) -> Vec<String> {
+    names(list, "tools")
 }
 
 /// `tools/list` on an initialized session; returns the `result` object.

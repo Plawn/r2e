@@ -65,6 +65,9 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     let decorator_config_stmts =
         crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
 
+    let uses_session = def
+        .uses_session
+        .then(|| quote! { __routes.uses_session = true; });
     let member_pushes: Vec<TokenStream> = def
         .members
         .iter()
@@ -72,6 +75,8 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
             McpMemberKind::Tool => generate_tool_route(def, member, &mcp),
             McpMemberKind::Resource => generate_resource_route(def, member, &mcp),
             McpMemberKind::Prompt => generate_prompt_route(def, member, &mcp),
+            // Wired into the prompt/resource routes that reference it.
+            McpMemberKind::Completion => quote! {},
         })
         .collect();
 
@@ -99,6 +104,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
                     #(#deco_field_inits,)*
                 });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();
+                #uses_session
                 #(#member_pushes)*
                 __routes
             }
@@ -139,6 +145,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
         None => quote! { ::core::option::Option::None },
     };
 
+    let group = group_expr(tool, mcp);
     let requirements = super::requirements_expr(def, tool, mcp);
     let read_only = opt_bool(tool.meta.read_only);
     let destructive = opt_bool(tool.meta.destructive);
@@ -162,6 +169,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
                     open_world: #open_world,
                 },
                 requirements: #requirements,
+                group: #group,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ToolCall|
                         -> #mcp::__macro_support::ToolFuture {
@@ -190,7 +198,9 @@ fn generate_resource_route(
     let title = opt_string(&resource.meta.title);
     let description = opt_string(&tool_description(resource));
     let mime_type = opt_string(&resource.meta.mime_type);
+    let group = group_expr(resource, mcp);
     let requirements = super::requirements_expr(def, resource, mcp);
+    let completions = completions_expr(resource, mcp);
 
     quote! {
         {
@@ -202,6 +212,8 @@ fn generate_resource_route(
                 description: #description,
                 mime_type: #mime_type,
                 requirements: #requirements,
+                group: #group,
+                completions: #completions,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ResourceCall|
                         -> #mcp::__macro_support::ResourceFuture {
@@ -229,7 +241,9 @@ fn generate_prompt_route(
     let name_str = prompt.tool_name();
     let title = opt_string(&prompt.meta.title);
     let description = opt_string(&tool_description(prompt));
+    let group = group_expr(prompt, mcp);
     let requirements = super::requirements_expr(def, prompt, mcp);
+    let completions = completions_expr(prompt, mcp);
 
     let arguments = match prompt.params_type() {
         Some(params_ty) => quote_spanned! {params_ty.span()=>
@@ -249,6 +263,8 @@ fn generate_prompt_route(
                 description: #description,
                 arguments: #arguments,
                 requirements: #requirements,
+                group: #group,
+                completions: #completions,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::PromptCall|
                         -> #mcp::__macro_support::PromptFuture {
@@ -261,6 +277,35 @@ fn generate_prompt_route(
             });
         }
     }
+}
+
+/// The `completions: Vec<CompletionProvider>` field of a prompt/resource
+/// route: one provider per `complete(arg = "method")` entry, each calling the
+/// `#[completion]` method's invoke (parse() checked the method exists).
+fn completions_expr(member: &McpTool, mcp: &TokenStream) -> TokenStream {
+    let providers = member.meta.complete.iter().map(|(arg, provider)| {
+        let arg = arg.to_string();
+        let provider = syn::Ident::new(&provider.value(), provider.span());
+        let invoke_name = super::invoke_ident(McpMemberKind::Completion, &provider);
+        quote! {
+            {
+                let __w = __wrapper.clone();
+                #mcp::__macro_support::CompletionProvider {
+                    argument: ::std::borrow::Cow::Borrowed(#arg),
+                    invoke: ::std::sync::Arc::new(
+                        move |__call: #mcp::__macro_support::Completion|
+                            -> #mcp::__macro_support::CompletionFuture {
+                            let __w = __w.clone();
+                            ::std::boxed::Box::pin(async move {
+                                __w.#invoke_name(__call).await
+                            })
+                        },
+                    ),
+                }
+            }
+        }
+    });
+    quote! { ::std::vec![#(#providers),*] }
 }
 
 /// The member description: explicit `description = "..."` override, or the
@@ -334,5 +379,23 @@ fn output_schema_probe(ty: &syn::Type, mcp: &TokenStream) -> TokenStream {
             use __NoSchema as _;
             (&__p).__schema().map(::std::sync::Arc::new)
         }
+    }
+}
+
+/// The `group: Option<McpGroup>` field of a member route.
+fn group_expr(member: &McpTool, mcp: &TokenStream) -> TokenStream {
+    match &member.group {
+        Some(group) => {
+            let name = &group.name;
+            let ctor = if group.opt_in {
+                quote! { opt_in }
+            } else {
+                quote! { new }
+            };
+            quote! {
+                ::core::option::Option::Some(#mcp::__macro_support::McpGroup::#ctor(#name))
+            }
+        }
+        None => quote! { ::core::option::Option::None },
     }
 }

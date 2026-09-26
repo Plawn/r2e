@@ -1,9 +1,10 @@
 //! The `McpServer` plugin: mounts the MCP streamable-HTTP endpoint on the
 //! app router.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use r2e_core::beans::BeanContext;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext};
 use r2e_core::rt::CancelToken;
 use r2e_core::Plugin;
@@ -13,10 +14,17 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use crate::auth::config::McpAuthConfig;
 use crate::auth::setup::{build_auth, cors_layer, default_cors_origins, AuthInputs};
 use crate::auth::validator::McpTokenValidator;
+use crate::catalog::{Catalog, CatalogOptions, ServerIdentity};
 use crate::config::McpConfig;
-use crate::handler::{McpRuntime, R2eMcpHandler, ServerIdentity};
+use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
+use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
 use crate::resource_updates::McpResourceUpdates;
+use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn};
+
+/// Resolves the `session_init` hook bean from the built graph (`None` = no
+/// such bean).
+type ResolveInit = fn(&BeanContext) -> Option<SessionInitFn>;
 
 /// MCP server plugin for R2E.
 ///
@@ -65,9 +73,13 @@ pub struct McpServer {
     allowed_hosts: Option<Vec<String>>,
     allowed_origins: Option<Vec<String>>,
     max_request_body_bytes: Option<u64>,
+    elicitation_timeout: Option<Duration>,
+    page_size: Option<u32>,
     cors_allowed_origins: Option<Vec<String>>,
     auth: Option<McpAuthConfig>,
     token_validator: Option<McpTokenValidator>,
+    /// Resolves the [`McpSessionInit`] bean once the graph is built.
+    session_init: Option<(&'static str, ResolveInit)>,
 }
 
 impl McpServer {
@@ -143,6 +155,20 @@ impl McpServer {
         self
     }
 
+    /// How long an elicitation (`McpClient::elicit`) waits for the user's
+    /// answer (overrides `mcp.elicitation-timeout-secs`; default 5 minutes).
+    pub fn with_elicitation_timeout(mut self, timeout: Duration) -> Self {
+        self.elicitation_timeout = Some(timeout);
+        self
+    }
+
+    /// Maximum entries per `*/list` page (overrides `mcp.page-size`); `0`
+    /// serves every list in one page (the default).
+    pub fn with_page_size(mut self, page_size: u32) -> Self {
+        self.page_size = Some(page_size);
+        self
+    }
+
     /// Origins granted CORS access to the MCP endpoint (overrides
     /// `mcp.cors.allowed-origins`). Entries are exact origins or `host:*`
     /// for any port.
@@ -175,6 +201,23 @@ impl McpServer {
         self.resource_updates = updates;
         self
     }
+
+    /// Shape each MCP session's member list when it opens: the `T` bean's
+    /// [`McpSessionInit::init`] runs once per session, on its first
+    /// request, with the caller's identity, and returns the groups to
+    /// enable/disable and the session-private members to add.
+    ///
+    /// `T` is resolved from the bean graph (so tests can `override_bean`
+    /// it); a missing bean aborts startup.
+    pub fn session_init<T>(mut self) -> Self
+    where
+        T: McpSessionInit + Clone + Send + Sync + 'static,
+    {
+        self.session_init = Some((std::any::type_name::<T>(), |beans| {
+            beans.try_get::<T>().map(erase_init)
+        }));
+        self
+    }
 }
 
 /// Validate the configured endpoint path: absolute, single segment target,
@@ -204,7 +247,10 @@ impl Plugin for McpServer {
     /// data. [`McpTokenValidator`] is a real bean so tests can pin it
     /// (`override_bean`) — auth off provides the inert
     /// [`McpTokenValidator::disabled`].
-    type Provided = (McpTokenValidator, McpResourceUpdates);
+    ///
+    /// [`McpSessions`] reaches every live MCP session (push list changes
+    /// from a consumer, an admin endpoint, …).
+    type Provided = (McpTokenValidator, McpResourceUpdates, McpSessions);
     type Deps = ();
     type Config = McpConfig;
     type Controllers = ();
@@ -226,7 +272,11 @@ impl Plugin for McpServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         if !ctx.enabled() {
             tracing::info!("MCP server disabled (mcp.enabled = false); endpoint not mounted");
-            return Ok((McpTokenValidator::disabled(), self.resource_updates));
+            return Ok((
+                McpTokenValidator::disabled(),
+                self.resource_updates,
+                McpSessions::default(),
+            ));
         }
         let cfg = config.unwrap_or_default();
 
@@ -260,6 +310,15 @@ impl Plugin for McpServer {
             .max_request_body_bytes
             .or(cfg.max_request_body_bytes)
             .map(|b| b as usize);
+        let elicitation_timeout = self
+            .elicitation_timeout
+            .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
+            .unwrap_or(DEFAULT_ELICITATION_TIMEOUT);
+        let page_size = self
+            .page_size
+            .or(cfg.page_size)
+            .filter(|&size| size > 0)
+            .map(|size| size as usize);
 
         // rmcp's default `Host` allowlist is loopback-only (DNS-rebinding
         // protection): a non-loopback deployment without `mcp.allowed-hosts`
@@ -338,6 +397,31 @@ impl Plugin for McpServer {
                 let _ = slot.set(resolved);
             });
         }
+        // Session-shaping beans, resolved (not captured) from the bean
+        // context — the Graph stage runs before `wrap_router` reads them.
+        let sessions = McpSessions::default();
+        let sessions_slot: Arc<OnceLock<McpSessions>> = Arc::new(OnceLock::new());
+        let init_slot: Arc<OnceLock<SessionInitFn>> = Arc::new(OnceLock::new());
+        let has_session_init = self.session_init.is_some();
+        {
+            let sessions_slot = Arc::clone(&sessions_slot);
+            let init_slot = Arc::clone(&init_slot);
+            let fallback = sessions.clone();
+            let session_init = self.session_init;
+            ctx.after_build(move |dctx| {
+                let beans = dctx.bean_context();
+                let _ = sessions_slot.set(beans.try_get::<McpSessions>().unwrap_or(fallback));
+                if let Some((type_name, resolve)) = session_init {
+                    let hook = resolve(beans).unwrap_or_else(|| {
+                        panic!(
+                            "McpServer::session_init::<{type_name}>(): no `{type_name}` bean \
+                             is registered — provide or register it before `build_state()`"
+                        )
+                    });
+                    let _ = init_slot.set(hook);
+                }
+            });
+        }
         let cors = cors_layer(
             self.cors_allowed_origins
                 .or(cfg.cors.and_then(|c| c.allowed_origins))
@@ -369,6 +453,7 @@ impl Plugin for McpServer {
         // manager, dispatch table and token below are shared by all workers.
         let registry = self.registry;
         let resource_updates = self.resource_updates.clone();
+        let sessions_fallback = sessions.clone();
         ctx.wrap_router(move |router| {
             let Some(services) = registry.take() else {
                 tracing::warn!(
@@ -377,19 +462,33 @@ impl Plugin for McpServer {
                 );
                 return router;
             };
-            let runtime = Arc::new(McpRuntime::build(
+            let catalog = Arc::new(Catalog::build(
                 services,
                 identity,
-                filter_members,
-                auth_enabled,
+                CatalogOptions {
+                    filter_members,
+                    auth_enabled,
+                    stateful: !stateless,
+                    session_init: has_session_init,
+                },
             ));
             tracing::info!(
                 path = %path,
-                tools = ?runtime.tool_names(),
-                resources = runtime.resource_count(),
-                prompts = runtime.prompt_count(),
+                tools = ?catalog.tool_names(),
+                resources = catalog.resource_count(),
+                prompts = catalog.prompt_count(),
+                groups = ?catalog.group_names(),
                 "Mounting MCP endpoint"
             );
+            let endpoint = Arc::new(Endpoint {
+                catalog,
+                updates: resource_updates,
+                sessions: sessions_slot.get().cloned().unwrap_or(sessions_fallback),
+                init: init_slot.get().cloned(),
+                shutdown: mcp_cancel.clone(),
+                elicitation_timeout,
+                page_size,
+            });
             let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite
             // the fields we own (all pub).
@@ -410,13 +509,7 @@ impl Plugin for McpServer {
                 transport_config.max_request_body_bytes = bytes;
             }
             let service = StreamableHttpService::new(
-                move || {
-                    Ok(R2eMcpHandler::new(
-                        runtime.clone(),
-                        resource_updates.clone(),
-                        mcp_cancel.clone(),
-                    ))
-                },
+                move || Ok(R2eMcpHandler::new(Arc::clone(&endpoint))),
                 session_manager,
                 transport_config,
             );
@@ -437,6 +530,6 @@ impl Plugin for McpServer {
             }
         });
 
-        Ok((provided_validator, self.resource_updates))
+        Ok((provided_validator, self.resource_updates, sessions))
     }
 }

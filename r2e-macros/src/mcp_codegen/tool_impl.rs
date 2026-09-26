@@ -42,7 +42,7 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Tok
 /// → params deserialization (tools/prompts) → method call
 /// (interceptor-wrapped, arguments in original positional order) → the
 /// family's result conversion (`IntoToolResult` / `IntoResourceResult` /
-/// `IntoPromptResult`).
+/// `IntoPromptResult` / `IntoCompletion`).
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
@@ -199,6 +199,10 @@ fn generate_invoke_method(
         .args
         .iter()
         .any(|arg| matches!(arg, McpToolArg::Cancel));
+    let has_progress = tool
+        .args
+        .iter()
+        .any(|arg| matches!(arg, McpToolArg::Progress));
     let params_stmts = match tool.params_type() {
         Some(params_ty) => {
             // Preserve the arguments inside a call passed to the method. This
@@ -225,12 +229,52 @@ fn generate_invoke_method(
         let cancel = (has_call && has_cancel).then(|| {
             quote! { let __cancel = __call.cancel.clone(); }
         });
+        let progress = (has_call && has_progress).then(|| {
+            quote! { let __progress = __call.progress.clone(); }
+        });
+        // `McpClient<'_>` borrows the channel: an owned copy that outlives
+        // the method call (the call itself may be moved into it).
+        let channel = tool
+            .args
+            .iter()
+            .any(|arg| matches!(arg, McpToolArg::Client))
+            .then(|| {
+                quote! { let __channel = __call.channel.clone(); }
+            });
         let resource_uri = (has_call && kind == McpMemberKind::Resource).then(|| {
             quote! { let __resource_uri = __call.uri.clone(); }
         });
+        // `ToolCall::session` is always `Some` from the transport; `None`
+        // only for hand-built calls (tests, adapters), reported plainly.
+        let session = tool
+            .args
+            .iter()
+            .any(|arg| matches!(arg, McpToolArg::Session))
+            .then(|| {
+                let missing = format!(
+                    "{} `{}` takes an McpSession but the call carries none",
+                    kind.attr_name(),
+                    fn_name_str,
+                );
+                quote! {
+                    let __session = match __call.session.clone() {
+                        ::core::option::Option::Some(__s) => __s,
+                        ::core::option::Option::None => {
+                            return ::core::result::Result::Err(
+                                #mcp::__macro_support::McpError::Internal(
+                                    ::std::string::String::from(#missing),
+                                ),
+                            );
+                        }
+                    };
+                }
+            });
         quote! {
             #cancel
+            #progress
+            #channel
             #resource_uri
+            #session
         }
     };
 
@@ -244,6 +288,10 @@ fn generate_invoke_method(
             McpToolArg::Call => quote! { __call },
             McpToolArg::Cancel if has_call => quote! { __cancel },
             McpToolArg::Cancel => quote! { __call.cancel.clone() },
+            McpToolArg::Session => quote! { __session },
+            McpToolArg::Progress if has_call => quote! { __progress },
+            McpToolArg::Progress => quote! { __call.progress.clone() },
+            McpToolArg::Client => quote! { #mcp::__macro_support::McpClient::new(&__channel) },
         })
         .collect();
 
@@ -276,6 +324,7 @@ fn generate_invoke_method(
         McpMemberKind::Tool => quote! { #mcp::__macro_support::ToolCall },
         McpMemberKind::Resource => quote! { #mcp::__macro_support::ResourceCall },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::PromptCall },
+        McpMemberKind::Completion => quote! { #mcp::__macro_support::Completion },
     };
     let ok_ty = match kind {
         McpMemberKind::Tool => quote! { #mcp::__macro_support::CallToolResult },
@@ -283,6 +332,7 @@ fn generate_invoke_method(
             ::std::vec::Vec<#mcp::__macro_support::ResourceContents>
         },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::GetPromptResult },
+        McpMemberKind::Completion => quote! { #mcp::__macro_support::Completions },
     };
     let convert = match kind {
         McpMemberKind::Tool => quote! {
@@ -315,6 +365,9 @@ fn generate_invoke_method(
                 #mcp::__macro_support::IntoPromptResult::into_prompt_result(__result, #desc)
             }
         }
+        McpMemberKind::Completion => quote! {
+            #mcp::__macro_support::IntoCompletion::into_completion(__result)
+        },
     };
 
     quote! {

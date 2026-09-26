@@ -73,6 +73,9 @@ bad `#[config]` key is caught at `register_mcp_service` — a missing
 | `Params<T>` | Typed tool arguments. `T: Deserialize + JsonSchema + ObjectParams`; derive all three on a named-field struct. The sealed marker rejects scalar/tuple/enum root schemas at compile time. The schema becomes the tool's `inputSchema` (doc comments → property descriptions, `Option<..>` fields → not required, nested types/enums kept as inline `$defs`). |
 | `ToolCall` | Everything about the call: `arguments` (raw JSON), `parts` (HTTP request parts of the transport request — headers, URI, extensions), `request_id`, `cancel` (`CancelToken`, fired on client abort / shutdown). |
 | `CancelToken` | Just the cancellation token. |
+| `McpSession` | The caller's session handle: change what this session sees (see Dynamic members). At most one. |
+| `Progress` | Reports `notifications/progress` for this call (see Progress). Also on `ToolCall::progress`. |
+| `McpClient<'_>` | Asks the user for input mid-call (see Elicitation). Also `ToolCall::client()`. |
 | `#[inject(identity)] user: I` / `Option<I>` | The authenticated caller (wired by the MCP auth layer — see the Auth section). |
 
 Anything else is a targeted compile error — beans and config go on the
@@ -167,8 +170,9 @@ impl MathTools {
   `GetPromptResult`, and `Result<_, E: Into<McpError>>`; the doc-comment
   description is attached to the result unless it already carries one.
 
-`resources` / `prompts` capabilities are only advertised when at least one
-member of that family exists. **Error mapping differs from tools**: resources
+`resources` / `prompts` capabilities are advertised when sessions are enabled
+(since `McpSessions` can add members), a session-init hook is installed, or
+members of that family exist. **Error mapping differs from tools**: resources
 and prompts have no in-result error plane, so `McpError::Tool` degrades to a
 JSON-RPC `-32603` internal error (message preserved, structured data
 attached); everything else maps as in the table above. An unknown resource
@@ -181,13 +185,169 @@ changing a resource. R2E sends `notifications/resources/updated` only to
 sessions subscribed to that exact URI. Both legacy `resources/subscribe` /
 `resources/unsubscribe` and the current `subscriptions/listen` filter are
 handled; lagging sessions skip stale update hints (clients re-read the
-resource for the actual contents).
+resource for the actual contents). Modern `subscriptions/listen` acknowledges
+URI interests before running the asynchronous session-init hook. Each update
+is then filtered against the initialized view and the caller's scope/role
+requirements; unknown or unauthorized URI interests receive no updates.
+Legacy `resources/subscribe` refuses an unauthorized URI with the same
+`-32002` "unknown resource" error as an unknown one, and stops relaying a
+URI once it leaves the session's view or resolves to a replacement route.
+A replacement requires a new `resources/subscribe`, with a fresh access check.
 
 Auth is uniform across families: `scopes`/`any_scopes` on the marker,
 `#[roles]`/`#[all_roles]`/`#[guard]` via the shared guard machinery, and
 `resources/list` / `prompts/list` filtered to what the caller may access
 (same `mcp.auth.filter-members` switch); denials are JSON-RPC `-32600` errors
 with `data: "forbidden"` instead of `isError` results.
+
+## Progress
+
+A long member takes a `Progress` parameter (tools, resources and prompts
+alike — also `ToolCall::progress` / `ResourceCall::progress` /
+`PromptCall::progress`) and reports how far it has got:
+
+```rust
+#[tool]
+async fn reindex(&self, progress: Progress) -> Result<String, McpError> {
+    let items = self.repo.all().await?;
+    for (i, item) in items.iter().enumerate() {
+        self.index(item).await?;
+        progress.report(i as f64 + 1.0, Some(items.len() as f64), None).await;
+    }
+    Ok("done".into())
+}
+```
+
+- Only a request carrying `_meta.progressToken` gets notifications; without
+  one every `report` is a no-op (`progress.is_requested()` tells which).
+- `progress` must strictly increase (spec): a report that does not is
+  dropped with a `debug!` log instead of sending invalid wire.
+- Progress is advisory: `report` never fails; delivery errors are logged at
+  `debug`.
+- Notifications ride the request's own SSE stream, before the result. Under
+  `mcp.json-response: true` the reply switches to SSE as soon as a report is
+  sent (no report is lost); a call that sends none stays plain JSON.
+- Once the member returns the stream closes: reports sent later (e.g. from a
+  task the member spawned) are dropped.
+
+## Elicitation
+
+A member takes an `McpClient<'_>` parameter (tools, resources and prompts
+alike — also `ToolCall::client()` / `ResourceCall::client()` /
+`PromptCall::client()`) to ask the user for input while it runs
+(`elicitation/create`):
+
+```rust
+#[derive(serde::Deserialize, JsonSchema)]
+struct Confirm {
+    /// Really delete it?
+    confirmed: bool,
+}
+
+#[tool]
+async fn delete_repo(&self, args: Params<Repo>, client: McpClient<'_>) -> Result<String, McpError> {
+    match client.elicit::<Confirm>(format!("Delete {}?", args.0.name)).await? {
+        Elicited::Accept(Confirm { confirmed: true }) => { /* … */ Ok("deleted".into()) }
+        _ => Ok("kept".into()),
+    }
+}
+```
+
+- **Form mode** — `elicit::<T>(message)`: `T`'s JSON schema is the form. The
+  spec only allows a flat object of primitive properties (string, number,
+  integer, boolean, enum); any other `T` fails with
+  `ElicitError::InvalidSchema` before anything is sent.
+- **URL mode** — `elicit_url(message, url, elicitation_id)`: sends the user
+  to an out-of-band page (OAuth consent, payment). `Accept` only means the
+  user agreed to open it, so confirm the outcome server-side.
+- The answer is `Elicited::{Accept(T), Decline, Cancel}`. Failures are
+  `ElicitError`: `Unsupported` (the client did not advertise that mode, so
+  check `supports_elicitation()` / `supports_url_elicitation()` first),
+  `NoChannel`, `Timeout`, `Cancelled` (the call was cancelled while
+  waiting), `InvalidResponse` (the answer does not match `T`), `InvalidSchema`,
+  `Transport`. `?` turns them into a tool error result the agent reads.
+  `InvalidSchema` and `Transport` are server bugs and become internal errors.
+- A member waits at most `mcp.elicitation-timeout-secs` (default 300) or
+  `McpServer::with_elicitation_timeout`.
+- The `'_` lifetime ties the client to the call: a request can only be
+  delivered while the call is in flight, so moving an `McpClient` into a
+  spawned task is a compile error.
+- **Live elicitation needs an MCP session.** The client's answer arrives
+  on a separate POST that rmcp routes by `Mcp-Session-Id`. Under
+  `mcp.stateless: true`, and for sessionless 2026-07-28 clients (which
+  negotiate per request), rmcp drops that POST. So every elicitation there
+  fails fast with `NoChannel` instead of hanging until the timeout.
+  Supporting sessionless clients needs the multi-round-trip flow
+  (SEP-2322), which is planned.
+
+## Completion
+
+Clients call `completion/complete` to autocomplete a prompt argument or a
+resource-template variable while the user types. A `#[completion]` method
+provides the suggestions; `complete(arg = "method")` on the prompt or
+resource wires it to an argument or variable:
+
+```rust
+#[prompt(complete(lang = "languages"))]
+async fn review(&self, Params(args): Params<ReviewArgs>) -> String {
+    format!("Review this {} code.", args.lang)
+}
+
+#[resource(uri = "files://{dir}/{name}", complete(dir = "dirs", name = "file_names"))]
+async fn file(&self, call: ResourceCall) -> Result<String, McpError> { /* … */ }
+
+#[completion]
+async fn languages(&self, c: Completion) -> Vec<String> {
+    self.langs.iter().filter(|l| l.starts_with(&c.value)).cloned().collect()
+}
+
+#[completion]
+async fn file_names(&self, c: Completion) -> Completions {
+    // Values already chosen for the other variables arrive in `context`.
+    match c.context.get("dir") {
+        Some(dir) => Completions::new(self.repo.files_in(dir)),
+        None => Completions::empty(),
+    }
+}
+```
+
+- A provider takes `&self` plus `Completion` (the reference, the argument
+  name, the typed `value`, the `context` map, parts, request id, session),
+  `CancelToken` or `#[inject(identity)]`. `Progress`, `McpClient` and
+  `McpSession` are compile errors: completion is a per-keystroke lookup.
+- It returns `Vec<String>`, `Completions` (to set `total` / `has_more`) or a
+  `Result` of either. An `Err` becomes a JSON-RPC error.
+- The wire list is capped at 100 values (the spec maximum). A longer list is
+  truncated, with `hasMore: true` and `total` set to the full count unless
+  the provider set its own.
+- Checked at compile time: every `complete(...)` entry names a `#[completion]`
+  method of the impl and an argument (prompts need `Params<T>`) or a variable
+  of the URI template; fixed-URI resources cannot use `complete`; a
+  `#[completion]` method nothing references is an error. Prompt argument
+  names are checked at boot.
+- A template reference is matched by its exact text first, then by shape:
+  `files://{a}/{b}` finds `files://{dir}/{name}`.
+- **Security.** The referenced member's scopes, roles and group visibility
+  apply: a caller who cannot see the prompt or template gets the same
+  `unknown completion reference` error as for a missing one. Custom guards
+  and interceptors on the prompt or resource do **not** run; the completion
+  method runs its own. Put guards (and any rate limiting — clients send one
+  request per keystroke) on the `#[completion]` method.
+- An argument with no provider gets an empty list. The `completions`
+  capability is advertised only when a provider exists or a session may add
+  one.
+- Dynamic members: `DynamicPrompt::with_completion(argument, handler)` and
+  `DynamicResource::with_completion(variable, handler)`. A session refuses a
+  provider naming no argument or variable with
+  `McpSessionError::InvalidCompletion`.
+
+## Not implemented (deliberately)
+
+SEP-2577 deprecates server-initiated sampling (`sampling/createMessage`),
+roots (`roots/list`) and logging (`logging/setLevel` /
+`notifications/message`); R2E implements none of them and advertises no
+matching capability. Server logs go to `tracing` / OpenTelemetry — clients
+see results and progress messages, not server logs.
 
 ## Guards and interceptors
 
@@ -239,6 +399,116 @@ pub struct CalcController { #[inject] calc: CalcService } // HTTP adapter (#[rou
 `examples/example-mcp` is the worked example (HTTP + MCP + guards +
 interceptors + `TestApp` e2e tests).
 
+## Dynamic members (per-session lists)
+
+By default every session sees the same list, fixed at boot (modulo the
+scope/role filter). Three levers let each session have its own list, for all
+three families. Typed `#[mcp_routes]` members stay declared and compile-checked;
+what changes at runtime is **which** members a session sees, plus private
+members built for one session.
+
+### Groups
+
+```rust
+#[mcp_routes(group = "git", opt_in)]   // every member in "git", hidden until enabled
+impl GitTools {
+    #[tool]
+    async fn git_status(&self) -> &'static str { "clean" }
+
+    #[prompt(group = "review")]        // a member-level group overrides the service's
+    async fn review_diff(&self) -> &'static str { "Review the staged diff." }
+}
+```
+
+- No `group` → implicit, always-on group: existing services are unchanged.
+- `group` without `opt_in` → visible by default, can be *disabled* per session.
+- `opt_in` requires a `group` (compile error otherwise).
+- **Hidden = not callable.** A member of a disabled group answers exactly like
+  an unknown one (`-32601` tool, `-32002` resource, `-32602` prompt): no
+  enumeration oracle. The scope/role filter still applies on top.
+
+### During the session — `McpSession`
+
+A member (tool, resource or prompt) takes `session: McpSession`; the handle is
+also on `ToolCall::session` / `ResourceCall::session` / `PromptCall::session`.
+
+```rust
+#[tool]
+async fn enable_git(&self, session: McpSession) -> Result<&'static str, McpError> {
+    session.enable_group("git")?;            // + notifications/tools/list_changed
+    Ok("git tools enabled")
+}
+
+#[tool]
+async fn open_table(&self, Params(p): Params<TableIn>, session: McpSession) -> Result<String, McpError> {
+    let name = format!("query_{}", p.table);
+    session.add_tool(
+        DynamicTool::new(name.clone())
+            .description("Run a read-only query")
+            .scopes(&["db:read"])            // same gates as #[tool(scopes)] / #[roles]
+            .handler(|q: QueryIn, _call: ToolCall| async move { format!("ran {}", q.sql) }),
+    )?;
+    Ok(name)
+}
+```
+
+Operations: `enable_group` / `disable_group`, `add_tool` / `remove_tool`,
+`add_resource` / `remove_resource` (`DynamicResource::new(uri, name)`),
+`add_prompt` / `remove_prompt` (`DynamicPrompt::new(name)`, `Params`-style
+arguments from the handler's first parameter), and `apply(SessionToolset)` to
+batch several changes behind one notification. A private member whose name
+collides with the catalog (even a hidden member) or another private member is
+an `Err`, never a panic. Updates are copy-on-write: an in-flight call keeps
+the view it started with, and sessions that never change share one view.
+
+### At open — `McpSessionInit`
+
+```rust
+#[derive(Clone)]
+pub struct RoleToolsets;
+
+impl McpSessionInit for RoleToolsets {
+    async fn init(&self, s: &SessionInit) -> Result<SessionToolset, McpError> {
+        Ok(SessionToolset::new().enable_if(s.has_role("dev"), "git"))
+    }
+}
+
+AppBuilder::new()
+    .provide(RoleToolsets)                               // the hook is a bean
+    .plugin(McpServer::new().session_init::<RoleToolsets>())
+```
+
+Runs once per session, lazily on its first request so the caller's identity
+is known (`principal`, `subject`, `has_role`, `has_scope`, `identity::<T>()`,
+`header`, `parts`). An `Err` fails that request and is retried on the next.
+A missing hook bean is a boot panic.
+
+### From outside — the `McpSessions` bean
+
+The plugin provides `McpSessions` (`#[inject] sessions: McpSessions`):
+`for_subject(sub)`, `all()`, `len()`, each item an `McpSession`. Use it from an
+admin endpoint or a `#[consumer]` to change a live user's toolset. Sessions are
+held weakly and listed from their `initialize` handshake on.
+
+### Security, capabilities, stateless
+
+- A session is **bound to the principal that opened it** (`sub`). Under
+  `mcp.auth`, the same session id presented with another subject's token is
+  refused by the auth layer on every method — `POST`, the standalone SSE
+  `GET` and `DELETE` — with rmcp's own `404 Not Found: Session not found`,
+  byte-identical to an unknown id (no oracle that the session exists; the
+  client recovers by re-initializing). The handler keeps a JSON-RPC `-32600`
+  "belongs to another principal" check as a backstop.
+- With sessions enabled, all three families and completion are advertised,
+  even when initially empty: `McpSessions` and raw call contexts can add
+  members at any time. A stateless endpoint with a `session_init` or an
+  `opt_in` group also advertises all three families with
+  `listChanged: true`. Changes are pushed to legacy sessions via their peer and
+  to 2026 `subscriptions/listen` streams that accepted `*_list_changed`.
+- `mcp.stateless: true`: groups and `session_init` work (recomputed per
+  request); a member taking `McpSession` is a boot panic, since a mutation
+  would not outlive its request.
+
 ## Configuration (`mcp.*`)
 
 All keys optional; builder methods (`McpServer::new().with_path(...)` etc.)
@@ -254,6 +524,8 @@ mcp:
   sse-keep-alive-secs: 15     # 0 disables keep-alive pings
   stateless: false            # true → no MCP sessions
   json-response: false        # true (stateless only) → plain application/json responses
+  elicitation-timeout-secs: 300 # how long an elicitation waits for the user
+  page-size: 100              # paginate the */list results (unset/0 = one page)
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
   allowed-origins: []         # reject browser requests from other Origins
   cors:
@@ -266,6 +538,17 @@ transport-level request rejection list (empty disables that check), while
 `mcp.cors.allowed-origins` controls the CORS response headers. CORS defaults
 to `https://claude.ai` and `https://claude.com`, plus localhost origins under
 the `dev` profile.
+
+**Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
+`tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`
+return at most that many entries plus a `nextCursor`. The cursor is bound to
+the caller's visible list and subject: when the list changes (a group
+toggled, a private member added) or another caller replays it, the request
+fails with `-32602` and the client restarts from the first page, as the
+`list_changed` notification already asks it to. Cursors need no session, so
+they work under `mcp.stateless`. They are not secrets: a forged offset can
+only page the caller's own list. Each page costs one pass over the caller's
+visible list, which is fine up to thousands of members.
 
 **`allowed-hosts` matters in deployment**: rmcp's default `Host` allowlist is
 loopback-only, so an MCP endpoint behind a proxy or public hostname silently
