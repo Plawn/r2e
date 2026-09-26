@@ -1,0 +1,5 @@
+error: #[completion] methods cannot take Progress: a completion request is a per-keystroke lookup — take `Completion`, `CancelToken` or `#[inject(identity)]`
+  --> cases/mcp/fail/mcp_completion_bad_param.rs:18:43
+   |
+18 |     async fn names(&self, _c: Completion, progress: Progress) -> Vec<String> {
+   |                                           ^^^^^^^^^^^^^^^^^^

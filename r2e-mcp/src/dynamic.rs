@@ -35,8 +35,9 @@ use crate::params::{
 };
 use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 use crate::route::{
-    PromptArgumentDef, PromptCall, PromptInvoke, PromptRoute, ResourceCall, ResourceInvoke,
-    ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolInvoke, ToolRoute,
+    Completion, CompletionProvider, IntoCompletion, PromptArgumentDef, PromptCall, PromptInvoke,
+    PromptRoute, ResourceCall, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
+    ToolCall, ToolInvoke, ToolRoute,
 };
 
 /// The four requirement setters every dynamic builder shares (its
@@ -240,6 +241,7 @@ pub struct DynamicResource {
     description: Option<String>,
     mime_type: Option<String>,
     requirements: ToolRequirements,
+    completions: Vec<CompletionProvider>,
 }
 
 impl DynamicResource {
@@ -252,6 +254,7 @@ impl DynamicResource {
             description: None,
             mime_type: None,
             requirements: ToolRequirements::NONE,
+            completions: Vec::new(),
         }
     }
 
@@ -270,6 +273,25 @@ impl DynamicResource {
     /// MIME type of text-shaped returns.
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Complete the URI-template variable `variable` (`completion/complete`): `handler`
+    /// returns suggestions for the value typed so far
+    /// ([`Completion::value`]). Naming no URI-template variable of the member is refused
+    /// when the session adds it.
+    pub fn with_completion<F, Fut, R>(
+        mut self,
+        variable: impl Into<Cow<'static, str>>,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(Completion) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        R: IntoCompletion,
+    {
+        self.completions
+            .push(CompletionProvider::new(variable, handler));
         self
     }
 
@@ -306,6 +328,7 @@ impl DynamicResource {
             mime_type: self.mime_type,
             requirements,
             group: None,
+            completions: self.completions,
             invoke,
         }
     }
@@ -397,6 +420,7 @@ pub struct DynamicPrompt {
     title: Option<String>,
     description: Option<String>,
     requirements: ToolRequirements,
+    completions: Vec<CompletionProvider>,
 }
 
 impl DynamicPrompt {
@@ -407,6 +431,7 @@ impl DynamicPrompt {
             title: None,
             description: None,
             requirements: ToolRequirements::NONE,
+            completions: Vec::new(),
         }
     }
 
@@ -424,6 +449,25 @@ impl DynamicPrompt {
 
     requirement_setters!();
 
+    /// Complete the argument `argument` (`completion/complete`): `handler`
+    /// returns suggestions for the value typed so far
+    /// ([`Completion::value`]). Naming no argument of the member is refused
+    /// when the session adds it.
+    pub fn with_completion<F, Fut, R>(
+        mut self,
+        argument: impl Into<Cow<'static, str>>,
+        handler: F,
+    ) -> Self
+    where
+        F: Fn(Completion) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        R: IntoCompletion,
+    {
+        self.completions
+            .push(CompletionProvider::new(argument, handler));
+        self
+    }
+
     /// Finish with the handler: `|call: PromptCall| async { … }` or
     /// `|p: MyArgs, call: PromptCall| async { … }` (the advertised arguments
     /// come from `MyArgs`).
@@ -440,6 +484,7 @@ impl DynamicPrompt {
             arguments: H::arguments(),
             requirements: self.requirements,
             group: None,
+            completions: self.completions,
             invoke,
         }
     }

@@ -1601,6 +1601,20 @@ pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Marker attribute declaring an MCP completion provider inside
+/// `#[mcp_routes]`: suggestions for a prompt argument or resource-template
+/// variable, wired with `#[prompt(complete(arg = "method"))]` /
+/// `#[resource(uri = "…", complete(var = "method"))]`.
+///
+/// Takes no arguments. The method takes a `Completion` (plus optionally
+/// `#[inject(identity)]` and `CancelToken`) and returns
+/// `impl IntoCompletion` (`Vec<String>`, `Completions`, or a `Result` of
+/// either). This is a no-op on its own — it is consumed by `#[mcp_routes]`.
+#[proc_macro_attribute]
+pub fn completion(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Mark an MCP `Params<T>` type as an object-shaped argument structure.
 ///
 /// Only structs with named fields are accepted. Combine this derive with

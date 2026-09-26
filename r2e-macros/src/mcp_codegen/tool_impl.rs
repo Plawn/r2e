@@ -42,7 +42,7 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Tok
 /// → params deserialization (tools/prompts) → method call
 /// (interceptor-wrapped, arguments in original positional order) → the
 /// family's result conversion (`IntoToolResult` / `IntoResourceResult` /
-/// `IntoPromptResult`).
+/// `IntoPromptResult` / `IntoCompletion`).
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
@@ -324,6 +324,7 @@ fn generate_invoke_method(
         McpMemberKind::Tool => quote! { #mcp::__macro_support::ToolCall },
         McpMemberKind::Resource => quote! { #mcp::__macro_support::ResourceCall },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::PromptCall },
+        McpMemberKind::Completion => quote! { #mcp::__macro_support::Completion },
     };
     let ok_ty = match kind {
         McpMemberKind::Tool => quote! { #mcp::__macro_support::CallToolResult },
@@ -331,6 +332,7 @@ fn generate_invoke_method(
             ::std::vec::Vec<#mcp::__macro_support::ResourceContents>
         },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::GetPromptResult },
+        McpMemberKind::Completion => quote! { #mcp::__macro_support::Completions },
     };
     let convert = match kind {
         McpMemberKind::Tool => quote! {
@@ -363,6 +365,9 @@ fn generate_invoke_method(
                 #mcp::__macro_support::IntoPromptResult::into_prompt_result(__result, #desc)
             }
         }
+        McpMemberKind::Completion => quote! {
+            #mcp::__macro_support::IntoCompletion::into_completion(__result)
+        },
     };
 
     quote! {

@@ -1,0 +1,5 @@
+error: `complete(...)` on a fixed-URI #[resource] (`files://readme`): only URI template variables can be completed
+  --> cases/mcp/fail/mcp_completion_fixed_uri.rs:11:49
+   |
+11 |     #[resource(uri = "files://readme", complete(name = "names"))]
+   |                                                 ^^^^

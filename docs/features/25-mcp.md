@@ -272,6 +272,67 @@ async fn delete_repo(&self, args: Params<Repo>, client: McpClient<'_>) -> Result
   Supporting sessionless clients needs the multi-round-trip flow
   (SEP-2322), which is planned.
 
+## Completion
+
+Clients call `completion/complete` to autocomplete a prompt argument or a
+resource-template variable while the user types. A `#[completion]` method
+provides the suggestions; `complete(arg = "method")` on the prompt or
+resource wires it to an argument or variable:
+
+```rust
+#[prompt(complete(lang = "languages"))]
+async fn review(&self, Params(args): Params<ReviewArgs>) -> String {
+    format!("Review this {} code.", args.lang)
+}
+
+#[resource(uri = "files://{dir}/{name}", complete(dir = "dirs", name = "file_names"))]
+async fn file(&self, call: ResourceCall) -> Result<String, McpError> { /* … */ }
+
+#[completion]
+async fn languages(&self, c: Completion) -> Vec<String> {
+    self.langs.iter().filter(|l| l.starts_with(&c.value)).cloned().collect()
+}
+
+#[completion]
+async fn file_names(&self, c: Completion) -> Completions {
+    // Values already chosen for the other variables arrive in `context`.
+    match c.context.get("dir") {
+        Some(dir) => Completions::new(self.repo.files_in(dir)),
+        None => Completions::empty(),
+    }
+}
+```
+
+- A provider takes `&self` plus `Completion` (the reference, the argument
+  name, the typed `value`, the `context` map, parts, request id, session),
+  `CancelToken` or `#[inject(identity)]`. `Progress`, `McpClient` and
+  `McpSession` are compile errors: completion is a per-keystroke lookup.
+- It returns `Vec<String>`, `Completions` (to set `total` / `has_more`) or a
+  `Result` of either. An `Err` becomes a JSON-RPC error.
+- The wire list is capped at 100 values (the spec maximum). A longer list is
+  truncated, with `hasMore: true` and `total` set to the full count unless
+  the provider set its own.
+- Checked at compile time: every `complete(...)` entry names a `#[completion]`
+  method of the impl and an argument (prompts need `Params<T>`) or a variable
+  of the URI template; fixed-URI resources cannot use `complete`; a
+  `#[completion]` method nothing references is an error. Prompt argument
+  names are checked at boot.
+- A template reference is matched by its exact text first, then by shape:
+  `files://{a}/{b}` finds `files://{dir}/{name}`.
+- **Security.** The referenced member's scopes, roles and group visibility
+  apply: a caller who cannot see the prompt or template gets the same
+  `unknown completion reference` error as for a missing one. Custom guards
+  and interceptors on the prompt or resource do **not** run; the completion
+  method runs its own. Put guards (and any rate limiting — clients send one
+  request per keystroke) on the `#[completion]` method.
+- An argument with no provider gets an empty list. The `completions`
+  capability is advertised only when a provider exists or a session may add
+  one.
+- Dynamic members: `DynamicPrompt::with_completion(argument, handler)` and
+  `DynamicResource::with_completion(variable, handler)`. A session refuses a
+  provider naming no argument or variable with
+  `McpSessionError::InvalidCompletion`.
+
 ## Not implemented (deliberately)
 
 SEP-2577 deprecates server-initiated sampling (`sampling/createMessage`),

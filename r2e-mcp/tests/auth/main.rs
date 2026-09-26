@@ -7,6 +7,7 @@ mod support;
 mod fixtures;
 
 mod backends;
+mod completion;
 mod config;
 mod discovery;
 mod identity;

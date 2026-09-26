@@ -7,6 +7,7 @@ mod support;
 
 mod fixtures;
 
+mod completion;
 mod dispatch;
 mod dynamic;
 mod elicitation;

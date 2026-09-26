@@ -229,6 +229,20 @@ impl TemplateFamily {
         })
     }
 
+    /// The template a `completion/complete` `ref/resource` names: the exact
+    /// template text, else any template matching the same URIs (the client
+    /// may spell the variables differently).
+    fn template(&self, raw: &str) -> Option<&Arc<ResourceRoute>> {
+        if let Some(entry) = self.routes.iter().find(|e| e.matcher.raw() == raw) {
+            return Some(&entry.route);
+        }
+        let shape = UriTemplate::parse(raw).ok()?.shape();
+        self.routes
+            .iter()
+            .find(|e| e.matcher.shape() == shape)
+            .map(|e| &e.route)
+    }
+
     fn same_members(&self, other: &Self) -> bool {
         self.routes.len() == other.routes.len()
             && self
@@ -319,6 +333,14 @@ impl SessionView {
             .or_else(|| self.resource_templates.route(uri))
     }
 
+    /// The resource a `completion/complete` `ref/resource` names: a
+    /// template (see [`TemplateFamily::template`]) or a fixed URI.
+    pub(crate) fn completion_resource(&self, uri: &str) -> Option<&Arc<ResourceRoute>> {
+        self.resource_templates
+            .template(uri)
+            .or_else(|| self.resources.route(uri))
+    }
+
     pub(crate) fn has_resource(&self, uri: &str) -> bool {
         self.resource_route(uri).is_some()
     }
@@ -384,6 +406,7 @@ impl Catalog {
         let mut groups: Vec<GroupDef> = Vec::new();
         let mut group_index: HashMap<Cow<'static, str>, usize> = HashMap::new();
         let mut uses_session = false;
+        let mut has_completions = false;
         let mut tools = Vec::new();
         let mut resources = Vec::new();
         let mut templates = Vec::new();
@@ -441,6 +464,10 @@ impl Catalog {
                     &resource.uri,
                     &resource.requirements,
                 );
+                if let Err(reason) = resource_completions_valid(&resource) {
+                    panic!("{reason} (in `{name}`)");
+                }
+                has_completions |= !resource.completions.is_empty();
                 let group = intern(name, &resource.group);
                 if resource.is_template() {
                     templates.push(Member {
@@ -469,6 +496,10 @@ impl Catalog {
                     &prompt.name,
                     &prompt.requirements,
                 );
+                if let Err(reason) = prompt_completions_valid(&prompt) {
+                    panic!("{reason} (in `{name}`)");
+                }
+                has_completions |= !prompt.completions.is_empty();
                 let group = intern(name, &prompt.group);
                 prompts.push(Member {
                     service: name,
@@ -540,6 +571,11 @@ impl Catalog {
             let mut prompt_capabilities = PromptsCapability::default();
             prompt_capabilities.list_changed = list_changed;
             capabilities.prompts = Some(prompt_capabilities);
+        }
+        // Same rule for completion: advertised when a provider exists, or
+        // when a session may gain one (a dynamic member `with_completion`).
+        if dynamic || has_completions {
+            capabilities.completions = Some(Default::default());
         }
         info.capabilities = capabilities;
         info.server_info = Implementation::new(identity.name, identity.version);
@@ -755,4 +791,64 @@ fn require_auth_for_scopes(
 /// catalog members and at runtime for session-private ones.
 pub(crate) fn scopes_allowed(auth_enabled: bool, requirements: &ToolRequirements) -> bool {
     auth_enabled || (requirements.scopes.is_empty() && requirements.any_scopes.is_empty())
+}
+
+/// A prompt's completion providers each name one of its declared
+/// arguments, at most once.
+pub(crate) fn prompt_completions_valid(prompt: &PromptRoute) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for provider in &prompt.completions {
+        let argument = provider.argument.as_ref();
+        if !prompt.arguments.iter().any(|a| a.name == argument) {
+            return Err(format!(
+                "MCP prompt `{}` has a completion provider for `{argument}`, which is not \
+                 one of its arguments",
+                prompt.name
+            ));
+        }
+        if !seen.insert(argument) {
+            return Err(format!(
+                "MCP prompt `{}` has two completion providers for `{argument}`",
+                prompt.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A resource's completion providers each name one variable of its URI
+/// template, at most once — a fixed URI has none to complete.
+pub(crate) fn resource_completions_valid(resource: &ResourceRoute) -> Result<(), String> {
+    if resource.completions.is_empty() {
+        return Ok(());
+    }
+    if !resource.is_template() {
+        return Err(format!(
+            "MCP resource `{}` has completion providers but a fixed URI — only URI \
+             template variables can be completed",
+            resource.uri
+        ));
+    }
+    // An unparsable template is reported by the template checks.
+    let Ok(template) = UriTemplate::parse(&resource.uri) else {
+        return Ok(());
+    };
+    let mut seen = HashSet::new();
+    for provider in &resource.completions {
+        let argument = provider.argument.as_ref();
+        if !template.variables().any(|v| v == argument) {
+            return Err(format!(
+                "MCP resource `{}` has a completion provider for `{argument}`, which is not \
+                 a variable of its URI template",
+                resource.uri
+            ));
+        }
+        if !seen.insert(argument) {
+            return Err(format!(
+                "MCP resource `{}` has two completion providers for `{argument}`",
+                resource.uri
+            ));
+        }
+    }
+    Ok(())
 }

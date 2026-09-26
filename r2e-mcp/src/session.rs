@@ -26,7 +26,10 @@ use r2e_core::rt::sync::{broadcast, OnceCell};
 use rmcp::service::{Peer, RoleServer};
 
 use crate::auth::McpPrincipal;
-use crate::catalog::{scopes_allowed, Catalog, Changed, PrivateMembers, SessionView};
+use crate::catalog::{
+    prompt_completions_valid, resource_completions_valid, scopes_allowed, Catalog, Changed,
+    PrivateMembers, SessionView,
+};
 use crate::error::McpError;
 use crate::route::{identity_in, PromptRoute, ResourceRoute, ToolRoute};
 use crate::uri_template::UriTemplate;
@@ -64,6 +67,10 @@ pub enum McpSessionError {
         /// The member name / URI.
         key: String,
     },
+    /// A session-private member's completion provider names no argument
+    /// (prompt) or template variable (resource) of the member, or names one
+    /// twice.
+    InvalidCompletion(String),
 }
 
 impl fmt::Display for McpSessionError {
@@ -84,6 +91,7 @@ impl fmt::Display for McpSessionError {
                 f,
                 "MCP {kind} `{key}` declares OAuth scopes but `mcp.auth` is disabled"
             ),
+            McpSessionError::InvalidCompletion(reason) => f.write_str(reason),
         }
     }
 }
@@ -504,6 +512,7 @@ impl Draft<'_> {
 
     fn add_resource(&mut self, resource: ResourceRoute) -> Result<(), McpSessionError> {
         self.check_scopes("resource", &resource.uri, &resource.requirements)?;
+        resource_completions_valid(&resource).map_err(McpSessionError::InvalidCompletion)?;
         if resource.is_template() {
             let shape = template_shape(&resource.uri)?;
             let clash = self.catalog.has_template_shape(&shape)
@@ -533,6 +542,7 @@ impl Draft<'_> {
 
     fn add_prompt(&mut self, prompt: PromptRoute) -> Result<(), McpSessionError> {
         self.check_scopes("prompt", &prompt.name, &prompt.requirements)?;
+        prompt_completions_valid(&prompt).map_err(McpSessionError::InvalidCompletion)?;
         if self.catalog.has_prompt_key(&prompt.name)
             || self.private.prompts.iter().any(|p| p.name == prompt.name)
         {

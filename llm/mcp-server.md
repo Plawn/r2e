@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~5500
+tokens: ~6100
 requires: guards, security
 ---
 
@@ -20,7 +20,8 @@ requires: guards, security
 - A member takes `&self` plus at most one of `Params<T>` (typed arguments →
   `inputSchema`, needs `Deserialize + JsonSchema + ObjectParams`),
   `ToolCall`/`ResourceCall`/
-  `PromptCall`, `CancelToken`, `McpSession`, `Progress`, `McpClient<'_>`.
+  `PromptCall`, `CancelToken`, `McpSession`, `Progress`, `McpClient<'_>`;
+  `#[completion]` providers take `Completion`.
   Beans and config go on the struct, never as parameters.
 - Return `Json<T>` for structured output (`structuredContent` + `outputSchema`),
   `String`/`&str`/`()`, `CallToolResult`, or `Result<_, E: Into<McpError>>`;
@@ -221,6 +222,63 @@ call cancellation → `Cancelled`. `McpClient` borrows the call — it cannot be
 moved into a spawned task. Live elicitation needs an MCP session: under
 `mcp.stateless` and for sessionless 2026-07-28 clients it fails fast with
 `ElicitError::NoChannel`.
+
+Completion — `completion/complete` for prompt arguments and resource-template
+variables: a `#[completion]` method, wired by `complete(arg = "method")`:
+
+```rust
+#[derive(serde::Deserialize, schemars::JsonSchema, ObjectParams)]
+pub struct ReviewArgs {
+    pub lang: String,
+}
+# #[controller]
+# pub struct Reviewer;
+#[mcp_routes]
+impl Reviewer {
+    /// Review code in a language.
+    #[prompt(complete(lang = "languages"))]
+    async fn review(&self, Params(args): Params<ReviewArgs>) -> String {
+        format!("Review this {} code.", args.lang)
+    }
+
+    /// A file.
+    #[resource(uri = "files://{dir}/{name}", complete(dir = "dirs", name = "file_names"))]
+    async fn file(&self, call: ResourceCall) -> String {
+        format!("{}/{}", call.variables["dir"], call.variables["name"])
+    }
+
+    #[completion]
+    async fn languages(&self, c: Completion) -> Vec<String> {
+        ["python", "ruby", "rust"].into_iter().filter(|l| l.starts_with(&c.value)).map(String::from).collect()
+    }
+
+    #[completion]
+    async fn dirs(&self, _c: Completion) -> Vec<String> {
+        vec!["docs".into(), "src".into()]
+    }
+
+    #[completion]
+    async fn file_names(&self, c: Completion) -> Completions {
+        match c.context.get("dir").map(String::as_str) {   // other variables the client already resolved
+            Some("docs") => Completions::new(["guide.md"]),
+            _ => Completions::empty(),
+        }
+    }
+}
+# fn main() {}
+```
+
+Provider params: `Completion`, `CancelToken`, `#[inject(identity)]` only (no
+`Progress`/`McpClient`/`McpSession`). Returns `Vec<String>`, `Completions`
+(`total`/`has_more`) or `Result<_, E: Into<McpError>>` (Err → JSON-RPC error).
+Capped at 100 values (`hasMore` + `total` set when truncated). Compile errors:
+unknown provider, unknown template variable, `complete` on a fixed URI or a
+prompt without `Params<T>`, unwired `#[completion]`. The referenced member's
+scopes/roles/groups apply (hidden = `unknown completion reference`), but its
+custom guards/interceptors do NOT run — guard and rate-limit the
+`#[completion]` method itself. Dynamic: `DynamicPrompt::with_completion(arg, f)`
+/ `DynamicResource::with_completion(var, f)`.
+
 Sampling, roots and logging (deprecated by SEP-2577) are NOT implemented — no
 API, no capability.
 

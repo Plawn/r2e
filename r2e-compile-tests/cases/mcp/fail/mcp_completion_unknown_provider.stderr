@@ -1,0 +1,5 @@
+error: no #[completion] method `file_names` in this #[mcp_routes] impl — a completion provider is an `async fn file_names(&self, c: Completion)` marked #[completion]
+  --> cases/mcp/fail/mcp_completion_unknown_provider.rs:11:56
+   |
+11 |     #[resource(uri = "files://{name}", complete(name = "file_names"))]
+   |                                                        ^^^^^^^^^^^^

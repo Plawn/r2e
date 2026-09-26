@@ -11,22 +11,23 @@ use r2e_core::rt::sync::broadcast;
 use r2e_core::rt::CancelToken;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, ErrorCode, ErrorData, GetPromptRequestParams,
-    GetPromptResponse, InitializeRequestParams, InitializeResult, ListPromptsResult,
-    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    ResourceUpdatedNotificationParam, ServerInfo, SubscribeRequestParams, SubscriptionFilter, Tool,
-    UnsubscribeRequestParams,
+    CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult, CompletionInfo,
+    ErrorCode, ErrorData, GetPromptRequestParams, GetPromptResponse, InitializeRequestParams,
+    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
+    ReadResourceResult, Reference, ResourceUpdatedNotificationParam, ServerInfo,
+    SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
 
+use crate::auth::tools::requirements_visible;
 use crate::catalog::{principal_in, Catalog};
 use crate::elicitation::ClientChannel;
 use crate::error::McpError;
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
-use crate::route::{PromptCall, ResourceCall, ToolCall};
+use crate::route::{Completion, CompletionRef, Completions, PromptCall, ResourceCall, ToolCall};
 use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState};
 
 /// Extract the per-call HTTP parts from the request context, by value.
@@ -529,4 +530,91 @@ impl ServerHandler for R2eMcpHandler {
             Err(err) => Err(err.into_error_data()),
         }
     }
+
+    async fn complete(
+        &self,
+        request: CompleteRequestParams,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, ErrorData> {
+        self.prepare(&context).await?;
+        let view = self.state.view();
+        let target = match &request.r#ref {
+            Reference::Prompt(prompt) => view.prompts.route(&prompt.name).map(|route| {
+                (
+                    CompletionRef::Prompt(prompt.name.clone()),
+                    &route.requirements,
+                    &route.completions,
+                )
+            }),
+            Reference::Resource(resource) => view.completion_resource(&resource.uri).map(|route| {
+                (
+                    CompletionRef::Resource(resource.uri.clone()),
+                    &route.requirements,
+                    &route.completions,
+                )
+            }),
+            _ => None,
+        };
+        // A member the caller may not use gets exactly the unknown-reference
+        // error: completion values must not reveal a hidden member, whether
+        // hidden by its group or by its requirements (checked here even
+        // without `mcp.auth.filter-members`).
+        let principal = principal_in(context.extensions.get::<Parts>());
+        let Some((reference, _, providers)) =
+            target.filter(|(_, requirements, _)| requirements_visible(principal, requirements))
+        else {
+            return Err(ErrorData::new(
+                ErrorCode::INVALID_PARAMS,
+                "unknown completion reference",
+                None,
+            ));
+        };
+        let Some(invoke) = providers
+            .iter()
+            .find(|p| p.argument == request.argument.name)
+            .map(|p| Arc::clone(&p.invoke))
+        else {
+            return Ok(CompleteResult::new(CompletionInfo::default()));
+        };
+        drop(view);
+
+        let parts = take_parts(&mut context);
+        let completion = Completion {
+            reference,
+            argument: request.argument.name,
+            value: request.argument.value,
+            context: request
+                .context
+                .and_then(|c| c.arguments)
+                .map(|arguments| arguments.into_iter().collect())
+                .unwrap_or_default(),
+            parts,
+            request_id: context.id.to_string(),
+            cancel: context.ct.into(),
+            session: Some(self.session()),
+        };
+        let completions = invoke(completion)
+            .await
+            .map_err(McpError::into_error_data)?;
+        Ok(CompleteResult::new(completion_info(completions)))
+    }
+}
+
+/// The wire form of a provider's suggestions, capped at the spec's 100
+/// values; truncating implies `hasMore` and a `total` (the provider's own,
+/// else the untruncated count).
+fn completion_info(completions: Completions) -> CompletionInfo {
+    let Completions {
+        mut values,
+        total,
+        has_more,
+    } = completions;
+    let count = values.len();
+    let truncated = count > CompletionInfo::MAX_VALUES;
+    values.truncate(CompletionInfo::MAX_VALUES);
+    let mut info = CompletionInfo::default();
+    info.values = values;
+    info.total = total.or_else(|| truncated.then(|| u32::try_from(count).unwrap_or(u32::MAX)));
+    info.has_more = (has_more || truncated).then_some(true);
+    info
 }

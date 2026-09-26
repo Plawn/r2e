@@ -76,9 +76,10 @@ pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use resource_updates::McpResourceUpdates;
 pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 pub use route::{
-    McpGroup, McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
-    ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
-    ToolCall, ToolFuture, ToolInvoke, ToolRoute,
+    Completion, CompletionFuture, CompletionInvoke, CompletionProvider, CompletionRef, Completions,
+    IntoCompletion, McpGroup, McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke,
+    PromptRoute, ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject,
+    ToolAnnotations, ToolCall, ToolFuture, ToolInvoke, ToolRoute,
 };
 pub use service::McpService;
 pub use session::{
@@ -204,7 +205,8 @@ pub mod __macro_support {
     pub use crate::progress::Progress;
     pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
     pub use crate::route::{
-        McpGroup, McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
+        Completion, CompletionFuture, CompletionProvider, Completions, IntoCompletion, McpGroup,
+        McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
         ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolRoute,
     };
     pub use crate::service::McpService;
@@ -223,7 +225,9 @@ pub mod prelude {
     pub use crate::plugin::McpServer;
     pub use crate::progress::Progress;
     pub use crate::resource_updates::McpResourceUpdates;
-    pub use crate::route::{PromptCall, ResourceCall, ToolCall};
+    pub use crate::route::{
+        Completion, CompletionRef, Completions, PromptCall, ResourceCall, ToolCall,
+    };
     pub use crate::service::McpService;
     pub use crate::session::{
         McpSession, McpSessionInit, McpSessions, SessionInit, SessionToolset,

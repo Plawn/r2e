@@ -75,6 +75,8 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
             McpMemberKind::Tool => generate_tool_route(def, member, &mcp),
             McpMemberKind::Resource => generate_resource_route(def, member, &mcp),
             McpMemberKind::Prompt => generate_prompt_route(def, member, &mcp),
+            // Wired into the prompt/resource routes that reference it.
+            McpMemberKind::Completion => quote! {},
         })
         .collect();
 
@@ -198,6 +200,7 @@ fn generate_resource_route(
     let mime_type = opt_string(&resource.meta.mime_type);
     let group = group_expr(resource, mcp);
     let requirements = super::requirements_expr(def, resource, mcp);
+    let completions = completions_expr(resource, mcp);
 
     quote! {
         {
@@ -210,6 +213,7 @@ fn generate_resource_route(
                 mime_type: #mime_type,
                 requirements: #requirements,
                 group: #group,
+                completions: #completions,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ResourceCall|
                         -> #mcp::__macro_support::ResourceFuture {
@@ -239,6 +243,7 @@ fn generate_prompt_route(
     let description = opt_string(&tool_description(prompt));
     let group = group_expr(prompt, mcp);
     let requirements = super::requirements_expr(def, prompt, mcp);
+    let completions = completions_expr(prompt, mcp);
 
     let arguments = match prompt.params_type() {
         Some(params_ty) => quote_spanned! {params_ty.span()=>
@@ -259,6 +264,7 @@ fn generate_prompt_route(
                 arguments: #arguments,
                 requirements: #requirements,
                 group: #group,
+                completions: #completions,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::PromptCall|
                         -> #mcp::__macro_support::PromptFuture {
@@ -271,6 +277,35 @@ fn generate_prompt_route(
             });
         }
     }
+}
+
+/// The `completions: Vec<CompletionProvider>` field of a prompt/resource
+/// route: one provider per `complete(arg = "method")` entry, each calling the
+/// `#[completion]` method's invoke (parse() checked the method exists).
+fn completions_expr(member: &McpTool, mcp: &TokenStream) -> TokenStream {
+    let providers = member.meta.complete.iter().map(|(arg, provider)| {
+        let arg = arg.to_string();
+        let provider = syn::Ident::new(&provider.value(), provider.span());
+        let invoke_name = super::invoke_ident(McpMemberKind::Completion, &provider);
+        quote! {
+            {
+                let __w = __wrapper.clone();
+                #mcp::__macro_support::CompletionProvider {
+                    argument: ::std::borrow::Cow::Borrowed(#arg),
+                    invoke: ::std::sync::Arc::new(
+                        move |__call: #mcp::__macro_support::Completion|
+                            -> #mcp::__macro_support::CompletionFuture {
+                            let __w = __w.clone();
+                            ::std::boxed::Box::pin(async move {
+                                __w.#invoke_name(__call).await
+                            })
+                        },
+                    ),
+                }
+            }
+        }
+    });
+    quote! { ::std::vec![#(#providers),*] }
 }
 
 /// The member description: explicit `description = "..."` override, or the

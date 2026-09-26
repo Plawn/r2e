@@ -380,6 +380,9 @@ pub struct ResourceRoute {
     pub requirements: ToolRequirements,
     /// The member group, if any — see [`McpGroup`].
     pub group: Option<McpGroup>,
+    /// Completion providers for the URI-template variables
+    /// (`completion/complete` with a `ref/resource`). Empty for a fixed URI.
+    pub completions: Vec<CompletionProvider>,
     /// The read closure.
     pub invoke: ResourceInvoke,
 }
@@ -534,6 +537,9 @@ pub struct PromptRoute {
     pub requirements: ToolRequirements,
     /// The member group, if any — see [`McpGroup`].
     pub group: Option<McpGroup>,
+    /// Completion providers for the arguments (`completion/complete` with a
+    /// `ref/prompt`).
+    pub completions: Vec<CompletionProvider>,
     /// The expansion closure.
     pub invoke: PromptInvoke,
 }
@@ -597,5 +603,187 @@ impl McpRoutes {
             tools,
             ..Default::default()
         }
+    }
+}
+
+// ── Completion ─────────────────────────────────────────────────────────────
+
+/// What a `completion/complete` request targets: a prompt (by name) or a
+/// resource template (by its raw URI template).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompletionRef {
+    /// A prompt argument (`ref/prompt`).
+    Prompt(String),
+    /// A resource-template variable (`ref/resource`), carrying the URI
+    /// template as the client sent it.
+    Resource(String),
+}
+
+/// Everything a completion provider can observe about the request.
+///
+/// A `#[completion]` method takes it as a parameter; dynamic members receive
+/// it in their [`with_completion`](crate::DynamicPrompt::with_completion)
+/// handler.
+#[derive(Clone)]
+pub struct Completion {
+    /// The prompt or resource template being completed.
+    pub reference: CompletionRef,
+    /// The argument (prompt) or template variable (resource) being completed.
+    pub argument: String,
+    /// What the user typed so far.
+    pub value: String,
+    /// Values the client already resolved for the other arguments/variables
+    /// (`context.arguments`), for dependent completion.
+    pub context: BTreeMap<String, String>,
+    /// The HTTP request parts — same semantics as [`ToolCall::parts`].
+    pub parts: Option<Arc<Parts>>,
+    /// The JSON-RPC request id, stringified.
+    pub request_id: String,
+    /// Cancelled when the client aborts the request (completion requests
+    /// are superseded on every keystroke) or the server shuts down.
+    pub cancel: CancelToken,
+    /// The MCP session serving this request — same semantics as
+    /// [`ToolCall::session`].
+    pub session: Option<McpSession>,
+}
+
+impl Completion {
+    /// A hand-built completion request (tests, adapters).
+    ///
+    /// No parts, an empty request id and context, a fresh [`CancelToken`]
+    /// and no session. Set the public fields as needed.
+    pub fn new(
+        reference: CompletionRef,
+        argument: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Completion {
+            reference,
+            argument: argument.into(),
+            value: value.into(),
+            context: BTreeMap::new(),
+            parts: None,
+            request_id: String::new(),
+            cancel: CancelToken::new(),
+            session: None,
+        }
+    }
+
+    /// Read a request-scoped value of type `T` from the HTTP request
+    /// extensions — same semantics as [`ToolCall::extension`].
+    pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+
+    /// Resolve a request-scoped identity — same semantics as
+    /// [`ToolCall::identity`].
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        identity_in(self.parts.as_deref())
+    }
+}
+
+/// Completion suggestions, as returned by a provider.
+///
+/// `Vec<String>` converts into it directly. The endpoint caps the wire list
+/// at 100 values (the spec maximum) and sets `has_more` when it truncates.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Completions {
+    /// Suggested values, best match first.
+    pub values: Vec<String>,
+    /// Total number of matches, when larger than `values` (defaults to the
+    /// length of `values` when truncated).
+    pub total: Option<u32>,
+    /// More matches exist than returned.
+    pub has_more: bool,
+}
+
+impl Completions {
+    /// Suggestions from any iterator of strings.
+    pub fn new<I, S>(values: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Completions {
+            values: values.into_iter().map(Into::into).collect(),
+            total: None,
+            has_more: false,
+        }
+    }
+
+    /// No suggestion.
+    pub fn empty() -> Self {
+        Completions::default()
+    }
+}
+
+/// Conversion from a `#[completion]` method's return value.
+pub trait IntoCompletion {
+    /// Convert into suggestions, or an error reported as a JSON-RPC error.
+    fn into_completion(self) -> Result<Completions, McpError>;
+}
+
+impl IntoCompletion for Completions {
+    fn into_completion(self) -> Result<Completions, McpError> {
+        Ok(self)
+    }
+}
+
+impl IntoCompletion for Vec<String> {
+    fn into_completion(self) -> Result<Completions, McpError> {
+        Ok(Completions::new(self))
+    }
+}
+
+impl<T: IntoCompletion, E: Into<McpError>> IntoCompletion for Result<T, E> {
+    fn into_completion(self) -> Result<Completions, McpError> {
+        self.map_err(Into::into)?.into_completion()
+    }
+}
+
+/// Boxed future returned by a completion provider.
+pub type CompletionFuture = Pin<Box<dyn Future<Output = Result<Completions, McpError>> + Send>>;
+
+/// Type-erased completion provider closure.
+pub type CompletionInvoke = Arc<dyn Fn(Completion) -> CompletionFuture + Send + Sync>;
+
+/// The completion provider of one prompt argument or template variable.
+///
+/// Wired by the macro from `#[prompt(complete(arg = "method"))]` /
+/// `#[resource(uri = "…", complete(var = "method"))]`, or added to a dynamic
+/// member with `with_completion`.
+#[derive(Clone)]
+pub struct CompletionProvider {
+    /// The prompt argument or URI-template variable it completes.
+    pub argument: Cow<'static, str>,
+    /// The provider closure.
+    pub invoke: CompletionInvoke,
+}
+
+impl CompletionProvider {
+    /// A provider for `argument` from an async closure.
+    pub fn new<F, Fut, R>(argument: impl Into<Cow<'static, str>>, handler: F) -> Self
+    where
+        F: Fn(Completion) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        R: IntoCompletion,
+    {
+        let handler = Arc::new(handler);
+        CompletionProvider {
+            argument: argument.into(),
+            invoke: Arc::new(move |completion| {
+                let handler = Arc::clone(&handler);
+                Box::pin(async move { handler(completion).await.into_completion() })
+            }),
+        }
+    }
+}
+
+impl std::fmt::Debug for CompletionProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompletionProvider")
+            .field("argument", &self.argument)
+            .finish_non_exhaustive()
     }
 }
