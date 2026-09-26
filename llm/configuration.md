@@ -1,7 +1,7 @@
 ---
 topic: configuration
 features: core
-tokens: ~3500
+tokens: ~3700
 requires: di-beans
 ---
 
@@ -265,6 +265,23 @@ That equality is the contract, so a **required** field (no `default`, not
 compile error rather than a silent `Default::default()` that would disagree
 with what config loading produces. It is opt-in: a struct with a hand-written
 `Default` is untouched.
+
+Deriving `garde::Validate` alongside `ConfigProperties` makes `from_config`
+run the garde rules right after construction. Violations fail with
+`ConfigError::Validation`, one detail per rule, keyed by the full dotted path
+(`app.pool.size`). Detection is by attribute: any `#[garde(..)]` on a field or
+on the struct turns validation on. The garde context must implement `Default`.
+
+```rust
+use garde::Validate;
+
+#[derive(ConfigProperties, Validate, Clone)]
+pub struct PoolConfig {
+    #[garde(length(min = 1))] pub name: String,
+    #[config(default = 10)]
+    #[garde(range(min = 1, max = 100))] pub size: i64,
+}
+```
 
 Missing **required** `#[config]` keys fail at startup (controller registration
 validates them). The message names the full working `R2E_…` env var (prefix

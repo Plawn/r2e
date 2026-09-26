@@ -38,7 +38,7 @@ struct FieldInfo {
     is_skip: bool,
     /// Explicit env var from `#[config(env = "...")]`.
     env_var: Option<String>,
-    /// Whether the field has any `#[validate(...)]` attributes (from garde).
+    /// Whether the field carries a `#[garde(...)]` attribute.
     has_validate: bool,
 }
 
@@ -174,9 +174,11 @@ fn string_map_value_type(ty: &syn::Type) -> Option<&syn::Type> {
     Some(value_ty)
 }
 
-/// Check if a field has any `#[validate(...)]` attributes (from garde).
-fn has_validate_attr(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| a.path().is_ident("validate"))
+/// Check if the attributes include a `#[garde(...)]` rule. `garde` is only a
+/// known attribute when the type derives `garde::Validate`, so its presence
+/// is a reliable signal that `validate()` exists.
+fn has_garde_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("garde"))
 }
 
 /// Struct-level `#[config(...)]` arguments.
@@ -523,7 +525,7 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
             default_flag: field_config.default_flag,
             is_skip: field_config.skip,
             env_var: field_config.env,
-            has_validate: has_validate_attr(&field.attrs),
+            has_validate: has_garde_attr(&field.attrs),
         });
     }
 
@@ -548,7 +550,8 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
     };
 
     // Detect if any field has garde validation → we'll call validate() after construction
-    let any_has_validate = field_infos.iter().any(|f| f.has_validate);
+    let any_has_validate =
+        has_garde_attr(&input.attrs) || field_infos.iter().any(|f| f.has_validate);
 
     // Generate metadata entries
     let metadata_entries: Vec<TokenStream2> = field_infos
@@ -870,7 +873,7 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
                 use garde::Validate as _;
                 let __ctx = <#name as garde::Validate>::Context::default();
                 let __prefix_str = __prefix.unwrap_or("");
-                __instance.validate(&__ctx).map_err(|__report| {
+                __instance.validate_with(&__ctx).map_err(|__report| {
                     let __details = __report.iter()
                         .map(|(path, error)| {
                             let __key = if __prefix_str.is_empty() {

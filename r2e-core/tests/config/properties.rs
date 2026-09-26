@@ -387,3 +387,99 @@ fn derive_default_uses_the_declared_defaults() {
     assert_eq!(d.nested.timeout, 30);
     assert!(d.entries.is_empty());
 }
+
+// --- ConfigProperties: garde validation runs automatically ---
+
+#[derive(r2e_macros::ConfigProperties, garde::Validate, Clone, Debug)]
+struct ValidatedPoolConfig {
+    #[garde(length(min = 1))]
+    pub name: String,
+    #[config(default = 10)]
+    #[garde(range(min = 1, max = 100))]
+    pub size: i64,
+}
+
+#[test]
+fn test_config_properties_garde_valid_passes() {
+    let yaml = r#"
+app:
+  pool:
+    name: "main"
+    size: 20
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let pool = ValidatedPoolConfig::from_config(&config, Some("app.pool")).unwrap();
+    assert_eq!(pool.size, 20);
+}
+
+#[test]
+fn test_config_properties_garde_violation_is_reported_with_prefixed_keys() {
+    let yaml = r#"
+app:
+  pool:
+    name: ""
+    size: 500
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let err = ValidatedPoolConfig::from_config(&config, Some("app.pool")).unwrap_err();
+    let ConfigError::Validation(details) = err else {
+        panic!("expected ConfigError::Validation, got {err:?}");
+    };
+    let mut keys: Vec<_> = details.iter().map(|d| d.key.as_str()).collect();
+    keys.sort();
+    assert_eq!(keys, ["app.pool.name", "app.pool.size"]);
+}
+
+#[test]
+fn test_config_properties_garde_violation_without_prefix() {
+    let yaml = r#"
+name: "main"
+size: 0
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let err = ValidatedPoolConfig::from_config(&config, None).unwrap_err();
+    let ConfigError::Validation(details) = err else {
+        panic!("expected ConfigError::Validation, got {err:?}");
+    };
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].key, "size");
+}
+
+/// Only struct-level garde attributes: validation still runs (the derive's
+/// `validate()` exists), and every field opting out with `skip` passes.
+#[derive(r2e_macros::ConfigProperties, garde::Validate, Clone, Debug)]
+#[garde(allow_unvalidated)]
+struct StructLevelGardeConfig {
+    pub label: String,
+}
+
+#[test]
+fn test_config_properties_struct_level_garde_compiles_and_passes() {
+    let config = R2eConfig::from_yaml_str("label: x").unwrap();
+    let cfg = StructLevelGardeConfig::from_config(&config, None).unwrap();
+    assert_eq!(cfg.label, "x");
+}
+
+#[derive(r2e_macros::ConfigProperties, garde::Validate, Clone, Debug)]
+struct AppWithValidatedSection {
+    #[config(section)]
+    #[garde(skip)]
+    pub pool: ValidatedPoolConfig,
+}
+
+#[test]
+fn test_config_properties_nested_section_is_validated_with_full_key() {
+    let yaml = r#"
+app:
+  pool:
+    name: "main"
+    size: 0
+"#;
+    let config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let err = AppWithValidatedSection::from_config(&config, Some("app")).unwrap_err();
+    let ConfigError::Validation(details) = err else {
+        panic!("expected ConfigError::Validation, got {err:?}");
+    };
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].key, "app.pool.size");
+}

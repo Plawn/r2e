@@ -359,6 +359,18 @@ section is parsed and any error surfaces — a present-but-invalid section is
 an error, not a silent `None`. This makes `Option<Section>` reliable even
 when every field of the section has a default.
 
+### garde validation
+
+When the struct also derives `garde::Validate`, the derive appends a
+`validate_with(&Context::default())` call after construction and maps the report
+to `ConfigError::Validation`, one `ConfigValidationDetail` per violation, keyed
+`<prefix>.<garde path>`. The trigger is purely syntactic: a `#[garde(..)]`
+attribute on any field (including `#[config(skip)]` ones) or on the struct.
+That is safe because `garde` is only a known attribute when `Validate` is
+derived. Nested sections are validated by their own `from_config`, so they
+don't need `#[garde(dive)]` to be checked (they still need `#[garde(dive)]` or
+`#[garde(skip)]` to satisfy garde's derive).
+
 ### Why `#[config(section)]` is required
 
 The derive macro operates on tokens only — it cannot resolve traits. It cannot tell whether a field implements `FromConfigValue` (scalar) or `ConfigProperties` (nested struct). `#[config(section)]` tells the macro to generate `T::from_config(...)` instead of `config.get::<T>(...)`.

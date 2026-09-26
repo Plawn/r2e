@@ -1404,6 +1404,13 @@ pub fn derive_cacheable(input: TokenStream) -> TokenStream {
 ///
 /// Doc comments on fields become property descriptions in metadata.
 ///
+/// # Validation
+///
+/// If the struct also derives `garde::Validate` (any `#[garde(...)]`
+/// attribute on a field or on the struct), `from_config()` runs the garde
+/// rules after construction and returns `ConfigError::Validation` with the
+/// full dotted keys of every violation.
+///
 /// # Example
 ///
 /// ```ignore
