@@ -12,6 +12,7 @@ mod dynamic;
 mod interceptors;
 mod lifecycle;
 mod plugin;
+mod progress;
 mod prompts;
 mod registry;
 mod resources;

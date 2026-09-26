@@ -1,0 +1,5 @@
+error: only one Progress parameter is allowed per #[tool] method
+  --> cases/mcp/fail/mcp_two_progress.rs:13:41
+   |
+13 |     async fn broken(&self, a: Progress, b: Progress) -> String {
+   |                                         ^^^^^^^^^^^

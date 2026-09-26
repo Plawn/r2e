@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use crate::auth::ToolRequirements;
 use crate::error::McpError;
+use crate::progress::Progress;
 use crate::session::McpSession;
 
 /// A JSON Schema object body (the map under `inputSchema`).
@@ -84,9 +85,29 @@ pub struct ToolCall {
     /// The MCP session serving this call — what an `McpSession` member
     /// parameter resolves to. `None` only for hand-built calls.
     pub session: Option<McpSession>,
+    /// Progress reporter bound to the request's `progressToken` — what a
+    /// `Progress` member parameter resolves to. [`Progress::disabled`] for
+    /// hand-built calls.
+    pub progress: Progress,
 }
 
 impl ToolCall {
+    /// A hand-built call (tests, adapters) with the given raw `arguments`.
+    ///
+    /// The transport-provided fields start empty: no parts, an empty
+    /// request id, a fresh [`CancelToken`], no session and a
+    /// [`Progress::disabled`] reporter. Set the public fields as needed.
+    pub fn new(arguments: Value) -> Self {
+        ToolCall {
+            arguments,
+            parts: None,
+            request_id: String::new(),
+            cancel: CancelToken::new(),
+            session: None,
+            progress: Progress::disabled(),
+        }
+    }
+
     /// Read a request-scoped value of type `T` from the HTTP request
     /// extensions (where auth layers deposit the caller's identity).
     ///
@@ -267,9 +288,28 @@ pub struct ResourceCall {
     /// The MCP session serving this call — same semantics as
     /// [`ToolCall::session`].
     pub session: Option<McpSession>,
+    /// Progress reporter — same semantics as [`ToolCall::progress`].
+    pub progress: Progress,
 }
 
 impl ResourceCall {
+    /// A hand-built read (tests, adapters) of `uri`, with no template variables.
+    ///
+    /// The transport-provided fields start empty: no parts, an empty
+    /// request id, a fresh [`CancelToken`], no session and a
+    /// [`Progress::disabled`] reporter. Set the public fields as needed.
+    pub fn new(uri: impl Into<String>) -> Self {
+        ResourceCall {
+            uri: uri.into(),
+            variables: BTreeMap::new(),
+            parts: None,
+            request_id: String::new(),
+            cancel: CancelToken::new(),
+            session: None,
+            progress: Progress::disabled(),
+        }
+    }
+
     /// Read a request-scoped value of type `T` from the HTTP request
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
@@ -378,9 +418,27 @@ pub struct PromptCall {
     /// The MCP session serving this call — same semantics as
     /// [`ToolCall::session`].
     pub session: Option<McpSession>,
+    /// Progress reporter — same semantics as [`ToolCall::progress`].
+    pub progress: Progress,
 }
 
 impl PromptCall {
+    /// A hand-built expansion (tests, adapters) with the given raw `arguments`.
+    ///
+    /// The transport-provided fields start empty: no parts, an empty
+    /// request id, a fresh [`CancelToken`], no session and a
+    /// [`Progress::disabled`] reporter. Set the public fields as needed.
+    pub fn new(arguments: Value) -> Self {
+        PromptCall {
+            arguments,
+            parts: None,
+            request_id: String::new(),
+            cancel: CancelToken::new(),
+            session: None,
+            progress: Progress::disabled(),
+        }
+    }
+
     /// Read a request-scoped value of type `T` from the HTTP request
     /// extensions — same semantics as [`ToolCall::extension`].
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {

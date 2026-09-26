@@ -74,6 +74,7 @@ bad `#[config]` key is caught at `register_mcp_service` — a missing
 | `ToolCall` | Everything about the call: `arguments` (raw JSON), `parts` (HTTP request parts of the transport request — headers, URI, extensions), `request_id`, `cancel` (`CancelToken`, fired on client abort / shutdown). |
 | `CancelToken` | Just the cancellation token. |
 | `McpSession` | The caller's session handle: change what this session sees (see Dynamic members). At most one. |
+| `Progress` | Reports `notifications/progress` for this call (see Progress). Also on `ToolCall::progress`. |
 | `#[inject(identity)] user: I` / `Option<I>` | The authenticated caller (wired by the MCP auth layer — see the Auth section). |
 
 Anything else is a targeted compile error — beans and config go on the
@@ -189,6 +190,44 @@ Auth is uniform across families: `scopes`/`any_scopes` on the marker,
 `resources/list` / `prompts/list` filtered to what the caller may access
 (same `mcp.auth.filter-members` switch); denials are JSON-RPC `-32600` errors
 with `data: "forbidden"` instead of `isError` results.
+
+## Progress
+
+A long member takes a `Progress` parameter (tools, resources and prompts
+alike — also `ToolCall::progress` / `ResourceCall::progress` /
+`PromptCall::progress`) and reports how far it has got:
+
+```rust
+#[tool]
+async fn reindex(&self, progress: Progress) -> Result<String, McpError> {
+    let items = self.repo.all().await?;
+    for (i, item) in items.iter().enumerate() {
+        self.index(item).await?;
+        progress.report(i as f64 + 1.0, Some(items.len() as f64), None).await;
+    }
+    Ok("done".into())
+}
+```
+
+- Only a request carrying `_meta.progressToken` gets notifications; without
+  one every `report` is a no-op (`progress.is_requested()` tells which).
+- `progress` must strictly increase (spec): a report that does not is
+  dropped with a `debug!` log instead of sending invalid wire.
+- Progress is advisory: `report` never fails; delivery errors are logged at
+  `debug`.
+- Notifications ride the request's own SSE stream, before the result. Under
+  `mcp.json-response: true` the reply switches to SSE as soon as a report is
+  sent (no report is lost); a call that sends none stays plain JSON.
+- Once the member returns the stream closes: reports sent later (e.g. from a
+  task the member spawned) are dropped.
+
+## Not implemented (deliberately)
+
+SEP-2577 deprecates server-initiated sampling (`sampling/createMessage`),
+roots (`roots/list`) and logging (`logging/setLevel` /
+`notifications/message`); R2E implements none of them and advertises no
+matching capability. Server logs go to `tracing` / OpenTelemetry — clients
+see results and progress messages, not server logs.
 
 ## Guards and interceptors
 

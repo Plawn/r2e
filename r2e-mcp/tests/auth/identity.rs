@@ -22,7 +22,6 @@ use std::sync::Arc;
 use r2e_core::http::middleware::{from_fn, Next};
 use r2e_core::http::{Body, Parts, Request, Router};
 use r2e_core::prelude::*;
-use r2e_core::rt::CancelToken;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, McpPrincipal, McpServer, PromptCall, ResourceCall, ToolCall};
 use r2e_security::AuthenticatedUser;
@@ -225,34 +224,21 @@ fn parts_with(
 }
 
 fn tool_call(parts: Option<Arc<Parts>>) -> ToolCall {
-    ToolCall {
-        arguments: json!({}),
-        parts,
-        request_id: "1".to_string(),
-        cancel: CancelToken::new(),
-        session: None,
-    }
+    let mut call = ToolCall::new(json!({}));
+    call.parts = parts;
+    call
 }
 
 fn resource_call(parts: Option<Arc<Parts>>) -> ResourceCall {
-    ResourceCall {
-        uri: "r2e://identity/me".to_string(),
-        variables: Default::default(),
-        parts,
-        request_id: "1".to_string(),
-        cancel: CancelToken::new(),
-        session: None,
-    }
+    let mut call = ResourceCall::new("r2e://identity/me");
+    call.parts = parts;
+    call
 }
 
 fn prompt_call(parts: Option<Arc<Parts>>) -> PromptCall {
-    PromptCall {
-        arguments: json!({}),
-        parts,
-        request_id: "1".to_string(),
-        cancel: CancelToken::new(),
-        session: None,
-    }
+    let mut call = PromptCall::new(json!({}));
+    call.parts = parts;
+    call
 }
 
 /// Walk the whole ladder for one call type.

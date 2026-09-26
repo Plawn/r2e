@@ -199,6 +199,10 @@ fn generate_invoke_method(
         .args
         .iter()
         .any(|arg| matches!(arg, McpToolArg::Cancel));
+    let has_progress = tool
+        .args
+        .iter()
+        .any(|arg| matches!(arg, McpToolArg::Progress));
     let params_stmts = match tool.params_type() {
         Some(params_ty) => {
             // Preserve the arguments inside a call passed to the method. This
@@ -224,6 +228,9 @@ fn generate_invoke_method(
     let saved_call_fields = {
         let cancel = (has_call && has_cancel).then(|| {
             quote! { let __cancel = __call.cancel.clone(); }
+        });
+        let progress = (has_call && has_progress).then(|| {
+            quote! { let __progress = __call.progress.clone(); }
         });
         let resource_uri = (has_call && kind == McpMemberKind::Resource).then(|| {
             quote! { let __resource_uri = __call.uri.clone(); }
@@ -255,6 +262,7 @@ fn generate_invoke_method(
             });
         quote! {
             #cancel
+            #progress
             #resource_uri
             #session
         }
@@ -271,6 +279,8 @@ fn generate_invoke_method(
             McpToolArg::Cancel if has_call => quote! { __cancel },
             McpToolArg::Cancel => quote! { __call.cancel.clone() },
             McpToolArg::Session => quote! { __session },
+            McpToolArg::Progress if has_call => quote! { __progress },
+            McpToolArg::Progress => quote! { __call.progress.clone() },
         })
         .collect();
 

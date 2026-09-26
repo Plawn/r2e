@@ -1,7 +1,7 @@
 //! The rmcp `ServerHandler` implementation dispatching to registered R2E
 //! tools, resources and prompts.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -22,6 +22,7 @@ use serde_json::Value;
 
 use crate::catalog::{principal_in, Catalog};
 use crate::error::McpError;
+use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
 use crate::route::{PromptCall, ResourceCall, ToolCall};
 use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState};
@@ -33,6 +34,63 @@ use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, Sessio
 /// identity extraction see the real request head.
 fn take_parts(context: &mut RequestContext<RoleServer>) -> Option<Arc<Parts>> {
     context.extensions.remove::<Parts>().map(Arc::new)
+}
+
+/// The per-call context every member family shares — the one place a new
+/// `ToolCall`/`ResourceCall`/`PromptCall` field is sourced from the rmcp
+/// request context.
+struct CallContext {
+    parts: Option<Arc<Parts>>,
+    request_id: String,
+    cancel: CancelToken,
+    session: McpSession,
+    progress: Progress,
+}
+
+impl CallContext {
+    fn new(mut context: RequestContext<RoleServer>, session: McpSession) -> Self {
+        CallContext {
+            parts: take_parts(&mut context),
+            request_id: context.id.to_string(),
+            progress: Progress::new(context.meta.get_progress_token(), &context.peer),
+            cancel: context.ct.into(),
+            session,
+        }
+    }
+
+    fn tool(self, arguments: Option<serde_json::Map<String, Value>>) -> ToolCall {
+        ToolCall {
+            arguments: Value::Object(arguments.unwrap_or_default()),
+            parts: self.parts,
+            request_id: self.request_id,
+            cancel: self.cancel,
+            session: Some(self.session),
+            progress: self.progress,
+        }
+    }
+
+    fn resource(self, uri: String, variables: BTreeMap<String, String>) -> ResourceCall {
+        ResourceCall {
+            uri,
+            variables,
+            parts: self.parts,
+            request_id: self.request_id,
+            cancel: self.cancel,
+            session: Some(self.session),
+            progress: self.progress,
+        }
+    }
+
+    fn prompt(self, arguments: Option<serde_json::Map<String, Value>>) -> PromptCall {
+        PromptCall {
+            arguments: Value::Object(arguments.unwrap_or_default()),
+            parts: self.parts,
+            request_id: self.request_id,
+            cancel: self.cancel,
+            session: Some(self.session),
+            progress: self.progress,
+        }
+    }
 }
 
 /// Everything the session handlers of one endpoint share.
@@ -246,7 +304,7 @@ impl ServerHandler for R2eMcpHandler {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        mut context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         self.prepare(&context).await?;
         let view = self.state.view();
@@ -262,19 +320,7 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let session = self.session();
-        let parts = take_parts(&mut context);
-        let arguments = match request.arguments {
-            Some(map) => Value::Object(map),
-            None => Value::Object(serde_json::Map::new()),
-        };
-        let call = ToolCall {
-            arguments,
-            parts,
-            request_id: context.id.to_string(),
-            cancel: context.ct.into(),
-            session: Some(session),
-        };
+        let call = CallContext::new(context, self.session()).tool(request.arguments);
 
         match (route.invoke)(call).await {
             Ok(result) => Ok(CallToolResponse::Complete(result)),
@@ -307,7 +353,7 @@ impl ServerHandler for R2eMcpHandler {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        mut context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         self.prepare(&context).await?;
         let view = self.state.view();
@@ -320,15 +366,7 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let session = self.session();
-        let call = ResourceCall {
-            uri: request.uri,
-            variables,
-            parts: take_parts(&mut context),
-            request_id: context.id.to_string(),
-            cancel: context.ct.into(),
-            session: Some(session),
-        };
+        let call = CallContext::new(context, self.session()).resource(request.uri, variables);
 
         match (route.invoke)(call).await {
             Ok(contents) => Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
@@ -446,7 +484,7 @@ impl ServerHandler for R2eMcpHandler {
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        mut context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
         self.prepare(&context).await?;
         let view = self.state.view();
@@ -459,18 +497,7 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let arguments = match request.arguments {
-            Some(map) => Value::Object(map),
-            None => Value::Object(serde_json::Map::new()),
-        };
-        let session = self.session();
-        let call = PromptCall {
-            arguments,
-            parts: take_parts(&mut context),
-            request_id: context.id.to_string(),
-            cancel: context.ct.into(),
-            session: Some(session),
-        };
+        let call = CallContext::new(context, self.session()).prompt(request.arguments);
 
         match (route.invoke)(call).await {
             Ok(result) => Ok(GetPromptResponse::Complete(result)),

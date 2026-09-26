@@ -108,6 +108,8 @@ pub enum McpToolArg {
     Cancel,
     /// An `McpSession` parameter (the caller's session handle).
     Session,
+    /// A `Progress` parameter (`notifications/progress` reporter).
+    Progress,
 }
 
 /// A single `#[tool]` / `#[resource]` / `#[prompt]` method with parsed
@@ -423,6 +425,7 @@ fn classify_args(
     let mut has_call = false;
     let mut has_cancel = false;
     let mut has_session = false;
+    let mut has_progress = false;
 
     for arg in method.sig.inputs.iter_mut() {
         let syn::FnArg::Typed(pat_type) = arg else {
@@ -493,6 +496,17 @@ fn classify_args(
             args.push(McpToolArg::Session);
             continue;
         }
+        if type_last_segment_is(&pat_type.ty, "Progress") {
+            if has_progress {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!("only one Progress parameter is allowed per #[{marker}] method"),
+                ));
+            }
+            has_progress = true;
+            args.push(McpToolArg::Progress);
+            continue;
+        }
         let params_part = if kind.takes_params() {
             "`Params<T>` (typed arguments), "
         } else {
@@ -502,7 +516,7 @@ fn classify_args(
             pat_type,
             format!(
                 "unsupported #[{marker}] parameter: expected {params_part}\
-                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, `CancelToken`, or `McpSession`. \
+                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, `CancelToken`, `McpSession`, or `Progress`. \
                  Beans and config go on the struct (`#[inject]`/`#[config]` fields)"
             ),
         ));
