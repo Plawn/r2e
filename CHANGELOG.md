@@ -19,12 +19,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-26
+
 ### Changed
 
 - **Releases are version-driven** (see the note above): `release.yml` no longer
   tags every merge; it publishes to crates.io, then tags `vX.Y.Z`, only when a
   `release: X.Y.Z` PR changes the workspace version, and only after Tests
   pass. New `scripts/bump-version.sh`; `publish-crates.sh --yes` for CI.
+
+- **`ErrorHandling` plugin removed** (PR #68/#69, task #1025). Panic capture is
+  now part of router assembly, so the plugin was a third copy of the layer that
+  never fired for a handler panic. **Breaking**: `.plugin(ErrorHandling)` and
+  `catch_panic_layer()` no longer compile — delete the line, nothing replaces it.
+
+- **Plugin routes mount in the Routes stage** (PR #69). Prometheus `/metrics`,
+  the `r2e-oidc` endpoints and `EmbeddedFrontend`'s SPA fallback go through
+  `after_routes` instead of an `add_layer` closure, so they now sit inside
+  `HttpTrace`, the metrics layer and the catch-panic slot (static responses are
+  traced and counted; `EmbeddedFrontend` no longer has to be installed last).
+  Rule: `add_layer` wraps, it never mounts. **Breaking**: `EmbeddedFrontend`
+  combined with a controller `#[fallback]` is now a boot panic instead of a
+  silent override.
+
+- **MCP session binding** (PR #74). Sessions are bound to their principal: a
+  `Mcp-Session-Id` replayed by another subject gets HTTP 404 (was JSON-RPC
+  -32600). **Breaking**: `ToolRoute` / `ResourceRoute` / `PromptRoute` gain
+  `group` (plus `completions` on resources and prompts), `McpRoutes` gains
+  `uses_session`, `ToolCall` / `ResourceCall` / `PromptCall` gain `session` and
+  `progress` (use the new `::new` constructors), `McpServer::Provided` gains
+  `McpSessions`, `McpSessionError` gains `InvalidCompletion`. `McpSession`
+  under `mcp.stateless` panics at boot.
 
 ### Added
 
@@ -33,6 +58,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Linux) — the program returns the target socket's group index, i.e. its bind
   order — with `CbpfInsn` in the kernel `sock_filter` layout. **Breaking**:
   new `AffinityError::ReuseportFilterUnsupported` variant (returned off Linux).
+
+- **Observable panics and a unified `on_panic` hook** (PR #68/#70/#71, tasks
+  #1017/#1027). R2E's own catch-panic layer, installed innermost (so a handler
+  panic still gets the `request completed` line, the 5xx metric and
+  `x-request-id`) and outermost as a last-resort net, emits one
+  `tracing::error!` on target `r2e::panic` with the message and route.
+  `AppBuilder::on_panic(|report| ..)` is called once per panic from HTTP
+  handlers, `#[scheduled]` ticks (shared or dedicated pool, tick factories
+  included) and `PoolExecutor` jobs; `PanicReport::origin()` returns a
+  `PanicOrigin::{Http, Scheduled, Executor}` and `label()` a bounded metric
+  label. A panicking hook is contained. New `PoolExecutor::submit_named`;
+  `#[async_exec]` jobs are named after their method. **Breaking**: hooks that
+  assumed HTTP-only now also see background panics.
+
+- **MCP per-session member lists and protocol gaps** (PR #74).
+  `#[mcp_routes(group = "…", opt_in)]` groups; an `McpSession` member parameter
+  enables/disables groups and adds session-private `DynamicTool` /
+  `DynamicResource` / `DynamicPrompt` members (with `list_changed`
+  notifications); `McpServer::session_init::<T: McpSessionInit>()` and the
+  `McpSessions` bean. Protocol: `Progress` parameter
+  (`notifications/progress`), live elicitation via `McpClient<'_>`
+  (`elicit::<T>()`, `elicit_url()`, `mcp.elicitation-timeout-secs`),
+  `#[completion]` providers wired with `complete(arg = "fn")` and checked at
+  compile time, and `*/list` pagination (`mcp.page-size`) with cursors bound
+  to the caller's visible list.
 
 - **Per-request span enrichment channel** (task #1015): the `HttpTrace` layer
   now publishes the request span as the `RequestSpan` request extension —
@@ -257,6 +307,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     also carries `TcpListenerStream` now (tokio-stream's `net` feature).
 
 ### Fixed
+
+- **`#[derive(ConfigProperties)]` garde rules now run** (PR #73, task #1046).
+  The derive looked for `#[validate(..)]` instead of `#[garde(..)]`, so
+  validation was never emitted. It now runs after construction and reports
+  `ConfigError::Validation` with dotted keys (`app.pool.size`). **Behavior
+  change**: a violated rule now fails `from_config`, and therefore boot.
+
+- **Executor drain no longer stalls on a panicking job** (PR #70): panics are
+  caught at poll level, so permit release and drain/completed counts survive
+  and `shutdown_graceful` completes.
 
 - **`r2e::prelude` no longer ambiguous with both data backends enabled**
   (task #1016). The prelude glob-re-exported `r2e_data_sqlx::prelude::*` and
