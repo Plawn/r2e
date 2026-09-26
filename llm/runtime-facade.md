@@ -1,7 +1,7 @@
 ---
 topic: runtime-facade
 features: core
-tokens: ~3000
+tokens: ~3100
 requires: background-work, app-builder
 ---
 
@@ -178,7 +178,12 @@ all in `r2e::prelude` unless noted):
   `adopt_tcp_listener(std)` (must run on that worker's thread — asserts).
   `AffinityError::Unsupported { transport }` on platforms without
   `SO_REUSEPORT` — never a silent single-socket fallback. QUIC: pass the
-  `reuseport_udp` socket to `quinn::Endpoint::new`.
+  `reuseport_udp` socket to `quinn::Endpoint::new`. Custom steering (e.g.
+  QUIC connection-ID affinity): `attach_reuseport_cbpf(&sock, &[CbpfInsn])
+  -> Result<(), AffinityError>` (unix-only item, Linux-only success,
+  `SO_ATTACH_REUSEPORT_CBPF`); the program returns the socket's **group
+  index = bind order**, so bind the N sockets in order and hand socket `i` to
+  worker `i`. Off Linux: `AffinityError::ReuseportFilterUnsupported`.
 - **`WorkerCollector`** (`r2e::r2e_prometheus`, feature `prometheus`):
   `Prometheus::builder().register(Box::new(WorkerCollector::new(set)))` →
   `r2e_workers`, `r2e_worker_state{worker,state}`, `r2e_worker_cpu{worker}`,

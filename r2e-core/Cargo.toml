@@ -52,6 +52,10 @@ pin-project-lite = {workspace = true}
 [target.'cfg(all(unix, not(any(target_os = "solaris", target_os = "illumos", target_os = "cygwin"))))'.dependencies]
 socket2 = {workspace = true}
 
+# `SO_ATTACH_REUSEPORT_CBPF` for `runtime::ingress::attach_reuseport_cbpf`.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = {workspace = true}
 http-body-util = {workspace = true}

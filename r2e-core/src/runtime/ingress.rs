@@ -17,6 +17,17 @@
 //! "fall back to one shared socket" mode in the helpers: if an application
 //! wants that, it binds a plain socket on the control plane and says so.
 //!
+//! # Steering the group: `attach_reuseport_cbpf`
+//!
+//! The kernel's default spread is a 4-tuple hash. When the application must
+//! decide which socket of the group gets a packet (QUIC connection-ID
+//! affinity, a key-based shard map), [`attach_reuseport_cbpf`] installs a
+//! classic-BPF program on the group (`SO_ATTACH_REUSEPORT_CBPF`, Linux only).
+//! The program's return value is the **index of the socket in the group**,
+//! i.e. its bind order — so bind the `N` sockets sequentially on one thread,
+//! keep them in that order, and hand socket `i` to worker `i`. An index out of
+//! range makes the kernel fall back to the hash for that packet.
+//!
 //! # QUIC extension point
 //!
 //! R2E's own QUIC listener (`server.quic.*`) runs on the control plane. A
@@ -42,7 +53,10 @@ pub enum AffinityError {
         /// `"tcp"` or `"udp"`.
         transport: &'static str,
     },
-    /// The socket could not be created/bound.
+    /// `SO_ATTACH_REUSEPORT_CBPF` is unavailable on this platform (it is
+    /// Linux-only); the requested steering cannot be honoured.
+    ReuseportFilterUnsupported,
+    /// The socket could not be created/bound, or the filter was rejected.
     Io(std::io::Error),
 }
 
@@ -54,6 +68,9 @@ impl std::fmt::Display for AffinityError {
                 "worker-affine {transport} ingress needs SO_REUSEPORT, which this platform \
                  does not support"
             ),
+            Self::ReuseportFilterUnsupported => f.write_str(
+                "reuseport group steering needs SO_ATTACH_REUSEPORT_CBPF, which is Linux-only",
+            ),
             Self::Io(e) => write!(f, "worker-affine socket: {e}"),
         }
     }
@@ -63,7 +80,7 @@ impl std::error::Error for AffinityError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(e) => Some(e),
-            Self::Unsupported { .. } => None,
+            Self::Unsupported { .. } | Self::ReuseportFilterUnsupported => None,
         }
     }
 }
@@ -158,6 +175,108 @@ pub fn reuseport_tcp(addr: SocketAddr) -> Result<std::net::TcpListener, Affinity
 /// the kernel spreads datagrams (by 4-tuple) across them.
 pub fn reuseport_udp(addr: SocketAddr) -> Result<std::net::UdpSocket, AffinityError> {
     imp::reuseport_udp(addr)
+}
+
+/// One classic-BPF instruction, layout-compatible with the kernel's
+/// `struct sock_filter` (`linux/filter.h`).
+///
+/// Opcodes are the kernel's (`BPF_LD | BPF_W | BPF_ABS = 0x20`,
+/// `BPF_RET | BPF_A = 0x16`, …); R2E does not re-export a BPF assembler.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CbpfInsn {
+    /// Opcode.
+    pub code: u16,
+    /// Jump offset if true.
+    pub jt: u8,
+    /// Jump offset if false.
+    pub jf: u8,
+    /// Generic field (constant, offset, …).
+    pub k: u32,
+}
+
+impl CbpfInsn {
+    /// `CbpfInsn { code, jt, jf, k }`, usable in `const` program tables.
+    pub const fn new(code: u16, jt: u8, jf: u8, k: u32) -> Self {
+        Self { code, jt, jf, k }
+    }
+}
+
+/// Install a classic-BPF steering program on the `SO_REUSEPORT` group `sock`
+/// belongs to (`SO_ATTACH_REUSEPORT_CBPF`). Works on a UDP socket or a TCP
+/// listener from [`reuseport_udp`] / [`reuseport_tcp`], before or after the
+/// other members bind; the program applies to the whole group and replaces any
+/// previous one.
+///
+/// For UDP the program sees the packet from the start of the **UDP payload**.
+/// Its return value selects the socket by group index (= bind order, see the
+/// [module docs](self)); an out-of-range index falls back to the 4-tuple hash.
+///
+/// Errors: [`AffinityError::ReuseportFilterUnsupported`] off Linux; `Io` with
+/// `InvalidInput` for an empty program or one longer than `u16::MAX`
+/// instructions; `Io` with the kernel's error when it rejects the program.
+#[cfg(unix)]
+pub fn attach_reuseport_cbpf(
+    sock: &impl std::os::fd::AsFd,
+    program: &[CbpfInsn],
+) -> Result<(), AffinityError> {
+    if program.is_empty() || program.len() > usize::from(u16::MAX) {
+        return Err(AffinityError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "classic-BPF program must have 1..={} instructions, got {}",
+                u16::MAX,
+                program.len()
+            ),
+        )));
+    }
+    cbpf::attach(sock.as_fd(), program)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+mod cbpf {
+    use super::{AffinityError, CbpfInsn};
+    use std::os::fd::{AsRawFd, BorrowedFd};
+
+    const _: () = assert!(
+        std::mem::size_of::<CbpfInsn>() == std::mem::size_of::<libc::sock_filter>()
+            && std::mem::align_of::<CbpfInsn>() == std::mem::align_of::<libc::sock_filter>()
+    );
+
+    pub(super) fn attach(fd: BorrowedFd<'_>, program: &[CbpfInsn]) -> Result<(), AffinityError> {
+        let prog = libc::sock_fprog {
+            len: program.len() as u16,
+            // The kernel copies the program and never writes through it.
+            filter: program.as_ptr().cast_mut().cast::<libc::sock_filter>(),
+        };
+        // SAFETY: `CbpfInsn` is `repr(C)` with the `sock_filter` layout
+        // (asserted above); `prog` and `program` outlive the syscall, which
+        // copies the instructions into the kernel.
+        let rc = unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_ATTACH_REUSEPORT_CBPF,
+                std::ptr::from_ref(&prog).cast(),
+                std::mem::size_of::<libc::sock_fprog>() as libc::socklen_t,
+            )
+        };
+        if rc == -1 {
+            Err(std::io::Error::last_os_error().into())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+mod cbpf {
+    use super::{AffinityError, CbpfInsn};
+    use std::os::fd::BorrowedFd;
+
+    pub(super) fn attach(_fd: BorrowedFd<'_>, _program: &[CbpfInsn]) -> Result<(), AffinityError> {
+        Err(AffinityError::ReuseportFilterUnsupported)
+    }
 }
 
 impl WorkerContext {

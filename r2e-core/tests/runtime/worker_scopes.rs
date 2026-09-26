@@ -8,11 +8,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(unix)]
+use r2e_core::attach_reuseport_cbpf;
 use r2e_core::rt::sync::oneshot;
 use r2e_core::runtime::worker::{PerWorkerServiceFactory, WorkerContext, WorkerService};
 use r2e_core::{
-    reuseport_supported, reuseport_tcp, reuseport_udp, MailboxError, Mailboxes, WorkerHarness,
-    WorkerInfo, WorkerLocal, WorkerRole, WorkerSet, WorkerState,
+    reuseport_supported, reuseport_tcp, reuseport_udp, AffinityError, CbpfInsn, MailboxError,
+    Mailboxes, WorkerHarness, WorkerInfo, WorkerLocal, WorkerRole, WorkerSet, WorkerState,
 };
 
 // ── WorkerInfo ──────────────────────────────────────────────────────────
@@ -511,6 +513,67 @@ async fn adopt_udp_registers_the_socket_with_the_worker_runtime() {
         .await;
     assert_eq!(echoed, b"ping");
     h.shutdown().await;
+}
+
+// BPF_RET | BPF_K: return the constant `k`.
+const RET_K: u16 = 0x06;
+
+#[test]
+fn attach_reuseport_cbpf_rejects_an_empty_program() {
+    if !reuseport_supported() {
+        return;
+    }
+    let sock = reuseport_udp("127.0.0.1:0".parse().unwrap()).unwrap();
+    let e = attach_reuseport_cbpf(&sock, &[]).unwrap_err();
+    assert!(
+        matches!(&e, AffinityError::Io(io) if io.kind() == std::io::ErrorKind::InvalidInput),
+        "{e:?}"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn attach_reuseport_cbpf_steers_the_group_by_bind_order() {
+    let first = reuseport_udp("127.0.0.1:0".parse().unwrap()).unwrap();
+    let bound = first.local_addr().unwrap();
+    let second = reuseport_udp(bound).unwrap();
+    // Every datagram goes to group index 1 — the socket bound second.
+    attach_reuseport_cbpf(&first, &[CbpfInsn::new(RET_K, 0, 0, 1)]).unwrap();
+
+    // Distinct source ports: the 4-tuple hash alone would spread these.
+    for i in 0..16u8 {
+        let client = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        client.send_to(&[i], bound).unwrap();
+    }
+    second.set_nonblocking(false).unwrap();
+    second
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 4];
+    for _ in 0..16 {
+        let (n, _) = second.recv_from(&mut buf).expect("steered datagram");
+        got.extend_from_slice(&buf[..n]);
+    }
+    got.sort_unstable();
+    assert_eq!(got, (0..16u8).collect::<Vec<_>>());
+    let e = first.recv_from(&mut buf).unwrap_err();
+    assert_eq!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock,
+        "index 0 got a datagram"
+    );
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+#[test]
+fn attach_reuseport_cbpf_is_refused_off_linux() {
+    let sock = reuseport_udp("127.0.0.1:0".parse().unwrap()).unwrap();
+    let e = attach_reuseport_cbpf(&sock, &[CbpfInsn::new(RET_K, 0, 0, 0)]).unwrap_err();
+    assert!(
+        matches!(e, AffinityError::ReuseportFilterUnsupported),
+        "{e:?}"
+    );
 }
 
 #[allow(dead_code)]

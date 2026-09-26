@@ -379,6 +379,41 @@ application never re-dispatches. The contract, by transport:
 | UDP / QUIC | `reuseport_udp(addr) -> std::net::UdpSocket` then `worker.adopt_udp(s)` (or hand the std socket to `quinn::Endpoint::new`) | your per-worker service | Linux: 4-tuple hash across the group; macOS: **one** socket receives everything | `Err(AffinityError::Unsupported { transport: "udp" })` |
 
 `reuseport_supported()` is a `const fn` for an early, explicit check.
+
+### Steering the group: `attach_reuseport_cbpf`
+
+When the 4-tuple hash is not enough — QUIC must route by destination
+connection ID, a protocol must shard by key — install a classic-BPF program on
+the group with `attach_reuseport_cbpf(&sock, &[CbpfInsn])`
+(`SO_ATTACH_REUSEPORT_CBPF`). The program's return value is the **group
+index** of the target socket, which is its **bind order**; an out-of-range
+index falls back to the hash. So bind all `N` sockets on the control plane,
+in order, attach once, and let factory `i` claim socket `i`:
+
+```rust,ignore
+use r2e::runtime::ingress::{attach_reuseport_cbpf, reuseport_udp, CbpfInsn};
+
+// ld [0] (first payload byte); mod N; ret A  — pick the worker from byte 0.
+const fn prog(n: u32) -> [CbpfInsn; 3] {
+    [CbpfInsn::new(0x30, 0, 0, 0), CbpfInsn::new(0x94, 0, 0, n), CbpfInsn::new(0x16, 0, 0, 0)]
+}
+
+let first = reuseport_udp(addr)?;
+let bound = first.local_addr()?;
+let mut group = vec![first];
+for _ in 1..n { group.push(reuseport_udp(bound)?); }   // index = bind order
+attach_reuseport_cbpf(&group[0], &prog(n as u32))?;     // applies to the whole group
+let slots: Arc<[Mutex<Option<std::net::UdpSocket>>]> =
+    group.into_iter().map(|s| Mutex::new(Some(s))).collect();
+// factory: let sock = slots[worker.id()].lock().unwrap().take().unwrap();
+//          let sock = worker.adopt_udp(sock)?;
+```
+
+For UDP the program reads from the start of the UDP payload. The helper is
+Linux-only: elsewhere it returns `AffinityError::ReuseportFilterUnsupported`
+(and it is not compiled on non-unix targets). An empty program, or one longer
+than `u16::MAX` instructions, is `AffinityError::Io(InvalidInput)`; a program
+the kernel rejects surfaces its `errno` as `Io`.
 `adopt_*` asserts it runs on the worker's own thread (the socket is registered
 with **that** runtime's reactor) — calling it from the control plane panics
 with a message naming the worker. Nothing in R2E ever silently falls back to a
@@ -433,6 +468,7 @@ Nothing is removed; the new API is layered on top.
 |---|---|
 | `per_worker_service(\|w\| async { Ok(MyService{..}) })` with `Rc` state read only from inside the service | `.worker_local(\|w\| async { Ok(state) })` and `#[inject] state: WorkerLocal<State>` in controllers, `state.with(..)` in handlers |
 | Hand-rolled `socket2` `SO_REUSEPORT` bind + `rt::UdpSocket::from_std` | `reuseport_udp(addr)?` + `worker.adopt_udp(sock)?` |
+| Hand-rolled `libc::setsockopt(.., SO_ATTACH_REUSEPORT_CBPF, ..)` | `attach_reuseport_cbpf(&sock, &[CbpfInsn::new(..), ..])?` |
 | Custom `Arc<Mutex<Vec<…>>>` written from every worker to aggregate | `Mailboxes<Cmd>` + `ask_all` from a control-plane `#[scheduled]` or admin route |
 | Reading `worker.id()` only inside the factory | `WorkerInfo` handler parameter / `WorkerInfo::current()` |
 | No view of worker lifecycle | `.provide(WorkerSet::new())` + `WorkerHealth::new()` + `WorkerCollector` |
