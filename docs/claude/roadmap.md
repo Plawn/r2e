@@ -471,6 +471,51 @@ legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
 public clients with a Docker-free, one-time Authorization Code + PKCE S256
 flow.
 
+SHIPPED 2026-09-26 (branch feat/mcp-dynamic-session-members): per-session
+member lists for tools, resources and prompts. The boot-time `Catalog`
+(immutable, `Arc`) is split from a copy-on-write `SessionView`; sessions that
+never change share one default view, so the hotpath allocation guard is
+unchanged. There are three ways to shape a session's list:
+- groups: `#[mcp_routes(group, opt_in)]` or a per-member `group` override;
+- the `McpSession` member parameter, which can enable/disable groups and
+  add/remove private `DynamicTool`/`DynamicResource`/`DynamicPrompt` members;
+- the `McpServer::session_init::<T: McpSessionInit>()` hook, plus the
+  plugin-provided `McpSessions` bean (`for_subject`/`all`).
+
+Locked decisions:
+- A hidden member answers like an unknown one (fail-closed; no enumeration
+  oracle).
+- `get_tool` stays catalog-wide, because rmcp caches it per name; visibility
+  is enforced in `call_tool`.
+- A private member cannot shadow any catalog name.
+- `listChanged: true` on all three families as soon as dynamism is used.
+- Under `mcp.stateless`, a member taking `McpSession` is a boot panic.
+- A session binds to the `sub` of its `initialize`; another subject gets
+  `-32600` "belongs to another principal".
+- A session is persistent and registered with `McpSessions` in `initialize`.
+  Under stateful serving, rmcp only hands the handshake to a handler it built
+  for a new or restored session, so no `Mcp-Session-Id` header check is needed.
+
+BREAKING: new pub fields on hand-built literals:
+- `group` on `ToolRoute`/`ResourceRoute`/`PromptRoute`;
+- `session` on `ToolCall`/`ResourceCall`/`PromptCall`;
+- `uses_session` on `McpRoutes`.
+
+Also, `McpServer::Provided` gains `McpSessions`.
+
+Open follow-ups:
+- (a) The standalone SSE `GET` stream is not subject-checked. Only
+  notifications flow on it, but it should reuse the binding. Fix: move the
+  session ↔ principal binding into `auth/layer.rs`, keyed on
+  `mcp-session-id`, so it covers POST, GET and DELETE alike (the handler
+  `prepare` check then becomes a backstop).
+- (c) A single choke point for `prepare`: a wrapper implementing
+  `Service<RoleServer>` that runs it in `handle_request`. Today each
+  `ServerHandler` method calls it by hand. `ping`, `completion` and
+  `set_level` stay on rmcp's defaults and read no session state.
+- (b) `McpSessions::each`/bulk ops and per-tenant filtering, if a real app
+  asks for them.
+
 ## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
 
 **All 6 sprints landed on `task/w17-sprints`, one commit per sprint**

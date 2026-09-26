@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~3600
+tokens: ~4900
 requires: guards, security
 ---
 
@@ -34,6 +34,11 @@ requires: guards, security
 - A duplicate tool name, fixed resource URI, URI template or prompt name across
   services is a **boot panic**; one type cannot be both `#[routes]` and
   `#[mcp_routes]`.
+- Per-session lists: `#[mcp_routes(group = "git", opt_in)]` hides a service
+  until a session enables it; a member parameter `session: McpSession` lets a
+  tool `enable_group`/`add_tool(DynamicTool::…)`; `McpServer::session_init::<T>()`
+  shapes the list from the opening request; the `McpSessions` bean reaches
+  live sessions by subject. Hidden = unknown (not callable).
 - Auth: set `server.public-url` + `mcp.auth.issuer` (any OIDC IdP) and the rest
   is discovered; with no `mcp.auth` section the server is unauthenticated.
 - Set `mcp.allowed-hosts` behind a proxy or public hostname (the default
@@ -171,6 +176,111 @@ graceful shutdown terminates live SSE streams. Test over `TestApp`: POST the
 JSON-RPC envelope to `/mcp` with `accept: application/json, text/event-stream`
 (responses are SSE `data:` events; see `examples/example-mcp/tests/mcp_e2e.rs`).
 
+### Dynamic members — per-session lists
+
+Every session starts from the boot-time catalog; groups, a session handle and
+session-private members change what ONE session sees. Typed `#[mcp_routes]`
+members stay compile-checked; the dynamism is *which* members a session sees.
+
+```rust
+#[derive(serde::Deserialize, schemars::JsonSchema, ObjectParams)]
+pub struct TableIn { pub table: String }
+
+#[derive(serde::Deserialize, schemars::JsonSchema, ObjectParams)]
+pub struct QueryIn { pub sql: String }
+
+#[controller]
+pub struct GitTools;
+
+#[mcp_routes(group = "git", opt_in)]      // whole service in group "git", hidden until enabled
+impl GitTools {
+    /// Working tree status.
+    #[tool]
+    async fn git_status(&self) -> &'static str { "clean" }
+}
+
+#[controller]
+pub struct Toolbox;
+
+#[mcp_routes]
+impl Toolbox {
+    /// Reveal the git tools to this session.
+    #[tool]
+    async fn enable_git(&self, session: McpSession) -> Result<&'static str, McpError> {
+        session.enable_group("git")?;      // + notifications/tools/list_changed
+        Ok("git tools enabled")
+    }
+
+    /// Create a session-private query tool for one table.
+    #[tool]
+    async fn open_table(&self, Params(p): Params<TableIn>, session: McpSession) -> Result<String, McpError> {
+        let name = format!("query_{}", p.table);
+        session.add_tool(
+            DynamicTool::new(name.clone())
+                .description("Run a read-only query")
+                .scopes(&["db:read"])                     // same scope/role gates as #[tool]
+                .handler(|q: QueryIn, _call: ToolCall| async move { format!("ran {}", q.sql) }),
+        )?;                                               // name collision → Err, never a panic
+        Ok(name)
+    }
+
+    /// Per-member group, visible by default (no `opt_in`).
+    #[tool(group = "admin")]
+    async fn stats(&self) -> &'static str { "42" }
+}
+
+#[derive(Clone)]
+pub struct RoleToolsets;
+
+impl McpSessionInit for RoleToolsets {
+    async fn init(&self, s: &SessionInit) -> Result<SessionToolset, McpError> {
+        let toolset = SessionToolset::new().enable_if(s.has_role("dev"), "git");
+        // "admin" is on by default (no `opt_in`): switch it off for non-admins.
+        Ok(if s.has_role("admin") { toolset } else { toolset.disable("admin") })
+    }
+}
+
+# async fn __doc(b: AppBuilder) -> impl Sized {
+b.provide(RoleToolsets)                                    // the hook is a bean
+    .plugin(McpServer::new().session_init::<RoleToolsets>())
+    .build_state().await
+    .register_mcp_service::<GitTools>()
+    .register_mcp_service::<Toolbox>()
+# }
+# fn main() {}
+```
+
+- Groups: `#[mcp_routes(group = "…")]` (service) or `#[tool|resource|prompt(group
+  = "…")]` (member, overrides); `opt_in` = hidden until enabled (needs a
+  `group` — compile error otherwise). No group = always visible (existing apps
+  unchanged).
+- A hidden or foreign member answers **exactly like an unknown one** (tool
+  -32601, resource -32002, prompt -32602); scope/role filtering still applies
+  on top, to private members too.
+- `McpSession` (at most one per member; also `ToolCall::session`,
+  `ResourceCall::session`, `PromptCall::session`): `enable_group`,
+  `disable_group`, `add_tool`/`remove_tool`, `add_resource`/`remove_resource`
+  (`DynamicResource::new(uri, name).handler(|call: ResourceCall| async { … })`),
+  `add_prompt`/`remove_prompt` (`DynamicPrompt::new(name).handler(|p: T, call:
+  PromptCall| …)`), `apply(SessionToolset)` (batched, one notification),
+  `is_group_enabled`, `has_tool`, `subject`. A private member cannot shadow a
+  catalog name, even a hidden one.
+- `McpSessionInit::init` runs once per session, lazily on its first request
+  (`SessionInit`: `principal`, `subject`, `has_role`, `has_scope`,
+  `identity::<T>()`, `header`, `parts`); `Err` fails that request and is
+  retried. A missing hook bean is a boot panic.
+- `McpSessions` (plugin-provided bean — `#[inject] sessions: McpSessions`):
+  `for_subject(sub)`, `all()`, `len()`; each item is an `McpSession`. Use it
+  from an admin route or a `#[consumer]` to change a live user's toolset.
+- Sessions are **bound to the principal that opened them**: the same session
+  id with another token's subject is refused (`-32600`, "belongs to another
+  principal").
+- Once lists are dynamic (any `opt_in` group, a `session_init`, or a member
+  taking `McpSession`), all three families advertise `listChanged: true`.
+- `mcp.stateless: true`: groups and `session_init` work (recomputed per
+  request); a member taking `McpSession` is a **boot panic** (mutations would
+  not outlive the request).
+
 ### MCP auth — OAuth 2.1 resource server (`mcp.auth.*`)
 
 Works with ANY OIDC IdP (Keycloak, Auth0, Entra, Okta). Three YAML keys:
@@ -281,5 +391,7 @@ exhaustive protocol and auth cases live in `r2e-mcp/tests`.
   `McpError::tool(...)` degrades there to JSON-RPC -32603.
 - Do not give a prompt non-string argument fields — MCP argument values are
   strings.
+- Do not try to hide a tool by filtering `tools/list` yourself — use a group;
+  an `opt_in` member is also uncallable, a filtered one would not be.
 - Do not make one type both `#[routes]` and `#[mcp_routes]`; share a bean
   between a thin HTTP controller and a thin MCP service instead.

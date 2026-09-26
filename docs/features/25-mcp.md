@@ -73,6 +73,7 @@ bad `#[config]` key is caught at `register_mcp_service` — a missing
 | `Params<T>` | Typed tool arguments. `T: Deserialize + JsonSchema + ObjectParams`; derive all three on a named-field struct. The sealed marker rejects scalar/tuple/enum root schemas at compile time. The schema becomes the tool's `inputSchema` (doc comments → property descriptions, `Option<..>` fields → not required, nested types/enums kept as inline `$defs`). |
 | `ToolCall` | Everything about the call: `arguments` (raw JSON), `parts` (HTTP request parts of the transport request — headers, URI, extensions), `request_id`, `cancel` (`CancelToken`, fired on client abort / shutdown). |
 | `CancelToken` | Just the cancellation token. |
+| `McpSession` | The caller's session handle: change what this session sees (see Dynamic members). At most one. |
 | `#[inject(identity)] user: I` / `Option<I>` | The authenticated caller (wired by the MCP auth layer — see the Auth section). |
 
 Anything else is a targeted compile error — beans and config go on the
@@ -238,6 +239,111 @@ pub struct CalcController { #[inject] calc: CalcService } // HTTP adapter (#[rou
 
 `examples/example-mcp` is the worked example (HTTP + MCP + guards +
 interceptors + `TestApp` e2e tests).
+
+## Dynamic members (per-session lists)
+
+By default every session sees the same list, fixed at boot (modulo the
+scope/role filter). Three levers let each session have its own list, for all
+three families. Typed `#[mcp_routes]` members stay declared and compile-checked;
+what changes at runtime is **which** members a session sees, plus private
+members built for one session.
+
+### Groups
+
+```rust
+#[mcp_routes(group = "git", opt_in)]   // every member in "git", hidden until enabled
+impl GitTools {
+    #[tool]
+    async fn git_status(&self) -> &'static str { "clean" }
+
+    #[prompt(group = "review")]        // a member-level group overrides the service's
+    async fn review_diff(&self) -> &'static str { "Review the staged diff." }
+}
+```
+
+- No `group` → implicit, always-on group: existing services are unchanged.
+- `group` without `opt_in` → visible by default, can be *disabled* per session.
+- `opt_in` requires a `group` (compile error otherwise).
+- **Hidden = not callable.** A member of a disabled group answers exactly like
+  an unknown one (`-32601` tool, `-32002` resource, `-32602` prompt): no
+  enumeration oracle. The scope/role filter still applies on top.
+
+### During the session — `McpSession`
+
+A member (tool, resource or prompt) takes `session: McpSession`; the handle is
+also on `ToolCall::session` / `ResourceCall::session` / `PromptCall::session`.
+
+```rust
+#[tool]
+async fn enable_git(&self, session: McpSession) -> Result<&'static str, McpError> {
+    session.enable_group("git")?;            // + notifications/tools/list_changed
+    Ok("git tools enabled")
+}
+
+#[tool]
+async fn open_table(&self, Params(p): Params<TableIn>, session: McpSession) -> Result<String, McpError> {
+    let name = format!("query_{}", p.table);
+    session.add_tool(
+        DynamicTool::new(name.clone())
+            .description("Run a read-only query")
+            .scopes(&["db:read"])            // same gates as #[tool(scopes)] / #[roles]
+            .handler(|q: QueryIn, _call: ToolCall| async move { format!("ran {}", q.sql) }),
+    )?;
+    Ok(name)
+}
+```
+
+Operations: `enable_group` / `disable_group`, `add_tool` / `remove_tool`,
+`add_resource` / `remove_resource` (`DynamicResource::new(uri, name)`),
+`add_prompt` / `remove_prompt` (`DynamicPrompt::new(name)`, `Params`-style
+arguments from the handler's first parameter), and `apply(SessionToolset)` to
+batch several changes behind one notification. A private member whose name
+collides with the catalog (even a hidden member) or another private member is
+an `Err`, never a panic. Updates are copy-on-write: an in-flight call keeps
+the view it started with, and sessions that never change share one view.
+
+### At open — `McpSessionInit`
+
+```rust
+#[derive(Clone)]
+pub struct RoleToolsets;
+
+impl McpSessionInit for RoleToolsets {
+    async fn init(&self, s: &SessionInit) -> Result<SessionToolset, McpError> {
+        Ok(SessionToolset::new().enable_if(s.has_role("dev"), "git"))
+    }
+}
+
+AppBuilder::new()
+    .provide(RoleToolsets)                               // the hook is a bean
+    .plugin(McpServer::new().session_init::<RoleToolsets>())
+```
+
+Runs once per session, lazily on its first request so the caller's identity
+is known (`principal`, `subject`, `has_role`, `has_scope`, `identity::<T>()`,
+`header`, `parts`). An `Err` fails that request and is retried on the next.
+A missing hook bean is a boot panic.
+
+### From outside — the `McpSessions` bean
+
+The plugin provides `McpSessions` (`#[inject] sessions: McpSessions`):
+`for_subject(sub)`, `all()`, `len()`, each item an `McpSession`. Use it from an
+admin endpoint or a `#[consumer]` to change a live user's toolset. Sessions are
+held weakly and listed from their `initialize` handshake on.
+
+### Security, capabilities, stateless
+
+- A session is **bound to the principal that opened it** (`sub`): the same
+  session id presented with another subject's token is refused (`-32600`,
+  "this MCP session belongs to another principal"). The standalone SSE `GET`
+  stream is not yet subject-checked — it only carries notifications.
+- As soon as lists can change (an `opt_in` group, a `session_init`, or a
+  member taking `McpSession`), all three families advertise
+  `listChanged: true`. Changes are pushed to legacy sessions via their peer and
+  to 2026 `subscriptions/listen` streams that accepted `*_list_changed`.
+- `mcp.stateless: true`: groups and `session_init` work (recomputed per
+  request); a member taking `McpSession` is a boot panic, since a mutation
+  would not outlive its request.
 
 ## Configuration (`mcp.*`)
 

@@ -8,6 +8,7 @@ mod support;
 mod fixtures;
 
 mod dispatch;
+mod dynamic;
 mod interceptors;
 mod lifecycle;
 mod plugin;

@@ -19,9 +19,45 @@ use serde_json::Value;
 
 use crate::auth::ToolRequirements;
 use crate::error::McpError;
+use crate::session::McpSession;
 
 /// A JSON Schema object body (the map under `inputSchema`).
 pub type SchemaObject = serde_json::Map<String, Value>;
+
+/// The member group a route belongs to (`#[mcp_routes(group = "...")]` /
+/// `#[tool(group = "...")]`).
+///
+/// Groups are the unit a session switches on and off
+/// ([`McpSession::enable_group`]): an **opt-in** group is invisible — and
+/// not callable — until the session enables it; any other group starts
+/// enabled and can be disabled. Members without a group are always served.
+/// Every member naming the same group must agree on `opt_in` (a mismatch is
+/// a boot panic).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpGroup {
+    /// The group name, global across services.
+    pub name: Cow<'static, str>,
+    /// Hidden until a session enables it.
+    pub opt_in: bool,
+}
+
+impl McpGroup {
+    /// A group enabled by default.
+    pub const fn new(name: &'static str) -> Self {
+        McpGroup {
+            name: Cow::Borrowed(name),
+            opt_in: false,
+        }
+    }
+
+    /// A group hidden until a session enables it.
+    pub const fn opt_in(name: &'static str) -> Self {
+        McpGroup {
+            name: Cow::Borrowed(name),
+            opt_in: true,
+        }
+    }
+}
 
 /// Everything a tool invocation can observe about its call.
 ///
@@ -45,6 +81,9 @@ pub struct ToolCall {
     /// Cancelled when the client aborts the request or the server shuts
     /// down. Long-running tools should observe it.
     pub cancel: CancelToken,
+    /// The MCP session serving this call — what an `McpSession` member
+    /// parameter resolves to. `None` only for hand-built calls.
+    pub session: Option<McpSession>,
 }
 
 impl ToolCall {
@@ -70,12 +109,18 @@ impl ToolCall {
     /// Declaring the parameter as `Arc<AuthenticatedUser>` skips the copy
     /// entirely: that lookup hits the fallback and finds the shared `Arc`.
     pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
-        let extensions = &self.parts.as_ref()?.extensions;
-        extensions
-            .get::<Arc<T>>()
-            .map(|shared| (**shared).clone())
-            .or_else(|| extensions.get::<T>().cloned())
+        identity_in(self.parts.as_deref())
     }
+}
+
+/// A request-scoped identity from the request head: the `Arc<T>` the auth
+/// layer shares, or a plain `T` inserted by another layer.
+pub(crate) fn identity_in<T: Clone + Send + Sync + 'static>(parts: Option<&Parts>) -> Option<T> {
+    let extensions = &parts?.extensions;
+    extensions
+        .get::<Arc<T>>()
+        .map(|shared| (**shared).clone())
+        .or_else(|| extensions.get::<T>().cloned())
 }
 
 /// Boxed future returned by a tool invocation.
@@ -129,11 +174,12 @@ impl ToolAnnotations {
 /// One registered MCP tool: wire metadata plus its dispatch closure.
 ///
 /// Produced by the `#[mcp_routes]` macro (one per `#[tool]` method); can also
-/// be built by hand for dynamic tools.
+/// be built by hand, or with [`DynamicTool`](crate::DynamicTool) for members
+/// added to one session at runtime.
 #[derive(Clone)]
 pub struct ToolRoute {
     /// Unique tool name (unique across ALL registered services — a duplicate
-    /// is a boot panic).
+    /// is a boot panic; a session-private tool may not reuse it either).
     pub name: Cow<'static, str>,
     /// Optional human-readable title.
     pub title: Option<String>,
@@ -155,6 +201,8 @@ pub struct ToolRoute {
     /// by the `tools/list` visibility filter. [`ToolRequirements::NONE`] for
     /// unrestricted tools.
     pub requirements: ToolRequirements,
+    /// The member group, if any — see [`McpGroup`].
+    pub group: Option<McpGroup>,
     /// The dispatch closure.
     pub invoke: ToolInvoke,
 }
@@ -216,6 +264,9 @@ pub struct ResourceCall {
     /// Cancelled when the client aborts the request or the server shuts
     /// down.
     pub cancel: CancelToken,
+    /// The MCP session serving this call — same semantics as
+    /// [`ToolCall::session`].
+    pub session: Option<McpSession>,
 }
 
 impl ResourceCall {
@@ -228,11 +279,7 @@ impl ResourceCall {
     /// Resolve a request-scoped identity — same semantics as
     /// [`ToolCall::identity`].
     pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
-        let extensions = &self.parts.as_ref()?.extensions;
-        extensions
-            .get::<Arc<T>>()
-            .map(|shared| (**shared).clone())
-            .or_else(|| extensions.get::<T>().cloned())
+        identity_in(self.parts.as_deref())
     }
 }
 
@@ -266,6 +313,8 @@ pub struct ResourceRoute {
     /// `#[roles]`/`#[all_roles]`) — checked in the read prologue and used by
     /// the `resources/list` visibility filter.
     pub requirements: ToolRequirements,
+    /// The member group, if any — see [`McpGroup`].
+    pub group: Option<McpGroup>,
     /// The read closure.
     pub invoke: ResourceInvoke,
 }
@@ -326,6 +375,9 @@ pub struct PromptCall {
     /// Cancelled when the client aborts the request or the server shuts
     /// down.
     pub cancel: CancelToken,
+    /// The MCP session serving this call — same semantics as
+    /// [`ToolCall::session`].
+    pub session: Option<McpSession>,
 }
 
 impl PromptCall {
@@ -338,11 +390,7 @@ impl PromptCall {
     /// Resolve a request-scoped identity — same semantics as
     /// [`ToolCall::identity`].
     pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
-        let extensions = &self.parts.as_ref()?.extensions;
-        extensions
-            .get::<Arc<T>>()
-            .map(|shared| (**shared).clone())
-            .or_else(|| extensions.get::<T>().cloned())
+        identity_in(self.parts.as_deref())
     }
 }
 
@@ -389,6 +437,8 @@ pub struct PromptRoute {
     /// `#[roles]`/`#[all_roles]`) — checked in the expansion prologue and
     /// used by the `prompts/list` visibility filter.
     pub requirements: ToolRequirements,
+    /// The member group, if any — see [`McpGroup`].
+    pub group: Option<McpGroup>,
     /// The expansion closure.
     pub invoke: PromptInvoke,
 }
@@ -439,6 +489,10 @@ pub struct McpRoutes {
     pub resources: Vec<ResourceRoute>,
     /// `#[prompt]` routes.
     pub prompts: Vec<PromptRoute>,
+    /// Whether a member takes an [`McpSession`] parameter (it may reshape
+    /// its session's member list). Turns on `listChanged` in the advertised
+    /// capabilities; rejected at boot under `mcp.stateless`.
+    pub uses_session: bool,
 }
 
 impl McpRoutes {

@@ -1526,6 +1526,13 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 ///   caller, read from the transport request extensions
 /// - `call: ToolCall` — raw call metadata (arguments, HTTP parts, request id)
 /// - `cancel: CancelToken` — cancelled on client abort / shutdown
+/// - `session: McpSession` — the caller's session: enable/disable groups,
+///   add/remove session-private members
+///
+/// Groups (per-session visibility): `#[mcp_routes(group = "git")]` puts every
+/// member in a group, `#[tool(group = "…")]` / `#[resource(group = "…")]` /
+/// `#[prompt(group = "…")]` overrides it per member, and `opt_in` (which
+/// requires a `group`) hides the group until a session enables it.
 ///
 /// Guards (`#[roles]`, `#[all_roles]`, `#[guard]`) and interceptors
 /// (`#[intercept]`) are supported per method and on the impl block (applied
@@ -1551,16 +1558,12 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_attribute]
 pub fn mcp_routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    if !args.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "#[mcp_routes] takes no arguments",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let group = match mcp_routes_parsing::parse_impl_args(args.into()) {
+        Ok(group) => group,
+        Err(err) => return err.to_compile_error().into(),
+    };
     let item = syn::parse_macro_input!(input as syn::ItemImpl);
-    match mcp_routes_parsing::parse(item) {
+    match mcp_routes_parsing::parse(item, group) {
         Ok(def) => mcp_codegen::generate(&def).into(),
         Err(err) => err.to_compile_error().into(),
     }

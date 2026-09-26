@@ -13,6 +13,7 @@ mod identity;
 mod keycloak;
 mod layer;
 mod scopes;
+mod sessions;
 mod shim;
 mod tools;
 mod wellknown;

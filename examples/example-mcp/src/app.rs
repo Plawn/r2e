@@ -117,6 +117,20 @@ pub struct BinaryOperands {
     pub b: f64,
 }
 
+#[derive(Deserialize, JsonSchema, ObjectParams)]
+pub struct Unary {
+    /// The operand.
+    pub x: f64,
+}
+
+#[derive(Deserialize, JsonSchema, ObjectParams)]
+pub struct Constant {
+    /// Constant name (the private tool is `const_<name>`).
+    pub name: String,
+    /// Its value.
+    pub value: f64,
+}
+
 #[derive(Serialize, JsonSchema)]
 pub struct CalcResult {
     /// The result of the operation.
@@ -185,6 +199,30 @@ impl MathTools {
         self.log.0.lock().unwrap().join("\n")
     }
 
+    /// Reveal the scientific tools (`sqrt`, …) to this session only.
+    #[tool]
+    async fn enable_scientific(&self, session: McpSession) -> Result<&'static str, McpError> {
+        session.enable_group("scientific")?;
+        Ok("scientific tools enabled; the tool list has changed")
+    }
+
+    /// Remember a named constant as a session-private tool `const_<name>`.
+    #[tool]
+    async fn remember(
+        &self,
+        Params(c): Params<Constant>,
+        session: McpSession,
+    ) -> Result<String, McpError> {
+        let name = format!("const_{}", c.name);
+        let value = c.value;
+        session.add_tool(
+            DynamicTool::new(name.clone())
+                .description(format!("Return the constant `{}`.", c.name))
+                .handler(move |_call: ToolCall| async move { value.to_string() }),
+        )?;
+        Ok(name)
+    }
+
     /// Reusable prompt template guiding an agent through a division,
     /// including the division-by-zero contract. Arguments are derived from
     /// the `Params` schema and advertised in `prompts/list`.
@@ -195,6 +233,26 @@ impl MathTools {
              report the tool's domain error to the user instead of retrying.",
             p.a, p.b
         )
+    }
+}
+
+// ── Opt-in toolset ─────────────────────────────────────────────────────
+//
+// Hidden (and uncallable) until a session calls `enable_scientific`: agents
+// start with a short tool list and pull in more on demand.
+
+#[controller]
+pub struct ScientificTools;
+
+#[mcp_routes(group = "scientific", opt_in)]
+impl ScientificTools {
+    /// Square root of `x`.
+    #[tool(read_only, idempotent)]
+    async fn sqrt(&self, Params(p): Params<Unary>) -> Result<Json<CalcResult>, McpError> {
+        if p.x < 0.0 {
+            return Err(McpError::tool("sqrt of a negative number: pass `x >= 0`"));
+        }
+        Ok(Json(CalcResult { value: p.x.sqrt() }))
     }
 }
 
@@ -241,7 +299,10 @@ impl App for McpApp {
             .plugin(
                 McpServer::new()
                     .with_name("example-mcp")
-                    .with_instructions("Calculator tools: add, divide, call_log, clear_log."),
+                    .with_instructions(
+                        "Calculator tools: add, divide, call_log, clear_log. \
+                         Call enable_scientific for sqrt; remember stores a constant.",
+                    ),
             )
             .provide(CalcService)
             .provide(CallLog::default())
@@ -252,6 +313,7 @@ impl App for McpApp {
                 Ok(())
             })
             .register_mcp_service::<MathTools>()
+            .register_mcp_service::<ScientificTools>()
             .register_controller::<CalcController>()
     })
     }

@@ -1,0 +1,5 @@
+error: `opt_in` needs a group: #[mcp_routes(group = "…", opt_in)] — only a named group can be enabled later by a session
+ --> cases/mcp/fail/mcp_routes_opt_in_without_group.rs:8:14
+  |
+8 | #[mcp_routes(opt_in)]
+  |              ^^^^^^

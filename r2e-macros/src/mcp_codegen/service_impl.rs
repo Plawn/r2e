@@ -65,6 +65,9 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     let decorator_config_stmts =
         crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
 
+    let uses_session = def
+        .uses_session
+        .then(|| quote! { __routes.uses_session = true; });
     let member_pushes: Vec<TokenStream> = def
         .members
         .iter()
@@ -99,6 +102,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
                     #(#deco_field_inits,)*
                 });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();
+                #uses_session
                 #(#member_pushes)*
                 __routes
             }
@@ -139,6 +143,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
         None => quote! { ::core::option::Option::None },
     };
 
+    let group = group_expr(tool, mcp);
     let requirements = super::requirements_expr(def, tool, mcp);
     let read_only = opt_bool(tool.meta.read_only);
     let destructive = opt_bool(tool.meta.destructive);
@@ -162,6 +167,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
                     open_world: #open_world,
                 },
                 requirements: #requirements,
+                group: #group,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ToolCall|
                         -> #mcp::__macro_support::ToolFuture {
@@ -190,6 +196,7 @@ fn generate_resource_route(
     let title = opt_string(&resource.meta.title);
     let description = opt_string(&tool_description(resource));
     let mime_type = opt_string(&resource.meta.mime_type);
+    let group = group_expr(resource, mcp);
     let requirements = super::requirements_expr(def, resource, mcp);
 
     quote! {
@@ -202,6 +209,7 @@ fn generate_resource_route(
                 description: #description,
                 mime_type: #mime_type,
                 requirements: #requirements,
+                group: #group,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ResourceCall|
                         -> #mcp::__macro_support::ResourceFuture {
@@ -229,6 +237,7 @@ fn generate_prompt_route(
     let name_str = prompt.tool_name();
     let title = opt_string(&prompt.meta.title);
     let description = opt_string(&tool_description(prompt));
+    let group = group_expr(prompt, mcp);
     let requirements = super::requirements_expr(def, prompt, mcp);
 
     let arguments = match prompt.params_type() {
@@ -249,6 +258,7 @@ fn generate_prompt_route(
                 description: #description,
                 arguments: #arguments,
                 requirements: #requirements,
+                group: #group,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::PromptCall|
                         -> #mcp::__macro_support::PromptFuture {
@@ -334,5 +344,23 @@ fn output_schema_probe(ty: &syn::Type, mcp: &TokenStream) -> TokenStream {
             use __NoSchema as _;
             (&__p).__schema().map(::std::sync::Arc::new)
         }
+    }
+}
+
+/// The `group: Option<McpGroup>` field of a member route.
+fn group_expr(member: &McpTool, mcp: &TokenStream) -> TokenStream {
+    match &member.group {
+        Some(group) => {
+            let name = &group.name;
+            let ctor = if group.opt_in {
+                quote! { opt_in }
+            } else {
+                quote! { new }
+            };
+            quote! {
+                ::core::option::Option::Some(#mcp::__macro_support::McpGroup::#ctor(#name))
+            }
+        }
+        None => quote! { ::core::option::Option::None },
     }
 }

@@ -38,7 +38,9 @@
 //! ```
 
 pub mod auth;
+mod catalog;
 pub mod config;
+pub mod dynamic;
 pub mod error;
 pub mod guard;
 pub mod handler;
@@ -49,6 +51,7 @@ pub mod resource_updates;
 pub mod result;
 pub mod route;
 pub mod service;
+pub mod session;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod uri_template;
@@ -58,6 +61,10 @@ use r2e_core::EndpointDeps;
 
 pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements};
 pub use config::McpConfig;
+pub use dynamic::{
+    DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
+    NoParams, WithParams,
+};
 pub use error::McpError;
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
@@ -65,11 +72,14 @@ pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use resource_updates::McpResourceUpdates;
 pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 pub use route::{
-    McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
+    McpGroup, McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
     ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
     ToolCall, ToolFuture, ToolInvoke, ToolRoute,
 };
 pub use service::McpService;
+pub use session::{
+    McpSession, McpSessionError, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+};
 
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
 pub use rmcp::model::Role as PromptMessageRole;
@@ -188,10 +198,11 @@ pub mod __macro_support {
     };
     pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
     pub use crate::route::{
-        McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
+        McpGroup, McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
         ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolRoute,
     };
     pub use crate::service::McpService;
+    pub use crate::session::McpSession;
     pub use r2e_core::NoIdentity;
     pub use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
 }
@@ -205,5 +216,7 @@ pub mod prelude {
     pub use crate::resource_updates::McpResourceUpdates;
     pub use crate::route::{PromptCall, ResourceCall, ToolCall};
     pub use crate::service::McpService;
+    pub use crate::session::{McpSession, McpSessionInit, McpSessions, SessionInit, SessionToolset};
+    pub use crate::dynamic::{DynamicPrompt, DynamicResource, DynamicTool};
     pub use crate::AppBuilderMcpExt;
 }

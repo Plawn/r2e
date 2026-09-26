@@ -356,7 +356,10 @@ src/
   lib.rs                    AppBuilderMcpExt (register_mcp_service + compile-time dep check), prelude, __macro_support
   plugin.rs                 McpServer plugin: path validation, shared session map, shutdown-token relay, endpoint mount
   config.rs                 McpConfig (`mcp.*`)
-  handler.rs                McpRuntime (dispatch table, duplicate-name boot panic) + rmcp ServerHandler impl
+  catalog.rs                Catalog (boot-time member table, groups, duplicate-name boot panic) + copy-on-write SessionView
+  handler.rs                rmcp ServerHandler impl: per-session dispatch, session↔principal binding, list_changed delivery
+  session.rs                McpSession handle, McpSessions bean, McpSessionInit hook, SessionToolset
+  dynamic.rs                DynamicTool/DynamicResource/DynamicPrompt builders (session-private members)
   registry.rs               McpServiceRegistry (filled at registration, drained once at router build)
   resource_updates.rs       Injectable resource-update publisher (legacy + current subscriptions)
   uri_template.rs           RFC 6570 reverse matching and captured variables
@@ -369,7 +372,8 @@ src/
 
 tests/
   support/mod.rs            oneshot-driven MCP protocol harness (initialize/session/SSE parsing)
-  server/                   plugin, registry, dispatch, schema, interceptors, lifecycle (sharded + stop)
+  server/                   plugin, registry, dispatch, schema, interceptors, lifecycle (sharded + stop), dynamic (per-session lists)
+  auth/                     OAuth resource server, scopes/roles, session binding (sessions)
 ```
 
 ---

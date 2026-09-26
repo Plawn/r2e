@@ -19,6 +19,7 @@ fn stub_tool(name: &'static str) -> ToolRoute {
         output_schema: None,
         annotations: Default::default(),
         requirements: ToolRequirements::NONE,
+        group: None,
         invoke: Arc::new(|_call| Box::pin(async { ().into_tool_result() })),
     }
 }

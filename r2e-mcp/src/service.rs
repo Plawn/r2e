@@ -38,6 +38,7 @@ use crate::route::McpRoutes;
 ///             tools: vec![/* one ToolRoute per #[tool] method */],
 ///             resources: vec![/* … per #[resource] method */],
 ///             prompts: vec![/* … per #[prompt] method */],
+///             uses_session: false, // true when a member takes `McpSession`
 ///         }
 ///     }
 /// }

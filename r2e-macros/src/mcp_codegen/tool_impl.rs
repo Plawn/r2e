@@ -228,9 +228,35 @@ fn generate_invoke_method(
         let resource_uri = (has_call && kind == McpMemberKind::Resource).then(|| {
             quote! { let __resource_uri = __call.uri.clone(); }
         });
+        // `ToolCall::session` is always `Some` from the transport; `None`
+        // only for hand-built calls (tests, adapters), reported plainly.
+        let session = tool
+            .args
+            .iter()
+            .any(|arg| matches!(arg, McpToolArg::Session))
+            .then(|| {
+                let missing = format!(
+                    "{} `{}` takes an McpSession but the call carries none",
+                    kind.attr_name(),
+                    fn_name_str,
+                );
+                quote! {
+                    let __session = match __call.session.clone() {
+                        ::core::option::Option::Some(__s) => __s,
+                        ::core::option::Option::None => {
+                            return ::core::result::Result::Err(
+                                #mcp::__macro_support::McpError::Internal(
+                                    ::std::string::String::from(#missing),
+                                ),
+                            );
+                        }
+                    };
+                }
+            });
         quote! {
             #cancel
             #resource_uri
+            #session
         }
     };
 
@@ -244,6 +270,7 @@ fn generate_invoke_method(
             McpToolArg::Call => quote! { __call },
             McpToolArg::Cancel if has_call => quote! { __cancel },
             McpToolArg::Cancel => quote! { __call.cancel.clone() },
+            McpToolArg::Session => quote! { __session },
         })
         .collect();
 

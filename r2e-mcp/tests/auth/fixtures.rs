@@ -308,14 +308,4 @@ pub async fn rpc_auth(
     response.message().clone()
 }
 
-/// The names in a `tools/list` result, sorted.
-pub fn tool_names(list_result: &Value) -> Vec<String> {
-    let mut names: Vec<String> = list_result["tools"]
-        .as_array()
-        .expect("tools array")
-        .iter()
-        .map(|t| t["name"].as_str().unwrap().to_string())
-        .collect();
-    names.sort();
-    names
-}
+pub use crate::support::tool_names;

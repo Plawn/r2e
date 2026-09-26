@@ -79,6 +79,18 @@ pub struct McpToolMeta {
     /// Scopes of which the caller must hold at least one (`any_scopes = ...`,
     /// same forms as `scopes`).
     pub any_scopes: Vec<String>,
+    /// Member group (`group = "..."`), overriding the service's.
+    pub group: Option<String>,
+    /// `opt_in`: the group is hidden until a session enables it.
+    pub opt_in: bool,
+}
+
+/// A resolved member group: `#[mcp_routes(group = "...", opt_in)]` or the
+/// member's own `group`/`opt_in`.
+#[derive(Clone)]
+pub struct McpGroupSpec {
+    pub name: String,
+    pub opt_in: bool,
 }
 
 /// One (typed, non-receiver) parameter of a member method, in declaration
@@ -94,6 +106,8 @@ pub enum McpToolArg {
     Call,
     /// A `CancelToken` parameter.
     Cancel,
+    /// An `McpSession` parameter (the caller's session handle).
+    Session,
 }
 
 /// A single `#[tool]` / `#[resource]` / `#[prompt]` method with parsed
@@ -113,6 +127,8 @@ pub struct McpTool {
     pub decorators: MethodDecorators,
     /// Typed parameters in declaration order.
     pub args: Vec<McpToolArg>,
+    /// The member's group: its own `group`, else the service's.
+    pub group: Option<McpGroupSpec>,
     /// The original method item (with known attrs stripped).
     pub fn_item: syn::ImplItemFn,
 }
@@ -159,6 +175,8 @@ pub struct McpRoutesImplDef {
     pub controller_all_roles: Vec<String>,
     /// `#[tool]` / `#[resource]` / `#[prompt]` methods, in declaration order.
     pub members: Vec<McpTool>,
+    /// Some member takes an `McpSession` parameter.
+    pub uses_session: bool,
     /// The original inherent impl with only MCP-owned attributes stripped.
     /// Keeping the complete item preserves helper ordering, associated items,
     /// and passive impl attributes instead of reconstructing a lossy impl.
@@ -179,6 +197,8 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "open_world",
             "scopes",
             "any_scopes",
+            "group",
+            "opt_in",
         ],
         McpMemberKind::Resource => &[
             "uri",
@@ -188,8 +208,18 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "mime_type",
             "scopes",
             "any_scopes",
+            "group",
+            "opt_in",
         ],
-        McpMemberKind::Prompt => &["name", "title", "description", "scopes", "any_scopes"],
+        McpMemberKind::Prompt => &[
+            "name",
+            "title",
+            "description",
+            "scopes",
+            "any_scopes",
+            "group",
+            "opt_in",
+        ],
     }
 }
 
@@ -222,15 +252,6 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
         let parse_str = |nested: &syn::meta::ParseNestedMeta| -> syn::Result<String> {
             let lit: syn::LitStr = nested.value()?.parse()?;
             Ok(lit.value())
-        };
-        // Flags: bare = true, `= <bool>` accepted.
-        let parse_flag = |nested: &syn::meta::ParseNestedMeta| -> syn::Result<bool> {
-            if nested.input.peek(syn::Token![=]) {
-                let lit: syn::LitBool = nested.value()?.parse()?;
-                Ok(lit.value())
-            } else {
-                Ok(true)
-            }
         };
         // Scope lists: `= "a,b"` (comma/whitespace separated, the OAuth
         // `scope` parameter shape) or `= ["a", "b"]`.
@@ -271,12 +292,77 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
             "mime_type" => meta.mime_type = Some(parse_str(&nested)?),
             "scopes" => meta.scopes = parse_scope_list(&nested)?,
             "any_scopes" => meta.any_scopes = parse_scope_list(&nested)?,
+            "group" => meta.group = Some(parse_group_name(&nested)?),
+            "opt_in" => meta.opt_in = parse_flag(&nested)?,
             // Every key passed the allowed-list check above.
             _ => unreachable!(),
         }
         Ok(())
     })?;
+    if meta.opt_in && meta.group.is_none() {
+        return Err(opt_in_without_group(attr, kind.attr_name()));
+    }
     Ok(meta)
+}
+
+/// A flag: bare = true, `= <bool>` accepted.
+fn parse_flag(nested: &syn::meta::ParseNestedMeta) -> syn::Result<bool> {
+    if nested.input.peek(syn::Token![=]) {
+        let lit: syn::LitBool = nested.value()?.parse()?;
+        Ok(lit.value())
+    } else {
+        Ok(true)
+    }
+}
+
+fn opt_in_without_group(span: impl quote::ToTokens, attr_name: &str) -> syn::Error {
+    syn::Error::new_spanned(
+        span,
+        format!(
+            "`opt_in` needs a group: #[{attr_name}(group = \"…\", opt_in)] — only a named \
+             group can be enabled later by a session"
+        ),
+    )
+}
+
+/// `group = "..."`: a non-empty group name.
+fn parse_group_name(nested: &syn::meta::ParseNestedMeta) -> syn::Result<String> {
+    let lit: syn::LitStr = nested.value()?.parse()?;
+    let name = lit.value();
+    if name.trim().is_empty() || name.trim() != name {
+        return Err(syn::Error::new_spanned(
+            lit,
+            "an MCP group name must be non-empty, without surrounding whitespace",
+        ));
+    }
+    Ok(name)
+}
+
+/// Parse the `#[mcp_routes(group = "...", opt_in)]` arguments.
+pub fn parse_impl_args(args: proc_macro2::TokenStream) -> syn::Result<Option<McpGroupSpec>> {
+    if args.is_empty() {
+        return Ok(None);
+    }
+    let mut group = None;
+    let mut opt_in = false;
+    let parser = syn::meta::parser(|nested| {
+        if nested.path.is_ident("group") {
+            group = Some(parse_group_name(&nested)?);
+        } else if nested.path.is_ident("opt_in") {
+            opt_in = parse_flag(&nested)?;
+        } else {
+            return Err(nested.error(
+                "unknown #[mcp_routes] argument; expected `group = \"…\"` and/or `opt_in`",
+            ));
+        }
+        Ok(())
+    });
+    syn::parse::Parser::parse2(parser, args.clone())?;
+    match group {
+        Some(name) => Ok(Some(McpGroupSpec { name, opt_in })),
+        None if opt_in => Err(opt_in_without_group(args, "mcp_routes")),
+        None => Ok(None),
+    }
 }
 
 /// If `ty` is `Params<T>` (by last path segment), return `T`.
@@ -336,6 +422,7 @@ fn classify_args(
     let mut has_params = false;
     let mut has_call = false;
     let mut has_cancel = false;
+    let mut has_session = false;
 
     for arg in method.sig.inputs.iter_mut() {
         let syn::FnArg::Typed(pat_type) = arg else {
@@ -395,6 +482,17 @@ fn classify_args(
             args.push(McpToolArg::Cancel);
             continue;
         }
+        if type_last_segment_is(&pat_type.ty, "McpSession") {
+            if has_session {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!("only one McpSession parameter is allowed per #[{marker}] method"),
+                ));
+            }
+            has_session = true;
+            args.push(McpToolArg::Session);
+            continue;
+        }
         let params_part = if kind.takes_params() {
             "`Params<T>` (typed arguments), "
         } else {
@@ -404,7 +502,7 @@ fn classify_args(
             pat_type,
             format!(
                 "unsupported #[{marker}] parameter: expected {params_part}\
-                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, or `CancelToken`. \
+                 `#[inject(identity)] user: I` (or `Option<I>`), `{call_type}`, `CancelToken`, or `McpSession`. \
                  Beans and config go on the struct (`#[inject]`/`#[config]` fields)"
             ),
         ));
@@ -413,7 +511,10 @@ fn classify_args(
 }
 
 /// Parse an `#[mcp_routes] impl Name { ... }` block.
-pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
+pub fn parse(
+    mut item: syn::ItemImpl,
+    service_group: Option<McpGroupSpec>,
+) -> syn::Result<McpRoutesImplDef> {
     if let Some((_, trait_path, _)) = &item.trait_ {
         return Err(syn::Error::new_spanned(
             trait_path,
@@ -558,6 +659,13 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
         let args = classify_args(&mut method, kind)?;
         let name = method.sig.ident.clone();
 
+        let group = match &meta.group {
+            Some(name) => Some(McpGroupSpec {
+                name: name.clone(),
+                opt_in: meta.opt_in,
+            }),
+            None => service_group.clone(),
+        };
         let member = McpTool {
             kind,
             name,
@@ -565,6 +673,7 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
             doc_text,
             decorators,
             args,
+            group,
             fn_item: method.clone(),
         };
         let (seen, key, what, hint) = match kind {
@@ -598,8 +707,12 @@ pub fn parse(mut item: syn::ItemImpl) -> syn::Result<McpRoutesImplDef> {
     }
 
     item.items = impl_items;
+    let uses_session = members
+        .iter()
+        .any(|m| m.args.iter().any(|a| matches!(a, McpToolArg::Session)));
 
     Ok(McpRoutesImplDef {
+        uses_session,
         controller_name,
         controller_guards,
         controller_intercepts,

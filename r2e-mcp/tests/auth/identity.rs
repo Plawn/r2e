@@ -230,6 +230,7 @@ fn tool_call(parts: Option<Arc<Parts>>) -> ToolCall {
         parts,
         request_id: "1".to_string(),
         cancel: CancelToken::new(),
+        session: None,
     }
 }
 
@@ -240,6 +241,7 @@ fn resource_call(parts: Option<Arc<Parts>>) -> ResourceCall {
         parts,
         request_id: "1".to_string(),
         cancel: CancelToken::new(),
+        session: None,
     }
 }
 
@@ -249,6 +251,7 @@ fn prompt_call(parts: Option<Arc<Parts>>) -> PromptCall {
         parts,
         request_id: "1".to_string(),
         cancel: CancelToken::new(),
+        session: None,
     }
 }
 
