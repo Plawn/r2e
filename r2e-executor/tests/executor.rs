@@ -177,3 +177,134 @@ async fn shutdown_aborts_queued_submissions() {
     release.notify_waiters();
     assert_eq!(running.await.unwrap(), "done");
 }
+
+// ── #1066: an aborted job must not leak its counters ─────────────────────
+//
+// `JobHandle::abort` drops the job future at its next await point, so any
+// bookkeeping written *after* `fut.await` never runs. Before the RAII guards,
+// a single aborted running job pinned `drain_count` above zero forever, and
+// every `shutdown_graceful` after it sat out the full timeout on an idle pool.
+
+#[tokio::test]
+async fn aborting_a_running_job_releases_its_drain_slot() {
+    let exec = PoolExecutor::new(ExecutorConfig {
+        max_concurrent: 1,
+        queue_capacity: 8,
+        shutdown_timeout: Duration::from_secs(5),
+    });
+
+    let h = exec
+        .submit(async {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+        })
+        .expect("submit ok");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(exec.metrics().running, 1, "the job holds the only permit");
+
+    h.abort();
+    assert!(
+        h.await.expect_err("aborted").is_cancelled(),
+        "the handle resolves to a cancelled JoinError"
+    );
+
+    let m = exec.metrics();
+    assert_eq!(m.running, 0, "the permit must be back");
+    assert_eq!(m.completed, 1, "an aborted job still counts as completed");
+
+    let start = std::time::Instant::now();
+    let drained = exec.shutdown_graceful(Duration::from_secs(1)).await;
+    assert!(
+        drained,
+        "an idle pool must drain immediately after an abort"
+    );
+    assert!(
+        start.elapsed() < Duration::from_millis(500),
+        "drain must be prompt, not a timeout expiry: {:?}",
+        start.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn aborting_a_queued_job_releases_its_queue_slot() {
+    let exec = PoolExecutor::new(ExecutorConfig {
+        max_concurrent: 1,
+        queue_capacity: 1,
+        shutdown_timeout: Duration::from_secs(5),
+    });
+    let release = Arc::new(Notify::new());
+
+    let r = release.clone();
+    let running = exec
+        .submit(async move {
+            r.notified().await;
+        })
+        .expect("submit ok");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    // Waits for the permit `running` holds.
+    let queued = exec.submit(async {}).expect("submit ok");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(exec.metrics().queued, 1);
+    // The queue is full: cap = 1 running + 1 queued.
+    assert_eq!(
+        exec.try_submit(async {}).err(),
+        Some(RejectedError::QueueFull)
+    );
+
+    queued.abort();
+    assert!(queued.await.expect_err("aborted").is_cancelled());
+
+    assert_eq!(
+        exec.metrics().queued,
+        0,
+        "an aborted queued job must give its slot back"
+    );
+    // ...and `try_submit` sees the freed slot again.
+    let refilled = exec.try_submit(async {}).expect("slot freed by the abort");
+
+    release.notify_waiters();
+    running.await.unwrap();
+    refilled.await.unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_while_a_detached_job_is_queued_releases_its_queue_slot() {
+    let exec = PoolExecutor::new(ExecutorConfig {
+        max_concurrent: 1,
+        queue_capacity: 8,
+        shutdown_timeout: Duration::from_secs(5),
+    });
+    let release = Arc::new(Notify::new());
+
+    let r = release.clone();
+    let running = exec
+        .submit(async move {
+            r.notified().await;
+        })
+        .expect("submit ok");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let ran = Arc::new(AtomicU32::new(0));
+    let flag = ran.clone();
+    exec.submit_detached(async move {
+        flag.fetch_add(1, Ordering::SeqCst);
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(exec.metrics().queued, 1);
+
+    // Shutdown drops the queued detached job before it ever runs.
+    exec.shutdown();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(
+        exec.metrics().queued,
+        0,
+        "the dropped queued job gave its slot back"
+    );
+    assert_eq!(ran.load(Ordering::SeqCst), 0, "it never ran");
+
+    // The running job is unaffected and the pool drains promptly once it ends.
+    release.notify_waiters();
+    running.await.unwrap();
+    assert!(exec.shutdown_graceful(Duration::from_secs(1)).await);
+    assert_eq!(exec.metrics().completed, 1);
+}

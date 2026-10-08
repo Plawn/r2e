@@ -48,7 +48,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
-use r2e_core::rt::sync::{Notify, Semaphore};
+use r2e_core::rt::sync::{Notify, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use r2e_core::rt::{self, CancelToken};
 use r2e_core::runtime::panic::{report_caught_panic, PanicHookSlot, PanicOrigin};
 
@@ -155,8 +155,10 @@ impl JobLabel {
 }
 
 /// Run `fut` with every `poll` under `catch_unwind`, so a panicking job hands
-/// the payload back instead of unwinding past the pool's bookkeeping (permit,
-/// drain count, completed counter, idle notification for `shutdown_graceful`).
+/// the payload back to the pool, which reports it (`report_caught_panic`)
+/// before re-raising. The bookkeeping itself does not depend on this catch:
+/// it lives in [`RunningGuard`] / [`QueuedGuard`] drops, which land on a
+/// normal return, an unwind and a dropped future alike.
 async fn catch_unwind<F: Future>(fut: F) -> Result<F::Output, Box<dyn Any + Send>> {
     let mut fut = std::pin::pin!(fut);
     std::future::poll_fn(move |cx| {
@@ -189,6 +191,110 @@ struct Inner {
     /// may be registered on the builder after the pool is built. Detached
     /// (never set) for a pool constructed with [`PoolExecutor::new`].
     panic_hook: PanicHookSlot,
+}
+
+// ── Bookkeeping guards ────────────────────────────────────────────────────
+//
+// Every counter a job touches is paired through an RAII guard rather than a
+// `fetch_add` / `fetch_sub` pair around an `.await`. A job future can end
+// three ways — return, unwind, or be *dropped* (`JobHandle::abort`, or the
+// runtime tearing the task down) — and only a `Drop` impl runs on all three.
+// Before #1066 an aborted job leaked its `drain_count` (so `shutdown_graceful`
+// sat out its whole timeout on an idle pool) or its `queued` slot (so
+// `try_submit` saw a fuller queue than there was).
+
+/// `queued += 1` while a job waits for a permit; `-= 1` however the wait ends.
+struct QueuedGuard(Arc<Inner>);
+
+impl QueuedGuard {
+    fn new(inner: &Arc<Inner>) -> Self {
+        inner.queued.fetch_add(1, Ordering::Relaxed);
+        Self(Arc::clone(inner))
+    }
+}
+
+impl Drop for QueuedGuard {
+    fn drop(&mut self) {
+        self.0.queued.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Owns a job's permit for the time it runs. Created once the permit is held
+/// (`drain_count += 1`); its drop releases the permit **first**, then
+/// `drain_count -= 1`, `completed += 1`, and wakes `shutdown_graceful` when
+/// this was the last in-flight job of a shutting-down pool.
+///
+/// The decrement is `Release` so a waiter woken by the notification and
+/// re-reading `drain_count` with `Acquire` (see `shutdown_graceful`) observes
+/// the permit already returned.
+struct RunningGuard {
+    inner: Arc<Inner>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl RunningGuard {
+    fn new(inner: &Arc<Inner>, permit: OwnedSemaphorePermit) -> Self {
+        inner.drain_count.fetch_add(1, Ordering::Relaxed);
+        Self {
+            inner: Arc::clone(inner),
+            permit: Some(permit),
+        }
+    }
+}
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        drop(self.permit.take());
+        let prev = self.inner.drain_count.fetch_sub(1, Ordering::Release);
+        self.inner.completed.fetch_add(1, Ordering::Relaxed);
+        if prev == 1 && self.inner.shutdown.is_cancelled() {
+            self.inner.notify_idle.notify_waiters();
+        }
+    }
+}
+
+/// Wait for a permit, counting the wait in `queued`.
+///
+/// `None` when the pool shut down before a permit was obtained — either the
+/// semaphore was already closed, or the shutdown token fired while queued.
+async fn acquire_permit(inner: &Arc<Inner>) -> Option<OwnedSemaphorePermit> {
+    match inner.semaphore.clone().try_acquire_owned() {
+        Ok(permit) => return Some(permit),
+        Err(TryAcquireError::Closed) => return None,
+        Err(TryAcquireError::NoPermits) => {}
+    }
+    let _queued = QueuedGuard::new(inner);
+    rt::select! {
+        biased;
+        _ = inner.shutdown.cancelled() => None,
+        permit = inner.semaphore.clone().acquire_owned() => permit.ok(),
+    }
+}
+
+/// The body every pool job runs: acquire a permit, run `fut` under the
+/// running guard, report a panic through the app hook and re-raise it.
+///
+/// `None` when the pool shut down before the job ran. Shared by the
+/// handle-returning path (`spawn_job`) and the fire-and-forget path
+/// (`submit_detached`) so the bookkeeping cannot drift between them.
+async fn run_job<F: Future>(inner: Arc<Inner>, fut: F, label: JobLabel) -> Option<F::Output> {
+    let permit = acquire_permit(&inner).await?;
+    let _running = RunningGuard::new(&inner, permit);
+    match catch_unwind(fut).await {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            report_caught_panic(
+                payload.as_ref(),
+                label.origin(),
+                inner.panic_hook.get().as_ref(),
+            );
+            // Resume so the `JobHandle` still resolves to a panicked
+            // `JoinError` (`is_panic() == true`); `_running` drops during the
+            // unwind, so the permit, drain count and idle notification land
+            // exactly as on a normal return.
+            std::panic::resume_unwind(payload);
+        }
+    }
 }
 
 /// Cloneable handle to a managed Tokio task pool.
@@ -325,38 +431,9 @@ impl PoolExecutor {
         }
         let inner = self.inner.clone();
         rt::spawn_ctl(async move {
-            let permit = match inner.semaphore.clone().try_acquire_owned() {
-                Ok(p) => p,
-                Err(rt::sync::TryAcquireError::NoPermits) => {
-                    inner.queued.fetch_add(1, Ordering::Relaxed);
-                    let p = match inner.semaphore.clone().acquire_owned().await {
-                        Ok(p) => p,
-                        Err(_) => {
-                            inner.queued.fetch_sub(1, Ordering::Relaxed);
-                            return;
-                        }
-                    };
-                    inner.queued.fetch_sub(1, Ordering::Relaxed);
-                    p
-                }
-                Err(rt::sync::TryAcquireError::Closed) => return,
-            };
-            inner.drain_count.fetch_add(1, Ordering::Relaxed);
-            let outcome = catch_unwind(fut).await;
-            drop(permit);
-            let prev = inner.drain_count.fetch_sub(1, Ordering::Relaxed);
-            inner.completed.fetch_add(1, Ordering::Relaxed);
-            if prev == 1 && inner.shutdown.is_cancelled() {
-                inner.notify_idle.notify_waiters();
-            }
-            if let Err(payload) = outcome {
-                report_caught_panic(
-                    payload.as_ref(),
-                    PanicOrigin::Executor { job: None },
-                    inner.panic_hook.get().as_ref(),
-                );
-                std::panic::resume_unwind(payload);
-            }
+            // A job dropped by shutdown before it ran is simply gone: there is
+            // no handle to signal, unlike `spawn_job`.
+            let _ = run_job(inner, fut, JobLabel::Unnamed).await;
         });
     }
 
@@ -389,57 +466,14 @@ impl PoolExecutor {
         T: Send + 'static,
     {
         let inner = self.inner.clone();
-        let shutdown = inner.shutdown.clone();
         rt::spawn_ctl(async move {
-            let permit = match inner.semaphore.clone().try_acquire_owned() {
-                Ok(p) => p,
-                Err(rt::sync::TryAcquireError::Closed) => {
-                    panic!("executor shut down while job was pending");
-                }
-                Err(rt::sync::TryAcquireError::NoPermits) => {
-                    inner.queued.fetch_add(1, Ordering::Relaxed);
-                    let p = rt::select! {
-                        biased;
-                        _ = shutdown.cancelled() => {
-                            inner.queued.fetch_sub(1, Ordering::Relaxed);
-                            panic!("executor shut down while job was queued");
-                        }
-                        p = inner.semaphore.clone().acquire_owned() => match p {
-                            Ok(p) => p,
-                            Err(_) => {
-                                inner.queued.fetch_sub(1, Ordering::Relaxed);
-                                panic!("executor shut down while job was queued");
-                            }
-                        }
-                    };
-                    inner.queued.fetch_sub(1, Ordering::Relaxed);
-                    p
-                }
-            };
-            inner.drain_count.fetch_add(1, Ordering::Relaxed);
-            // The catch exists for the bookkeeping below: an unwind straight
-            // out of `fut.await` would leak the drain count (shutdown would
-            // wait out its whole timeout) and undercount `completed`.
-            let outcome = catch_unwind(fut).await;
-            drop(permit);
-            let prev = inner.drain_count.fetch_sub(1, Ordering::Relaxed);
-            inner.completed.fetch_add(1, Ordering::Relaxed);
-            if prev == 1 && inner.shutdown.is_cancelled() {
-                inner.notify_idle.notify_waiters();
-            }
-            match outcome {
-                Ok(result) => result,
-                Err(payload) => {
-                    report_caught_panic(
-                        payload.as_ref(),
-                        label.origin(),
-                        inner.panic_hook.get().as_ref(),
-                    );
-                    // Resume so the `JobHandle` still resolves to a panicked
-                    // `JoinError` (`is_panic() == true`) exactly as before the
-                    // catch — the report above is the only added behavior.
-                    std::panic::resume_unwind(payload);
-                }
+            match run_job(inner, fut, label).await {
+                Some(value) => value,
+                // Deliberately outside `catch_unwind`: this is the
+                // cancellation signal that makes the `JobHandle` resolve to a
+                // panicked `JoinError`, not a user-job panic, so it must not
+                // reach the app's `on_panic` hook.
+                None => panic!("executor shut down while job was queued"),
             }
         })
     }

@@ -19,6 +19,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`r2e-executor`: an aborted job no longer leaks the pool's counters**
+  (task #1066). `JobHandle::abort` drops the job future at its next await, so
+  the bookkeeping written after `fut.await` never ran: one aborted running job
+  pinned `drain_count` above zero forever and every `shutdown_graceful` after
+  it sat out the whole `executor.shutdown-timeout` on an idle pool; an aborted
+  queued job leaked its `queued` slot and made `try_submit` reject early. The
+  counters are now paired through RAII guards (`QueuedGuard`, `RunningGuard`)
+  whose drops land on a return, an unwind and a dropped future alike, and both
+  submission paths share one job body (`run_job`).
+
 ## [0.4.0] - 2026-09-26
 
 ### Changed
