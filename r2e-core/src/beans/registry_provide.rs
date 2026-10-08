@@ -424,12 +424,13 @@ impl BeanRegistry {
     /// the builder during server startup.
     pub fn register_service_source<T: crate::ServiceComponent>(&mut self) {
         let tid = TypeId::of::<T>();
-        if self.service_sources.iter().any(|(t, _, _)| *t == tid) {
+        if self.service_sources.iter().any(|(t, ..)| *t == tid) {
             return;
         }
         self.service_sources.push((
             tid,
             type_name::<T>(),
+            crate::runtime::service::StopSpec::of::<T>(),
             Box::new(|ctx: &BeanContext, shutdown| {
                 let service = T::from_context(ctx);
                 // The global `services.enabled` switch. `R2eConfig` is a bean
@@ -545,10 +546,16 @@ impl BeanRegistry {
 
     /// Drain background-service hooks queued by [`register_service_source`](Self::register_service_source).
     #[doc(hidden)]
-    pub fn take_service_sources(&mut self) -> Vec<(&'static str, ServiceSourceHook)> {
+    pub fn take_service_sources(
+        &mut self,
+    ) -> Vec<(
+        &'static str,
+        crate::runtime::service::StopSpec,
+        ServiceSourceHook,
+    )> {
         std::mem::take(&mut self.service_sources)
             .into_iter()
-            .map(|(_, name, hook)| (name, hook))
+            .map(|(_, name, stop, hook)| (name, stop, hook))
             .collect()
     }
 

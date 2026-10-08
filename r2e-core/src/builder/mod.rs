@@ -42,7 +42,7 @@ use crate::di::module::{
 use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect};
 use crate::rt::CancelToken;
 use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
-use crate::runtime::service::ServiceComponent;
+use crate::runtime::service::{ServiceComponent, StopPhase};
 use crate::type_list::{AllSatisfied, BeanState, BuildHList, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -546,6 +546,121 @@ impl ServiceHandles {
     }
 }
 
+/// One service on the **after-drain** lane: a [`StopPhase::AfterDrain`]
+/// [`ServiceComponent`](crate::ServiceComponent). Unlike a [`TrackedHandle`]
+/// it carries its own token, because this lane is stopped one service at a
+/// time — cancel this one, join it, then move to the next — not by firing a
+/// single shared root.
+pub(super) struct PostDrainEntry {
+    /// [`stop_order`](crate::ServiceComponent::stop_order): lowest stops first.
+    pub(super) order: i32,
+    /// Diagnostic name (the component type name).
+    pub(super) label: &'static str,
+    /// This service's private token — a child of the [`PostDrainRoot`].
+    pub(super) token: CancelToken,
+    pub(super) handle: crate::rt::JobHandle<()>,
+}
+
+/// Shared collection of the `AfterDrain` services, the lane the shutdown
+/// sequence stops **after** the HTTP drain and the tracked-handle join.
+///
+/// Kept apart from [`ServiceHandles`] on purpose: everything on that lane is
+/// cancelled by the plugin sync hooks (step 2) or by the app root (step 3),
+/// and joined concurrently; this lane is untouched by both, so a sink fed by
+/// request handlers through a channel is still consuming while those
+/// handlers finish, and is only told to stop once the last of them has
+/// returned. See [`stop_post_drain_services`](prepared::stop_post_drain_services).
+#[derive(Clone, Default)]
+struct PostDrainServices(Arc<Mutex<Vec<PostDrainEntry>>>);
+
+impl PostDrainServices {
+    /// Spawn `fut` as an after-drain service that **owns the bean graph while
+    /// it runs** — the same ownership rule as
+    /// [`ServiceHandles::spawn_owning`], for the same reason: the join is
+    /// bounded by `shutdown_grace_period`, and skipped when the `run()`
+    /// future is dropped, so the graph reference has to travel inside the
+    /// task.
+    fn spawn_owning<F>(
+        &self,
+        label: &'static str,
+        order: i32,
+        graph: Arc<crate::beans::BeanContext>,
+        token: CancelToken,
+        fut: F,
+    ) where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = crate::rt::spawn(async move {
+            let _graph_keepalive = graph;
+            fut.await;
+        });
+        let mut entries = self.0.lock().unwrap();
+        entries.retain(|e| !e.handle.is_finished());
+        entries.push(PostDrainEntry {
+            order,
+            label,
+            token,
+            handle,
+        });
+    }
+
+    /// Take every entry, **sorted by `order`** (stable, so services sharing
+    /// an order keep registration order).
+    fn drain(&self) -> Vec<PostDrainEntry> {
+        let mut entries = std::mem::take(&mut *self.0.lock().unwrap());
+        entries.sort_by_key(|e| e.order);
+        entries
+    }
+
+    /// Whether any after-drain service is still running — the term it adds to
+    /// [`RunningApp::has_shutdown_work`](crate::RunningApp::has_shutdown_work).
+    fn has_live(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| !e.handle.is_finished())
+    }
+
+    /// Cancel and abort every after-drain service, returning how many were
+    /// still running. Same last-resort semantics as
+    /// [`ServiceHandles::abort_all`].
+    fn abort_all(&self) -> usize {
+        let mut aborted = 0;
+        for e in self.drain() {
+            e.token.cancel();
+            if !e.handle.is_finished() {
+                aborted += 1;
+                e.handle.abort();
+            }
+        }
+        aborted
+    }
+}
+
+/// The root of the **after-drain** service tokens, memoized in `plugin_data`
+/// like [`ShutdownRoot`] — and deliberately *not* a child of it.
+///
+/// Cancelling the app root at step 3 must not reach an `AfterDrain` service:
+/// that is the whole contract. What this root is for is the uncontrolled
+/// exits: `start_lifecycle` arms a `DropGuard` on it, so a panic unwinding
+/// out of `run_inner`, or the `run()` future being dropped by an `r2e dev`
+/// hot patch, still cancels every after-drain service — liveness never
+/// depends on the ordered stop sequence having run.
+#[derive(Clone)]
+struct PostDrainRoot(CancelToken);
+
+/// Get-or-insert the one [`PostDrainRoot`] for this app (see
+/// [`shutdown_root`] for why this is a free function over `plugin_data`).
+fn post_drain_root(data: &mut HashMap<TypeId, Box<dyn Any + Send + Sync>>) -> CancelToken {
+    data.entry(TypeId::of::<PostDrainRoot>())
+        .or_insert_with(|| Box::new(PostDrainRoot(CancelToken::new())))
+        .downcast_ref::<PostDrainRoot>()
+        .expect("PostDrainRoot type mismatch in plugin_data")
+        .0
+        .clone()
+}
+
 /// The app-scope shutdown token, created **lazily** by whichever comes first
 /// (a `register_service` call or `run_inner`), memoized in
 /// `plugin_data` so `run_inner` and everything registered before it agree on
@@ -788,6 +903,10 @@ pub struct AppBuilder<
     plugin_shutdown_hooks: Vec<Box<dyn FnOnce() + Send>>,
     /// Shutdown hooks from plugins (async, awaited during shutdown).
     plugin_async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Plugin hooks awaited **after** the HTTP drain, the tracked-handle join
+    /// and the after-drain services, right before `on_stop`
+    /// ([`DeferredContext::on_shutdown_after_drain_async`]).
+    plugin_post_drain_async_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     /// Controller-core `#[pre_destroy]` disposal hooks, pushed in registration
     /// order as controllers register and folded into the ordered async-shutdown
     /// list at `build_inner` (reversed there so later-registered controllers

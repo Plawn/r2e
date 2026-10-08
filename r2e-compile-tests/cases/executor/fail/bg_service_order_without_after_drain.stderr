@@ -1,0 +1,5 @@
+error: #[service(order = …)] requires `stop = "after_drain"`: early services are all cancelled together before the HTTP drain, so they have no stop order
+ --> cases/executor/fail/bg_service_order_without_after_drain.rs:8:19
+  |
+8 | #[service(order = 2)]
+  |                   ^

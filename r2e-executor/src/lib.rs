@@ -588,7 +588,13 @@ impl Plugin for Executor {
             PoolExecutor::with_panic_hook_slot(config.unwrap_or_default(), ctx.panic_hook_slot());
         let shutdown_handle = executor.clone();
 
-        ctx.on_shutdown_async(move || async move {
+        // AFTER the HTTP drain, not at step 2 (#1071): a pool that has begun
+        // draining refuses every `submit` with `ShuttingDown`, and at step 2
+        // the listener is still serving — an in-flight handler (or an
+        // `AfterDrain` sink fed by one) submitting a job during the drain
+        // would be turned away. Here the last request has returned and the
+        // after-drain services are stopped, so nothing can still be producing.
+        ctx.on_shutdown_after_drain_async(move || async move {
             let timeout = shutdown_handle.shutdown_timeout();
             if timeout.is_zero() {
                 shutdown_handle.shutdown();

@@ -186,6 +186,8 @@ impl Plugin for MyPlugin {
         let svc = MyService::connect(pool, config.unwrap_or_default()).await?; // Err aborts boot
         let h = svc.handle();
         ctx.on_shutdown_async(move || async move { h.drain().await });
+        // Or, for a resource handlers still use during the HTTP drain:
+        // ctx.on_shutdown_after_drain_async(move || async move { h.drain().await });
         Ok((svc,))
     }
 }
@@ -332,7 +334,8 @@ Owned by the factory future (`'static`, no lifetime param):
 | `after_build(f)` | Graph | `FnOnce(&mut DeferredContext)` — full-graph boot-time escape hatch |
 | `after_routes(f)` | Routes | `FnOnce(&mut RoutesContext)` — runs after every controller is registered: read the route registry, mount routers from it |
 | `wrap_router(f)` | Finalize | replace the whole router (e.g. gRPC multiplexer) — outside every HTTP layer, `catch_panic` included |
-| `on_shutdown(f)` / `on_shutdown_async(f)` | cleanup | graceful-shutdown hooks (never gated on `enabled`) |
+| `on_shutdown(f)` / `on_shutdown_async(f)` | cleanup | graceful-shutdown hooks at **step 2** — before the HTTP drain (never gated on `enabled`) |
+| `on_shutdown_after_drain_async(f)` | cleanup | async hook at **step 5** — after the HTTP drain, the tracked-handle join and the `AfterDrain` service stop; for resources that request handlers and after-drain sinks still *use* during the drain (the executor pool drains here, #1071) |
 
 All effects are buffered; Graph effects are applied after graph resolution
 inside `build_state()`, Routes and Finalize effects inside `build()` — each
@@ -404,7 +407,7 @@ conditionality is runtime + config-driven. When `<prefix>.enabled = false`:
   | `add_layer`, `store_data`, `on_serve`, `after_build` | surface (Graph) | dropped |
   | `after_routes` | surface (Routes) | dropped |
   | `wrap_router` | surface (Finalize) | dropped |
-  | `on_shutdown`, `on_shutdown_async` | cleanup | **still run** |
+  | `on_shutdown`, `on_shutdown_async`, `on_shutdown_after_drain_async` | cleanup | **still run** |
 
   Sync `on_shutdown` hooks are an **ordering** guarantee, not a liveness
   mechanism: they fire in registration order, one at a time (each is taken out

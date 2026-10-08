@@ -1,7 +1,7 @@
 ---
 topic: app-builder
 features: core
-tokens: ~2000
+tokens: ~2100
 requires: di-beans
 ---
 
@@ -86,6 +86,7 @@ covering exactly one phase; the phases run in this order:
 | plugin sync + async shutdown hooks (incl. `#[pre_destroy]`) | — | — | — |
 | HTTP drain (in-flight requests, listener no longer accepting) | `.drain_timeout(Duration)` or `server.drain-timeout` | **30s** (`.drain_timeout_unbounded()` opts out) | `warn!(phase = "http drain", ..)`, remaining connections abandoned, shutdown continues |
 | tracked-handle join (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains, `#[ws]` sessions) | `.shutdown_grace_period(Duration)`, applied **per handle** | unbounded | `warn!(phase = "tracked-handle join", service = <label>, ..)`, that handle detached (never aborted), others keep their own budget |
+| after-drain services (`#[service(stop = "after_drain")]`), stopped **one at a time** in ascending `order`, then plugin `on_shutdown_after_drain_async` hooks (the executor pool drain) | `.shutdown_grace_period(Duration)`, applied **per service**, sequentially | unbounded | `warn!(phase = "after-drain service stop", service = <label>, order = N, ..)`, that service abandoned, the next one is cancelled |
 | `on_stop` hooks | — **always run** | — | — |
 
 `on_stop` is **must-run**: it executes even when the drain timed out and every

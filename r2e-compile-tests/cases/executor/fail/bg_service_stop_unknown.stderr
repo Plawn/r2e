@@ -1,0 +1,5 @@
+error: unknown stop phase `late` in #[service(stop = ...)] — expected "early" (cancelled before the HTTP drain, the default) or "after_drain" (cancelled once in-flight requests have finished)
+ --> cases/executor/fail/bg_service_stop_unknown.rs:8:18
+  |
+8 | #[service(stop = "late")]
+  |                  ^^^^^^
