@@ -21,7 +21,7 @@ impl<I: Identity> Guard<I> for QuotaGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let _ = (&self.registry, self.max);
         async { Ok(()) }
     }

@@ -67,10 +67,13 @@ Concretely:
 2. A route has one envelope type `E`. The generated handler converts every
    failure with `E::from(rejection)` and renders `E` once, at the end. `E` is
    also what the handler returns in `Err`.
-3. Projection has levels: per route `#[error(E)]` > per controller
-   `#[routes(error = E)]` > app `error_projection::<E>()` for non-route failures
-   > the framework default `HttpError`. The default reproduces 0.4.0 byte for
-   byte, so the attribute is purely additive for existing apps.
+3. Projection has two levels and no attribute: the route's **return type**
+   `Result<T, E>` when `E: From<Rejection> + IntoHttpResponse + ErrorSchema`,
+   else the app-level `error_projection::<E>()` (default `HttpError`, the
+   JAX-RS `ExceptionMapper` equivalent). The default reproduces 0.4.0 byte for
+   byte, so existing apps see no change. (Decision 2026-10-09: `#[error(E)]`
+   and `#[routes(error = E)]` dropped — a route declared infallible that is
+   not is a definition problem R2E does not fix for the developer.)
 4. The spec is derived from the same data: the macro knows which
    `RejectionKind`s a route can produce (it sees the extractors, the identity,
    the guards, the validation); `E::status_of(kind)` is applied **before**
@@ -234,16 +237,17 @@ not remap the kind), honours `opaque_passthrough`, calls
 
 | Level | Declared by | Applies to |
 |---|---|---|
-| route | `#[error(E)]` on a route method | that route |
-| controller | `#[routes(error = E)]` | every route, SSE and WS of the impl |
-| app | `AppBuilder::error_projection::<E>()` (phase 4) | the non-route failures: 404, 405, 413 body limit, panic 500 |
-| framework | — | `HttpError` |
+| route | the handler's return type `Result<T, E>`, `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (autoref probe at codegen, no attribute) | every failure of that route: request data, guards, parameters, body, validation, managed, handler `Err` |
+| app | `AppBuilder::error_projection::<E>()` → `ErrorProjector` bean (P1); 404/405/413/panic wiring in P4 | routes whose return type declares no envelope (`Json<T>`, `Result<T, HttpError>`, `Result<T, E>` with a plain `E`), SSE/WS routes, and the non-route failures |
+| framework | — | `HttpError` when no `ErrorProjector` bean is provided |
 
-The app level is stored as an `Arc<dyn Fn(Rejection) -> Response>` bean built
-from `E` (`status_of` + `From` + `into_http_response`) so the router-wide
-layers (catch-panic, fallback, body-limit) can call it without a type
-parameter. Controllers that declare nothing resolve to `HttpError` statically
-(the macro cannot see the app-level type); the two defaults stay explicit.
+The app level is an `ErrorProjector(Arc<dyn Fn(Rejection) -> Response>)` bean
+built from `E` (`status_of` + `From` + `into_http_response`) so the generated
+entry fns and the router-wide layers (catch-panic, fallback, body-limit) can
+call it without a type parameter; `project_default(rejection, &state)` picks
+the bean when present, else `HttpError`. A handler `Result<T, E>` whose `E`
+only implements `IntoHttpResponse` keeps rendering its own `Err` as today and
+uses the app level for framework failures.
 
 ## 4. Codegen: the single projection point
 
@@ -311,16 +315,27 @@ preflight already runs guards before the upgrade; it switches to `Rejection`).
 | `RolesGuard` / `AllRolesGuard` / `RateLimitGuard` / `FgaGuard` | `GuardError` → `Response` | `RolesDenied` / `RateLimited { retry_after }` / `FgaDenied`, each `From<_> for Rejection` |
 | `GrpcGuard<I>` | separate trait returning `tonic::Status` | **removed**; gRPC runs `Guard<I>` and maps with `Status::from(rejection)` |
 
-### 4.3 Attributes
+### 4.3 No attributes: the return type is the declaration
 
-- `#[routes(error = E)]` on the impl; `#[error(E)]` on a route, SSE or WS
-  method. Both are a path to a type implementing
-  `From<Rejection> + IntoHttpResponse + ErrorSchema`.
-- Compile errors, all pointing at the attribute: `E` misses one of the three
-  traits (each with its own `on_unimplemented` note); `#[error]` on a
-  non-route method; `error =` given twice.
-- `#[anonymous]` routes still project through `E` (they can fail on body,
-  path, guards).
+- No `#[error(E)]`, no `#[routes(error = E)]`. The generated entry fn probes
+  the route's return type with an autoref specialization
+  (`r2e_core::error::projection::{ProjectionProbe, ProjectEnvelope,
+  ProjectFallback}`): `Result<T, E>` with `E: From<Rejection> +
+  IntoHttpResponse + ErrorSchema` projects through `E`; anything else calls
+  `project_default(rejection, &state)` (the `ErrorProjector` bean, else
+  `HttpError`).
+- Rationale (user decision 2026-10-09): a route that returns `Json<T>` is
+  declared infallible by its author; its framework failures still render, with
+  the app-level envelope. If the route must speak `E`, declare `Result<T, E>`.
+  `error_projection::<E>()` is the JAX-RS/Quarkus `ExceptionMapper`.
+- `#[anonymous]` routes project the same way (they can fail on body, path,
+  guards). SSE and WS routes always use the app level.
+- Order inside the entry fn: pre-auth guards (controller then route) → request
+  data → identity param → guards (controller then route; skipped on
+  `#[anonymous]`) → head parameters → body parameter (last, `FromRequest`) →
+  garde validation → managed acquire → interceptors → handler → managed
+  finalize. Guards therefore run **before** the route's own parameters, and the
+  body is never read before identity and guards have passed.
 
 ## 5. Transports
 
@@ -406,9 +421,9 @@ impl ErrorSchema for OpenAiError {
     fn extra_statuses() -> Vec<(StatusCode, &'static str)> { vec![(StatusCode::BAD_GATEWAY, "Upstream failed")] }
 }
 
-#[routes(error = OpenAiError)]
+#[routes]
 impl ChatCompletionsController {
-    #[post("/v1/chat/completions")]
+    #[post("/v1/chat/completions")]            // envelope = the return type's `E`
     async fn chat(&self, user: UserContext, Json(req): Json<ChatRequest>)
         -> Result<ChatReply, OpenAiError> { … }
 }
@@ -446,7 +461,7 @@ One PR per phase, sequential, same branch. Each phase ships green on
 | Phase | Scope | Tests |
 |---|---|---|
 | **P0** core types | `Rejection`, `RejectionKind`, `ErrorSchema`, every `From<X> for Rejection`, `From<Rejection> for HttpError` + `ErrorSchema for HttpError`, `From<Rejection> for Response`, typed guard errors (`RolesDenied`, `RateLimited`, `FgaDenied`), `TenantError::into_rejection`, `ParamError::location`, derive `#[error(rejection)]`. Guards still return `Response` (they render through the typed errors); no codegen change. **Shipped** (PR for P0). | `r2e-core/tests/http/rejection.rs` (new `mod`): kind → status table, every `From` impl, `HttpError` projection byte-equal to today's `into_response`, coherence `E::from(r).status() == E::status_of(r.kind)`; derive cases in `tests/http/api_error.rs`; `r2e-compile-tests` for derive misuse; owning-crate tests (`r2e-security/tests/{error,guards}.rs`, `r2e-rate-limit/tests/guard.rs`, `r2e-openfga/tests/guard.rs`, `r2e-tenant/tests/tenant/error.rs`) |
-| **P1** single projection point | Option B extraction in `handlers.rs` (route, SSE, WS), typed guards/validation/managed, `#[routes(error)]` + `#[error]`, `ParamsRejectionFormat` removal. | compile tests (missing trait, misplaced `#[error]`); `tests/http/projection.rs`: malformed body, missing content-type, bad path, failed identity, guard, garde, managed acquire and finalize all answer in `E`'s envelope with the right status and headers; identity failure never reads the body (counting body reader); every existing `r2e-core/tests/http` + `tests/decorators` test unchanged with the default projector |
+| **P1** single projection point | Option B extraction in `handlers.rs` (route, SSE, WS): one `(State, Request)` entry fn per endpoint, pre-auth guards as its first step (middleware layer removed), `RequestData<S>` replacing the `FromRequestParts` bridge, guards/pre-guards returning `Result<(), Rejection>`, `ManagedResource::Error: Into<Rejection>`, envelope inferred from the return type (autoref probe, no attributes), `AppBuilder::error_projection::<E>()` + `ErrorProjector` bean, `ParamsRejectionFormat` removal. **Shipped** (PR for P1). | `tests/http/projection.rs`: malformed body, missing content-type, bad path, failed identity, guard, garde, managed acquire and finalize all answer in `E`'s envelope with the right status and headers; identity failure never reads the body (counting body reader); every existing `r2e-core/tests/http` + `tests/decorators` test unchanged with the default projector |
 | **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo`, builder rewrite, `RequestBodySchema`. | spec snapshot: default projector (unchanged modulo 413/415/422), custom projector remapping 422→400 shows 400 only, extra 502 listed; custom body extractor documented |
 | **P3** transports | `From<Rejection>` for `McpError` and `tonic::Status`; delete the MCP body-read fold; delete `GrpcGuard`, gRPC codegen runs `Guard<I>`. | existing MCP/gRPC guard tests pass by kind; mapping table tests |
 | **P4** app level | `AppBuilder::error_projection::<E>()`, routed into catch-panic, fallback 404/405, body-limit 413. | `tests/http/panic.rs` + new `tests/runtime/fallback.rs`: panic, unknown route, wrong method, oversized body answer in `E`'s envelope |

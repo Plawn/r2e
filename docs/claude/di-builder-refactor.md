@@ -113,8 +113,10 @@ the state model.
 `FromRequestPartsVia<S, M>` / `OptionalFromRequestPartsVia<S, M>` — R2E-owned
 extraction traits with a marker slot `M` where bean-backed extractors park their
 `HasBean` index witnesses (works around E0207). A blanket `ViaAxum` bridge
-covers plain axum extractors; `Via<T, M>` adapts inside generated closures;
-`BeanExtract<T, I>` serves hand-written handlers. `r2e-security` extracts via
+covers plain axum extractors (its rejection must be `Into<Rejection>`); the
+generated entry fn calls `FromRequestPartsVia` directly through the
+controller's `RequestData<S>` impl; `BeanExtract<T, I>` serves hand-written
+handlers. `r2e-security` extracts via
 `HasBean<Arc<JwtClaimsValidator>, I>` parked in `ViaBean<I>`.
 
 **Overlap invariant (actively checked, not structural).** A type must NOT

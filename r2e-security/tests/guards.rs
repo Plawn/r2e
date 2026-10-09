@@ -75,7 +75,7 @@ async fn roles_guard_rejects() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -89,7 +89,7 @@ async fn roles_guard_rejects_no_identity() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -135,7 +135,7 @@ async fn all_roles_guard_rejects_when_one_missing() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -149,7 +149,7 @@ async fn all_roles_guard_rejects_no_identity() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]

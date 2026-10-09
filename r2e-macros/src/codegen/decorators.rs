@@ -442,7 +442,7 @@ pub(crate) struct CtrlDecoSet {
     /// roles-derived guards first — checked before each route's own guards.
     pub guard_fields: Vec<syn::Ident>,
     /// Field idents for the controller-level pre-auth guard sites (`__cp0..`),
-    /// checked in the pre-auth middleware before each route's own pre-guards.
+    /// checked first in each route's entry fn, before the route's own pre-guards.
     pub pre_guard_fields: Vec<syn::Ident>,
 }
 

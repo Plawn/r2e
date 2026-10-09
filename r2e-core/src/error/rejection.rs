@@ -16,7 +16,10 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::http::extract::rejection::{FormRejection, PathRejection, QueryRejection};
+use crate::http::extract::rejection::{
+    BytesRejection, ExtensionRejection, FormRejection, MatchedPathRejection, NestedPathRejection,
+    PathRejection, QueryRejection, RawFormRejection, RawPathParamsRejection, StringRejection,
+};
 use crate::http::header::{HeaderMap, HeaderName, HeaderValue};
 use crate::http::response::{IntoHttpResponse, Response};
 use crate::http::{JsonRejection, StatusCode};
@@ -397,8 +400,8 @@ impl StdError for Rejection {
 /// Default projection: through [`HttpError`] (the 0.4 bodies).
 ///
 /// Legal despite `Response` being foreign because `Rejection` is local. Used
-/// by hand-written axum handlers merged via `merge_router` and by the P0
-/// guards that still return a `Response`.
+/// by hand-written axum handlers merged via `merge_router`; generated routes
+/// project through [`Rejection::project`] with the route's envelope instead.
 impl From<Rejection> for Response {
     fn from(rejection: Rejection) -> Self {
         rejection.project::<HttpError>()
@@ -549,6 +552,115 @@ impl From<&garde::Report> for Rejection {
 impl From<garde::Report> for Rejection {
     fn from(report: garde::Report) -> Self {
         Self::from(&report)
+    }
+}
+
+/// Body read failures of the raw-body extractors (`Bytes`, `String`): a 413
+/// over the body limit, otherwise a 400 (`BodyRead`); invalid UTF-8 in a
+/// `String` body is `MalformedBody`.
+impl From<BytesRejection> for Rejection {
+    fn from(r: BytesRejection) -> Self {
+        let status = r.status();
+        let kind = if status == StatusCode::PAYLOAD_TOO_LARGE {
+            RejectionKind::PayloadTooLarge
+        } else {
+            RejectionKind::BodyRead
+        };
+        let mut rejection = Self::with_status(kind, status, r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+impl From<StringRejection> for Rejection {
+    fn from(r: StringRejection) -> Self {
+        let status = r.status();
+        let kind = match &r {
+            StringRejection::InvalidUtf8(_) => RejectionKind::MalformedBody,
+            _ if status == StatusCode::PAYLOAD_TOO_LARGE => RejectionKind::PayloadTooLarge,
+            _ => RejectionKind::BodyRead,
+        };
+        let mut rejection = Self::with_status(kind, status, r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+impl From<RawFormRejection> for Rejection {
+    fn from(r: RawFormRejection) -> Self {
+        let kind = match &r {
+            RawFormRejection::InvalidFormContentType(_) => RejectionKind::UnsupportedMediaType,
+            _ => RejectionKind::InvalidForm,
+        };
+        let mut rejection = Self::with_status(kind, r.status(), r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+/// A missing `Extension<T>` is a wiring error (500), kept as `Internal`.
+impl From<ExtensionRejection> for Rejection {
+    fn from(r: ExtensionRejection) -> Self {
+        let mut rejection = Self::with_status(RejectionKind::Internal, r.status(), r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+/// `MatchedPath` / `NestedPath` outside a matched route: server-side misuse.
+impl From<MatchedPathRejection> for Rejection {
+    fn from(r: MatchedPathRejection) -> Self {
+        let mut rejection = Self::with_status(RejectionKind::Internal, r.status(), r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+impl From<NestedPathRejection> for Rejection {
+    fn from(r: NestedPathRejection) -> Self {
+        let mut rejection = Self::with_status(RejectionKind::Internal, r.status(), r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+/// Raw path params: invalid UTF-8 is the client's (400, `InvalidPath`); a
+/// missing param set is a route/extractor mismatch (500).
+impl From<RawPathParamsRejection> for Rejection {
+    fn from(r: RawPathParamsRejection) -> Self {
+        let status = r.status();
+        let kind = if status.is_server_error() {
+            RejectionKind::Internal
+        } else {
+            RejectionKind::InvalidPath
+        };
+        let mut rejection = Self::with_status(kind, status, r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
+    }
+}
+
+/// The common hand-written axum rejection shape, `(StatusCode, message)`.
+impl From<(StatusCode, &'static str)> for Rejection {
+    fn from((status, message): (StatusCode, &'static str)) -> Self {
+        Self::from_status(status, message)
+    }
+}
+
+impl From<(StatusCode, String)> for Rejection {
+    fn from((status, message): (StatusCode, String)) -> Self {
+        Self::from_status(status, message)
+    }
+}
+
+/// A failed WebSocket handshake (`WebSocketUpgrade` extraction): kind chosen
+/// from the status axum assigns (400/405/426), message = axum's body text.
+#[cfg(feature = "ws")]
+impl From<crate::http::ws::WebSocketUpgradeRejection> for Rejection {
+    fn from(r: crate::http::ws::WebSocketUpgradeRejection) -> Self {
+        let mut rejection = Self::from_status(r.status(), r.body_text());
+        rejection.source = Some(Arc::new(r));
+        rejection
     }
 }
 

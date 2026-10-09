@@ -148,9 +148,9 @@ HTTP request
     +-- State (if guarded handler)
     +-- HeaderMap (if guarded handler)
     +-- Arc<Core>            ← core Arc clone (built once at registration)
-    +-- __R2eRequestData_<Name>  ← FromRequestParts: request-scoped values only
-    |       +-- #[inject(identity)]: FromRequestParts (async)
-    |       +-- #[inject(request)] : FromRequestParts (async)
+    +-- __R2eRequestData_<Name>  ← RequestData<S>: request-scoped values only
+    |       +-- #[inject(identity)]: FromRequestPartsVia (async)
+    |       +-- #[inject(request)] : FromRequestPartsVia (async)
     |   (the #[inject] / #[config] live on the core, already built)
     +-- bind_request → façade __R2eRequest_<Name> (Deref to the core)
     +-- handler params (Json, Path, Query, etc.)
@@ -219,10 +219,11 @@ let core: Arc<UserController> = Arc::new(UserController::from_context(&ctx));
 
 **Step 2 — Request data extraction (per request, async, fallible)**
 
-The generated `__R2eRequestData_<Name>` extractor implements `FromRequestParts<S>`
-(generic over the inferred HList state) and produces **only** the request-scoped values
-(`#[inject(identity)]` and `#[inject(request)]`). When the controller declares no
-request-scoped fields it is zero-sized and infallible.
+The generated `__R2eRequestData_<Name>` extractor implements R2E's `RequestData<S>`
+(generic over the inferred HList state; not axum's `FromRequestParts`) and produces
+**only** the request-scoped values (`#[inject(identity)]` and `#[inject(request)]`).
+A failure is a typed `Rejection`, projected once through the route's error envelope.
+When the controller declares no request-scoped fields it is zero-sized and infallible.
 
 Each value is resolved through the R2E-owned trait `FromRequestPartsVia<S, M>` (or
 `OptionalFromRequestPartsVia<S, M>` for `Option<T>` fields). The marker slot `M`
@@ -249,60 +250,68 @@ then moved, together with the core `Arc`, into the façade via
 `__r2e_meta_<Name>::bind_request`. There is no per-request DI re-resolution: `#[inject]` and
 `#[config]` are read from the shared core, never recomputed.
 
-### 2.3 Two Handler Modes
+### 2.3 One Handler Shape
 
-Every endpoint shares the same shape: the Axum-facing closure captures the core `Arc`,
-extracts `__R2eRequestData_<Name>`, binds the stack façade with `bind_request`, then runs
-the route method on the façade.
+Every endpoint has the same shape: the Axum-facing closure is `move |State(state),
+req: Request|`, captures the core `Arc` (and the prebuilt decorator bundle), and
+delegates to **one generated entry fn** that owns the whole request pipeline:
 
-**Simple mode** (without guards) — the closure directly returns the method's return type:
+```
+split head/body → pre-auth guards → request data (identity + #[inject(request)])
+→ guards → head parameters (Path/Query/Params/…) → body parameter (last)
+→ garde validation → managed acquire → interceptors → method → managed finalize
+```
+
+Every failure site is projected **once**, through the route's error envelope: the
+`Result<T, E>` return type when `E: From<Rejection> + IntoHttpResponse + ErrorSchema`,
+otherwise the app-level `error_projection::<E>()` (default `HttpError`). Guards run
+before the route's own parameters, so a denied or unauthenticated request never reads
+its body.
 
 ```rust
-// core: Arc<UserController> is captured once at registration.
+// core: Arc<UserController> and deco (guards/interceptors built once from the
+// BeanContext) are captured once at registration.
 let core = core.clone();
-move |data: __R2eRequestData_UserController, /* ... params */| {
+let deco = deco.clone();
+move |State(state), req: Request| {
     let core = core.clone(); // one Arc clone per request
-    async move {
-        let ctrl = __r2e_meta_UserController::bind_request(core, data);
-        ctrl.list(/* params */).await
-    }
-}
-```
-
-**Guarded mode** (with `#[roles]`, `#[rate_limited]`, `#[guard]`) — the closure also extracts
-`State` and `HeaderMap` and returns `Response` to allow short-circuiting:
-
-```rust
-let core = core.clone();
-let deco = deco.clone();   // guards/interceptors built once from the BeanContext at registration
-move |headers: HeaderMap,
-      uri: Uri,
-      data: __R2eRequestData_UserController| {
-    let core = core.clone();
     let deco = deco.clone();
-    async move {
-        let ctrl = __r2e_meta_UserController::bind_request(core, data);
+    async move { __r2e_invoke_UserController_admin_list(state, req, deco, core).await }
+}
 
-        let guard_ctx = GuardContext {
-            method_name: "admin_list",
-            controller_name: "UserController",
-            headers: &headers,
-            uri: &uri,
-            path_params: PathParams::EMPTY,
-            identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, read from the façade
-        };
+async fn __r2e_invoke_UserController_admin_list<S, M>(
+    state: S, req: Request, deco: Arc<Deco>, core: Arc<UserController>,
+) -> Response {
+    let (mut parts, body) = req.into_parts();
+    let data = match __R2eRequestData_UserController::<M>::extract(&mut parts, &state).await {
+        Ok(d) => d,
+        Err(rejection) => return rejection.project::<HttpError>(),
+    };
+    let ctrl = __r2e_meta_UserController::bind_request(core, data);
 
-        // Guard built at registration (deco.g0); check() takes no state, and is async.
-        if let Err(resp) = Guard::check(&deco.g0, &guard_ctx).await {
-            return resp;
-        }
-
-        IntoResponse::into_response(ctrl.admin_list().await)
+    let guard_ctx = GuardContext {
+        method_name: "admin_list",
+        controller_name: "UserController",
+        headers: &parts.headers,
+        uri: &parts.uri,
+        path_params: PathParams::from_parts(&parts),
+        identity: __r2e_meta_UserController::guard_identity(&ctrl), // Option<&AuthenticatedUser>, read from the façade
+    };
+    // Guard built at registration (deco.g0); check() takes no state and returns a Rejection.
+    if let Err(rejection) = Guard::check(&deco.g0, &guard_ctx).await {
+        return rejection.project::<HttpError>();
     }
+    let _ = body; // no body parameter: never read
+
+    ctrl.admin_list().await.into_http_response()
 }
 ```
 
-**Implications**: in guarded mode, Axum extracts `HeaderMap` and `Uri` in addition to the request-data extractor, to build the `GuardContext`. There is **no `State` extraction** — the guard was constructed once at registration and is captured by the closure. In all modes the per-request cost is one `Arc` clone of the core, one clone of the prebuilt decorator bundle, and one request-data extraction; the core and the guards are built once at registration.
+**Implications**: there is **no `State` lookup for guards** — they were constructed
+once at registration and are passed in prebuilt. The per-request cost is one `Arc`
+clone of the core, one clone of the prebuilt decorator bundle, and one request-data
+extraction; the core and the guards are built once at registration. Pre-auth guards
+are the first step of the same entry fn, not a middleware layer.
 
 ---
 
@@ -535,7 +544,7 @@ pub struct GuardContext<'a, I: Identity> {
 
 pub trait Guard<I: Identity>: Send + Sync {
     fn check(&self, ctx: &GuardContext<'_, I>)
-        -> impl Future<Output = Result<(), Response>> + Send;
+        -> impl Future<Output = Result<(), Rejection>> + Send;
 }
 ```
 

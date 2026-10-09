@@ -15,7 +15,6 @@ use std::sync::Arc;
 
 use http_body_util::BodyExt;
 use r2e_core::http::extract::FromRequestParts;
-use r2e_core::http::response::Response;
 use r2e_core::http::{Body, Method, Parts, Request, Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::web::request_head::RequestHead;
@@ -102,7 +101,7 @@ impl<I: Identity> Guard<I> for Deny {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let reason = self.0;
         async move { Err(GuardError::forbidden(reason).into()) }
     }
@@ -167,13 +166,13 @@ impl<I: Identity> Guard<I> for SeeTenant {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             self.router
                 .resolve(&ctx.head())
                 .await
                 .map(|_| ())
-                .map_err(r2e_core::http::response::IntoResponse::into_response)
+                .map_err(Rejection::from)
         }
     }
 }

@@ -18,6 +18,7 @@ mod managed;
 mod multipart;
 mod panic;
 mod params;
+mod projection;
 mod plugins;
 mod rejection;
 mod request_id;

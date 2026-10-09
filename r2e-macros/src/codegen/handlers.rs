@@ -1,4 +1,13 @@
-//! Axum handler generation for route methods.
+//! Entry-function generation for route / SSE / WS methods.
+//!
+//! Every endpoint gets ONE generated entry function, registered through a
+//! `(State<S>, Request)` closure. The entry function owns the whole request
+//! pipeline in a fixed order — pre-auth guards, request-scoped data (identity +
+//! `#[inject(request)]`), the param-level identity, guards, the remaining
+//! extractors (body last), garde validation, `#[managed]` acquisition, the
+//! interceptor chain around the method call, managed finalisation — and every
+//! failure of that pipeline is a typed [`Rejection`] projected **once** through
+//! the route's error envelope (see `r2e_core::error::projection`).
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
@@ -8,12 +17,7 @@ use crate::model::types::*;
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
 
-/// Generate all handler functions for a controller.
-///
-/// For each endpoint we emit one invocation function. HTTP/SSE route closures
-/// bind the façade and call it directly; WebSocket additionally needs a thin
-/// upgrade adapter. Guards, interceptors, managed resources, method invocation,
-/// and response conversion are emitted only in the invocation function.
+/// Generate all entry functions for a controller.
 pub fn generate_handlers(def: &RoutesImplDef) -> TokenStream {
     let route_handlers: Vec<_> = def
         .route_methods
@@ -44,6 +48,11 @@ fn invocation_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Id
     format_ident!("__r2e_invoke_{}_{}", controller, method)
 }
 
+/// The post-upgrade session body of a `#[ws]` method (runs on the socket).
+fn ws_session_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Ident {
+    format_ident!("__r2e_session_{}_{}", controller, method)
+}
+
 /// The generic state ident shared by all state-generic generated items. Free
 /// generated fns declare it themselves; items inside the `Controller` impl use
 /// the impl's parameter of the same name.
@@ -69,7 +78,8 @@ pub(super) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
 
 /// Bounds placed on the generic state by every generated item that touches it:
 /// axum's `Router` requirements plus `BeanLookup`, the fixed vocabulary through
-/// which guards, interceptors, and managed resources pull beans from the state.
+/// which guards, interceptors, managed resources and the error projection pull
+/// beans from the state.
 pub(super) fn state_bounds(krate: &TokenStream) -> TokenStream {
     quote! { Clone + Send + Sync + 'static + #krate::BeanLookup }
 }
@@ -101,10 +111,6 @@ fn request_data_ident_for(controller: &syn::Ident) -> syn::Ident {
     format_ident!("__R2eRequestData_{}", controller)
 }
 
-fn handler_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Ident {
-    format_ident!("__r2e_{}_{}", controller, method)
-}
-
 /// The controller name as seen by guards: **module-qualified**, e.g.
 /// `my_app::admin::UsersController`.
 ///
@@ -120,38 +126,6 @@ pub(super) fn qualified_controller_name(controller: &syn::Ident) -> TokenStream 
     quote! { ::core::concat!(::core::module_path!(), "::", #bare) }
 }
 
-/// Context for handler generation, containing names and identifiers.
-struct HandlerContext<'a> {
-    meta_mod: syn::Ident,
-    invocation_name: syn::Ident,
-    fn_name: &'a syn::Ident,
-    fn_name_str: String,
-    controller_name_str: String,
-    /// Module-qualified name expression for guard contexts (see
-    /// [`qualified_controller_name`]).
-    controller_name_q: TokenStream,
-}
-
-impl<'a> HandlerContext<'a> {
-    fn new(def: &'a RoutesImplDef, rm: &'a RouteMethod) -> Self {
-        let controller_name = &def.controller_name;
-        let fn_name = &rm.fn_item.sig.ident;
-        Self {
-            meta_mod: format_ident!("__r2e_meta_{}", controller_name),
-            invocation_name: invocation_ident_for(controller_name, fn_name),
-            fn_name,
-            fn_name_str: fn_name.to_string(),
-            controller_name_str: controller_name.to_string(),
-            controller_name_q: qualified_controller_name(controller_name),
-        }
-    }
-}
-
-/// Extract handler parameters (everything except &self) with their indices.
-fn extract_handler_params(rm: &RouteMethod) -> Vec<(usize, &syn::PatType)> {
-    extract_sig_params(&rm.fn_item.sig)
-}
-
 /// Walk a method signature once and collect its typed params with indices,
 /// dropping the `&self` receiver. Shared by HTTP / SSE / WS handler codegen.
 fn extract_sig_params(sig: &syn::Signature) -> Vec<(usize, &syn::PatType)> {
@@ -165,75 +139,6 @@ fn extract_sig_params(sig: &syn::Signature) -> Vec<(usize, &syn::PatType)> {
         .collect()
 }
 
-/// Build handler parameter declarations, excluding managed params.
-fn build_handler_params(
-    extra_params: &[(usize, &syn::PatType)],
-    managed_indices: &std::collections::HashSet<usize>,
-) -> Vec<TokenStream> {
-    extra_params
-        .iter()
-        .filter(|(i, _)| !managed_indices.contains(i))
-        .map(|(i, pt)| {
-            let arg_name = format_ident!("__arg_{}", i);
-            let ty = &pt.ty;
-            quote! { #arg_name: #ty }
-        })
-        .collect()
-}
-
-/// Build call arguments, substituting managed params with mutable refs.
-fn build_call_args(
-    extra_params: &[(usize, &syn::PatType)],
-    managed_indices: &std::collections::HashSet<usize>,
-) -> Vec<TokenStream> {
-    extra_params
-        .iter()
-        .map(|(i, _)| {
-            let arg_name = format_ident!("__arg_{}", i);
-            if managed_indices.contains(i) {
-                quote! { #arg_name.resource_mut() }
-            } else {
-                quote! { #arg_name }
-            }
-        })
-        .collect()
-}
-
-/// Generate automatic validation calls for handler parameters.
-///
-/// Uses the autoref specialization trick: types deriving `garde::Validate` are
-/// validated automatically; types without it compile to a no-op.
-fn generate_validation_calls(
-    extra_params: &[(usize, &syn::PatType)],
-    managed_indices: &std::collections::HashSet<usize>,
-    identity_param_index: Option<usize>,
-    krate: &TokenStream,
-) -> Vec<TokenStream> {
-    extra_params
-        .iter()
-        .filter(|(i, _)| !managed_indices.contains(i) && Some(*i) != identity_param_index)
-        .map(|(i, pt)| {
-            let arg_name = format_ident!("__arg_{}", i);
-            let validate_target = if is_wrapper_type(&pt.ty) {
-                // For Json<T>, Query<T>, Path<T>, Form<T> → validate the inner .0
-                quote! { &#arg_name.0 }
-            } else {
-                // For Params and other custom types → validate directly
-                quote! { &#arg_name }
-            };
-            quote! {
-                {
-                    use #krate::web::validation::__DoValidate as _;
-                    use #krate::web::validation::__SkipValidate as _;
-                    if let Err(__validation_err) = (&#krate::web::validation::__AutoValidator(#validate_target)).__maybe_validate() {
-                        return *__validation_err;
-                    }
-                }
-            }
-        })
-        .collect()
-}
-
 /// Check if a type is a known Axum wrapper (Json, Query, Path, Form).
 fn is_wrapper_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
@@ -244,6 +149,274 @@ fn is_wrapper_type(ty: &syn::Type) -> bool {
     }
     false
 }
+
+// ── Error projection ─────────────────────────────────────────────────────
+
+/// How a route projects the [`Rejection`]s of its request pipeline.
+enum Projection {
+    /// Probe the handler's declared return type: `Result<T, E>` with an
+    /// envelope `E` projects through `E`; anything else falls back to the
+    /// application projection. Resolved by autoref specialization at
+    /// compile time, so the fallback costs nothing where it applies.
+    Probe(syn::Type),
+    /// The application projection (`ErrorProjector` bean, else `HttpError`).
+    /// Used when the return type cannot be named as a type argument (`impl
+    /// Trait`), for SSE/WS endpoints, and for infallible handlers.
+    Default,
+}
+
+impl Projection {
+    /// From a handler signature: its output type when it is nameable.
+    fn for_signature(sig: &syn::Signature) -> Self {
+        match &sig.output {
+            syn::ReturnType::Default => Self::Default,
+            syn::ReturnType::Type(_, ty) => {
+                if contains_impl_trait(ty) {
+                    Self::Default
+                } else {
+                    Self::Probe((**ty).clone())
+                }
+            }
+        }
+    }
+
+    /// A `return <projected response>;` statement for a `Rejection` expression.
+    /// `state` is an expression of type `&S` (`S: BeanLookup`).
+    fn return_stmt(&self, krate: &TokenStream, rejection: TokenStream, state: &TokenStream) -> TokenStream {
+        match self {
+            Self::Probe(ty) => quote! {
+                {
+                    use #krate::error::projection::ProjectEnvelope as _;
+                    use #krate::error::projection::ProjectFallback as _;
+                    return (&#krate::error::projection::ProjectionProbe::<#ty>::new())
+                        .project(#rejection, #state);
+                }
+            },
+            Self::Default => quote! {
+                {
+                    return #krate::error::projection::project_default(#rejection, #state);
+                }
+            },
+        }
+    }
+}
+
+fn contains_impl_trait(ty: &syn::Type) -> bool {
+    struct Finder(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_type_impl_trait(&mut self, _: &'ast syn::TypeImplTrait) {
+            self.0 = true;
+        }
+    }
+    let mut finder = Finder(false);
+    syn::visit::Visit::visit_type(&mut finder, ty);
+    finder.0
+}
+
+// ── Decorator plan ───────────────────────────────────────────────────────
+
+/// Everything an endpoint's entry function and its registration closure must
+/// agree on about decorator sets: which sets exist (after spec-type
+/// degradation), and which fields of each apply to this endpoint.
+///
+/// Computed by ONE function ([`plan_endpoint`]) from the same inputs on both
+/// sides, so a spec-type error can never produce an arity mismatch between
+/// the closure call and the entry function's signature.
+struct EndpointPlan {
+    /// Per-method set (guards + method-level interceptors) items; carries the
+    /// `compile_error!` when a spec type is not inferable.
+    deco_items: TokenStream,
+    predeco_items: TokenStream,
+    deco_set: Option<super::decorators::DecoSet>,
+    predeco_set: Option<super::decorators::DecoSet>,
+    /// The shared controller-level set, when this endpoint captures it.
+    ctrl_set: Option<super::decorators::CtrlDecoSet>,
+    anonymous: bool,
+}
+
+/// Build the decorator plan of one endpoint.
+///
+/// `intercepts_apply` is true for HTTP routes only — SSE/WS endpoints never run
+/// the interceptor chain, so they capture the controller-level set only for
+/// its guard / pre-guard fields.
+fn plan_endpoint(
+    def: &RoutesImplDef,
+    fn_ident: &syn::Ident,
+    decorators: &MethodDecorators,
+    intercepts_apply: bool,
+    path: &str,
+    sig: &syn::Signature,
+) -> EndpointPlan {
+    let krate = r2e_core_path();
+    let intercept_exprs: Vec<&syn::Expr> = if intercepts_apply {
+        decorators.intercept_fns.iter().collect()
+    } else {
+        Vec::new()
+    };
+    let path_module = generate_path_param_module(path, sig, &krate);
+    let (deco_items, deco_set) = super::decorators::generate_deco_items(
+        def,
+        fn_ident,
+        &decorators.guard_fns,
+        &intercept_exprs,
+        path_module,
+    );
+    let (predeco_items, predeco_set) =
+        super::decorators::generate_predeco_items(def, fn_ident, decorators);
+
+    // Degradation: when any spec (method-level guard/interceptor, or any
+    // controller-level decorator) is not inferable, drop every set so the
+    // only error the user sees is the spec-type one. The compile_error comes
+    // from this method's own deco/predeco items for method-level specs and
+    // from `generate_ctrl_deco_items` (once per controller) for
+    // controller-level specs — degradation is never silent.
+    let specs_ok = super::decorators::specs_ok_with_ctrl(
+        def,
+        decorators
+            .guard_fns
+            .iter()
+            .chain(intercept_exprs.iter().copied()),
+    );
+    let ctrl_set = super::decorators::ctrl_deco_set(def)
+        .filter(|_| specs_ok)
+        .filter(|s| {
+            intercepts_apply || !s.guard_fields.is_empty() || !s.pre_guard_fields.is_empty()
+        });
+
+    EndpointPlan {
+        deco_items,
+        predeco_items,
+        deco_set: deco_set.filter(|_| specs_ok),
+        predeco_set: predeco_set.filter(|_| specs_ok),
+        ctrl_set,
+        anonymous: decorators.anonymous,
+    }
+}
+
+impl EndpointPlan {
+    /// Controller-level post-auth guards apply to every route EXCEPT
+    /// `#[anonymous]` ones: the marker opts the route out of the controller's
+    /// auth surface, so identity-driven controller guards must not fire there
+    /// (pre-guards and interceptors still do).
+    fn ctrl_guard_fields(&self) -> &[syn::Ident] {
+        match &self.ctrl_set {
+            Some(s) if !self.anonymous => &s.guard_fields,
+            _ => &[],
+        }
+    }
+
+    fn ctrl_pre_fields(&self) -> &[syn::Ident] {
+        self.ctrl_set
+            .as_ref()
+            .map(|s| s.pre_guard_fields.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn ctrl_intercept_fields(&self) -> &[syn::Ident] {
+        self.ctrl_set
+            .as_ref()
+            .map(|s| s.intercept_fields.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn method_guard_fields(&self) -> &[syn::Ident] {
+        self.deco_set
+            .as_ref()
+            .map(|s| s.guard_fields.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn method_intercept_fields(&self) -> &[syn::Ident] {
+        self.deco_set
+            .as_ref()
+            .map(|s| s.intercept_fields.as_slice())
+            .unwrap_or(&[])
+    }
+
+    fn pre_fields(&self) -> &[syn::Ident] {
+        self.predeco_set
+            .as_ref()
+            .map(|s| s.guard_fields.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Any post-auth guard (controller- or method-level) runs on this endpoint.
+    fn has_guards(&self) -> bool {
+        !self.ctrl_guard_fields().is_empty() || !self.method_guard_fields().is_empty()
+    }
+
+    fn has_intercepts(&self) -> bool {
+        !self.ctrl_intercept_fields().is_empty() || !self.method_intercept_fields().is_empty()
+    }
+
+    /// Combined interceptor refs, impl-level (shared) outermost then
+    /// method-level — unchanged execution order.
+    fn interceptor_refs(&self) -> Vec<TokenStream> {
+        let mut refs: Vec<TokenStream> = Vec::new();
+        for f in self.ctrl_intercept_fields() {
+            refs.push(quote! { &__ctrl_deco.#f });
+        }
+        for f in self.method_intercept_fields() {
+            refs.push(quote! { &__deco.#f });
+        }
+        refs
+    }
+
+    /// Decorator-set parameters of the entry function (after `__req`).
+    fn entry_params(&self) -> Vec<TokenStream> {
+        let mut params = Vec::new();
+        if let Some(cs) = &self.ctrl_set {
+            let ty = &cs.struct_ident;
+            params.push(quote! { __ctrl_deco: &#ty });
+        }
+        if let Some(ps) = &self.predeco_set {
+            let ty = ps.ty();
+            params.push(quote! { __pre_deco: &#ty });
+        }
+        if let Some(ds) = &self.deco_set {
+            let ty = ds.ty();
+            params.push(quote! { __deco: &#ty });
+        }
+        params
+    }
+
+    /// Registration-time construction of the captured sets (closure side).
+    /// The method's sets are built once here, from the resolved graph, and
+    /// captured as one `Arc` each; the shared controller-level set
+    /// (`__r2e_ctrl_deco`, built once in the router body) is captured by an
+    /// `Arc` clone so every route shares one instance.
+    fn capture_setup(&self) -> TokenStream {
+        let ctrl = self.ctrl_set.as_ref().map(|_| {
+            quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
+        });
+        let pre = self.predeco_set.as_ref().map(|s| {
+            let ctor = &s.ctor_ident;
+            quote! { let __pre_deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
+        });
+        let deco = self.deco_set.as_ref().map(|s| {
+            let ctor = &s.ctor_ident;
+            quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
+        });
+        quote! { #ctrl #pre #deco }
+    }
+
+    /// The matching call arguments (same order as [`Self::entry_params`]).
+    fn capture_args(&self) -> Vec<TokenStream> {
+        let mut args = Vec::new();
+        if self.ctrl_set.is_some() {
+            args.push(quote! { &__ctrl_deco_capture });
+        }
+        if self.predeco_set.is_some() {
+            args.push(quote! { &__pre_deco_capture });
+        }
+        if self.deco_set.is_some() {
+            args.push(quote! { &__deco_capture });
+        }
+        args
+    }
+}
+
+// ── Path-parameter symbols (`mod path { const id: PathParam<T> }`) ───────
 
 struct PathParamSymbol {
     ident: syn::Ident,
@@ -409,849 +582,813 @@ fn generate_path_param_module(
     }
 }
 
-/// Generate guard check statements against prebuilt guard fields (constructed
-/// once at wiring time). `recv` names the set binding (`__deco` for the
-/// method's own set, `__ctrl_deco` for the shared controller-level set) and
-/// `ctx_ident` the `GuardContext` binding the checks read.
-fn generate_guard_checks(
-    recv: &TokenStream,
-    ctx_ident: &syn::Ident,
-    guard_fields: &[syn::Ident],
-    krate: &TokenStream,
-) -> Vec<TokenStream> {
-    guard_fields
-        .iter()
-        .map(|field| {
-            quote! {
-                if let Err(__resp) = #krate::Guard::check(
-                    &#recv.#field,
-                    &#ctx_ident,
-                ).await {
-                    return __resp;
-                }
-            }
-        })
-        .collect()
+// ── Request pipeline (shared by route / SSE / WS entry functions) ────────
+
+/// Parameters shared by the pipeline emitters.
+struct Pipeline<'a> {
+    krate: TokenStream,
+    def: &'a RoutesImplDef,
+    fn_ident: &'a syn::Ident,
+    fn_name_str: String,
+    /// Module-qualified controller name expression for guard contexts.
+    controller_name_q: TokenStream,
+    meta_mod: syn::Ident,
+    plan: &'a EndpointPlan,
+    identity_param: Option<&'a IdentityParam>,
+    projection: Projection,
+    /// Expression of type `&S` naming the state (`&__state` at top level).
+    state: TokenStream,
 }
 
-/// Generate the shared request-head binding.
-///
-/// Emitted once per handler body when the route has guards and/or `#[managed]`
-/// params: both read the request head, and both borrow the same extracted
-/// values (`__path_params` is declared here and reused by the guard context).
-fn generate_request_head(krate: &TokenStream) -> TokenStream {
-    quote! {
-        let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-        let __r2e_head = #krate::RequestHead {
-            method: &__method,
-            uri: &__uri,
-            headers: &__headers,
-            extensions: &__extensions,
-            path_params: __path_params,
-            peer_addr: __peer_addr.0,
-        };
-    }
-}
-
-/// Generate guard context construction based on identity source.
-///
-/// Runs after [`generate_request_head`], so `__path_params` is already in
-/// scope (it is `Copy`) and the guard context borrows the same request parts as
-/// the `RequestHead`. `ctx_ident` names the binding and `method_name` its
-/// `method_name` field — the method's own context gets the route's fn name,
-/// the shared controller-level context gets `"*"` (one stateful-guard bucket
-/// for the whole controller).
-fn generate_guard_context(
-    ctx: &HandlerContext,
-    rm: &RouteMethod,
-    krate: &TokenStream,
-    ctx_ident: &syn::Ident,
-    method_name: &TokenStream,
-) -> TokenStream {
-    let controller_name_str = &ctx.controller_name_q;
-    let meta_mod = &ctx.meta_mod;
-
-    let identity_expr = if let Some(ref id_param) = rm.identity_param {
-        // Case A: param-level identity
-        let arg_name = format_ident!("__arg_{}", id_param.index);
-        if id_param.is_optional {
-            quote! { #arg_name.as_ref() }
-        } else {
-            quote! { Some(&#arg_name) }
+impl<'a> Pipeline<'a> {
+    fn new(
+        def: &'a RoutesImplDef,
+        fn_ident: &'a syn::Ident,
+        plan: &'a EndpointPlan,
+        identity_param: Option<&'a IdentityParam>,
+        projection: Projection,
+    ) -> Self {
+        let controller_name = &def.controller_name;
+        Self {
+            krate: r2e_core_path(),
+            def,
+            fn_ident,
+            fn_name_str: fn_ident.to_string(),
+            controller_name_q: qualified_controller_name(controller_name),
+            meta_mod: format_ident!("__r2e_meta_{}", controller_name),
+            plan,
+            identity_param,
+            projection,
+            state: quote! { &__state },
         }
-    } else if rm.decorators.anonymous {
-        // Case C: #[anonymous] — no identity was extracted. Guards still run
-        // (e.g. rate limiting) with `identity: None`, typed to the controller's
-        // `IdentityType` so `GuardContext<I>` stays pinned as in case B.
-        quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
-    } else {
-        // Case B: struct-level identity or no identity. Both adapters have
-        // already normalized their controller source to `&Controller`.
-        quote! { #meta_mod::guard_identity(__ctrl) }
-    };
-    quote! {
-        let #ctx_ident = #krate::GuardContext {
-            method_name: #method_name,
-            controller_name: #controller_name_str,
-            method: &__method,
-            headers: &__headers,
-            uri: &__uri,
-            extensions: &__extensions,
-            peer_addr: __peer_addr.0,
-            path_params: __path_params,
-            identity: #identity_expr,
-        };
     }
-}
 
-/// Generate managed resource acquisition statements.
-///
-/// Uses `quote_spanned!` so any trait-bound error (e.g. `T: ManagedResource<State>`
-/// not satisfied) points at the user's own `&mut T` parameter type rather than
-/// the macro-expanded handler body.
-fn generate_managed_acquire(
-    rm: &RouteMethod,
-    krate: &TokenStream,
-    controller_name: &str,
-    handler_name: &str,
-) -> Vec<TokenStream> {
-    rm.managed_params
-        .iter()
-        .map(|mp| {
-            let arg_name = format_ident!("__arg_{}", mp.index);
-            let ty = &mp.ty;
-            let ty_span = ty.span();
-            quote_spanned! { ty_span =>
-                let mut #arg_name = match #krate::ManagedGuard::<#ty, __R2eS>::acquire(
-                    #krate::ManagedContext::new(&__state, #controller_name, #handler_name)
-                        .with_request(__r2e_head)
-                ).await {
-                    Ok(__r) => __r,
-                    Err(__e) => return __e.into(),
-                };
-            }
-        })
-        .collect()
-}
+    fn project(&self, rejection: TokenStream) -> TokenStream {
+        self.projection.return_stmt(&self.krate, rejection, &self.state)
+    }
 
-/// Generate managed resource release statements (in reverse order).
-fn generate_managed_release(
-    rm: &RouteMethod,
-    krate: &TokenStream,
-    controller_name: &str,
-    handler_name: &str,
-) -> Vec<TokenStream> {
-    rm.managed_params
-        .iter()
-        .rev()
-        .map(|mp| {
-            let arg_name = format_ident!("__arg_{}", mp.index);
-            let ty = &mp.ty;
-            let ty_span = ty.span();
-            quote_spanned! { ty_span =>
-                if let Err(__e) = #arg_name.finalize(&__managed_outcome).await {
-                    #krate::record_managed_finalize_error(
-                        &mut __managed_finalize_error,
-                        __e.into(),
-                        #controller_name,
-                        #handler_name,
-                    );
+    /// Split the request, snapshot the peer address.
+    fn open(&self) -> TokenStream {
+        let krate = &self.krate;
+        quote! {
+            let (mut __parts, __body) = __req.into_parts();
+            let __peer_addr = __parts
+                .extensions
+                .get::<#krate::http::ConnectInfo<::std::net::SocketAddr>>()
+                .map(|__info| __info.0);
+        }
+    }
+
+    /// Pre-auth guards: controller-level (`"*"` context) first, then the
+    /// method's own. They run before ANY extraction — no identity, no body.
+    fn pre_auth_guards(&self) -> TokenStream {
+        let krate = &self.krate;
+        let controller_name_q = &self.controller_name_q;
+        let fn_name_str = &self.fn_name_str;
+        let ctx = |method_name: TokenStream| {
+            quote! {
+                #krate::PreAuthGuardContext {
+                    method_name: #method_name,
+                    controller_name: #controller_name_q,
+                    headers: &__parts.headers,
+                    uri: &__parts.uri,
+                    peer_addr: __peer_addr,
+                    path_params: #krate::PathParams::EMPTY,
                 }
             }
-        })
-        .collect()
-}
+        };
+        let check = |recv: TokenStream, field: &syn::Ident, ctx: TokenStream| {
+            let project = self.project(quote! { __rej });
+            quote! {
+                {
+                    let __pre_ctx = #ctx;
+                    if let Err(__rej) = #krate::PreAuthGuard::check(&#recv.#field, &__pre_ctx).await {
+                        #project
+                    }
+                }
+            }
+        };
+        let ctrl: Vec<TokenStream> = self
+            .plan
+            .ctrl_pre_fields()
+            .iter()
+            .map(|f| check(quote! { __ctrl_deco }, f, ctx(quote! { "*" })))
+            .collect();
+        let method: Vec<TokenStream> = self
+            .plan
+            .pre_fields()
+            .iter()
+            .map(|f| check(quote! { __pre_deco }, f, ctx(quote! { #fn_name_str })))
+            .collect();
+        quote! { #(#ctrl)* #(#method)* }
+    }
 
-/// Generate the body and release logic for managed resources.
-fn generate_body_and_release(
-    call_expr: &TokenStream,
-    managed_release: &[TokenStream],
-    has_managed: bool,
-    krate: &TokenStream,
-) -> TokenStream {
-    if has_managed {
+    /// Bind the receiver: extract the request-scoped data and build the
+    /// façade (`__facade`, with `__ctrl: &Façade`), or borrow the core for
+    /// `#[anonymous]` endpoints (`__ctrl: &Core`).
+    fn bind_receiver(&self) -> TokenStream {
+        let krate = &self.krate;
+        let controller_name = &self.def.controller_name;
+        if self.plan.anonymous {
+            return quote! {
+                let __ctrl: &#controller_name = &__core;
+            };
+        }
+        let data_name = request_data_ident_for(controller_name);
+        let md = data_marker();
+        let meta_mod = &self.meta_mod;
+        let project = self.project(quote! { __rej });
         quote! {
-            let __result = #call_expr;
+            let __data = match <#data_name<#md> as #krate::web::extract::RequestData<__R2eS>>
+                ::extract(&mut __parts, &__state).await
+            {
+                Ok(__d) => __d,
+                Err(__rej) => #project
+            };
+            let __facade = #meta_mod::bind_request(__core, __data);
+            let __ctrl = &__facade;
+        }
+    }
+
+    /// Extract the param-level `#[inject(identity)]` (bean-backed, witness in
+    /// the marker generic), binding `__arg_<i>` with the declared type.
+    fn identity_param(&self, params: &[(usize, &syn::PatType)]) -> TokenStream {
+        let Some(id) = self.identity_param else {
+            return quote! {};
+        };
+        let krate = &self.krate;
+        let arg = format_ident!("__arg_{}", id.index);
+        let ty = &params
+            .iter()
+            .find(|(i, _)| *i == id.index)
+            .expect("identity parameter index out of range")
+            .1
+            .ty;
+        let marker = identity_marker_for(self.fn_ident);
+        let project = self.project(quote! { ::core::convert::Into::into(__e) });
+        quote_spanned! { ty.span() =>
+            let #arg = match <#ty as #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
+                ::from_request_parts_via(&mut __parts, &__state).await
+            {
+                Ok(__v) => __v,
+                #[allow(unreachable_code)]
+                Err(__e) => #project
+            };
+        }
+    }
+
+    /// Extract one `FromRequestParts` value from `__parts` into `binding`,
+    /// converting a foreign rejection through the `ToRejection` probe (typed
+    /// `Into<Rejection>` when available, opaque `Response` otherwise).
+    fn extract_parts(&self, binding: &syn::Ident, ty: &syn::Type) -> TokenStream {
+        let krate = &self.krate;
+        let project = self.project(quote! { __rej });
+        quote_spanned! { ty.span() =>
+            let #binding = match <#ty as #krate::http::extract::FromRequestParts<__R2eS>>
+                ::from_request_parts(&mut __parts, &__state).await
+            {
+                Ok(__v) => __v,
+                #[allow(unreachable_code)]
+                Err(__e) => {
+                    use #krate::web::extract::ToRejectionTyped as _;
+                    use #krate::web::extract::ToRejectionOpaque as _;
+                    let __rej = (&#krate::web::extract::ToRejection::<
+                        <#ty as #krate::http::extract::FromRequestParts<__R2eS>>::Rejection,
+                    >::new()).convert(__e);
+                    #project
+                }
+            };
+        }
+    }
+
+    /// Extract the trailing parameter through `FromRequest` — the one
+    /// extractor allowed to consume the body. Consumes `__parts` + `__body`.
+    fn extract_body(&self, binding: &syn::Ident, ty: &syn::Type) -> TokenStream {
+        let krate = &self.krate;
+        let project = self.project(quote! { __rej });
+        quote_spanned! { ty.span() =>
+            let #binding = match <#ty as #krate::http::extract::FromRequest<__R2eS, _>>
+                ::from_request(
+                    #krate::http::extract::Request::from_parts(__parts, __body),
+                    &__state,
+                ).await
+            {
+                Ok(__v) => __v,
+                #[allow(unreachable_code)]
+                Err(__e) => {
+                    use #krate::web::extract::ToRejectionTyped as _;
+                    use #krate::web::extract::ToRejectionOpaque as _;
+                    let __rej = (&#krate::web::extract::ToRejection::<
+                        <#ty as #krate::http::extract::FromRequest<__R2eS, _>>::Rejection,
+                    >::new()).convert(__e);
+                    #project
+                }
+            };
+        }
+    }
+
+    /// The identity expression of a guard context.
+    fn guard_identity_expr(&self) -> TokenStream {
+        let meta_mod = &self.meta_mod;
+        if let Some(id) = self.identity_param {
+            // Case A: param-level identity, already extracted.
+            let arg = format_ident!("__arg_{}", id.index);
+            if id.is_optional {
+                quote! { #arg.as_ref() }
+            } else {
+                quote! { Some(&#arg) }
+            }
+        } else if self.plan.anonymous {
+            // Case C: #[anonymous] — no identity was extracted. Guards still
+            // run (e.g. rate limiting) with `identity: None`, typed to the
+            // controller's `IdentityType` so `GuardContext<I>` stays pinned.
+            quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
+        } else {
+            // Case B: struct-level identity or no identity, read off the façade.
+            quote! { #meta_mod::guard_identity(__ctrl) }
+        }
+    }
+
+    /// Request-head bindings (`__method`, `__uri`, `__headers`, `__extensions`:
+    /// all `&`-references) plus `__path_params`.
+    ///
+    /// `owned` clones the four values out of `__parts` so the head can outlive
+    /// later `&mut __parts` extractions (a `RequestHead` kept for `#[managed]`
+    /// acquisition after the body was read); otherwise they borrow `__parts`
+    /// directly — the borrows end with the last guard check.
+    fn head_bindings(&self, owned: bool) -> TokenStream {
+        let krate = &self.krate;
+        let raw = format_ident!("__raw_path_params");
+        let raw_ty: syn::Type = syn::parse_quote! { #krate::http::extract::RawPathParams };
+        let raw_extract = self.extract_parts(&raw, &raw_ty);
+        let values = if owned {
+            quote! {
+                let __method_owned = __parts.method.clone();
+                let __uri_owned = __parts.uri.clone();
+                let __headers_owned = __parts.headers.clone();
+                let __extensions_owned = __parts.extensions.clone();
+                let __method = &__method_owned;
+                let __uri = &__uri_owned;
+                let __headers = &__headers_owned;
+                let __extensions = &__extensions_owned;
+            }
+        } else {
+            quote! {
+                let __method = &__parts.method;
+                let __uri = &__parts.uri;
+                let __headers = &__parts.headers;
+                let __extensions = &__parts.extensions;
+            }
+        };
+        quote! {
+            #raw_extract
+            let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
+            #values
+        }
+    }
+
+    /// The `RequestHead` handed to `#[managed]` acquisition. Requires
+    /// [`Self::head_bindings`] in scope.
+    fn request_head(&self) -> TokenStream {
+        let krate = &self.krate;
+        quote! {
+            let __r2e_head = #krate::RequestHead {
+                method: __method,
+                uri: __uri,
+                headers: __headers,
+                extensions: __extensions,
+                path_params: __path_params,
+                peer_addr: __peer_addr,
+            };
+        }
+    }
+
+    /// Post-auth guards: controller-level (`"*"` context, one stateful-guard
+    /// bucket per controller) first, then the method's own. Requires
+    /// [`Self::head_bindings`] in scope.
+    fn guards(&self) -> TokenStream {
+        let krate = &self.krate;
+        let controller_name_q = &self.controller_name_q;
+        let fn_name_str = &self.fn_name_str;
+        let identity = self.guard_identity_expr();
+        let ctx = |method_name: TokenStream| {
+            quote! {
+                #krate::GuardContext {
+                    method_name: #method_name,
+                    controller_name: #controller_name_q,
+                    method: __method,
+                    headers: __headers,
+                    uri: __uri,
+                    extensions: __extensions,
+                    peer_addr: __peer_addr,
+                    path_params: __path_params,
+                    identity: #identity,
+                }
+            }
+        };
+        let check = |recv: TokenStream, field: &syn::Ident, ctx: TokenStream| {
+            let project = self.project(quote! { __rej });
+            quote! {
+                {
+                    let __guard_ctx = #ctx;
+                    if let Err(__rej) = #krate::Guard::check(&#recv.#field, &__guard_ctx).await {
+                        #project
+                    }
+                }
+            }
+        };
+        let ctrl: Vec<TokenStream> = self
+            .plan
+            .ctrl_guard_fields()
+            .iter()
+            .map(|f| check(quote! { __ctrl_deco }, f, ctx(quote! { "*" })))
+            .collect();
+        let method: Vec<TokenStream> = self
+            .plan
+            .method_guard_fields()
+            .iter()
+            .map(|f| check(quote! { __deco }, f, ctx(quote! { #fn_name_str })))
+            .collect();
+        quote! { #(#ctrl)* #(#method)* }
+    }
+
+    /// Extract the handler's own parameters (`__arg_<i>`), in declaration
+    /// order: every one through `FromRequestParts`, except the last, which
+    /// goes through `FromRequest` when `last_consumes_body` (consuming
+    /// `__parts` + `__body`). When it does not, the body is left untouched.
+    fn params(&self, params: &[(usize, &syn::PatType)], last_consumes_body: bool) -> TokenStream {
+        let mut out = Vec::new();
+        let n = params.len();
+        for (pos, (i, pt)) in params.iter().enumerate() {
+            let arg = format_ident!("__arg_{}", i);
+            if last_consumes_body && pos + 1 == n {
+                out.push(self.extract_body(&arg, &pt.ty));
+            } else {
+                out.push(self.extract_parts(&arg, &pt.ty));
+            }
+        }
+        quote! { #(#out)* }
+    }
+
+    /// Automatic garde validation of the given params (autoref
+    /// specialization: types without `garde::Validate` compile to a no-op).
+    fn validation(&self, params: &[(usize, &syn::PatType)]) -> TokenStream {
+        let krate = &self.krate;
+        let calls: Vec<TokenStream> = params
+            .iter()
+            .map(|(i, pt)| {
+                let arg = format_ident!("__arg_{}", i);
+                let target = if is_wrapper_type(&pt.ty) {
+                    // Json<T>, Query<T>, Path<T>, Form<T> → validate the inner .0
+                    quote! { &#arg.0 }
+                } else {
+                    quote! { &#arg }
+                };
+                let project = self.project(quote! { *__rej });
+                quote! {
+                    {
+                        use #krate::web::validation::__DoValidate as _;
+                        use #krate::web::validation::__SkipValidate as _;
+                        if let Err(__rej) = (&#krate::web::validation::__AutoValidator(#target)).__maybe_validate() {
+                            #project
+                        }
+                    }
+                }
+            })
+            .collect();
+        quote! { #(#calls)* }
+    }
+
+    /// `#[managed]` acquisition. `state` names the `&S` to acquire against —
+    /// `&__state` at top level, the `Copy` `__state_ref` inside interceptor
+    /// closures. Requires `__r2e_head` in scope.
+    fn managed_acquire(&self, managed: &[ManagedParam], state: &TokenStream) -> TokenStream {
+        let krate = &self.krate;
+        let controller_name_str = self.def.controller_name.to_string();
+        let fn_name_str = &self.fn_name_str;
+        let stmts: Vec<TokenStream> = managed
+            .iter()
+            .map(|mp| {
+                let arg = format_ident!("__arg_{}", mp.index);
+                let ty = &mp.ty;
+                let project = self.projection.return_stmt(
+                    krate,
+                    quote! { ::core::convert::Into::into(__e) },
+                    state,
+                );
+                // `quote_spanned!` so a trait-bound error (`T: ManagedResource<S>`
+                // not satisfied) points at the user's own `&mut T` parameter.
+                quote_spanned! { ty.span() =>
+                    let mut #arg = match #krate::ManagedGuard::<#ty, __R2eS>::acquire(
+                        #krate::ManagedContext::new(#state, #controller_name_str, #fn_name_str)
+                            .with_request(__r2e_head)
+                    ).await {
+                        Ok(__r) => __r,
+                        Err(__e) => #project
+                    };
+                }
+            })
+            .collect();
+        quote! { #(#stmts)* }
+    }
+
+    /// Run the handler call, convert to a `Response`, finalize every managed
+    /// resource (reverse order) and project a finalisation failure.
+    fn call_and_finalize(
+        &self,
+        call: &TokenStream,
+        managed: &[ManagedParam],
+        state: &TokenStream,
+    ) -> TokenStream {
+        let krate = &self.krate;
+        if managed.is_empty() {
+            return quote! { #krate::http::response::IntoResponse::into_response(#call) };
+        }
+        let controller_name_str = self.def.controller_name.to_string();
+        let fn_name_str = &self.fn_name_str;
+        let releases: Vec<TokenStream> = managed
+            .iter()
+            .rev()
+            .map(|mp| {
+                let arg = format_ident!("__arg_{}", mp.index);
+                let ty = &mp.ty;
+                quote_spanned! { ty.span() =>
+                    if let Err(__e) = #arg.finalize(&__managed_outcome).await {
+                        #krate::record_managed_finalize_error(
+                            &mut __managed_finalize_error,
+                            ::core::convert::Into::into(__e),
+                            #controller_name_str,
+                            #fn_name_str,
+                        );
+                    }
+                }
+            })
+            .collect();
+        let project = self
+            .projection
+            .return_stmt(krate, quote! { __rej }, state);
+        quote! {
+            let __result = #call;
             let __response = #krate::http::response::IntoResponse::into_response(__result);
             let __managed_outcome = #krate::ManagedOutcome::from_status(__response.status());
-            let mut __managed_finalize_error:
-                ::core::option::Option<#krate::http::response::Response> = ::core::option::Option::None;
-            #(#managed_release)*
-            if let ::core::option::Option::Some(__error_response) = __managed_finalize_error {
-                return __error_response;
+            let mut __managed_finalize_error: ::core::option::Option<#krate::Rejection> =
+                ::core::option::Option::None;
+            #(#releases)*
+            if let ::core::option::Option::Some(__rej) = __managed_finalize_error {
+                #project
             }
             __response
         }
-    } else {
-        quote! {
-            #krate::http::response::IntoResponse::into_response(#call_expr)
-        }
     }
 }
 
-// Interceptor-chain wrapping is shared with scheduled tasks and gRPC
-// methods — see `super::decorators::wrap_with_deco_interceptors`.
-
-/// Generate managed resource acquisition using `__state_ref` (for use inside interceptor closures).
-fn generate_managed_acquire_ref(
-    rm: &RouteMethod,
+/// Generics + where-clause of an entry function: the state, the request-data
+/// marker (non-anonymous endpoints), the identity-param marker, and the
+/// `#[managed]` bounds.
+fn entry_generics(
+    def: &RoutesImplDef,
+    fn_ident: &syn::Ident,
+    anonymous: bool,
+    identity_param: Option<&IdentityParam>,
+    sig: &syn::Signature,
+    managed: &[ManagedParam],
     krate: &TokenStream,
-    controller_name: &str,
-    handler_name: &str,
-) -> Vec<TokenStream> {
-    rm.managed_params
-        .iter()
-        .map(|mp| {
-            let arg_name = format_ident!("__arg_{}", mp.index);
-            let ty = &mp.ty;
-            let ty_span = ty.span();
-            quote_spanned! { ty_span =>
-                let mut #arg_name = match #krate::ManagedGuard::<#ty, __R2eS>::acquire(
-                    #krate::ManagedContext::new(__state_ref, #controller_name, #handler_name)
-                        .with_request(__r2e_head)
-                ).await {
-                    Ok(__r) => __r,
-                    Err(__e) => return __e.into(),
-                };
-            }
-        })
-        .collect()
+) -> (TokenStream, TokenStream) {
+    let state = state_generic();
+    let sb = state_bounds(krate);
+    let mut generics: Vec<TokenStream> = vec![quote! { #state }];
+    let mut bounds: Vec<TokenStream> = vec![quote! { #state: #sb }];
+    if !anonymous {
+        let md = data_marker();
+        let data_name = request_data_ident_for(&def.controller_name);
+        generics.push(quote! { #md });
+        bounds.push(quote! { #data_name<#md>: #krate::web::extract::RequestData<#state> });
+    }
+    if let Some(id) = identity_param {
+        let marker = identity_marker_for(fn_ident);
+        let ty = &extract_sig_params(sig)
+            .into_iter()
+            .find(|(i, _)| *i == id.index)
+            .expect("identity parameter index out of range")
+            .1
+            .ty;
+        generics.push(quote! { #marker });
+        bounds.push(quote! { #ty: #krate::web::extract::FromRequestPartsVia<#state, #marker> });
+    }
+    for mp in managed {
+        let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
+        bounds.push(quote! { #ty: #krate::ManagedResource<#state> });
+    }
+    (quote! { <#(#generics),*> }, quote! { where #(#bounds,)* })
 }
 
-/// Generate a single Axum handler function.
-///
-/// # Case matrix
-///
-/// The handler shape depends on which features are active:
-///
-/// | Case | Guards/Managed | Interceptors | Validation | Return type      |
-/// |------|----------------|--------------|------------|------------------|
-/// | 1a   | No             | No           | No         | Handler's own    |
-/// | 1b   | No             | No           | Yes        | Response         |
-/// | 2a   | No             | Yes          | No         | Handler's own    |
-/// | 2b   | No             | Yes          | Yes        | Response         |
-/// | 3    | Yes            | Optional     | Optional   | Response         |
-///
-/// Guards and interceptors are prebuilt fields of the method's decorator set
-/// (`__deco`, one `Arc` per route, built from the bean context at wiring
-/// time); the invocation function is generic over the state (`__R2eS`) only
-/// when `#[managed]` params are present.
+/// Turbofish naming the entry function's marker generics from inside the
+/// `Controller` impl (where the same idents are the impl's parameters).
+fn entry_turbofish(fn_ident: &syn::Ident, anonymous: bool, has_identity_param: bool) -> TokenStream {
+    let state = state_generic();
+    let mut args: Vec<TokenStream> = vec![quote! { #state }];
+    if !anonymous {
+        let md = data_marker();
+        args.push(quote! { #md });
+    }
+    if has_identity_param {
+        let marker = identity_marker_for(fn_ident);
+        args.push(quote! { #marker });
+    }
+    quote! { ::<#(#args),*> }
+}
+
+// ── HTTP route entry function ────────────────────────────────────────────
+
+/// Generate the entry function of an HTTP route.
 ///
 /// # Design invariant
 ///
-/// When interceptors are present, they **always wrap the raw handler call** — the
-/// `IntoResponse::into_response()` conversion is applied *after* the outermost
-/// interceptor. This ensures interceptors see the handler's native type (`Json<T>`,
-/// `Result<Json<T>, E>`, etc.) and type-constrained interceptors like `Cache`
-/// (which requires `R: Cacheable`) work correctly alongside guards/roles.
+/// When interceptors are present, they **always wrap the raw handler call** —
+/// `IntoResponse::into_response()` is applied *after* the outermost
+/// interceptor, so type-constrained interceptors like `Cache` (which requires
+/// `R: Cacheable`) see the handler's native type.
 ///
-/// **Exception:** when `#[managed]` params are present with interceptors (Case 3,
-/// `has_managed` branch), the managed lifecycle wraps `into_response` inside the
-/// interceptor closure because release errors must convert to `Response`. This means
-/// type-constrained interceptors don't work with `#[managed]` params.
+/// **Exception:** with `#[managed]` params AND interceptors, the managed
+/// lifecycle (acquire → call → finalize) runs inside the interceptor closure
+/// and converts to `Response` there, because a finalisation failure must be
+/// projected in place of the handler's response. Type-constrained
+/// interceptors therefore don't combine with `#[managed]` params.
 fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let krate = r2e_core_path();
-    let ctx = HandlerContext::new(def, rm);
     let controller_name = &def.controller_name;
-    // Same automatic `+ use<...>` as on the façade method: this return type is
-    // re-emitted on a generated `fn(&__R2eRequest_<Ctrl>) -> …`, so it captures
-    // the receiver lifetime under the user's edition unless the clause is there.
-    let return_type = super::precise_capture::handler_return_type(&rm.fn_item.sig);
+    let fn_ident = &rm.fn_item.sig.ident;
+    let plan = plan_endpoint(def, fn_ident, &rm.decorators, true, &rm.path, &rm.fn_item.sig);
+    let pipeline = Pipeline::new(
+        def,
+        fn_ident,
+        &plan,
+        rm.identity_param.as_ref(),
+        Projection::for_signature(&rm.fn_item.sig),
+    );
 
-    let extra_params = extract_handler_params(rm);
+    let all_params = extract_sig_params(&rm.fn_item.sig);
     let managed_indices: std::collections::HashSet<usize> =
         rm.managed_params.iter().map(|mp| mp.index).collect();
+    let identity_index = rm.identity_param.as_ref().map(|p| p.index);
+    // Request-extracted params: everything but `#[managed]` and the identity.
+    let extracted: Vec<(usize, &syn::PatType)> = all_params
+        .iter()
+        .copied()
+        .filter(|(i, _)| !managed_indices.contains(i) && Some(*i) != identity_index)
+        .collect();
 
-    let handler_extra_params = build_handler_params(&extra_params, &managed_indices);
-    let call_args = build_call_args(&extra_params, &managed_indices);
-
-    let call_expr = if rm.fn_item.sig.asyncness.is_some() {
-        let fn_name = ctx.fn_name;
-        quote! { __ctrl.#fn_name(#(#call_args),*).await }
+    let call_args: Vec<TokenStream> = all_params
+        .iter()
+        .map(|(i, _)| {
+            let arg = format_ident!("__arg_{}", i);
+            if managed_indices.contains(i) {
+                quote! { #arg.resource_mut() }
+            } else {
+                quote! { #arg }
+            }
+        })
+        .collect();
+    let call = if rm.fn_item.sig.asyncness.is_some() {
+        quote! { __ctrl.#fn_ident(#(#call_args),*).await }
     } else {
-        let fn_name = ctx.fn_name;
-        quote! { __ctrl.#fn_name(#(#call_args),*) }
+        quote! { __ctrl.#fn_ident(#(#call_args),*) }
     };
 
     let has_managed = !rm.managed_params.is_empty();
+    let has_guards = plan.has_guards();
+    let has_body = !extracted.is_empty();
+    let needs_head = has_guards || has_managed;
+    // The `RequestHead` kept for managed acquisition must survive the body
+    // extraction (which consumes `__parts`), so the head values are cloned out
+    // first — the same four clones the former axum head extractors made.
+    // Guards alone borrow `__parts` and release it before any extractor runs.
+    let head_owned = has_managed && has_body;
 
-    let invocation_name = &ctx.invocation_name;
-    let fn_name_str = &ctx.fn_name_str;
-    let controller_name_str = &ctx.controller_name_str;
+    let open = pipeline.open();
+    let pre_auth = pipeline.pre_auth_guards();
+    let bind = pipeline.bind_receiver();
+    let identity = pipeline.identity_param(&all_params);
+    let head = needs_head.then(|| pipeline.head_bindings(head_owned));
+    let request_head = has_managed.then(|| pipeline.request_head());
+    let guards = pipeline.guards();
+    let params = pipeline.params(&extracted, true);
+    let body_sink = (!has_body).then(|| quote! { let _ = __body; });
+    let validation = pipeline.validation(&extracted);
 
-    // Decorator set: one hidden struct per method holding the built guards +
-    // METHOD-level interceptors, plus its constructor (see codegen/decorators.rs).
-    // Controller-level (impl-level) interceptors live in a SEPARATE shared set
-    // (`__ctrl_deco`) built once per controller, so a stateful impl-level
-    // interceptor keeps one instance across every route.
-    let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let intercept_exprs: Vec<&syn::Expr> = rm.decorators.intercept_fns.iter().collect();
-    let deco_path_module = generate_path_param_module(&rm.path, &rm.fn_item.sig, &krate);
-    let (deco_items, deco_set) = super::decorators::generate_deco_items(
-        def,
-        ctx.fn_name,
-        &rm.decorators.guard_fns,
-        &intercept_exprs,
-        deco_path_module,
-    );
-    let (predeco_items, _) =
-        super::decorators::generate_predeco_items(def, ctx.fn_name, &rm.decorators);
-
-    // On a failed spec extraction, `deco_items` carries the compile_error and
-    // the handler falls back to the no-decorator shape.
-    // Mirror generate_route_closure's degradation: if any spec (guard,
-    // controller-level, or method-level interceptor) is not inferable, drop the
-    // controller-level shared set too so the closure/invocation arities match.
-    // The accompanying spec-type compile_error comes from this method's own
-    // deco/predeco items for method-level specs, and from
-    // `generate_ctrl_deco_items` (once per controller) for controller-level
-    // specs — degradation is never silent.
-    let specs_ok = super::decorators::specs_ok_with_ctrl(
-        def,
-        rm.decorators
-            .guard_fns
-            .iter()
-            .chain(rm.decorators.intercept_fns.iter()),
-    );
-    let has_guards = !rm.decorators.guard_fns.is_empty() && deco_set.is_some();
-    let has_ctrl = ctrl_set.is_some() && specs_ok;
-    // Controller-level post-auth guards apply to every route EXCEPT
-    // `#[anonymous]` ones: the marker opts the route out of the controller's
-    // auth surface, so identity-driven controller guards must not fire there
-    // (pre-guards and interceptors still do).
-    let ctrl_guard_fields: &[syn::Ident] = if has_ctrl && !rm.decorators.anonymous {
-        ctrl_set
-            .as_ref()
-            .map(|s| s.guard_fields.as_slice())
-            .unwrap_or(&[])
-    } else {
-        &[]
-    };
-    let has_ctrl_guards = !ctrl_guard_fields.is_empty();
-    // Combined interceptor refs, impl-level (shared) outermost then method-level.
-    let interceptor_refs = |set: &Option<super::decorators::DecoSet>| -> Vec<TokenStream> {
-        let mut refs: Vec<TokenStream> = Vec::new();
-        if has_ctrl {
-            if let Some(cs) = ctrl_set.as_ref() {
-                for f in &cs.intercept_fields {
-                    refs.push(quote! { &__ctrl_deco.#f });
+    let fn_name_str = fn_ident.to_string();
+    let controller_name_str = controller_name.to_string();
+    let inner = if plan.has_intercepts() {
+        if has_managed {
+            // Managed lifecycle inside the interceptor closure (see the
+            // invariant above). `__state_ref` is `Copy`, so the nested
+            // closures can capture it for acquisition and projection.
+            let state_ref = quote! { __state_ref };
+            let acquire = pipeline.managed_acquire(&rm.managed_params, &state_ref);
+            let finalize = pipeline.call_and_finalize(&call, &rm.managed_params, &state_ref);
+            let wrapped = super::decorators::wrap_with_interceptor_refs(
+                quote! { #acquire #finalize },
+                &fn_name_str,
+                &controller_name_str,
+                &plan.interceptor_refs(),
+                &krate,
+            );
+            quote! {
+                {
+                    let __state_ref: &__R2eS = &__state;
+                    #wrapped
                 }
             }
+        } else {
+            let wrapped = super::decorators::wrap_with_interceptor_refs(
+                call.clone(),
+                &fn_name_str,
+                &controller_name_str,
+                &plan.interceptor_refs(),
+                &krate,
+            );
+            quote! { #krate::http::response::IntoResponse::into_response(#wrapped) }
         }
-        for f in deco_intercept_fields(set) {
-            refs.push(quote! { &__deco.#f });
-        }
-        refs
+    } else {
+        let state = quote! { &__state };
+        let acquire = pipeline.managed_acquire(&rm.managed_params, &state);
+        let finalize = pipeline.call_and_finalize(&call, &rm.managed_params, &state);
+        quote! { #acquire #finalize }
     };
-    let has_ctrl_intercepts = has_ctrl
-        && ctrl_set
-            .as_ref()
-            .is_some_and(|s| !s.intercept_fields.is_empty());
-    let has_method_intercepts = !rm.decorators.intercept_fns.is_empty() && deco_set.is_some();
-    let has_intercepts = has_ctrl_intercepts || has_method_intercepts;
-    let needs_response = has_guards || has_ctrl_guards || has_managed;
-    // The state is only threaded through for `#[managed]` params — guards
-    // and interceptors are prebuilt decorator fields (no state access).
-    let needs_state = has_managed;
-    // Request-head parts (method, uri, headers, extensions, path params, peer
-    // address) are extracted for guards AND for `#[managed]` acquisition —
-    // both read the request before the handler body runs. Extracted once and
-    // shared: guard context and `RequestHead` borrow the same values.
-    let needs_head = has_guards || has_ctrl_guards || has_managed;
 
-    // Generate validation calls for all non-managed, non-identity parameters
-    let identity_param_index = rm.identity_param.as_ref().map(|p| p.index);
-    let validation_calls = generate_validation_calls(
-        &extra_params,
-        &managed_indices,
-        identity_param_index,
+    let (generics, where_clause) = entry_generics(
+        def,
+        fn_ident,
+        plan.anonymous,
+        rm.identity_param.as_ref(),
+        &rm.fn_item.sig,
+        &rm.managed_params,
         &krate,
     );
-    let has_validation = !validation_calls.is_empty();
+    let deco_params = plan.entry_params();
+    let deco_items = &plan.deco_items;
+    let predeco_items = &plan.predeco_items;
+    let invocation = invocation_ident_for(controller_name, fn_ident);
+    let core_ty = quote! { ::std::sync::Arc<#controller_name> };
 
-    let mut invocation_prefix_params = Vec::new();
-
-    if needs_state {
-        invocation_prefix_params.push(quote! { __state: __R2eS });
-    }
-    if needs_head {
-        invocation_prefix_params.push(quote! { __headers: #krate::http::HeaderMap });
-        invocation_prefix_params.push(quote! { __uri: #krate::http::Uri });
-        invocation_prefix_params
-            .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        invocation_prefix_params.push(quote! { __peer_addr: #krate::PeerAddr });
-        invocation_prefix_params.push(quote! { __extensions: #krate::http::Extensions });
-        invocation_prefix_params.push(quote! { __method: #krate::http::Method });
-    }
-    if has_ctrl {
-        if let Some(cs) = ctrl_set.as_ref() {
-            let ctrl_ty = &cs.struct_ident;
-            invocation_prefix_params.push(quote! { __ctrl_deco: &#ctrl_ty });
-        }
-    }
-    if let Some(ref set) = deco_set {
-        let deco_ty = set.ty();
-        invocation_prefix_params.push(quote! { __deco: &#deco_ty });
-    }
-
-    let invocation_extra_params = &handler_extra_params;
-
-    let is_simple = !needs_response && !has_intercepts;
-    let (invocation_return, invocation_body) = if is_simple && !has_validation {
-        // Case 1a: Simple handler — no guards, no managed, no interceptors, no validation
-        (quote! { #return_type }, quote! { #call_expr })
-    } else if is_simple && has_validation {
-        // Case 1b: Simple handler with validation — returns Response
-        (
-            quote! { -> #krate::http::response::Response },
-            quote! {
-                #(#validation_calls)*
-                #krate::http::response::IntoResponse::into_response(#call_expr)
-            },
-        )
-    } else if has_intercepts && !needs_response && !has_validation {
-        // Case 2a: Interceptors only, no validation — returns method's own type
-        let interceptor_body = super::decorators::wrap_with_interceptor_refs(
-            call_expr,
-            fn_name_str,
-            controller_name_str,
-            &interceptor_refs(&deco_set),
-            &krate,
-        );
-
-        (quote! { #return_type }, interceptor_body)
-    } else if has_intercepts && !needs_response && has_validation {
-        // Case 2b: Interceptors + validation — returns Response
-        // Apply into_response AFTER the interceptor chain so interceptors
-        // see the handler's raw return type (e.g. Json<T>), not Response.
-        let interceptor_body = super::decorators::wrap_with_interceptor_refs(
-            call_expr.clone(),
-            fn_name_str,
-            controller_name_str,
-            &interceptor_refs(&deco_set),
-            &krate,
-        );
-        let interceptor_body = quote! {
-            #krate::http::response::IntoResponse::into_response(#interceptor_body)
-        };
-
-        (
-            quote! { -> #krate::http::response::Response },
-            quote! {
-                #(#validation_calls)*
-                #interceptor_body
-            },
-        )
-    } else {
-        // Case 3: Complex handler — returns Response (guards and/or managed, optionally interceptors)
-        // The method's `path` module lives in the decorator constructor now —
-        // guard expressions are evaluated there, once, at wiring time.
-        // Controller-level guards run FIRST (before the route's own), against
-        // the shared set and a `"*"` context (one bucket per controller).
-        let ctrl_ctx_ident = format_ident!("__ctrl_guard_ctx");
-        let guard_ctx_ident = format_ident!("__guard_ctx");
-        let ctrl_guard_checks = generate_guard_checks(
-            &quote! { __ctrl_deco },
-            &ctrl_ctx_ident,
-            ctrl_guard_fields,
-            &krate,
-        );
-        let guard_checks = generate_guard_checks(
-            &quote! { __deco },
-            &guard_ctx_ident,
-            deco_guard_fields(&deco_set),
-            &krate,
-        );
-        let head_construction = if needs_head {
-            generate_request_head(&krate)
-        } else {
-            quote! {}
-        };
-        let ctrl_guard_context_construction = if has_ctrl_guards {
-            generate_guard_context(&ctx, rm, &krate, &ctrl_ctx_ident, &quote! { "*" })
-        } else {
-            quote! {}
-        };
-        let guard_context_construction = if has_guards {
-            let fn_name_str = &ctx.fn_name_str;
-            generate_guard_context(&ctx, rm, &krate, &guard_ctx_ident, &quote! { #fn_name_str })
-        } else {
-            quote! {}
-        };
-
-        // Build the inner body (after guards, including managed lifecycle)
-        let inner_body = if has_intercepts {
-            // Wrap the managed lifecycle + call in interceptors.
-            // Inside the interceptor closure, use __state_ref for acquire.
-            if has_managed {
-                let managed_acquire_ref =
-                    generate_managed_acquire_ref(rm, &krate, controller_name_str, fn_name_str);
-                let managed_release =
-                    generate_managed_release(rm, &krate, controller_name_str, fn_name_str);
-                let body_and_release =
-                    generate_body_and_release(&call_expr, &managed_release, true, &krate);
-                let managed_body = quote! {
-                    #(#managed_acquire_ref)*
-                    #body_and_release
-                };
-                let wrapped = super::decorators::wrap_with_interceptor_refs(
-                    managed_body,
-                    fn_name_str,
-                    controller_name_str,
-                    &interceptor_refs(&deco_set),
-                    &krate,
-                );
-                // `__state_ref` is `Copy`, so the nested interceptor closures
-                // can capture it for the managed acquire calls.
-                quote! {
-                    {
-                        let __state_ref: &_ = &__state;
-                        #wrapped
-                    }
-                }
-            } else {
-                // Apply into_response AFTER the interceptor chain so interceptors
-                // see the handler's raw return type (e.g. Json<T>), not Response.
-                // This fixes #[intercept(Cache)] + #[roles] (or any guard) combinations.
-                let interceptor_body = super::decorators::wrap_with_interceptor_refs(
-                    call_expr.clone(),
-                    fn_name_str,
-                    controller_name_str,
-                    &interceptor_refs(&deco_set),
-                    &krate,
-                );
-                quote! {
-                    #krate::http::response::IntoResponse::into_response(#interceptor_body)
-                }
-            }
-        } else {
-            // No interceptors — original behavior
-            let managed_acquire =
-                generate_managed_acquire(rm, &krate, controller_name_str, fn_name_str);
-            let managed_release =
-                generate_managed_release(rm, &krate, controller_name_str, fn_name_str);
-            let body_and_release =
-                generate_body_and_release(&call_expr, &managed_release, has_managed, &krate);
-            quote! {
-                #(#managed_acquire)*
-                #body_and_release
-            }
-        };
-
-        (
-            quote! { -> #krate::http::response::Response },
-            quote! {
-                #head_construction
-                #ctrl_guard_context_construction
-                #(#ctrl_guard_checks)*
-                #guard_context_construction
-                #(#guard_checks)*
-                #(#validation_calls)*
-                #inner_body
-            },
-        )
-    };
-
-    let receiver_ty = receiver_ty_for(rm.decorators.anonymous, controller_name);
-    let (fn_generics, fn_where) = if needs_state {
-        let sb = state_bounds(&krate);
-        let managed_bounds: Vec<TokenStream> = rm
-            .managed_params
-            .iter()
-            .map(|mp| {
-                let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
-                quote! { #ty: #krate::ManagedResource<__R2eS> }
-            })
-            .collect();
-        (
-            quote! { <__R2eS> },
-            quote! { where __R2eS: #sb, #(#managed_bounds,)* },
-        )
-    } else {
-        (quote! {}, quote! {})
-    };
     quote! {
         #deco_items
         #predeco_items
 
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, unused_variables, unused_mut)]
         #[allow(clippy::too_many_arguments)]
-        async fn #invocation_name #fn_generics(
-            #(#invocation_prefix_params,)*
-            __ctrl: &#receiver_ty,
-            #(#invocation_extra_params,)*
-        ) #invocation_return #fn_where {
-            #invocation_body
+        async fn #invocation #generics(
+            __state: __R2eS,
+            __req: #krate::http::extract::Request,
+            #(#deco_params,)*
+            __core: #core_ty,
+        ) -> #krate::http::response::Response #where_clause {
+            #open
+            #pre_auth
+            #bind
+            #identity
+            #head
+            #request_head
+            #guards
+            #params
+            #body_sink
+            #validation
+            #inner
         }
     }
 }
 
-/// Guard field idents of a decorator set (empty when there is none).
-fn deco_guard_fields(set: &Option<super::decorators::DecoSet>) -> &[syn::Ident] {
-    set.as_ref()
-        .map(|s| s.guard_fields.as_slice())
-        .unwrap_or(&[])
-}
+// ── SSE entry function ───────────────────────────────────────────────────
 
-/// Interceptor field idents of a decorator set (empty when there is none).
-fn deco_intercept_fields(set: &Option<super::decorators::DecoSet>) -> &[syn::Ident] {
-    set.as_ref()
-        .map(|s| s.intercept_fields.as_slice())
-        .unwrap_or(&[])
-}
-
-// ── SSE handler generation ───────────────────────────────────────────────
-
-/// Generate a handler function for an `#[sse("/path")]` method.
+/// Generate the entry function of an `#[sse("/path")]` method.
+///
+/// Same pipeline as an HTTP route minus interceptors and `#[managed]`; the
+/// stream is wrapped in the shutdown terminator and the keep-alive policy.
 fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
-    let fn_name = &sm.fn_item.sig.ident;
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let invocation_name = invocation_ident_for(controller_name, fn_name);
+    let fn_ident = &sm.fn_item.sig.ident;
+    let plan = plan_endpoint(def, fn_ident, &sm.decorators, false, &sm.path, &sm.fn_item.sig);
+    let pipeline = Pipeline::new(
+        def,
+        fn_ident,
+        &plan,
+        sm.identity_param.as_ref(),
+        Projection::Default,
+    );
 
-    let fn_name_str = fn_name.to_string();
-    // Guard contexts get the module-qualified name (bucket-key uniqueness).
-    let controller_name_str = qualified_controller_name(controller_name);
-
-    // Extra params (excluding &self)
-    let extra_params = extract_sig_params(&sm.fn_item.sig);
-
-    let handler_extra_params: Vec<_> = extra_params
+    let all_params = extract_sig_params(&sm.fn_item.sig);
+    let identity_index = sm.identity_param.as_ref().map(|p| p.index);
+    let extracted: Vec<(usize, &syn::PatType)> = all_params
         .iter()
-        .map(|(i, pt)| {
-            let arg_name = format_ident!("__arg_{}", i);
-            let ty = &pt.ty;
-            quote! { #arg_name: #ty }
-        })
+        .copied()
+        .filter(|(i, _)| Some(*i) != identity_index)
         .collect();
-    let call_args: Vec<_> = extra_params
+    let call_args: Vec<TokenStream> = all_params
         .iter()
         .map(|(i, _)| {
-            let arg_name = format_ident!("__arg_{}", i);
-            quote! { #arg_name }
+            let arg = format_ident!("__arg_{}", i);
+            quote! { #arg }
         })
         .collect();
-
-    let call_expr = if sm.fn_item.sig.asyncness.is_some() {
-        quote! { __ctrl.#fn_name(#(#call_args),*).await }
+    let call = if sm.fn_item.sig.asyncness.is_some() {
+        quote! { __ctrl.#fn_ident(#(#call_args),*).await }
     } else {
-        quote! { __ctrl.#fn_name(#(#call_args),*) }
+        quote! { __ctrl.#fn_ident(#(#call_args),*) }
     };
 
-    // Keep-alive wrapping
-    let keep_alive_expr = match sm.keep_alive {
-        SseKeepAlive::Default => {
-            quote! {
-                #krate::http::response::Sse::new(__stream)
-                    .keep_alive(#krate::http::response::SseKeepAlive::default())
-            }
-        }
-        SseKeepAlive::Interval(secs) => {
-            quote! {
-                #krate::http::response::Sse::new(__stream)
-                    .keep_alive(
-                        #krate::http::response::SseKeepAlive::new()
-                            .interval(std::time::Duration::from_secs(#secs))
-                    )
-            }
-        }
-        SseKeepAlive::Disabled => {
-            quote! { #krate::http::response::Sse::new(__stream) }
-        }
+    let keep_alive = match sm.keep_alive {
+        SseKeepAlive::Default => quote! {
+            #krate::http::response::Sse::new(__stream)
+                .keep_alive(#krate::http::response::SseKeepAlive::default())
+        },
+        SseKeepAlive::Interval(secs) => quote! {
+            #krate::http::response::Sse::new(__stream)
+                .keep_alive(
+                    #krate::http::response::SseKeepAlive::new()
+                        .interval(::std::time::Duration::from_secs(#secs))
+                )
+        },
+        SseKeepAlive::Disabled => quote! { #krate::http::response::Sse::new(__stream) },
     };
 
-    // Decorator set (guards only — SSE endpoints don't run interceptors).
-    let deco_path_module = generate_path_param_module(&sm.path, &sm.fn_item.sig, &krate);
-    let (deco_items, deco_set) = super::decorators::generate_deco_items(
+    let has_body = !extracted.is_empty();
+    let open = pipeline.open();
+    let pre_auth = pipeline.pre_auth_guards();
+    let bind = pipeline.bind_receiver();
+    let identity = pipeline.identity_param(&all_params);
+    let head = plan.has_guards().then(|| pipeline.head_bindings(false));
+    let guards = pipeline.guards();
+    let params = pipeline.params(&extracted, true);
+    let body_sink = (!has_body).then(|| quote! { let _ = __body; });
+    let validation = pipeline.validation(&extracted);
+
+    let (generics, where_clause) = entry_generics(
         def,
-        fn_name,
-        &sm.decorators.guard_fns,
+        fn_ident,
+        plan.anonymous,
+        sm.identity_param.as_ref(),
+        &sm.fn_item.sig,
         &[],
-        deco_path_module,
+        &krate,
     );
-    let (predeco_items, _) =
-        super::decorators::generate_predeco_items(def, fn_name, &sm.decorators);
-    // Same degrade check as the closure (specs_ok implies the method deco set
-    // exists whenever the method has guards).
-    let specs_ok = super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
-    let has_guards = !sm.decorators.guard_fns.is_empty() && specs_ok;
-    // Controller-level post-auth guards apply to SSE endpoints too — except
-    // `#[anonymous]` ones (the marker opts out of the controller auth surface).
-    let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let has_ctrl_guards = ctrl_set.is_some()
-        && specs_ok
-        && !sm.decorators.anonymous
-        && ctrl_set
-            .as_ref()
-            .is_some_and(|s| !s.guard_fields.is_empty());
+    let deco_params = plan.entry_params();
+    let deco_items = &plan.deco_items;
+    let predeco_items = &plan.predeco_items;
+    let invocation = invocation_ident_for(controller_name, fn_ident);
+    let core_ty = quote! { ::std::sync::Arc<#controller_name> };
 
-    let mut invocation_prefix_params = Vec::new();
-
-    let (invocation_return, invocation_body) = if !has_guards && !has_ctrl_guards {
-        (
-            // `+ use<>` for the same reason `codegen::precise_capture` puts one
-            // on the handler's own return type: this function takes the façade
-            // by reference and its value is moved out past that borrow. Under
-            // edition 2024 a bare `impl Trait` here would capture the `&__ctrl`
-            // lifetime, and the caller — which binds the façade to a local
-            // inside the per-request async block — fails with E0716.
-            quote! { -> impl #krate::http::response::IntoResponse + use<> },
-            quote! {
-                let __stream = #krate::web::sse::until_shutdown(#call_expr, __r2e_shutdown);
-                #keep_alive_expr
-            },
-        )
-    } else {
-        invocation_prefix_params.push(quote! { __headers: #krate::http::HeaderMap });
-        invocation_prefix_params.push(quote! { __uri: #krate::http::Uri });
-        invocation_prefix_params
-            .push(quote! { __raw_path_params: #krate::http::extract::RawPathParams });
-        invocation_prefix_params.push(quote! { __peer_addr: #krate::PeerAddr });
-        invocation_prefix_params.push(quote! { __extensions: #krate::http::Extensions });
-        invocation_prefix_params.push(quote! { __method: #krate::http::Method });
-        if has_ctrl_guards {
-            let ctrl_ty = &ctrl_set
-                .as_ref()
-                .expect("has_ctrl_guards implies a set")
-                .struct_ident;
-            invocation_prefix_params.push(quote! { __ctrl_deco: &#ctrl_ty });
-        }
-        if has_guards {
-            let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
-            invocation_prefix_params.push(quote! { __deco: &#deco_ty });
-        }
-
-        // One identity expression shared by the controller-level ("*") and
-        // method-level guard contexts.
-        let identity_expr = if let Some(ref id_param) = sm.identity_param {
-            let arg_name = format_ident!("__arg_{}", id_param.index);
-            if id_param.is_optional {
-                quote! { #arg_name.as_ref() }
-            } else {
-                quote! { Some(&#arg_name) }
-            }
-        } else if sm.decorators.anonymous {
-            quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
-        } else {
-            quote! { #meta_mod::guard_identity(__ctrl) }
-        };
-        let guard_ctx = |ctx_ident: &syn::Ident, method_name: TokenStream| {
-            quote! {
-                let #ctx_ident = #krate::GuardContext {
-                    method_name: #method_name,
-                    controller_name: #controller_name_str,
-                    method: &__method,
-                    headers: &__headers,
-                    uri: &__uri,
-                    extensions: &__extensions,
-                    peer_addr: __peer_addr.0,
-                    path_params: __path_params,
-                    identity: #identity_expr,
-                };
-            }
-        };
-        let ctrl_ctx_ident = format_ident!("__ctrl_guard_ctx");
-        let guard_ctx_ident = format_ident!("__guard_ctx");
-        // Controller-level guards run FIRST, against the shared set and a
-        // `"*"` context (one stateful-guard bucket per controller).
-        let ctrl_guard_context = if has_ctrl_guards {
-            guard_ctx(&ctrl_ctx_ident, quote! { "*" })
-        } else {
-            TokenStream::new()
-        };
-        let ctrl_guard_checks = generate_guard_checks(
-            &quote! { __ctrl_deco },
-            &ctrl_ctx_ident,
-            if has_ctrl_guards {
-                ctrl_set
-                    .as_ref()
-                    .map(|s| s.guard_fields.as_slice())
-                    .unwrap_or(&[])
-            } else {
-                &[]
-            },
-            &krate,
-        );
-        let guard_context = if has_guards {
-            guard_ctx(&guard_ctx_ident, quote! { #fn_name_str })
-        } else {
-            TokenStream::new()
-        };
-        let guard_checks = generate_guard_checks(
-            &quote! { __deco },
-            &guard_ctx_ident,
-            deco_guard_fields(&deco_set),
-            &krate,
-        );
-
-        (
-            quote! { -> #krate::http::response::Response },
-            quote! {
-                let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                #ctrl_guard_context
-                #(#ctrl_guard_checks)*
-                #guard_context
-                #(#guard_checks)*
-                let __stream = #krate::web::sse::until_shutdown(#call_expr, __r2e_shutdown);
-                #krate::http::response::IntoResponse::into_response(#keep_alive_expr)
-            },
-        )
-    };
-
-    // Default shutdown termination: the app's `ShutdownToken`, resolved once
-    // per route at registration (`None` for an app with no bean graph). It is
-    // the LAST prefix param so it stays put whether or not the guard branch
-    // above pushed its own — `generate_sse_closure` forwards it in the same
-    // position.
-    invocation_prefix_params.push(quote! {
-        __r2e_shutdown: ::core::option::Option<#krate::rt::ShutdownToken>
-    });
-
-    let invocation_extra_params = &handler_extra_params;
-
-    let receiver_ty = receiver_ty_for(sm.decorators.anonymous, controller_name);
     quote! {
         #deco_items
         #predeco_items
 
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, unused_variables, unused_mut)]
         #[allow(clippy::too_many_arguments)]
-        async fn #invocation_name(
-            #(#invocation_prefix_params,)*
-            __ctrl: &#receiver_ty,
-            #(#invocation_extra_params,)*
-        ) #invocation_return {
-            #invocation_body
+        async fn #invocation #generics(
+            __state: __R2eS,
+            __req: #krate::http::extract::Request,
+            #(#deco_params,)*
+            __core: #core_ty,
+            __r2e_shutdown: ::core::option::Option<#krate::rt::ShutdownToken>,
+        ) -> #krate::http::response::Response #where_clause {
+            #open
+            #pre_auth
+            #bind
+            #identity
+            #head
+            #guards
+            #params
+            #body_sink
+            #validation
+            let __stream = #krate::web::sse::until_shutdown(#call, __r2e_shutdown);
+            #krate::http::response::IntoResponse::into_response(#keep_alive)
         }
     }
 }
 
-// ── WS handler generation ────────────────────────────────────────────────
+// ── WS entry function ────────────────────────────────────────────────────
 
-/// Generate a handler function for a `#[ws("/path")]` method.
+/// Generate the entry function of a `#[ws("/path")]` method plus its
+/// post-upgrade session body.
+///
+/// The entry function runs the pipeline (pre-auth guards, request data,
+/// identity, guards, the non-socket params), extracts the `WebSocketUpgrade`
+/// and hands the receiver + params to the upgrade callback, which runs the
+/// session body on the tracked lane (`WsSessions::run_session`).
 fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
-    let fn_name = &wm.fn_item.sig.ident;
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let facade_name = facade_ident_for(controller_name);
-    let invocation_name = invocation_ident_for(controller_name, fn_name);
-    let preflight_name = format_ident!("__r2e_preflight_{}_{}", controller_name, fn_name);
-
-    // #[anonymous]: the upgrade adapter owns the core `Arc` directly instead of
-    // a bound facade, and the invocation/preflight receive `&Core`. `&Arc<Core>`
-    // deref-coerces to `&Core` at the call sites below.
-    let receiver_ty = receiver_ty_for(wm.decorators.anonymous, controller_name);
-    let carrier_ty = if wm.decorators.anonymous {
-        quote! { ::std::sync::Arc<#controller_name> }
-    } else {
-        quote! { #facade_name }
-    };
-
-    let fn_name_str = fn_name.to_string();
-    // Guard contexts get the module-qualified name (bucket-key uniqueness).
-    let controller_name_str = qualified_controller_name(controller_name);
+    let fn_ident = &wm.fn_item.sig.ident;
+    let plan = plan_endpoint(def, fn_ident, &wm.decorators, false, &wm.path, &wm.fn_item.sig);
+    let pipeline = Pipeline::new(
+        def,
+        fn_ident,
+        &plan,
+        wm.identity_param.as_ref(),
+        Projection::Default,
+    );
+    let receiver_ty = receiver_ty_for(plan.anonymous, controller_name);
+    let fn_name_str = fn_ident.to_string();
 
     // How a live session names itself in the `shutdown_grace_period` warning.
     // `ws:` + the declaration site, mirroring `spawn_service`'s component type
@@ -1259,69 +1396,47 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     // the `PATH_PREFIX` const, and `#[routes]` never sees its value).
     let session_label = syn::LitStr::new(
         &format!("ws:{controller_name}::{fn_name_str}"),
-        fn_name.span(),
+        fn_ident.span(),
     );
 
-    // Collect all typed params, excluding WsStream/WebSocket
-    let extra_params = extract_sig_params(&wm.fn_item.sig);
-
+    let all_params = extract_sig_params(&wm.fn_item.sig);
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
-
-    // Handler params: skip the WsStream/WebSocket param (it comes from on_upgrade)
-    let handler_extra_params: Vec<_> = extra_params
+    let identity_index = wm.identity_param.as_ref().map(|p| p.index);
+    // Request-extracted params: everything but the socket and the identity.
+    // None of them may consume the body: the upgrade is the trailing
+    // extractor, so every handler param goes through `FromRequestParts`.
+    let extracted: Vec<(usize, &syn::PatType)> = all_params
         .iter()
+        .copied()
+        .filter(|(i, _)| Some(*i) != ws_param_index && Some(*i) != identity_index)
+        .collect();
+    // Forwarded into the session body: every param but the socket.
+    let forwarded: Vec<(usize, &syn::PatType)> = all_params
+        .iter()
+        .copied()
         .filter(|(i, _)| Some(*i) != ws_param_index)
+        .collect();
+    let session_params: Vec<TokenStream> = forwarded
+        .iter()
         .map(|(i, pt)| {
-            let arg_name = format_ident!("__arg_{}", i);
+            let arg = format_ident!("__arg_{}", i);
             let ty = &pt.ty;
-            quote! { #arg_name: #ty }
+            quote! { #arg: #ty }
         })
         .collect();
-    let forwarded_args: Vec<_> = extra_params
+    let forwarded_args: Vec<TokenStream> = forwarded
         .iter()
-        .filter(|(i, _)| Some(*i) != ws_param_index)
         .map(|(i, _)| {
-            let arg_name = format_ident!("__arg_{}", i);
-            quote! { #arg_name }
+            let arg = format_ident!("__arg_{}", i);
+            quote! { #arg }
         })
         .collect();
 
-    // Decorator set (guards only — WS endpoints don't run interceptors).
-    let deco_path_module = generate_path_param_module(&wm.path, &wm.fn_item.sig, &krate);
-    let (deco_items, deco_set) = super::decorators::generate_deco_items(
-        def,
-        fn_name,
-        &wm.decorators.guard_fns,
-        &[],
-        deco_path_module,
-    );
-    let (predeco_items, _) =
-        super::decorators::generate_predeco_items(def, fn_name, &wm.decorators);
-    // Same degrade check as the closure (specs_ok implies the method deco set
-    // exists whenever the method has guards).
-    let specs_ok = super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
-    let has_guards = !wm.decorators.guard_fns.is_empty() && specs_ok;
-    // Controller-level post-auth guards run in the same preflight — except on
-    // `#[anonymous]` endpoints (the marker opts out of the controller auth
-    // surface).
-    let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let has_ctrl_guards = ctrl_set.is_some()
-        && specs_ok
-        && !wm.decorators.anonymous
-        && ctrl_set
-            .as_ref()
-            .is_some_and(|s| !s.guard_fields.is_empty());
-    let needs_preflight = has_guards || has_ctrl_guards;
-
-    // Build the shared post-upgrade invocation body. Controller ownership
-    // remains in the thin adapter's `on_upgrade` closure; this function only
-    // receives a borrow while the session setup/method invocation runs.
-    let invocation_body = if let Some(ref ws_p) = wm.ws_param {
-        // Pattern 1: WsStream or WebSocket parameter
-        let call_args: Vec<_> = extra_params
+    // The session body: WsStream/WebSocket param, or a returned `WsHandler`.
+    let session_body = if let Some(ref ws_p) = wm.ws_param {
+        let call_args: Vec<TokenStream> = all_params
             .iter()
             .map(|(i, _)| {
-                let arg_name = format_ident!("__arg_{}", i);
                 if Some(*i) == ws_param_index {
                     if ws_p.is_ws_stream {
                         quote! { __ws_stream }
@@ -1329,49 +1444,39 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                         quote! { __socket }
                     }
                 } else {
-                    quote! { #arg_name }
+                    let arg = format_ident!("__arg_{}", i);
+                    quote! { #arg }
                 }
             })
             .collect();
-
-        let ws_setup = if ws_p.is_ws_stream {
-            // `with_shutdown`, not `new`: this is what makes the session's
-            // receive loop end itself (1001 Going Away) when the app shuts
-            // down. A raw `WebSocket` param opts out — it is still tracked, but
-            // only its own loop can decide when to stop.
+        // `with_shutdown`, not `new`: this is what makes the session's receive
+        // loop end itself (1001 Going Away) when the app shuts down. A raw
+        // `WebSocket` param opts out — it is still tracked, but only its own
+        // loop can decide when to stop.
+        let setup = ws_p.is_ws_stream.then(|| {
             quote! {
                 let __ws_stream = #krate::web::ws::WsStream::with_shutdown(__socket, __shutdown);
             }
-        } else {
-            quote! {}
-        };
-
+        });
         let call = if wm.fn_item.sig.asyncness.is_some() {
-            quote! { __ctrl.#fn_name(#(#call_args),*).await; }
+            quote! { __ctrl.#fn_ident(#(#call_args),*).await; }
         } else {
-            quote! { __ctrl.#fn_name(#(#call_args),*); }
+            quote! { __ctrl.#fn_ident(#(#call_args),*); }
         };
-
-        quote! {
-            #ws_setup
-            #call
-        }
+        quote! { #setup #call }
     } else {
-        // Pattern 2: no WsStream param → method returns impl WsHandler
-        let call_args: Vec<_> = extra_params
+        let call_args: Vec<TokenStream> = all_params
             .iter()
             .map(|(i, _)| {
-                let arg_name = format_ident!("__arg_{}", i);
-                quote! { #arg_name }
+                let arg = format_ident!("__arg_{}", i);
+                quote! { #arg }
             })
             .collect();
-
         let call = if wm.fn_item.sig.asyncness.is_some() {
-            quote! { let __handler = __ctrl.#fn_name(#(#call_args),*).await; }
+            quote! { let __handler = __ctrl.#fn_ident(#(#call_args),*).await; }
         } else {
-            quote! { let __handler = __ctrl.#fn_name(#(#call_args),*); }
+            quote! { let __handler = __ctrl.#fn_ident(#(#call_args),*); }
         };
-
         quote! {
             #call
             #krate::web::ws::run_ws_handler(
@@ -1381,226 +1486,77 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         }
     };
 
-    let (preflight, preflight_call) = if needs_preflight {
-        let ws_guard_checks = |recv: TokenStream, ctx_ident: &syn::Ident, fields: &[syn::Ident]| {
-            fields
-                .iter()
-                .map(|field| {
-                    quote! {
-                        if let Err(__resp) = #krate::Guard::check(
-                            &#recv.#field,
-                            &#ctx_ident,
-                        ).await {
-                            return Err(__resp);
-                        }
-                    }
-                })
-                .collect::<Vec<TokenStream>>()
-        };
-        let ctrl_ctx_ident = format_ident!("__ctrl_guard_ctx");
-        let guard_ctx_ident = format_ident!("__guard_ctx");
-        let ctrl_guard_checks = ws_guard_checks(
-            quote! { __ctrl_deco },
-            &ctrl_ctx_ident,
-            if has_ctrl_guards {
-                ctrl_set
-                    .as_ref()
-                    .map(|s| s.guard_fields.as_slice())
-                    .unwrap_or(&[])
-            } else {
-                &[]
-            },
-        );
-        let guard_checks = ws_guard_checks(
-            quote! { __deco },
-            &guard_ctx_ident,
-            deco_guard_fields(&deco_set),
-        );
-        let ctrl_deco_param = has_ctrl_guards.then(|| {
-            let ctrl_ty = &ctrl_set
-                .as_ref()
-                .expect("has_ctrl_guards implies a set")
-                .struct_ident;
-            quote! { __ctrl_deco: &#ctrl_ty, }
-        });
-        let deco_param = has_guards.then(|| {
-            let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
-            quote! { __deco: &#deco_ty, }
-        });
+    let open = pipeline.open();
+    let pre_auth = pipeline.pre_auth_guards();
+    let bind = pipeline.bind_receiver();
+    let identity = pipeline.identity_param(&all_params);
+    let head = plan.has_guards().then(|| pipeline.head_bindings(false));
+    let guards = pipeline.guards();
+    let params = pipeline.params(&extracted, false);
+    let validation = pipeline.validation(&extracted);
+    let upgrade_ident = format_ident!("__ws_upgrade");
+    let upgrade_ty: syn::Type = syn::parse_quote! { #krate::http::ws::WebSocketUpgrade };
+    let upgrade = pipeline.extract_parts(&upgrade_ident, &upgrade_ty);
 
-        let (identity_decl, identity_call, identity_expr) =
-            if let Some(ref id_param) = wm.identity_param {
-                let arg_name = format_ident!("__arg_{}", id_param.index);
-                let identity_ty = extra_params
-                    .iter()
-                    .find(|(index, _)| *index == id_param.index)
-                    .map(|(_, param)| &param.ty)
-                    .expect("identity parameter must be present in the method signature");
-                let identity_expr = if id_param.is_optional {
-                    quote! { __identity.as_ref() }
-                } else {
-                    quote! { Some(__identity) }
-                };
-                (
-                    quote! { __identity: &#identity_ty },
-                    quote! { &#arg_name },
-                    identity_expr,
-                )
-            } else if wm.decorators.anonymous {
-                (
-                    quote! {},
-                    quote! {},
-                    quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None },
-                )
-            } else {
-                (
-                    quote! {},
-                    quote! {},
-                    quote! { #meta_mod::guard_identity(__ctrl) },
-                )
-            };
-
-        let ws_guard_ctx = |ctx_ident: &syn::Ident, method_name: TokenStream| {
-            quote! {
-                let #ctx_ident = #krate::GuardContext {
-                    method_name: #method_name,
-                    controller_name: #controller_name_str,
-                    method: &__method,
-                    headers: &__headers,
-                    uri: &__uri,
-                    extensions: &__extensions,
-                    peer_addr: __peer_addr.0,
-                    path_params: __path_params,
-                    identity: #identity_expr,
-                };
-            }
-        };
-        // Controller-level guards run FIRST, against the shared set and a
-        // `"*"` context (one stateful-guard bucket per controller).
-        let ctrl_guard_context = if has_ctrl_guards {
-            ws_guard_ctx(&ctrl_ctx_ident, quote! { "*" })
-        } else {
-            TokenStream::new()
-        };
-        let guard_context = if has_guards {
-            ws_guard_ctx(&guard_ctx_ident, quote! { #fn_name_str })
-        } else {
-            TokenStream::new()
-        };
-        let ctrl_deco_call = has_ctrl_guards.then(|| quote! { &__ctrl_deco, });
-        let deco_call = has_guards.then(|| quote! { &__deco, });
-
-        (
-            quote! {
-                #[allow(non_snake_case)]
-                #[allow(clippy::too_many_arguments)]
-                async fn #preflight_name(
-                    #ctrl_deco_param
-                    #deco_param
-                    __headers: #krate::http::HeaderMap,
-                    __uri: #krate::http::Uri,
-                    __peer_addr: #krate::PeerAddr,
-                    __raw_path_params: #krate::http::extract::RawPathParams,
-                    __extensions: #krate::http::Extensions,
-                    __method: #krate::http::Method,
-                    __ctrl: &#receiver_ty,
-                    #identity_decl
-                ) -> Result<(), #krate::http::response::Response> {
-                    let __path_params = #krate::PathParams::from_raw(&__raw_path_params);
-                    #ctrl_guard_context
-                    #(#ctrl_guard_checks)*
-                    #guard_context
-                    #(#guard_checks)*
-                    Ok(())
-                }
-            },
-            quote! {
-                if let Err(__response) = #preflight_name(
-                    #ctrl_deco_call
-                    #deco_call
-                    __headers,
-                    __uri,
-                    __peer_addr,
-                    __raw_path_params,
-                    __extensions,
-                    __method,
-                    __ctrl_for_guard,
-                    #identity_call
-                ).await {
-                    return __response;
-                }
-            },
-        )
+    // The upgrade callback owns the receiver for the whole socket lifetime:
+    // the façade (its `Arc` + request data) or the core `Arc` itself.
+    let owned_receiver = if plan.anonymous {
+        quote! { let __owned = __core; }
     } else {
-        (quote! {}, quote! {})
+        quote! { let __owned = __facade; }
     };
 
-    let handler_name = handler_ident_for(controller_name, fn_name);
-    // The decorator sets arrive first (`Arc`s captured by the route closure —
-    // shared controller-level set, then the method's own), then the
-    // request-extracted guard-context values.
-    let guard_params = if needs_preflight {
-        let ctrl_deco_param = has_ctrl_guards.then(|| {
-            let ctrl_ty = &ctrl_set
-                .as_ref()
-                .expect("has_ctrl_guards implies a set")
-                .struct_ident;
-            quote! { __ctrl_deco: ::std::sync::Arc<#ctrl_ty>, }
-        });
-        let deco_param = has_guards.then(|| {
-            let deco_ty = deco_set.as_ref().expect("has_guards implies a set").ty();
-            quote! { __deco: ::std::sync::Arc<#deco_ty>, }
-        });
-        quote! {
-            #ctrl_deco_param
-            #deco_param
-            __headers: #krate::http::HeaderMap,
-            __uri: #krate::http::Uri,
-            __peer_addr: #krate::PeerAddr,
-            __raw_path_params: #krate::http::extract::RawPathParams,
-            __extensions: #krate::http::Extensions,
-            __method: #krate::http::Method,
-        }
-    } else {
-        quote! {}
-    };
-    let guard_controller_borrow = if needs_preflight {
-        quote! { let __ctrl_for_guard = &__facade; }
-    } else {
-        quote! {}
-    };
+    let (generics, where_clause) = entry_generics(
+        def,
+        fn_ident,
+        plan.anonymous,
+        wm.identity_param.as_ref(),
+        &wm.fn_item.sig,
+        &[],
+        &krate,
+    );
+    let deco_params = plan.entry_params();
+    let deco_items = &plan.deco_items;
+    let predeco_items = &plan.predeco_items;
+    let invocation = invocation_ident_for(controller_name, fn_ident);
+    let session = ws_session_ident_for(controller_name, fn_ident);
+    let core_ty = quote! { ::std::sync::Arc<#controller_name> };
 
     quote! {
         #deco_items
         #predeco_items
 
-        #[allow(non_snake_case)]
-        #[allow(unused_variables)]
+        #[allow(non_snake_case, unused_variables)]
         #[allow(clippy::too_many_arguments)]
-        async fn #invocation_name(
+        async fn #session(
             __ctrl: &#receiver_ty,
-            #(#handler_extra_params,)*
+            #(#session_params,)*
             __socket: #krate::http::ws::WebSocket,
             __shutdown: ::core::option::Option<#krate::rt::CancelToken>,
         ) {
-            #invocation_body
+            #session_body
         }
 
-        #preflight
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, unused_variables, unused_mut)]
         #[allow(clippy::too_many_arguments)]
-        async fn #handler_name(
-            #guard_params
-            __facade: #carrier_ty,
-            #(#handler_extra_params,)*
-            __ws_upgrade: #krate::http::ws::WebSocketUpgrade,
+        async fn #invocation #generics(
+            __state: __R2eS,
+            __req: #krate::http::extract::Request,
+            #(#deco_params,)*
+            __core: #core_ty,
             __ws_sessions: #krate::builder::WsSessions,
-        ) -> #krate::http::response::Response {
-            // Guard checks borrow the façade; the upgrade callback then owns it
-            // for the whole socket lifetime (façade owns its Arc + request data,
-            // so nothing is borrowed across the upgrade boundary).
-            #guard_controller_borrow
-            #preflight_call
+        ) -> #krate::http::response::Response #where_clause {
+            #open
+            #pre_auth
+            #bind
+            #identity
+            #head
+            #guards
+            #params
+            #validation
+            #upgrade
+            let _ = __body;
+            #owned_receiver
             #krate::http::response::IntoResponse::into_response(
                 __ws_upgrade.on_upgrade(move |__socket| async move {
                     // The session body does NOT run in this detached task when
@@ -1609,8 +1565,8 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                     // `shutdown_grace_period` instead of killing it with the
                     // runtime. Unserved apps (`TestApp`) run it right here.
                     __ws_sessions.run_session(#session_label, move |__shutdown| async move {
-                        #invocation_name(
-                            &__facade,
+                        #session(
+                            &__owned,
                             #(#forwarded_args,)*
                             __socket,
                             __shutdown,
@@ -1622,494 +1578,94 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     }
 }
 
-// ── Application-controller closure helpers ──────────────────────────────
+// ── Registration closures ────────────────────────────────────────────────
 //
-// These build the `move |...| async move { __r2e_<Name>_<m>(...) }`
-// closures registered by the state-aware route builder for non-identity
-// controllers. The closure captures the controller `Arc` and forwards the
-// request-extracted parameters to the common hidden handler wrapper.
+// Each endpoint registers a `move |State(state), req| async move { entry(..) }`
+// closure. The closure captures the controller core `Arc` and the prebuilt
+// decorator sets once at registration; axum clones it per request (one `Arc`
+// increment each), and the body moves those clones into the entry function.
 
-/// The six request-head parameters, as closure params and as call args.
-///
-/// The order of the two vectors is the SAME — what differs is *where* the
-/// param group is spliced into the closure signature (see
-/// [`assemble_closure_params`]); the args always stay in the fixed
-/// `(State?, HeaderMap, Uri, RawPathParams, PeerAddr, Extensions, Method, …)`
-/// order the inner invocation function declares.
-fn head_params_and_args(krate: &TokenStream) -> (Vec<TokenStream>, Vec<TokenStream>) {
-    (
-        vec![
-            quote! { __headers: #krate::http::HeaderMap },
-            quote! { __uri: #krate::http::Uri },
-            quote! { __raw_path_params: #krate::http::extract::RawPathParams },
-            quote! { __peer_addr: #krate::PeerAddr },
-            quote! { __extensions: #krate::http::Extensions },
-            quote! { __method: #krate::http::Method },
-        ],
-        vec![
-            quote! { __headers },
-            quote! { __uri },
-            quote! { __raw_path_params },
-            quote! { __peer_addr },
-            quote! { __extensions },
-            quote! { __method },
-        ],
+/// The shared closure shape. `extra_setup` runs at registration time (after
+/// the decorator captures), `extra_args` are forwarded after `__core`.
+fn registration_closure(
+    def: &RoutesImplDef,
+    fn_ident: &syn::Ident,
+    plan: &EndpointPlan,
+    has_identity_param: bool,
+    extra_setup: TokenStream,
+    extra_args: Vec<TokenStream>,
+) -> TokenStream {
+    let krate = r2e_core_path();
+    let state = state_generic();
+    let invocation = invocation_ident_for(&def.controller_name, fn_ident);
+    let turbofish = entry_turbofish(fn_ident, plan.anonymous, has_identity_param);
+    let capture_setup = plan.capture_setup();
+    let capture_args = plan.capture_args();
+    quote! {
+        {
+            let __core_capture = __ctrl.clone();
+            #capture_setup
+            #extra_setup
+            move |#krate::http::extract::State(__state): #krate::http::extract::State<#state>,
+                  __req: #krate::http::extract::Request| {
+                async move {
+                    #invocation #turbofish(
+                        __state,
+                        __req,
+                        #(#capture_args,)*
+                        __core_capture,
+                        #(#extra_args,)*
+                    ).await
+                }
+            }
+        }
+    }
+}
+
+/// Generate the closure registering an HTTP route.
+pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
+    let fn_ident = &rm.fn_item.sig.ident;
+    let plan = plan_endpoint(def, fn_ident, &rm.decorators, true, &rm.path, &rm.fn_item.sig);
+    registration_closure(
+        def,
+        fn_ident,
+        &plan,
+        rm.identity_param.is_some(),
+        quote! {},
+        Vec::new(),
     )
 }
 
-/// Splice the request-head group into the closure signature **after** the
-/// handler's own `FromRequestParts` parameters.
-///
-/// Axum runs extractors in parameter order, and the head group snapshots
-/// `Extensions` **by value**. A param-level `#[inject(identity)]` that parks
-/// something in `parts.extensions` (the documented JWT → tenancy pattern) must
-/// therefore run *before* the snapshot, or the snapshot is stale and everything
-/// reading the request head — guards, `#[managed]` acquisition — never sees the
-/// claim.
-///
-/// The one parameter that cannot move is the trailing one: axum requires the
-/// **last** handler parameter to be `FromRequest` (the body extractor), the
-/// others `FromRequestParts`. So the layout is
-/// `[leading…] [extras except the trailing one] [head…] [trailing extra]`,
-/// with the trailing extra pulled forward when it is the identity (an identity
-/// is always `FromRequestParts`, so nothing is left needing the last slot, and
-/// `Method` — itself `FromRequestParts` — ends the signature instead).
-///
-/// The closure's forwarding args are unaffected: they are named, and their
-/// order stays the fixed one the invocation function expects.
-fn assemble_closure_params(
-    leading: Vec<TokenStream>,
-    extras: Vec<TokenStream>,
-    head: Vec<TokenStream>,
-    trailing_is_movable: bool,
-) -> Vec<TokenStream> {
-    let mut params = leading;
-    if head.is_empty() {
-        params.extend(extras);
-        return params;
-    }
-    let mut extras = extras;
-    let trailing = if trailing_is_movable {
-        None
-    } else {
-        extras.pop()
-    };
-    params.extend(extras);
-    params.extend(head);
-    params.extend(trailing);
-    params
-}
-
-/// Build the Axum-extractable params + matching call args for a closure
-/// wrapping the application-scoped HTTP handler.
-fn route_axum_params_and_args(
-    rm: &RouteMethod,
-    needs_state: bool,
-    needs_head: bool,
-    krate: &TokenStream,
-) -> (Vec<TokenStream>, Vec<TokenStream>) {
-    let identity_index = rm.identity_param.as_ref().map(|p| p.index);
-    let identity_marker = identity_marker_for(&rm.fn_item.sig.ident);
-    let mut leading: Vec<TokenStream> = Vec::new();
-    let mut args: Vec<TokenStream> = Vec::new();
-    if needs_state {
-        leading.push(quote! {
-            #krate::http::extract::State(__state): #krate::http::extract::State<__R2eS>
-        });
-        args.push(quote! { __state });
-    }
-    let (head_params, head_args) = if needs_head {
-        head_params_and_args(krate)
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    args.extend(head_args);
-
-    let extra_params = extract_handler_params(rm);
-    let managed_indices: std::collections::HashSet<usize> =
-        rm.managed_params.iter().map(|mp| mp.index).collect();
-    let mut extras: Vec<TokenStream> = Vec::new();
-    let mut last_is_identity = false;
-    for (i, pt) in extra_params
-        .iter()
-        .filter(|(i, _)| !managed_indices.contains(i))
-    {
-        let arg = format_ident!("__arg_{}", i);
-        let ty = &pt.ty;
-        if Some(*i) == identity_index {
-            // Param-level identity: extracted through `FromRequestPartsVia`
-            // (bean-backed, witness in the marker) and unwrapped before the
-            // invocation call, so the route method keeps the plain type.
-            extras.push(quote! { #arg: #krate::web::extract::Via<#ty, #identity_marker> });
-            args.push(quote! { #arg.0 });
-            last_is_identity = true;
-        } else {
-            extras.push(quote! { #arg: #ty });
-            args.push(quote! { #arg });
-            last_is_identity = false;
-        }
-    }
-    let params = assemble_closure_params(leading, extras, head_params, last_is_identity);
-    (params, args)
-}
-
-/// Generate the closure expression that registers an application-scoped HTTP
-/// handler for a route.
-pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
-    let krate = r2e_core_path();
-    let controller_name = &def.controller_name;
-    let fn_name = &rm.fn_item.sig.ident;
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let data_name = request_data_ident_for(controller_name);
-    let invocation = invocation_ident_for(controller_name, fn_name);
-
-    // Mirror generate_single_handler's fallback: if a spec type is not
-    // inferable, the invoke fn degrades to the no-decorator shape, so the
-    // closure must too (avoids an arity-mismatch cascade after the real
-    // spec-type error).
-    let specs_ok = super::decorators::specs_ok_with_ctrl(
-        def,
-        rm.decorators
-            .guard_fns
-            .iter()
-            .chain(rm.decorators.intercept_fns.iter()),
-    );
-    let has_guards = !rm.decorators.guard_fns.is_empty() && specs_ok;
-    let has_managed = !rm.managed_params.is_empty();
-    // Per-method decorator struct exists iff there are guards or METHOD-level
-    // interceptors; controller-level interceptors live in the separate shared
-    // set captured from the router body (`__r2e_ctrl_deco`).
-    let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let has_ctrl = ctrl_set.is_some() && specs_ok;
-    // Mirror `generate_single_handler`: controller-level post-auth guards skip
-    // `#[anonymous]` routes, but still force head extraction elsewhere.
-    let has_ctrl_guards = has_ctrl
-        && !rm.decorators.anonymous
-        && ctrl_set
-            .as_ref()
-            .is_some_and(|s| !s.guard_fields.is_empty());
-    let has_method_set = has_guards || (!rm.decorators.intercept_fns.is_empty() && specs_ok);
-
-    let needs_state = has_managed;
-    // Mirror `generate_single_handler`: the request head is extracted for
-    // guards (method- or controller-level) and for `#[managed]` acquisition.
-    let needs_head = has_guards || has_ctrl_guards || has_managed;
-
-    let (closure_params, fwd_args) =
-        route_axum_params_and_args(rm, needs_state, needs_head, &krate);
-
-    // Splice __ctrl_deco/__deco/__ctrl into the inner-handler call after the
-    // axum-extracted prefix, matching the inner handler's signature:
-    // `(State?, [HeaderMap, Uri, RawPathParams, PeerAddr, Extensions, Method]?,
-    //   __ctrl_deco?, __deco?, __ctrl, extras...)`.
-    let prefix_len = usize::from(needs_state) + if needs_head { 6 } else { 0 };
-    let (prefix, suffix) = fwd_args.split_at(prefix_len);
-    // The method's decorator set is built once here — at wiring time, from
-    // the resolved graph — and captured by the closure as one `Arc`. The shared
-    // controller-level set (`__r2e_ctrl_deco`, built once in the router body) is
-    // captured by an `Arc` clone so every route shares one instance.
-    let ctrl_setup = has_ctrl.then(|| {
-        quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
-    });
-    let ctrl_arg = has_ctrl.then(|| quote! { &__ctrl_deco_capture, });
-    let deco_setup = has_method_set.then(|| {
-        let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
-        quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
-    });
-    let deco_arg = has_method_set.then(|| quote! { &__deco_capture, });
-    // #[anonymous]: no request-scoped extraction at all — the closure calls the
-    // invocation on the captured core (`&Arc<Core>` deref-coerces to `&Core`).
-    if rm.decorators.anonymous {
-        return quote! {
-            {
-                let __core_capture = __ctrl.clone();
-                #ctrl_setup
-                #deco_setup
-                move |#(#closure_params),*| {
-                    async move {
-                        #invocation(
-                            #(#prefix,)*
-                            #ctrl_arg
-                            #deco_arg
-                            &__core_capture,
-                            #(#suffix),*
-                        ).await
-                    }
-                }
-            }
-        };
-    }
-    // One per-request `Arc` increment: axum clones the `Fn`-once closure per
-    // request (cloning `__core_capture`), then this body moves that clone into
-    // `bind_request`. There is no second explicit `.clone()`.
-    let md = data_marker();
-    quote! {
-        {
-            let __core_capture = __ctrl.clone();
-            #ctrl_setup
-            #deco_setup
-            move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
-                async move {
-                    let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
-                    #invocation(
-                        #(#prefix,)*
-                        #ctrl_arg
-                        #deco_arg
-                        &__facade,
-                        #(#suffix),*
-                    ).await
-                }
-            }
-        }
-    }
-}
-
-/// Same as `generate_route_closure`, but for `#[sse]` endpoints. SSE
-/// handlers always omit the `__state` parameter when guards are not present.
+/// Generate the closure registering an `#[sse]` endpoint. The shutdown token
+/// is resolved ONCE here, at registration — not per request. Absent bean (an
+/// app with no graph) = `None` = no termination wrapper behaviour.
 pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
-    let controller_name = &def.controller_name;
-    let fn_name = &sm.fn_item.sig.ident;
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let data_name = request_data_ident_for(controller_name);
-    let invocation = invocation_ident_for(controller_name, fn_name);
-    // Mirror `generate_sse_handler` exactly — a drifted condition here changes
-    // the closure's arity but not the handler's.
-    let specs_ok = super::decorators::specs_ok_with_ctrl(def, sm.decorators.guard_fns.iter());
-    let has_guards = !sm.decorators.guard_fns.is_empty() && specs_ok;
-    let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let has_ctrl_guards = ctrl_set.is_some()
-        && specs_ok
-        && !sm.decorators.anonymous
-        && ctrl_set
-            .as_ref()
-            .is_some_and(|s| !s.guard_fields.is_empty());
-    let needs_head = has_guards || has_ctrl_guards;
-
-    let mut fwd_args: Vec<TokenStream> = Vec::new();
-    let (head_params, head_args) = if needs_head {
-        head_params_and_args(&krate)
-    } else {
-        (Vec::new(), Vec::new())
-    };
-    fwd_args.extend(head_args);
-    let identity_index = sm.identity_param.as_ref().map(|p| p.index);
-    let identity_marker = identity_marker_for(&sm.fn_item.sig.ident);
-    let mut extras: Vec<TokenStream> = Vec::new();
-    let mut last_is_identity = false;
-    for (i, pt) in extract_sig_params(&sm.fn_item.sig) {
-        let arg = format_ident!("__arg_{}", i);
-        let ty = &pt.ty;
-        if Some(i) == identity_index {
-            extras.push(quote! { #arg: #krate::web::extract::Via<#ty, #identity_marker> });
-            fwd_args.push(quote! { #arg.0 });
-            last_is_identity = true;
-        } else {
-            extras.push(quote! { #arg: #ty });
-            fwd_args.push(quote! { #arg });
-            last_is_identity = false;
-        }
-    }
-    // Same ordering rule as the ordinary route closure: the head snapshot goes
-    // after the handler's own `FromRequestParts` params (a param identity can
-    // populate the extensions a guard reads), before the trailing one.
-    let closure_params = assemble_closure_params(Vec::new(), extras, head_params, last_is_identity);
-
-    let prefix_len = if needs_head { 6 } else { 0 };
-    let (prefix, suffix) = fwd_args.split_at(prefix_len);
-    // Shared controller-level set (guards): captured as an `Arc` clone of the
-    // router-body instance, like the ordinary route closures.
-    let ctrl_setup = has_ctrl_guards.then(|| {
-        quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
-    });
-    let ctrl_arg = has_ctrl_guards.then(|| quote! { &__ctrl_deco_capture, });
-    let deco_setup = has_guards.then(|| {
-        let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
-        quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
-    });
-    let deco_arg = has_guards.then(|| quote! { &__deco_capture, });
-    // Resolved ONCE, here at registration — not per request. Absent bean (an
-    // app with no graph) = `None` = no termination wrapper behaviour, so this
-    // costs nothing where there is nothing to observe.
-    let shutdown_setup = quote! {
-        let __shutdown_capture = #krate::web::sse::shutdown_token_of(__ctx);
-    };
-    let shutdown_arg = quote! { __shutdown_capture, };
-    if sm.decorators.anonymous {
-        return quote! {
-            {
-                let __core_capture = __ctrl.clone();
-                #deco_setup
-                #shutdown_setup
-                move |#(#closure_params),*| {
-                    async move {
-                        #invocation(
-                            #(#prefix,)*
-                            #deco_arg
-                            #shutdown_arg
-                            &__core_capture,
-                            #(#suffix),*
-                        ).await
-                    }
-                }
-            }
-        };
-    }
-    let md = data_marker();
-    quote! {
-        {
-            let __core_capture = __ctrl.clone();
-            #ctrl_setup
-            #deco_setup
-            #shutdown_setup
-            move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
-                async move {
-                    let __facade = #meta_mod::bind_request(__core_capture, __r2e_data);
-                    #invocation(
-                        #(#prefix,)*
-                        #ctrl_arg
-                        #deco_arg
-                        #shutdown_arg
-                        &__facade,
-                        #(#suffix),*
-                    ).await
-                }
-            }
-        }
-    }
+    let fn_ident = &sm.fn_item.sig.ident;
+    let plan = plan_endpoint(def, fn_ident, &sm.decorators, false, &sm.path, &sm.fn_item.sig);
+    registration_closure(
+        def,
+        fn_ident,
+        &plan,
+        sm.identity_param.is_some(),
+        quote! { let __shutdown_capture = #krate::web::sse::shutdown_token_of(__ctx); },
+        vec![quote! { __shutdown_capture }],
+    )
 }
 
-/// Same captured-core adapter pattern for `#[ws]` endpoints. The WS
-/// handler always ends with a `WebSocketUpgrade` parameter, which we surface
-/// as the closure's final parameter.
+/// Generate the closure registering a `#[ws]` endpoint. The session registry
+/// is a framework bean (not part of the state HList): resolved ONCE here from
+/// the bean context and cloned into every upgrade.
 pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
-    let controller_name = &def.controller_name;
-    let fn_name = &wm.fn_item.sig.ident;
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let data_name = request_data_ident_for(controller_name);
-    let inner = handler_ident_for(controller_name, fn_name);
-    // Mirror `generate_ws_handler` exactly — a drifted condition here changes
-    // the closure's arity but not the handler's.
-    let specs_ok = super::decorators::specs_ok_with_ctrl(def, wm.decorators.guard_fns.iter());
-    let has_guards = !wm.decorators.guard_fns.is_empty() && specs_ok;
-    let ctrl_set = super::decorators::ctrl_deco_set(def);
-    let has_ctrl_guards = ctrl_set.is_some()
-        && specs_ok
-        && !wm.decorators.anonymous
-        && ctrl_set
-            .as_ref()
-            .is_some_and(|s| !s.guard_fields.is_empty());
-    let needs_preflight = has_guards || has_ctrl_guards;
-    let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
-
-    let mut closure_params: Vec<TokenStream> = Vec::new();
-    let mut fwd_args: Vec<TokenStream> = Vec::new();
-    // WS keeps its own head order (peer_addr before raw_path_params) — the
-    // inner handler's signature, not something to "fix" here.
-    let head_params: Vec<TokenStream> = if needs_preflight {
-        if has_ctrl_guards {
-            fwd_args.push(quote! { __ctrl_deco_capture.clone() });
-        }
-        if has_guards {
-            fwd_args.push(quote! { __deco_capture.clone() });
-        }
-        fwd_args.push(quote! { __headers });
-        fwd_args.push(quote! { __uri });
-        fwd_args.push(quote! { __peer_addr });
-        fwd_args.push(quote! { __raw_path_params });
-        fwd_args.push(quote! { __extensions });
-        fwd_args.push(quote! { __method });
-        vec![
-            quote! { __headers: #krate::http::HeaderMap },
-            quote! { __uri: #krate::http::Uri },
-            quote! { __peer_addr: #krate::PeerAddr },
-            quote! { __raw_path_params: #krate::http::extract::RawPathParams },
-            quote! { __extensions: #krate::http::Extensions },
-            quote! { __method: #krate::http::Method },
-        ]
-    } else {
-        Vec::new()
-    };
-    let identity_index = wm.identity_param.as_ref().map(|p| p.index);
-    let identity_marker = identity_marker_for(&wm.fn_item.sig.ident);
-    for (i, pt) in extract_sig_params(&wm.fn_item.sig) {
-        if Some(i) == ws_param_index {
-            continue;
-        }
-        let arg = format_ident!("__arg_{}", i);
-        let ty = &pt.ty;
-        if Some(i) == identity_index {
-            closure_params.push(quote! { #arg: #krate::web::extract::Via<#ty, #identity_marker> });
-            fwd_args.push(quote! { #arg.0 });
-        } else {
-            closure_params.push(quote! { #arg: #ty });
-            fwd_args.push(quote! { #arg });
-        }
-    }
-    // The head snapshot lands after every handler param (a param identity may
-    // populate the extensions the guards read) and before the upgrade, which
-    // stays the trailing parameter.
-    closure_params.extend(head_params);
-    closure_params.push(quote! { __ws_upgrade: #krate::http::ws::WebSocketUpgrade });
-    fwd_args.push(quote! { __ws_upgrade });
-    // Not an extractor: the registry is resolved ONCE here, at registration
-    // time, and cloned into every upgrade. It is a framework bean rather than
-    // part of the state HList, so it comes from the bean context.
-    fwd_args.push(quote! { __ws_sessions_capture.clone() });
-
-    let md = data_marker();
-    let prefix_len = if needs_preflight {
-        6 + usize::from(has_ctrl_guards) + usize::from(has_guards)
-    } else {
-        0
-    };
-    let (prefix, suffix) = fwd_args.split_at(prefix_len);
-    let ctrl_setup = has_ctrl_guards.then(|| {
-        quote! { let __ctrl_deco_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
-    });
-    let deco_setup = has_guards.then(|| {
-        let ctor = format_ident!("__r2e_deco_{}_{}", controller_name, fn_name);
-        quote! { let __deco_capture = ::std::sync::Arc::new(#ctor(__ctx)); }
-    });
-    let ws_sessions_setup = quote! {
-        let __ws_sessions_capture = #krate::builder::WsSessions::from_context(__ctx);
-    };
-    if wm.decorators.anonymous {
-        // The anonymous WS adapter takes `Arc<Core>` where the facade path
-        // takes a bound facade — same ownership shape across the upgrade.
-        return quote! {
-            {
-                let __core_capture = __ctrl.clone();
-                #deco_setup
-                #ws_sessions_setup
-                move |#(#closure_params),*| {
-                    async move {
-                        #inner(
-                            #(#prefix,)*
-                            __core_capture,
-                            #(#suffix),*
-                        ).await
-                    }
-                }
-            }
-        };
-    }
-    quote! {
-        {
-            let __core_capture = __ctrl.clone();
-            #ctrl_setup
-            #deco_setup
-            #ws_sessions_setup
-            move |__r2e_data: #data_name<#md>, #(#closure_params),*| {
-                async move {
-                    #inner(
-                        #(#prefix,)*
-                        #meta_mod::bind_request(__core_capture, __r2e_data),
-                        #(#suffix),*
-                    ).await
-                }
-            }
-        }
-    }
+    let fn_ident = &wm.fn_item.sig.ident;
+    let plan = plan_endpoint(def, fn_ident, &wm.decorators, false, &wm.path, &wm.fn_item.sig);
+    registration_closure(
+        def,
+        fn_ident,
+        &plan,
+        wm.identity_param.is_some(),
+        quote! { let __ws_sessions_capture = #krate::builder::WsSessions::from_context(__ctx); },
+        vec![quote! { __ws_sessions_capture }],
+    )
 }

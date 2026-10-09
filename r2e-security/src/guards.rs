@@ -1,5 +1,5 @@
 use r2e_core::decorators::guards::{Guard, GuardContext, Identity};
-use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, Response};
 use r2e_core::{Rejection, RejectionKind};
 
 /// Why a role check refused the request.
@@ -80,11 +80,11 @@ impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         let result = (|| {
             let identity = ctx
                 .identity
-                .ok_or_else(|| RolesDenied::NoIdentity.into_response())?;
+                .ok_or_else(|| Rejection::from(RolesDenied::NoIdentity))?;
             let roles = identity.roles();
             let has_role = !self.required_roles.is_empty()
                 && self
@@ -94,7 +94,7 @@ impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
             if has_role {
                 Ok(())
             } else {
-                Err(RolesDenied::Insufficient.into_response())
+                Err(Rejection::from(RolesDenied::Insufficient))
             }
         })();
         std::future::ready(result)
@@ -121,11 +121,11 @@ impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         let result = (|| {
             let identity = ctx
                 .identity
-                .ok_or_else(|| RolesDenied::NoIdentity.into_response())?;
+                .ok_or_else(|| Rejection::from(RolesDenied::NoIdentity))?;
             let roles = identity.roles();
             let has_all = !self.required_roles.is_empty()
                 && self
@@ -135,7 +135,7 @@ impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
             if has_all {
                 Ok(())
             } else {
-                Err(RolesDenied::Insufficient.into_response())
+                Err(Rejection::from(RolesDenied::Insufficient))
             }
         })();
         std::future::ready(result)

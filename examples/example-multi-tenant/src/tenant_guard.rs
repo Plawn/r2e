@@ -1,5 +1,5 @@
 use r2e::prelude::*;
-use r2e::{Guard, GuardContext};
+use r2e::{Guard, GuardContext, GuardError};
 
 use crate::tenant_identity::TenantUser;
 
@@ -13,11 +13,11 @@ impl Guard<TenantUser> for TenantGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, TenantUser>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         async move {
-            let identity = ctx.identity.ok_or_else(|| {
-                HttpError::unauthorized("Authentication required").into_response()
-            })?;
+            let identity = ctx
+                .identity
+                .ok_or_else(|| GuardError::unauthorized("Authentication required"))?;
 
             // Super-admins can access any tenant
             if identity.is_super_admin() {
@@ -35,11 +35,11 @@ impl Guard<TenantUser> for TenantGuard {
             if path_tenant == identity.tenant_id {
                 Ok(())
             } else {
-                Err(HttpError::forbidden(format!(
+                Err(GuardError::forbidden(format!(
                     "You don't have access to tenant '{}'",
                     path_tenant
                 ))
-                .into_response())
+                .into())
             }
         }
     }

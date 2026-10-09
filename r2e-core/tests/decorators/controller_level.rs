@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use r2e_core::beans::BeanContext;
 use r2e_core::decorators::guards::PreAuthGuardContext;
 use r2e_core::http::extract::FromRequestParts;
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::Response;
 use r2e_core::http::{Body, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::type_list::{TCons, TNil};
@@ -72,7 +72,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Subject {
             .get("x-user")
             .and_then(|v| v.to_str().ok())
             .map(|s| Subject(s.to_owned()))
-            .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+            .ok_or_else(|| GuardError::unauthorized("missing header").into())
     }
 }
 
@@ -113,7 +113,7 @@ impl<I: Identity> Guard<I> for RecordingGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let hit = self.hits.fetch_add(1, Ordering::SeqCst) + 1;
         self.log
             .events
@@ -170,7 +170,7 @@ impl PreAuthGuard for RecordingPreGuard {
     fn check(
         &self,
         ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         self.log
             .events
             .lock()

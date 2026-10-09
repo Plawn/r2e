@@ -26,7 +26,7 @@ impl Guard<AuthenticatedUser> for Allow {
     fn check(
         &self,
         _ctx: &GuardContext<'_, AuthenticatedUser>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }

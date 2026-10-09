@@ -29,7 +29,7 @@ pub struct UserController {
 **Generated items:**
 - the controller **core** (struct with request-scoped fields stripped)
 - `mod __r2e_meta_UserController` — type aliases, constants, `guard_identity`, `bind_request`, `validate_config`
-- `struct __R2eRequestData_UserController` — `FromRequestParts` extractor for the request-scoped values (identity + `#[inject(request)]`)
+- `struct __R2eRequestData_UserController` — `RequestData<S>` extractor for the request-scoped values (identity + `#[inject(request)]`), failing with a `Rejection`
 - `struct __R2eRequest_UserController` — the per-request façade, `Deref<Target = core>`; route methods run here
 - `impl ContextConstruct` — always (the core builds from the resolved `BeanContext`, fetching each `#[inject]` field by type)
 

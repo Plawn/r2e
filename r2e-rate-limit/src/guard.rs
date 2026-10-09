@@ -533,11 +533,8 @@ impl IntoHttpResponse for RateLimited {
 
 r2e_core::http::impl_into_response!(RateLimited);
 
-fn too_many_requests() -> r2e_core::http::Response {
-    r2e_core::http::response::static_json(
-        r2e_core::http::StatusCode::TOO_MANY_REQUESTS,
-        r#"{"error":"Rate limit exceeded"}"#,
-    )
+fn too_many_requests() -> Rejection {
+    RateLimited::default().into()
 }
 
 /// A per-user limit reached without an identity: fail closed.
@@ -547,16 +544,16 @@ fn too_many_requests() -> r2e_core::http::Response {
 /// promises. [`DecoratorSpec::REQUIRES_IDENTITY`] rejects statically
 /// identity-less placements at compile time; this is the runtime backstop for an
 /// `Option<..>` identity that came back `None`.
-fn identity_required(controller: &str, method: &str) -> r2e_core::http::Response {
+fn identity_required(controller: &str, method: &str) -> Rejection {
     tracing::warn!(
         controller,
         method,
         "rate limit: per-user limit on a request with no identity — rejecting with 401 \
          (a per-user bucket cannot be keyed without a subject)"
     );
-    r2e_core::http::response::static_json(
-        r2e_core::http::StatusCode::UNAUTHORIZED,
-        r#"{"error":"Authentication required for this rate-limited endpoint"}"#,
+    Rejection::new(
+        RejectionKind::Unauthenticated,
+        "Authentication required for this rate-limited endpoint",
     )
 }
 
@@ -582,7 +579,7 @@ impl<I: Identity> Guard<I> for RateLimitGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), r2e_core::Rejection>> + Send {
         if !self.enabled {
             return std::future::ready(Ok(()));
         }
@@ -641,7 +638,7 @@ impl PreAuthGuard for PreAuthRateLimitGuard {
     fn check(
         &self,
         ctx: &PreAuthGuardContext<'_>,
-    ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), r2e_core::Rejection>> + Send {
         if !self.enabled {
             return std::future::ready(Ok(()));
         }

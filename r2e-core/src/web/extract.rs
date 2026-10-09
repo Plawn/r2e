@@ -20,10 +20,13 @@
 //! { ... }
 //! ```
 //!
-//! Generated controller code extracts request-scoped values through this trait
-//! (via the [`Via`] adapter), threading the markers as inferred generics on the
-//! generated `Controller` impl — user code never sees them. Plain axum
-//! extractors participate through the blanket [`ViaAxum`] bridge.
+//! Generated controller code extracts request-scoped values (identity,
+//! `#[inject(request)]` fields) through this trait, threading the markers as
+//! inferred generics on the generated `Controller` impl — user code never sees
+//! them. Plain axum extractors participate through the blanket [`ViaAxum`]
+//! bridge. Every failure converts into the [`Rejection`] hub (the trait's
+//! `Rejection: Into<Rejection>` bound), so the route projects it through its
+//! error envelope like any other fault.
 //!
 //! [`BeanExtract`] is the standalone helper for hand-written axum handlers
 //! that need a bean from an HList state: the witness lives in the extractor's
@@ -59,29 +62,30 @@
 //! # The named bridge surface (plan §5.3b)
 //!
 //! [`FromRequestPartsVia`] is the R2E-owned extraction contract, and every
-//! bean-backed extractor R2E ships implements it. A handful of impls of the
-//! *backend's* [`FromRequestParts`] necessarily remain, because the backend —
-//! not R2E — is what drives extraction of a handler's argument tuple. They are
+//! bean-backed extractor R2E ships implements it. Route-method **parameters**
+//! are extracted by the generated handler through the backend's
+//! [`FromRequestParts`] / `FromRequest` vocabulary instead: the parameter type
+//! is concrete there, so its rejection is converted through [`ToRejection`]
+//! (typed when `Into<Rejection>` exists, opaque otherwise) without a marker.
+//! The impls of the *backend's* [`FromRequestParts`] that remain are
 //! enumerated here so a backend swap has a list instead of a search:
 //!
 //! | site | why it speaks the backend contract |
 //! |---|---|
-//! | [`Via<T, M>`](Via) (this file) | *the* reverse bridge: the single adapter from `FromRequestPartsVia` back to the backend. A swap rewrites this impl. |
-//! | [`PeerAddr`] (this file) | emitted into the generated handler's argument tuple, and usable as a route-method parameter — both positions the backend extracts. |
+//! | [`PeerAddr`] (this file) | usable as a route-method parameter. |
 //! | [`BeanExtract<T, I>`](BeanExtract) (this file) | exists *for* hand-written backend handlers merged via `merge_router` (see `crate::http::axum_compat`). |
 //! | `RequestId` (`crate::builtins::request_id`) | documented route-method parameter. |
 //! | `SchedulerHandle` (`r2e-scheduler`) | documented route-method parameter. |
-//! | `__R2eRequestData_<C>` (emitted by `#[controller]`) | the generated extractor the backend invokes per request; its *fields* are extracted through `FromRequestPartsVia`. |
-//! | `#[derive(Params)]` (emitted by `r2e-macros`) | same, for user parameter structs used as route-method parameters. |
+//! | `#[derive(Params)]` (emitted by `r2e-macros`) | user parameter structs used as route-method parameters. |
 //!
-//! Wrapping every route-method parameter in [`Via`] would remove the last five
-//! rows, at the cost of an inferred marker generic per parameter (compile time,
-//! and `E0283`-shaped errors on user types). That trade was measured and
-//! rejected — see the plan. None of these sites names `axum` directly: they all
-//! go through `r2e_http`'s re-exported names.
+//! None of these sites names `axum` directly: they all go through
+//! `r2e_http`'s re-exported names. The generated request-data struct
+//! (`__R2eRequestData_<C>`) implements R2E's own [`RequestData`] and extracts
+//! its fields through [`FromRequestPartsVia`].
 
 use std::marker::PhantomData;
 
+use crate::error::Rejection;
 use crate::http::extract::FromRequestParts;
 use crate::http::header::Parts;
 use crate::type_list::HasBean;
@@ -112,7 +116,12 @@ pub struct ViaOpt<M>(PhantomData<fn() -> M>);
 )]
 pub trait FromRequestPartsVia<S, M>: Sized {
     /// The rejection returned when extraction fails.
-    type Rejection: crate::http::response::IntoResponse;
+    ///
+    /// Converts into the [`Rejection`] hub so the route can project it
+    /// through its error envelope. Plain axum extractors reach this trait
+    /// through [`ViaAxum`] only when their rejection converts too; R2E ships
+    /// the conversions for every rejection `r2e_core::http` exposes.
+    type Rejection: Into<Rejection>;
 
     /// Extract `Self` from request parts and the application state.
     fn from_request_parts_via(
@@ -136,7 +145,7 @@ pub trait FromRequestPartsVia<S, M>: Sized {
 )]
 pub trait OptionalFromRequestPartsVia<S, M>: Sized {
     /// The rejection returned when extraction fails (not when absent).
-    type Rejection: crate::http::response::IntoResponse;
+    type Rejection: Into<Rejection>;
 
     /// Extract `Option<Self>` from request parts and the application state.
     fn from_request_parts_via(
@@ -145,11 +154,13 @@ pub trait OptionalFromRequestPartsVia<S, M>: Sized {
     ) -> impl std::future::Future<Output = Result<Option<Self>, Self::Rejection>> + Send;
 }
 
-// Blanket bridge: every plain axum extractor works, with marker `ViaAxum`.
+// Blanket bridge: every plain axum extractor whose rejection converts into
+// the hub works, with marker `ViaAxum`.
 impl<S, T> FromRequestPartsVia<S, ViaAxum> for T
 where
     S: Send + Sync,
     T: FromRequestParts<S>,
+    T::Rejection: Into<Rejection>,
 {
     type Rejection = T::Rejection;
 
@@ -189,25 +200,70 @@ where
     }
 }
 
-/// Adapter that turns any [`FromRequestPartsVia`] extractor into a real axum
-/// extractor by carrying the marker in its own type (the E0207-safe position).
+/// Generated per-controller request data: the struct `#[controller]` emits
+/// to hold the identity and every `#[inject(request)]` field, extracted once
+/// per request from the parts, **before** guards run and before the body is
+/// read.
 ///
-/// Generated handlers declare identity parameters as `Via<T, M>` closure
-/// parameters and unwrap `.0` before invoking the route method, so user
-/// signatures keep the plain type.
-pub struct Via<T, M>(pub T, PhantomData<fn() -> M>);
+/// R2E-owned (not the backend's `FromRequestParts`) so the impl can be generic
+/// over the state and the per-field markers at once, and so a failure is a
+/// typed [`Rejection`] the route projects — never a pre-rendered response.
+#[doc(hidden)]
+pub trait RequestData<S>: Sized {
+    fn extract(
+        parts: &mut Parts,
+        state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Rejection>> + Send;
+}
 
-impl<S, T, M> FromRequestParts<S> for Via<T, M>
-where
-    S: Send + Sync,
-    T: FromRequestPartsVia<S, M>,
-{
-    type Rejection = T::Rejection;
+/// Autoref probe converting a route-method parameter's extractor rejection
+/// into the [`Rejection`] hub.
+///
+/// Generated code calls `(&ToRejection::<Rej>::new()).convert(err)` with both
+/// traits imported: the by-value receiver ([`ToRejectionTyped`], `Rej:
+/// Into<Rejection>`) wins when the conversion exists, otherwise lookup autorefs
+/// to [`ToRejectionOpaque`], which renders the rejection with its own
+/// `IntoResponse` and wraps the result as an
+/// [`Opaque`](crate::RejectionKind::Opaque) rejection — the escape hatch for
+/// third-party extractors. Works because the parameter type, hence `Rej`, is
+/// concrete at the call site.
+#[doc(hidden)]
+pub struct ToRejection<Rej>(PhantomData<fn() -> Rej>);
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        T::from_request_parts_via(parts, state)
-            .await
-            .map(|value| Via(value, PhantomData))
+impl<Rej> ToRejection<Rej> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<Rej> Default for ToRejection<Rej> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[doc(hidden)]
+pub trait ToRejectionTyped<Rej> {
+    fn convert(&self, rejection: Rej) -> Rejection;
+}
+
+impl<Rej: Into<Rejection>> ToRejectionTyped<Rej> for ToRejection<Rej> {
+    #[inline]
+    fn convert(&self, rejection: Rej) -> Rejection {
+        rejection.into()
+    }
+}
+
+#[doc(hidden)]
+pub trait ToRejectionOpaque<Rej> {
+    fn convert(&self, rejection: Rej) -> Rejection;
+}
+
+impl<Rej: crate::http::response::IntoResponse> ToRejectionOpaque<Rej> for &ToRejection<Rej> {
+    #[inline]
+    fn convert(&self, rejection: Rej) -> Rejection {
+        Rejection::opaque(rejection.into_response())
     }
 }
 

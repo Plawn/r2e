@@ -742,7 +742,6 @@ This is the fix for apps hand-rolling a `build_settings()` helper purely to get
 | `server.quic.cert` | `String` | — | PEM certificate chain path (required with `quic.port`) |
 | `server.quic.key` | `String` | — | PEM private key path (required with `quic.port`) |
 | `server.quic.alt_svc_max_age` | `u32` | `3600` | Alt-Svc header max-age in seconds |
-| `server.params-rejection-format` | `"json"` \| `"plain-text"` | `"json"` | Body format of the `400` a `#[derive(Params)]` extraction failure produces: `{"error": "<message>"}` (default) or the bare message as `text/plain`, which is byte-for-byte what a raw `Query<T>` rejection returns (pick it when migrating a shipped API off `Query<T>`). App-level, never per struct: read **once** in `build_state()` into a process-global slot, because the derive extracts against a state-generic `S` with no bean lookup. An unknown value fails the boot. Constant: `r2e_core::PARAMS_REJECTION_FORMAT_KEY`; enum `r2e_core::ParamsRejectionFormat`. |
 
 ### Background services
 

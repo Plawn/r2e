@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use r2e_core::beans::{BeanContext, BeanRegistry};
 use r2e_core::decorators::guards::{GuardContext, GuardError, PathParams};
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{HeaderMap, Router, StatusCode, Uri};
 use r2e_core::prelude::*;
 use r2e_core::type_list::{TAppend, TCons, TNil};
@@ -93,7 +93,7 @@ impl<I: Identity> Guard<I> for SpikeRateLimitGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         async move {
             if self.registry.hits.fetch_add(1, Ordering::SeqCst) >= self.max {
                 Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "rate limited").into())
@@ -168,7 +168,7 @@ impl<I: Identity> Guard<I> for RequireHeader {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         async move {
             if ctx.headers.contains_key(self.0) {
                 Ok(())
@@ -266,11 +266,11 @@ where
                         identity: None,
                     };
                     // Guards in declaration order, monomorphized field access.
-                    if let Err(resp) = deco.g_header.check(&guard_ctx).await {
-                        return resp;
+                    if let Err(rej) = deco.g_header.check(&guard_ctx).await {
+                        return rej.into();
                     }
-                    if let Err(resp) = deco.g_limit.check(&guard_ctx).await {
-                        return resp;
+                    if let Err(rej) = deco.g_limit.check(&guard_ctx).await {
+                        return rej.into();
                     }
                     // Interceptor chain sees the raw return type.
                     let out = deco

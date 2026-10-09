@@ -87,7 +87,7 @@ impl<I: Identity> Guard<I> for ApiKeyGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         let authorized = ctx
             .headers
             .get("x-api-key")
@@ -96,7 +96,7 @@ impl<I: Identity> Guard<I> for ApiKeyGuard {
             if authorized {
                 Ok(())
             } else {
-                Err(HttpError::forbidden("missing or invalid x-api-key").into_response())
+                Err(HttpError::forbidden("missing or invalid x-api-key").into())
             }
         }
     }

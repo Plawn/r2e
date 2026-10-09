@@ -139,9 +139,9 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
 /// - A hidden metadata module (`__r2e_meta_<Name>`) — state type alias, path
 ///   prefix, identity type alias, the `guard_identity` accessor (reads the
 ///   façade) and `bind_request` (binds the façade).
-/// - A request-data extractor (`__R2eRequestData_<Name>`) implementing
-///   `FromRequestParts<State>` — extracts the request-scoped values (zero-sized
-///   and infallible when there are none).
+/// - A request-data extractor (`__R2eRequestData_<Name>`) implementing R2E's
+///   `RequestData<State>` — extracts the request-scoped values into a
+///   `Rejection` on failure (zero-sized and infallible when there are none).
 /// - The request façade (`__R2eRequest_<Name>`) — owns `Arc<Name>` plus the
 ///   request-scoped values, with `Deref<Target = Name>`. Route methods run on
 ///   it; app/config fields and core helpers are reached through `Deref`.

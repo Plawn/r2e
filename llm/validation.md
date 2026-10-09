@@ -1,7 +1,7 @@
 ---
 topic: validation
 features: core
-tokens: ~1500
+tokens: ~1400
 requires: core-concepts
 ---
 
@@ -15,7 +15,7 @@ requires: core-concepts
 - There is no `#[params(...)]` renaming spelling: `#[serde(rename)]`, `rename_all`, `default`, `skip`, `flatten` are read as-is.
 - Precedence: explicit R2E name > `#[serde(rename)]` > `#[serde(rename_all)]` > field identifier; `#[param(default)]` > `#[serde(default)]`.
 - `#[serde(skip)]` combined with an R2E param attribute is a compile error.
-- Migrate `Query<T>` to `Params` by adding the derive and dropping the wrapper; the only visible change is the 400 body, controlled app-wide by `server.params-rejection-format` (`json` default, `plain-text` for compatibility).
+- Migrate `Query<T>` to `Params` by adding the derive and dropping the wrapper; the only visible change is the 400 body, which is rendered by the route's error envelope like every other rejection (`{"error": "..."}` with the default `HttpError`).
 - To handle a rejection yourself, take `Result<Query<T>, QueryRejection>` — `QueryRejection`/`PathRejection`/`FormRejection`/`JsonRejection` come from `r2e::http`.
 
 Always available (via `garde`). `Json<T>` extraction auto-validates when
@@ -143,18 +143,11 @@ impl SearchController {
 # fn main() {}
 ```
 
-The one visible difference is the 400 body. `Query<T>` answers with plain text
-from serde; `Params` answers with a JSON problem body by default. It is an
-**app-level** setting, never a per-struct one, read once at `build_state()`:
-
-```yaml
-server:
-  params-rejection-format: json        # default; { "error": "...", "message": "..." }
-  # params-rejection-format: plain-text  # raw `Query<T>` compatibility
-```
-
-Unknown values fail boot. In Rust the enum is `r2e::ParamsRejectionFormat`
-(`Json` | `PlainText`); the JSON body is `{"error": "<message>"}`.
+The one visible difference is the 400 body. A `Params` failure is a
+`Rejection` (`InvalidPath` / `InvalidQuery` / `InvalidHeader`) rendered by the
+route's error envelope — `{"error": "<message>"}` with the default `HttpError`,
+your own shape with a custom envelope (`llm/error-handling.md`). There is no
+per-struct or app-level format switch.
 
 Axum's own rejection types are re-exported for handlers that take a
 `Result<Query<T>, QueryRejection>`: `QueryRejection`, `PathRejection`,

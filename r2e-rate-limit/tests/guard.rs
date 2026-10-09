@@ -441,11 +441,11 @@ async fn per_user_guard_rejects_a_request_without_identity() {
         .check(&anon)
         .await
         .expect_err("a per-user limit without an identity must be rejected");
-    assert_eq!(err.status(), r2e_core::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(err.status, r2e_core::http::StatusCode::UNAUTHORIZED);
 
     // Repeat calls keep 401-ing (they are not consuming any bucket).
     let err = guard.check(&anon).await.expect_err("still rejected");
-    assert_eq!(err.status(), r2e_core::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(err.status, r2e_core::http::StatusCode::UNAUTHORIZED);
 
     // And an authenticated caller still has their full budget.
     let identity = TestIdentity {

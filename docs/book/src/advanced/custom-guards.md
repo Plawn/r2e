@@ -22,7 +22,7 @@ impl<I: Identity> Guard<I> for TenantGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let tenant_id = ctx.path().split('/').nth(2);
             let user_tenant = ctx.identity_claims()
@@ -30,7 +30,7 @@ impl<I: Identity> Guard<I> for TenantGuard {
 
             match (tenant_id, user_tenant) {
                 (Some(path_tenant), Some(jwt_tenant)) if path_tenant == jwt_tenant => Ok(()),
-                _ => Err(HttpError::Forbidden("Tenant mismatch".into()).into_response()),
+                _ => Err(Rejection::forbidden("Tenant mismatch")),
             }
         }
     }
@@ -60,13 +60,10 @@ impl PreAuthGuard for MaintenanceGuard {
     fn check(
         &self,
         _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             if is_maintenance_mode() {
-                Err(HttpError::Custom {
-                    status: StatusCode::SERVICE_UNAVAILABLE,
-                    body: serde_json::json!({"error": "Under maintenance"}),
-                }.into_response())
+                Err(Rejection::new(RejectionKind::Unavailable, "Under maintenance"))   // 503
             } else {
                 Ok(())
             }
@@ -101,7 +98,7 @@ impl<I: Identity> Guard<I> for ActiveUserGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let sub = ctx.identity_sub().unwrap_or("");
 
@@ -111,11 +108,11 @@ impl<I: Identity> Guard<I> for ActiveUserGuard {
             .bind(sub)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|_| HttpError::Internal("DB error".into()).into_response())?;
+            .map_err(|_| Rejection::internal("DB error"))?;
 
             match active {
                 Some(true) => Ok(()),
-                _ => Err(HttpError::Forbidden("Account suspended".into()).into_response()),
+                _ => Err(Rejection::forbidden("Account suspended")),
             }
         }
     }

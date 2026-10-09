@@ -4,7 +4,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use r2e_core::http::response::Response;
 use r2e_core::http::Router;
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, Guard, GuardContext, Identity};
@@ -77,7 +76,7 @@ impl<I: Identity> Guard<I> for KeyGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         let authorized = ctx
             .headers
             .get("x-test-key")
@@ -86,7 +85,7 @@ impl<I: Identity> Guard<I> for KeyGuard {
             if authorized {
                 Ok(())
             } else {
-                Err(HttpError::forbidden("missing or invalid x-test-key").into_response())
+                Err(HttpError::forbidden("missing or invalid x-test-key").into())
             }
         }
     }

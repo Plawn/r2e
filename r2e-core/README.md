@@ -101,14 +101,16 @@ Authorization checks that run before the handler body:
 ```rust
 struct TenantGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
+impl SelfBuilt for TenantGuard {}        // no bean deps: the expression is the guard
+
+impl<I: Identity> Guard<I> for TenantGuard {
     fn check(
-        &self, state: &S, ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+        &self, ctx: &GuardContext<'_, I>,
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() => Ok(()),
-                _ => Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
+                _ => Err(Rejection::forbidden("Missing tenant")),   // rendered by the route's error envelope
             }
         }
     }

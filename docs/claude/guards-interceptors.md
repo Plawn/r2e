@@ -125,10 +125,14 @@ impl DecoratorSpec for DbAudit {
 ## Guards
 
 Handler-level guards run before the handler body and can short-circuit with
-an error response. The `Guard<I: Identity>` trait
+a typed denial. The `Guard<I: Identity>` trait
 (`r2e-core/src/decorators/guards.rs`) defines async
-`check(&self, ctx) -> Result<(), Response>` — **no state parameter**; a
-guard's beans are fields, injected at build time.
+`check(&self, ctx) -> Result<(), Rejection>` — **no state parameter**; a
+guard's beans are fields, injected at build time. The `Rejection` is rendered
+by the route's error envelope (return-type `Result<T, E>` or the app-level
+`error_projection::<E>()`, see `docs/claude/error-handling.md`), never by the
+guard itself. Guards run **before** the handler's own parameters are extracted
+(path/query/header, then body): a denied request never reads its body.
 
 `GuardContext<'a, I: Identity>` provides:
 - `method_name`, `controller_name` — handler identification
@@ -204,10 +208,12 @@ concrete `AuthenticatedUser` type: `sub()` (required), `email()` /
 ### Pre-authentication guards
 
 For checks that don't need identity (IP rate limiting, allowlisting):
-`PreAuthGuard` (no generics). Pre-auth guards run as middleware **before**
-JWT extraction. Context: `PreAuthGuardContext` (no identity). They are
-prebuilt like everything else (`__R2ePreDeco_*` set, one `Arc` captured by
-the middleware closure). SSE and WS endpoints support `#[pre_guard]` too.
+`PreAuthGuard` (no generics, `check(&self, ctx) -> Result<(), Rejection>`).
+Pre-auth guards are the **first step of the generated entry fn**, before
+identity / `#[inject(request)]` extraction — not a middleware layer. Context:
+`PreAuthGuardContext` (no identity). They are prebuilt like everything else
+(`__R2ePreDeco_*` set, passed to the entry fn by `Controller::routes`). SSE and
+WS endpoints support `#[pre_guard]` too.
 
 ### Custom guards
 
@@ -242,11 +248,18 @@ monomorphized (no `dyn`). `InterceptorContext` is a `Copy` struct
 
 ## Execution order (outermost → innermost)
 
-Pre-auth middleware level (runs BEFORE Axum extraction/JWT validation):
+Everything below runs inside one generated entry fn per route
+(`move |State(state), req: Request|`), which splits the request head first and
+reads the body only at the parameter step. Each failure is projected **once**
+through the route's error envelope (`Rejection` → `E`).
+
+Entry (before identity extraction):
 0. Controller-level `#[pre_guard]`s, then method-level `#[pre_guard]`s
    (`PreRateLimit::global/per_ip(...)`, custom pre-auth guards)
+0b. Request data: identity + `#[inject(request)]` fields (`RequestData<S>`),
+   then the identity parameter when the route takes one
 
-Handler level (after extraction, before controller body):
+Handler level (after identity, before parameters and controller body):
 1. Controller-level guards, then method-level guards — within each level,
    declaration order: `#[roles]`/`#[all_roles]` desugar to guard sites that
    run first, then `#[guard(...)]` sites top-to-bottom
