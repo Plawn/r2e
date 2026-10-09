@@ -2,29 +2,48 @@ error[E0277]: `Option<Widget>` cannot be extracted from a request against this a
   --> cases/routing/fail/extractor_option_no_route.rs:35:36
    |
 35 |             .register_controller::<WidgetController>()
-   |              -------------------   ^^^^^^^^^^^^^^^^ the trait `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, _>` is not implemented for `Option<Widget>`
+   |              -------------------   ^^^^^^^^^^^^^^^^ unsatisfied trait bound
    |              |
    |              required by a bound introduced by this call
    |
-   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
-   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
-   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
-help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is conditionally implemented for `Option<T>`
-  --> $WORKSPACE/r2e-core/src/web/extract.rs
+help: the trait `OptionalFromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, _>` is not implemented for `Widget`
+  --> cases/routing/fail/extractor_option_no_route.rs:14:1
    |
-   | / impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
+14 | pub struct Widget;
+   | ^^^^^^^^^^^^^^^^^
+   = note: optional extraction requires `Widget` to implement `OptionalFromRequestPartsVia` (bean-backed extractors) or axum's `OptionalFromRequestParts` for a generic state (bridged automatically)
+   = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
+help: the following other types implement trait `OptionalFromRequestPartsVia<S, M>`
+  --> $WORKSPACE/r2e-tenant/src/extract.rs
+   |
+   | / impl<S, T, I, J> OptionalFromRequestPartsVia<S, ViaBean<(I, J)>> for Tenant<T>
    | | where
-   | |     S: Send + Sync,
-   | |     T: OptionalFromRequestPartsVia<S, M>,
-   | |________---------------------------------^
-   |          |
-   |          unsatisfied requirement introduced here: `_: OptionalFromRequestPartsVia<_, _>`
-note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<BeanState<HCons<ShutdownToken, HNil>>>`
+   | |     S: HasBean<TenantRouter, I> + HasBean<Tenanted<T>, J> + Send + Sync,
+   | |     T: Clone + Send + Sync + 'static,
+   | |     I: Send + Sync,
+   | |     J: Send + Sync,
+   | |___________________^ `Tenant<T>` implements `OptionalFromRequestPartsVia<S, ViaBean<(I, J)>>`
+...
+   | / impl<S, I> OptionalFromRequestPartsVia<S, ViaBean<I>> for TenantId
+   | | where
+   | |     S: HasBean<TenantRouter, I> + Send + Sync,
+   | |     I: Send + Sync,
+   | |___________________^ `TenantId` implements `OptionalFromRequestPartsVia<S, ViaBean<I>>`
+   |
+  ::: $WORKSPACE/r2e-security/src/extractor.rs
+   |
+   | / impl<S, I> OptionalFromRequestPartsVia<S, ViaBean<I>> for AuthenticatedUser
+   | | where
+   | |     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
+   | |     I: Send + Sync,
+   | |___________________^ `AuthenticatedUser` implements `OptionalFromRequestPartsVia<S, ViaBean<I>>`
+   = note: required for `Option<Widget>` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaOpt<_>>`
+note: required for `__R2eRequestData_WidgetController<(ViaOpt<_>,)>` to implement `r2e::web::extract::RequestData<BeanState<HCons<ShutdownToken, HNil>>>`
   --> cases/routing/fail/extractor_option_no_route.rs:16:1
    |
 16 | #[controller(path = "/w")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `WidgetController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((_,),)>`
+note: required for `WidgetController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((ViaOpt<_>,),)>`
   --> cases/routing/fail/extractor_option_no_route.rs:22:1
    |
 22 | #[routes]
@@ -48,27 +67,46 @@ error[E0277]: `Option<Widget>` cannot be extracted from a request against this a
 33 | |             .build_state()
 34 | |             .await
 35 | |             .register_controller::<WidgetController>()
-   | |______________________________________________________^ the trait `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, _>` is not implemented for `Option<Widget>`
+   | |______________________________________________________^ unsatisfied trait bound
    |
-   = note: request-scoped types must implement `FromRequestPartsVia` (bean-backed extractors) or axum's `FromRequestParts` for a generic state (bridged automatically)
+help: the trait `OptionalFromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, _>` is not implemented for `Widget`
+  --> cases/routing/fail/extractor_option_no_route.rs:14:1
+   |
+14 | pub struct Widget;
+   | ^^^^^^^^^^^^^^^^^
+   = note: optional extraction requires `Widget` to implement `OptionalFromRequestPartsVia` (bean-backed extractors) or axum's `OptionalFromRequestParts` for a generic state (bridged automatically)
    = note: if the extractor pulls a bean from the state, the bean must be registered on the AppBuilder so the `HasBean` bound holds
-   = note: for an `Option<T>` field or parameter, `T` must implement `OptionalFromRequestPartsVia` (bean-backed) or axum's `OptionalFromRequestParts` (bridged automatically)
-help: the trait `FromRequestPartsVia<S, ViaOpt<M>>` is conditionally implemented for `Option<T>`
-  --> $WORKSPACE/r2e-core/src/web/extract.rs
+help: the following other types implement trait `OptionalFromRequestPartsVia<S, M>`
+  --> $WORKSPACE/r2e-tenant/src/extract.rs
    |
-   | / impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
+   | / impl<S, T, I, J> OptionalFromRequestPartsVia<S, ViaBean<(I, J)>> for Tenant<T>
    | | where
-   | |     S: Send + Sync,
-   | |     T: OptionalFromRequestPartsVia<S, M>,
-   | |________---------------------------------^
-   |          |
-   |          unsatisfied requirement introduced here: `_: OptionalFromRequestPartsVia<_, _>`
-note: required for `__R2eRequestData_WidgetController<(_,)>` to implement `FromRequestParts<BeanState<HCons<ShutdownToken, HNil>>>`
+   | |     S: HasBean<TenantRouter, I> + HasBean<Tenanted<T>, J> + Send + Sync,
+   | |     T: Clone + Send + Sync + 'static,
+   | |     I: Send + Sync,
+   | |     J: Send + Sync,
+   | |___________________^ `Tenant<T>` implements `OptionalFromRequestPartsVia<S, ViaBean<(I, J)>>`
+...
+   | / impl<S, I> OptionalFromRequestPartsVia<S, ViaBean<I>> for TenantId
+   | | where
+   | |     S: HasBean<TenantRouter, I> + Send + Sync,
+   | |     I: Send + Sync,
+   | |___________________^ `TenantId` implements `OptionalFromRequestPartsVia<S, ViaBean<I>>`
+   |
+  ::: $WORKSPACE/r2e-security/src/extractor.rs
+   |
+   | / impl<S, I> OptionalFromRequestPartsVia<S, ViaBean<I>> for AuthenticatedUser
+   | | where
+   | |     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
+   | |     I: Send + Sync,
+   | |___________________^ `AuthenticatedUser` implements `OptionalFromRequestPartsVia<S, ViaBean<I>>`
+   = note: required for `Option<Widget>` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaOpt<_>>`
+note: required for `__R2eRequestData_WidgetController<(ViaOpt<_>,)>` to implement `r2e::web::extract::RequestData<BeanState<HCons<ShutdownToken, HNil>>>`
   --> cases/routing/fail/extractor_option_no_route.rs:16:1
    |
 16 | #[controller(path = "/w")]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^
-note: required for `WidgetController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((_,),)>`
+note: required for `WidgetController` to implement `Controller<BeanState<HCons<ShutdownToken, HNil>>, ((ViaOpt<_>,),)>`
   --> cases/routing/fail/extractor_option_no_route.rs:22:1
    |
 22 | #[routes]

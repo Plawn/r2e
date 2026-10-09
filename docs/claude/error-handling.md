@@ -204,7 +204,7 @@ The `#[managed]` attribute enables automatic lifecycle management for resources 
 
 ```rust
 pub trait ManagedResource<S>: Sized + Send {
-    type Error: Into<Response>;
+    type Error: Into<Rejection>;
 
     fn acquire(
         context: ManagedContext<'_, S>,
@@ -293,4 +293,4 @@ and use a drop-safe abort fallback.
 
 ### Error wrappers for `ManagedResource`
 
-`ManagedErr<E>` — generic wrapper for any `IntoResponse` type. Needed because orphan rules prevent `impl Into<Response> for YourError` directly. Use `ManagedErr<HttpError>` for the common case.
+`ManagedErr<E>` — generic wrapper for any `Into<Rejection>` type. Needed because orphan rules prevent `impl Into<Rejection> for YourError` directly. Use `ManagedErr<HttpError>` for the common case. Acquire and finalize failures are projected through the route's error envelope like every other rejection.

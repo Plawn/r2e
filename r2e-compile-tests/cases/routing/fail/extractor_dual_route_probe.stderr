@@ -8,7 +8,7 @@ error[E0283]: type annotations needed
            - impl<S, T, M> FromRequestPartsVia<S, ViaOpt<M>> for Option<T>
              where S: std::marker::Send, S: Sync, T: OptionalFromRequestPartsVia<S, M>;
            - impl<S, T> FromRequestPartsVia<S, ViaAxum> for T
-             where S: std::marker::Send, S: Sync, T: FromRequestParts<S>;
+             where S: std::marker::Send, S: Sync, T: FromRequestParts<S>, <T as FromRequestParts<S>>::Rejection: Into<Rejection>, <T as FromRequestParts<S>>::Rejection: ?Sized;
 note: required by a bound in `assert_unambiguous_extractor`
   --> $WORKSPACE/r2e-core/src/web/extract.rs
    |

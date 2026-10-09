@@ -48,7 +48,7 @@ pub struct ApiKeyGuard;
 impl SelfBuilt for ApiKeyGuard {}
 
 impl<I: Identity> Guard<I> for ApiKeyGuard {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), r2e::http::Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), r2e::Rejection> {
         if ctx.headers.contains_key("x-api-key") {
             Ok(())
         } else {

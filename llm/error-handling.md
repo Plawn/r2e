@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~3300
+tokens: ~3900
 requires: core-concepts
 ---
 
@@ -169,10 +169,72 @@ __assert::<HttpError>();               // the default envelope
 ```
 
 An enum whose only link to the framework is `#[error(transparent)] Http(#[from] HttpError)`
-inherits the same two impls through `HttpError`. Wiring an envelope to routes
-(`#[error(E)]`, `#[routes(error = E)]`, `AppBuilder::error_projection::<E>()`)
-lands with the next phase of #1072; until then an envelope is used by hand:
-`rejection.project::<MyEnvelope>()`.
+inherits the same two impls through `HttpError`.
+
+### Which envelope renders a route
+
+There is no attribute to wire an envelope: the **handler's return type** decides.
+
+- `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` —
+  every framework failure on that route (extractor rejection, failed identity,
+  guard denial, garde report, managed acquire/finalize) is projected through
+  `E`, so the handler's own `Err(E)` and the framework's errors share one wire
+  shape. Nothing to annotate.
+- Any other return type (`Json<T>`, `Result<T, HttpError>`, `Result<T, E>` with
+  `E` lacking one of the three traits, a plain `String`) — the route uses the
+  **app-level** projection: `AppBuilder::error_projection::<E>()`, default
+  `HttpError`. The app-level one is the JAX-RS/Quarkus `ExceptionMapper`
+  equivalent: one place that decides how unmapped failures look.
+
+A route declared infallible (`-> Json<T>`) is a definition the framework trusts:
+its failures still exist (a bad body, a missing identity) and render with the
+app-level envelope. Declare `Result<T, E>` when the route must speak `E`.
+
+```rust
+# use r2e::ErrorProjector;
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+    #[error(rejection)]
+    Rejected(Rejection),
+}
+
+#[controller(path = "/items")]
+pub struct ItemController;
+
+#[routes]
+impl ItemController {
+    #[post("/")]
+    async fn create(&self, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiEnvelope> {
+        Ok(Json(body))                     // a malformed body answers as `ApiEnvelope` too
+    }
+
+    #[get("/{id}")]
+    async fn get(&self, Path(id): Path<u32>) -> Json<u32> {
+        Json(id)                           // a bad `id` answers with the app-level envelope
+    }
+}
+
+# async fn __doc() {
+let state = AppBuilder::new()
+    .error_projection::<ApiEnvelope>()     // app-level envelope (default: HttpError)
+    .build_state()
+    .await;
+let projector = r2e::BeanAccess::get::<ErrorProjector>(state.state());
+let _resp = projector.project(Rejection::not_found("gone"));
+# }
+# fn main() {}
+```
+
+`error_projection::<E>()` provides an `ErrorProjector` bean (`project(rejection)
+-> Response`); plugins and hand-written handlers can inject it to render a
+`Rejection` with the app's envelope. The runtime order on every route is fixed:
+pre-auth guards → identity + `#[inject(request)]` fields → guards → path/query/
+header parameters → body → garde validation → managed acquire → interceptors →
+handler → managed finalize. A failure at any step is projected once, through
+the route's envelope, and the body is never read before identity and guards
+have passed.
 
 ### Hand-written response types
 

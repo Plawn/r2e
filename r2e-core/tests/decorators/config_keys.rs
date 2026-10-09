@@ -12,7 +12,6 @@
 use std::future::Future;
 
 use r2e_core::config::{ConfigValue, R2eConfig};
-use r2e_core::http::response::Response;
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, GuardContext, Identity};
 
@@ -44,7 +43,7 @@ impl<I: Identity> Guard<I> for ConfiguredGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move { Ok(()) }
     }
 }

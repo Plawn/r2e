@@ -14,7 +14,7 @@ impl PreAuthGuard for AllowAllPre {
     fn check(
         &self,
         _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }

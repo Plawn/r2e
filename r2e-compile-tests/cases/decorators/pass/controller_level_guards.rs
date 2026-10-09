@@ -15,7 +15,7 @@ impl<I: Identity> Guard<I> for HeaderGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let ok = ctx.headers.contains_key(self.0);
         async move {
             if ok {
@@ -35,7 +35,7 @@ impl PreAuthGuard for AllowAllPre {
     fn check(
         &self,
         _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }

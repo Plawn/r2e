@@ -119,7 +119,7 @@ impl<I: Identity> Guard<I> for RecordPeer {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
         SEEN.lock()
             .unwrap()
             .push((ctx.controller_name, ctx.peer_addr));

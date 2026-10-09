@@ -124,7 +124,7 @@ pub use crate::runtime::panic::{PanicOrigin, PanicReport};
 pub use crate::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::type_list::BeanLookup;
 pub use crate::web::extract::{
-    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr, Via,
+    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr,
 };
 pub use crate::web::managed::{
     ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,

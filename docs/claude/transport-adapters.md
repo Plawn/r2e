@@ -94,8 +94,10 @@ references.
   2026-08-27) and resolved the OTHER way — **new adapters with HTTP request
   context reuse `Guard<I>`/`GuardContext` directly** instead of minting a
   per-transport guard trait. MCP builds a `GuardContext` from the transport
-  request's `http::request::Parts` and maps the rejection `Response` back to
-  a JSON-RPC error by status (`r2e-mcp/src/guard.rs::guard_response_to_error`)
+  request's `http::request::Parts`; guards return a typed `Rejection`, which
+  MCP today still renders to a `Response` and maps back to a JSON-RPC error by
+  status (`r2e-mcp/src/guard.rs::guard_response_to_error`, replaced by
+  `From<Rejection> for McpError` in #1072 P3)
   — so `#[guard]`, `#[roles]`-style specs, `RateLimitGuard` and every user
   `#[derive(DecoratorBean)]` guard work on MCP members (tools, resources, prompts) with zero new impls.
   `GrpcGuard`/`GrpcRolesGuard` remain the outlier (tonic metadata is not

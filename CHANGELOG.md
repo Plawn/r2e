@@ -48,6 +48,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   exactly one `#[error(transparent)]` variant over `HttpError` inherits both
   impls. `status`/`message` on that variant and two such variants are compile
   errors.
+- **One projection point per route** (task #1072, phase P1). Every HTTP
+  route, SSE and WS endpoint is now one generated entry fn `(State, Request)
+  -> Response` that owns the whole pipeline — pre-auth guards → request data
+  (identity + `#[inject(request)]`) → guards → head parameters → body
+  parameter (last) → garde validation → managed acquire → interceptors →
+  handler → managed finalize — and converts every failure into a `Rejection`
+  projected **once** through the route's error envelope. The envelope is
+  inferred from the handler's return type: `Result<T, E>` with
+  `E: From<Rejection> + IntoHttpResponse + ErrorSchema` projects through `E`
+  (no attribute to write); any other return type uses the app-level
+  projection. Guards run before the route's own parameters, so a denied or
+  unauthenticated request never reads its body. New tests:
+  `r2e-core/tests/http/projection.rs`.
+- **`AppBuilder::error_projection::<E>()`** — the app-level error envelope
+  (the JAX-RS/Quarkus `ExceptionMapper` equivalent), provided as the
+  `ErrorProjector` bean (`r2e_core::ErrorProjector`, `of::<E>()` /
+  `project(rejection)`). Routes whose return type declares no envelope, SSE
+  and WS routes, and (from phase P4) 404/405/413/panic responses render
+  through it; without the bean the default is `HttpError`, byte-equal to 0.4.
+- **`RequestData<S>`** (`r2e_core::web::extract`): the R2E-owned trait the
+  generated `__R2eRequestData_<C>` extractor implements —
+  `extract(&mut Parts, &S) -> Result<Self, Rejection>` — replacing its
+  `FromRequestParts` bridge impl.
 
 - **`StopPhase::AfterDrain` background services** (task #1071). A
   `ServiceComponent` can declare `fn stop_phase() -> StopPhase` and
@@ -68,6 +91,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking: guards return `Result<(), Rejection>`** (task #1072, phase P1).
+  `Guard<I>::check` and `PreAuthGuard::check` no longer build a `Response`;
+  they return a `Rejection` (`Rejection::forbidden(..)`,
+  `Rejection::unauthenticated()`, or a typed error through `?`/`From`) that the
+  route projects through its envelope. `GuardContext::parse_path_param` returns
+  `Result<T, GuardError>`. Pre-auth guards are the first step of the route's
+  entry fn, not a middleware layer.
+- **Breaking: `ManagedResource::Error: Into<Rejection>`** (was
+  `IntoHttpResponse`). Acquire/finalize failures are projected like any other
+  rejection; `HttpError` still qualifies.
+- **Breaking: `ParamsRejectionFormat` and `server.params-rejection-format`
+  removed.** `#[derive(Params)]` failures always render through the route's
+  envelope (default `HttpError`, same body as the previous default).
+- **Breaking: `Via<T, M>` removed.** The generated handlers resolve bean-backed
+  extractors inline; hand-written handlers keep `BeanExtract<T, I>`. The
+  `ViaAxum` bridge now requires the axum rejection to convert `Into<Rejection>`
+  (every axum built-in does).
 - **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
   `Header`), so a `#[derive(Params)]` failure converts into the right
   `RejectionKind`. Only code that builds `ParamError` by struct literal is

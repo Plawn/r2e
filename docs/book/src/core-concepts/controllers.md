@@ -248,7 +248,7 @@ Behind the scenes, `#[controller]` and `#[routes]` generate:
 
 1. **Controller core** — your struct with request-scoped fields stripped out; holds only `#[inject]` + `#[config]` fields and is built once into an `Arc`
 2. **Metadata module** (`__r2e_meta_<Name>`) — identity type, path prefix, `bind_request`, config validation
-3. **Request-data extractor** (`__R2eRequestData_<Name>`) — implements `FromRequestParts` to extract the request-scoped values (identity + `#[inject(request)]`)
+3. **Request-data extractor** (`__R2eRequestData_<Name>`) — implements R2E's `RequestData<S>` to extract the request-scoped values (identity + `#[inject(request)]`), failing with a typed `Rejection`
 4. **Request façade** (`__R2eRequest_<Name>`) — `{ __core: Arc<Core>, <request fields> }` with `Deref<Target = Core>`; route methods run here
 5. **ContextConstruct impl** — always generated; builds the core from the resolved bean graph, resolving each `#[inject]` field by type via `ctx.get::<T>()`
 6. **Controller trait impl** — generic over the (inferred) state; wires the core supplied by `register_controller()` into routes, consumers, and scheduled tasks. Its `Deps` (the unique `#[inject]` types plus `R2eConfig`) are checked at registration, so injecting a type that is not a bean is a compile error naming that type.

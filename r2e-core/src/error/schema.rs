@@ -6,9 +6,9 @@ use super::rejection::RejectionKind;
 
 /// Static documentation of an error envelope.
 ///
-/// Mandatory for every type used as a projector (`#[error(E)]`,
-/// `#[routes(error = E)]`, `AppBuilder::error_projection::<E>()`), next to
-/// `From<Rejection>` and `IntoHttpResponse`. The runtime
+/// Mandatory for every type used as an envelope — the `E` of a route's
+/// `Result<T, E>` return type, or `AppBuilder::error_projection::<E>()` —
+/// next to `From<Rejection>` and `IntoHttpResponse`. The runtime
 /// ([`Rejection::project`](super::Rejection::project)) and the OpenAPI builder
 /// read the **same** [`status_of`](Self::status_of), so the spec cannot say
 /// 422 where the server answers 400.

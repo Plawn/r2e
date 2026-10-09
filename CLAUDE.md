@@ -84,7 +84,7 @@ Dependency flow: `r2e-rt` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← int
 
 ### Containment Boundaries (CI-enforced — details: `docs/claude/architecture.md`)
 
-- **axum**: only `r2e-http` depends on it. Everything else goes through `r2e_core::http` and implements **R2E's** contracts (`IntoHttpResponse` + `impl_into_response!`, `FromRequestPartsVia`/`Via<T, M>`); raw axum only via `r2e::http::axum_compat`.
+- **axum**: only `r2e-http` depends on it. Everything else goes through `r2e_core::http` and implements **R2E's** contracts (`IntoHttpResponse` + `impl_into_response!`, `FromRequestPartsVia`/`RequestData<S>`); raw axum only via `r2e::http::axum_compat`.
 - **JSON codec**: typed (de)serialization goes through `r2e_core::json` (`to_vec`/`from_slice`/…), never `serde_json::…` directly. `serde_json::Value` / `json!` (dynamic tree) deliberately stays `serde_json`. JWT claims are typed (`StandardClaims`), not `Value`.
 - **tokio**: go through `r2e_core::rt` (or `r2e_rt` below core), never `tokio`/`tokio-util`/`tokio-stream`. By-design exceptions: `r2e-rt`, `r2e-test`, `r2e-devservices`.
 

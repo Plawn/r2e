@@ -1,15 +1,12 @@
 //! Cancellation-safe managed resource lifecycle support.
 //!
-//! A route parameter annotated with `#[managed]` is acquired before the
 //! handler runs, exposed to the handler as `&mut R`, and finalized after the
 //! handler response has been built. Resources are protected by a
 //! [`ManagedGuard`]: if the request is cancelled, panics, or a later resource
 //! fails to acquire, [`ManagedResource::abort`] is called from `Drop`.
 
-use crate::http::{
-    response::{IntoResponse, Response},
-    StatusCode,
-};
+use crate::error::Rejection;
+use crate::http::StatusCode;
 use crate::web::request_head::RequestHead;
 use crate::HttpError;
 use std::{future::Future, marker::PhantomData};
@@ -127,7 +124,10 @@ impl ManagedOutcome {
 )]
 pub trait ManagedResource<S>: Sized + Send {
     /// Error returned while acquiring or finalizing the resource.
-    type Error: Into<Response>;
+    ///
+    /// Converts into the [`Rejection`] hub, so the generated route projects it
+    /// through the same envelope as every other failure.
+    type Error: Into<Rejection>;
 
     /// Acquires one resource for the current request.
     fn acquire(
@@ -229,8 +229,9 @@ where
     }
 }
 
-/// Generic bridge from an `IntoResponse` error to the `Into<Response>` bound
-/// required by [`ManagedResource`].
+/// Newtype carrying a managed resource's error through the `Into<Rejection>`
+/// bound of [`ManagedResource`] — lets `?` convert any `E: Into<Rejection>`
+/// without a dedicated error enum.
 pub struct ManagedErr<E>(pub E);
 
 impl<E> From<E> for ManagedErr<E> {
@@ -239,9 +240,9 @@ impl<E> From<E> for ManagedErr<E> {
     }
 }
 
-impl<E: IntoResponse> From<ManagedErr<E>> for Response {
+impl<E: Into<Rejection>> From<ManagedErr<E>> for Rejection {
     fn from(err: ManagedErr<E>) -> Self {
-        err.0.into_response()
+        err.0.into()
     }
 }
 
@@ -260,18 +261,18 @@ impl<E: std::fmt::Debug> std::fmt::Debug for ManagedErr<E> {
 /// Records a finalization error while allowing remaining resources to close.
 #[doc(hidden)]
 pub fn record_managed_finalize_error(
-    slot: &mut Option<Response>,
-    response: Response,
+    slot: &mut Option<Rejection>,
+    rejection: Rejection,
     controller: &'static str,
     handler: &'static str,
 ) {
     if slot.is_none() {
-        *slot = Some(response);
+        *slot = Some(rejection);
     } else {
         tracing::error!(
             controller,
             handler,
-            status = %response.status(),
+            status = %rejection.status,
             "additional managed resource finalization failure"
         );
     }

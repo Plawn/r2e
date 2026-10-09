@@ -9,7 +9,7 @@
 //! behavior, pre-auth ordering, SSE/WS identity, `Deref` access to core fields,
 //! and that no `Arc<Controller>` is ever stashed in request extensions.
 
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::Response;
 use r2e_core::http::{Request, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::{
@@ -287,7 +287,7 @@ impl Guard<Subject> for RecordingGuardReady {
     fn check(
         &self,
         ctx: &GuardContext<'_, Subject>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let sub = ctx.identity.map(|i| i.sub().to_string());
         async move {
             if let Some(s) = sub {
@@ -357,13 +357,13 @@ impl PreAuthGuard for GatePreReady {
     fn check(
         &self,
         _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let allow = self.allow.0.load(Ordering::SeqCst);
         async move {
             if allow {
                 Ok(())
             } else {
-                Err(StatusCode::FORBIDDEN.into_response())
+                Err(GuardError::forbidden("forbidden").into())
             }
         }
     }

@@ -740,10 +740,72 @@ __assert::<HttpError>();               // the default envelope
 ```
 
 An enum whose only link to the framework is `#[error(transparent)] Http(#[from] HttpError)`
-inherits the same two impls through `HttpError`. Wiring an envelope to routes
-(`#[error(E)]`, `#[routes(error = E)]`, `AppBuilder::error_projection::<E>()`)
-lands with the next phase of #1072; until then an envelope is used by hand:
-`rejection.project::<MyEnvelope>()`.
+inherits the same two impls through `HttpError`.
+
+### Which envelope renders a route
+
+There is no attribute to wire an envelope: the **handler's return type** decides.
+
+- `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` —
+  every framework failure on that route (extractor rejection, failed identity,
+  guard denial, garde report, managed acquire/finalize) is projected through
+  `E`, so the handler's own `Err(E)` and the framework's errors share one wire
+  shape. Nothing to annotate.
+- Any other return type (`Json<T>`, `Result<T, HttpError>`, `Result<T, E>` with
+  `E` lacking one of the three traits, a plain `String`) — the route uses the
+  **app-level** projection: `AppBuilder::error_projection::<E>()`, default
+  `HttpError`. The app-level one is the JAX-RS/Quarkus `ExceptionMapper`
+  equivalent: one place that decides how unmapped failures look.
+
+A route declared infallible (`-> Json<T>`) is a definition the framework trusts:
+its failures still exist (a bad body, a missing identity) and render with the
+app-level envelope. Declare `Result<T, E>` when the route must speak `E`.
+
+```rust
+# use r2e::ErrorProjector;
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+    #[error(rejection)]
+    Rejected(Rejection),
+}
+
+#[controller(path = "/items")]
+pub struct ItemController;
+
+#[routes]
+impl ItemController {
+    #[post("/")]
+    async fn create(&self, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiEnvelope> {
+        Ok(Json(body))                     // a malformed body answers as `ApiEnvelope` too
+    }
+
+    #[get("/{id}")]
+    async fn get(&self, Path(id): Path<u32>) -> Json<u32> {
+        Json(id)                           // a bad `id` answers with the app-level envelope
+    }
+}
+
+# async fn __doc() {
+let state = AppBuilder::new()
+    .error_projection::<ApiEnvelope>()     // app-level envelope (default: HttpError)
+    .build_state()
+    .await;
+let projector = r2e::BeanAccess::get::<ErrorProjector>(state.state());
+let _resp = projector.project(Rejection::not_found("gone"));
+# }
+# fn main() {}
+```
+
+`error_projection::<E>()` provides an `ErrorProjector` bean (`project(rejection)
+-> Response`); plugins and hand-written handlers can inject it to render a
+`Rejection` with the app's envelope. The runtime order on every route is fixed:
+pre-auth guards → identity + `#[inject(request)]` fields → guards → path/query/
+header parameters → body → garde validation → managed acquire → interceptors →
+handler → managed finalize. A failure at any step is projected once, through
+the route's envelope, and the body is never read before identity and guards
+have passed.
 
 ### Hand-written response types
 
@@ -2170,7 +2232,7 @@ of `run()` while leaving registration and config validation untouched.
 - There is no `#[params(...)]` renaming spelling: `#[serde(rename)]`, `rename_all`, `default`, `skip`, `flatten` are read as-is.
 - Precedence: explicit R2E name > `#[serde(rename)]` > `#[serde(rename_all)]` > field identifier; `#[param(default)]` > `#[serde(default)]`.
 - `#[serde(skip)]` combined with an R2E param attribute is a compile error.
-- Migrate `Query<T>` to `Params` by adding the derive and dropping the wrapper; the only visible change is the 400 body, controlled app-wide by `server.params-rejection-format` (`json` default, `plain-text` for compatibility).
+- Migrate `Query<T>` to `Params` by adding the derive and dropping the wrapper; the only visible change is the 400 body, which is rendered by the route's error envelope like every other rejection (`{"error": "..."}` with the default `HttpError`).
 - To handle a rejection yourself, take `Result<Query<T>, QueryRejection>` — `QueryRejection`/`PathRejection`/`FormRejection`/`JsonRejection` come from `r2e::http`.
 
 Always available (via `garde`). `Json<T>` extraction auto-validates when
@@ -2298,18 +2360,11 @@ impl SearchController {
 # fn main() {}
 ```
 
-The one visible difference is the 400 body. `Query<T>` answers with plain text
-from serde; `Params` answers with a JSON problem body by default. It is an
-**app-level** setting, never a per-struct one, read once at `build_state()`:
-
-```yaml
-server:
-  params-rejection-format: json        # default; { "error": "...", "message": "..." }
-  # params-rejection-format: plain-text  # raw `Query<T>` compatibility
-```
-
-Unknown values fail boot. In Rust the enum is `r2e::ParamsRejectionFormat`
-(`Json` | `PlainText`); the JSON body is `{"error": "<message>"}`.
+The one visible difference is the 400 body. A `Params` failure is a
+`Rejection` (`InvalidPath` / `InvalidQuery` / `InvalidHeader`) rendered by the
+route's error envelope — `{"error": "<message>"}` with the default `HttpError`,
+your own shape with a custom envelope (`llm/error-handling.md`). There is no
+per-struct or app-level format switch.
 
 Axum's own rejection types are re-exported for handlers that take a
 `Result<Query<T>, QueryRejection>`: `QueryRejection`, `PathRejection`,
@@ -2662,13 +2717,18 @@ The same `Arc<JwtClaimsValidator>` bean validates the JWT once; light
 - Bean or config deps: `#[derive(DecoratorBean)]` with `#[inject]` / `#[config]`
   fields, applied as `MyGuard::spec(args)` (plain fields, declaration order). A
   missing bean is a compile error at `register_controller()`.
-- Deny with `Err(GuardError::forbidden(…).into())` / `unauthorized` /
-  `new(status, msg)`; read the request through `GuardContext`. The built-in
-  guards deny with typed errors — `RolesDenied` (r2e-security), `RateLimited`
-  (r2e-rate-limit, carries `Retry-After`), `FgaDenied` (r2e-openfga) — which
-  render through `Rejection` (see `llm/error-handling.md`).
-- Checks that must run **before** JWT extraction implement `PreAuthGuard` and
-  are applied with `#[pre_guard(…)]`.
+- `check` returns `Result<(), Rejection>`: deny with
+  `Err(GuardError::forbidden(…).into())` / `unauthorized` / `new(status, msg)`
+  or any `Rejection` constructor; read the request through `GuardContext`. The
+  built-in guards deny with typed errors — `RolesDenied` (r2e-security),
+  `RateLimited` (r2e-rate-limit, carries `Retry-After`), `FgaDenied`
+  (r2e-openfga) — which convert into `Rejection` with `?`. The denial is
+  rendered by the route's error envelope (see `llm/error-handling.md`).
+- Guards run **before** the handler's own parameters are extracted and before
+  the body is read: a denied request never deserializes its body.
+- Checks that must run **before** identity extraction implement `PreAuthGuard`
+  and are applied with `#[pre_guard(…)]`; they are the first step of the
+  generated handler, not a middleware layer.
 - Rate limiting needs feature `rate-limit` and `.provide(RateLimitRegistry::default())`;
   `PreRateLimit` is pre-auth, `RateLimit::per_user` is post-auth.
 - `window_secs` must be > 0 (every constructor panics on 0), and a per-user
@@ -2693,7 +2753,7 @@ pub struct BlockUser;
 impl SelfBuilt for BlockUser {}            // one line: the expression IS the guard
 
 impl<I: Identity> Guard<I> for BlockUser {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
         if ctx.identity_sub() == Some("blocked-user") {
             return Err(GuardError::forbidden("Blocked").into());
         }
@@ -2739,7 +2799,7 @@ pub struct ProjectGuard {
 }
 
 impl<I: Identity> Guard<I> for ProjectGuard {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
         Ok(())                              // uses self.pool / self.tenant / self.min_role
     }
 }
@@ -2772,9 +2832,11 @@ that names every missing key at once, not a late panic when the guard is built.
 
 ### Pre-auth guards
 
-Run as middleware **before** JWT extraction (IP allowlists, pre-auth rate
-limits). Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no identity),
-apply with `#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
+Run **before** identity extraction (IP allowlists, pre-auth rate limits) as
+the first step of the generated handler — controller-level pre-guards, then the
+route's own. Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no
+identity; `check` returns `Result<(), Rejection>`), apply with
+`#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
 
 ### Rate limiting
 

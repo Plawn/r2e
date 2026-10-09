@@ -4,7 +4,6 @@
 //! extraction is skipped entirely, guards still run (with `identity: None`),
 //! and an `Option<T>` identity parameter makes the route adaptive.
 
-use r2e_core::http::response::Response;
 use r2e_core::http::StatusCode;
 use r2e_core::prelude::*;
 use r2e_core::{Guard, GuardContext};
@@ -136,7 +135,7 @@ impl Guard<Subject> for AnonProbeReady {
     fn check(
         &self,
         ctx: &GuardContext<'_, Subject>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let seen = if ctx.identity.is_some() {
             "some"
         } else {

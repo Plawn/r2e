@@ -136,7 +136,7 @@ fn generate_invoke_method(
                         #krate::Guard::check(&self.#field, &__ctrl_gctx).await
                     {
                         return ::core::result::Result::Err(
-                            #mcp::__macro_support::guard_response_to_error(__resp).await,
+                            #mcp::__macro_support::guard_rejection_to_error(__resp),
                         );
                     }
                 }
@@ -151,7 +151,7 @@ fn generate_invoke_method(
                         #krate::Guard::check(&self.#field, &__member_gctx).await
                     {
                         return ::core::result::Result::Err(
-                            #mcp::__macro_support::guard_response_to_error(__resp).await,
+                            #mcp::__macro_support::guard_rejection_to_error(__resp),
                         );
                     }
                 }

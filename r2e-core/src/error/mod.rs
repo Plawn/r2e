@@ -1,6 +1,8 @@
+pub mod projection;
 mod rejection;
 mod schema;
 
+pub use projection::{project_default, ErrorProjector};
 pub use rejection::{Rejection, RejectionKind};
 pub use schema::ErrorSchema;
 

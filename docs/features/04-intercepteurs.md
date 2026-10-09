@@ -52,10 +52,10 @@ Every built-in effect is a spec type applied via `#[intercept(...)]` (or, for ra
 Interceptors are applied in a fixed order, from outermost to innermost:
 
 ```
-Pre-auth middleware level (before JWT extraction):
+Entry fn, before identity extraction (no middleware layer):
   → pre_guard (PreRateLimit::global, PreRateLimit::per_ip, custom PreAuthGuard)
 
-Handler level (after extraction, before body):
+Handler level (after identity, before parameters and body):
   → guard (RateLimit::per_user, custom Guard)
   → roles — short-circuit 403
 

@@ -1,5 +1,9 @@
 pub use axum::extract::{
-    rejection::{FormRejection, PathRejection, QueryRejection},
+    rejection::{
+        BytesRejection, ExtensionRejection, FormRejection, MatchedPathRejection,
+        NestedPathRejection, PathRejection, QueryRejection, RawFormRejection,
+        RawPathParamsRejection, StringRejection,
+    },
     ConnectInfo, DefaultBodyLimit, FromRef, FromRequest, FromRequestParts, MatchedPath,
     OptionalFromRequest, OptionalFromRequestParts, OriginalUri, Path, Query, RawPathParams,
     Request, State,
@@ -14,6 +18,10 @@ pub use axum::Form;
 /// [`axum_compat`](crate::axum_compat). `Json<T>` is R2E's own extractor, so
 /// its rejection lives with it ([`crate::json::JsonRejection`]).
 pub mod rejection {
-    pub use super::{FormRejection, PathRejection, QueryRejection};
+    pub use super::{
+        BytesRejection, ExtensionRejection, FormRejection, MatchedPathRejection,
+        NestedPathRejection, PathRejection, QueryRejection, RawFormRejection,
+        RawPathParamsRejection, StringRejection,
+    };
     pub use crate::json::JsonRejection;
 }

@@ -268,20 +268,20 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
                 __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
             }
 
-            // Named bridge point (plan §5.3b): the generated extractor the HTTP
-            // backend invokes per request. Its *fields* go through
-            // `FromRequestPartsVia`; this outer impl is the backend's contract.
-            impl<__R2eS> #krate::http::extract::FromRequestParts<__R2eS> for #data_name<()>
+            // Named bridge point (plan §5.3b): the generated request-scoped
+            // extraction the entry function runs once per request. Its
+            // *fields* go through `FromRequestPartsVia`; this outer impl is the
+            // entry function's contract — every failure is a typed `Rejection`
+            // the route projects through its error envelope.
+            impl<__R2eS> #krate::web::extract::RequestData<__R2eS> for #data_name<()>
             where
                 __R2eS: Send + Sync,
             {
-                type Rejection = ::std::convert::Infallible;
-
                 #[inline(always)]
-                async fn from_request_parts(
+                async fn extract(
                     _parts: &mut #krate::http::header::Parts,
                     _state: &__R2eS,
-                ) -> Result<Self, Self::Rejection> {
+                ) -> Result<Self, #krate::Rejection> {
                     Ok(#data_name {
                         __r2e_markers: ::std::marker::PhantomData,
                     })
@@ -308,7 +308,7 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
                 let #field_name = <#field_ty as #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
                     ::from_request_parts_via(__parts, __state)
                     .await
-                    .map_err(#krate::http::response::IntoResponse::into_response)?;
+                    .map_err(::core::convert::Into::into)?;
             }
         })
         .collect();
@@ -340,18 +340,16 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
         // allowed `non_snake_case` for must not re-trip it as a local binding
         // (task #985).
         #[allow(deprecated, non_snake_case)]
-        impl<__R2eS, #(#marker_idents),*> #krate::http::extract::FromRequestParts<__R2eS>
+        impl<__R2eS, #(#marker_idents),*> #krate::web::extract::RequestData<__R2eS>
             for #data_name<(#(#marker_idents,)*)>
         where
             __R2eS: Send + Sync,
             #(#via_bounds,)*
         {
-            type Rejection = #krate::http::response::Response;
-
-            async fn from_request_parts(
+            async fn extract(
                 __parts: &mut #krate::http::header::Parts,
                 __state: &__R2eS,
-            ) -> Result<Self, Self::Rejection> {
+            ) -> Result<Self, #krate::Rejection> {
                 #(#extractions)*
                 Ok(Self {
                     #(#field_inits,)*

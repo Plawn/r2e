@@ -15,7 +15,7 @@ impl<I: Identity> Guard<I> for RequireApiKey {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             if ctx.headers.contains_key(self.0) {
                 Ok(())

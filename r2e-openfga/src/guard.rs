@@ -4,7 +4,7 @@ use crate::error::OpenFgaError;
 use crate::registry::OpenFgaRegistry;
 use r2e_core::beans::BeanContext;
 use r2e_core::decorators::guards::{Guard, GuardContext, Identity};
-use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, Response};
 use r2e_core::{Rejection, RejectionKind};
 use r2e_core::type_list::{TCons, TNil};
 use r2e_core::{DecoratorSpec, PathParam};
@@ -370,7 +370,7 @@ impl<I: Identity> Guard<I> for FgaGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), r2e_core::http::Response>> + Send {
+    ) -> impl std::future::Future<Output = Result<(), r2e_core::Rejection>> + Send {
         let registry = &self.registry;
         let relation = self.check.relation;
         let object_result = self.check.resolve_object(ctx);
@@ -379,15 +379,7 @@ impl<I: Identity> Guard<I> for FgaGuard {
         let sub = ctx.identity.map(|i| i.sub().to_string());
 
         async move {
-            let sub = sub.ok_or_else(|| {
-                (
-                    r2e_core::http::StatusCode::UNAUTHORIZED,
-                    r2e_core::http::Json(serde_json::json!({
-                        "error": "Authentication required for authorization check"
-                    })),
-                )
-                    .into_response()
-            })?;
+            let sub = sub.ok_or_else(|| Rejection::from(FgaDenied::NoIdentity))?;
 
             // Same injection guard as the object side: `sub` is normally
             // IdP-issued, but if a deployment maps a caller-influenced claim
@@ -399,25 +391,13 @@ impl<I: Identity> Guard<I> for FgaGuard {
                     sub = %sub,
                     "rejecting FGA check: identity subject contains a reserved character (':', '#', '*')"
                 );
-                return Err((
-                    r2e_core::http::StatusCode::FORBIDDEN,
-                    r2e_core::http::Json(serde_json::json!({
-                        "error": "Access denied"
-                    })),
-                )
-                    .into_response());
+                return Err(FgaDenied::Denied.into());
             }
             let user = format!("user:{}", sub);
 
             let object = object_result.map_err(|e| {
                 tracing::warn!(error = %e, "failed to resolve object for FGA check");
-                (
-                    r2e_core::http::StatusCode::BAD_REQUEST,
-                    r2e_core::http::Json(serde_json::json!({
-                        "error": format!("Failed to resolve object: {}", e)
-                    })),
-                )
-                    .into_response()
+                Rejection::from(FgaDenied::ObjectResolution(e.to_string()))
             })?;
 
             tracing::debug!(
@@ -436,13 +416,7 @@ impl<I: Identity> Guard<I> for FgaGuard {
                         object = %object,
                         "authorization denied"
                     );
-                    Err((
-                        r2e_core::http::StatusCode::FORBIDDEN,
-                        r2e_core::http::Json(serde_json::json!({
-                            "error": "Access denied"
-                        })),
-                    )
-                        .into_response())
+                    Err(FgaDenied::Denied.into())
                 }
                 Err(e) => {
                     tracing::error!(
@@ -452,13 +426,7 @@ impl<I: Identity> Guard<I> for FgaGuard {
                         object = %object,
                         "authorization check failed"
                     );
-                    Err((
-                        r2e_core::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        r2e_core::http::Json(serde_json::json!({
-                            "error": "Authorization check failed"
-                        })),
-                    )
-                        .into_response())
+                    Err(FgaDenied::CheckFailed.into())
                 }
             }
         }

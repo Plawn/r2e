@@ -406,7 +406,7 @@ async fn built_guard_forbids_when_tuple_absent() {
     };
 
     let response = guard.check(&ctx).await.expect_err("should be denied");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -437,7 +437,7 @@ async fn built_guard_unauthorized_without_identity() {
     };
 
     let response = guard.check(&ctx).await.expect_err("should be unauthorized");
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status, StatusCode::UNAUTHORIZED);
 }
 
 /// A crafted subject must never be interpolated into `user:{sub}`:
@@ -477,7 +477,7 @@ async fn built_guard_forbids_subject_with_reserved_characters() {
         };
 
         let response = guard.check(&ctx).await.expect_err("must be rejected");
-        assert_eq!(response.status(), StatusCode::FORBIDDEN, "sub = {sub:?}");
+        assert_eq!(response.status, StatusCode::FORBIDDEN, "sub = {sub:?}");
     }
 }
 
