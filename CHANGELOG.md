@@ -65,8 +65,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (the JAX-RS/Quarkus `ExceptionMapper` equivalent), provided as the
   `ErrorProjector` bean (`r2e_core::ErrorProjector`, `of::<E>()` /
   `project(rejection)`). Routes whose return type declares no envelope, SSE
-  and WS routes, and (from phase P4) 404/405/413/panic responses render
-  through it; without the bean the default is `HttpError`, byte-equal to 0.4.
+  and WS routes, and the framework's own responses (phase P4: the catch-panic
+  500, the router's 404 and 405, the `Json` extractor's 413) render through
+  it; without the bean the default is `HttpError`, byte-equal to 0.4.
+- **Framework 404/405/panic through the application envelope** (task #1072,
+  phase P4). `build_inner` reads the `ErrorProjector` bean once
+  (`ErrorProjector::default()` = `HttpError`) and hands it to the two
+  catch-panic slots (`CatchPanicLayer::with(hook, projector)`, the 500 being
+  `Rejection::internal("Internal server error")` projected) and to the
+  router: a framework `fallback` answering `Rejection::not_found("Not found")`
+  — installed only when nothing else claimed the fallback, so a controller
+  `#[fallback]`, a merged `Router::fallback(..)` and the `r2e-static` SPA
+  fallback keep winning — and a `method_not_allowed_fallback` answering the new
+  `RejectionKind::MethodNotAllowed` (405; `Allow` kept). `E::status_of` applies
+  to all three. New: `r2e_http::routing::has_custom_fallback(&Router)` (reads
+  the bit axum only exposes through `Router`'s `Debug` output; pinned by
+  `r2e-http/tests/routing.rs`). Tests: `r2e-core/tests/http/fallback.rs`,
+  `tests/http/panic.rs`.
 - **OpenAPI error responses from the route's real failures** (task #1072,
   phase P2). `RouteInfo` gains `rejection_kinds: Vec<RejectionKind>` (inferred
   by `#[routes]`: body extractor kinds, `Path`/`Query`/`Form`/`#[derive(Params)]`
@@ -179,6 +194,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `RejectionKind`. Only code that builds `ParamError` by struct literal is
   affected.
 - `MultipartError` now implements `std::error::Error`.
+- **Unknown routes and wrong methods answer JSON** (task #1072, phase P4). An
+  app without a fallback of its own used to get axum's empty-bodied 404 and
+  bodiless 405; they are now `404 {"error":"Not found"}` and `405
+  {"error":"Method not allowed"}` with `content-type: application/json` (or
+  the `error_projection::<E>()` envelope). `CatchPanicLayer::with_hook(hook)`
+  is replaced by `CatchPanicLayer::with(hook, projector)` and
+  `catch_panic_layer_with` takes the projector too.
 - **`r2e-executor`: the pool drains after the HTTP drain, not before it**
   (task #1071). The `Executor` plugin's graceful drain moved from
   `on_shutdown_async` (step 2) to `on_shutdown_after_drain_async` (step 5).

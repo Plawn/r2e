@@ -219,16 +219,62 @@ pub fn default_cors() -> CorsLayer {
         .allow_headers(Any)
 }
 
-/// Returns the layer that converts panics into JSON 500 responses, logs one
-/// structured `error` event, and invokes the application hook from
+/// Returns the layer that converts panics into 500 responses in the
+/// application's error envelope (`projector`), logs one structured `error`
+/// event, and invokes the application hook from
 /// [`AppBuilder::on_panic`](crate::builder::AppBuilder::on_panic).
 ///
 /// Installed by `build_inner` alone (twice — see [`crate::runtime::panic`]
 /// for why the primary slot is the *innermost* one); there is no plugin for it.
 pub fn catch_panic_layer_with(
     hook: Option<crate::runtime::panic::PanicHook>,
+    projector: crate::error::ErrorProjector,
 ) -> crate::runtime::panic::CatchPanicLayer {
-    crate::runtime::panic::CatchPanicLayer::with_hook(hook)
+    crate::runtime::panic::CatchPanicLayer::with(hook, projector)
+}
+
+/// Install the framework's 404 and 405 responders on a fully assembled
+/// router, both answering through the application's error envelope.
+///
+/// - **404** — only when nothing else claimed the router fallback
+///   ([`has_custom_fallback`](crate::http::routing::has_custom_fallback)):
+///   a controller `#[fallback]`, a router merged with its own `.fallback(..)`,
+///   or a plugin such as the SPA fallback keep winning. Without one, axum
+///   would answer an empty-bodied 404; R2E answers `Rejection::not_found`
+///   projected through the envelope (`{"error":"Not found"}` by default).
+/// - **405** — the per-route method-not-allowed fallback, for every route
+///   still on axum's default (a route's own custom fallback is kept). axum
+///   adds the `Allow` header afterwards. `RejectionKind::MethodNotAllowed`
+///   projected through the envelope (`{"error":"Method not allowed"}` by
+///   default) replaces axum's bare, bodiless 405.
+///
+/// Must run after every route, controller fallback and Routes-stage plugin
+/// router has been merged: routes added later would miss the 405 responder,
+/// and a fallback merged later would panic against the one installed here.
+pub fn framework_fallbacks(
+    app: crate::http::Router,
+    projector: &crate::error::ErrorProjector,
+) -> crate::http::Router {
+    use crate::error::{Rejection, RejectionKind};
+
+    let mut app = app;
+    if !crate::http::routing::has_custom_fallback(&app) {
+        let projector = projector.clone();
+        app = app.fallback(move || {
+            let projector = projector.clone();
+            async move { projector.project(Rejection::not_found("Not found")) }
+        });
+    }
+    let projector = projector.clone();
+    app.method_not_allowed_fallback(move || {
+        let projector = projector.clone();
+        async move {
+            projector.project(Rejection::new(
+                RejectionKind::MethodNotAllowed,
+                "Method not allowed",
+            ))
+        }
+    })
 }
 
 /// Wrap a fully-built router in pre-routing trailing-slash normalization.

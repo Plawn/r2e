@@ -99,6 +99,69 @@ async fn a_panicking_handler_answers_the_json_500_contract() {
     );
 }
 
+/// An application envelope: the `HttpError` body plus a marker header, and
+/// `Internal` remapped to 503 to show `status_of` governs the panic 500 too.
+#[derive(Debug)]
+struct Envelope(r2e_core::HttpError);
+
+impl From<r2e_core::Rejection> for Envelope {
+    fn from(r: r2e_core::Rejection) -> Self {
+        Self(r2e_core::HttpError::from(r))
+    }
+}
+
+impl r2e_core::http::response::IntoHttpResponse for Envelope {
+    fn into_http_response(self) -> Response {
+        let mut resp = self.0.into_http_response();
+        resp.headers_mut().insert(
+            "x-envelope",
+            r2e_core::http::header::HeaderValue::from_static("app"),
+        );
+        resp
+    }
+}
+
+r2e_core::http::impl_into_response!(Envelope);
+
+impl r2e_core::ErrorSchema for Envelope {
+    fn status_of(kind: r2e_core::RejectionKind) -> StatusCode {
+        match kind {
+            r2e_core::RejectionKind::Internal => StatusCode::SERVICE_UNAVAILABLE,
+            k => k.default_status(),
+        }
+    }
+
+    fn body_schema() -> Option<(String, serde_json::Value)> {
+        r2e_core::HttpError::body_schema()
+    }
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_panicking_handler_answers_in_the_application_envelope() {
+    let router = AppBuilder::new()
+        .override_config(R2eConfig::from_yaml_str(NO_CONFIG).expect("valid yaml"))
+        .load_config::<()>()
+        .error_projection::<Envelope>()
+        .build_state()
+        .await
+        .merge_router(routes())
+        .build();
+
+    let response = raw_get_with(router, "/panic/7", &[]).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-envelope")
+            .and_then(|v| v.to_str().ok()),
+        Some("app")
+    );
+    assert_eq!(
+        body_string(response).await,
+        r#"{"error":"Internal server error"}"#
+    );
+}
+
 #[r2e_core::test(flavor = "current_thread")]
 async fn one_error_line_carries_the_request_id_the_message_and_the_route() {
     let (capture, response) = drive("/panic/7", None).await;

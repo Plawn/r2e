@@ -68,6 +68,9 @@ pub enum RejectionKind {
     // ── resource ──
     /// The target does not exist (404).
     NotFound,
+    /// The path exists but not for this method (405) — the router's
+    /// method-not-allowed response; `Allow` rides on the response.
+    MethodNotAllowed,
     /// The request conflicts with the current state (409).
     Conflict,
     /// A rate limit was hit — `Retry-After` in [`Rejection::headers`] when
@@ -111,6 +114,7 @@ impl RejectionKind {
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::Conflict => StatusCode::CONFLICT,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal | Self::Opaque => StatusCode::INTERNAL_SERVER_ERROR,
@@ -134,6 +138,7 @@ impl RejectionKind {
             StatusCode::UNAUTHORIZED => Self::Unauthenticated,
             StatusCode::FORBIDDEN => Self::Forbidden,
             StatusCode::NOT_FOUND => Self::NotFound,
+            StatusCode::METHOD_NOT_ALLOWED => Self::MethodNotAllowed,
             StatusCode::CONFLICT => Self::Conflict,
             StatusCode::TOO_MANY_REQUESTS => Self::RateLimited,
             StatusCode::SERVICE_UNAVAILABLE => Self::Unavailable,
@@ -161,6 +166,7 @@ impl RejectionKind {
         Self::Unauthenticated,
         Self::Forbidden,
         Self::NotFound,
+        Self::MethodNotAllowed,
         Self::Conflict,
         Self::RateLimited,
         Self::Internal,

@@ -800,7 +800,15 @@ let _resp = projector.project(Rejection::not_found("gone"));
 
 `error_projection::<E>()` provides an `ErrorProjector` bean (`project(rejection)
 -> Response`); plugins and hand-written handlers can inject it to render a
-`Rejection` with the app's envelope. The runtime order on every route is fixed:
+`Rejection` with the app's envelope. The framework's own responses go through
+it too: a panicking handler (500, kind `Internal`), an unknown route (404,
+`NotFound` — unless the app installed a fallback of its own: a controller
+`#[fallback]`, a merged `Router::fallback(..)`, the static SPA fallback), a
+known path with the wrong method (405, `MethodNotAllowed`, `Allow` kept) and
+an oversized body (413, `PayloadTooLarge`). With the default envelope these
+are `{"error":"Not found"}`, `{"error":"Method not allowed"}`, and so on.
+`E::status_of` applies to them like to any other kind. The runtime order on
+every route is fixed:
 pre-auth guards → identity + `#[inject(request)]` fields → guards → path/query/
 header parameters → body → garde validation → managed acquire → interceptors →
 handler → managed finalize. A failure at any step is projected once, through
@@ -877,7 +885,8 @@ For a one-off, convert at the call site instead:
 ### Panics
 
 Panic capture is always on — no plugin, no opt-in. A panicking handler answers
-`500 {"error":"Internal server error"}` and R2E emits **one** `error` event on
+`500 {"error":"Internal server error"}` (`Rejection::internal` through the
+app-level envelope, see above) and R2E emits **one** `error` event on
 target `r2e::panic` with `panic_message` and the matched `route`. The layer sits
 *below* the tracing and metrics layers, so the event is inside the request span
 (it carries `request_id`) and the request still gets its `request completed`

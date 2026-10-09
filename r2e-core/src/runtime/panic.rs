@@ -1,7 +1,8 @@
 //! Panic capture: the report/hook contract shared by every execution surface
 //! ([`PanicReport`], [`PanicOrigin`], [`PanicHook`]), plus the HTTP layer that
-//! turns a panicking handler into a JSON 500 **and** into something an
-//! operator can see.
+//! turns a panicking handler into a 500 in the application's error envelope
+//! ([`ErrorProjector`]; `{"error":"Internal server error"}` by default)
+//! **and** into something an operator can see.
 //!
 //! The HTTP catch-panic layer lives here; the executor pool (and, through it,
 //! `#[scheduled]` ticks) catches its own unwinds in `r2e-executor` and reports
@@ -44,10 +45,10 @@ use std::task::{Context, Poll};
 use pin_project_lite::pin_project;
 use tower::{Layer, Service};
 
+use crate::error::{ErrorProjector, Rejection};
 use crate::http::extract::MatchedPath;
 use crate::http::header::HttpRequest as Request;
 use crate::http::response::Response;
-use crate::http::StatusCode;
 
 /// `tracing` target of the panic event.
 pub const PANIC_TARGET: &str = "r2e::panic";
@@ -208,15 +209,6 @@ pub fn panic_message(payload: &(dyn Any + Send)) -> &str {
     }
 }
 
-/// The JSON 500 a caught panic answers with. Byte-identical to what the
-/// previous `tower_http` handler produced — the client contract is unchanged.
-fn panic_response() -> Response {
-    crate::http::response::static_json(
-        StatusCode::INTERNAL_SERVER_ERROR,
-        r#"{"error":"Internal server error"}"#,
-    )
-}
-
 /// Emit the one [`PANIC_TARGET`] error line for a caught panic and run the
 /// hook, contained — the reporting seam every catching surface goes through.
 ///
@@ -290,10 +282,17 @@ pub fn report_caught_panic(
 }
 
 /// Report the panic (line + hook) and build the 500 — the HTTP catch's exit.
+///
+/// The 500 is `Rejection::internal("Internal server error")` projected through
+/// the application envelope: with the default [`ErrorProjector`] that is the
+/// same `{"error":"Internal server error"}` JSON body the layer has always
+/// produced — the client contract is unchanged unless the app installed an
+/// envelope of its own.
 fn handle_panic(
     payload: Box<dyn Any + Send>,
     route: Option<&MatchedPath>,
     hook: Option<&PanicHook>,
+    projector: &ErrorProjector,
 ) -> Response {
     report_caught_panic(
         payload.as_ref(),
@@ -302,24 +301,27 @@ fn handle_panic(
         },
         hook,
     );
-    panic_response()
+    projector.project(Rejection::internal("Internal server error"))
 }
 
 /// [`Layer`] installing [`CatchPanic`].
 #[derive(Clone, Default)]
 pub struct CatchPanicLayer {
     hook: Option<PanicHook>,
+    projector: ErrorProjector,
 }
 
 impl CatchPanicLayer {
-    /// The layer with no application hook: log line + JSON 500.
+    /// The layer with no application hook and the default envelope: log line
+    /// + `{"error":"Internal server error"}` 500.
     pub fn new() -> Self {
-        Self { hook: None }
+        Self::default()
     }
 
-    /// The layer with an application hook invoked once per caught panic.
-    pub fn with_hook(hook: Option<PanicHook>) -> Self {
-        Self { hook }
+    /// The layer with an optional application hook invoked once per caught
+    /// panic, answering through `projector`'s envelope.
+    pub fn with(hook: Option<PanicHook>, projector: ErrorProjector) -> Self {
+        Self { hook, projector }
     }
 }
 
@@ -330,16 +332,19 @@ impl<S> Layer<S> for CatchPanicLayer {
         CatchPanic {
             inner,
             hook: self.hook.clone(),
+            projector: self.projector.clone(),
         }
     }
 }
 
 /// Catches an unwind from the inner service — raised synchronously in `call`
-/// or later while polling its future — and answers a JSON 500.
+/// or later while polling its future — and answers a 500 in the application's
+/// error envelope.
 #[derive(Clone)]
 pub struct CatchPanic<S> {
     inner: S,
     hook: Option<PanicHook>,
+    projector: ErrorProjector,
 }
 
 impl<S, ReqBody> Service<Request<ReqBody>> for CatchPanic<S>
@@ -366,12 +371,19 @@ where
                 response: None,
                 route,
                 hook: self.hook.clone(),
+                projector: Some(self.projector.clone()),
             },
             Err(payload) => CatchPanicFuture {
                 inner: None,
-                response: Some(handle_panic(payload, route.as_ref(), self.hook.as_ref())),
+                response: Some(handle_panic(
+                    payload,
+                    route.as_ref(),
+                    self.hook.as_ref(),
+                    &self.projector,
+                )),
                 route: None,
                 hook: None,
+                projector: None,
             },
         }
     }
@@ -389,6 +401,8 @@ pin_project! {
         response: Option<Response>,
         route: Option<MatchedPath>,
         hook: Option<PanicHook>,
+        // `None` only on the already-answered path (the response is built).
+        projector: Option<ErrorProjector>,
     }
 }
 
@@ -417,10 +431,15 @@ where
                 // mid-poll, so its state is unknown and it must never be
                 // polled again.
                 this.inner.set(None);
+                let projector = this
+                    .projector
+                    .as_ref()
+                    .expect("CatchPanicFuture: projector present while the inner future is");
                 Poll::Ready(Ok(handle_panic(
                     payload,
                     this.route.as_ref(),
                     this.hook.as_ref(),
+                    projector,
                 )))
             }
         }

@@ -169,8 +169,10 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// handler, or a `Result<T, E2>` whose `E2` is not `From<Rejection> +
     /// ErrorSchema`) projects its request failures — extractor rejections,
     /// identity, guards, validation, managed resources — through `E` instead
-    /// of the default [`HttpError`](crate::HttpError). Framework-level
-    /// responses (404/405/413/panic) follow in a later phase.
+    /// of the default [`HttpError`](crate::HttpError). So do the framework's
+    /// own responses: the catch-panic 500, the router's 404 (unless the app
+    /// installed a fallback of its own) and 405, and the `Json` extractor's
+    /// 413 — like a JAX-RS `ExceptionMapper`, one mapping for the whole app.
     ///
     /// Provides an [`ErrorProjector`](crate::ErrorProjector) bean: it appears
     /// in the state like any provided bean and may be injected. One per
