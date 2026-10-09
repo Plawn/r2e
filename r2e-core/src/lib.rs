@@ -72,7 +72,9 @@ pub use di::lazy::Lazy;
 pub use di::meta::MetaRegistry;
 pub use di::module::FeatureModule;
 pub use di::scheduled_source::ScheduledSource;
-pub use error::{ErrorProjector, ErrorSchema, HttpError, HttpErrorExt, Rejection, RejectionKind};
+pub use error::{
+    ErrorProjector, ErrorSchema, ErrorSchemaInfo, HttpError, HttpErrorExt, Rejection, RejectionKind,
+};
 pub use plugin::{
     DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
     PluginInstall, PluginSetupContext, RoutesContext,

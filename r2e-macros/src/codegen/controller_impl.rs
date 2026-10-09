@@ -291,8 +291,9 @@ fn generate_route_metadata(
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
 
             let params_expr = params_expr(&rm.fn_item.sig, None, &krate);
-            let (body_type_token, body_schema_token, body_content_type_token) =
-                extract_body_info(rm);
+            let body = extract_body_info(rm);
+            let (body_type_token, body_schema_token, body_content_type_token) = body.tokens();
+            let body_probe = body.probe_expr();
             let (response_type_token, response_schema_token) = extract_response_info(rm);
             let response_unmapped_token = response_unmapped_token(rm);
 
@@ -316,70 +317,269 @@ fn generate_route_metadata(
             let body_required = detect_body_required(rm);
 
             let has_roles = !role_strs.is_empty();
-            let has_identity_param = rm.identity_param.is_some();
-            let has_guards = !rm.decorators.guard_fns.is_empty()
-                || (ctrl_applies && !ctrl.guard_fns.is_empty());
-            let has_auth = has_auth_expr(
-                rm.decorators.anonymous,
+            let extracted = extracted_params(rm);
+            let static_kinds = static_rejection_kinds(
+                def,
+                &rm.decorators,
+                rm.identity_param.as_ref(),
                 has_roles,
-                has_identity_param,
-                has_guards,
+                &extracted,
+                body.as_ref(),
+            );
+            let kinds_expr = rejection_kinds_expr(
+                &static_kinds,
+                rm.decorators.anonymous,
+                &extracted,
                 meta_mod,
             );
+            let error_schema =
+                super::handlers::Projection::for_signature(&rm.fn_item.sig).schema_expr(&krate);
 
             quote! {
-                #krate::di::meta::RouteInfo {
-                    path: match #meta_mod::PATH_PREFIX {
-                        Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
-                        None => #route_path_str.to_string(),
-                    },
-                    method: #method.to_string(),
-                    operation_id: #op_id.to_string(),
-                    summary: #summary_token,
-                    description: #description_token,
-                    request_body_type: #body_type_token,
-                    request_body_schema: #body_schema_token,
-                    request_body_content_type: #body_content_type_token,
-                    request_body_required: #body_required,
-                    response_type: #response_type_token,
-                    response_schema: #response_schema_token,
-                    response_status: #status_code,
-                    response_unmapped: #response_unmapped_token,
-                    params: #params_expr,
-                    roles: vec![#(#roles),*],
-                    tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
-                    deprecated: #deprecated,
-                    has_auth: #has_auth,
+                {
+                    let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
+                    let __body: Option<#krate::di::meta::__BodyProbeResult> = #body_probe;
+                    let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
+                    #krate::di::meta::RouteInfo {
+                        path: match #meta_mod::PATH_PREFIX {
+                            Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
+                            None => #route_path_str.to_string(),
+                        },
+                        method: #method.to_string(),
+                        operation_id: #op_id.to_string(),
+                        summary: #summary_token,
+                        description: #description_token,
+                        request_body_type: #body_type_token,
+                        request_body_schema: #body_schema_token,
+                        request_body_content_type: #body_content_type_token,
+                        request_body_required: #body_required,
+                        response_type: #response_type_token,
+                        response_schema: #response_schema_token,
+                        response_status: #status_code,
+                        response_unmapped: #response_unmapped_token,
+                        params: __params,
+                        roles: vec![#(#roles),*],
+                        tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
+                        deprecated: #deprecated,
+                        rejection_kinds: __kinds,
+                        error_schema: #error_schema,
+                    }
                 }
             }
         })
         .collect()
 }
 
-/// The `RouteInfo.has_auth` expression for a route.
+/// The handler's request-extracted parameters: every typed parameter except
+/// `#[managed]` ones and the identity — the same set the entry function
+/// extracts (`handlers.rs`), whose last element is the body position.
+fn extracted_params(rm: &crate::model::types::RouteMethod) -> Vec<syn::PatType> {
+    let managed: std::collections::HashSet<usize> =
+        rm.managed_params.iter().map(|mp| mp.index).collect();
+    let identity = rm.identity_param.as_ref().map(|p| p.index);
+    rm.fn_item
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Typed(pt) => Some(pt),
+            syn::FnArg::Receiver(_) => None,
+        })
+        .enumerate()
+        .filter(|(i, _)| !managed.contains(i) && Some(*i) != identity)
+        .map(|(_, pt)| pt.clone())
+        .collect()
+}
+
+/// Whether a guard expression names a rate-limit guard (`RateLimit::per_user(..)`,
+/// `PreRateLimit`, `ConfiguredRateLimit`, …): its only failure is `RateLimited`.
+fn is_rate_limit_guard(expr: &syn::Expr) -> bool {
+    super::decorators::spec_type_of(expr)
+        .ok()
+        .and_then(|(path, _)| path.segments.last().map(|s| s.ident.to_string()))
+        .is_some_and(|name| name.contains("RateLimit"))
+}
+
+/// Rejection kinds known at macro time, as `RejectionKind` variant names.
 ///
-/// Normal routes: roles, an identity param, guard fns, or the struct-level
-/// identity all mark the operation as secured. `#[anonymous]` routes bypass
-/// the struct identity, cannot carry roles or a *required* identity param
-/// (rejected at parse time), and an *optional* identity param never rejects —
-/// so only explicit guards (which may still reject, e.g. an API-key check)
-/// keep the flag on.
+/// Inference table (see `plans/error-projection.md` §6): the body extractor's
+/// failures; `Path<T>` → `InvalidPath`, `Query<T>` → `InvalidQuery`, `Form<T>`
+/// → `InvalidForm` (+ media-type/size failures), raw `Bytes`/`String` bodies →
+/// read failures; a **required** identity parameter → `Unauthenticated`;
+/// roles → `Forbidden`; each guard → `Forbidden`, or `RateLimited` when it is
+/// a rate-limit guard; and `Internal` always (handler, managed resources,
+/// anything the framework cannot type). Controller-level guards fold in for
+/// non-`#[anonymous]` routes only (the same rule as their execution);
+/// pre-auth guards run on every route.
 ///
-/// Call sites fold controller-level (impl-block) roles/guards into
-/// `has_roles`/`has_guards` for non-anonymous endpoints only — anonymous
-/// endpoints skip the controller's post-auth checks, so controller decorators
-/// never turn their flag back on.
-fn has_auth_expr(
-    anonymous: bool,
+/// Runtime-only facts (struct identity, `#[derive(Params)]` locations, garde
+/// validation, a custom body extractor) are added by [`rejection_kinds_expr`].
+fn static_rejection_kinds(
+    def: &RoutesImplDef,
+    decorators: &crate::model::types::MethodDecorators,
+    identity_param: Option<&crate::model::types::IdentityParam>,
     has_roles: bool,
-    has_identity_param: bool,
-    has_guards: bool,
+    extracted: &[syn::PatType],
+    body: Option<&BodyExtractor>,
+) -> Vec<&'static str> {
+    let mut kinds: Vec<&'static str> = Vec::new();
+
+    match body {
+        Some(BodyExtractor::Json { .. }) => kinds.extend([
+            "MissingContentType",
+            "PayloadTooLarge",
+            "BodyRead",
+            "MalformedBody",
+            "InvalidBody",
+        ]),
+        Some(BodyExtractor::TypedMultipart { .. } | BodyExtractor::RawMultipart) => {
+            kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "MalformedBody"]);
+        }
+        // A custom extractor declares its kinds through `RequestBodySchema`,
+        // read at runtime by `rejection_kinds_expr` (`__body`).
+        Some(BodyExtractor::Custom { .. }) | None => {}
+    }
+
+    let n = extracted.len();
+    for (pos, pt) in extracted.iter().enumerate() {
+        let last = pos + 1 == n;
+        if type_last_segment_is(&pt.ty, "Path") {
+            kinds.push("InvalidPath");
+        } else if type_last_segment_is(&pt.ty, "Query") {
+            kinds.push("InvalidQuery");
+        } else if last && type_last_segment_is(&pt.ty, "Form") {
+            kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "InvalidForm"]);
+        } else if last && type_last_segment_is(&pt.ty, "Bytes") {
+            kinds.extend(["PayloadTooLarge", "BodyRead"]);
+        } else if last && type_last_segment_is(&pt.ty, "String") {
+            kinds.extend(["PayloadTooLarge", "BodyRead", "MalformedBody"]);
+        }
+    }
+
+    if identity_param.is_some_and(|p| !p.is_optional) {
+        kinds.push("Unauthenticated");
+    }
+    if has_roles {
+        kinds.push("Forbidden");
+    }
+
+    let ctrl = &def.controller_decorators;
+    let post_auth = decorators.guard_fns.iter().chain(
+        (!decorators.anonymous)
+            .then_some(ctrl.guard_fns.iter())
+            .into_iter()
+            .flatten(),
+    );
+    let pre_auth = decorators
+        .pre_auth_guard_fns
+        .iter()
+        .chain(ctrl.pre_auth_guard_fns.iter());
+    for guard in post_auth.chain(pre_auth) {
+        kinds.push(if is_rate_limit_guard(guard) {
+            "RateLimited"
+        } else {
+            "Forbidden"
+        });
+    }
+
+    kinds.push("Internal");
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
+}
+
+/// The type garde validation runs on for a handler parameter: the inner `T`
+/// of a `Json<T>` / `Query<T>` / `Path<T>` / `Form<T>` wrapper (the entry
+/// function validates `.0`), else the parameter type itself.
+fn validation_target_type(ty: &syn::Type) -> syn::Type {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident = segment.ident.to_string();
+            if matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form") {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return inner.clone();
+                    }
+                }
+            }
+        }
+    }
+    ty.clone()
+}
+
+/// The `RouteInfo::rejection_kinds` expression: the static kinds, plus what
+/// only the compiled program knows — the struct-level identity
+/// (`HAS_STRUCT_IDENTITY`, skipped by `#[anonymous]`), the locations of
+/// `#[derive(Params)]` fields (`__params`, bound by the caller), whether a
+/// parameter type implements `garde::Validate` (autoref probe, the same
+/// decision `__maybe_validate` makes), and the kinds a custom body extractor
+/// declares (`__body`, bound by the caller). Deduplicated, order-insensitive.
+fn rejection_kinds_expr(
+    static_kinds: &[&str],
+    anonymous: bool,
+    extracted: &[syn::PatType],
     meta_mod: &syn::Ident,
 ) -> TokenStream {
-    if anonymous {
-        quote! { #has_guards }
+    let krate = r2e_core_path();
+    let statics: Vec<TokenStream> = static_kinds
+        .iter()
+        .map(|k| {
+            let ident = format_ident!("{}", k);
+            quote! { #krate::RejectionKind::#ident }
+        })
+        .collect();
+    let struct_identity = if anonymous {
+        quote! { false }
     } else {
-        quote! { #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY }
+        quote! { #meta_mod::HAS_STRUCT_IDENTITY }
+    };
+    let validate_probes: Vec<TokenStream> = extracted
+        .iter()
+        .map(|pt| {
+            let ty = validation_target_type(&pt.ty);
+            quote! {
+                {
+                    struct __ValidateProbe<T>(::core::marker::PhantomData<T>);
+                    trait __NoValidate {
+                        fn __validates(&self) -> bool { false }
+                    }
+                    impl<T> __NoValidate for &__ValidateProbe<T> {}
+                    impl<T: #krate::web::validation::Validate> __ValidateProbe<T>
+                    where
+                        T::Context: Default,
+                    {
+                        fn __validates(&self) -> bool { true }
+                    }
+                    use __NoValidate as _;
+                    if (&__ValidateProbe::<#ty>(::core::marker::PhantomData)).__validates() {
+                        __kinds.push(#krate::RejectionKind::Validation);
+                    }
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        {
+            let mut __kinds: Vec<#krate::RejectionKind> = vec![#(#statics),*];
+            for __p in &__params {
+                __kinds.push(match __p.location {
+                    #krate::di::meta::ParamLocation::Path => #krate::RejectionKind::InvalidPath,
+                    #krate::di::meta::ParamLocation::Query => #krate::RejectionKind::InvalidQuery,
+                    #krate::di::meta::ParamLocation::Header => #krate::RejectionKind::InvalidHeader,
+                });
+            }
+            if #struct_identity {
+                __kinds.push(#krate::RejectionKind::Unauthenticated);
+            }
+            #(#validate_probes)*
+            if let Some(__b) = &__body {
+                __kinds.extend(__b.rejection_kinds.iter().copied());
+            }
+            let mut __seen = ::std::collections::HashSet::new();
+            __kinds.retain(|__k| __seen.insert(*__k));
+            __kinds
+        }
     }
 }
 
@@ -799,57 +999,133 @@ enum BodyExtractor {
     TypedMultipart { name: String, ty: syn::Type },
     /// Raw `Multipart` — `multipart/form-data`, free-form (no named schema).
     RawMultipart,
+    /// Any other type in the body position (the last extracted parameter):
+    /// probed for `RequestBodySchema` at runtime — documented when the type
+    /// implements it, no request body otherwise.
+    Custom { ty: syn::Type },
 }
 
 /// Media type emitted for multipart body extractors.
 const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data";
 
-/// Extract request body information.
-/// Returns (type_name_token, schema_token, content_type_token).
-fn extract_body_info(
-    rm: &crate::model::types::RouteMethod,
-) -> (TokenStream, TokenStream, TokenStream) {
-    let body_info: Option<BodyExtractor> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
+/// The request-body classification of a route, with its `RouteInfo` tokens.
+struct BodyInfo(Option<BodyExtractor>);
+
+impl BodyInfo {
+    fn as_ref(&self) -> Option<&BodyExtractor> {
+        self.0.as_ref()
+    }
+
+    /// `(request_body_type, request_body_schema, request_body_content_type)`
+    /// expressions. A `Custom` body reads them from `__body` (bound by the
+    /// caller to [`probe_expr`](Self::probe_expr)).
+    fn tokens(&self) -> (TokenStream, TokenStream, TokenStream) {
+        let multipart_ct = MULTIPART_CONTENT_TYPE;
+        match &self.0 {
+            Some(BodyExtractor::Json { name, ty }) => {
+                let schema_token =
+                    if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
+                        let krate = r2e_core_path();
+                        quote! {
+                            Some({
+                                let __schema = #schemars::schema_for!(#ty);
+                                #krate::serde_json::to_value(__schema).unwrap()
+                            })
+                        }
+                    } else {
+                        quote! { None }
+                    };
+                (
+                    quote! { Some(#name.to_string()) },
+                    schema_token,
+                    quote! { None },
+                )
+            }
+            Some(BodyExtractor::TypedMultipart { name, ty }) => (
+                quote! { Some(#name.to_string()) },
+                multipart_schema_token(ty),
+                quote! { Some(#multipart_ct.to_string()) },
+            ),
+            Some(BodyExtractor::RawMultipart) => (
+                quote! { None },
+                quote! { None },
+                quote! { Some(#multipart_ct.to_string()) },
+            ),
+            Some(BodyExtractor::Custom { .. }) => (
+                quote! { __body.as_ref().and_then(|__b| __b.schema.as_ref().map(|(__n, _)| __n.clone())) },
+                quote! { __body.as_ref().and_then(|__b| __b.schema.as_ref().map(|(_, __s)| __s.clone())) },
+                quote! { __body.as_ref().map(|__b| __b.content_type.to_string()) },
+            ),
+            None => (quote! { None }, quote! { None }, quote! { None }),
+        }
+    }
+
+    /// The `__body` binding: an autoref probe of the custom body type for
+    /// `RequestBodySchema`, `None` for every other classification.
+    fn probe_expr(&self) -> TokenStream {
+        let Some(BodyExtractor::Custom { ty }) = &self.0 else {
+            return quote! { None };
+        };
+        let krate = r2e_core_path();
+        quote! {
+            {
+                struct __BodyProbe<T>(::core::marker::PhantomData<T>);
+                trait __NoBodySchema {
+                    fn __body(&self) -> Option<#krate::di::meta::__BodyProbeResult> { None }
+                }
+                impl<T> __NoBodySchema for &__BodyProbe<T> {}
+                impl<T: #krate::di::meta::RequestBodySchema> __BodyProbe<T> {
+                    fn __body(&self) -> Option<#krate::di::meta::__BodyProbeResult> {
+                        Some(#krate::di::meta::__BodyProbeResult {
+                            content_type: <T as #krate::di::meta::RequestBodySchema>::content_type(),
+                            schema: <T as #krate::di::meta::RequestBodySchema>::body_schema(),
+                            rejection_kinds: <T as #krate::di::meta::RequestBodySchema>::rejection_kinds(),
+                        })
+                    }
+                }
+                use __NoBodySchema as _;
+                (&__BodyProbe::<#ty>(::core::marker::PhantomData)).__body()
+            }
+        }
+    }
+}
+
+/// Classify the route's request body: a `Json` / `TypedMultipart` /
+/// `Multipart` parameter anywhere in the signature (by name, as before), else
+/// the last extracted parameter as a `Custom` candidate — the entry function
+/// reads exactly that parameter through `FromRequest`, so it is the only one
+/// that can be a body extractor.
+fn extract_body_info(rm: &crate::model::types::RouteMethod) -> BodyInfo {
+    let named = rm.fn_item.sig.inputs.iter().find_map(|arg| {
         if let syn::FnArg::Typed(pt) = arg {
             extract_body_type_info(&pt.ty)
         } else {
             None
         }
     });
-
-    let multipart_ct = MULTIPART_CONTENT_TYPE;
-    match &body_info {
-        Some(BodyExtractor::Json { name, ty }) => {
-            let schema_token = if let Some(schemars) = crate::util::crate_path::r2e_schemars_path()
-            {
-                let krate = r2e_core_path();
-                quote! {
-                    Some({
-                        let __schema = #schemars::schema_for!(#ty);
-                        #krate::serde_json::to_value(__schema).unwrap()
-                    })
-                }
-            } else {
-                quote! { None }
-            };
-            (
-                quote! { Some(#name.to_string()) },
-                schema_token,
-                quote! { None },
-            )
-        }
-        Some(BodyExtractor::TypedMultipart { name, ty }) => (
-            quote! { Some(#name.to_string()) },
-            multipart_schema_token(ty),
-            quote! { Some(#multipart_ct.to_string()) },
-        ),
-        Some(BodyExtractor::RawMultipart) => (
-            quote! { None },
-            quote! { None },
-            quote! { Some(#multipart_ct.to_string()) },
-        ),
-        None => (quote! { None }, quote! { None }, quote! { None }),
+    if named.is_some() {
+        return BodyInfo(named);
     }
+    let custom = extracted_params(rm)
+        .pop()
+        .filter(|pt| !is_known_non_body_type(&pt.ty))
+        .map(|pt| BodyExtractor::Custom { ty: (*pt.ty).clone() });
+    BodyInfo(custom)
+}
+
+/// Parameter types that never read the body — skipped by the custom body
+/// probe so the generated metadata stays free of pointless probes.
+fn is_known_non_body_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return matches!(
+                segment.ident.to_string().as_str(),
+                "Path" | "Query" | "HeaderMap" | "Method" | "Uri" | "Version" | "Extension"
+                    | "ConnectInfo" | "State" | "Option"
+            );
+        }
+    }
+    matches!(ty, syn::Type::Reference(_))
 }
 
 /// Generate a schema token for a `TypedMultipart<T>` body via autoref
@@ -1187,15 +1463,22 @@ fn generate_sse_route_metadata(
     def.sse_methods
         .iter()
         .map(|sm| {
-            let (roles, has_guards) = streaming_effective_auth(def, &sm.decorators);
+            let roles = streaming_effective_roles(def, &sm.decorators);
+            let kinds = static_rejection_kinds(
+                def,
+                &sm.decorators,
+                sm.identity_param.as_ref(),
+                !roles.is_empty(),
+                &[],
+                None,
+            );
             emit_streaming_route_info(
                 name,
                 meta_mod,
                 &sm.path,
                 &sm.fn_item.sig,
                 &roles,
-                has_guards,
-                sm.identity_param.is_some(),
+                &kinds,
                 sm.decorators.anonymous,
                 &sm.fn_item.attrs,
                 None,
@@ -1213,15 +1496,22 @@ fn generate_ws_route_metadata(
     def.ws_methods
         .iter()
         .map(|wm| {
-            let (roles, has_guards) = streaming_effective_auth(def, &wm.decorators);
+            let roles = streaming_effective_roles(def, &wm.decorators);
+            let kinds = static_rejection_kinds(
+                def,
+                &wm.decorators,
+                wm.identity_param.as_ref(),
+                !roles.is_empty(),
+                &[],
+                None,
+            );
             emit_streaming_route_info(
                 name,
                 meta_mod,
                 &wm.path,
                 &wm.fn_item.sig,
                 &roles,
-                has_guards,
-                wm.identity_param.is_some(),
+                &kinds,
                 wm.decorators.anonymous,
                 &wm.fn_item.attrs,
                 // The socket itself comes from the upgrade, not from an
@@ -1233,14 +1523,14 @@ fn generate_ws_route_metadata(
         .collect()
 }
 
-/// Effective (method + controller) role strings and guard presence for a
-/// streaming route's metadata. Controller-level decorators apply on the same
-/// rule as routes: every non-`#[anonymous]` endpoint (anonymous opts out of
-/// the controller's post-auth checks).
-fn streaming_effective_auth(
+/// Effective (method + controller) role strings for a streaming route's
+/// metadata. Controller-level decorators apply on the same rule as routes:
+/// every non-`#[anonymous]` endpoint (anonymous opts out of the controller's
+/// post-auth checks).
+fn streaming_effective_roles(
     def: &RoutesImplDef,
     decorators: &crate::model::types::MethodDecorators,
-) -> (Vec<String>, bool) {
+) -> Vec<String> {
     let ctrl = &def.controller_decorators;
     let mut roles: Vec<String> = decorators
         .roles
@@ -1248,12 +1538,10 @@ fn streaming_effective_auth(
         .chain(decorators.all_roles.iter())
         .cloned()
         .collect();
-    let mut has_guards = !decorators.guard_fns.is_empty();
     if !decorators.anonymous {
         roles.extend(ctrl.roles.iter().chain(ctrl.all_roles.iter()).cloned());
-        has_guards |= !ctrl.guard_fns.is_empty();
     }
-    (roles, has_guards)
+    roles
 }
 
 /// Emit a `RouteInfo` literal for SSE / WS routes.
@@ -1272,6 +1560,12 @@ fn streaming_effective_auth(
 /// method extracts `Path<T>` / `#[derive(Params)]` arguments like any other
 /// handler, so it documents them the same way. `ws_param` is the index of the
 /// socket parameter, excluded from that list.
+///
+/// `static_kinds` are the macro-time rejection kinds (identity, roles, guards,
+/// `Internal`); a streaming route reads no body and validates nothing, so the
+/// runtime additions are the struct identity and the `#[derive(Params)]`
+/// locations only. Its return type is a stream, never an envelope, so
+/// `error_schema` is `None` (application projection).
 #[allow(clippy::too_many_arguments)]
 fn emit_streaming_route_info(
     controller_name: &syn::Ident,
@@ -1279,8 +1573,7 @@ fn emit_streaming_route_info(
     path: &str,
     sig: &syn::Signature,
     roles: &[String],
-    has_guards: bool,
-    has_identity_param: bool,
+    static_kinds: &[&str],
     anonymous: bool,
     attrs: &[syn::Attribute],
     ws_param: Option<usize>,
@@ -1290,14 +1583,7 @@ fn emit_streaming_route_info(
     let op_id = format!("{}_{}", controller_name, sig.ident);
     let params_expr = params_expr(sig, ws_param, &krate);
     let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
-    let has_roles = !roles.is_empty();
-    let has_auth = has_auth_expr(
-        anonymous,
-        has_roles,
-        has_identity_param,
-        has_guards,
-        meta_mod,
-    );
+    let kinds_expr = rejection_kinds_expr(static_kinds, anonymous, &[], meta_mod);
 
     let (doc_summary, doc_description) = crate::extract::route::extract_doc_comments(attrs);
     let summary = doc_summary.unwrap_or_else(|| fallback_summary.to_string());
@@ -1307,28 +1593,34 @@ fn emit_streaming_route_info(
     };
 
     quote! {
-        #krate::di::meta::RouteInfo {
-            path: match #meta_mod::PATH_PREFIX {
-                Some(__prefix) => format!("{}{}", __prefix, #path),
-                None => #path.to_string(),
-            },
-            method: "GET".to_string(),
-            operation_id: #op_id.to_string(),
-            summary: Some(#summary.to_string()),
-            description: #description_token,
-            request_body_type: None,
-            request_body_schema: None,
-            request_body_content_type: None,
-            request_body_required: true,
-            response_type: None,
-            response_schema: None,
-            response_status: 200,
-            response_unmapped: None,
-            params: #params_expr,
-            roles: vec![#(#roles_tokens),*],
-            tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
-            deprecated: false,
-            has_auth: #has_auth,
+        {
+            let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
+            let __body: Option<#krate::di::meta::__BodyProbeResult> = None;
+            let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
+            #krate::di::meta::RouteInfo {
+                path: match #meta_mod::PATH_PREFIX {
+                    Some(__prefix) => format!("{}{}", __prefix, #path),
+                    None => #path.to_string(),
+                },
+                method: "GET".to_string(),
+                operation_id: #op_id.to_string(),
+                summary: Some(#summary.to_string()),
+                description: #description_token,
+                request_body_type: None,
+                request_body_schema: None,
+                request_body_content_type: None,
+                request_body_required: true,
+                response_type: None,
+                response_schema: None,
+                response_status: 200,
+                response_unmapped: None,
+                params: __params,
+                roles: vec![#(#roles_tokens),*],
+                tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
+                deprecated: false,
+                rejection_kinds: __kinds,
+                error_schema: None,
+            }
         }
     }
 }

@@ -1,5 +1,6 @@
 use crate::{openapi_routes, OpenApiConfig};
 use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError};
+use r2e_core::ErrorProjector;
 
 /// Plugin that adds OpenAPI spec generation and optional documentation UI.
 ///
@@ -44,8 +45,16 @@ impl Plugin for OpenApiPlugin {
         _config: Option<Self::Config>,
         ctx: &mut PluginBuildContext,
     ) -> Result<Self::Provided, PluginBuildError> {
-        let config = self.config;
+        let mut config = self.config;
         ctx.after_routes(move |routes| {
+            // The application's envelope (`AppBuilder::error_projection::<E>()`)
+            // documents every route without an envelope of its own. An explicit
+            // `with_error_schema` on the config wins.
+            if config.error_schema.is_none() {
+                if let Some(projector) = routes.bean_context().try_get::<ErrorProjector>() {
+                    config.error_schema = Some(*projector.schema());
+                }
+            }
             let router = openapi_routes::<()>(config, routes.routes());
             routes.register_routes(router);
         });

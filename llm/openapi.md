@@ -1,7 +1,7 @@
 ---
 topic: openapi
 features: openapi
-tokens: ~700
+tokens: ~1000
 requires: core-concepts
 ---
 
@@ -32,7 +32,28 @@ b.plugin(OpenApiPlugin::new(
 
 Spec at `/openapi.json`. Request/response schemas auto-detected from `Json<T>`
 params and return types; `#[status(N)]` / `#[returns(T)]` override; doc
-comments become summary/description; 401/403 only emitted on authed routes.
+comments become summary/description.
+
+**Error responses** come from what the route can actually fail with. The
+`#[routes]` macro records the route's `RejectionKind`s in
+`RouteInfo::rejection_kinds` (JSON body → 415/413/400/422, `Path` → 400,
+`Query`/`#[derive(Params)]` → 400, garde `Validate` body → 400, required
+identity → 401, `#[roles]`/guards → 403, a rate-limit guard → 429, always 500)
+and the builder emits one response per distinct status the route's **error
+envelope** maps them to (`ErrorSchema::status_of`), with the envelope's
+`body_schema` / `body_schema_for(kind)` as the component (+ its
+`extra_statuses`). The envelope is the handler's `Result<T, E>` error type when
+it is one, else the application's (`AppBuilder::error_projection::<E>()`, read
+from the `ErrorProjector` bean by the plugin; `OpenApiConfig::with_error_schema::<E>()`
+for direct `build_spec` callers), else `HttpError` (`ErrorResponse` /
+`ValidationErrorResponse`). Runtime and spec call the same `status_of`, so an
+envelope remapping 422 → 400 documents 400 only. Two bodies on one status
+render as `oneOf`.
+
+A custom body extractor (the handler's last parameter, read with
+`FromRequest`) is documented when it implements
+`r2e::di::meta::RequestBodySchema` (`content_type()`, `body_schema()`,
+`rejection_kinds()`); otherwise the route has no request body in the spec.
 
 When a route's successful response body can't be mapped to a schema (an
 `impl Trait` return, or a concrete non-`Json` type), the spec still generates

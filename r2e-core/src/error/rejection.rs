@@ -32,7 +32,7 @@ use super::HttpError;
 /// Each kind has one default status ([`RejectionKind::default_status`]); an
 /// envelope remaps a kind through [`ErrorSchema::status_of`].
 #[non_exhaustive]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize)]
 pub enum RejectionKind {
     // ── request shape ──
     /// No `Content-Type` on a request that needs one (415).

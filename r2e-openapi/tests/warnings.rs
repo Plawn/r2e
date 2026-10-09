@@ -23,7 +23,8 @@ fn base(method: &str, path: &str) -> RouteInfo {
         roles: vec![],
         tag: None,
         deprecated: false,
-        has_auth: false,
+        rejection_kinds: vec![],
+        error_schema: None,
     }
 }
 

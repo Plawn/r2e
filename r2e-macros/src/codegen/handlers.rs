@@ -153,7 +153,7 @@ fn is_wrapper_type(ty: &syn::Type) -> bool {
 // ── Error projection ─────────────────────────────────────────────────────
 
 /// How a route projects the [`Rejection`]s of its request pipeline.
-enum Projection {
+pub(super) enum Projection {
     /// Probe the handler's declared return type: `Result<T, E>` with an
     /// envelope `E` projects through `E`; anything else falls back to the
     /// application projection. Resolved by autoref specialization at
@@ -167,7 +167,7 @@ enum Projection {
 
 impl Projection {
     /// From a handler signature: its output type when it is nameable.
-    fn for_signature(sig: &syn::Signature) -> Self {
+    pub(super) fn for_signature(sig: &syn::Signature) -> Self {
         match &sig.output {
             syn::ReturnType::Default => Self::Default,
             syn::ReturnType::Type(_, ty) => {
@@ -177,6 +177,22 @@ impl Projection {
                     Self::Probe((**ty).clone())
                 }
             }
+        }
+    }
+
+    /// The `RouteInfo::error_schema` expression: the probed return type's
+    /// envelope schema (`Some` for `Result<T, E>` with an envelope `E`), or
+    /// `None` when the route documents through the application projection.
+    pub(super) fn schema_expr(&self, krate: &TokenStream) -> TokenStream {
+        match self {
+            Self::Probe(ty) => quote! {
+                {
+                    use #krate::error::projection::ProjectEnvelope as _;
+                    use #krate::error::projection::ProjectFallback as _;
+                    (&#krate::error::projection::ProjectionProbe::<#ty>::new()).error_schema()
+                }
+            },
+            Self::Default => quote! { None },
         }
     }
 
