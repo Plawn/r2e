@@ -179,18 +179,30 @@ async fn error_enrichment(req: Request, next: Next) -> Response {
 
 **Automatic 5xx logging:** there is no `ErrorHandling` plugin any more (removed with #1017 — panic capture is part of the router assembly). For custom 5xx logging, add a middleware layer that inspects response status codes.
 
-**Key files:** `r2e-core/src/error.rs` (HttpError, `error_response()`, `map_error!`, `HttpErrorExt`), `r2e-macros/src/derives/api_error_derive.rs` (derive implementation), `r2e-core/tests/api_error.rs` (comprehensive tests)
+**Key files:** `r2e-core/src/error/mod.rs` (HttpError, `error_response()`, `map_error!`, `HttpErrorExt`), `error/rejection.rs` (`Rejection`, `RejectionKind`, every `From<X>`), `error/schema.rs` (`ErrorSchema`, `ErrorSchemaInfo`), `error/projection.rs` (`ErrorProjector`, autoref probe), `r2e-macros/src/derives/api_error_derive.rs` (derive implementation), `r2e-core/tests/http/api_error.rs` (comprehensive tests)
+
+---
+
+## Rejection, envelopes, projection (#1072)
+
+Every failure the framework raises before, around or instead of the handler is one typed value, `Rejection { kind: RejectionKind, status, message, details, headers, source }` (`r2e-core/src/error/rejection.rs`). Faults convert with plain `From` in the crate that owns them: the axum `Json`/`Path`/`Query`/`Form` rejections, `ParamError` (by `location`), `HttpError`, `GuardError`, `MultipartError`, `SecurityError` (+ `WWW-Authenticate`), `RolesDenied`, `RateLimited` (+ `Retry-After`), `FgaDenied`, `TenantError::into_rejection(statuses)`, garde `Report`, a raw `Response` (→ `Opaque`). `RejectionKind::default_status()` is the single status table (`MethodNotAllowed` 405 included since P4); `from_status` is its inverse.
+
+An **envelope** `E: From<Rejection> + IntoHttpResponse + ErrorSchema` is what a rejection is projected into. `HttpError` is the default and its bodies are byte-equal to 0.4. `ErrorSchema` (`error/schema.rs`) is the static side — `status_of(kind)`, `body_schema[_for]`, `extra_statuses`, `opaque_passthrough` — read by `Rejection::project::<E>()` at runtime (status remapped *before* `E::from`) and by `r2e-openapi` for the spec, so runtime and spec cannot drift. `#[derive(ApiError)]` with one `#[error(rejection)]` variant emits both impls; an enum whose only framework link is `#[error(transparent)] Http(#[from] HttpError)` inherits them.
+
+**Which envelope renders a route** (`error/projection.rs`): `#[routes]` probes the handler's return type by autoref (`ProjectionProbe` → `ProjectEnvelope` when `Result<T, E>` qualifies, else `ProjectFallback`). The fallback is the app-level `ErrorProjector` bean — `AppBuilder::error_projection::<E>()` = `provide(ErrorProjector::of::<E>())`, `Default` = `HttpError` — the JAX-RS `ExceptionMapper` equivalent. It also renders SSE/WS routes, the catch-panic 500, the router 404/405 and (through `Json`'s `PayloadTooLarge`) the 413. There is deliberately **no** `#[error(E)]` / `#[routes(error = E)]` attribute and no `IntoRejection`-style trait (user decision 2026-10-09 — a route declared infallible is a definition R2E does not fix for the developer; don't re-propose). Design and phase record: `plans/error-projection.md`; developer migration: `docs/migration/error-projection.md`.
+
+Order inside the generated entry fn (one per route, SSE and WS endpoint): pre-auth guards → request data (identity + `#[inject(request)]`, via `RequestData<S>`) → guards → head parameters → body (last) → garde → managed acquire → interceptors → handler → managed finalize. Each `Err(x)` is `Rejection::from(x)` then `project::<E>()`, once; the body is never read before identity and guards pass. Wires: `r2e_grpc::rejection_to_status` (free fn — `From<Rejection> for tonic::Status` would be an orphan impl) and `McpError: From<Rejection>` map by kind. Tests: `r2e-core/tests/http/{rejection,projection,fallback,panic}.rs`, `tests/controller/error_meta.rs`, `r2e-openapi/tests/errors.rs`, `r2e-mcp/tests/server/rejection.rs`, `r2e-grpc/tests/guard.rs`.
 
 ---
 
 ## Guards (error helpers)
 
-The `GuardError` struct simplifies guard error construction:
+The `GuardError` struct simplifies guard error construction; it converts `Into<Rejection>`, so `.into()` / `?` produce the `Rejection` a `check -> Result<(), Rejection>` returns (the status is kept, the kind is derived from it):
 
 ```rust
 use r2e_core::decorators::guards::GuardError;
 
-// Instead of manually building Response:
+// `.into()` yields the `Rejection` the route projects through its envelope:
 Err(GuardError::forbidden("Insufficient permissions").into())
 Err(GuardError::unauthorized("Missing API key").into())
 Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "rate limited").into())

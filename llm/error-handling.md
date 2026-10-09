@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~4000
+tokens: ~4100
 requires: core-concepts
 ---
 
@@ -24,6 +24,11 @@ requires: core-concepts
   `HttpError: From<Rejection>` renders the default bodies; your own envelope
   implements `From<Rejection> + IntoHttpResponse + ErrorSchema` — or gets all
   three from `#[derive(ApiError)]` with one `#[error(rejection)]` variant.
+- The envelope that renders a route is inferred from its return type:
+  `Result<T, E>` projects every framework failure on that route through `E`;
+  any other return type uses `AppBuilder::error_projection::<E>()` (default
+  `HttpError`), which also renders the framework's own 404 / 405 / 413 and the
+  panic 500. There is no attribute to write.
 - Panics are caught automatically (no plugin): JSON 500, plus one `error` event
   on target `r2e::panic` inside the request span (so `request_id` + `route`).
   Count them with `.on_panic(|report| ...)` — one hook for HTTP handlers,
@@ -90,7 +95,8 @@ let headers = &r.headers;                // `WWW-Authenticate`, `Retry-After`, �
 / `UnsupportedMediaType` 415, `PayloadTooLarge` 413, `BodyRead` / `MalformedBody`
 / `InvalidPath` / `InvalidQuery` / `InvalidForm` / `InvalidHeader` / `BadRequest`
 / `Validation` 400, `InvalidBody` 422 (deserialized but semantically wrong),
-`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `Conflict` 409,
+`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `MethodNotAllowed` 405,
+`Conflict` 409,
 `RateLimited` 429, `Internal` 500, `Unavailable` 503, `Timeout` 504, and
 `Opaque` for a pre-rendered `Response` the framework could not type.
 

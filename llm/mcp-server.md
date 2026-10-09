@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~6300
+tokens: ~6400
 requires: guards, security
 ---
 
@@ -120,8 +120,13 @@ arguments; `T: Deserialize + JsonSchema + ObjectParams` becomes the
 (dual-encoded: `structuredContent` + JSON text, advertises `outputSchema`),
 `CallToolResult`, or `Result<_, E: Into<McpError>>`. `McpError::tool(...)` →
 `isError: true` result the agent can read; other variants map to JSON-RPC
-errors (bad args → -32602, unknown tool → -32601, guard rejection → -32600 with
-the HTTP status text). Beans/config go on the struct, never as parameters.
+errors (bad args → -32602, unknown tool → -32601). A guard or identity
+`Rejection` becomes `McpError::from(rejection)` by kind: `Unauthenticated` →
+`Unauthorized` and `Forbidden` → `Forbidden` (-32600, `data` `"unauthorized"` /
+`"forbidden"`), `NotFound` → `NotFound` (-32002), request-shape kinds →
+`InvalidParams` (-32602), `Internal`/`Unavailable`/`Timeout` → `Internal`
+(-32603), `Conflict`/`RateLimited` → `McpError::tool(..)` carrying the details.
+Beans/config go on the struct, never as parameters.
 
 Resources and prompts — the same impl block can carry the two other MCP
 member families (one marker per method):

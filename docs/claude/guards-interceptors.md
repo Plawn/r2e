@@ -293,7 +293,7 @@ one per intercepted `#[scheduled]`/`#[consumer]` method).
 
 **Design invariant:** Interceptors always see the handler's **raw return
 type** (`Json<T>`, `Result<Json<T>, E>`, etc.), never `Response`. The
-`IntoResponse::into_response()` conversion happens *after* the outermost
+`IntoHttpResponse::into_http_response()` conversion happens *after* the outermost
 interceptor. Guards short-circuit *before* interceptors.
 
 ## Controller-level guard family (impl-block `#[guard]`/`#[pre_guard]`/`#[roles]`/`#[all_roles]`)
