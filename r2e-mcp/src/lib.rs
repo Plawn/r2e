@@ -198,7 +198,7 @@ pub mod __macro_support {
     pub use crate::auth::tools::{check_access, ToolRequirements};
     pub use crate::elicitation::McpClient;
     pub use crate::error::McpError;
-    pub use crate::guard::{guard_rejection_to_error, member_guard_context};
+    pub use crate::guard::member_guard_context;
     pub use crate::params::private::Sealed as ObjectParamsSeal;
     pub use crate::params::{
         empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,

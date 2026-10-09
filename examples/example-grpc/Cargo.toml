@@ -25,6 +25,8 @@ bytes = {workspace = true}
 base64 = {workspace = true}
 # Reflection client (pb types + generated client stub) for the e2e test.
 tonic-reflection = {workspace = true}
+# HS256 test tokens + validator for the guards e2e test.
+r2e-test = {workspace = true}
 
 [build-dependencies]
 r2e-grpc-build = {workspace = true}

@@ -1,8 +1,64 @@
+//! Identity extraction for gRPC calls.
+//!
+//! Two paths exist:
+//!
+//! - **Declarative** — an `#[inject(identity)]` parameter on a
+//!   `#[grpc_routes]` method. The generated dispatch builds the type's
+//!   [`GrpcIdentity::Spec`] once at registration (from the bean graph, like
+//!   any decorator spec) and runs [`GrpcIdentity::extract`] per call, before
+//!   guards; a failure is projected onto a [`tonic::Status`] by kind.
+//!   `r2e-security` implements it for `AuthenticatedUser` under its `grpc`
+//!   feature.
+//! - **Manual** — [`extract_jwt_claims_from_metadata`] /
+//!   [`GrpcIdentityExtractor`] over any [`JwtClaimsValidatorLike`], for
+//!   handlers that want the raw [`StandardClaims`].
+
+use std::future::Future;
 use std::sync::Arc;
 
-use r2e_core::StandardClaims;
+use r2e_core::{DecoratorSpec, Identity, Rejection, StandardClaims};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
+
+use crate::status::rejection_to_status;
+
+/// An identity type that `#[grpc_routes]` can inject from request metadata.
+///
+/// The extractor (the validator bean, typically) is built **once at
+/// registration** from the bean graph through [`Self::Spec`] — exactly like a
+/// guard or interceptor spec — and its [`DecoratorSpec::Deps`] are folded into
+/// the service's [`EndpointDeps`](r2e_core::EndpointDeps), so a missing
+/// validator bean is a compile error at `register_grpc_service()`.
+pub trait GrpcIdentity: Identity + Sized {
+    /// The spec that builds the per-service extractor from the bean context.
+    type Spec: DecoratorSpec;
+
+    /// The spec value to build the extractor with.
+    fn spec() -> Self::Spec;
+
+    /// Extract a **required** identity from the call metadata.
+    fn extract(
+        extractor: &<Self::Spec as DecoratorSpec>::Product,
+        metadata: &MetadataMap,
+    ) -> impl Future<Output = Result<Self, Rejection>> + Send;
+
+    /// Extract an **optional** identity (`Option<Self>` parameters): `None`
+    /// when no credential is presented, `Err` when one is presented but
+    /// rejected — a bad token on an optional identity is still a failure,
+    /// never silently anonymous. Default: no `authorization` metadata ⇒
+    /// `None`.
+    fn extract_optional(
+        extractor: &<Self::Spec as DecoratorSpec>::Product,
+        metadata: &MetadataMap,
+    ) -> impl Future<Output = Result<Option<Self>, Rejection>> + Send {
+        async move {
+            if metadata.get("authorization").is_none() {
+                return Ok(None);
+            }
+            Self::extract(extractor, metadata).await.map(Some)
+        }
+    }
+}
 
 /// Extract and validate a JWT from gRPC metadata.
 ///
@@ -21,22 +77,41 @@ pub async fn extract_jwt_claims_from_metadata<V: JwtClaimsValidatorLike>(
         .map_err(|e| Status::unauthenticated(format!("JWT validation failed: {e}")))
 }
 
-/// Extract the bearer token string from gRPC metadata.
+/// Extract the bearer token string from gRPC metadata as a typed
+/// [`Rejection`] (`Unauthenticated` kind) — the form [`GrpcIdentity`]
+/// implementations use.
 ///
 /// Returns the token without the `Bearer ` prefix.
-pub fn extract_bearer_token(metadata: &MetadataMap) -> Result<&str, Status> {
+pub fn bearer_token(metadata: &MetadataMap) -> Result<&str, Rejection> {
     let auth_header = metadata
         .get("authorization")
-        .ok_or_else(|| Status::unauthenticated("Missing authorization metadata"))?;
+        .ok_or_else(|| Rejection::new(r2e_core::RejectionKind::Unauthenticated, "Missing authorization metadata"))?;
 
-    let auth_str = auth_header
-        .to_str()
-        .map_err(|_| Status::unauthenticated("Invalid authorization metadata encoding"))?;
+    let auth_str = auth_header.to_str().map_err(|_| {
+        Rejection::new(
+            r2e_core::RejectionKind::Unauthenticated,
+            "Invalid authorization metadata encoding",
+        )
+    })?;
 
     auth_str
         .strip_prefix("Bearer ")
         .or_else(|| auth_str.strip_prefix("bearer "))
-        .ok_or_else(|| Status::unauthenticated("Authorization must use Bearer scheme"))
+        .ok_or_else(|| {
+            Rejection::new(
+                r2e_core::RejectionKind::Unauthenticated,
+                "Authorization must use Bearer scheme",
+            )
+        })
+}
+
+/// Extract the bearer token string from gRPC metadata.
+///
+/// Returns the token without the `Bearer ` prefix, or a
+/// `Status::unauthenticated` ([`bearer_token`] projected by
+/// [`rejection_to_status`]).
+pub fn extract_bearer_token(metadata: &MetadataMap) -> Result<&str, Status> {
+    bearer_token(metadata).map_err(rejection_to_status)
 }
 
 /// Trait abstracting JWT claims validation.

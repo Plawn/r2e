@@ -6,27 +6,29 @@ use quote::{format_ident, quote};
 use crate::parsing::grpc_routes_parsing::GrpcRoutesImplDef;
 use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
 
-use super::GrpcDecoSets;
+use super::{site_exprs, unique_identity_types, GrpcDecoSets};
 
 /// Generate the `EndpointDeps` carrier for the service: the core's
-/// `ContextConstruct::Deps` extended with every `#[intercept(...)]` site's
-/// spec deps — the same fold `#[routes]` emits for HTTP controllers. Checked
-/// by `AllSatisfied` at `register_grpc_service()`, so a missing bean is a
-/// compile error at the registration call site.
+/// `ContextConstruct::Deps` extended with every guard/interceptor site's
+/// spec deps — the same fold `#[routes]` emits for HTTP controllers — plus
+/// each injected identity type's `GrpcIdentity::Spec` deps (the validator
+/// bean). Checked by `AllSatisfied` at `register_grpc_service()`, so a
+/// missing bean is a compile error at the registration call site.
 pub fn generate_endpoint_deps_impl(def: &GrpcRoutesImplDef) -> TokenStream {
     let krate = r2e_core_path();
+    let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
 
-    let mut exprs: Vec<&syn::Expr> = Vec::new();
-    // Controller-level interceptors run on every method; their deps only
-    // matter when at least one method exists.
-    if !def.methods.is_empty() {
-        exprs.extend(&def.controller_intercepts);
+    let mut deps_fold =
+        crate::codegen::decorators::endpoint_deps_fold(controller_name, site_exprs(def));
+    for ty in unique_identity_types(def) {
+        deps_fold = quote! {
+            <#deps_fold as #krate::type_list::TAppend<
+                <<#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec
+                    as #krate::DecoratorSpec>::Deps,
+            >>::Output
+        };
     }
-    for m in &def.methods {
-        exprs.extend(&m.decorators.intercept_fns);
-    }
-    let deps_fold = crate::codegen::decorators::endpoint_deps_fold(controller_name, exprs);
 
     quote! {
         #[doc(hidden)]
@@ -71,18 +73,26 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
         quote! { #name }
     };
 
-    // Prebuild every method's interceptor set from the resolved graph — once,
-    // at registration, exactly like route decorator sets — into the single
-    // Arc'd container.
-    let decos_init = if deco.has_any() {
+    // Prebuild every method's guard/interceptor set and identity extractor
+    // from the resolved graph — once, at registration, exactly like route
+    // decorator sets — into the single Arc'd container.
+    let decos_init = if deco.has_any(def) {
         let container = GrpcDecoSets::container_ident(controller_name);
-        let field_inits: Vec<TokenStream> = deco
+        let mut field_inits: Vec<TokenStream> = deco
             .fields(def)
             .map(|(field, set)| {
                 let ctor = &set.ctor_ident;
                 quote! { #field: #ctor(__ctx) }
             })
             .collect();
+        field_inits.extend(GrpcDecoSets::identity_fields(def).map(|(field, ty)| {
+            quote! {
+                #field: #krate::decorators::decorator::build_decorator::<
+                    _,
+                    <#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec,
+                >(<#ty as #grpc_krate::__macro_support::GrpcIdentity>::spec(), __ctx)
+            }
+        }));
         quote! {
             __decos: ::std::sync::Arc::new(#container {
                 #(#field_inits,)*
@@ -94,17 +104,19 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
 
     // Aggregated config validation for the service: the core's own
     // `#[config]`/`#[config_section]` keys (from the `#[controller]`-generated
-    // meta module) plus every `#[intercept]` spec's declared keys. Reported at
-    // `register_grpc_service()`, the gRPC peer of `register_controller()`.
+    // meta module) plus every guard/interceptor spec's and identity spec's
+    // declared keys. Reported at `register_grpc_service()`, the gRPC peer of
+    // `register_controller()`.
     let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let mut site_exprs: Vec<&syn::Expr> = Vec::new();
-    if !def.methods.is_empty() {
-        site_exprs.extend(&def.controller_intercepts);
-    }
-    for m in &def.methods {
-        site_exprs.extend(&m.decorators.intercept_fns);
-    }
-    let decorator_config_stmts = crate::codegen::decorators::decorator_config_key_stmts(site_exprs);
+    let mut decorator_config_stmts =
+        crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
+    decorator_config_stmts.extend(unique_identity_types(def).into_iter().map(|ty| {
+        quote! {
+            __errors.extend(#krate::decorator_config_errors::<
+                <#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec,
+            >(__config));
+        }
+    }));
 
     // Override the trait's `None` default only when the attribute declared a
     // descriptor set (`#[grpc_routes(..., descriptor = <expr>)]`).

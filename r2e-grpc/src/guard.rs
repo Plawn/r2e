@@ -1,111 +1,53 @@
-use r2e_core::{Identity, StandardClaims};
-use tonic::metadata::MetadataMap;
-use tonic::Status;
+//! Bridge between gRPC method dispatch and R2E's shared guard machinery.
+//!
+//! gRPC reuses [`Guard<I>`](r2e_core::Guard) / [`GuardContext`] directly —
+//! the same `#[roles]`, `#[all_roles]`, `#[guard]` specs (and every user
+//! `#[derive(DecoratorBean)]` guard) work on `#[grpc_routes]` methods with
+//! zero new impls. The generated tonic trait impl builds the context from
+//! the incoming [`tonic::Request`] through [`guard_context`]; a denial is
+//! projected onto a [`tonic::Status`] by kind through
+//! [`rejection_to_status`](crate::rejection_to_status).
+//!
+//! What a gRPC guard sees in its [`GuardContext`]:
+//!
+//! | field | gRPC value |
+//! |---|---|
+//! | `method` | `POST` (every unary/streaming gRPC call is an HTTP/2 POST) |
+//! | `headers` | the request metadata — `MetadataMap` is a `HeaderMap` view, so `headers.get("x-tenant-id")` reads a metadata key |
+//! | `uri` | `/` — gRPC routing is by service/method, exposed as `controller_name`/`method_name` |
+//! | `extensions` | the request extensions (tonic interceptors / tower layers can deposit values there) |
+//! | `peer_addr` | [`tonic::Request::remote_addr`] |
+//! | `path_params` | empty |
+//! | `identity` | the method's `#[inject(identity)]` parameter, if any |
 
-/// Context available to gRPC guards before the handler body runs.
-///
-/// Analogous to [`r2e_core::GuardContext`] for HTTP, but carries
-/// gRPC-specific data (service name, method name, metadata).
-pub struct GrpcGuardContext<'a, I: Identity> {
-    pub service_name: &'static str,
-    pub method_name: &'static str,
-    pub metadata: &'a MetadataMap,
-    pub identity: Option<&'a I>,
+use r2e_core::http::{Method, Uri};
+use r2e_core::{GuardContext, Identity, PathParams};
+
+static GRPC_METHOD: Method = Method::POST;
+
+fn default_uri() -> &'static Uri {
+    static URI: std::sync::LazyLock<Uri> = std::sync::LazyLock::new(|| Uri::from_static("/"));
+    &URI
 }
 
-impl<'a, I: Identity> GrpcGuardContext<'a, I> {
-    /// Convenience accessor for the identity subject.
-    pub fn identity_sub(&self) -> Option<&str> {
-        self.identity.map(|i| i.sub())
+/// Build a [`GuardContext`] for one gRPC call from the incoming request —
+/// the form used by the generated `#[grpc_routes]` dispatch (see the module
+/// docs for the field mapping).
+pub fn guard_context<'a, T, I: Identity>(
+    request: &'a tonic::Request<T>,
+    method_name: &'static str,
+    controller_name: &'static str,
+    identity: Option<&'a I>,
+) -> GuardContext<'a, I> {
+    GuardContext {
+        method_name,
+        controller_name,
+        method: &GRPC_METHOD,
+        headers: request.metadata().as_ref(),
+        uri: default_uri(),
+        extensions: request.extensions(),
+        peer_addr: request.remote_addr(),
+        path_params: PathParams::EMPTY,
+        identity,
     }
-
-    /// Convenience accessor for the identity email.
-    pub fn identity_email(&self) -> Option<&str> {
-        self.identity.and_then(|i| i.email())
-    }
-
-    /// Convenience accessor for the identity's validated JWT claims.
-    pub fn identity_claims(&self) -> Option<&StandardClaims> {
-        self.identity.and_then(|i| i.claims())
-    }
-}
-
-/// Guard trait for gRPC service methods.
-///
-/// Runs before the handler body and can short-circuit with a [`tonic::Status`].
-/// Analogous to [`r2e_core::Guard`] for HTTP.
-///
-/// # Example
-///
-/// ```ignore
-/// struct AdminGuard;
-///
-/// impl<I: RoleBasedIdentity> GrpcGuard<I> for AdminGuard {
-///     fn check(
-///         &self,
-///         ctx: &GrpcGuardContext<'_, I>,
-///     ) -> impl Future<Output = Result<(), Status>> + Send {
-///         async move {
-///             let identity = ctx.identity
-///                 .ok_or_else(|| Status::unauthenticated("No identity"))?;
-///             if identity.roles().iter().any(|r| r == "admin") {
-///                 Ok(())
-///             } else {
-///                 Err(Status::permission_denied("Requires admin role"))
-///             }
-///         }
-///     }
-/// }
-/// ```
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` does not implement `GrpcGuard<{I}>`",
-    label = "this type cannot be used as a gRPC guard",
-    note = "implement `GrpcGuard<I>` for your type and apply it with `#[guard(YourGuard)]`"
-)]
-pub trait GrpcGuard<I: Identity>: Send + Sync {
-    fn check(
-        &self,
-        ctx: &GrpcGuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Status>> + Send;
-}
-
-/// Built-in gRPC guard that checks required roles.
-///
-/// Returns `Status::permission_denied` if the identity lacks the required roles.
-/// Applied automatically by `#[roles("admin")]` on gRPC methods.
-pub struct GrpcRolesGuard {
-    pub required_roles: &'static [&'static str],
-}
-
-impl<I: Identity + GrpcRoleBasedIdentity> GrpcGuard<I> for GrpcRolesGuard {
-    fn check(
-        &self,
-        ctx: &GrpcGuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Status>> + Send {
-        let result = (|| {
-            let identity = ctx
-                .identity
-                .ok_or_else(|| Status::unauthenticated("No identity available for role check"))?;
-            let roles = identity.roles();
-            let has_role = self
-                .required_roles
-                .iter()
-                .any(|req| roles.iter().any(|r| r.as_str() == *req));
-            if has_role {
-                Ok(())
-            } else {
-                Err(Status::permission_denied("Insufficient roles"))
-            }
-        })();
-        std::future::ready(result)
-    }
-}
-
-/// Extension of [`Identity`] for role-based gRPC access control.
-///
-/// This is the gRPC equivalent of `r2e_security::RoleBasedIdentity`.
-/// Identity types that carry role information should implement this trait.
-pub trait GrpcRoleBasedIdentity: Identity {
-    /// Roles associated with this identity.
-    fn roles(&self) -> &[String];
 }
