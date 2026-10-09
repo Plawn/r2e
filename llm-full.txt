@@ -316,6 +316,7 @@ name that type: there is no state derive to write, and `state = ...` on
 - Reach for the R2E construct first; dropping to raw axum forfeits compile-time checking, DI, guards, OpenAPI and TestApp support.
 - Do NOT add `axum` to `Cargo.toml` — reach every HTTP type through `r2e::http` / `r2e::prelude`.
 - Implement R2E's contracts, not axum's: `IntoHttpResponse` (+ the `r2e::http::impl_into_response!` bridge) for responses, `FromRequestPartsVia` for bean-backed extractors.
+- One error shape for the whole API: return `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` + one `#[error(rejection)]` variant), or set it app-wide with `AppBuilder::error_projection::<E>()` — never rewrite error bodies in middleware or write never-rejecting extractors.
 - Typed JSON goes through `r2e::json` (`to_vec`, `to_string`, `from_slice`, `from_str`), never `serde_json::to_vec`; `serde_json::Value` / `json!` stay `serde_json`.
 - Use the table below as the translation: identity injection instead of a custom `FromRequestParts`, a `Guard` instead of in-handler `if`, `.provide()` + `#[inject]` instead of `State<Arc<..>>`, `#[scheduled]` / `PoolExecutor` instead of `tokio::spawn`.
 - When raw axum is unavoidable, climb the ladder in order: `#[any]`/`#[fallback]` → `merge_router` → `with_layer_fn` → `r2e::http::axum_compat` (off the supported surface, deliberately greppable).
@@ -355,6 +356,8 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 | Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
 | Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
 | A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
+| One error body for every failure, extractor rejections included | `IntoResponse` per error type + middleware rewriting 4xx bodies, or never-rejecting extractors | `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` with an `#[error(rejection)]` variant); app-wide: `AppBuilder::error_projection::<E>()` |
+| Custom 404 / 405 / panic bodies | `Router::fallback` + `method_not_allowed_fallback` + a catch-panic layer | `AppBuilder::error_projection::<E>()` — the framework's 404/405/413/500 render through the same envelope |
 | Endpoints grouped by resource | A `Router` of free functions | A `#[controller(path = "...")]` + `#[routes]` impl |
 | Shared services | `State<Arc<MyState>>` + field access | `.provide(bean)` / `.register::<T>()` + `#[inject]` fields |
 | Config values in handlers | Lazy statics / `std::env` | `#[config("key")]` fields, `load_config::<Root>()` + `#[inject]` typed sections |
@@ -595,6 +598,11 @@ type StatusResult  = Result<StatusCode, HttpError>;
   `HttpError: From<Rejection>` renders the default bodies; your own envelope
   implements `From<Rejection> + IntoHttpResponse + ErrorSchema` — or gets all
   three from `#[derive(ApiError)]` with one `#[error(rejection)]` variant.
+- The envelope that renders a route is inferred from its return type:
+  `Result<T, E>` projects every framework failure on that route through `E`;
+  any other return type uses `AppBuilder::error_projection::<E>()` (default
+  `HttpError`), which also renders the framework's own 404 / 405 / 413 and the
+  panic 500. There is no attribute to write.
 - Panics are caught automatically (no plugin): JSON 500, plus one `error` event
   on target `r2e::panic` inside the request span (so `request_id` + `route`).
   Count them with `.on_panic(|report| ...)` — one hook for HTTP handlers,
@@ -661,7 +669,8 @@ let headers = &r.headers;                // `WWW-Authenticate`, `Retry-After`, �
 / `UnsupportedMediaType` 415, `PayloadTooLarge` 413, `BodyRead` / `MalformedBody`
 / `InvalidPath` / `InvalidQuery` / `InvalidForm` / `InvalidHeader` / `BadRequest`
 / `Validation` 400, `InvalidBody` 422 (deserialized but semantically wrong),
-`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `Conflict` 409,
+`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `MethodNotAllowed` 405,
+`Conflict` 409,
 `RateLimited` 429, `Internal` 500, `Unavailable` 503, `Timeout` 504, and
 `Opaque` for a pre-rendered `Response` the framework could not type.
 
@@ -3525,6 +3534,7 @@ missing/forged/replayed = 400 `invalid_request`.
 - Transactions are `#[managed]` handler params — the only transaction attribute (`#[transactional]` was removed).
 - `use r2e::r2e_data_sqlx::Tx;` then `#[managed] tx: &mut Tx<'_, Sqlite>`; the pool is resolved from the bean graph by type, no `HasPool` impl.
 - A custom resource implements BOTH `ManagedResource<S>` and `ManagedDeps` — there is no blanket impl. List the beans `acquire()` looks up in `type Deps`, or `type Deps = TNil;` when it reads none; a bean that was never provided is then a compile error at `register_controller()`.
+- `type Error` is anything `Into<Rejection>` — `ManagedErr<HttpError>` in practice; acquire/finalize failures are projected through the route's error envelope exactly like an extractor rejection (see llm/error-handling.md).
 - In `acquire`, take the request head with `context.require_request()?` (uniform 500 off-request) instead of unwrapping `ManagedContext::request`.
 - `RequestHead<'a>` is the same `Copy` view guards see through `GuardContext::head()` — use its helpers (`header`, `path_param`, `host`, `extension::<T>()`).
 - SSE and WebSocket handlers acquire no managed resources; every other HTTP handler shape does.
@@ -3567,6 +3577,13 @@ Every `#[managed]` type must also implement `ManagedDeps`, listing the beans
 bean that was never provided is a compile error at `register_controller()`
 instead of a 500 on the first request. A resource that reads no bean says
 `type Deps = TNil;`.
+
+`type Error` is any `Into<Rejection>`. `ManagedErr<E>` wraps an error you cannot
+write `From<E> for Rejection` for (a foreign type such as `sqlx::Error`);
+`ManagedErr<HttpError>` is the usual choice. Whatever the type, an `Err` from
+`acquire` or `finalize` is projected once through the route's error envelope —
+the route's `Result<T, E>` type when it qualifies, else the app-level
+`error_projection::<E>()` (default `HttpError`).
 
 `ManagedContext<'_, S>` (passed to `acquire`) carries:
 
@@ -5845,8 +5862,13 @@ arguments; `T: Deserialize + JsonSchema + ObjectParams` becomes the
 (dual-encoded: `structuredContent` + JSON text, advertises `outputSchema`),
 `CallToolResult`, or `Result<_, E: Into<McpError>>`. `McpError::tool(...)` →
 `isError: true` result the agent can read; other variants map to JSON-RPC
-errors (bad args → -32602, unknown tool → -32601, guard rejection → -32600 with
-the HTTP status text). Beans/config go on the struct, never as parameters.
+errors (bad args → -32602, unknown tool → -32601). A guard or identity
+`Rejection` becomes `McpError::from(rejection)` by kind: `Unauthenticated` →
+`Unauthorized` and `Forbidden` → `Forbidden` (-32600, `data` `"unauthorized"` /
+`"forbidden"`), `NotFound` → `NotFound` (-32002), request-shape kinds →
+`InvalidParams` (-32602), `Internal`/`Unavailable`/`Timeout` → `Internal`
+(-32603), `Conflict`/`RateLimited` → `McpError::tool(..)` carrying the details.
+Beans/config go on the struct, never as parameters.
 
 Resources and prompts — the same impl block can carry the two other MCP
 member families (one marker per method):

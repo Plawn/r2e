@@ -19,6 +19,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+Task #1072 (error projection layers) is the 0.5.0 break: one typed `Rejection`
+per failure, projected once per route through an error envelope. Each item is
+detailed under *Added*; the step-by-step developer migration is
+[`docs/migration/error-projection.md`](docs/migration/error-projection.md).
+
+- **Breaking: guards return `Result<(), Rejection>`** (task #1072, phase P1).
+  `Guard<I>::check` and `PreAuthGuard::check` no longer build a `Response`;
+  they return a `Rejection` (`Rejection::forbidden(..)`,
+  `Rejection::unauthenticated()`, or a typed error through `?`/`From`) that the
+  route projects through its envelope. `GuardContext::parse_path_param` returns
+  `Result<T, GuardError>`. Pre-auth guards are the first step of the route's
+  entry fn, not a middleware layer.
+- **Breaking: `ManagedResource::Error: Into<Rejection>`** (was
+  `IntoHttpResponse`). Acquire/finalize failures are projected like any other
+  rejection; `HttpError` still qualifies.
+- **Breaking: `ParamsRejectionFormat` and `server.params-rejection-format`
+  removed.** `#[derive(Params)]` failures always render through the route's
+  envelope (default `HttpError`, same body as the previous default).
+- **Breaking: `Via<T, M>` removed.** The generated handlers resolve bean-backed
+  extractors inline; hand-written handlers keep `BeanExtract<T, I>`. The
+  `ViaAxum` bridge now requires the axum rejection to convert `Into<Rejection>`
+  (every axum built-in does).
+- **Breaking: the gRPC guard family is gone** (task #1072, phase P3).
+  `GrpcGuard`, `GrpcGuardContext`, `GrpcRolesGuard` and `GrpcRoleBasedIdentity`
+  are removed from `r2e-grpc` (and its prelude); write `Guard<I>` impls and put
+  them on the method or impl block with `#[guard]` — they now work on HTTP,
+  gRPC and MCP alike. Manual `GrpcIdentityExtractor::extract_claims` wiring
+  still compiles but is no longer needed: use an `#[inject(identity)]`
+  parameter.
+- **Breaking: `r2e_mcp::guard::guard_rejection_to_error` removed**; the
+  generated tool code uses `McpError::from(rejection)`.
+- **Breaking: `RouteInfo.has_auth` removed** (task #1072, phase P2) in favour
+  of `rejection_kinds`; `RouteInfo` literals need the two new fields. The
+  OpenAPI spec no longer hardcodes 401/403/500/400: default-envelope routes
+  now list 415/413/422 for JSON bodies and 400 for path/query parameters
+  (what the runtime already answered), and the `FieldError` component is gone
+  (`ValidationErrorResponse.details` items are inline). `RejectionKind` is
+  `Serialize`.
+- **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
+  `Header`), so a `#[derive(Params)]` failure converts into the right
+  `RejectionKind`. Only code that builds `ParamError` by struct literal is
+  affected.
+- **Breaking: unknown routes and wrong methods answer JSON** (task #1072, phase P4). An
+  app without a fallback of its own used to get axum's empty-bodied 404 and
+  bodiless 405; they are now `404 {"error":"Not found"}` and `405
+  {"error":"Method not allowed"}` with `content-type: application/json` (or
+  the `error_projection::<E>()` envelope). `CatchPanicLayer::with_hook(hook)`
+  is replaced by `CatchPanicLayer::with(hook, projector)` and
+  `catch_panic_layer_with` takes the projector too.
+
 ### Added
 
 - **`Rejection` — one typed value for every framework failure** (task #1072,
@@ -156,51 +208,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **Breaking: guards return `Result<(), Rejection>`** (task #1072, phase P1).
-  `Guard<I>::check` and `PreAuthGuard::check` no longer build a `Response`;
-  they return a `Rejection` (`Rejection::forbidden(..)`,
-  `Rejection::unauthenticated()`, or a typed error through `?`/`From`) that the
-  route projects through its envelope. `GuardContext::parse_path_param` returns
-  `Result<T, GuardError>`. Pre-auth guards are the first step of the route's
-  entry fn, not a middleware layer.
-- **Breaking: `ManagedResource::Error: Into<Rejection>`** (was
-  `IntoHttpResponse`). Acquire/finalize failures are projected like any other
-  rejection; `HttpError` still qualifies.
-- **Breaking: `ParamsRejectionFormat` and `server.params-rejection-format`
-  removed.** `#[derive(Params)]` failures always render through the route's
-  envelope (default `HttpError`, same body as the previous default).
-- **Breaking: `Via<T, M>` removed.** The generated handlers resolve bean-backed
-  extractors inline; hand-written handlers keep `BeanExtract<T, I>`. The
-  `ViaAxum` bridge now requires the axum rejection to convert `Into<Rejection>`
-  (every axum built-in does).
-- **Breaking: the gRPC guard family is gone** (task #1072, phase P3).
-  `GrpcGuard`, `GrpcGuardContext`, `GrpcRolesGuard` and `GrpcRoleBasedIdentity`
-  are removed from `r2e-grpc` (and its prelude); write `Guard<I>` impls and put
-  them on the method or impl block with `#[guard]` — they now work on HTTP,
-  gRPC and MCP alike. Manual `GrpcIdentityExtractor::extract_claims` wiring
-  still compiles but is no longer needed: use an `#[inject(identity)]`
-  parameter.
-- **Breaking: `r2e_mcp::guard::guard_rejection_to_error` removed**; the
-  generated tool code uses `McpError::from(rejection)`.
-- **Breaking: `RouteInfo.has_auth` removed** (task #1072, phase P2) in favour
-  of `rejection_kinds`; `RouteInfo` literals need the two new fields. The
-  OpenAPI spec no longer hardcodes 401/403/500/400: default-envelope routes
-  now list 415/413/422 for JSON bodies and 400 for path/query parameters
-  (what the runtime already answered), and the `FieldError` component is gone
-  (`ValidationErrorResponse.details` items are inline). `RejectionKind` is
-  `Serialize`.
-- **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
-  `Header`), so a `#[derive(Params)]` failure converts into the right
-  `RejectionKind`. Only code that builds `ParamError` by struct literal is
-  affected.
 - `MultipartError` now implements `std::error::Error`.
-- **Unknown routes and wrong methods answer JSON** (task #1072, phase P4). An
-  app without a fallback of its own used to get axum's empty-bodied 404 and
-  bodiless 405; they are now `404 {"error":"Not found"}` and `405
-  {"error":"Method not allowed"}` with `content-type: application/json` (or
-  the `error_projection::<E>()` envelope). `CatchPanicLayer::with_hook(hook)`
-  is replaced by `CatchPanicLayer::with(hook, projector)` and
-  `catch_panic_layer_with` takes the projector too.
 - **`r2e-executor`: the pool drains after the HTTP drain, not before it**
   (task #1071). The `Executor` plugin's graceful drain moved from
   `on_shutdown_async` (step 2) to `on_shutdown_after_drain_async` (step 5).
