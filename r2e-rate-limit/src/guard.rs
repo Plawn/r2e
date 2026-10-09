@@ -1,12 +1,15 @@
 use std::sync::Once;
+use std::time::Duration;
 
 use r2e_core::beans::BeanContext;
 use r2e_core::config::R2eConfig;
 use r2e_core::decorators::guards::{
     ClientIp, Guard, GuardContext, Identity, PreAuthGuard, PreAuthGuardContext,
 };
+use r2e_core::http::header::{HeaderValue, RETRY_AFTER};
+use r2e_core::http::response::{IntoHttpResponse, Response};
 use r2e_core::type_list::{TCons, TNil};
-use r2e_core::DecoratorSpec;
+use r2e_core::{DecoratorSpec, Rejection, RejectionKind};
 
 use crate::RateLimitRegistry;
 
@@ -472,6 +475,63 @@ impl DecoratorSpec for ConfiguredRateLimit {
 // ---------------------------------------------------------------------------
 // Guards
 // ---------------------------------------------------------------------------
+
+/// The bucket for this request is empty.
+///
+/// Converts into a `RateLimited` (429) [`Rejection`] carrying `Retry-After`
+/// when a delay is known. The token-bucket registry refills continuously and
+/// does not expose a next-token estimate, so the built-in guards leave
+/// `retry_after` unset; custom guards built on a windowed limiter can fill it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RateLimited {
+    /// Suggested wait before retrying, rendered as `Retry-After` (whole
+    /// seconds, rounded up).
+    pub retry_after: Option<Duration>,
+}
+
+impl RateLimited {
+    /// Client-facing message.
+    pub const MESSAGE: &'static str = "Rate limit exceeded";
+
+    /// A denial with a known retry delay.
+    pub const fn after(retry_after: Duration) -> Self {
+        Self {
+            retry_after: Some(retry_after),
+        }
+    }
+}
+
+impl std::fmt::Display for RateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(Self::MESSAGE)
+    }
+}
+
+impl std::error::Error for RateLimited {}
+
+impl From<RateLimited> for Rejection {
+    fn from(limited: RateLimited) -> Self {
+        let rejection = Rejection::new(RejectionKind::RateLimited, RateLimited::MESSAGE);
+        match limited.retry_after {
+            Some(delay) => {
+                let secs = delay.as_secs() + u64::from(delay.subsec_nanos() > 0);
+                match HeaderValue::from_str(&secs.to_string()) {
+                    Ok(value) => rejection.header(RETRY_AFTER, value),
+                    Err(_) => rejection,
+                }
+            }
+            None => rejection,
+        }
+    }
+}
+
+impl IntoHttpResponse for RateLimited {
+    fn into_http_response(self) -> Response {
+        Rejection::from(self).into_http_response()
+    }
+}
+
+r2e_core::http::impl_into_response!(RateLimited);
 
 fn too_many_requests() -> r2e_core::http::Response {
     r2e_core::http::response::static_json(

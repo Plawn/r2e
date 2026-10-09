@@ -81,9 +81,22 @@ pub fn params_rejection_format() -> ParamsRejectionFormat {
     ParamsRejectionFormat::from_u8(FORMAT.load(Ordering::Relaxed))
 }
 
+/// Where a `#[derive(Params)]` field is read from — decides the
+/// [`RejectionKind`](crate::error::RejectionKind) of a failed extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamLocation {
+    /// A route path segment.
+    Path,
+    /// A query-string key.
+    Query,
+    /// A request header.
+    Header,
+}
+
 /// Error type for parameter extraction failures in `#[derive(Params)]`.
 #[derive(Debug)]
 pub struct ParamError {
+    pub location: ParamLocation,
     pub message: String,
 }
 

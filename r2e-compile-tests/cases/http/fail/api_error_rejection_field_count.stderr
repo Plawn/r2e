@@ -1,0 +1,11 @@
+error: #[error(rejection)] requires exactly one field, of type `Rejection`
+ --> cases/http/fail/api_error_rejection_field_count.rs:6:5
+  |
+6 |     Rejected(Rejection, String),
+  |     ^^^^^^^^
+
+error: #[error(rejection)] requires exactly one field, of type `Rejection`
+  --> cases/http/fail/api_error_rejection_field_count.rs:12:5
+   |
+12 |     Rejected,
+   |     ^^^^^^^^

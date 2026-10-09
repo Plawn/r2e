@@ -19,6 +19,7 @@ mod multipart;
 mod panic;
 mod params;
 mod plugins;
+mod rejection;
 mod request_id;
 mod secure_headers;
 mod sse;

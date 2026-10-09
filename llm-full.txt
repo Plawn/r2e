@@ -66,7 +66,7 @@ extra).
 
 | Your task involves… | Read | features |
 |---|---|---|
-| `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, panic capture / `on_panic` | `llm/error-handling.md` | core |
+| `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, `Rejection` / `RejectionKind`, `ErrorSchema`, error envelopes, `#[error(rejection)]`, panic capture / `on_panic` | `llm/error-handling.md` | core |
 | `#[bean]`, `#[producer]`, `AsyncBean`, `.provide` / `.register`, `ProvideBundle`, `Option<T>` beans, same-typed beans (newtypes) | `llm/di-beans.md` | core |
 | writing a `Plugin`, `Provided` / `Deps`, plugin config, plugin-shipped controllers, `HealthRegistry` | `llm/plugins.md` | core |
 | `#[post_construct]`, `#[pre_destroy]`, `#[on_start]`, startup/shutdown hooks | `llm/lifecycle-hooks.md` | core |
@@ -589,6 +589,12 @@ type StatusResult  = Result<StatusCode, HttpError>;
   impls so `?` converts into your error type; the bare `{ Err => Variant }` form
   targets `HttpError` and is orphan-rule-illegal outside `r2e-core` — convert at
   the call site with `.map_err(|e| HttpError::internal(e.to_string()))` instead.
+- Framework failures (extractor rejections, guard denials, garde reports, …) are
+  typed as one hub value, `Rejection { kind: RejectionKind, status, message,
+  details, headers, source }`. Every fault type converts with plain `From`;
+  `HttpError: From<Rejection>` renders the default bodies; your own envelope
+  implements `From<Rejection> + IntoHttpResponse + ErrorSchema` — or gets all
+  three from `#[derive(ApiError)]` with one `#[error(rejection)]` variant.
 - Panics are caught automatically (no plugin): JSON 500, plus one `error` event
   on target `r2e::panic` inside the request span (so `request_id` + `route`).
   Count them with `.on_panic(|report| ...)` — one hook for HTTP handlers,
@@ -634,6 +640,110 @@ pub enum MyError {
     Http(#[from] HttpError),
 }
 ```
+
+### `Rejection` — the typed framework failure
+
+Everything the framework rejects before or around your handler — a malformed
+JSON body, a missing `content-type`, a bad path segment, a failed JWT, a denied
+guard, a garde report, a rate limit — is one value: `Rejection` (prelude).
+
+```rust
+# fn __doc(r: Rejection) {
+let kind: RejectionKind = r.kind;        // closed enum, `#[non_exhaustive]`
+let status: StatusCode = r.status;       // starts at `kind.default_status()`
+let message: &str = &r.message;          // client-facing; `Display` prints it
+let details = r.details.as_ref();        // `Option<serde_json::Value>` — garde field errors
+let headers = &r.headers;                // `WWW-Authenticate`, `Retry-After`, …
+# }
+```
+
+`RejectionKind::default_status()` is the one status table: `MissingContentType`
+/ `UnsupportedMediaType` 415, `PayloadTooLarge` 413, `BodyRead` / `MalformedBody`
+/ `InvalidPath` / `InvalidQuery` / `InvalidForm` / `InvalidHeader` / `BadRequest`
+/ `Validation` 400, `InvalidBody` 422 (deserialized but semantically wrong),
+`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `Conflict` 409,
+`RateLimited` 429, `Internal` 500, `Unavailable` 503, `Timeout` 504, and
+`Opaque` for a pre-rendered `Response` the framework could not type.
+
+Faults reach the hub through std `From`, implemented in the crate that owns the
+fault: `JsonRejection` / `PathRejection` / `QueryRejection` / `FormRejection`,
+`ParamError` (by `location`), `HttpError`, `GuardError` (kind from the status,
+status kept), `SecurityError` (401 + `WWW-Authenticate: Bearer`, or 503 for a
+JWKS failure), `RolesDenied` (r2e-security), `RateLimited` (r2e-rate-limit,
+sets `Retry-After`), `FgaDenied` (r2e-openfga), `TenantError` (r2e-tenant; use
+`into_rejection(statuses)` to keep configured statuses), garde `Report`,
+`Response` (→ `Opaque`). Build one directly with `Rejection::new(kind, msg)`,
+`Rejection::with_status(kind, status, msg)`, `Rejection::from_status(status, msg)`
+or the shortcuts `unauthenticated()` / `forbidden(msg)` / `not_found(msg)` /
+`bad_request(msg)` / `internal(msg)`, then `.details(value)` /
+`.header(name, value)` / `.source(err)`.
+
+### Error envelopes — `From<Rejection> + IntoHttpResponse + ErrorSchema`
+
+An **envelope** is the type a rejection is projected into before it is
+rendered. `HttpError` is the default and reproduces the plain bodies
+(`{"error": msg}`, `{"error":"Validation failed","details":[…]}`). A foreign
+wire shape (OpenAI-style `{"error":{"type":…}}`, RFC 9457 problem details, …)
+is an envelope `E` with three impls:
+
+- `From<Rejection>` — build the body from `r.kind` / `r.message` / `r.details`,
+  and **read `r.status`**, never the table: the status may have been remapped or
+  carried by the fault (a 413 body read, a configured tenant status).
+- `IntoHttpResponse` (+ `impl_into_response!`), as for any response type.
+- `ErrorSchema` — the static side, read by the runtime **and** the OpenAPI
+  builder so the spec cannot say 422 where the server answers 400:
+
+```rust
+pub trait ErrorSchema {
+    /// Status for `kind`. Default: `kind.default_status()`. A kind left at its
+    /// default keeps whatever status the fault carried.
+    fn status_of(kind: RejectionKind) -> StatusCode { kind.default_status() }
+    /// `(component name, JSON Schema)` of the body; `None` = undocumented.
+    fn body_schema() -> Option<(String, serde_json::Value)>;
+    /// Per-kind body when one envelope has several shapes.
+    fn body_schema_for(_kind: RejectionKind) -> Option<(String, serde_json::Value)> { None }
+    /// Statuses the envelope emits that no inferred kind covers (502 for a proxy).
+    fn extra_statuses() -> Vec<(StatusCode, &'static str)> { Vec::new() }
+    /// Return an `Opaque` rejection untouched instead of re-wrapping it (`HttpError`: true).
+    fn opaque_passthrough() -> bool { false }
+}
+```
+
+`rejection.project::<E>()` is the one projection step: it applies
+`E::status_of(kind)` when that differs from the default, honours
+`opaque_passthrough`, calls `E::from(rejection).into_http_response()` and adds
+the hub headers (the envelope's own header of the same name wins).
+
+The quickest envelope is a derive: mark **one** variant `#[error(rejection)]`
+over a single `Rejection` field (or `#[error(transparent)]` over a `Rejection`
+field, which means the same). The derive then also emits `From<Rejection>` and
+`ErrorSchema` — `status_of` is the default table, `body_schema` delegates to
+`HttpError`'s, `extra_statuses` lists the other variants' fixed statuses, and
+`opaque_passthrough()` is `true`. The variant takes no `status`/`message`;
+remap statuses by implementing `ErrorSchema` by hand instead.
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+
+    #[error(rejection)]                 // From<Rejection> + ErrorSchema come with it
+    Rejected(Rejection),
+}
+
+fn __assert<E: From<Rejection> + IntoHttpResponse + ErrorSchema>() {}
+# fn __doc() {
+__assert::<ApiEnvelope>();
+__assert::<HttpError>();               // the default envelope
+# }
+```
+
+An enum whose only link to the framework is `#[error(transparent)] Http(#[from] HttpError)`
+inherits the same two impls through `HttpError`. Wiring an envelope to routes
+(`#[error(E)]`, `#[routes(error = E)]`, `AppBuilder::error_projection::<E>()`)
+lands with the next phase of #1072; until then an envelope is used by hand:
+`rejection.project::<MyEnvelope>()`.
 
 ### Hand-written response types
 
@@ -2553,7 +2663,10 @@ The same `Arc<JwtClaimsValidator>` bean validates the JWT once; light
   fields, applied as `MyGuard::spec(args)` (plain fields, declaration order). A
   missing bean is a compile error at `register_controller()`.
 - Deny with `Err(GuardError::forbidden(…).into())` / `unauthorized` /
-  `new(status, msg)`; read the request through `GuardContext`.
+  `new(status, msg)`; read the request through `GuardContext`. The built-in
+  guards deny with typed errors — `RolesDenied` (r2e-security), `RateLimited`
+  (r2e-rate-limit, carries `Retry-After`), `FgaDenied` (r2e-openfga) — which
+  render through `Rejection` (see `llm/error-handling.md`).
 - Checks that must run **before** JWT extraction implement `PreAuthGuard` and
   are applied with `#[pre_guard(…)]`.
 - Rate limiting needs feature `rate-limit` and `.provide(RateLimitRegistry::default())`;

@@ -1,5 +1,52 @@
 use r2e_core::decorators::guards::{Guard, GuardContext, Identity};
-use r2e_core::http::response::{IntoResponse, Response};
+use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
+use r2e_core::{Rejection, RejectionKind};
+
+/// Why a role check refused the request.
+///
+/// Typed so a custom guard (or, later, the projection layer) can match on
+/// the cause; converts into a `Forbidden` [`Rejection`] with `?`/`.into()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RolesDenied {
+    /// The route has no identity to read roles from (an `Option<I>` identity
+    /// that came back `None`).
+    NoIdentity,
+    /// The identity has none of (`#[roles]`) / not all of (`#[all_roles]`)
+    /// the required roles.
+    Insufficient,
+}
+
+impl RolesDenied {
+    /// Client-facing message.
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::NoIdentity => "No identity available for role check",
+            Self::Insufficient => "Insufficient roles",
+        }
+    }
+}
+
+impl std::fmt::Display for RolesDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for RolesDenied {}
+
+impl From<RolesDenied> for Rejection {
+    fn from(denied: RolesDenied) -> Self {
+        Rejection::new(RejectionKind::Forbidden, denied.message())
+    }
+}
+
+impl IntoHttpResponse for RolesDenied {
+    fn into_http_response(self) -> Response {
+        Rejection::from(self).into_http_response()
+    }
+}
+
+r2e_core::http::impl_into_response!(RolesDenied);
 
 /// Extension of [`Identity`] for role-based access control.
 ///
@@ -35,10 +82,9 @@ impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         let result = (|| {
-            let identity = ctx.identity.ok_or_else(|| {
-                r2e_core::HttpError::Forbidden("No identity available for role check".into())
-                    .into_response()
-            })?;
+            let identity = ctx
+                .identity
+                .ok_or_else(|| RolesDenied::NoIdentity.into_response())?;
             let roles = identity.roles();
             let has_role = !self.required_roles.is_empty()
                 && self
@@ -48,7 +94,7 @@ impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
             if has_role {
                 Ok(())
             } else {
-                Err(r2e_core::HttpError::Forbidden("Insufficient roles".into()).into_response())
+                Err(RolesDenied::Insufficient.into_response())
             }
         })();
         std::future::ready(result)
@@ -77,10 +123,9 @@ impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
         ctx: &GuardContext<'_, I>,
     ) -> impl std::future::Future<Output = Result<(), Response>> + Send {
         let result = (|| {
-            let identity = ctx.identity.ok_or_else(|| {
-                r2e_core::HttpError::Forbidden("No identity available for role check".into())
-                    .into_response()
-            })?;
+            let identity = ctx
+                .identity
+                .ok_or_else(|| RolesDenied::NoIdentity.into_response())?;
             let roles = identity.roles();
             let has_all = !self.required_roles.is_empty()
                 && self
@@ -90,7 +135,7 @@ impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
             if has_all {
                 Ok(())
             } else {
-                Err(r2e_core::HttpError::Forbidden("Insufficient roles".into()).into_response())
+                Err(RolesDenied::Insufficient.into_response())
             }
         })();
         std::future::ready(result)

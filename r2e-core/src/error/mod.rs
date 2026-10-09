@@ -1,3 +1,9 @@
+mod rejection;
+mod schema;
+
+pub use rejection::{Rejection, RejectionKind};
+pub use schema::ErrorSchema;
+
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -333,4 +339,100 @@ macro_rules! map_error {
             }
         )*
     };
+}
+
+// ── Rejection → HttpError: the default envelope ───────────────────────
+
+/// `HttpError` is the default projector: every rejection renders exactly as
+/// the 0.4 framework did (`{"error": msg}`,
+/// `{"error":"Validation failed","details":[…]}`; an opaque response is
+/// passed through by [`Rejection::project`]).
+///
+/// Reads `rejection.status`, never the kind table, so an envelope built on
+/// top of `HttpError` (`#[error(transparent)]`) inherits status remaps.
+impl From<Rejection> for HttpError {
+    fn from(rejection: Rejection) -> Self {
+        let Rejection {
+            kind,
+            status,
+            message,
+            details,
+            source,
+            ..
+        } = rejection;
+        match (kind, details) {
+            (RejectionKind::Validation, Some(details)) => {
+                match serde_json::from_value::<Vec<crate::web::validation::FieldError>>(details) {
+                    Ok(errors) => HttpError::Validation(
+                        crate::web::validation::ValidationErrorResponse { errors },
+                    ),
+                    Err(_) => HttpError::from_status(status, message),
+                }
+            }
+            // `HttpError::Custom` round-trips through `details`; so does any
+            // fault that ships a full body.
+            (_, Some(body)) => HttpError::Custom { status, body },
+            (_, None) => match source {
+                Some(source) => HttpError::WithSource {
+                    status,
+                    message,
+                    source,
+                },
+                None => HttpError::from_status(status, message),
+            },
+        }
+    }
+}
+
+impl ErrorSchema for HttpError {
+    fn body_schema() -> Option<(String, serde_json::Value)> {
+        Some((
+            "ErrorResponse".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "string",
+                        "description": "A human-readable error message"
+                    }
+                },
+                "required": ["error"]
+            }),
+        ))
+    }
+
+    fn body_schema_for(kind: RejectionKind) -> Option<(String, serde_json::Value)> {
+        match kind {
+            RejectionKind::Validation => Some((
+                "ValidationErrorResponse".to_string(),
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "error": {
+                            "type": "string",
+                            "description": "Always \"Validation failed\""
+                        },
+                        "details": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "field": { "type": "string" },
+                                    "message": { "type": "string" },
+                                    "code": { "type": "string" }
+                                },
+                                "required": ["field", "message", "code"]
+                            }
+                        }
+                    },
+                    "required": ["error", "details"]
+                }),
+            )),
+            _ => None,
+        }
+    }
+
+    fn opaque_passthrough() -> bool {
+        true
+    }
 }

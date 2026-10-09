@@ -1,11 +1,11 @@
 use crate::http::response::{IntoResponse, Response};
 use crate::http::{Json, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // ── Error types ────────────────────────────────────────────
 
 /// A field-level validation error.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldError {
     pub field: String,
     pub message: String,
@@ -13,9 +13,33 @@ pub struct FieldError {
 }
 
 /// Container for validation errors, used as the payload of `HttpError::Validation`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidationErrorResponse {
     pub errors: Vec<FieldError>,
+}
+
+impl ValidationErrorResponse {
+    /// Flatten a `garde` report into field errors (`code` is always
+    /// `"validation"`; an empty path renders as `value`).
+    #[must_use]
+    pub fn from_report(report: &garde::Report) -> Self {
+        let iter = report.iter();
+        let mut errors: Vec<FieldError> = Vec::with_capacity(iter.size_hint().0);
+        for (path, error) in iter {
+            let rendered = path.to_string();
+            let field = if rendered.is_empty() {
+                String::from("value")
+            } else {
+                rendered
+            };
+            errors.push(FieldError {
+                field,
+                message: error.message().to_owned(),
+                code: "validation".to_string(),
+            });
+        }
+        Self { errors }
+    }
 }
 
 // ── Autoref specialization for automatic validation ────────
@@ -72,26 +96,10 @@ struct ValidationErrorBody<'a> {
 }
 
 fn convert_garde_report(report: &garde::Report) -> Response {
-    let iter = report.iter();
-    let mut field_errors: Vec<FieldError> = Vec::with_capacity(iter.size_hint().0);
-
-    for (path, error) in iter {
-        let rendered = path.to_string();
-        let field = if rendered.is_empty() {
-            String::from("value")
-        } else {
-            rendered
-        };
-        field_errors.push(FieldError {
-            field,
-            message: error.message().to_owned(),
-            code: "validation".to_string(),
-        });
-    }
-
+    let resp = ValidationErrorResponse::from_report(report);
     let body = ValidationErrorBody {
         error: "Validation failed",
-        details: &field_errors,
+        details: &resp.errors,
     };
     (StatusCode::BAD_REQUEST, Json(body)).into_response()
 }

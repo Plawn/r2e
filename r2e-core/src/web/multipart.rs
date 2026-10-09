@@ -83,6 +83,8 @@ impl std::fmt::Display for MultipartError {
     }
 }
 
+impl std::error::Error for MultipartError {}
+
 impl IntoHttpResponse for MultipartError {
     fn into_http_response(self) -> Response {
         let status = match &self {

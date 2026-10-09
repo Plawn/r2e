@@ -112,7 +112,8 @@ pub enum RejectionKind {
     InvalidQuery,         // 400
     InvalidForm,          // 400
     InvalidHeader,        // 400
-    Validation,           // 400 — garde report in `details`
+    BadRequest,           // 400 — a client fault with no closer kind (`GuardError`, `from_status` fallback)
+    Validation,           // 400 — garde report in `details` (byte-equal with 0.4; `InvalidBody` is the 422)
     // auth
     Unauthenticated,      // 401
     Forbidden,            // 403
@@ -129,9 +130,16 @@ pub enum RejectionKind {
 }
 ```
 
-`RejectionKind::default_status()` is the one table. `Opaque` carries the
-original `Response` in a private slot: a projector may pass it through
-(`HttpError` does) or re-wrap it by status (an envelope projector does).
+`RejectionKind::default_status()` is the one table; `RejectionKind::from_status`
+is its inverse for faults that only carry a status (415/413/422/401/403/404/409/
+429/503/504 map to their kind, any other 4xx to `BadRequest`, anything else to
+`Internal`). `Opaque` carries the original `Response` in a private slot: a
+projector passes it through when `ErrorSchema::opaque_passthrough()` (`HttpError`
+does) or re-wraps it by status (an envelope projector does, body dropped).
+
+`Rejection`'s `Display` is the bare client message (an envelope's `Display`
+delegates to it); `Debug` has kind, status, details, headers and source.
+`Rejection: Error` with `source()` wired to the carried cause.
 
 Constructors keep the hot paths allocation-free: `Rejection::unauthenticated()`
 is `Cow::Borrowed`, and the `HttpError` projector keeps today's pre-serialised
@@ -148,15 +156,16 @@ owns it (r2e-core for the axum rejections, reached through
 |---|---|
 | `JsonRejection` | MissingContentType / BodyRead (+status) / MalformedBody / InvalidBody |
 | `PathRejection`, `QueryRejection`, `FormRejection` (axum) | InvalidPath / InvalidQuery / InvalidForm |
-| `MultipartRejection`, `TypedMultipart` errors | MalformedBody / InvalidBody / PayloadTooLarge |
-| `ParamError` (`#[derive(Params)]`) | InvalidQuery / InvalidHeader / InvalidPath per field location |
+| `MultipartRejection`, `MultipartError` (now `Error`) | MalformedBody / InvalidBody / PayloadTooLarge |
+| `ParamError` (`#[derive(Params)]`) | InvalidQuery / InvalidHeader / InvalidPath from the new `ParamError::location: ParamLocation` |
 | `HttpError` | by variant (`Validation` → Validation with details, `Custom` → by status, `WithSource` keeps source) |
 | `SecurityError` | Unauthenticated / Unavailable, with `WWW-Authenticate: Bearer` |
-| `GuardError` | by status |
-| `RolesDenied { required, missing }`, `FgaDenied { .. }` (new, typed) | Forbidden, details filled |
-| `RateLimited { retry_after }` (new, typed) | RateLimited, `Retry-After` set |
+| `GuardError` | kind `from_status`, the status is kept (a 418 stays 418) |
+| `RolesDenied::{NoIdentity, Insufficient}` (r2e-security, new) | Forbidden, messages byte-equal to 0.4 |
+| `FgaDenied::{NoIdentity, Denied, ObjectResolution(cause), CheckFailed}` (r2e-openfga, new) | Unauthenticated / Forbidden / BadRequest / Internal |
+| `RateLimited { retry_after: Option<Duration> }` (r2e-rate-limit, new) | RateLimited, `Retry-After` = seconds rounded up when set |
 | `ValidationErrorResponse` / garde report | Validation |
-| `TenantError` | NotFound / InvalidHeader / Unavailable / Timeout (keeps `TenantStatuses` overrides in `status`) |
+| `TenantError` | BadRequest / NotFound / Unavailable / Timeout / Internal; `TenantError::into_rejection(TenantStatuses)` keeps the configured statuses in `status`, `From` uses the defaults |
 | `Response` | Opaque |
 | `Infallible` | unreachable |
 
@@ -181,10 +190,21 @@ pub trait ErrorSchema {
     /// (`HttpError` emits `ValidationErrorResponse` for `Validation`).
     fn body_schema_for(_kind: RejectionKind) -> Option<(String, serde_json::Value)> { None }
     /// Statuses the envelope can emit that no inferred kind covers
-    /// (404 from a handler, 502 from a proxy, …).
-    fn extra_statuses() -> &'static [(u16, &'static str)] { &[] }
+    /// (404 from a handler, 502 from a proxy, …), as `(status, description)`.
+    fn extra_statuses() -> Vec<(StatusCode, &'static str)> { Vec::new() }
+    /// Return an `Opaque` rejection untouched instead of re-wrapping it.
+    /// `false` by default (one body shape); `HttpError` says `true` (0.4).
+    fn opaque_passthrough() -> bool { false }
 }
 ```
+
+`Rejection::project::<E>()` is the one runtime helper behind every level: it
+overwrites `status` with `E::status_of(kind)` **only when that differs from
+`kind.default_status()`** (so a status the fault carried — a 413 body read, a
+configured tenant status, a 418 `GuardError` — survives an envelope that does
+not remap the kind), honours `opaque_passthrough`, calls
+`E::from(self).into_http_response()`, then adds the hub `headers` with
+`or_insert` (an envelope's own header of the same name wins).
 
 - `HttpError: From<Rejection> + ErrorSchema` is the default projector and
   reproduces 0.4.0 exactly (`{"error": msg}`,
@@ -192,14 +212,20 @@ pub trait ErrorSchema {
 - `From<Rejection> for Response` goes through `HttpError` (legal: `Rejection` is
   local). It is what hand-written axum handlers merged via `merge_router` use.
 - `#[derive(ApiError)]` gains one variant attribute, `#[error(rejection)]`
-  (alias `#[from] Rejection`), on a variant holding a `Rejection`. The derive
-  then emits `From<Rejection>` (using `rejection.status`) and `ErrorSchema`
-  (`status_of` from the per-variant `#[error(status = ..)]` when the variant is
-  mapped, `body_schema` from the `JsonSchema` probe, `extra_statuses` from the
-  other variants' statuses). A derive with `#[error(transparent)]` over
-  `HttpError` inherits both impls. An enum without such a variant does not
-  implement `From<Rejection>`, and using it as `error = E` is a compile error
-  that names the missing attribute.
+  (alias: `#[error(transparent)]` over a single field whose type is
+  `Rejection`), on a variant holding exactly one `Rejection`. It takes no
+  `status`/`message` (both come from the carried `Rejection`; remap through
+  `ErrorSchema::status_of`), and only one variant may carry it (`From` would be
+  ambiguous) — both are compile errors. The derive then emits `From<Rejection>`
+  and `ErrorSchema`: `status_of` = the default table, `body_schema` /
+  `body_schema_for` delegate to `HttpError` (the rejection variant renders the
+  `HttpError` bodies; the `JsonSchema` probe for a custom body is P2),
+  `extra_statuses` = the sorted, de-duplicated fixed statuses of the other
+  variants with humanized names, `opaque_passthrough() = true`. An enum with
+  exactly one `#[error(transparent)]` variant over `HttpError` and no rejection
+  variant inherits the same impls (`E::Variant(HttpError::from(r))`); two such
+  variants emit nothing. An enum without any of this does not implement
+  `From<Rejection>`, and using it as `error = E` is a compile error (P1).
 - A hand-written envelope implements the three traits directly; the schema side
   uses `schemars` through the existing optional path (`r2e_schemars_path()`), so
   an app without the `openapi` feature pays nothing.
@@ -250,9 +276,9 @@ managed finalize                errors → Rejection → projector
 Every `Err(x)` on the way becomes:
 
 ```rust
-let mut r = Rejection::from(x);          // or the autoref probe → Opaque
-r.status = <E as ErrorSchema>::status_of(r.kind);
-return E::from(r).into_http_response();
+return Rejection::from(x).project::<E>();   // or the autoref probe → Opaque
+// = status_of remap (only when it differs from the default), opaque passthrough,
+//   E::from(r).into_http_response(), hub headers added with or_insert
 ```
 
 The handler's own `Err(E)` reaches the same `into_http_response`, so there is
@@ -377,7 +403,7 @@ impl ErrorSchema for OpenAiError {
         match kind { RejectionKind::InvalidBody => StatusCode::BAD_REQUEST, k => k.default_status() }
     }
     fn body_schema() -> Option<(String, Value)> { Some(schema_of::<OpenAiErrorBody>("OpenAiError")) }
-    fn extra_statuses() -> &'static [(u16, &'static str)] { &[(502, "Upstream failed")] }
+    fn extra_statuses() -> Vec<(StatusCode, &'static str)> { vec![(StatusCode::BAD_GATEWAY, "Upstream failed")] }
 }
 
 #[routes(error = OpenAiError)]
@@ -402,6 +428,9 @@ impl ChatCompletionsController {
 - `__R2eRequestData<M>` no longer implements `FromRequestParts` (internal, but
   the bridge table in `web/extract.rs` is public doc).
 - The default spec lists 413/415/422 for body routes.
+- `ParamError` gains `location: ParamLocation` (struct-literal construction
+  outside the derive breaks).
+- `Rejection` is new; its `Display` is the bare message.
 - Version: **0.5.0**, not the 0.4.1 the ticket assumed.
 
 Not breaking: handler signatures, `HttpError` bodies and statuses,
@@ -416,7 +445,7 @@ One PR per phase, sequential, same branch. Each phase ships green on
 
 | Phase | Scope | Tests |
 |---|---|---|
-| **P0** core types | `Rejection`, `RejectionKind`, `ErrorSchema`, every `From<X> for Rejection`, `From<Rejection> for HttpError` + `ErrorSchema for HttpError`, `From<Rejection> for Response`, typed guard errors (`RolesDenied`, `RateLimited`, `FgaDenied`), derive `#[error(rejection)]`. No codegen change. | `r2e-core/tests/http/rejection.rs` (new `mod`): kind → status table, every `From` impl, `HttpError` projection byte-equal to today's `into_response`, coherence `E::from(r).status() == E::status_of(r.kind)`; derive cases in `tests/http/api_error.rs`; `r2e-compile-tests` for derive misuse |
+| **P0** core types | `Rejection`, `RejectionKind`, `ErrorSchema`, every `From<X> for Rejection`, `From<Rejection> for HttpError` + `ErrorSchema for HttpError`, `From<Rejection> for Response`, typed guard errors (`RolesDenied`, `RateLimited`, `FgaDenied`), `TenantError::into_rejection`, `ParamError::location`, derive `#[error(rejection)]`. Guards still return `Response` (they render through the typed errors); no codegen change. **Shipped** (PR for P0). | `r2e-core/tests/http/rejection.rs` (new `mod`): kind → status table, every `From` impl, `HttpError` projection byte-equal to today's `into_response`, coherence `E::from(r).status() == E::status_of(r.kind)`; derive cases in `tests/http/api_error.rs`; `r2e-compile-tests` for derive misuse; owning-crate tests (`r2e-security/tests/{error,guards}.rs`, `r2e-rate-limit/tests/guard.rs`, `r2e-openfga/tests/guard.rs`, `r2e-tenant/tests/tenant/error.rs`) |
 | **P1** single projection point | Option B extraction in `handlers.rs` (route, SSE, WS), typed guards/validation/managed, `#[routes(error)]` + `#[error]`, `ParamsRejectionFormat` removal. | compile tests (missing trait, misplaced `#[error]`); `tests/http/projection.rs`: malformed body, missing content-type, bad path, failed identity, guard, garde, managed acquire and finalize all answer in `E`'s envelope with the right status and headers; identity failure never reads the body (counting body reader); every existing `r2e-core/tests/http` + `tests/decorators` test unchanged with the default projector |
 | **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo`, builder rewrite, `RequestBodySchema`. | spec snapshot: default projector (unchanged modulo 413/415/422), custom projector remapping 422→400 shows 400 only, extra 502 listed; custom body extractor documented |
 | **P3** transports | `From<Rejection>` for `McpError` and `tonic::Status`; delete the MCP body-read fold; delete `GrpcGuard`, gRPC codegen runs `Guard<I>`. | existing MCP/gRPC guard tests pass by kind; mapping table tests |

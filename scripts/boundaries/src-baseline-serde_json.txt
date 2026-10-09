@@ -20,6 +20,5 @@
 
 r2e-cli/src/commands/dev.rs:1
 r2e-devservices/src/openfga.rs:1
-r2e-openapi/src/handlers.rs:1
 r2e-openfga/macros/src/model_macro.rs:1
 r2e-test/src/app.rs:1

@@ -409,6 +409,7 @@ fn expand_inner(input: DeriveInput) -> syn::Result<TokenStream> {
                 .await
                 .map_err(|e| {
                     let err = #krate::web::params::ParamError {
+                        location: #krate::web::params::ParamLocation::Path,
                         message: format!("Failed to extract path parameters: {}", e),
                     };
                     #krate::http::response::IntoResponse::into_response(err)
@@ -529,6 +530,12 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
         ParamSource::Header { name } => name.as_str(),
     };
 
+    let location = match &field.source {
+        ParamSource::Path { .. } => quote! { #krate::web::params::ParamLocation::Path },
+        ParamSource::Query { .. } => quote! { #krate::web::params::ParamLocation::Query },
+        ParamSource::Header { .. } => quote! { #krate::web::params::ParamLocation::Header },
+    };
+
     let missing_fallback = |error_msg: &str| -> TokenStream {
         match &field.default_value {
             Some(DefaultValue::Trait) => quote! { Default::default() },
@@ -538,6 +545,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                 quote! {
                     return Err(#krate::http::response::IntoResponse::into_response(
                         #krate::web::params::ParamError {
+ location: #location,
                             message: #msg.to_string(),
                         }
                     ))
@@ -558,6 +566,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                                 Ok(val) => Some(val),
                                 Err(_) => return Err(#krate::http::response::IntoResponse::into_response(
                                     #krate::web::params::ParamError {
+ location: #location,
                                         message: format!("Invalid path parameter '{}': parse error", #name_str),
                                     }
                                 )),
@@ -572,6 +581,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                     let #ident = match __raw_path.iter().find(|(k, _)| *k == #name_str) {
                         Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                             #krate::web::params::ParamError {
+ location: #location,
                                 message: format!("Invalid path parameter '{}': parse error", #name_str),
                             }
                         ))?,
@@ -590,6 +600,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                         match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                             Some((_, v)) => Some(v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                 #krate::web::params::ParamError {
+ location: #location,
                                     message: format!("Invalid query parameter '{}': parse error", __key),
                                 }
                             ))?),
@@ -606,6 +617,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                                 match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                                     Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                         #krate::web::params::ParamError {
+ location: #location,
                                             message: format!("Invalid query parameter '{}': parse error", __key),
                                         }
                                     ))?,
@@ -621,6 +633,7 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                                 match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                                     Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                         #krate::web::params::ParamError {
+ location: #location,
                                             message: format!("Invalid query parameter '{}': parse error", __key),
                                         }
                                     ))?,
@@ -636,11 +649,13 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                                 match __query_pairs.iter().find(|(k, _)| k.as_str() == __key.as_ref()) {
                                     Some((_, v)) => v.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                         #krate::web::params::ParamError {
+ location: #location,
                                             message: format!("Invalid query parameter '{}': parse error", __key),
                                         }
                                     ))?,
                                     None => return Err(#krate::http::response::IntoResponse::into_response(
                                         #krate::web::params::ParamError {
+ location: #location,
                                             message: format!("Missing query parameter '{}'", __key),
                                         }
                                     )),
@@ -660,11 +675,13 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                         Some(v) => {
                             let s = v.to_str().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                 #krate::web::params::ParamError {
+ location: #location,
                                     message: format!("Invalid header '{}': not valid UTF-8", #name_str),
                                 }
                             ))?;
                             Some(s.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                 #krate::web::params::ParamError {
+ location: #location,
                                     message: format!("Invalid header '{}': parse error", #name_str),
                                 }
                             ))?)
@@ -679,11 +696,13 @@ fn generate_field_construction(field: &ParamField, krate: &TokenStream) -> Token
                         Some(v) => {
                             let s = v.to_str().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                 #krate::web::params::ParamError {
+ location: #location,
                                     message: format!("Invalid header '{}': not valid UTF-8", #name_str),
                                 }
                             ))?;
                             s.parse().map_err(|_| #krate::http::response::IntoResponse::into_response(
                                 #krate::web::params::ParamError {
+ location: #location,
                                     message: format!("Invalid header '{}': parse error", #name_str),
                                 }
                             ))?

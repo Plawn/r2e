@@ -4,7 +4,8 @@ use crate::error::OpenFgaError;
 use crate::registry::OpenFgaRegistry;
 use r2e_core::beans::BeanContext;
 use r2e_core::decorators::guards::{Guard, GuardContext, Identity};
-use r2e_core::http::response::IntoResponse;
+use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
+use r2e_core::{Rejection, RejectionKind};
 use r2e_core::type_list::{TCons, TNil};
 use r2e_core::{DecoratorSpec, PathParam};
 
@@ -294,6 +295,72 @@ impl FgaObjectBuilder {
 /// Holds the [`OpenFgaRegistry`] as a field (resolved once at controller
 /// registration via [`FgaCheck`]'s [`DecoratorSpec`] impl) — there is no state
 /// lookup at request time.
+/// Why an OpenFGA check refused the request.
+///
+/// Typed so callers can match on the cause; converts into a [`Rejection`]
+/// (`Unauthenticated` / `Forbidden` / `BadRequest` / `Internal`) with
+/// `?`/`.into()`. Messages never leak the tuple being checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FgaDenied {
+    /// No identity on the request to derive the `user:` subject from.
+    NoIdentity,
+    /// The subject contains a reserved character, or the store answered
+    /// "not allowed".
+    Denied,
+    /// The object could not be resolved from the request (missing or
+    /// malformed path parameter).
+    ObjectResolution(String),
+    /// The store call failed.
+    CheckFailed,
+}
+
+impl FgaDenied {
+    /// The rejection kind this cause maps to.
+    pub const fn kind(&self) -> RejectionKind {
+        match self {
+            Self::NoIdentity => RejectionKind::Unauthenticated,
+            Self::Denied => RejectionKind::Forbidden,
+            Self::ObjectResolution(_) => RejectionKind::BadRequest,
+            Self::CheckFailed => RejectionKind::Internal,
+        }
+    }
+}
+
+impl std::fmt::Display for FgaDenied {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoIdentity => f.write_str("Authentication required for authorization check"),
+            Self::Denied => f.write_str("Access denied"),
+            Self::ObjectResolution(cause) => write!(f, "Failed to resolve object: {cause}"),
+            Self::CheckFailed => f.write_str("Authorization check failed"),
+        }
+    }
+}
+
+impl std::error::Error for FgaDenied {}
+
+impl From<FgaDenied> for Rejection {
+    fn from(denied: FgaDenied) -> Self {
+        let kind = denied.kind();
+        match denied {
+            FgaDenied::NoIdentity => {
+                Rejection::new(kind, "Authentication required for authorization check")
+            }
+            FgaDenied::Denied => Rejection::new(kind, "Access denied"),
+            FgaDenied::CheckFailed => Rejection::new(kind, "Authorization check failed"),
+            FgaDenied::ObjectResolution(_) => Rejection::new(kind, denied.to_string()),
+        }
+    }
+}
+
+impl IntoHttpResponse for FgaDenied {
+    fn into_http_response(self) -> Response {
+        Rejection::from(self).into_http_response()
+    }
+}
+
+r2e_core::http::impl_into_response!(FgaDenied);
+
 pub struct FgaGuard {
     pub registry: OpenFgaRegistry,
     pub check: FgaCheck,

@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
 use r2e_core::http::StatusCode;
-use r2e_core::HttpError;
+use r2e_core::{HttpError, Rejection, RejectionKind};
 
 use crate::TenantId;
 
@@ -82,6 +82,32 @@ impl TenantError {
         matches!(self, Self::Cycle(_) | Self::NoSource(_))
     }
 
+    /// Map to a [`Rejection`] with the deployment's configured statuses.
+    ///
+    /// The kind follows the table in the module docs (`BadRequest` /
+    /// `NotFound` / `Unavailable` / `Timeout` / `Internal`); the configured
+    /// status overrides the kind's default and survives projection. The
+    /// `Unavailable` cause is kept as [`Rejection::source`].
+    #[must_use]
+    pub fn into_rejection(self, statuses: TenantStatuses) -> Rejection {
+        let message = self.to_string();
+        match self {
+            Self::Unresolved => {
+                Rejection::with_status(RejectionKind::BadRequest, statuses.missing, message)
+            }
+            Self::Unknown(_) => {
+                Rejection::with_status(RejectionKind::NotFound, statuses.unknown, message)
+            }
+            Self::Unavailable { ref source, .. } => {
+                let source = Arc::clone(source);
+                Rejection::with_status(RejectionKind::Unavailable, statuses.unavailable, message)
+                    .source_arc(source)
+            }
+            Self::Timeout(_) => Rejection::new(RejectionKind::Timeout, message),
+            Self::Cycle(_) | Self::NoSource(_) => Rejection::new(RejectionKind::Internal, message),
+        }
+    }
+
     /// Map to an [`HttpError`] with the deployment's configured statuses.
     #[must_use]
     pub fn into_http_error(self, statuses: TenantStatuses) -> HttpError {
@@ -129,6 +155,12 @@ impl StdError for TenantError {
             Self::Unavailable { source, .. } => Some(source.as_ref()),
             _ => None,
         }
+    }
+}
+
+impl From<TenantError> for Rejection {
+    fn from(err: TenantError) -> Self {
+        err.into_rejection(TenantStatuses::default())
     }
 }
 

@@ -1,7 +1,7 @@
 ---
 topic: guards
 features: core, rate-limit
-tokens: ~2500
+tokens: ~2600
 requires: security
 ---
 
@@ -17,7 +17,10 @@ requires: security
   fields, applied as `MyGuard::spec(args)` (plain fields, declaration order). A
   missing bean is a compile error at `register_controller()`.
 - Deny with `Err(GuardError::forbidden(…).into())` / `unauthorized` /
-  `new(status, msg)`; read the request through `GuardContext`.
+  `new(status, msg)`; read the request through `GuardContext`. The built-in
+  guards deny with typed errors — `RolesDenied` (r2e-security), `RateLimited`
+  (r2e-rate-limit, carries `Retry-After`), `FgaDenied` (r2e-openfga) — which
+  render through `Rejection` (see `llm/error-handling.md`).
 - Checks that must run **before** JWT extraction implement `PreAuthGuard` and
   are applied with `#[pre_guard(…)]`.
 - Rate limiting needs feature `rate-limit` and `.provide(RateLimitRegistry::default())`;

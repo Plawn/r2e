@@ -21,6 +21,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`Rejection` — one typed value for every framework failure** (task #1072,
+  phase P0 of `plans/error-projection.md`). `r2e_core::error::Rejection { kind:
+  RejectionKind, status, message, details, headers, source }` is the hub every
+  fault converts into with plain `From`: the axum `Json`/`Path`/`Query`/`Form`
+  rejections, `ParamError` (by its new `location`), `HttpError`, `GuardError`,
+  `MultipartError`, garde reports, `SecurityError` (with `WWW-Authenticate`),
+  `TenantError` (`TenantError::into_rejection(TenantStatuses)` keeps the
+  configured statuses), a raw `Response` (kind `Opaque`).
+  `RejectionKind::default_status()` is the one status table and
+  `RejectionKind::from_status` its inverse. `Rejection::project::<E>()` renders
+  through an envelope `E: From<Rejection> + IntoHttpResponse + ErrorSchema`;
+  `HttpError` is the default envelope and its bodies are byte-equal to 0.4.
+- **`ErrorSchema`** (`r2e_core::error`, prelude): the static side of an error
+  envelope — `status_of(kind)`, `body_schema()`, `body_schema_for(kind)`,
+  `extra_statuses()`, `opaque_passthrough()` — read by the runtime and, from
+  phase P2, by the OpenAPI builder.
+- **Typed guard errors**: `r2e_security::RolesDenied`,
+  `r2e_rate_limit::RateLimited { retry_after }` (emits `Retry-After`, seconds
+  rounded up) and `r2e_openfga::FgaDenied`. Each is `Error`, converts into
+  `Rejection`, and renders through it; the built-in guards use them and their
+  bodies are unchanged.
+- **`#[derive(ApiError)]`: `#[error(rejection)]`** on one variant holding a
+  `Rejection` (alias: `#[error(transparent)]` over a `Rejection` field). The
+  derive then also emits `From<Rejection>` and `ErrorSchema`. An enum with
+  exactly one `#[error(transparent)]` variant over `HttpError` inherits both
+  impls. `status`/`message` on that variant and two such variants are compile
+  errors.
+
 - **`StopPhase::AfterDrain` background services** (task #1071). A
   `ServiceComponent` can declare `fn stop_phase() -> StopPhase` and
   `fn stop_order() -> i32` — with the derive,
@@ -40,6 +68,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
+  `Header`), so a `#[derive(Params)]` failure converts into the right
+  `RejectionKind`. Only code that builds `ParamError` by struct literal is
+  affected.
+- `MultipartError` now implements `std::error::Error`.
 - **`r2e-executor`: the pool drains after the HTTP drain, not before it**
   (task #1071). The `Executor` plugin's graceful drain moved from
   `on_shutdown_async` (step 2) to `on_shutdown_after_drain_async` (step 5).

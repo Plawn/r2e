@@ -1,1 +1,1 @@
-pub use axum::extract::Multipart;
+pub use axum::extract::{multipart::MultipartRejection, Multipart};

@@ -517,7 +517,9 @@ impl<'a> PreAuthGuardContext<'a> {
 /// A convenient error type for guard implementations.
 ///
 /// Instead of constructing `Response` manually, guards can return
-/// `GuardError` and convert it with `.into()`.
+/// `GuardError` and convert it with `.into()`. It also converts into a
+/// [`Rejection`](crate::error::Rejection) (kind chosen from the status, status
+/// preserved), which is what the projection layer consumes.
 ///
 /// # Example
 /// ```ignore

@@ -115,7 +115,7 @@ pub use crate::decorators::interceptors::{Interceptor, InterceptorContext};
 pub use crate::di::event_subscriber::EventSubscriber;
 pub use crate::di::module::FeatureModule;
 pub use crate::di::scheduled_source::ScheduledSource;
-pub use crate::error::{HttpError, HttpErrorExt};
+pub use crate::error::{ErrorSchema, HttpError, HttpErrorExt, Rejection, RejectionKind};
 pub use crate::plugin::{
     GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext,
 };
