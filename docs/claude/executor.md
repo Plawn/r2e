@@ -76,13 +76,30 @@ let m = exec.metrics(); // running / queued / completed / rejected (u64)
 ### Panic reporting (#1027)
 
 A panicking job is contained at the poll level (`catch_unwind` around every
-poll), so the pool's bookkeeping always lands even mid-unwind: the permit is
-released, the drain count decremented, `completed` incremented, and the idle
-notification fired — a graceful shutdown after a panicked job drains promptly
-instead of sitting out its timeout. The payload is then reported through
-`report_caught_panic` (one `r2e::panic` error line + the app's
-`AppBuilder::on_panic` hook, contained) and re-raised with `resume_unwind`, so
-the `JobHandle` still resolves to a `JoinError` with `is_panic() == true`.
+poll) so the pool can report the payload through `report_caught_panic` (one
+`r2e::panic` error line + the app's `AppBuilder::on_panic` hook, contained)
+before re-raising it with `resume_unwind`, so the `JobHandle` still resolves
+to a `JoinError` with `is_panic() == true`.
+
+The bookkeeping does **not** rely on that catch (#1066). Every counter a job
+touches is paired through an RAII guard in `lib.rs`: `QueuedGuard` holds the
+`queued` slot while the job waits for a permit, and `RunningGuard` owns the
+permit and the `drain_count` slot while it runs — its drop releases the
+permit first, then decrements `drain_count` (`Release`, paired with the
+`Acquire` read in `shutdown_graceful`), increments `completed` and fires the
+idle notification when it was the last job of a shutting-down pool. A job
+future can end three ways — return, unwind, or be *dropped*
+(`JobHandle::abort`, or the runtime tearing the task down) — and only a
+`Drop` impl runs on all three. Before the guards, one aborted running job
+pinned `drain_count` above zero forever, so every graceful shutdown after it
+sat out the whole `shutdown-timeout` on an idle pool; an aborted queued job
+likewise leaked its `queued` slot and made `try_submit` reject early.
+
+Both submission paths run the same body, `run_job` (acquire → guard → catch →
+report), so `spawn_job` (handle-returning) and `submit_detached` cannot drift:
+the only difference is what happens when the pool shuts down before the job
+ran — the detached job is silently gone, the handle-returning one panics so
+its `JobHandle` resolves to a cancelled `JoinError`.
 
 Origins: a plain `submit`/`try_submit`/`submit_detached` job reports
 `PanicOrigin::Executor { job: None }` (label `<unnamed>`); `submit_named`
@@ -103,8 +120,8 @@ time** — `on_panic` registered after `build_state()` still fires, and each
 dev-reload cycle's rebuilt pool gets the fresh registry's slot. A pool built
 with `PoolExecutor::new` has a detached slot: panics are still contained and
 logged, no app hook fires. The framework-generated "executor shut down while
-job was queued/pending" panics stay *outside* the catch on purpose — they are
-cancellation signals, not user-job panics, and must not reach the hook.
+job was queued" panic stays *outside* the catch on purpose — it is a
+cancellation signal, not a user-job panic, and must not reach the hook.
 
 ### Shutdown
 
@@ -401,7 +418,12 @@ constructor.
 
 - `executor.rs` — `submit_and_await`, `concurrent_limit_enforced_by_semaphore`,
   `try_submit_rejects_when_queue_full`, `graceful_shutdown_drains_running_jobs`,
-  `shutdown_aborts_queued_submissions`.
+  `shutdown_aborts_queued_submissions`, and the #1066 abort guards
+  (`aborting_a_running_job_releases_its_drain_slot`,
+  `aborting_a_queued_job_releases_its_queue_slot`,
+  `shutdown_while_a_detached_job_is_queued_releases_its_queue_slot`).
+- `panic.rs` — panic reporting (#1027): origin/label per submission path, hook
+  containment, `bookkeeping_survives_a_panicking_job`.
 - `bg_service.rs` — `#[derive(BackgroundService)]` round-trip.
 - `async_exec.rs` — `#[async_exec]` codegen returning `Result<JobHandle<T>, RejectedError>`,
   on both a `#[routes]` controller and a `#[bean]` impl.
