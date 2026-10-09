@@ -92,6 +92,10 @@ pub struct DeferredContext<'a> {
     /// Shutdown hooks from plugins (async, awaited during shutdown).
     #[doc(hidden)]
     pub async_shutdown_hooks: &'a mut Vec<AsyncShutdownHook>,
+    /// Plugin hooks awaited after the HTTP drain and the after-drain
+    /// services, before `on_stop`.
+    #[doc(hidden)]
+    pub post_drain_async_hooks: &'a mut Vec<AsyncShutdownHook>,
     /// The fully resolved bean graph, available because deferred actions run
     /// after `build_state()`. Read beans out of it via
     /// [`bean_context`](DeferredContext::bean_context).
@@ -298,6 +302,27 @@ impl DeferredContext<'_> {
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
         self.async_shutdown_hooks
+            .push(Box::new(move || Box::pin(hook())));
+    }
+
+    /// Add an async hook awaited **after the HTTP drain** — once in-flight
+    /// requests have returned, the tracked handles are joined and the
+    /// [`AfterDrain`](crate::StopPhase::AfterDrain) services are stopped — and
+    /// before the `on_stop` hooks.
+    ///
+    /// [`on_shutdown_async`](Self::on_shutdown_async) runs at step 2, *before*
+    /// the listener stops accepting: right for releasing what nothing
+    /// request-side still needs. This hook is the other half: a drain that
+    /// must still accept what the request path hands it until the last
+    /// request is gone — the executor pool's graceful drain lives here, so a
+    /// handler submitting a job during the HTTP drain is not refused with
+    /// "shutting down". Unbounded, like every plugin hook.
+    pub fn on_shutdown_after_drain_async<F, Fut>(&mut self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.post_drain_async_hooks
             .push(Box::new(move || Box::pin(hook())));
     }
 }

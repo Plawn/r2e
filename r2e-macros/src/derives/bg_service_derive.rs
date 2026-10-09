@@ -31,8 +31,11 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     // Phase 4: services construct from the bean graph by type — a named state
     // no longer exists. Reject the removed `#[service(state = ...)]` attribute
-    // with a migration hint. `enabled = "…"` is the one accepted argument.
+    // with a migration hint. Accepted arguments: `enabled = "…"`,
+    // `stop = "early" | "after_drain"`, `order = N` (after-drain only).
     let mut enabled_gate: Option<syn::LitStr> = None;
+    let mut stop_phase: Option<(syn::LitStr, StopPhaseArg)> = None;
+    let mut stop_order: Option<syn::LitInt> = None;
     for attr in &input.attrs {
         if attr.path().is_ident("service") {
             attr.parse_nested_meta(|meta| {
@@ -48,21 +51,67 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     }
                     enabled_gate = Some(meta.value()?.parse::<syn::LitStr>()?);
                     Ok(())
+                } else if meta.path.is_ident("stop") {
+                    if stop_phase.is_some() {
+                        return Err(meta.error("duplicate `stop` in #[service(...)]"));
+                    }
+                    let lit = meta.value()?.parse::<syn::LitStr>()?;
+                    let phase = match lit.value().as_str() {
+                        "early" => StopPhaseArg::Early,
+                        "after_drain" => StopPhaseArg::AfterDrain,
+                        other => {
+                            return Err(syn::Error::new_spanned(
+                                &lit,
+                                format!(
+                                    "unknown stop phase `{other}` in #[service(stop = ...)] — \
+                                     expected \"early\" (cancelled before the HTTP drain, the \
+                                     default) or \"after_drain\" (cancelled once in-flight \
+                                     requests have finished)"
+                                ),
+                            ))
+                        }
+                    };
+                    stop_phase = Some((lit, phase));
+                    Ok(())
+                } else if meta.path.is_ident("order") {
+                    if stop_order.is_some() {
+                        return Err(meta.error("duplicate `order` in #[service(...)]"));
+                    }
+                    stop_order = Some(meta.value()?.parse::<syn::LitInt>()?);
+                    Ok(())
                 } else {
                     Err(meta.error(
                         "unknown attribute in #[service(...)] — expected `enabled = \"<field or \
-                         method>\"`",
+                         method>\"`, `stop = \"early\" | \"after_drain\"` or `order = <i32>`",
                     ))
                 }
             })?;
         }
     }
 
+    // `order` only means something on the after-drain lane; on the early lane
+    // every service is cancelled at once, so an order there is a silent no-op
+    // the author would mistake for sequencing.
+    if let Some(order) = &stop_order {
+        if !matches!(stop_phase, Some((_, StopPhaseArg::AfterDrain))) {
+            return Err(syn::Error::new_spanned(
+                order,
+                "#[service(order = …)] requires `stop = \"after_drain\"`: early services are \
+                 all cancelled together before the HTTP drain, so they have no stop order",
+            ));
+        }
+    }
+    let stop_fns = stop_fns(
+        &krate,
+        stop_phase.as_ref().map(|(_, p)| *p),
+        stop_order.as_ref(),
+    );
+
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(named) => &named.named,
             Fields::Unit => {
-                return generate_unit_impl(name, &krate, enabled_gate.as_ref());
+                return generate_unit_impl(name, &krate, enabled_gate.as_ref(), &stop_fns);
             }
             _ => {
                 return Err(syn::Error::new_spanned(
@@ -249,6 +298,8 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             #enabled_fns
 
+            #stop_fns
+
             fn from_context(__ctx: &#krate::beans::BeanContext) -> Self {
                 #config_prelude
                 #live_config_prelude
@@ -267,10 +318,46 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
+/// `#[service(stop = …, order = …)]`, parsed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StopPhaseArg {
+    Early,
+    AfterDrain,
+}
+
+/// The `stop_phase` / `stop_order` overrides to emit — nothing when neither
+/// argument is given, so a plain service keeps the trait defaults.
+fn stop_fns(
+    krate: &TokenStream2,
+    phase: Option<StopPhaseArg>,
+    order: Option<&syn::LitInt>,
+) -> TokenStream2 {
+    let phase_fn = match phase {
+        None => quote! {},
+        Some(StopPhaseArg::Early) => quote! {
+            fn stop_phase() -> #krate::StopPhase { #krate::StopPhase::Early }
+        },
+        Some(StopPhaseArg::AfterDrain) => quote! {
+            fn stop_phase() -> #krate::StopPhase { #krate::StopPhase::AfterDrain }
+        },
+    };
+    let order_fn = match order {
+        None => quote! {},
+        Some(lit) => quote! {
+            fn stop_order() -> i32 { #lit }
+        },
+    };
+    quote! {
+        #phase_fn
+        #order_fn
+    }
+}
+
 fn generate_unit_impl(
     name: &syn::Ident,
     krate: &TokenStream2,
     enabled_gate: Option<&syn::LitStr>,
+    stop_fns: &TokenStream2,
 ) -> syn::Result<TokenStream2> {
     // A unit struct has no fields, so the gate can only be a `&self` method.
     let enabled_fns = match enabled_gate {
@@ -301,6 +388,8 @@ fn generate_unit_impl(
             type Deps = #krate::type_list::TNil;
 
             #enabled_fns
+
+            #stop_fns
 
             fn from_context(_ctx: &#krate::beans::BeanContext) -> Self { #name }
 

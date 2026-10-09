@@ -6,6 +6,7 @@
 //! make every serving test here skip its startup lifecycle. See
 //! `tests/dev_reload/main.rs`.
 
+mod post_drain_services;
 mod rt;
 mod sharded;
 mod shutdown_budget;

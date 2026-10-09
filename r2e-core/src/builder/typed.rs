@@ -8,11 +8,15 @@ use super::*;
 impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub(crate) fn collect_service_sources(
         mut self,
-        service_sources: Vec<(&'static str, crate::beans::ServiceSourceHook)>,
+        service_sources: Vec<(
+            &'static str,
+            crate::runtime::service::StopSpec,
+            crate::beans::ServiceSourceHook,
+        )>,
     ) -> Self {
-        for (name, hook) in service_sources {
+        for (name, stop, hook) in service_sources {
             let ctx = Arc::clone(&self.bean_context);
-            self = self.register_service(name, move |token| {
+            self = self.register_service(name, stop, move |token| {
                 tracing::debug!(service = name, "started bean service");
                 hook(&ctx, token)
             });
@@ -20,19 +24,60 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Spawn a background task, track its join handle for shutdown draining,
-    /// and register a shutdown hook that cancels it. Shared by
+    /// Spawn a background task on the lane its [`StopPhase`] selects, and
+    /// register whatever stops it. Shared by
     /// [`spawn_service`](Self::spawn_service) and
     /// [`collect_service_sources`](Self::collect_service_sources); `run`
     /// receives the [`CancelToken`] and returns the service future.
     ///
-    /// `name` labels the tracked handle: it is what the `shutdown_grace_period`
+    /// `name` labels the handle: it is what the `shutdown_grace_period`
     /// warning names when this service is the one that did not stop in time.
-    fn register_service<F, Fut>(mut self, name: &'static str, run: F) -> Self
+    ///
+    /// - [`StopPhase::Early`]: a child of the app shutdown root on the tracked
+    ///   lane, cancelled by a plugin sync hook at step 2 and joined with every
+    ///   other tracked handle after the HTTP drain;
+    /// - [`StopPhase::AfterDrain`]: a child of the **post-drain** root on its
+    ///   own lane, untouched until the drain and the tracked-handle join are
+    ///   over, then cancelled and joined on its own, in `order`.
+    fn register_service<F, Fut>(
+        mut self,
+        name: &'static str,
+        stop: crate::runtime::service::StopSpec,
+        run: F,
+    ) -> Self
     where
         F: FnOnce(CancelToken) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
+        // The service task owns the graph while it runs: `spawn_service` tasks
+        // are only *best-effort* awaited (an elapsed `shutdown_grace_period`,
+        // or a dropped `run()` future under `r2e dev`, leaves them detached and
+        // running), and a `BackgroundService` resolving through a `GraphHandle`
+        // must not see a dead graph on those paths.
+        let graph = Arc::clone(&self.bean_context);
+
+        if stop.phase == StopPhase::AfterDrain {
+            // A CHILD of the post-drain root — NOT of the app shutdown root,
+            // which step 3 cancels: this service must outlive that. The root's
+            // drop guard (armed in `start_lifecycle`) is what still reaches it
+            // on the uncontrolled exits (a panic, a dropped `run()` future).
+            let token = post_drain_root(&mut self.shared.plugin_data).child_token();
+            let lane = self
+                .shared
+                .plugin_data
+                .entry(TypeId::of::<PostDrainServices>())
+                .or_insert_with(|| Box::new(PostDrainServices::default()))
+                .downcast_ref::<PostDrainServices>()
+                .expect("PostDrainServices type mismatch in plugin_data")
+                .clone();
+            let order = stop.order;
+            return self.on_start(move |_state| async move {
+                let fut = run(token.clone());
+                lane.spawn_owning(name, order, graph, token, fut);
+                Ok(())
+            });
+        }
+
         // A CHILD of the app shutdown root, not a fresh token. The sync
         // shutdown hook below cancels it early in the normal shutdown sequence
         // (before the HTTP drain, as documented), and cancelling the root
@@ -54,12 +99,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .expect("ServiceHandles type mismatch in plugin_data")
             .clone();
 
-        // The service task owns the graph while it runs: `spawn_service` tasks
-        // are only *best-effort* awaited (an elapsed `shutdown_grace_period`,
-        // or a dropped `run()` future under `r2e dev`, leaves them detached and
-        // running), and a `BackgroundService` resolving through a `GraphHandle`
-        // must not see a dead graph on those paths.
-        let graph = Arc::clone(&self.bean_context);
         self = self.on_start(move |_state| async move {
             handles.spawn_owning(name, graph, run(token));
             Ok(())
@@ -107,6 +146,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             serve_hooks: Vec::new(),
             plugin_shutdown_hooks: Vec::new(),
             plugin_async_shutdown_hooks: Vec::new(),
+            plugin_post_drain_async_hooks: Vec::new(),
             controller_disposers: Vec::new(),
             bean_disposers: Vec::new(),
             _provided: PhantomData,
@@ -125,6 +165,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 serve_hooks: &mut builder.serve_hooks,
                 shutdown_hooks: &mut builder.plugin_shutdown_hooks,
                 async_shutdown_hooks: &mut builder.plugin_async_shutdown_hooks,
+                post_drain_async_hooks: &mut builder.plugin_post_drain_async_hooks,
                 bean_context: &builder.bean_context,
                 config: deferred_config.as_ref(),
                 routes_effects: &mut builder.shared.routes_effects,
@@ -547,7 +588,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // the service was validated against.
         let globally_enabled =
             crate::runtime::service::services_enabled(self.shared.config.as_ref());
-        Ok(self.register_service(name, move |token| async move {
+        let stop = crate::runtime::service::StopSpec::of::<C>();
+        Ok(self.register_service(name, stop, move |token| async move {
             // Both gates are read at spawn time, on the constructed instance:
             // everything above (registration, `from_context`, config
             // validation) has already happened unconditionally, exactly as it
@@ -1081,6 +1123,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             serve_hooks: self.serve_hooks,
             plugin_shutdown_hooks: self.plugin_shutdown_hooks,
             async_shutdown_hooks,
+            post_drain_async_hooks: self.plugin_post_drain_async_hooks,
             plugin_data: self.shared.plugin_data,
             state,
             shutdown_grace_period: self.shared.shutdown_grace_period,
@@ -1198,6 +1241,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             serve_hooks,
             plugin_shutdown_hooks,
             async_shutdown_hooks,
+            post_drain_async_hooks,
             plugin_data,
             state,
             shutdown_grace_period,
@@ -1226,6 +1270,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             serve_hooks,
             plugin_shutdown_hooks,
             async_shutdown_hooks,
+            post_drain_async_hooks,
             plugin_data,
             shutdown_grace_period,
             drain_timeout,
@@ -1287,6 +1332,9 @@ struct BuiltApp<T: Clone + Send + Sync + 'static> {
     /// `#[pre_destroy]` hooks ++ bean `#[pre_destroy]` disposers. Assembled once
     /// in `build_inner` and drained in order during the async shutdown phase.
     async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Plugin hooks awaited after the HTTP drain, the tracked-handle join and
+    /// the after-drain services, before `on_stop`.
+    post_drain_async_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     state: T,
     shutdown_grace_period: Option<Duration>,

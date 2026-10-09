@@ -43,3 +43,22 @@ impl Sink {
         Self
     }
 }
+
+/// The channel-backed queue the after-drain `AuditSink` snippet consumes.
+#[derive(Clone)]
+pub struct AuditQueue;
+
+#[bean]
+impl AuditQueue {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub async fn recv(&self) -> Option<String> {
+        None
+    }
+
+    pub async fn write(&self, _entry: String) {}
+
+    pub async fn flush(&self) {}
+}

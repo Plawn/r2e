@@ -94,7 +94,7 @@ pub use runtime::layers::{
 pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
 pub use runtime::panic::{PanicHook, PanicHookSlot, PanicOrigin, PanicReport, PANIC_TARGET};
-pub use runtime::service::ServiceComponent;
+pub use runtime::service::{ServiceComponent, StopPhase};
 pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use runtime::worker::{
     PerWorkerServiceFactory, WorkerContext, WorkerInfo, WorkerRole, WorkerService,

@@ -26,7 +26,10 @@ use crate::plugin::AsyncShutdownHook;
 ///    attached with [`serve_tracked`](Self::serve_tracked) starts its HTTP
 ///    drain, bounded by `drain_timeout`;
 /// 4. tracked handles are joined, each bounded by `shutdown_grace_period`;
-/// 5. `on_stop` hooks — outside every budget, always.
+/// 5. the [`AfterDrain`](crate::StopPhase::AfterDrain) services are stopped
+///    one at a time in `stop_order`, each joined under
+///    `shutdown_grace_period`, then the plugin after-drain hooks are awaited;
+/// 6. `on_stop` hooks — outside every budget, always.
 ///
 /// # `StopHandle`: the signal path, not the programmatic one
 ///
@@ -74,10 +77,19 @@ pub struct RunningApp {
     pub(super) _cancel_guard: crate::rt::CancelDropGuard,
     pub(super) plugin_shutdown: super::prepared::PluginShutdownCell,
     pub(super) handles: ServiceHandles,
+    /// The `AfterDrain` services, stopped one at a time at step 5.
+    pub(super) post_drain: PostDrainServices,
+    /// Root of their tokens — cancelled last by step 5, and by the guard
+    /// below on any other exit.
+    pub(super) post_drain_cancel: CancelToken,
+    pub(super) _post_drain_guard: crate::rt::CancelDropGuard,
     /// `on_drain` hooks with the state already bound (see
     /// [`PreparedApp::start_in_process`]).
     pub(super) drain_hooks: Vec<AsyncShutdownHook>,
     pub(super) async_shutdown_hooks: Vec<AsyncShutdownHook>,
+    /// Plugin `on_shutdown_after_drain_async` hooks, awaited at step 5 after
+    /// the after-drain services are stopped.
+    pub(super) post_drain_async_hooks: Vec<AsyncShutdownHook>,
     /// `on_stop` hooks with the state already bound.
     pub(super) stop_hooks: Vec<AsyncShutdownHook>,
     pub(super) stop_handle: StopHandle,
@@ -134,7 +146,7 @@ impl RunningApp {
     /// Whether [`shutdown`](Self::shutdown) has anything to do — **every**
     /// kind of work, not only the user hooks.
     ///
-    /// `true` when any of the five phases would act:
+    /// `true` when any of the six phases would act:
     ///
     /// - an `on_drain` hook is registered (phase 1);
     /// - a plugin sync shutdown hook has not fired yet, or an async disposer
@@ -144,7 +156,9 @@ impl RunningApp {
     ///   `#[derive(BackgroundService)]` task, or a server attached with
     ///   [`serve_tracked`](Self::serve_tracked) — so the cancel + join of
     ///   phases 3–4 has a subject;
-    /// - an `on_stop` hook is registered (phase 5).
+    /// - an `AfterDrain` service is still running, or a plugin after-drain
+    ///   hook is registered (phase 5);
+    /// - an `on_stop` hook is registered (phase 6).
     ///
     /// `false` therefore means dropping this value loses nothing: no hook is
     /// skipped and no task is abandoned. It is the only condition under which
@@ -157,8 +171,10 @@ impl RunningApp {
         !self.drain_hooks.is_empty()
             || !self.async_shutdown_hooks.is_empty()
             || !self.stop_hooks.is_empty()
+            || !self.post_drain_async_hooks.is_empty()
             || self.plugin_shutdown.is_pending()
             || self.handles.has_live()
+            || self.post_drain.has_live()
     }
 
     /// Spawn `fut` on the app's tracked lane: it owns the bean graph while it
@@ -225,7 +241,7 @@ impl RunningApp {
 
     /// Run the graceful-shutdown sequence — the same one `run()` runs on a
     /// signal, in the same order and under the same budgets (see the type
-    /// documentation for the five phases).
+    /// documentation for the six phases).
     pub async fn shutdown(mut self) {
         // The `StopHandle` is deliberately NOT fired here — see the type
         // documentation. This is the OS-signal path.
@@ -251,7 +267,19 @@ impl RunningApp {
         //    abandoned with a warning naming it, not waited on forever).
         super::prepared::drain_tracked_handles(&self.handles, self.shutdown_grace_period).await;
 
-        // 5. `on_stop` hooks — MUST-RUN, outside every budget.
+        // 5. The after-drain services, one at a time in `stop_order`, then
+        //    the plugin after-drain hooks (the executor drain lives there).
+        super::prepared::stop_post_drain_services(
+            &self.post_drain,
+            &self.post_drain_cancel,
+            self.shutdown_grace_period,
+        )
+        .await;
+        for hook in std::mem::take(&mut self.post_drain_async_hooks) {
+            hook().await;
+        }
+
+        // 6. `on_stop` hooks — MUST-RUN, outside every budget.
         for hook in std::mem::take(&mut self.stop_hooks) {
             hook().await;
         }
@@ -267,13 +295,15 @@ impl Drop for RunningApp {
     fn drop(&mut self) {
         let pending_hooks = !self.drain_hooks.is_empty()
             || !self.async_shutdown_hooks.is_empty()
+            || !self.post_drain_async_hooks.is_empty()
             || !self.stop_hooks.is_empty()
             || self.plugin_shutdown.is_pending();
 
         // Cancel first: a task sitting on `token.cancelled()` may reach its
         // own end before the abort lands, which is the friendlier outcome.
         self.cancel.cancel();
-        let aborted = self.handles.abort_all();
+        self.post_drain_cancel.cancel();
+        let aborted = self.handles.abort_all() + self.post_drain.abort_all();
 
         if pending_hooks || aborted > 0 {
             tracing::warn!(

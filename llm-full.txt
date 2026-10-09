@@ -1062,7 +1062,12 @@ A newtype is typed, compiler-checked, and works at **every** injection site
   controller is registered, so install order is irrelevant), `wrap_router`
   (Finalize, outermost).
 - Disabling drops the surface stages but **not** `on_shutdown` /
-  `on_shutdown_async`: what `build` constructed must still be released.
+  `on_shutdown_async` / `on_shutdown_after_drain_async`: what `build`
+  constructed must still be released.
+- `on_shutdown_async` runs at step 2, BEFORE the HTTP drain; a resource that
+  request handlers (or `#[service(stop = "after_drain")]` sinks) still use
+  while draining is released with `on_shutdown_after_drain_async` (step 5 —
+  the `Executor` plugin drains its pool there).
 - Put the rare pre-graph needs in `fn setup(&mut self, &mut PluginSetupContext)` —
   setup actions are never gated on `<prefix>.enabled`, and surface sugar
   (`add_layer`, `wrap_router`, serve/shutdown hooks) there is a compile error.
@@ -1675,6 +1680,7 @@ covering exactly one phase; the phases run in this order:
 | plugin sync + async shutdown hooks (incl. `#[pre_destroy]`) | — | — | — |
 | HTTP drain (in-flight requests, listener no longer accepting) | `.drain_timeout(Duration)` or `server.drain-timeout` | **30s** (`.drain_timeout_unbounded()` opts out) | `warn!(phase = "http drain", ..)`, remaining connections abandoned, shutdown continues |
 | tracked-handle join (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains, `#[ws]` sessions) | `.shutdown_grace_period(Duration)`, applied **per handle** | unbounded | `warn!(phase = "tracked-handle join", service = <label>, ..)`, that handle detached (never aborted), others keep their own budget |
+| after-drain services (`#[service(stop = "after_drain")]`), stopped **one at a time** in ascending `order`, then plugin `on_shutdown_after_drain_async` hooks (the executor pool drain) | `.shutdown_grace_period(Duration)`, applied **per service**, sequentially | unbounded | `warn!(phase = "after-drain service stop", service = <label>, order = N, ..)`, that service abandoned, the next one is cancelled |
 | `on_stop` hooks | — **always run** | — | — |
 
 `on_stop` is **must-run**: it executes even when the drain timed out and every
@@ -4549,6 +4555,7 @@ interval is unrepresentable; `parse_duration("5m")` returns `PositiveDuration`.
 - Long-running workers are `#[derive(BackgroundService)]`: app-scoped fields only (`#[inject]`, `#[config]`, `#[config_section]`, `#[live_config]`), and you write `async fn run(&self, shutdown: rt::CancelToken)`.
 - Call `.spawn_service::<S>()` AFTER `build_state()` (it needs the graph); `try_spawn_service` returns `Result<_, ConfigValidationError>` instead of panicking.
 - Every service MUST observe its `CancelToken`; the shutdown join is bounded per handle by `shutdown_grace_period`, and a service that ignores it is abandoned with a `warn!`.
+- A service that **consumes what request handlers produce** (write-behind sink, audit/outbox flusher) is `#[service(stop = "after_drain", order = N)]`: cancelled AFTER the HTTP drain, one service at a time in ascending `order`, and the executor pool still accepts its final `submit`. The default (`stop = "early"`) is cancelled BEFORE the drain — right for producers, wrong for sinks.
 - Gate one service with `#[service(enabled = "field_or_method")]` and all of them with `services.enabled: false` — both skip only `run()`, never registration, `from_context`, or config validation.
 - For a worker type you do not own, use `#[producer(start)]` (bean + service in one function) instead of writing an adapter struct; a hand-written `impl ServiceComponent` must supply `type Deps` (`TNil` when it reads nothing).
 - Startup work that must not repeat under `r2e dev` goes in `.on_start_once(..)` / `#[on_start(once)]`, not a hand-rolled `static BOOTED`.
@@ -4662,6 +4669,56 @@ reported by aggregated startup validation. `try_spawn_service` returns
 Hand-written `impl ServiceComponent` must supply `type Deps` (use
 `r2e_core::type_list::TNil` when the service reads nothing from the graph) and
 may override `config_keys()` / `config_sections()`.
+
+#### Stopping after the HTTP drain — `#[service(stop = "after_drain", order = N)]`
+
+By default a service is cancelled **early**, at step 2 of the shutdown sequence,
+while the listener is still serving — that is what makes the HTTP drain
+converge for producers (pollers, relays). It is the wrong moment for a service
+that consumes what handlers produce: cancelled early, the sink is gone before
+the request feeding it has returned, and the last requests' output is lost.
+
+```rust
+#[derive(BackgroundService)]
+#[service(stop = "after_drain", order = 1)]
+pub struct AuditSink {
+    #[inject] audit: AuditQueue,
+    #[inject] executor: PoolExecutor,
+}
+
+impl AuditSink {
+    async fn run(&self, shutdown: rt::CancelToken) {
+        loop {
+            rt::select! {
+                biased;
+                Some(entry) = self.audit.recv() => self.audit.write(entry).await,
+                _ = shutdown.cancelled() => break,
+            }
+        }
+        // Still allowed: the executor pool drains AFTER the after-drain services.
+        let audit = self.audit.clone();
+        if let Ok(flush) = self.executor.submit(async move { audit.flush().await }) {
+            let _ = flush.await;
+        }
+    }
+}
+# fn main() {}
+```
+
+`stop = "after_drain"` moves the service to step 5: it is cancelled after the
+HTTP drain and after the early services have been joined, then joined itself
+under `shutdown_grace_period`. After-drain services stop **one at a time**, in
+ascending `order` (default `0`; ties in registration order): the next one is
+not cancelled until the previous has returned, so a producer that feeds a sink
+through a channel gets `order = 1` and the sink `order = 2`. That is also why
+the lane costs up to one grace period *per* service — keep it to the services
+that need it. `order` without `stop = "after_drain"` is a compile error;
+`stop = "early"` is the explicit default. Hand-written impls override
+`fn stop_phase() -> StopPhase` and `fn stop_order() -> i32` on `ServiceComponent`.
+
+Plugins that own a resource handlers still use during the drain register their
+release with `ctx.on_shutdown_after_drain_async(..)` (the `Executor` plugin's
+pool drain lives there) instead of `on_shutdown_async`, which runs at step 2.
 
 #### Turning a service off — `#[service(enabled = "…")]`
 

@@ -134,8 +134,74 @@ pub trait ServiceComponent: Sized + Send + 'static {
         None
     }
 
+    /// When, in the shutdown sequence, this service's token is cancelled.
+    /// Default: [`StopPhase::Early`] — before the HTTP drain, together with
+    /// every other background task.
+    ///
+    /// Return [`StopPhase::AfterDrain`] for a service that **consumes work the
+    /// request path produces** (a write-behind sink, a batching writer, an
+    /// outbox flusher fed by handlers through a channel): it is then cancelled
+    /// only once in-flight requests have finished, so nothing a request
+    /// enqueued during the drain is lost. `#[derive(BackgroundService)]` emits
+    /// this from `#[service(stop = "after_drain")]`.
+    fn stop_phase() -> StopPhase {
+        StopPhase::Early
+    }
+
+    /// Position among the [`AfterDrain`](StopPhase::AfterDrain) services.
+    /// They are stopped **one at a time**, lowest order first (registration
+    /// order among equals): each is cancelled and joined — bounded by
+    /// `shutdown_grace_period` — before the next one is told to stop, so a
+    /// producer can be given a lower order than the sink it feeds. Ignored
+    /// for [`Early`](StopPhase::Early) services. Default: `0`.
+    fn stop_order() -> i32 {
+        0
+    }
+
     /// Run until the shutdown token is cancelled.
     fn start(self, shutdown: CancelToken) -> impl Future<Output = ()> + Send;
+}
+
+/// When a [`ServiceComponent`]'s token is cancelled during graceful shutdown.
+///
+/// The shutdown sequence is `on_drain` hooks → plugin shutdown hooks (which
+/// cancel the **`Early`** services) → HTTP drain → tracked-handle join →
+/// **`AfterDrain`** services, one at a time → post-drain plugin hooks →
+/// `on_stop`. See `docs/features/22-serve-lifecycle.md`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum StopPhase {
+    /// Cancelled before the listener stops accepting, with every other
+    /// background task (the default). Right for pollers, exporters and
+    /// anything that *produces* work.
+    #[default]
+    Early,
+    /// Cancelled after the HTTP drain and the tracked-handle join, i.e. after
+    /// the last in-flight request has returned. Right for anything that
+    /// *consumes* work requests hand it. Each `AfterDrain` service is joined
+    /// (under `shutdown_grace_period`) before the next is cancelled, in
+    /// [`stop_order`](ServiceComponent::stop_order) order, so this phase can
+    /// cost up to one grace period per service.
+    AfterDrain,
+}
+
+/// What the builder reads off a [`ServiceComponent`] to place it in the
+/// shutdown sequence: its [`StopPhase`] and its
+/// [`stop_order`](ServiceComponent::stop_order).
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StopSpec {
+    pub phase: StopPhase,
+    pub order: i32,
+}
+
+impl StopSpec {
+    /// The spec a service type declares.
+    pub fn of<C: ServiceComponent>() -> Self {
+        Self {
+            phase: C::stop_phase(),
+            order: C::stop_order(),
+        }
+    }
 }
 
 /// Config key of the **global** background-service gate.

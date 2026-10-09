@@ -125,8 +125,14 @@ cancellation signal, not a user-job panic, and must not reach the hook.
 
 ### Shutdown
 
-The plugin registers an async `on_shutdown` hook that calls
-`PoolExecutor::shutdown_graceful(timeout)` to drain in-flight tasks. After shutdown:
+The plugin registers an `on_shutdown_after_drain_async` hook that calls
+`PoolExecutor::shutdown_graceful(timeout)` to drain in-flight tasks. It runs at
+**step 5** of the shutdown sequence — after the HTTP drain and after the
+`AfterDrain` services have been stopped — not at step 2 with the other plugin
+async hooks (#1071): a pool that has begun draining refuses every `submit`, and
+at step 2 the listener is still serving, so an in-flight handler (or a sink fed
+by one) submitting a job during the drain would have been turned away. After
+shutdown:
 
 - `submit` / `try_submit` return `Err(RejectedError::Shutdown)`.
 - Queued tasks that never acquired a permit are cancelled (the `JobHandle` resolves to a `JoinError` with `is_panic() == true`).
@@ -281,6 +287,24 @@ awaits the worker. The cancellation token is cancelled on shutdown
 signal; the worker is expected to observe `shutdown.cancelled()` and
 exit promptly.
 
+**When** it is cancelled is the service's `StopPhase` (`ServiceComponent::stop_phase()`,
+default `Early`):
+
+| Phase | Cancelled at | Joined | Use for |
+|---|---|---|---|
+| `Early` (default) | step 2, **before** the HTTP drain | step 4, concurrently with every other tracked handle, `shutdown_grace_period` per handle | producers: pollers, relays, anything whose stopping helps the drain converge |
+| `AfterDrain` | step 5, **after** the HTTP drain and the tracked-handle join | immediately after its own cancel, **one service at a time** in ascending `stop_order()` (ties: registration order), `shutdown_grace_period` per service | consumers of what handlers produce: write-behind sinks, audit/outbox flushers — cancelled early they lose the last requests' output (#1071) |
+
+`AfterDrain` tokens are children of a separate post-drain root, not of the app
+token, so the step-3 cancellation cannot reach them; that root carries its own
+drop guard so a dropped `run()` future (`r2e dev` hot patch) or a panic still
+cancels them, and `RunningApp::drop` aborts them like the tracked lane. The
+executor's own drain hook runs *after* this lane, so an `AfterDrain` sink may
+`submit` its final flush to the pool and await it.
+
+With the derive: `#[service(stop = "after_drain", order = N)]` (`order` only
+with `stop = "after_drain"`; `stop = "early"` is the explicit default).
+
 There is no `#[service(state = ...)]`. The service resolves its `#[inject]`
 fields from the bean graph by type (like a controller core), so it works with
 the inferred HList state; each injected type must be present in the graph or
@@ -288,7 +312,7 @@ the inferred HList state; each injected type must be present in the graph or
 
 ### `#[service(enabled = "…")]` — the opt-in off switch
 
-The one struct attribute the derive takes. It emits
+One of the three keys the struct attribute takes (`enabled`, `stop`, `order`). It emits
 `ServiceComponent::enabled()`; the name it takes is looked up among the
 struct's own fields first (the usual case — a config flag), and read as a
 `&self` method returning `bool` otherwise:

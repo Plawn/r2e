@@ -507,4 +507,18 @@ impl PluginBuildContext {
             .shutdown
             .push(Box::new(move |dctx| dctx.on_shutdown_async(hook)));
     }
+
+    /// Add an async hook awaited after the HTTP drain and the after-drain
+    /// services, before `on_stop`. See
+    /// [`DeferredContext::on_shutdown_after_drain_async`]. Same effect stage
+    /// as [`on_shutdown`](Self::on_shutdown).
+    pub fn on_shutdown_after_drain_async<F, Fut>(&mut self, hook: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        self.effects.shutdown.push(Box::new(move |dctx| {
+            dctx.on_shutdown_after_drain_async(hook)
+        }));
+    }
 }

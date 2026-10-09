@@ -19,6 +19,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`StopPhase::AfterDrain` background services** (task #1071). A
+  `ServiceComponent` can declare `fn stop_phase() -> StopPhase` and
+  `fn stop_order() -> i32` — with the derive,
+  `#[service(stop = "after_drain", order = N)]`. Such a service is cancelled
+  **after** the HTTP drain and the tracked-handle join, in a new shutdown step 5,
+  one service at a time in ascending order (each join bounded by
+  `shutdown_grace_period`), so a sink fed by request handlers (write-behind,
+  audit/outbox) sees the last requests' output instead of being torn down at
+  step 2 while the listener is still serving. Its token hangs off a separate
+  post-drain root with its own drop guard, so a dropped `run()` future or a
+  dropped `RunningApp` still cancels/aborts it. `order` without
+  `stop = "after_drain"` and an unknown `stop` value are compile errors.
+- **`on_shutdown_after_drain_async` plugin hook** (`PluginBuildContext` and
+  `DeferredContext`): an async cleanup hook awaited at step 5, after the
+  after-drain services, for resources that handlers and sinks still use
+  during the drain.
+
+### Changed
+
+- **`r2e-executor`: the pool drains after the HTTP drain, not before it**
+  (task #1071). The `Executor` plugin's graceful drain moved from
+  `on_shutdown_async` (step 2) to `on_shutdown_after_drain_async` (step 5).
+  Previously a draining pool rejected every `submit` with
+  `RejectedError::Shutdown` while in-flight handlers were still running, so a
+  handler — or a sink fed by one — could not hand work to the pool during the
+  drain. The shutdown sequence is now six steps; see
+  `docs/features/22-serve-lifecycle.md`.
+
 ### Fixed
 
 - **`r2e-executor`: an aborted job no longer leaks the pool's counters**

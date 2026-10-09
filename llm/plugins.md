@@ -1,7 +1,7 @@
 ---
 topic: plugins
 features: core
-tokens: ~2800
+tokens: ~2900
 requires: di-beans
 ---
 
@@ -23,7 +23,12 @@ requires: di-beans
   controller is registered, so install order is irrelevant), `wrap_router`
   (Finalize, outermost).
 - Disabling drops the surface stages but **not** `on_shutdown` /
-  `on_shutdown_async`: what `build` constructed must still be released.
+  `on_shutdown_async` / `on_shutdown_after_drain_async`: what `build`
+  constructed must still be released.
+- `on_shutdown_async` runs at step 2, BEFORE the HTTP drain; a resource that
+  request handlers (or `#[service(stop = "after_drain")]` sinks) still use
+  while draining is released with `on_shutdown_after_drain_async` (step 5 —
+  the `Executor` plugin drains its pool there).
 - Put the rare pre-graph needs in `fn setup(&mut self, &mut PluginSetupContext)` —
   setup actions are never gated on `<prefix>.enabled`, and surface sugar
   (`add_layer`, `wrap_router`, serve/shutdown hooks) there is a compile error.

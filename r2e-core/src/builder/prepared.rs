@@ -48,6 +48,10 @@ pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
     /// registration order). Drained in order during the async shutdown phase, so
     /// a controller disposes before the beans it injected.
     pub(super) async_shutdown_hooks: Vec<crate::plugin::AsyncShutdownHook>,
+    /// Plugin hooks awaited after the HTTP drain, the tracked-handle join and
+    /// the after-drain services, before `on_stop`
+    /// ([`DeferredContext::on_shutdown_after_drain_async`](crate::plugin::DeferredContext::on_shutdown_after_drain_async)).
+    pub(super) post_drain_async_hooks: Vec<crate::plugin::AsyncShutdownHook>,
     pub(super) plugin_data: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     /// Per-handle bound on the tracked-handle join phase
     /// ([`AppBuilder::shutdown_grace_period`](crate::builder::AppBuilder::shutdown_grace_period)).
@@ -132,12 +136,18 @@ enum LifecycleMode {
 
 /// What [`PreparedApp::start_lifecycle`] hands back to whoever drives the rest
 /// of the lifecycle: the app shutdown token and its cancel-on-drop guard, the
-/// run-once plugin sync-hook cell, and the shared tracked-handle collector.
+/// run-once plugin sync-hook cell, the shared tracked-handle collector, and
+/// the after-drain lane with its own root token and guard.
 struct StartedLifecycle {
     cancel: CancelToken,
     guard: crate::rt::CancelDropGuard,
     plugin_shutdown: PluginShutdownCell,
     handles: ServiceHandles,
+    /// Root of the `AfterDrain` service tokens — cancelled last by the
+    /// ordered stop, and by `post_drain_guard` on any other exit.
+    post_drain_cancel: CancelToken,
+    post_drain_guard: crate::rt::CancelDropGuard,
+    post_drain: PostDrainServices,
 }
 
 impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
@@ -396,6 +406,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             guard,
             plugin_shutdown,
             handles,
+            post_drain_cancel,
+            post_drain_guard,
+            post_drain,
         } = self
             .start_lifecycle(&graph, LifecycleMode::InProcess)
             .await?;
@@ -423,8 +436,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             _cancel_guard: guard,
             plugin_shutdown,
             handles,
+            post_drain,
+            post_drain_cancel,
+            _post_drain_guard: post_drain_guard,
             drain_hooks: bind(self.drain_hooks, &state),
             async_shutdown_hooks: self.async_shutdown_hooks,
+            post_drain_async_hooks: self.post_drain_async_hooks,
             stop_hooks: bind(self.shutdown_hooks, &state),
             stop_handle: self.stop_handle,
             shutdown_grace_period: self.shutdown_grace_period,
@@ -500,6 +517,21 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             .expect("ServiceHandles type mismatch in plugin_data")
             .clone();
 
+        // The after-drain lane: its own root (NOT a child of the app root —
+        // step 3 must not reach it) with its own cancel-on-any-exit guard,
+        // armed for the same reason as `cancel_guard`: an `AfterDrain`
+        // service is stopped by the ordered post-drain sequence on the normal
+        // path, and must still be reached by a panic or a dropped `run()`.
+        let post_drain_root = post_drain_root(&mut self.plugin_data);
+        let post_drain_guard = post_drain_root.clone().drop_guard();
+        let post_drain_services = self
+            .plugin_data
+            .entry(TypeId::of::<PostDrainServices>())
+            .or_insert_with(|| Box::new(PostDrainServices::default()))
+            .downcast_ref::<PostDrainServices>()
+            .expect("PostDrainServices type mismatch in plugin_data")
+            .clone();
+
         // Claim the WebSocket session registry for this run, BEFORE anything
         // can accept a connection. Until this line every `#[ws]` route runs
         // its session inline (the `TestApp` / `build_with_consumers`
@@ -555,6 +587,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     &cancel_token,
                     &plugin_shutdown_hooks,
                     &service_handles,
+                    &post_drain_services,
+                    &post_drain_root,
                     self.shutdown_grace_period,
                     "#[on_start] hook failed",
                 )
@@ -592,6 +626,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                     &cancel_token,
                     &plugin_shutdown_hooks,
                     &service_handles,
+                    &post_drain_services,
+                    &post_drain_root,
                     self.shutdown_grace_period,
                     "startup hook failed",
                 )
@@ -622,6 +658,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             guard: cancel_guard,
             plugin_shutdown: plugin_shutdown_hooks,
             handles: service_handles,
+            post_drain_cancel: post_drain_root,
+            post_drain_guard,
+            post_drain: post_drain_services,
         })
     }
 
@@ -734,6 +773,9 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             guard: _boot_cancel_guard,
             plugin_shutdown: plugin_shutdown_hooks,
             handles: service_handles,
+            post_drain_cancel: post_drain_root,
+            post_drain_guard: _post_drain_guard,
+            post_drain: post_drain_services,
         } = self
             .start_lifecycle(&serve_scope_graph, LifecycleMode::Serving)
             .await?;
@@ -754,8 +796,12 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         //    cancellation is what starts that clock);
         // 4. tracked handles are joined, each bounded on its own by
         //    `shutdown_grace_period`;
-        // 5. user `on_stop` hooks run — outside every budget, always.
-        // Steps 1–3 are this future plus the serve call below; steps 4–5 are
+        // 5. the `AfterDrain` services are stopped one at a time in
+        //    `stop_order`, each joined under `shutdown_grace_period`, then the
+        //    plugin after-drain hooks (`on_shutdown_after_drain_async`, e.g.
+        //    the executor drain) are awaited;
+        // 6. user `on_stop` hooks run — outside every budget, always.
+        // Steps 1–3 are this future plus the serve call below; steps 4–6 are
         // the post-drain phase after it.
         // Hot-patch replaces the previous server future by dropping it, so
         // that future never reaches graceful shutdown. The currently active
@@ -1035,6 +1081,8 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 &cancel_token,
                 &plugin_shutdown_hooks,
                 &service_handles,
+                &post_drain_services,
+                &post_drain_root,
                 self.shutdown_grace_period,
                 "serve failed",
             )
@@ -1059,7 +1107,23 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         #[cfg(feature = "ws")]
         disarm_ws_sessions(&serve_scope_graph);
 
-        // ── Post-drain phase 2: user `on_stop` hooks ────────────────────────
+        // ── Post-drain phase 2: `AfterDrain` services + plugin after-drain hooks
+        // The last in-flight request has returned (or the drain budget
+        // elapsed) and every tracked task is joined (or abandoned), so nothing
+        // request-side can still hand work to a sink: stop the after-drain
+        // services now, one at a time in `stop_order`, then let the plugins
+        // that must outlive the request path (the executor pool) drain.
+        stop_post_drain_services(
+            &post_drain_services,
+            &post_drain_root,
+            self.shutdown_grace_period,
+        )
+        .await;
+        for hook in self.post_drain_async_hooks {
+            hook().await;
+        }
+
+        // ── Post-drain phase 3: user `on_stop` hooks ────────────────────────
         // MUST-RUN, outside every budget. These hooks carry application-state
         // reconciliation (marking interrupted runs cancelled, releasing an
         // advisory lock, flushing a final report); a stuck background service
@@ -1231,6 +1295,62 @@ pub(super) async fn drain_tracked_handles(handles: &ServiceHandles, grace: Optio
     while set.join_next().await.is_some() {}
 }
 
+/// Stop the [`AfterDrain`](crate::StopPhase::AfterDrain) services, **one at a
+/// time** in `stop_order`: cancel a service's token, join it under `grace`,
+/// then move to the next. Sequential on purpose — the ordering exists so a
+/// producer can be stopped (and fully drained) before the sink it feeds, and
+/// that only holds if the join completes before the next cancel. The cost is
+/// up to one `grace` per service, which is why the phase is opt-in.
+///
+/// `root` is cancelled last, as a belt: a service that spawned helper tasks on
+/// child tokens of its own token is already covered (cancelling a parent
+/// reaches its children), and on the normal path every entry's token has
+/// fired by then anyway. The same per-handle policy as
+/// [`drain_tracked_handles`] applies — an overflow abandons (detaches) the
+/// task with a warning naming it.
+pub(super) async fn stop_post_drain_services(
+    lane: &PostDrainServices,
+    root: &CancelToken,
+    grace: Option<Duration>,
+) {
+    let entries = lane.drain();
+    if !entries.is_empty() {
+        tracing::info!(count = entries.len(), "Stopping after-drain services");
+    }
+    for crate::builder::PostDrainEntry {
+        order,
+        label,
+        token,
+        handle,
+    } in entries
+    {
+        token.cancel();
+        let joined = match grace {
+            Some(g) => crate::rt::timeout(g, handle).await.ok(),
+            None => Some(handle.await),
+        };
+        match joined {
+            Some(Ok(())) => {}
+            Some(Err(e)) if e.is_panic() => {
+                tracing::warn!(service = label, order, error = %e, "after-drain service panicked");
+            }
+            Some(Err(e)) if e.is_cancelled() => {}
+            Some(Err(e)) => {
+                tracing::warn!(service = label, order, error = %e, "after-drain service join error");
+            }
+            None => tracing::warn!(
+                phase = "after-drain service stop",
+                service = label,
+                order,
+                grace_ms = grace.map(|g| g.as_millis() as u64),
+                "shutdown_grace_period elapsed before this after-drain service \
+                 finished; abandoning it and continuing shutdown"
+            ),
+        }
+    }
+    root.cancel();
+}
+
 /// Wind down work already started by the serve hooks when the boot aborts.
 ///
 /// Called on the two error exits of `run_inner` that happen after serve hooks
@@ -1248,6 +1368,8 @@ async fn abort_started_work(
     cancel: &CancelToken,
     plugin_hooks: &PluginShutdownCell,
     handles: &ServiceHandles,
+    post_drain: &PostDrainServices,
+    post_drain_root: &CancelToken,
     grace: Option<Duration>,
     reason: &'static str,
 ) {
@@ -1262,5 +1384,9 @@ async fn abort_started_work(
     // Same per-handle policy as the normal shutdown: `drain_tracked_handles`
     // bounds each handle by `grace` and names whichever one overflows.
     drain_tracked_handles(handles, grace).await;
+    // An aborted boot never served, so there is no request path to outlive:
+    // the after-drain services are simply stopped after the tracked ones,
+    // under the same policy.
+    stop_post_drain_services(post_drain, post_drain_root, grace).await;
     tracing::warn!(reason, "R2E boot aborted; background tasks wound down");
 }
