@@ -211,14 +211,21 @@ static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
     &ReturnsPlugin,
 ];
 
-/// Decorator plugins allowed for gRPC routes.
-static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[&InterceptPlugin];
+/// Decorator plugins allowed for gRPC routes: the post-auth guard family
+/// (`GuardContext` is transport-neutral — gRPC feeds it the request metadata
+/// as headers) plus interceptors. Ordering matters as for HTTP: roles-derived
+/// guards are injected at the front of `guard_fns`.
+static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[
+    &RolesPlugin,
+    &AllRolesPlugin,
+    &GuardPlugin,
+    &InterceptPlugin,
+];
 
-/// Decorator plugins allowed for MCP tools. Unlike gRPC, MCP methods run the
-/// full post-auth guard family — `GuardContext` is transport-neutral and the
-/// tool dispatch path has real request heads to feed it (rule of three:
-/// HTTP + WS + MCP). Ordering matters as for HTTP: roles-derived guards are
-/// injected at the front of `guard_fns`.
+/// Decorator plugins allowed for MCP tools: the same post-auth guard family
+/// as gRPC (rule of three: HTTP + gRPC + MCP share `Guard<I>`). Ordering
+/// matters as for HTTP: roles-derived guards are injected at the front of
+/// `guard_fns`.
 static MCP_PLUGINS: &[&dyn RoutePlugin] = &[
     &RolesPlugin,
     &AllRolesPlugin,
@@ -249,10 +256,11 @@ const MCP_DISALLOWED_ATTRS: &[&str] = &[
 ];
 
 const GRPC_DISALLOWED_ATTRS: &[&str] = &[
+    // Pre-auth/anonymous/middleware are HTTP-pipeline concepts: a gRPC
+    // method has no per-method tower stack, and `#[anonymous]` needs a
+    // fail-closed struct identity, which `#[grpc_routes]` types don't have
+    // (identity is per method).
     "anonymous",
-    "roles",
-    "all_roles",
-    "guard",
     "pre_guard",
     "middleware",
     "layer",
@@ -277,7 +285,8 @@ pub fn parse_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDecorator
     Ok(decorators)
 }
 
-/// Parse decorators for gRPC routes (only `#[intercept]` is supported).
+/// Parse decorators for gRPC routes (`#[roles]`/`#[all_roles]`/`#[guard]`/
+/// `#[intercept]`).
 pub fn parse_grpc_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDecorators> {
     validate_grpc_attrs(attrs)?;
     let mut decorators = MethodDecorators::default();
@@ -308,11 +317,10 @@ pub fn validate_grpc_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
 }
 
 /// Reject disallowed attributes on the `#[grpc_routes]` **impl block** itself.
-///
-/// gRPC controller-level decorators support `#[intercept]` only; the HTTP
-/// guard family (`#[guard]`/`#[pre_guard]`/`#[roles]`/`#[all_roles]`) is not
-/// wired for gRPC. Left unrejected they would be silently dropped — the impl
-/// attrs are only mined for intercepts and never re-emitted.
+/// The impl level supports `#[intercept]`, `#[guard]`, `#[roles]` and
+/// `#[all_roles]` (applied to every method). Left unrejected, the rest would
+/// be silently dropped — the impl attrs are mined for decorators and never
+/// re-emitted.
 pub fn validate_grpc_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     for attr in attrs {
         for name in GRPC_DISALLOWED_ATTRS {
@@ -321,7 +329,8 @@ pub fn validate_grpc_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
                     attr,
                     format!(
                         "#[{}] is not supported on a #[grpc_routes] impl block — \
-                         gRPC controller-level decorators support #[intercept] only",
+                         gRPC controller-level decorators support #[intercept], \
+                         #[guard], #[roles] and #[all_roles] only",
                         name
                     ),
                 ));

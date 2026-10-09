@@ -313,7 +313,7 @@ preflight already runs guards before the upgrade; it switches to `Rejection`).
 | `__maybe_validate` | `Result<(), Box<Response>>` | `Result<(), Box<Rejection>>` |
 | `ManagedResource::Error` | `Into<Response>` | `Into<Rejection>`; `ManagedErr<E: Into<Rejection>>` |
 | `RolesGuard` / `AllRolesGuard` / `RateLimitGuard` / `FgaGuard` | `GuardError` → `Response` | `RolesDenied` / `RateLimited { retry_after }` / `FgaDenied`, each `From<_> for Rejection` |
-| `GrpcGuard<I>` | separate trait returning `tonic::Status` | **removed**; gRPC runs `Guard<I>` and maps with `Status::from(rejection)` |
+| `GrpcGuard<I>` | separate trait returning `tonic::Status` | **removed**; gRPC runs `Guard<I>` and maps with `r2e_grpc::rejection_to_status(rejection)` (free fn — `From<Rejection> for tonic::Status` is an orphan) |
 
 ### 4.3 No attributes: the return type is the declaration
 
@@ -341,16 +341,34 @@ preflight already runs guards before the upgrade; it switches to `Rejection`).
 
 - **MCP**: `impl From<Rejection> for McpError` by kind (Unauthenticated →
   `Unauthorized`, Forbidden → `Forbidden`, NotFound → `NotFound`, Invalid* /
-  Validation → `InvalidParams`, Internal/Unavailable/Timeout → `Internal`, else
-  `Tool`). `guard_response_to_error` and its body read are deleted. MCP tools
-  that reuse HTTP guards get the mapping for free.
-- **gRPC**: `impl From<Rejection> for tonic::Status` by kind (Unauthenticated →
-  `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`, Invalid*/Validation →
-  `INVALID_ARGUMENT`, NotFound → `NOT_FOUND`, RateLimited →
-  `RESOURCE_EXHAUSTED`, Unavailable → `UNAVAILABLE`, Timeout →
-  `DEADLINE_EXCEEDED`, Internal → `INTERNAL`). `GrpcGuard` is removed; the
-  gRPC codegen calls `Guard<I>::check` and maps. Guards become
+  Validation → `InvalidParams`, Internal/Unavailable/Timeout → `Internal`,
+  Conflict/RateLimited → `Tool { data: details }`, else by status).
+  `guard_rejection_to_error` (the body-read fold) is deleted; the tool codegen
+  calls `McpError::from(rejection)`. MCP tools that reuse HTTP guards get the
+  mapping for free.
+- **gRPC**: `r2e_grpc::rejection_to_status(Rejection) -> tonic::Status` by
+  kind (Unauthenticated → `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`,
+  Invalid*/Validation → `INVALID_ARGUMENT`, NotFound → `NOT_FOUND`, Conflict →
+  `ABORTED`, RateLimited/PayloadTooLarge → `RESOURCE_EXHAUSTED`, Unavailable →
+  `UNAVAILABLE`, Timeout → `DEADLINE_EXCEEDED`, Internal → `INTERNAL`, other
+  kinds by status via `code_from_status`); message → status message, headers
+  → response metadata. A free function, not `From<Rejection> for Status`: both
+  types are foreign to `r2e-grpc` (orphan rule). `GrpcGuard`, `GrpcGuardContext`,
+  `GrpcRolesGuard`, `GrpcRoleBasedIdentity` are removed; `r2e_grpc::guard_context`
+  builds the shared `GuardContext` from the `tonic::Request` (metadata as
+  `HeaderMap`, `POST`, uri `/`, empty path params) and the gRPC codegen runs
+  `Guard<I>::check` (controller sites, then method sites) and maps. Guards are
   transport-agnostic.
+- **gRPC identity**: `#[inject(identity)]` method parameters (required or
+  `Option<T>`) are wired through a new `r2e_grpc::GrpcIdentity: Identity`
+  trait — `type Spec: DecoratorSpec` + `extract(&Spec::Product, &MetadataMap)
+  -> Result<Self, Rejection>` + `extract_optional` (absent `authorization` ⇒
+  `None`). The spec joins the service's `EndpointDeps` and config validation
+  like a decorator spec, so the validator bean is checked at
+  `register_grpc_service`. `r2e-security/grpc` implements it for
+  `AuthenticatedUser` with `JwtIdentitySpec` (product `Arc<JwtClaimsValidator>`).
+  Struct-level identity on a gRPC service is a compile error, as is a
+  `REQUIRES_IDENTITY` guard on a method with no identity parameter.
 
 ## 6. OpenAPI
 
@@ -467,8 +485,11 @@ impl ChatCompletionsController {
 - `Guard::check`, `PreAuthGuard::check` return `Result<(), Rejection>`.
 - `ManagedResource::Error: Into<Rejection>` (was `Into<Response>`).
 - `ParamsRejectionFormat` and `params.rejection-format` config removed.
-- `r2e_mcp::guard::guard_response_to_error` removed.
-- `r2e_grpc::GrpcGuard` / `GrpcRolesGuard` removed in favour of `Guard<I>`.
+- `r2e_mcp::guard::guard_rejection_to_error` removed (`McpError: From<Rejection>`).
+- `r2e_grpc::GrpcGuard` / `GrpcGuardContext` / `GrpcRolesGuard` /
+  `GrpcRoleBasedIdentity` removed in favour of `Guard<I>` + `guard_context` +
+  `rejection_to_status` (`extract_bearer_token` keeps its statuses and
+  messages: it is `bearer_token` projected).
 - `__R2eRequestData<M>` no longer implements `FromRequestParts` (internal, but
   the bridge table in `web/extract.rs` is public doc).
 - The default spec lists 413/415/422 for body routes.
@@ -492,7 +513,7 @@ One PR per phase, sequential, same branch. Each phase ships green on
 | **P0** core types | `Rejection`, `RejectionKind`, `ErrorSchema`, every `From<X> for Rejection`, `From<Rejection> for HttpError` + `ErrorSchema for HttpError`, `From<Rejection> for Response`, typed guard errors (`RolesDenied`, `RateLimited`, `FgaDenied`), `TenantError::into_rejection`, `ParamError::location`, derive `#[error(rejection)]`. Guards still return `Response` (they render through the typed errors); no codegen change. **Shipped** (PR for P0). | `r2e-core/tests/http/rejection.rs` (new `mod`): kind → status table, every `From` impl, `HttpError` projection byte-equal to today's `into_response`, coherence `E::from(r).status() == E::status_of(r.kind)`; derive cases in `tests/http/api_error.rs`; `r2e-compile-tests` for derive misuse; owning-crate tests (`r2e-security/tests/{error,guards}.rs`, `r2e-rate-limit/tests/guard.rs`, `r2e-openfga/tests/guard.rs`, `r2e-tenant/tests/tenant/error.rs`) |
 | **P1** single projection point | Option B extraction in `handlers.rs` (route, SSE, WS): one `(State, Request)` entry fn per endpoint, pre-auth guards as its first step (middleware layer removed), `RequestData<S>` replacing the `FromRequestParts` bridge, guards/pre-guards returning `Result<(), Rejection>`, `ManagedResource::Error: Into<Rejection>`, envelope inferred from the return type (autoref probe, no attributes), `AppBuilder::error_projection::<E>()` + `ErrorProjector` bean, `ParamsRejectionFormat` removal. **Shipped** (PR for P1). | `tests/http/projection.rs`: malformed body, missing content-type, bad path, failed identity, guard, garde, managed acquire and finalize all answer in `E`'s envelope with the right status and headers; identity failure never reads the body (counting body reader); every existing `r2e-core/tests/http` + `tests/decorators` test unchanged with the default projector |
 | **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo` (`has_auth` removed), `ErrorSchemaInfo`, `ErrorProjector::schema()`, builder rewrite, plugin reads the projector bean, `OpenApiConfig::with_error_schema`, `RequestBodySchema` (app extractors only). **Shipped** (PR for P2). | `r2e-openapi/tests/errors.rs`: per-kind statuses/bodies, `oneOf` on 400, remap 422→400 shows 400 only, extra 502, route envelope over config envelope, override precedence, plugin with/without projector; `r2e-core/tests/controller/error_meta.rs`: the inference table (body, Path/Query/Params, identity param vs struct vs `#[anonymous]`, guards vs rate-limit guards, garde, SSE), envelope capture, custom body extractor |
-| **P3** transports | `From<Rejection>` for `McpError` and `tonic::Status`; delete the MCP body-read fold; delete `GrpcGuard`, gRPC codegen runs `Guard<I>`. | existing MCP/gRPC guard tests pass by kind; mapping table tests |
+| **P3** transports | `From<Rejection> for McpError`, `rejection_to_status` (free fn, orphan rule), MCP body-read fold deleted, `GrpcGuard` family deleted, gRPC codegen runs `Guard<I>` through `guard_context`, `GrpcIdentity` + `JwtIdentitySpec` for `#[inject(identity)]` parameters (deps + config checked at registration), `#[guard]`/`#[roles]`/`#[all_roles]` allowed on gRPC methods and impl blocks. **Shipped** (PR for P3). | `r2e-mcp/tests/server/rejection.rs` (kind table), `r2e-grpc/tests/guard.rs` (kind → code table, metadata, `guard_context`, end-to-end `Guard<I>`), `r2e-security/tests/grpc.rs` (`GrpcIdentity for AuthenticatedUser`), `examples/example-grpc/tests/grpc_guards.rs` (real tonic round-trips), compile tests `grpc/pass/grpc_guards.rs`, `grpc/fail/grpc_roles_without_identity.rs`, `grpc/fail/grpc_identity_missing_validator.rs` |
 | **P4** app level | `AppBuilder::error_projection::<E>()`, routed into catch-panic, fallback 404/405, body-limit 413. | `tests/http/panic.rs` + new `tests/runtime/fallback.rs`: panic, unknown route, wrong method, oversized body answer in `E`'s envelope |
 | **P5** docs + release | `llm/error-handling.md`, `openapi.md`, `guards.md`, `managed-resources.md`, `validation.md`, `grpc.md`, `mcp-server.md`, `coming-from-axum.md`; `docs/claude/error-handling.md`, `guards-interceptors.md`, `architecture.md` bridge table, `configuration.md`, `prelude-features.md`, `docs/features/02-validation.md`; `r2e-grpc/README.md`; CHANGELOG "Breaking"; `check-llm-docs.sh --update`; bump 0.5.0 (publish via CI only). | `cargo test -p llm-doctests` |
 | **P6** | llm-engine-rust migration (its own repo). | — |

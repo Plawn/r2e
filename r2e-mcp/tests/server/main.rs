@@ -18,6 +18,7 @@ mod plugin;
 mod progress;
 mod prompts;
 mod registry;
+mod rejection;
 mod resources;
 mod schema;
 mod wire_golden;

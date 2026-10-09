@@ -86,6 +86,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   generated `__R2eRequestData_<C>` extractor implements —
   `extract(&mut Parts, &S) -> Result<Self, Rejection>` — replacing its
   `FromRequestParts` bridge impl.
+- **gRPC guards and identity** (task #1072, phase P3). `#[grpc_routes]`
+  methods and impl blocks take `#[guard(..)]`, `#[roles(..)]` and
+  `#[all_roles(..)]` — the HTTP `Guard<I>` impls, built once at registration
+  through `DecoratorSpec` with their bean deps checked at
+  `register_grpc_service` — and `#[inject(identity)]` **method parameters**
+  (`AuthenticatedUser` or `Option<AuthenticatedUser>`, any position). The
+  guard sees a `GuardContext` built by `r2e_grpc::guard_context` (request
+  metadata as `headers`, `extensions`, `peer_addr`). Per call: identity →
+  controller guards → method guards → interceptors → method.
+- **`r2e_grpc::GrpcIdentity`**: how an `#[inject(identity)]` gRPC parameter is
+  read — `type Spec: DecoratorSpec` resolves the extractor from the graph at
+  registration (so the bean is a compile-time dependency of the service),
+  `extract` / `extract_optional` read the metadata per call and return a
+  `Rejection`. `r2e-security` (feature `grpc`) implements it for
+  `AuthenticatedUser` with `JwtIdentitySpec` (product: the
+  `Arc<JwtClaimsValidator>` bean): `authorization: Bearer <jwt>`, validated by
+  the same bean HTTP uses. `r2e_grpc::bearer_token` is the typed metadata read.
+- **`r2e_grpc::rejection_to_status`** (+ `code_from_status`): projects a
+  `Rejection` onto `tonic::Status` by kind — Unauthenticated →
+  `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`, NotFound → `NOT_FOUND`,
+  Conflict → `ABORTED`, RateLimited/PayloadTooLarge → `RESOURCE_EXHAUSTED`,
+  Unavailable → `UNAVAILABLE`, Timeout → `DEADLINE_EXCEEDED`, Internal →
+  `INTERNAL`, request-shape kinds → `INVALID_ARGUMENT`, others by HTTP status;
+  the message becomes the status message and the rejection's headers
+  (`Retry-After`, `WWW-Authenticate`) become response metadata. A free
+  function because `From<Rejection> for Status` would be an orphan impl.
+- **`McpError: From<Rejection>`**: MCP guard rejections map by kind
+  (Unauthenticated → `Unauthorized`, Forbidden → `Forbidden`, NotFound →
+  `NotFound`, request-shape kinds → `InvalidParams`, Internal/Unavailable/
+  Timeout → `Internal`, Conflict/RateLimited → `Tool` with the details, others
+  by status) instead of re-reading a rendered response body.
+- Compile-time checks on gRPC services: a `#[roles]` method (or any guard
+  whose spec sets `REQUIRES_IDENTITY`) without an `#[inject(identity)]`
+  parameter, a struct-level `#[inject(identity)]`, and a missing
+  `Arc<JwtClaimsValidator>` bean all fail to build.
 
 - **`StopPhase::AfterDrain` background services** (task #1071). A
   `ServiceComponent` can declare `fn stop_phase() -> StopPhase` and
@@ -123,6 +158,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   extractors inline; hand-written handlers keep `BeanExtract<T, I>`. The
   `ViaAxum` bridge now requires the axum rejection to convert `Into<Rejection>`
   (every axum built-in does).
+- **Breaking: the gRPC guard family is gone** (task #1072, phase P3).
+  `GrpcGuard`, `GrpcGuardContext`, `GrpcRolesGuard` and `GrpcRoleBasedIdentity`
+  are removed from `r2e-grpc` (and its prelude); write `Guard<I>` impls and put
+  them on the method or impl block with `#[guard]` — they now work on HTTP,
+  gRPC and MCP alike. Manual `GrpcIdentityExtractor::extract_claims` wiring
+  still compiles but is no longer needed: use an `#[inject(identity)]`
+  parameter.
+- **Breaking: `r2e_mcp::guard::guard_rejection_to_error` removed**; the
+  generated tool code uses `McpError::from(rejection)`.
 - **Breaking: `RouteInfo.has_auth` removed** (task #1072, phase P2) in favour
   of `rejection_kinds`; `RouteInfo` literals need the two new fields. The
   OpenAPI spec no longer hardcodes 401/403/500/400: default-envelope routes

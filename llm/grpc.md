@@ -1,7 +1,7 @@
 ---
 topic: grpc
 features: grpc
-tokens: ~1500
+tokens: ~2200
 requires: core-concepts, modules
 ---
 
@@ -24,11 +24,19 @@ requires: core-concepts, modules
 - Browser clients need `.with_grpc_web()` (features `grpc-web` on `r2e`, `web`
   on `r2e-grpc`) — otherwise grpc-web requests get 415; that arm carries its
   own CORS, so no `Cors` plugin is needed.
-- `#[guard]`, `#[roles]`, `#[inject(identity)]`, `#[post_construct]`,
-  `#[pre_destroy]` and `#[on_start]` are compile errors on `#[grpc_routes]`
-  methods; `#[intercept]` is the only decorator supported.
-- For auth, wire it by hand: `#[inject] jwt_validator: Arc<JwtClaimsValidator>`
-  then `GrpcIdentityExtractor::extract_claims(request.metadata(), &self.jwt_validator)`.
+- Guards are the HTTP ones: `#[guard(..)]`, `#[roles(..)]`, `#[all_roles(..)]`
+  and `#[intercept(..)]` on methods or on the impl block; a `Guard<I>` written
+  for HTTP runs unchanged. A guard or identity `Rejection` is projected onto
+  `tonic::Status` by kind (`r2e_grpc::rejection_to_status`: Unauthenticated →
+  `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`, RateLimited →
+  `RESOURCE_EXHAUSTED`, request-shape kinds → `INVALID_ARGUMENT`, …).
+- Identity is a method **parameter**: `#[inject(identity)] user:
+  AuthenticatedUser` (or `Option<..>`), read from `authorization: Bearer ..`
+  metadata and validated by the `Arc<JwtClaimsValidator>` bean — provide it,
+  or `register_grpc_service` fails to compile. `#[roles]` needs that parameter.
+- Not supported on `#[grpc_routes]` (compile errors): struct-level
+  `#[inject(identity)]`, `#[pre_guard]`, `#[anonymous]`, `#[post_construct]`,
+  `#[pre_destroy]`, `#[on_start]`.
 - `register_grpc_service` panics on a missing config key; use
   `try_register_grpc_service::<S>()` to report the failure yourself.
 - A service owned by a feature module is registered by
@@ -118,14 +126,63 @@ impl GreeterService {
 
 (`descriptor = …` is optional — only needed for reflection.)
 
-NOT supported on `#[grpc_routes]` methods (compile errors): `#[guard(...)]`,
-`#[roles(...)]`, `#[inject(identity)]`, `#[post_construct]`, `#[pre_destroy]`,
+### Guards and identity
+
+gRPC methods take the same decorators as HTTP routes — `#[guard]`, `#[roles]`,
+`#[all_roles]`, `#[intercept]` — on the method or on the impl block
+(controller-level sites run first). Guards are `Guard<I>` impls, built once at
+registration through `DecoratorSpec` (bean deps checked at
+`register_grpc_service`), and receive a `GuardContext` whose `headers` is the
+request metadata (`method` is `POST`, `uri` is `/`, `path_params` empty).
+
+Identity is an `#[inject(identity)]` **method parameter** (any position;
+`Option<T>` for optional). The type must implement `r2e_grpc::GrpcIdentity`;
+`AuthenticatedUser` does (features `grpc` + `security`): `authorization:
+Bearer <jwt>` metadata validated by the `Arc<JwtClaimsValidator>` bean, which
+becomes a compile-time dependency of the service. Optional identity is `None`
+without `authorization` metadata but still rejects an invalid token.
+
+```rust
+use r2e::r2e_grpc::tonic::{Request, Response, Status};
+use r2e::r2e_security::AuthenticatedUser;
+
+#[controller]
+pub struct SecureGreeter {
+    #[inject] user_service: UserService,
+}
+
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+#[intercept(Logged::info())]
+impl SecureGreeter {
+    #[roles("admin")]
+    async fn say_hello(
+        &self,
+        #[inject(identity)] user: AuthenticatedUser,
+        request: Request<HelloRequest>,
+    ) -> Result<Response<HelloReply>, Status> {
+        Ok(Response::new(HelloReply { message: format!("Hello {} from {}", request.into_inner().name, user.sub) }))
+    }
+}
+# fn main() {}
+```
+
+Per call: identity extraction → controller guards → method guards →
+interceptors → method. Every `Rejection` is projected onto `tonic::Status` by
+kind with `r2e_grpc::rejection_to_status` (Unauthenticated → `UNAUTHENTICATED`,
+Forbidden → `PERMISSION_DENIED`, NotFound → `NOT_FOUND`, Conflict → `ABORTED`,
+RateLimited/PayloadTooLarge → `RESOURCE_EXHAUSTED`, Unavailable →
+`UNAVAILABLE`, Timeout → `DEADLINE_EXCEEDED`, Internal → `INTERNAL`,
+request-shape kinds → `INVALID_ARGUMENT`, else by HTTP status); the message is
+the status message and the rejection's headers (`Retry-After`,
+`WWW-Authenticate`) become response metadata. It is a free function (orphan
+rule) — call it yourself only when projecting a `Rejection` by hand.
+
+Compile errors: `#[roles]` on a method without an `#[inject(identity)]`
+parameter (`NoIdentity: RoleBasedIdentity` unsatisfied); a guard whose spec
+has `REQUIRES_IDENTITY` on such a method; struct-level `#[inject(identity)]`;
+`#[pre_guard]`, `#[anonymous]`, `#[post_construct]`, `#[pre_destroy]`,
 `#[on_start]`.
-The guard/identity infrastructure (`GrpcGuard`, `GrpcRolesGuard`,
-`GrpcIdentityExtractor`) exists in `r2e-grpc` for manual wiring but is not yet
-macro-wired. Manual wiring: `#[inject] jwt_validator: Arc<JwtClaimsValidator>`
-on the service, then `GrpcIdentityExtractor::extract_claims(request.metadata(),
-&self.jwt_validator).await?` → `r2e::StandardClaims` (same typed claims as
-HTTP; `Status::unauthenticated` on failure). `JwtClaimsValidator` implements
-`JwtClaimsValidatorLike` under `r2e-security/grpc`, enabled by `r2e`'s `grpc` +
-`security` features.
+
+Manual claims: `r2e_grpc::bearer_token(metadata) -> Result<&str, Rejection>`,
+`extract_jwt_claims_from_metadata(metadata, &validator).await ->
+Result<StandardClaims, Status>`.

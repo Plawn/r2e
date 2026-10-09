@@ -57,6 +57,9 @@ pub struct GrpcRoutesImplDef {
     pub service_trait: syn::Path,
     /// Expression for the service's encoded `FileDescriptorSet`, if declared.
     pub descriptor: Option<syn::Expr>,
+    /// Controller-level guards (`#[guard]`/`#[roles]`/`#[all_roles]` on the
+    /// impl block) checked before every method's own guards.
+    pub controller_guards: Vec<syn::Expr>,
     /// Controller-level interceptors applied to all methods.
     pub controller_intercepts: Vec<syn::Expr>,
     /// gRPC methods with their attributes.
@@ -69,7 +72,7 @@ pub struct GrpcRoutesImplDef {
 pub struct GrpcMethod {
     /// Method name (must match the tonic trait method name).
     pub name: syn::Ident,
-    /// Parsed decorator attributes (gRPC currently supports interceptors only).
+    /// Parsed decorator attributes (guards, roles and interceptors).
     pub decorators: MethodDecorators,
     /// Identity parameter (if `#[inject(identity)]` is on a handler param).
     pub identity_param: Option<IdentityParam>,
@@ -123,11 +126,14 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
         }
     };
 
-    // Extract controller-level intercepts from impl attrs. Everything else in
-    // the HTTP decorator family is rejected up front — impl attrs are never
-    // re-emitted, so an unrejected #[guard]/#[roles] would silently no-op.
+    // Impl-level decorators (guards, roles, intercepts) are consumed by the
+    // gRPC codegen. Everything else in the HTTP decorator family is rejected
+    // up front — impl attrs are never re-emitted, so an unrejected
+    // `#[pre_guard]` would silently no-op.
     validate_grpc_impl_attrs(&item.attrs)?;
-    let controller_intercepts = extract_intercept_fns(&item.attrs)?;
+    let controller_decorators = parse_grpc_decorators(&item.attrs)?;
+    let controller_guards = controller_decorators.guard_fns;
+    let controller_intercepts = controller_decorators.intercept_fns;
 
     let mut methods = Vec::new();
     let mut other_methods = Vec::new();
@@ -173,6 +179,7 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
         controller_name,
         service_trait,
         descriptor,
+        controller_guards,
         controller_intercepts,
         methods,
         other_methods,
