@@ -1,6 +1,7 @@
 use r2e_core::di::meta::{ParamLocation, RouteInfo};
+use r2e_core::{ErrorSchema, ErrorSchemaInfo, HttpError};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::schema::SchemaRegistry;
 
@@ -173,6 +174,9 @@ pub struct OpenApiConfig {
     pub docs_ui: bool,
     pub(crate) schema_registry: SchemaRegistry,
     pub(crate) schema_overrides: HashMap<String, Value>,
+    /// The application-level error envelope, documented on every route whose
+    /// return type carries no envelope of its own. `None` = `HttpError`.
+    pub(crate) error_schema: Option<ErrorSchemaInfo>,
 }
 
 impl OpenApiConfig {
@@ -184,6 +188,7 @@ impl OpenApiConfig {
             docs_ui: false,
             schema_registry: SchemaRegistry::new(),
             schema_overrides: HashMap::new(),
+            error_schema: None,
         }
     }
 
@@ -222,11 +227,96 @@ impl OpenApiConfig {
 
     /// Override the auto-generated schema for a type.
     ///
-    /// This takes precedence over both route-derived and registry schemas.
+    /// This takes precedence over both route-derived and registry schemas,
+    /// including the error envelope components (`ErrorResponse`, …).
     pub fn with_schema_override(mut self, name: &str, schema: Value) -> Self {
         self.schema_overrides.insert(name.to_string(), schema);
         self
     }
+
+    /// Document error responses with the envelope `E` — the type passed to
+    /// `AppBuilder::error_projection::<E>()`. Routes whose handler returns
+    /// `Result<T, E2>` with an envelope `E2` keep documenting `E2`.
+    ///
+    /// The [`OpenApiPlugin`](crate::OpenApiPlugin) sets this from the
+    /// application's `ErrorProjector` bean automatically; this method is for
+    /// callers of [`build_spec`] / [`openapi_routes`](crate::openapi_routes).
+    pub fn with_error_schema<E: ErrorSchema + ?Sized>(mut self) -> Self {
+        self.error_schema = Some(ErrorSchemaInfo::of::<E>());
+        self
+    }
+
+    /// Same as [`with_error_schema`](Self::with_error_schema), from an
+    /// already-captured [`ErrorSchemaInfo`].
+    pub fn with_error_schema_info(mut self, info: ErrorSchemaInfo) -> Self {
+        self.error_schema = Some(info);
+        self
+    }
+
+    /// The envelope documented on `route`: the route's own (from its return
+    /// type), else the application's, else `HttpError`.
+    fn error_schema_for(&self, route: &RouteInfo) -> ErrorSchemaInfo {
+        route
+            .error_schema
+            .or(self.error_schema)
+            .unwrap_or_else(ErrorSchemaInfo::of::<HttpError>)
+    }
+}
+
+/// The error responses of one route: `status → (body component names)`, from
+/// the envelope's `status_of` over the inferred rejection kinds plus its
+/// `extra_statuses`. Every body component met is recorded in `components`
+/// (name → schema) for `components/schemas`.
+///
+/// Two kinds projecting to the same status with different bodies (e.g. the
+/// default envelope's `ValidationErrorResponse` and `ErrorResponse` on 400)
+/// document as a `oneOf`.
+fn error_responses(
+    schema: &ErrorSchemaInfo,
+    route: &RouteInfo,
+    components: &mut BTreeMap<String, Value>,
+) -> BTreeMap<u16, Vec<String>> {
+    let mut by_status: BTreeMap<u16, Vec<String>> = BTreeMap::new();
+    let mut record = |status: u16, body: Option<(String, Value)>, by_status: &mut BTreeMap<u16, Vec<String>>| {
+        let names = by_status.entry(status).or_default();
+        if let Some((name, body_schema)) = body {
+            if !names.contains(&name) {
+                names.push(name.clone());
+            }
+            components.entry(name).or_insert(body_schema);
+        }
+    };
+    for kind in &route.rejection_kinds {
+        let status = schema.status_of(*kind).as_u16();
+        record(status, schema.body_schema_for(*kind), &mut by_status);
+    }
+    for (status, _) in schema.extra_statuses() {
+        record(status.as_u16(), schema.body_schema(), &mut by_status);
+    }
+    by_status
+}
+
+/// The OpenAPI response object for an error status with the given body
+/// components (none = description only).
+fn error_response_object(status: u16, bodies: &[String]) -> Value {
+    let description = r2e_core::http::StatusCode::from_u16(status)
+        .ok()
+        .and_then(|s| s.canonical_reason())
+        .unwrap_or("Error");
+    let schema = match bodies {
+        [] => return json!({ "description": description }),
+        [one] => json!({ "$ref": format!("#/components/schemas/{one}") }),
+        many => json!({
+            "oneOf": many
+                .iter()
+                .map(|n| json!({ "$ref": format!("#/components/schemas/{n}") }))
+                .collect::<Vec<_>>()
+        }),
+    };
+    json!({
+        "description": description,
+        "content": { "application/json": { "schema": schema } }
+    })
 }
 
 /// Build an OpenAPI 3.1.0 JSON spec from config and route metadata.
@@ -245,6 +335,9 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
     }
 
     let mut paths: Map<String, Value> = Map::new();
+
+    // Error envelope components met while documenting routes (name → schema).
+    let mut error_components: BTreeMap<String, Value> = BTreeMap::new();
 
     for route in routes {
         let axum_path = route.path.replace('{', "{").replace('}', "}");
@@ -347,57 +440,14 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
             responses.insert(status_key, json!({ "description": status_desc }));
         }
 
-        // Conditional 401/403 only when route has auth
-        if route.has_auth {
-            responses.insert(
-                "401".into(),
-                json!({
-                    "description": "Unauthorized",
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-                        }
-                    }
-                }),
-            );
-            responses.insert(
-                "403".into(),
-                json!({
-                    "description": "Forbidden",
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-                        }
-                    }
-                }),
-            );
-        }
-
-        // Default 500 response
-        responses.insert(
-            "500".into(),
-            json!({
-                "description": "Internal server error",
-                "content": {
-                    "application/json": {
-                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-                    }
-                }
-            }),
-        );
-
-        // If route has a request body, it may return 400
-        if route.request_body_type.is_some() || route.request_body_content_type.is_some() {
-            responses.entry("400".to_string()).or_insert_with(|| {
-                json!({
-                    "description": "Bad request / Validation error",
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/ValidationErrorResponse" }
-                        }
-                    }
-                })
-            });
+        // Error responses: one per distinct status the route's envelope
+        // projects its inferred rejection kinds to (+ `extra_statuses`).
+        // The success status wins when a kind collides with it.
+        let error_schema = config.error_schema_for(route);
+        for (status, bodies) in error_responses(&error_schema, route, &mut error_components) {
+            responses
+                .entry(status.to_string())
+                .or_insert_with(|| error_response_object(status, &bodies));
         }
 
         operation.insert("responses".into(), Value::Object(responses));
@@ -482,52 +532,12 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         schemas.insert(name.clone(), s);
     }
 
-    // Insert standard error schemas
-    schemas
-        .entry("ErrorResponse".to_string())
-        .or_insert_with(|| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "error": {
-                        "type": "string",
-                        "description": "A human-readable error message"
-                    }
-                },
-                "required": ["error"]
-            })
-        });
-    schemas
-        .entry("ValidationErrorResponse".to_string())
-        .or_insert_with(|| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "error": {
-                        "type": "string",
-                        "description": "Always \"Validation failed\""
-                    },
-                    "details": {
-                        "type": "array",
-                        "items": {
-                            "$ref": "#/components/schemas/FieldError"
-                        }
-                    }
-                },
-                "required": ["error", "details"]
-            })
-        });
-    schemas.entry("FieldError".to_string()).or_insert_with(|| {
-        json!({
-            "type": "object",
-            "properties": {
-                "field": { "type": "string" },
-                "message": { "type": "string" },
-                "code": { "type": "string" }
-            },
-            "required": ["field", "message", "code"]
-        })
-    });
+    // Error envelope components: whatever the routes' envelopes declared.
+    // Explicit overrides (applied above) and route/registry schemas win.
+    for (name, mut schema) in error_components {
+        sanitize_schema(&mut schema);
+        schemas.entry(name).or_insert(schema);
+    }
 
     let mut components: Map<String, Value> = Map::new();
     components.insert(

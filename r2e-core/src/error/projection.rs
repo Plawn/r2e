@@ -19,7 +19,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use super::{ErrorSchema, HttpError, Rejection};
+use super::{ErrorSchema, ErrorSchemaInfo, HttpError, Rejection};
 use crate::http::response::{IntoHttpResponse, Response};
 use crate::type_list::BeanLookup;
 
@@ -34,7 +34,10 @@ use crate::type_list::BeanLookup;
 /// Comparable to a JAX-RS `ExceptionMapper`: one mapping from the typed
 /// failure to the wire shape, installed once for the whole application.
 #[derive(Clone)]
-pub struct ErrorProjector(Arc<dyn Fn(Rejection) -> Response + Send + Sync>);
+pub struct ErrorProjector {
+    project: Arc<dyn Fn(Rejection) -> Response + Send + Sync>,
+    schema: ErrorSchemaInfo,
+}
 
 impl ErrorProjector {
     /// Project through the envelope `E`.
@@ -43,19 +46,29 @@ impl ErrorProjector {
     where
         E: From<Rejection> + IntoHttpResponse + ErrorSchema + 'static,
     {
-        Self(Arc::new(|rejection| rejection.project::<E>()))
+        Self {
+            project: Arc::new(|rejection| rejection.project::<E>()),
+            schema: ErrorSchemaInfo::of::<E>(),
+        }
     }
 
     /// Render a rejection through the installed envelope.
     #[must_use]
     pub fn project(&self, rejection: Rejection) -> Response {
-        (self.0)(rejection)
+        (self.project)(rejection)
+    }
+
+    /// The installed envelope's [`ErrorSchema`], for documentation (the
+    /// OpenAPI plugin reads it for every route without a declared envelope).
+    #[must_use]
+    pub fn schema(&self) -> &ErrorSchemaInfo {
+        &self.schema
     }
 }
 
 impl std::fmt::Debug for ErrorProjector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ErrorProjector(..)")
+        write!(f, "ErrorProjector({})", self.schema.type_name())
     }
 }
 
@@ -95,6 +108,8 @@ impl<R: ?Sized> Default for ProjectionProbe<R> {
 #[doc(hidden)]
 pub trait ProjectEnvelope {
     fn project<S: BeanLookup + ?Sized>(&self, rejection: Rejection, state: &S) -> Response;
+    /// The envelope's schema, for `RouteInfo::error_schema`.
+    fn error_schema(&self) -> Option<ErrorSchemaInfo>;
 }
 
 impl<T, E> ProjectEnvelope for ProjectionProbe<Result<T, E>>
@@ -105,17 +120,29 @@ where
     fn project<S: BeanLookup + ?Sized>(&self, rejection: Rejection, _state: &S) -> Response {
         rejection.project::<E>()
     }
+
+    #[inline]
+    fn error_schema(&self) -> Option<ErrorSchemaInfo> {
+        Some(ErrorSchemaInfo::of::<E>())
+    }
 }
 
 /// Fallback for every other return type: the application projection.
 #[doc(hidden)]
 pub trait ProjectFallback {
     fn project<S: BeanLookup + ?Sized>(&self, rejection: Rejection, state: &S) -> Response;
+    /// No route-level envelope: documented through the application one.
+    fn error_schema(&self) -> Option<ErrorSchemaInfo>;
 }
 
 impl<R: ?Sized> ProjectFallback for &ProjectionProbe<R> {
     #[inline]
     fn project<S: BeanLookup + ?Sized>(&self, rejection: Rejection, state: &S) -> Response {
         project_default(rejection, state)
+    }
+
+    #[inline]
+    fn error_schema(&self) -> Option<ErrorSchemaInfo> {
+        None
     }
 }

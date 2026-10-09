@@ -67,6 +67,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `project(rejection)`). Routes whose return type declares no envelope, SSE
   and WS routes, and (from phase P4) 404/405/413/panic responses render
   through it; without the bean the default is `HttpError`, byte-equal to 0.4.
+- **OpenAPI error responses from the route's real failures** (task #1072,
+  phase P2). `RouteInfo` gains `rejection_kinds: Vec<RejectionKind>` (inferred
+  by `#[routes]`: body extractor kinds, `Path`/`Query`/`Form`/`#[derive(Params)]`
+  locations, garde validation, required identity, roles/guards, rate-limit
+  guards, always `Internal`) and `error_schema: Option<ErrorSchemaInfo>` (the
+  envelope of a `Result<T, E>` return type). `build_spec` documents one
+  response per distinct `ErrorSchema::status_of(kind)` of the route's envelope
+  — the route's own, else the application's `error_projection::<E>()` (read
+  from the `ErrorProjector` bean by `OpenApiPlugin`, or set with
+  `OpenApiConfig::with_error_schema::<E>()`), else `HttpError` — with the
+  envelope's body components and `extra_statuses`; several bodies on one
+  status become a `oneOf`. New `r2e_core::error::ErrorSchemaInfo` (`Copy`
+  capture of an `ErrorSchema` impl, also exposed as `ErrorProjector::schema()`)
+  and `r2e_core::di::meta::RequestBodySchema` (a custom last-parameter body
+  extractor documents its content type, schema and rejection kinds).
 - **`RequestData<S>`** (`r2e_core::web::extract`): the R2E-owned trait the
   generated `__R2eRequestData_<C>` extractor implements —
   `extract(&mut Parts, &S) -> Result<Self, Rejection>` — replacing its
@@ -108,6 +123,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   extractors inline; hand-written handlers keep `BeanExtract<T, I>`. The
   `ViaAxum` bridge now requires the axum rejection to convert `Into<Rejection>`
   (every axum built-in does).
+- **Breaking: `RouteInfo.has_auth` removed** (task #1072, phase P2) in favour
+  of `rejection_kinds`; `RouteInfo` literals need the two new fields. The
+  OpenAPI spec no longer hardcodes 401/403/500/400: default-envelope routes
+  now list 415/413/422 for JSON bodies and 400 for path/query parameters
+  (what the runtime already answered), and the `FieldError` component is gone
+  (`ValidationErrorResponse.details` items are inline). `RejectionKind` is
+  `Serialize`.
 - **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
   `Header`), so a `#[derive(Params)]` failure converts into the right
   `RejectionKind`. Only code that builds `ParamError` by struct literal is

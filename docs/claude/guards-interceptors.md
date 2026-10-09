@@ -314,8 +314,9 @@ macro), not just `#[intercept]`. Semantics (locked in task #906):
 - **`#[anonymous]` opts out of the post-auth half only** (Option Y): anonymous
   routes skip controller `#[guard]`/`#[roles]`/`#[all_roles]` but keep
   controller `#[pre_guard]`s and interceptors. Metadata follows suit:
-  controller roles/guards fold into `RouteInfo.roles`/`has_auth` for
-  non-anonymous endpoints only.
+  controller roles/guards fold into `RouteInfo.roles`/`rejection_kinds`
+  (`Forbidden` / `RateLimited`) for non-anonymous endpoints only; controller
+  pre-guards fold into every endpoint's kinds.
 - **`REQUIRES_IDENTITY` asserts** for controller guards use the OR over
   applicable endpoints: the placement is rejected only when it is statically
   always-`None` (no struct identity AND no non-anonymous route with an

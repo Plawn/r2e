@@ -743,9 +743,9 @@ Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualif
 ## OpenAPI (r2e-openapi)
 
 - Generates **OpenAPI 3.1.0** specs. Uses **schemars 1.x** (JSON Schema Draft 2020-12) for schema generation.
-- `OpenApiConfig` — configuration for the generated spec (title, version, description). `with_docs_ui(true)` enables the interactive documentation page.
+- `OpenApiConfig` — configuration for the generated spec (title, version, description). `with_docs_ui(true)` enables the interactive documentation page. `with_error_schema::<E>()` / `with_error_schema_info(info)` set the application envelope for error responses.
 - `OpenApiPlugin` — registers OpenAPI routes. Use `.plugin(OpenApiPlugin::new(config))` on the builder (before `build_state()`; install order is irrelevant — the spec is built from a Routes-stage effect, after every controller is registered).
-- `SchemaRegistry` — extra schema collection. `register_for::<T: JsonSchema>()` for schemars types, `register(name, value)` for manual schemas. Wire into `OpenApiConfig` via `with_schema::<T>()`, `with_raw_schema(name, json)`, `with_schema_registry(registry)`, `with_schema_override(name, json)`. Precedence: overrides > route schemas > registry > built-in error schemas.
+- `SchemaRegistry` — extra schema collection. `register_for::<T: JsonSchema>()` for schemars types, `register(name, value)` for manual schemas. Wire into `OpenApiConfig` via `with_schema::<T>()`, `with_raw_schema(name, json)`, `with_schema_registry(registry)`, `with_schema_override(name, json)`. Precedence: overrides > route schemas > registry > error envelope schemas.
 - `SchemaProvider` — trait for types without `JsonSchema` derive; returns `Cow<'static, str>` name + `Value` schema. Use `SchemaRegistry::register_provider::<T>()` to register.
 - Route metadata is collected from `Controller::route_metadata()` via `RouteInfo` (in `r2e-core/src/di/meta.rs`).
 - Always serves the spec at `/openapi.json`. When `docs_ui` is enabled, also serves an interactive API documentation UI at `/docs`.
@@ -757,7 +757,7 @@ Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualif
 - `#[returns(T)]` — explicit response type for opaque returns (`impl IntoResponse`).
 - `#[deprecated]` — standard Rust attribute, reflected in spec.
 - Doc comments: first `///` line → `summary`, remaining → `description`.
-- 401/403 responses: only emitted when route has auth (`#[roles]`, `#[inject(identity)]`, guards).
+- Error responses (#1072 P2): the `#[routes]` macro infers `RouteInfo.rejection_kinds` (body extractor kinds, `Path`/`Query`/`Form`/`Bytes`/`String`, `#[derive(Params)]` locations and struct identity read at runtime from the generated metadata block, required identity → `Unauthenticated`, roles/guards → `Forbidden`, a guard whose spec type name contains `RateLimit` → `RateLimited`, garde probe → `Validation`, always `Internal`) and `RouteInfo.error_schema` (`ErrorSchemaInfo` of a `Result<T, E>` envelope via the `ProjectionProbe` autoref, `None` otherwise). `build_spec` emits one response per distinct `status_of(kind)` + `extra_statuses` of the route's envelope — `route.error_schema`, else `OpenApiConfig.error_schema` (the plugin fills it from the `ErrorProjector` bean in `after_routes`; `with_error_schema::<E>()` for direct callers), else `HttpError` — with the envelope's body components collected into `components/schemas` **after** overrides (`or_insert`). Several bodies on one status → `oneOf`. No hardcoded 401/403/500/400 and no `FieldError` component anymore. A custom last-parameter body extractor is probed for `RequestBodySchema` (content type, schema, kinds); built-in `Json`/`TypedMultipart`/`Multipart` stay name-based.
 
 ## Static File Serving (r2e-static)
 

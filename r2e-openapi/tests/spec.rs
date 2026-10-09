@@ -1,4 +1,5 @@
 use r2e_core::di::meta::{ParamInfo, ParamLocation, RouteInfo};
+use r2e_core::RejectionKind;
 use r2e_openapi::{build_spec, OpenApiConfig};
 use serde_json::{json, Value};
 
@@ -27,7 +28,8 @@ fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
         roles: vec![],
         tag: None,
         deprecated: false,
-        has_auth: false,
+        rejection_kinds: vec![],
+        error_schema: None,
     }
 }
 
@@ -259,7 +261,7 @@ fn responses_present_without_auth() {
 
     let responses = &spec["paths"]["/users"]["get"]["responses"];
     assert!(responses["200"].is_object());
-    // No 401/403 when has_auth is false
+    // No 401/403 without the auth rejection kinds
     assert!(responses.get("401").is_none());
     assert!(responses.get("403").is_none());
 }
@@ -616,7 +618,8 @@ fn status_override() {
 #[test]
 fn no_401_403_without_auth() {
     let routes = vec![RouteInfo {
-        has_auth: false,
+        rejection_kinds: vec![],
+        error_schema: None,
         ..route("GET", "/public", "public_endpoint")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -629,7 +632,8 @@ fn no_401_403_without_auth() {
 #[test]
 fn auth_route_has_401_403() {
     let routes = vec![RouteInfo {
-        has_auth: true,
+        rejection_kinds: vec![RejectionKind::Unauthenticated, RejectionKind::Forbidden],
+        error_schema: None,
         roles: vec!["admin".to_string()],
         ..route("GET", "/admin", "admin_endpoint")
     }];
@@ -839,10 +843,17 @@ fn schema_override_replaces_error_schema() {
             }
         }),
     );
-    let routes = vec![route("GET", "/test", "test")];
+    let routes = vec![RouteInfo {
+        rejection_kinds: vec![RejectionKind::Internal],
+        ..route("GET", "/test", "test")
+    }];
     let spec = build_spec(&config, &routes);
-    // Override replaces the hardcoded ErrorResponse
+    // Override replaces the envelope's own ErrorResponse component
     assert!(spec["components"]["schemas"]["ErrorResponse"]["properties"]["code"].is_object());
+    assert_eq!(
+        spec["paths"]["/test"]["get"]["responses"]["500"]["content"]["application/json"]["schema"]["$ref"],
+        "#/components/schemas/ErrorResponse"
+    );
 }
 
 #[derive(schemars::JsonSchema)]
@@ -953,17 +964,27 @@ fn raw_multipart_request_body_is_free_form() {
 }
 
 #[test]
-fn multipart_request_body_documents_400() {
+fn multipart_request_body_documents_its_rejections() {
+    // The macro infers a multipart body's kinds; the builder documents each
+    // one at the envelope's status (default: 415 / 413 / 400).
     let routes = vec![RouteInfo {
         request_body_content_type: Some("multipart/form-data".to_string()),
+        rejection_kinds: vec![
+            RejectionKind::UnsupportedMediaType,
+            RejectionKind::PayloadTooLarge,
+            RejectionKind::MalformedBody,
+        ],
         ..route("POST", "/uploads/raw", "upload_raw")
     }];
     let spec = build_spec(&default_config(), &routes);
 
-    assert!(
-        spec["paths"]["/uploads/raw"]["post"]["responses"]["400"].is_object(),
-        "a multipart body can be malformed, so 400 must be documented"
-    );
+    let responses = &spec["paths"]["/uploads/raw"]["post"]["responses"];
+    for status in ["400", "413", "415"] {
+        assert!(
+            responses[status].is_object(),
+            "a multipart body can fail with {status}, so it must be documented"
+        );
+    }
 }
 
 #[test]

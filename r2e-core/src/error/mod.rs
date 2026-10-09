@@ -4,7 +4,7 @@ mod schema;
 
 pub use projection::{project_default, ErrorProjector};
 pub use rejection::{Rejection, RejectionKind};
-pub use schema::ErrorSchema;
+pub use schema::{ErrorSchema, ErrorSchemaInfo};
 
 use std::borrow::Cow;
 use std::sync::Arc;

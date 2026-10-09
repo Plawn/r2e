@@ -28,7 +28,8 @@ fn simple_route(method: &str, path: &str, op: &str) -> RouteInfo {
         roles: vec![],
         tag: None,
         deprecated: false,
-        has_auth: false,
+        rejection_kinds: vec![],
+        error_schema: None,
     }
 }
 

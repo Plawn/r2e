@@ -85,7 +85,8 @@ pub struct RouteInfo {
     pub roles: Vec<String>,
     pub tag: Option<String>,
     pub deprecated: bool,
-    pub has_auth: bool,
+    pub rejection_kinds: Vec<RejectionKind>,     // what the route can fail with (inferred)
+    pub error_schema: Option<ErrorSchemaInfo>,   // envelope of a `Result<T, E>` return, else app-level
 }
 ```
 
@@ -94,6 +95,36 @@ pub struct RouteInfo {
 - Response schemas use autoref specialization — types without `JsonSchema` are silently skipped.
 - Doc comments: first `///` line → `summary`, remaining → `description`.
 - Roles declared via `#[roles("admin")]` appear in security metadata.
+- Error responses are derived from `rejection_kinds` (see below), never hardcoded.
+
+## Error responses
+
+The macro infers the `RejectionKind`s a route can fail with — the body
+extractor's failures (`Json<T>`: `MissingContentType` 415, `PayloadTooLarge`
+413, `BodyRead`/`MalformedBody` 400, `InvalidBody` 422), `Path<T>` →
+`InvalidPath`, `Query<T>` / `#[derive(Params)]` fields → `InvalidQuery` /
+`InvalidHeader`, `Form<T>` → `InvalidForm`, a garde `Validate` body →
+`Validation`, a required identity (struct-level or parameter) →
+`Unauthenticated`, `#[roles]` / guards → `Forbidden`, a rate-limit guard →
+`RateLimited`, and always `Internal`. Controller-level guards fold in for
+non-`#[anonymous]` routes, pre-auth guards for every route.
+
+The builder documents one response per distinct status the route's **error
+envelope** maps those kinds to, through `ErrorSchema::status_of(kind)`, with
+`body_schema_for(kind)` (else `body_schema()`) as the component, plus the
+envelope's `extra_statuses()`. The envelope is, in order: the handler's
+`Result<T, E>` error type when `E: ErrorSchema` (`RouteInfo::error_schema`),
+the application's `AppBuilder::error_projection::<E>()` (the plugin reads the
+`ErrorProjector` bean; `OpenApiConfig::with_error_schema::<E>()` does the same
+for direct `build_spec` callers), else `HttpError` — `ErrorResponse`
+everywhere, `ValidationErrorResponse` (inline `details` items) for
+`Validation`. Several bodies on one status render as a `oneOf`. Runtime and
+spec share `status_of`, so a remap (422 → 400) is documented as 400 only.
+
+A custom body extractor — the handler's last parameter, read with
+`FromRequest` — is documented when it implements
+`r2e_core::di::meta::RequestBodySchema` (`content_type()`, `body_schema()`,
+`rejection_kinds()`). Without it the route has no request body in the spec.
 
 ## Tags
 
@@ -136,13 +167,15 @@ let config = OpenApiConfig::new("Titre", "1.0.0")
 | `with_raw_schema(name, json)` | Add a manually-crafted JSON schema |
 | `with_schema_registry(registry)` | Merge a pre-built `SchemaRegistry` |
 | `with_schema_override(name, json)` | Override an auto-generated schema |
+| `with_error_schema::<E>()` | Document errors with envelope `E` (the plugin sets it from `ErrorProjector`) |
 
 ### Schema precedence
 
 1. **Overrides** (`with_schema_override`) — highest priority
 2. **Route-derived schemas** — from request/response types
 3. **Registry schemas** — from `with_schema`, `with_raw_schema`, `with_schema_registry`
-4. **Built-in error schemas** — `ErrorResponse`, `ValidationErrorResponse`, `FieldError`
+4. **Error envelope schemas** — whatever the routes' envelopes declare
+   (`ErrorResponse` / `ValidationErrorResponse` for `HttpError`)
 
 ## Documentation interface (WTI)
 

@@ -1,5 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::error::{ErrorSchemaInfo, RejectionKind};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 
@@ -107,7 +109,20 @@ pub struct RouteInfo {
     pub roles: Vec<String>,
     pub tag: Option<String>,
     pub deprecated: bool,
-    pub has_auth: bool,
+    /// Failure kinds the request pipeline can produce for this route before
+    /// (or around) the handler: inferred by the `#[routes]` macro from the
+    /// parameters (body extractor, `Path`/`Query`/`#[derive(Params)]`
+    /// locations, garde validation), the identity (struct-level or required
+    /// parameter → `Unauthenticated`), roles and guards (`Forbidden`, or
+    /// `RateLimited` for a rate-limit guard), plus `Internal` always. The
+    /// OpenAPI builder documents one error response per distinct
+    /// `status_of(kind)` of the route's envelope.
+    pub rejection_kinds: Vec<RejectionKind>,
+    /// The route's own error envelope — the `E` of a `Result<T, E>` return
+    /// type — when it declares one. `None` means the application projection
+    /// (the `ErrorProjector` bean, else `HttpError`) documents the route.
+    #[serde(skip)]
+    pub error_schema: Option<ErrorSchemaInfo>,
 }
 
 /// Describes a multipart form type as a JSON Schema object for OpenAPI.
@@ -125,6 +140,46 @@ pub trait MultipartSchema {
     /// `{"type": "object", "properties": {...}, "required": [...]}`.
     /// File fields are modeled as `{"type": "string", "format": "binary"}`.
     fn multipart_schema() -> Value;
+}
+
+/// Describes a **custom request-body extractor** for OpenAPI.
+///
+/// The routes macro recognises `Json<T>`, `TypedMultipart<T>` and raw
+/// `Multipart` by name. Any other type in the body position (the handler's
+/// last extracted parameter, read through `FromRequest`) is probed for this
+/// trait (autoref specialization): an implementation documents the body's
+/// media type, schema and failure kinds; without one the route documents no
+/// request body.
+///
+/// ```rust,ignore
+/// impl<T: JsonSchema> RequestBodySchema for OpenAiBody<T> {
+///     fn content_type() -> &'static str { "application/json" }
+///     fn body_schema() -> Option<(String, Value)> {
+///         Some((T::schema_name().into(), serde_json::to_value(schema_for!(T)).unwrap()))
+///     }
+///     fn rejection_kinds() -> Vec<RejectionKind> {
+///         vec![RejectionKind::MissingContentType, RejectionKind::InvalidBody]
+///     }
+/// }
+/// ```
+pub trait RequestBodySchema {
+    /// Media type the extractor reads (`application/json`, …).
+    fn content_type() -> &'static str;
+    /// `(component name, JSON Schema)` of the body. `None` documents a
+    /// free-form object under [`content_type`](Self::content_type).
+    fn body_schema() -> Option<(String, Value)>;
+    /// Failure kinds the extractor can reject with; they are documented as
+    /// error responses through the route's envelope.
+    fn rejection_kinds() -> Vec<RejectionKind>;
+}
+
+/// What the routes macro's `RequestBodySchema` probe yields for a custom
+/// body extractor. Generated code only.
+#[doc(hidden)]
+pub struct __BodyProbeResult {
+    pub content_type: &'static str,
+    pub schema: Option<(String, Value)>,
+    pub rejection_kinds: Vec<RejectionKind>,
 }
 
 /// Metadata about a route parameter.

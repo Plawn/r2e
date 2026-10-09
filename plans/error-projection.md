@@ -354,44 +354,73 @@ preflight already runs guards before the upgrade; it switches to `Rejection`).
 
 ## 6. OpenAPI
 
-`RouteInfo` gains:
+`RouteInfo` gains (shipped shape, P2):
 
 ```rust
 pub struct RouteInfo {
     // …
-    /// Failure kinds the macro inferred from the signature and decorators.
-    pub rejection_kinds: &'static [RejectionKind],
-    /// The route's envelope documentation, captured from `E: ErrorSchema`.
-    pub error_schema: fn() -> ErrorSchemaInfo, // { status_of: fn(RejectionKind) -> StatusCode, body, body_for, extra }
+    /// Failure kinds the macro inferred from the signature and decorators,
+    /// completed at metadata time by what only the compiled program knows.
+    pub rejection_kinds: Vec<RejectionKind>,
+    /// The envelope of a `Result<T, E>` return type (`E: ErrorSchema`),
+    /// captured through the P1 `ProjectionProbe`; `None` = application
+    /// projection. Not serialized.
+    pub error_schema: Option<ErrorSchemaInfo>,
 }
 ```
 
-Inference table (macro side, `controller_impl.rs`):
+`ErrorSchemaInfo` (`r2e_core::error`) is the `Copy` capture of an
+`ErrorSchema` impl (`of::<E>()`: type name + fn pointers for `status_of`,
+`body_schema`, `body_schema_for`, `extra_statuses`, `opaque_passthrough`);
+`ErrorProjector` carries one too (`projector.schema()`), which is how the
+OpenAPI plugin learns the application envelope from the bean graph.
 
-| Signature / decorator | Kinds |
-|---|---|
-| body param (`Json`, `TypedMultipart`, custom `RequestBodySchema`) | MissingContentType, MalformedBody, InvalidBody, PayloadTooLarge |
-| `Path<_>` or path symbols | InvalidPath |
-| `Query<_>` / `Params` with query fields | InvalidQuery |
-| `Form<_>` | InvalidForm |
-| required identity (struct or param) | Unauthenticated |
-| `#[roles]`, `#[all_roles]`, any guard | Forbidden |
-| `RateLimitGuard` / `PreRateLimit` | RateLimited |
-| garde `Validate` on a param | Validation |
-| always | Internal |
+Inference table (`controller_impl.rs`, `static_rejection_kinds` +
+`rejection_kinds_expr`):
 
-Builder (`r2e-openapi/src/builder.rs`): for each inferred kind, emit
-`status_of(kind)` with `body_schema_for(kind)` or `body_schema()`, merge kinds
-that land on the same status, then add `extra_statuses`, and register the
-components. The hardcoded `ErrorResponse` / `ValidationErrorResponse` blocks
-become `HttpError`'s `ErrorSchema` impl, so the default spec is unchanged except
-that it now also lists 415 and 422 for JSON bodies and 413 for bodies, which
-the runtime already emits. A projector that remaps 422 → 400 documents 400
-only, because both sides call the same `status_of`.
+| Signature / decorator | Kinds | When |
+|---|---|---|
+| `Json<T>` body | MissingContentType, PayloadTooLarge, BodyRead, MalformedBody, InvalidBody | macro |
+| `TypedMultipart<T>` / `Multipart` | UnsupportedMediaType, PayloadTooLarge, MalformedBody | macro |
+| `Form<T>` (last param) | UnsupportedMediaType, PayloadTooLarge, InvalidForm | macro |
+| `Bytes` / `String` (last param) | PayloadTooLarge, BodyRead (+ MalformedBody for `String`) | macro |
+| custom last param with `RequestBodySchema` | its `rejection_kinds()` | runtime probe |
+| `Path<_>` | InvalidPath | macro |
+| `Query<_>` | InvalidQuery | macro |
+| `#[derive(Params)]` fields | InvalidPath / InvalidQuery / InvalidHeader by location | runtime (`ParamInfo`) |
+| required identity param | Unauthenticated | macro |
+| required struct identity, route not `#[anonymous]` | Unauthenticated | runtime (`HAS_STRUCT_IDENTITY`) |
+| `#[roles]`, `#[all_roles]`, any guard | Forbidden | macro |
+| guard whose spec type name contains `RateLimit` (`RateLimit`, `PreRateLimit`, `Configured*`, `RateLimitGuard`, …) | RateLimited | macro (`spec_type_of`) |
+| param type implementing `garde::Validate` (inner of `Json`/`Query`/`Path`/`Form`) | Validation | runtime autoref probe |
+| always | Internal | macro |
 
-`RequestBodySchema` (from the ticket): a trait probed like `MultipartSchema`,
-implemented for `Json<T>` and `TypedMultipart<T>`, implementable by an app
-extractor; the name-based `extract_body_type_info` stays as the fallback.
+Controller-level post-auth guards fold into non-`#[anonymous]` routes,
+pre-auth guards into every route (the same rule as their execution). SSE/WS
+routes get the identity/guard kinds and `Internal`, `error_schema: None`.
+
+Builder (`r2e-openapi/src/builder.rs`): per route, envelope =
+`route.error_schema` → `config.error_schema` → `HttpError`; one response per
+distinct `status_of(kind)` with `body_schema_for(kind)` (else
+`body_schema()`), several bodies on one status as `oneOf`, then
+`extra_statuses`; the success status wins a collision. Components the
+envelopes declare are inserted after `schema_overrides` with `or_insert`, so
+overrides still win. The hardcoded 401/403/500/400 blocks and the
+`ErrorResponse` / `ValidationErrorResponse` / `FieldError` inserts are gone:
+`HttpError`'s `ErrorSchema` impl provides the first two (`Validation` →
+`ValidationErrorResponse` with inline items). Consequences for the default
+spec: JSON-body routes now list 413/415/422 (and 400 only when a kind maps
+there), `Path`-param routes list 400, and a route with no failure kind but
+`Internal` lists 500 only. The plugin (`ext.rs`) reads the `ErrorProjector`
+bean in `after_routes` to fill `OpenApiConfig::error_schema` unless
+`with_error_schema::<E>()` was called.
+
+`RequestBodySchema` (`r2e_core::di::meta`): `content_type()`, `body_schema()`,
+`rejection_kinds()`; probed by autoref on the handler's last extracted
+parameter when it is none of the name-detected extractors. **Deviation from
+the first draft:** it is *not* implemented for `Json<T>` / `TypedMultipart<T>`
+— r2e-core has no `schemars`, so the built-ins stay name-based in the macro
+(`extract_body_type_info`) and only app extractors use the trait.
 
 ## 7. What it looks like for llm-engine-rust
 
@@ -462,13 +491,13 @@ One PR per phase, sequential, same branch. Each phase ships green on
 |---|---|---|
 | **P0** core types | `Rejection`, `RejectionKind`, `ErrorSchema`, every `From<X> for Rejection`, `From<Rejection> for HttpError` + `ErrorSchema for HttpError`, `From<Rejection> for Response`, typed guard errors (`RolesDenied`, `RateLimited`, `FgaDenied`), `TenantError::into_rejection`, `ParamError::location`, derive `#[error(rejection)]`. Guards still return `Response` (they render through the typed errors); no codegen change. **Shipped** (PR for P0). | `r2e-core/tests/http/rejection.rs` (new `mod`): kind → status table, every `From` impl, `HttpError` projection byte-equal to today's `into_response`, coherence `E::from(r).status() == E::status_of(r.kind)`; derive cases in `tests/http/api_error.rs`; `r2e-compile-tests` for derive misuse; owning-crate tests (`r2e-security/tests/{error,guards}.rs`, `r2e-rate-limit/tests/guard.rs`, `r2e-openfga/tests/guard.rs`, `r2e-tenant/tests/tenant/error.rs`) |
 | **P1** single projection point | Option B extraction in `handlers.rs` (route, SSE, WS): one `(State, Request)` entry fn per endpoint, pre-auth guards as its first step (middleware layer removed), `RequestData<S>` replacing the `FromRequestParts` bridge, guards/pre-guards returning `Result<(), Rejection>`, `ManagedResource::Error: Into<Rejection>`, envelope inferred from the return type (autoref probe, no attributes), `AppBuilder::error_projection::<E>()` + `ErrorProjector` bean, `ParamsRejectionFormat` removal. **Shipped** (PR for P1). | `tests/http/projection.rs`: malformed body, missing content-type, bad path, failed identity, guard, garde, managed acquire and finalize all answer in `E`'s envelope with the right status and headers; identity failure never reads the body (counting body reader); every existing `r2e-core/tests/http` + `tests/decorators` test unchanged with the default projector |
-| **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo`, builder rewrite, `RequestBodySchema`. | spec snapshot: default projector (unchanged modulo 413/415/422), custom projector remapping 422→400 shows 400 only, extra 502 listed; custom body extractor documented |
+| **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo` (`has_auth` removed), `ErrorSchemaInfo`, `ErrorProjector::schema()`, builder rewrite, plugin reads the projector bean, `OpenApiConfig::with_error_schema`, `RequestBodySchema` (app extractors only). **Shipped** (PR for P2). | `r2e-openapi/tests/errors.rs`: per-kind statuses/bodies, `oneOf` on 400, remap 422→400 shows 400 only, extra 502, route envelope over config envelope, override precedence, plugin with/without projector; `r2e-core/tests/controller/error_meta.rs`: the inference table (body, Path/Query/Params, identity param vs struct vs `#[anonymous]`, guards vs rate-limit guards, garde, SSE), envelope capture, custom body extractor |
 | **P3** transports | `From<Rejection>` for `McpError` and `tonic::Status`; delete the MCP body-read fold; delete `GrpcGuard`, gRPC codegen runs `Guard<I>`. | existing MCP/gRPC guard tests pass by kind; mapping table tests |
 | **P4** app level | `AppBuilder::error_projection::<E>()`, routed into catch-panic, fallback 404/405, body-limit 413. | `tests/http/panic.rs` + new `tests/runtime/fallback.rs`: panic, unknown route, wrong method, oversized body answer in `E`'s envelope |
 | **P5** docs + release | `llm/error-handling.md`, `openapi.md`, `guards.md`, `managed-resources.md`, `validation.md`, `grpc.md`, `mcp-server.md`, `coming-from-axum.md`; `docs/claude/error-handling.md`, `guards-interceptors.md`, `architecture.md` bridge table, `configuration.md`, `prelude-features.md`, `docs/features/02-validation.md`; `r2e-grpc/README.md`; CHANGELOG "Breaking"; `check-llm-docs.sh --update`; bump 0.5.0 (publish via CI only). | `cargo test -p llm-doctests` |
 | **P6** | llm-engine-rust migration (its own repo). | — |
 
-P0 and P2's `RequestBodySchema` are independent of P1 and can land first.
+P2's `error_schema` capture reuses P1's `ProjectionProbe` (`error_schema()` on `ProjectEnvelope`/`ProjectFallback`).
 
 ## 10. Decisions (locked 2026-10-09)
 

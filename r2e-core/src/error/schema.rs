@@ -1,6 +1,7 @@
 //! [`ErrorSchema`]: the static side of an error envelope.
 
 use crate::http::StatusCode;
+use serde_json::Value;
 
 use super::rejection::RejectionKind;
 
@@ -29,12 +30,12 @@ pub trait ErrorSchema {
 
     /// `(component name, JSON Schema)` of the error body. `None` when the
     /// body is undocumented.
-    fn body_schema() -> Option<(String, serde_json::Value)>;
+    fn body_schema() -> Option<(String, Value)>;
 
     /// Per-kind body when one envelope has several shapes (`HttpError`
     /// answers `ValidationErrorResponse` to `Validation`). `None` falls back
     /// to [`body_schema`](Self::body_schema).
-    fn body_schema_for(_kind: RejectionKind) -> Option<(String, serde_json::Value)> {
+    fn body_schema_for(_kind: RejectionKind) -> Option<(String, Value)> {
         None
     }
 
@@ -55,5 +56,80 @@ pub trait ErrorSchema {
     #[must_use]
     fn opaque_passthrough() -> bool {
         false
+    }
+}
+
+/// A runtime capture of an [`ErrorSchema`] implementation.
+///
+/// Built by [`ErrorSchemaInfo::of`] and carried by
+/// [`RouteInfo`](crate::di::meta::RouteInfo) (the route's own envelope) and
+/// [`ErrorProjector`](super::ErrorProjector) (the application envelope), so
+/// the OpenAPI builder documents error responses from the **same** table the
+/// runtime projects through — without naming `E` at the type level.
+#[derive(Clone, Copy)]
+pub struct ErrorSchemaInfo {
+    type_name: &'static str,
+    status_of: fn(RejectionKind) -> StatusCode,
+    body_schema: fn() -> Option<(String, Value)>,
+    body_schema_for: fn(RejectionKind) -> Option<(String, Value)>,
+    extra_statuses: fn() -> Vec<(StatusCode, &'static str)>,
+    opaque_passthrough: bool,
+}
+
+impl ErrorSchemaInfo {
+    /// Capture the envelope `E`.
+    #[must_use]
+    pub fn of<E: ErrorSchema + ?Sized>() -> Self {
+        Self {
+            type_name: std::any::type_name::<E>(),
+            status_of: E::status_of,
+            body_schema: E::body_schema,
+            body_schema_for: E::body_schema_for,
+            extra_statuses: E::extra_statuses,
+            opaque_passthrough: E::opaque_passthrough(),
+        }
+    }
+
+    /// The envelope's Rust type name (diagnostics only).
+    #[must_use]
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
+
+    /// See [`ErrorSchema::status_of`].
+    #[must_use]
+    pub fn status_of(&self, kind: RejectionKind) -> StatusCode {
+        (self.status_of)(kind)
+    }
+
+    /// See [`ErrorSchema::body_schema`].
+    #[must_use]
+    pub fn body_schema(&self) -> Option<(String, Value)> {
+        (self.body_schema)()
+    }
+
+    /// The body documented for `kind`: [`ErrorSchema::body_schema_for`] when
+    /// it answers, else [`ErrorSchema::body_schema`].
+    #[must_use]
+    pub fn body_schema_for(&self, kind: RejectionKind) -> Option<(String, Value)> {
+        (self.body_schema_for)(kind).or_else(|| (self.body_schema)())
+    }
+
+    /// See [`ErrorSchema::extra_statuses`].
+    #[must_use]
+    pub fn extra_statuses(&self) -> Vec<(StatusCode, &'static str)> {
+        (self.extra_statuses)()
+    }
+
+    /// See [`ErrorSchema::opaque_passthrough`].
+    #[must_use]
+    pub fn opaque_passthrough(&self) -> bool {
+        self.opaque_passthrough
+    }
+}
+
+impl std::fmt::Debug for ErrorSchemaInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ErrorSchemaInfo({})", self.type_name)
     }
 }
