@@ -97,6 +97,7 @@ fn kind_default_status_table() {
         (K::Unauthenticated, 401),
         (K::Forbidden, 403),
         (K::NotFound, 404),
+        (K::MethodNotAllowed, 405),
         (K::Conflict, 409),
         (K::RateLimited, 429),
         (K::Internal, 500),

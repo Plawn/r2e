@@ -28,8 +28,10 @@ use crate::type_list::BeanLookup;
 /// Built from an envelope type by [`ErrorProjector::of`] and provided through
 /// [`AppBuilder::error_projection`](crate::AppBuilder::error_projection). Read
 /// on the error path of every route whose return type declares no envelope,
-/// and (P4) by the framework-level responders (404/405/413/panic). Absent from
-/// the state, [`HttpError`] is used.
+/// and by the framework-level responders: the catch-panic 500, the router's
+/// 404 and 405 (`build_inner` installs them from this bean), and — through the
+/// `Json` extractor's `PayloadTooLarge` rejection — the 413. Absent from the
+/// state, [`HttpError`] is used ([`ErrorProjector::default`]).
 ///
 /// Comparable to a JAX-RS `ExceptionMapper`: one mapping from the typed
 /// failure to the wire shape, installed once for the whole application.
@@ -63,6 +65,13 @@ impl ErrorProjector {
     #[must_use]
     pub fn schema(&self) -> &ErrorSchemaInfo {
         &self.schema
+    }
+}
+
+/// The framework default: project through [`HttpError`].
+impl Default for ErrorProjector {
+    fn default() -> Self {
+        Self::of::<HttpError>()
     }
 }
 

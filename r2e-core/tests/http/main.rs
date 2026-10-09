@@ -10,6 +10,7 @@ mod fixtures;
 mod api_error;
 mod error;
 mod extract;
+mod fallback;
 mod health;
 mod http_trace;
 mod json;

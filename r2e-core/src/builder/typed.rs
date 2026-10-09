@@ -1033,6 +1033,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             }
         }
 
+        // The application error envelope (`error_projection::<E>()`), read
+        // once here for every framework responder: the two catch-panic slots
+        // and the router's 404/405 below. `HttpError` when none was installed.
+        let projector = self
+            .bean_context
+            .try_get::<crate::ErrorProjector>()
+            .unwrap_or_default();
+
+        // Framework 404/405 in the envelope — after every route, controller
+        // `#[fallback]` and Routes-stage router has been merged (a custom
+        // fallback keeps winning; routes merged later would miss the 405),
+        // and before the layers, so both responses cross the same middleware
+        // stack as a routed request. See `layers::framework_fallbacks`.
+        app = crate::runtime::layers::framework_fallbacks(app, &projector);
+
         // Catch panics BELOW every layer added via `add_layer` (tracing,
         // metrics, CORS, the app's own). This is the slot that makes a
         // panicking handler observable: the unwind is converted to a 500
@@ -1046,6 +1061,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         let panic_hook = self.shared.panic_hook.get();
         app = app.layer(crate::runtime::layers::catch_panic_layer_with(
             panic_hook.clone(),
+            projector.clone(),
         ));
 
         // Apply layers (in registration order). Layers added via
@@ -1073,7 +1089,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // turned that into a plain 500 — so a panic still produces exactly
         // one error line. Its report carries no route: from out here routing
         // has not happened.
-        app = app.layer(crate::runtime::layers::catch_panic_layer_with(panic_hook));
+        app = app.layer(crate::runtime::layers::catch_panic_layer_with(
+            panic_hook, projector,
+        ));
 
         // Transport-level wraps go outside EVERYTHING HTTP-shaped (custom
         // layers and catch-panic included): a multiplexer's non-HTTP branch
