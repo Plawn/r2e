@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Structured errors that convert automatically to consistent JSON HTTP responses. Return `Result<T, HttpError>` from handlers; each `HttpError` variant maps to a status (`NotFound`→404, `Unauthorized`→401, `Forbidden`→403, `BadRequest`→400, `Internal`→500, `Custom { status, body }`→anything). Generate `From<E> for HttpError` conversions in one line with `map_error!`. A Tower layer captures handler panics and turns them into 500s.
+Structured errors that convert automatically to consistent JSON HTTP responses. Return `Result<T, HttpError>` from handlers; each `HttpError` variant maps to a status (`NotFound`→404, `Unauthorized`→401, `Forbidden`→403, `BadRequest`→400, `Internal`→500, `Custom { status, body }`→anything). Generate `From<E> for HttpError` conversions in one line with `map_error!`. Every framework failure (extractor rejection, identity, guard, validation, managed resource, panic, 404/405/413) is one typed `Rejection`, projected once per route into an error envelope — `HttpError` by default, or any `From<Rejection> + IntoHttpResponse + ErrorSchema` type. Panics are caught and rendered as 500s through the app-level envelope.
 
 
 ## Goal
@@ -19,9 +19,13 @@ Provide a structured error system that automatically converts errors into consis
 
 Macro to generate `From<E> for HttpError` implementations in a single line.
 
+### Rejection and envelopes
+
+`Rejection` is the typed value every framework failure converts into (`From`). An *envelope* (`HttpError` by default) is the type a `Rejection` is projected into, once per route, before rendering; it is inferred from the handler's `Result<T, E>` or set app-wide with `AppBuilder::error_projection::<E>()`.
+
 ### Catch panic
 
-Tower layer that captures panics in handlers and converts them into 500 responses.
+Always-on layer that captures panics in handlers and converts them into 500 responses rendered through the app-level envelope.
 
 ## HttpError variants
 
@@ -208,6 +212,31 @@ Each origin also keeps exactly one `r2e::panic` error line per panic —
 There is no plugin to install: panic capture is part of the router assembly,
 and the `Executor` plugin (which the scheduler runs on) wires the same hook
 into the pool.
+
+### 6. Rejection, envelopes and projection
+
+Every failure the framework raises before, around or instead of a handler —
+extractor rejection, `#[inject(request)]` extraction, identity, guard, garde
+validation, managed `acquire`/`finalize`, panic, 404/405/413 — is one typed
+value, **`Rejection`** (`kind: RejectionKind`, `status`, `message`, `details`,
+`headers`). It is projected **once per route** into an *error envelope*
+`E: From<Rejection> + IntoHttpResponse + ErrorSchema` and only then rendered.
+
+- `HttpError` is the default envelope and keeps the bodies above byte-for-byte.
+- The route's envelope is the handler's `Result<T, E>` error type when `E`
+  qualifies (no attribute); any other return type uses the app-level envelope
+  from `AppBuilder::error_projection::<E>()` (default `HttpError`), which also
+  renders panics, 404, 405 and 413 and is exposed as the `ErrorProjector` bean.
+- `ErrorSchema::status_of(kind)` is applied before `E::from(rejection)` and read
+  by the OpenAPI builder, so runtime and spec cannot disagree.
+- `#[derive(ApiError)]` with one `#[error(rejection)] Rejected(Rejection)`
+  variant generates `From<Rejection>` + `ErrorSchema`.
+
+The demo app's `Problem` envelope (RFC 9457, `examples/example-app/src/error.rs`)
+and `ProblemController` show a custom envelope next to an app-level one; the
+full model is in the book chapter
+[Error Handling → Rejection, envelopes and projection](../book/src/core-concepts/error-handling.md#rejection-envelopes-and-projection)
+and the 0.4 → 0.5 steps in [`docs/migration/error-projection.md`](../migration/error-projection.md).
 
 ## Combination with other features
 

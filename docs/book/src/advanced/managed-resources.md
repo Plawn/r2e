@@ -5,7 +5,7 @@ an RAII abort guard.
 
 ```rust
 pub trait ManagedResource<S>: Sized + Send {
-    type Error: Into<Response>;
+    type Error: Into<Rejection>;
 
     fn acquire(
         context: ManagedContext<'_, S>,
@@ -21,6 +21,10 @@ pub trait ManagedResource<S>: Sized + Send {
 ```
 
 `ManagedContext` exposes the bean state plus controller and handler names.
+`Error` is anything `Into<Rejection>` (`ManagedErr<HttpError>` in practice): an
+`acquire` or `finalize` failure is projected through the route's error envelope
+like any other framework rejection — see
+[Rejection, envelopes and projection](../core-concepts/error-handling.md#rejection-envelopes-and-projection).
 `ManagedOutcome` contains the built response status; statuses below 400 are
 successes. `abort` must be synchronous, infallible, non-blocking, and safe to
 call when async finalization cannot run.

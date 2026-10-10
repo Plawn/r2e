@@ -80,3 +80,4 @@
 - [Crate Map](./reference/crate-map.md)
 - [CLI Reference](./reference/cli-reference.md)
 - [API Documentation](./reference/api-docs.md)
+- [Migration 0.4 → 0.5: error projection](./reference/migration-0.5.md)
