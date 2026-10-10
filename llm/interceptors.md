@@ -79,7 +79,7 @@ Semantics:
   **once** per controller and shared by all its routes; its context reports
   `method_name: "*"`. A stateful spec (e.g. a rate limit) therefore uses a
   single bucket for the whole controller, unlike the per-route bucket it gets
-  at method level.
+  at method level. gRPC services and MCP tools follow the same rule.
 - **`#[anonymous]` opts out of the post-auth half** — anonymous routes skip
   controller `#[guard]`/`#[roles]`/`#[all_roles]` (they run with no identity)
   but keep controller `#[pre_guard]`s and interceptors.

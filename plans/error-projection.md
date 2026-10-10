@@ -343,7 +343,7 @@ preflight already runs guards before the upgrade; it switches to `Rejection`).
   `Unauthorized`, Forbidden → `Forbidden`, NotFound → `NotFound`, Invalid* /
   Validation → `InvalidParams`, Internal/Unavailable/Timeout → `Internal`,
   Conflict/RateLimited → `Tool { data: details }`, else by status).
-  `guard_rejection_to_error` (the body-read fold) is deleted; the tool codegen
+  `guard_response_to_error` (the body-read fold) is deleted; the tool codegen
   calls `McpError::from(rejection)`. MCP tools that reuse HTTP guards get the
   mapping for free.
 - **gRPC**: `r2e_grpc::rejection_to_status(Rejection) -> tonic::Status` by
@@ -400,14 +400,15 @@ Inference table (`controller_impl.rs`, `static_rejection_kinds` +
 |---|---|---|
 | `Json<T>` body | MissingContentType, PayloadTooLarge, BodyRead, MalformedBody, InvalidBody | macro |
 | `TypedMultipart<T>` / `Multipart` | UnsupportedMediaType, PayloadTooLarge, MalformedBody | macro |
-| `Form<T>` (last param) | UnsupportedMediaType, PayloadTooLarge, InvalidForm | macro |
+| `Form<T>` (last param), body method | UnsupportedMediaType, PayloadTooLarge, BodyRead, InvalidBody (422) | macro |
+| `Form<T>`, GET / SSE (query string; WS extracts parts only, so no `Form<T>`) | InvalidForm | macro (`#[any]`: both rows) |
 | `Bytes` / `String` (last param) | PayloadTooLarge, BodyRead (+ MalformedBody for `String`) | macro |
 | custom last param with `RequestBodySchema` | its `rejection_kinds()` | runtime probe |
 | `Path<_>` | InvalidPath | macro |
 | `Query<_>` | InvalidQuery | macro |
 | `#[derive(Params)]` fields | InvalidPath / InvalidQuery / InvalidHeader by location | runtime (`ParamInfo`) |
-| required identity param | Unauthenticated | macro |
-| required struct identity, route not `#[anonymous]` | Unauthenticated | runtime (`HAS_STRUCT_IDENTITY`) |
+| identity param, required or `Option<..>` | Unauthenticated | macro |
+| struct identity (required or `Option<..>`), route not `#[anonymous]` | Unauthenticated | runtime (`HAS_STRUCT_IDENTITY`) |
 | `#[roles]`, `#[all_roles]`, any guard | Forbidden | macro |
 | guard whose spec type name contains `RateLimit` (`RateLimit`, `PreRateLimit`, `Configured*`, `RateLimitGuard`, …) | RateLimited | macro (`spec_type_of`) |
 | param type implementing `garde::Validate` (inner of `Json`/`Query`/`Path`/`Form`) | Validation | runtime autoref probe |
@@ -415,15 +416,25 @@ Inference table (`controller_impl.rs`, `static_rejection_kinds` +
 
 Controller-level post-auth guards fold into non-`#[anonymous]` routes,
 pre-auth guards into every route (the same rule as their execution). SSE/WS
-routes get the identity/guard kinds and `Internal`, `error_schema: None`.
+routes read the same parameter list as their entry fn
+(`handlers::RequestParams`), so they get every row above, `error_schema: None`.
+`Internal` stays unconditional: managed resources, `#[inject(request)]`
+extractors and envelope/extractor mismatches cannot be enumerated at macro
+time.
 
 Builder (`r2e-openapi/src/builder.rs`): per route, envelope =
 `route.error_schema` → `config.error_schema` → `HttpError`; one response per
 distinct `status_of(kind)` with `body_schema_for(kind)` (else
-`body_schema()`), several bodies on one status as `oneOf`, then
-`extra_statuses`; the success status wins a collision. Components the
-envelopes declare are inserted after `schema_overrides` with `or_insert`, so
-overrides still win. The hardcoded 401/403/500/400 blocks and the
+`body_schema()`), bodies deduplicated by schema and distinct ones on one
+status as `anyOf`, then
+`extra_statuses`, then the panic 500 from the **application** envelope
+(`config.error_schema` → `HttpError`; the catch-panic layer never sees the
+route envelope) — deduplicated when the bodies agree, `anyOf` otherwise; the
+success status wins a collision. Components the envelopes declare go through
+the same `$defs` promotion as every schema and never replace a route or
+registry schema (or its `$defs`): a body whose name is taken by a different
+schema is inlined and warned about (`SchemaGap::ErrorBodyInlined`);
+`schema_overrides` still win. The hardcoded 401/403/500/400 blocks and the
 `ErrorResponse` / `ValidationErrorResponse` / `FieldError` inserts are gone:
 `HttpError`'s `ErrorSchema` impl provides the first two (`Validation` →
 `ValidationErrorResponse` with inline items). Consequences for the default
@@ -485,7 +496,7 @@ impl ChatCompletionsController {
 - `Guard::check`, `PreAuthGuard::check` return `Result<(), Rejection>`.
 - `ManagedResource::Error: Into<Rejection>` (was `Into<Response>`).
 - `ParamsRejectionFormat` and `params.rejection-format` config removed.
-- `r2e_mcp::guard::guard_rejection_to_error` removed (`McpError: From<Rejection>`).
+- `r2e_mcp::guard::guard_response_to_error` removed (`McpError: From<Rejection>`).
 - `r2e_grpc::GrpcGuard` / `GrpcGuardContext` / `GrpcRolesGuard` /
   `GrpcRoleBasedIdentity` removed in favour of `Guard<I>` + `guard_context` +
   `rejection_to_status` (`extract_bearer_token` keeps its statuses and
@@ -512,7 +523,7 @@ One PR per phase, sequential, same branch. Each phase ships green on
 |---|---|---|
 | **P0** core types | `Rejection`, `RejectionKind`, `ErrorSchema`, every `From<X> for Rejection`, `From<Rejection> for HttpError` + `ErrorSchema for HttpError`, `From<Rejection> for Response`, typed guard errors (`RolesDenied`, `RateLimited`, `FgaDenied`), `TenantError::into_rejection`, `ParamError::location`, derive `#[error(rejection)]`. Guards still return `Response` (they render through the typed errors); no codegen change. **Shipped** (PR for P0). | `r2e-core/tests/http/rejection.rs` (new `mod`): kind → status table, every `From` impl, `HttpError` projection byte-equal to today's `into_response`, coherence `E::from(r).status() == E::status_of(r.kind)`; derive cases in `tests/http/api_error.rs`; `r2e-compile-tests` for derive misuse; owning-crate tests (`r2e-security/tests/{error,guards}.rs`, `r2e-rate-limit/tests/guard.rs`, `r2e-openfga/tests/guard.rs`, `r2e-tenant/tests/tenant/error.rs`) |
 | **P1** single projection point | Option B extraction in `handlers.rs` (route, SSE, WS): one `(State, Request)` entry fn per endpoint, pre-auth guards as its first step (middleware layer removed), `RequestData<S>` replacing the `FromRequestParts` bridge, guards/pre-guards returning `Result<(), Rejection>`, `ManagedResource::Error: Into<Rejection>`, envelope inferred from the return type (autoref probe, no attributes), `AppBuilder::error_projection::<E>()` + `ErrorProjector` bean, `ParamsRejectionFormat` removal. **Shipped** (PR for P1). | `tests/http/projection.rs`: malformed body, missing content-type, bad path, failed identity, guard, garde, managed acquire and finalize all answer in `E`'s envelope with the right status and headers; identity failure never reads the body (counting body reader); every existing `r2e-core/tests/http` + `tests/decorators` test unchanged with the default projector |
-| **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo` (`has_auth` removed), `ErrorSchemaInfo`, `ErrorProjector::schema()`, builder rewrite, plugin reads the projector bean, `OpenApiConfig::with_error_schema`, `RequestBodySchema` (app extractors only). **Shipped** (PR for P2). | `r2e-openapi/tests/errors.rs`: per-kind statuses/bodies, `oneOf` on 400, remap 422→400 shows 400 only, extra 502, route envelope over config envelope, override precedence, plugin with/without projector; `r2e-core/tests/controller/error_meta.rs`: the inference table (body, Path/Query/Params, identity param vs struct vs `#[anonymous]`, guards vs rate-limit guards, garde, SSE), envelope capture, custom body extractor |
+| **P2** OpenAPI | `rejection_kinds` + `error_schema` on `RouteInfo` (`has_auth` removed), `ErrorSchemaInfo`, `ErrorProjector::schema()`, builder rewrite, plugin reads the projector bean, `OpenApiConfig::with_error_schema`, `RequestBodySchema` (app extractors only). **Shipped** (PR for P2). | `r2e-openapi/tests/errors.rs`: per-kind statuses/bodies, `anyOf` on 400, remap 422→400 shows 400 only, extra 502, route envelope over config envelope, override precedence, plugin with/without projector; `r2e-core/tests/controller/error_meta.rs`: the inference table (body, Path/Query/Params, identity param vs struct vs `#[anonymous]`, guards vs rate-limit guards, garde, SSE), envelope capture, custom body extractor |
 | **P3** transports | `From<Rejection> for McpError`, `rejection_to_status` (free fn, orphan rule), MCP body-read fold deleted, `GrpcGuard` family deleted, gRPC codegen runs `Guard<I>` through `guard_context`, `GrpcIdentity` + `JwtIdentitySpec` for `#[inject(identity)]` parameters (deps + config checked at registration), `#[guard]`/`#[roles]`/`#[all_roles]` allowed on gRPC methods and impl blocks. **Shipped** (PR for P3). | `r2e-mcp/tests/server/rejection.rs` (kind table), `r2e-grpc/tests/guard.rs` (kind → code table, metadata, `guard_context`, end-to-end `Guard<I>`), `r2e-security/tests/grpc.rs` (`GrpcIdentity for AuthenticatedUser`), `examples/example-grpc/tests/grpc_guards.rs` (real tonic round-trips), compile tests `grpc/pass/grpc_guards.rs`, `grpc/fail/grpc_roles_without_identity.rs`, `grpc/fail/grpc_identity_missing_validator.rs` |
 | **P4** app level | `ErrorProjector` read once in `build_inner` (`ErrorProjector: Default` = `HttpError`) and handed to both catch-panic slots (`CatchPanicLayer::with(hook, projector)`; the 500 is `Rejection::internal("Internal server error")` projected — default body byte-equal), to the framework 404 (`Router::fallback`, installed only when `r2e_http::routing::has_custom_fallback` says no controller `#[fallback]`/merged fallback/SPA plugin claimed it — the bit is read from axum's `Router` `Debug` output, the only place axum exposes it) and to the 405 (`method_not_allowed_fallback`, new `RejectionKind::MethodNotAllowed`, `Allow` kept). 413 needed no wiring: `Json`'s `PayloadTooLarge` already projects (P1). **Shipped** (PR for P4). | `tests/http/fallback.rs` (in the `http` target, not `tests/runtime/` — it is router assembly, not serving): default 404/405/413 as `{"error":..}` JSON, the same three in a custom envelope (with `status_of` remap), merged custom fallback and per-route method fallback not overridden; `tests/http/panic.rs`: panic 500 in the app envelope (status remapped); `r2e-http/tests/routing.rs`: `has_custom_fallback` across `fallback`/`fallback_service`/`merge`/`with_state`/`layer`/`nest` |
 | **P5** docs + release | `llm/error-handling.md`, `openapi.md`, `guards.md`, `managed-resources.md`, `validation.md`, `grpc.md`, `mcp-server.md`, `coming-from-axum.md`; `docs/claude/error-handling.md`, `guards-interceptors.md`, `architecture.md` bridge table, `configuration.md`, `prelude-features.md`, `docs/features/02-validation.md`; `r2e-grpc/README.md`; CHANGELOG "Breaking"; `check-llm-docs.sh --update`; bump 0.5.0 (publish via CI only). **Shipped** (PR for P5): docs sweep, new `docs/migration/error-projection.md`, CHANGELOG `### Breaking` section consolidating the 0.4 → 0.5 breaks. Deviation: the version bump is **not** in the docs PR — per the release pipeline (`CHANGELOG.md` header, `scripts/bump-version.sh`) it is the `release: 0.5.0` PR the script produces from a clean master once the lineage branch has landed; merging that PR publishes. | `cargo test -p llm-doctests` |

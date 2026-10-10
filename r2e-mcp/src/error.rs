@@ -144,7 +144,7 @@ impl From<HttpError> for McpError {
             HttpError::Forbidden(m) => McpError::Forbidden(msg(m)),
             HttpError::BadRequest(m) => McpError::InvalidParams(msg(m)),
             HttpError::Internal(m) => McpError::Internal(msg(m)),
-            HttpError::Validation(v) => match serde_json::to_value(&v) {
+            HttpError::Validation { response, .. } => match serde_json::to_value(&response) {
                 Ok(data) => McpError::Tool {
                     message: "validation failed".to_string(),
                     data: Some(data),

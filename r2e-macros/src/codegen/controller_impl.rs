@@ -291,7 +291,9 @@ fn generate_route_metadata(
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
 
             let params_expr = params_expr(&rm.fn_item.sig, None, &krate);
-            let body = extract_body_info(rm);
+            let request = super::handlers::RequestParams::route(rm);
+            let extracted = request.owned();
+            let body = extract_body_info(&rm.fn_item.sig, &extracted);
             let (body_type_token, body_schema_token, body_content_type_token) = body.tokens();
             let body_probe = body.probe_expr();
             let (response_type_token, response_schema_token) = extract_response_info(rm);
@@ -317,13 +319,14 @@ fn generate_route_metadata(
             let body_required = detect_body_required(rm);
 
             let has_roles = !role_strs.is_empty();
-            let extracted = extracted_params(rm);
             let static_kinds = static_rejection_kinds(
                 def,
                 &rm.decorators,
                 rm.identity_param.as_ref(),
                 has_roles,
                 &extracted,
+                request.last_consumes_body,
+                &rm.method,
                 body.as_ref(),
             );
             let kinds_expr = rejection_kinds_expr(
@@ -370,27 +373,6 @@ fn generate_route_metadata(
         .collect()
 }
 
-/// The handler's request-extracted parameters: every typed parameter except
-/// `#[managed]` ones and the identity — the same set the entry function
-/// extracts (`handlers.rs`), whose last element is the body position.
-fn extracted_params(rm: &crate::model::types::RouteMethod) -> Vec<syn::PatType> {
-    let managed: std::collections::HashSet<usize> =
-        rm.managed_params.iter().map(|mp| mp.index).collect();
-    let identity = rm.identity_param.as_ref().map(|p| p.index);
-    rm.fn_item
-        .sig
-        .inputs
-        .iter()
-        .filter_map(|arg| match arg {
-            syn::FnArg::Typed(pt) => Some(pt),
-            syn::FnArg::Receiver(_) => None,
-        })
-        .enumerate()
-        .filter(|(i, _)| !managed.contains(i) && Some(*i) != identity)
-        .map(|(_, pt)| pt.clone())
-        .collect()
-}
-
 /// Whether a guard expression names a rate-limit guard (`RateLimit::per_user(..)`,
 /// `PreRateLimit`, `ConfiguredRateLimit`, …): its only failure is `RateLimited`.
 fn is_rate_limit_guard(expr: &syn::Expr) -> bool {
@@ -404,8 +386,11 @@ fn is_rate_limit_guard(expr: &syn::Expr) -> bool {
 ///
 /// Inference table (see `plans/error-projection.md` §6): the body extractor's
 /// failures; `Path<T>` → `InvalidPath`, `Query<T>` → `InvalidQuery`, `Form<T>`
-/// → `InvalidForm` (+ media-type/size failures), raw `Bytes`/`String` bodies →
-/// read failures; a **required** identity parameter → `Unauthenticated`;
+/// → `InvalidForm` on a GET (query string) or `InvalidBody` (422) + media-type,
+/// size and read failures on a body-carrying method (both on `#[any]`), raw
+/// `Bytes`/`String` bodies → read failures; an identity parameter →
+/// `Unauthenticated`, `Option<..>` included (an absent credential is `None`,
+/// but a present invalid one is still a 401);
 /// roles → `Forbidden`; each guard → `Forbidden`, or `RateLimited` when it is
 /// a rate-limit guard; and `Internal` always (handler, managed resources,
 /// anything the framework cannot type). Controller-level guards fold in for
@@ -420,8 +405,11 @@ fn static_rejection_kinds(
     identity_param: Option<&crate::model::types::IdentityParam>,
     has_roles: bool,
     extracted: &[syn::PatType],
+    last_consumes_body: bool,
+    method: &crate::model::route::HttpMethod,
     body: Option<&BodyExtractor>,
 ) -> Vec<&'static str> {
+    use crate::model::route::HttpMethod;
     let mut kinds: Vec<&'static str> = Vec::new();
 
     match body {
@@ -442,13 +430,20 @@ fn static_rejection_kinds(
 
     let n = extracted.len();
     for (pos, pt) in extracted.iter().enumerate() {
-        let last = pos + 1 == n;
+        let last = last_consumes_body && pos + 1 == n;
         if type_last_segment_is(&pt.ty, "Path") {
             kinds.push("InvalidPath");
         } else if type_last_segment_is(&pt.ty, "Query") {
             kinds.push("InvalidQuery");
         } else if last && type_last_segment_is(&pt.ty, "Form") {
-            kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "InvalidForm"]);
+            // axum's `Form` reads the query string on GET/HEAD (400) and the
+            // body otherwise (415 / 413 / read failure / 422).
+            if matches!(method, HttpMethod::Get | HttpMethod::Any) {
+                kinds.push("InvalidForm");
+            }
+            if !matches!(method, HttpMethod::Get) {
+                kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "BodyRead", "InvalidBody"]);
+            }
         } else if last && type_last_segment_is(&pt.ty, "Bytes") {
             kinds.extend(["PayloadTooLarge", "BodyRead"]);
         } else if last && type_last_segment_is(&pt.ty, "String") {
@@ -456,7 +451,7 @@ fn static_rejection_kinds(
         }
     }
 
-    if identity_param.is_some_and(|p| !p.is_optional) {
+    if identity_param.is_some() {
         kinds.push("Unauthenticated");
     }
     if has_roles {
@@ -1095,8 +1090,8 @@ impl BodyInfo {
 /// the last extracted parameter as a `Custom` candidate — the entry function
 /// reads exactly that parameter through `FromRequest`, so it is the only one
 /// that can be a body extractor.
-fn extract_body_info(rm: &crate::model::types::RouteMethod) -> BodyInfo {
-    let named = rm.fn_item.sig.inputs.iter().find_map(|arg| {
+fn extract_body_info(sig: &syn::Signature, extracted: &[syn::PatType]) -> BodyInfo {
+    let named = sig.inputs.iter().find_map(|arg| {
         if let syn::FnArg::Typed(pt) = arg {
             extract_body_type_info(&pt.ty)
         } else {
@@ -1106,8 +1101,8 @@ fn extract_body_info(rm: &crate::model::types::RouteMethod) -> BodyInfo {
     if named.is_some() {
         return BodyInfo(named);
     }
-    let custom = extracted_params(rm)
-        .pop()
+    let custom = extracted
+        .last()
         .filter(|pt| !is_known_non_body_type(&pt.ty))
         .map(|pt| BodyExtractor::Custom { ty: (*pt.ty).clone() });
     BodyInfo(custom)
@@ -1464,13 +1459,20 @@ fn generate_sse_route_metadata(
         .iter()
         .map(|sm| {
             let roles = streaming_effective_roles(def, &sm.decorators);
+            // The same params the SSE entry fn extracts (its last may read
+            // the body) — see `handlers::RequestParams`.
+            let request = super::handlers::RequestParams::sse(sm);
+            let extracted = request.owned();
+            let body = extract_body_info(&sm.fn_item.sig, &extracted);
             let kinds = static_rejection_kinds(
                 def,
                 &sm.decorators,
                 sm.identity_param.as_ref(),
                 !roles.is_empty(),
-                &[],
-                None,
+                &extracted,
+                request.last_consumes_body,
+                &crate::model::route::HttpMethod::Get,
+                body.as_ref(),
             );
             emit_streaming_route_info(
                 name,
@@ -1479,6 +1481,8 @@ fn generate_sse_route_metadata(
                 &sm.fn_item.sig,
                 &roles,
                 &kinds,
+                &extracted,
+                body.probe_expr(),
                 sm.decorators.anonymous,
                 &sm.fn_item.attrs,
                 None,
@@ -1497,12 +1501,17 @@ fn generate_ws_route_metadata(
         .iter()
         .map(|wm| {
             let roles = streaming_effective_roles(def, &wm.decorators);
+            // The same params the WS entry fn extracts (none reads the body).
+            let request = super::handlers::RequestParams::ws(wm);
+            let extracted = request.owned();
             let kinds = static_rejection_kinds(
                 def,
                 &wm.decorators,
                 wm.identity_param.as_ref(),
                 !roles.is_empty(),
-                &[],
+                &extracted,
+                request.last_consumes_body,
+                &crate::model::route::HttpMethod::Get,
                 None,
             );
             emit_streaming_route_info(
@@ -1512,6 +1521,8 @@ fn generate_ws_route_metadata(
                 &wm.fn_item.sig,
                 &roles,
                 &kinds,
+                &extracted,
+                quote! { None },
                 wm.decorators.anonymous,
                 &wm.fn_item.attrs,
                 // The socket itself comes from the upgrade, not from an
@@ -1561,11 +1572,13 @@ fn streaming_effective_roles(
 /// handler, so it documents them the same way. `ws_param` is the index of the
 /// socket parameter, excluded from that list.
 ///
-/// `static_kinds` are the macro-time rejection kinds (identity, roles, guards,
-/// `Internal`); a streaming route reads no body and validates nothing, so the
-/// runtime additions are the struct identity and the `#[derive(Params)]`
-/// locations only. Its return type is a stream, never an envelope, so
-/// `error_schema` is `None` (application projection).
+/// `static_kinds` are the macro-time rejection kinds, computed over the same
+/// extracted parameters as the entry fn (`handlers::RequestParams`);
+/// `extracted` feeds the runtime garde probes and `body_probe` a custom body
+/// extractor's declared kinds (SSE only — a WS endpoint reads no body), so a
+/// `Query<T>` or a validated parameter is documented exactly as on a verb
+/// route. Its return type is a stream, never an envelope, so `error_schema` is
+/// `None` (application projection).
 #[allow(clippy::too_many_arguments)]
 fn emit_streaming_route_info(
     controller_name: &syn::Ident,
@@ -1574,6 +1587,8 @@ fn emit_streaming_route_info(
     sig: &syn::Signature,
     roles: &[String],
     static_kinds: &[&str],
+    extracted: &[syn::PatType],
+    body_probe: TokenStream,
     anonymous: bool,
     attrs: &[syn::Attribute],
     ws_param: Option<usize>,
@@ -1583,7 +1598,7 @@ fn emit_streaming_route_info(
     let op_id = format!("{}_{}", controller_name, sig.ident);
     let params_expr = params_expr(sig, ws_param, &krate);
     let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
-    let kinds_expr = rejection_kinds_expr(static_kinds, anonymous, &[], meta_mod);
+    let kinds_expr = rejection_kinds_expr(static_kinds, anonymous, extracted, meta_mod);
 
     let (doc_summary, doc_description) = crate::extract::route::extract_doc_comments(attrs);
     let summary = doc_summary.unwrap_or_else(|| fallback_summary.to_string());
@@ -1595,7 +1610,7 @@ fn emit_streaming_route_info(
     quote! {
         {
             let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
-            let __body: Option<#krate::di::meta::__BodyProbeResult> = None;
+            let __body: Option<#krate::di::meta::__BodyProbeResult> = #body_probe;
             let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
             #krate::di::meta::RouteInfo {
                 path: match #meta_mod::PATH_PREFIX {

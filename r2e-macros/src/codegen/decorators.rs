@@ -345,30 +345,12 @@ pub(crate) fn intercept_field_idents(count: usize) -> Vec<syn::Ident> {
     (0..count).map(|i| format_ident!("__i{}", i)).collect()
 }
 
-/// Wrap a body expression with the interceptor chain of a prebuilt decorator
-/// set.
-///
-/// Interceptors are prebuilt fields of the method's decorator set; the caller
-/// binds `__deco` to a `&` reference to the set (`Copy`), so the
-/// `move || async move { ... }` closures capture it by copy and other
-/// variables by move.
-pub(crate) fn wrap_with_deco_interceptors(
-    body: TokenStream,
-    fn_name_str: &str,
-    controller_name_str: &str,
-    intercept_fields: &[syn::Ident],
-    krate: &TokenStream,
-) -> TokenStream {
-    let refs: Vec<TokenStream> = intercept_fields
-        .iter()
-        .map(|f| quote! { &__deco.#f })
-        .collect();
-    wrap_with_interceptor_refs(body, fn_name_str, controller_name_str, &refs, krate)
-}
-
-/// Like [`wrap_with_deco_interceptors`] but the interceptor references are
-/// supplied explicitly (outermost first), each already a `&`-reference
-/// expression yielding the built `Interceptor` product.
+/// Wrap a body expression with an interceptor chain. The interceptor
+/// references are supplied explicitly (outermost first), each already a
+/// `&`-reference expression yielding the built `Interceptor` product; the
+/// caller binds whatever `Copy` reference they point through (`__deco`,
+/// `__decos`, …) so the `move || async move { ... }` closures capture it by
+/// copy and other variables by move.
 ///
 /// This is the split-source form used when controller-level (impl-level)
 /// interceptors are built **once per controller** and shared across routes /

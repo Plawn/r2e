@@ -121,7 +121,7 @@ fn request_data_ident_for(controller: &syn::Ident) -> syn::Ident {
 /// with `module_path!()` (expanded in the controller's own crate and module)
 /// makes the name route-unique at zero macro cost — the whole thing is a
 /// compile-time `&'static str` literal.
-pub(super) fn qualified_controller_name(controller: &syn::Ident) -> TokenStream {
+pub(crate) fn qualified_controller_name(controller: &syn::Ident) -> TokenStream {
     let bare = controller.to_string();
     quote! { ::core::concat!(::core::module_path!(), "::", #bare) }
 }
@@ -137,6 +137,66 @@ fn extract_sig_params(sig: &syn::Signature) -> Vec<(usize, &syn::PatType)> {
         })
         .enumerate()
         .collect()
+}
+
+/// The parameters an endpoint's entry fn extracts from the request, and
+/// whether the last of them consumes the body.
+///
+/// The single source of truth shared by the three entry-fn generators
+/// (route, `#[sse]`, `#[ws]`) and by the `RouteInfo` metadata generators in
+/// `controller_impl.rs`, so the documented rejection kinds are computed over
+/// exactly the parameters the runtime extracts and validates.
+pub(super) struct RequestParams<'a> {
+    /// `(typed-param index, param)`, in declaration order.
+    pub params: Vec<(usize, &'a syn::PatType)>,
+    /// The last param goes through `FromRequest` (consumes the body).
+    pub last_consumes_body: bool,
+}
+
+impl<'a> RequestParams<'a> {
+    fn new(sig: &'a syn::Signature, excluded: &[Option<usize>], last_consumes_body: bool) -> Self {
+        let params = extract_sig_params(sig)
+            .into_iter()
+            .filter(|(i, _)| !excluded.contains(&Some(*i)))
+            .collect();
+        Self { params, last_consumes_body }
+    }
+
+    /// A verb route: everything but `#[managed]` params and the identity.
+    pub(super) fn route(rm: &'a RouteMethod) -> Self {
+        let mut excluded: Vec<Option<usize>> =
+            rm.managed_params.iter().map(|mp| Some(mp.index)).collect();
+        excluded.push(rm.identity_param.as_ref().map(|p| p.index));
+        Self::new(&rm.fn_item.sig, &excluded, true)
+    }
+
+    /// An `#[sse]` endpoint: everything but the identity; the last param may
+    /// read the body.
+    pub(super) fn sse(sm: &'a SseMethod) -> Self {
+        Self::new(
+            &sm.fn_item.sig,
+            &[sm.identity_param.as_ref().map(|p| p.index)],
+            true,
+        )
+    }
+
+    /// A `#[ws]` endpoint: everything but the socket and the identity; the
+    /// upgrade is the trailing extractor, so nothing reads the body.
+    pub(super) fn ws(wm: &'a WsMethod) -> Self {
+        Self::new(
+            &wm.fn_item.sig,
+            &[
+                wm.ws_param.as_ref().map(|p| p.index),
+                wm.identity_param.as_ref().map(|p| p.index),
+            ],
+            false,
+        )
+    }
+
+    /// The params as owned `PatType`s (metadata codegen).
+    pub(super) fn owned(&self) -> Vec<syn::PatType> {
+        self.params.iter().map(|(_, pt)| (*pt).clone()).collect()
+    }
 }
 
 /// Check if a type is a known Axum wrapper (Json, Query, Path, Form).
@@ -160,21 +220,31 @@ pub(super) enum Projection {
     /// compile time, so the fallback costs nothing where it applies.
     Probe(syn::Type),
     /// The application projection (`ErrorProjector` bean, else `HttpError`).
-    /// Used when the return type cannot be named as a type argument (`impl
-    /// Trait`), for SSE/WS endpoints, and for infallible handlers.
+    /// Used when the error type cannot be named as a type argument (`impl
+    /// Trait` outside a `Result`'s success type), for SSE/WS endpoints, and
+    /// for infallible handlers.
     Default,
 }
 
 impl Projection {
     /// From a handler signature: its output type when it is nameable.
+    ///
+    /// Only the error type selects the envelope, so a `Result<impl Trait, E>`
+    /// (`Result` / `std::result::Result` / `core::result::Result`) with a
+    /// nameable `E` probes through the stand-in `Result<(), E>` — the probe
+    /// places no bound on the success type. `impl Trait` anywhere else (in
+    /// `E`, or a non-`Result` opaque return) keeps the application
+    /// projection.
     pub(super) fn for_signature(sig: &syn::Signature) -> Self {
         match &sig.output {
             syn::ReturnType::Default => Self::Default,
             syn::ReturnType::Type(_, ty) => {
-                if contains_impl_trait(ty) {
-                    Self::Default
-                } else {
+                if !contains_impl_trait(ty) {
                     Self::Probe((**ty).clone())
+                } else if let Some(err) = result_error_type(ty).filter(|e| !contains_impl_trait(e)) {
+                    Self::Probe(syn::parse_quote! { ::core::result::Result<(), #err> })
+                } else {
+                    Self::Default
                 }
             }
         }
@@ -215,6 +285,52 @@ impl Projection {
             },
         }
     }
+}
+
+/// `ty` without redundant parentheses (`(T)`) or invisible macro groups.
+fn peel_type(mut ty: &syn::Type) -> &syn::Type {
+    loop {
+        match ty {
+            syn::Type::Paren(p) => ty = &p.elem,
+            syn::Type::Group(g) => ty = &g.elem,
+            _ => return ty,
+        }
+    }
+}
+
+/// `E` when `ty` is syntactically `Result<T, E>` spelled `Result`,
+/// `std::result::Result` or `core::result::Result` (leading `::` allowed).
+/// Aliases (`io::Result<T>`, a crate's own `Result<T>`) are not resolved.
+fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
+    let syn::Type::Path(tp) = peel_type(ty) else {
+        return None;
+    };
+    if tp.qself.is_some() {
+        return None;
+    }
+    let names: Vec<String> = tp.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    if !matches!(
+        names.as_slice(),
+        ["Result"] | ["std", "result", "Result"] | ["core", "result", "Result"]
+    ) {
+        return None;
+    }
+    if tp.path.segments.iter().rev().skip(1).any(|s| !s.arguments.is_none()) {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &tp.path.segments.last()?.arguments else {
+        return None;
+    };
+    let mut types = args.args.iter().filter_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    });
+    let (_ok, err) = (types.next()?, types.next()?);
+    if types.next().is_some() || args.args.len() != 2 {
+        return None;
+    }
+    Some(err)
 }
 
 fn contains_impl_trait(ty: &syn::Type) -> bool {
@@ -1146,13 +1262,9 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let all_params = extract_sig_params(&rm.fn_item.sig);
     let managed_indices: std::collections::HashSet<usize> =
         rm.managed_params.iter().map(|mp| mp.index).collect();
-    let identity_index = rm.identity_param.as_ref().map(|p| p.index);
     // Request-extracted params: everything but `#[managed]` and the identity.
-    let extracted: Vec<(usize, &syn::PatType)> = all_params
-        .iter()
-        .copied()
-        .filter(|(i, _)| !managed_indices.contains(i) && Some(*i) != identity_index)
-        .collect();
+    let request = RequestParams::route(rm);
+    let extracted = &request.params;
 
     let call_args: Vec<TokenStream> = all_params
         .iter()
@@ -1188,9 +1300,9 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let head = needs_head.then(|| pipeline.head_bindings(head_owned));
     let request_head = has_managed.then(|| pipeline.request_head());
     let guards = pipeline.guards();
-    let params = pipeline.params(&extracted, true);
+    let params = pipeline.params(extracted, request.last_consumes_body);
     let body_sink = (!has_body).then(|| quote! { let _ = __body; });
-    let validation = pipeline.validation(&extracted);
+    let validation = pipeline.validation(extracted);
 
     let fn_name_str = fn_ident.to_string();
     let controller_name_str = controller_name.to_string();
@@ -1294,12 +1406,8 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     );
 
     let all_params = extract_sig_params(&sm.fn_item.sig);
-    let identity_index = sm.identity_param.as_ref().map(|p| p.index);
-    let extracted: Vec<(usize, &syn::PatType)> = all_params
-        .iter()
-        .copied()
-        .filter(|(i, _)| Some(*i) != identity_index)
-        .collect();
+    let request = RequestParams::sse(sm);
+    let extracted = &request.params;
     let call_args: Vec<TokenStream> = all_params
         .iter()
         .map(|(i, _)| {
@@ -1335,9 +1443,9 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let identity = pipeline.identity_param(&all_params);
     let head = plan.has_guards().then(|| pipeline.head_bindings(false));
     let guards = pipeline.guards();
-    let params = pipeline.params(&extracted, true);
+    let params = pipeline.params(extracted, request.last_consumes_body);
     let body_sink = (!has_body).then(|| quote! { let _ = __body; });
-    let validation = pipeline.validation(&extracted);
+    let validation = pipeline.validation(extracted);
 
     let (generics, where_clause) = entry_generics(
         def,
@@ -1417,15 +1525,11 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
     let all_params = extract_sig_params(&wm.fn_item.sig);
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
-    let identity_index = wm.identity_param.as_ref().map(|p| p.index);
     // Request-extracted params: everything but the socket and the identity.
     // None of them may consume the body: the upgrade is the trailing
     // extractor, so every handler param goes through `FromRequestParts`.
-    let extracted: Vec<(usize, &syn::PatType)> = all_params
-        .iter()
-        .copied()
-        .filter(|(i, _)| Some(*i) != ws_param_index && Some(*i) != identity_index)
-        .collect();
+    let request = RequestParams::ws(wm);
+    let extracted = &request.params;
     // Forwarded into the session body: every param but the socket.
     let forwarded: Vec<(usize, &syn::PatType)> = all_params
         .iter()
@@ -1508,8 +1612,8 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let identity = pipeline.identity_param(&all_params);
     let head = plan.has_guards().then(|| pipeline.head_bindings(false));
     let guards = pipeline.guards();
-    let params = pipeline.params(&extracted, false);
-    let validation = pipeline.validation(&extracted);
+    let params = pipeline.params(extracted, request.last_consumes_body);
+    let validation = pipeline.validation(extracted);
     let upgrade_ident = format_ident!("__ws_upgrade");
     let upgrade_ty: syn::Type = syn::parse_quote! { #krate::http::ws::WebSocketUpgrade };
     let upgrade = pipeline.extract_parts(&upgrade_ident, &upgrade_ty);

@@ -15,7 +15,7 @@ use r2e_core::di::meta::{MetaRegistry, RequestBodySchema, RouteInfo};
 use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
 use r2e_core::http::extract::{FromRequest, Path, Query};
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
-use r2e_core::http::{Json, Request, Response, StatusCode};
+use r2e_core::http::{Form, Json, Request, Response, StatusCode};
 use r2e_core::type_list::HNil;
 use r2e_core::{Guard, GuardContext, Identity, PreAuthGuard, SelfBuilt};
 use r2e_macros::{controller, routes, Params};
@@ -218,6 +218,43 @@ impl OpenController {
         Ok("ok")
     }
 
+    /// Opaque success type, nameable error: still the route envelope.
+    #[post("/envelope-opaque")]
+    async fn envelope_opaque(
+        &self,
+        Json(_b): Json<Plain>,
+    ) -> std::result::Result<impl IntoResponse, Envelope> {
+        Ok("ok")
+    }
+
+    /// Redundant parentheses around the `Result` are peeled.
+    #[post("/envelope-opaque-paren")]
+    #[allow(unused_parens)]
+    async fn envelope_opaque_paren(
+        &self,
+        Json(_b): Json<Plain>,
+    ) -> (std::result::Result<impl IntoResponse, Envelope>) {
+        Ok("ok")
+    }
+
+    /// Opaque everywhere: nothing to name, the application projection.
+    #[get("/all-opaque")]
+    async fn all_opaque(&self) -> impl IntoResponse {
+        "ok"
+    }
+
+    /// A query-string form: only the deserialization can fail.
+    #[get("/form-query")]
+    async fn form_query(&self, Form(_q): Form<Plain>) -> &'static str {
+        "ok"
+    }
+
+    /// A form body: media type, size, read, then deserialization (422).
+    #[post("/form-body")]
+    async fn form_body(&self, Form(_b): Form<Plain>) -> &'static str {
+        "ok"
+    }
+
     #[post("/csv")]
     async fn csv(&self, _b: CsvBody) -> &'static str {
         "ok"
@@ -257,6 +294,49 @@ impl SecuredController {
     {
         r2e_core::rt::stream::empty()
     }
+}
+
+/// Optional struct-level identity: a present but invalid token still fails.
+#[controller(path = "/maybe")]
+struct MaybeController {
+    #[inject(identity)]
+    #[allow(dead_code)]
+    user: Option<Subject>,
+}
+
+#[routes]
+impl MaybeController {
+    #[get("/me")]
+    async fn me(&self) -> &'static str {
+        "ok"
+    }
+}
+
+/// Streaming routes read the same request parameters as plain routes.
+#[controller(path = "/streams")]
+struct StreamsController {}
+
+#[routes]
+impl StreamsController {
+    #[sse("/events")]
+    async fn events(
+        &self,
+        Query(_q): Query<Validated>,
+    ) -> impl futures_core::Stream<Item = Result<r2e_core::http::response::SseEvent, Infallible>>
+    {
+        r2e_core::rt::stream::empty()
+    }
+}
+
+#[cfg(feature = "ws")]
+#[controller(path = "/sockets")]
+struct SocketsController {}
+
+#[cfg(feature = "ws")]
+#[routes]
+impl SocketsController {
+    #[ws("/socket")]
+    async fn socket(&self, Query(_q): Query<Validated>, _ws: r2e_core::web::ws::WsStream) {}
 }
 
 /// Controller-level guard: folded into every non-anonymous route.
@@ -386,15 +466,53 @@ fn derive_params_locations_are_read_at_runtime() {
 }
 
 #[test]
-fn required_identity_parameter_is_unauthenticated_optional_is_not() {
+fn identity_parameter_is_unauthenticated_required_or_optional() {
     assert!(has(
         &kinds!(OpenController, "/open/required"),
         RejectionKind::Unauthenticated
     ));
+    // `Option<identity>` admits a missing token, not an invalid one: the
+    // extraction still answers 401 on a present but bad token.
     assert_eq!(
         kinds!(OpenController, "/open/optional"),
-        vec![RejectionKind::Internal]
+        sorted(vec![RejectionKind::Unauthenticated, RejectionKind::Internal])
     );
+}
+
+#[test]
+fn optional_struct_identity_is_unauthenticated() {
+    assert_eq!(
+        kinds!(MaybeController, "/maybe/me"),
+        sorted(vec![RejectionKind::Unauthenticated, RejectionKind::Internal])
+    );
+}
+
+#[test]
+fn form_kinds_follow_the_method() {
+    use RejectionKind::*;
+    assert_eq!(
+        kinds!(OpenController, "/open/form-query"),
+        sorted(vec![InvalidForm, Internal])
+    );
+    assert_eq!(
+        kinds!(OpenController, "/open/form-body"),
+        sorted(vec![
+            UnsupportedMediaType,
+            PayloadTooLarge,
+            BodyRead,
+            InvalidBody,
+            Internal
+        ])
+    );
+}
+
+#[test]
+fn streaming_routes_infer_from_their_parameters() {
+    use RejectionKind::*;
+    let expected = sorted(vec![InvalidQuery, Validation, Internal]);
+    assert_eq!(kinds!(StreamsController, "/streams/events"), expected);
+    #[cfg(feature = "ws")]
+    assert_eq!(kinds!(SocketsController, "/sockets/socket"), expected);
 }
 
 #[test]
@@ -461,6 +579,26 @@ fn result_envelope_return_type_captures_its_schema() {
         schema.body_schema().map(|(n, _)| n).as_deref(),
         Some("EnvelopeBody")
     );
+}
+
+#[test]
+fn opaque_success_type_still_captures_the_envelope_schema() {
+    let r = route!(OpenController, "/open/envelope-opaque");
+    let schema = r
+        .error_schema
+        .expect("envelope captured from Result<impl Trait, Envelope>");
+    assert_eq!(schema.type_name(), std::any::type_name::<Envelope>());
+    assert_eq!(
+        schema.body_schema().map(|(n, _)| n).as_deref(),
+        Some("EnvelopeBody")
+    );
+    let paren = route!(OpenController, "/open/envelope-opaque-paren")
+        .error_schema
+        .expect("envelope captured from (Result<impl Trait, Envelope>)");
+    assert_eq!(paren.type_name(), std::any::type_name::<Envelope>());
+    assert!(route!(OpenController, "/open/all-opaque")
+        .error_schema
+        .is_none());
 }
 
 #[test]
