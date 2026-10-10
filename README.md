@@ -577,6 +577,10 @@ from the manifest — `v0.2.132`–`v0.2.163` actually contain workspace version
 (task #1072); the step-by-step guide is
 [`docs/migration/error-projection.md`](docs/migration/error-projection.md).
 
+0.5 → 0.6 documents OpenAPI bodies only through `RequestBodySchema` /
+`ResponseBodySchema` (no name-based `Json<T>` detection); the guide is
+[`docs/migration/response-schema.md`](docs/migration/response-schema.md).
+
 ## For AI agents
 
 If you are an AI agent or LLM, start at [llm.txt](llm.txt) — golden rules plus a routing table that maps your task to one topic file under [llm/](llm/) (read only those). [llm-full.txt](llm-full.txt) is the same reference as a single document, for tools that ingest one file.

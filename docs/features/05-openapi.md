@@ -73,14 +73,11 @@ pub struct RouteInfo {
     pub operation_id: String,   // e.g.: "UserController_get_by_id"
     pub summary: Option<String>,
     pub description: Option<String>,
-    pub request_body_type: Option<String>,
-    pub request_body_schema: Option<Value>,
-    pub request_body_content_type: Option<String>,  // None ⇒ application/json
-    pub request_body_required: bool,
-    pub response_type: Option<String>,
-    pub response_schema: Option<Value>,
+    pub request_body: Option<RequestBody>,      // { content_type, schema: Option<(name, Value)>, required }
+    pub request_body_unmapped: Option<String>,  // body-position type without `RequestBodySchema`
     pub response_status: u16,
-    pub response_unmapped: Option<String>,  // successful body type that could not be auto-mapped
+    pub response_contents: Vec<ResponseContent>, // one entry per media type the success body is served as
+    pub response_unmapped: Option<String>,      // return type without `ResponseBodySchema`
     pub params: Vec<ParamInfo>,
     pub roles: Vec<String>,
     pub tag: Option<String>,
@@ -91,8 +88,9 @@ pub struct RouteInfo {
 ```
 
 - Path parameters (e.g.: `Path(id): Path<u64>`) are automatically detected.
-- Request body schemas are generated via `schemars::schema_for!(T)` for `Json<T>` parameters.
-- Response schemas use autoref specialization — types without `JsonSchema` are silently skipped.
+- The request body is the last parameter when it reads the body (`FromRequest`), documented through its `RequestBodySchema` impl; `Option<..>` makes it optional.
+- The response body comes from the return type's `ResponseBodySchema` impl, probed through `Result<T, E>` and `(StatusCode, T)` tuples; `#[returns(T)]` declares it for `impl Trait` returns.
+- Both probes use autoref specialization — a type without the trait is documented without a body and warned about once at boot.
 - Doc comments: first `///` line → `summary`, remaining → `description`.
 - Roles declared via `#[roles("admin")]` appear in security metadata.
 - Error responses are derived from `rejection_kinds` (see below), never hardcoded.
@@ -143,17 +141,50 @@ documented **inline** in its responses; spec generation warns once at boot
 `build_spec_with_warnings(&config, &routes)` returns the spec with every
 warning instead of logging them.
 
-A custom body extractor — the handler's last parameter, read with
-`FromRequest` — is documented when it implements
-`r2e_core::di::meta::RequestBodySchema` (`content_type()`, `body_schema()`,
-`rejection_kinds()`). Without it the route has no request body in the spec.
+## Body schemas
 
-A custom **response** type — any concrete return type other than `Json<T>`,
-the `T` of a `Result<T, E>` included — is documented when it implements
-`r2e_core::di::meta::ResponseBodySchema`: `response_contents()` lists every media type it
-can be served as (`ResponseContent::json(..)`, `::event_stream(..)`,
-`::text()`, `::new(ct, ..)`), each with an optional `(component name, schema)`
-— `r2e_openapi::schema_of::<T>()` builds one from a `JsonSchema` type. A handler
+Bodies reach the spec through two traits in `r2e_core::di::meta`; the
+`#[routes]` macro never matches type names, it probes the types for the traits
+and R2E implements them for its own types.
+
+**`RequestBodySchema`** (`content_type()`, `body_schema()` — defaults to
+`None`, `rejection_kinds()`) on the handler's last parameter when it reads the
+body:
+
+| Extractor | Media type | Schema |
+|---|---|---|
+| `Json<T>` | `application/json` | `T: JsonSchema` (feature `openapi`) |
+| `Form<T>` | `application/x-www-form-urlencoded` | free-form object |
+| `Bytes` | `application/octet-stream` | binary string |
+| `String` | `text/plain` | string |
+| `Multipart` | `multipart/form-data` | free-form object |
+| `TypedMultipart<T>` | `multipart/form-data` | `#[derive(FromMultipart)]` schema |
+
+`Option<..>` around any of them → `required: false`. A custom extractor
+implements the trait; a body-position type without it has no request body in
+the spec and is warned about at boot (`SchemaGap::MissingRequestBody`).
+
+**`ResponseBodySchema`** (`response_contents()`) on the return type, probed
+through `Result<T, E>` (→ `T`) and `(StatusCode, T)` / `(HeaderMap, T)` /
+`(StatusCode, HeaderMap, T)` (→ `T`):
+
+| Return type | Documented as |
+|---|---|
+| `Json<T>` | `application/json`, `T: JsonSchema` |
+| `String`, `&'static str`, `Cow<'static, str>` | `text/plain` |
+| `Html<T>` | `text/html` |
+| `Bytes`, `Vec<u8>` | `application/octet-stream` |
+| `()`, `StatusCode`, `Redirect` | no body |
+| `Sse<S>` | `text/event-stream` |
+| `impl Trait` | not probed → `#[returns(T)]` |
+
+A custom response type implements the trait: `response_contents()` lists
+every media type it can be served as (`ResponseContent::json(..)`,
+`::event_stream(..)`, `::text()`, `::html()`, `::binary()`, `::new(ct, ..)`),
+each with an optional `(component name, schema)` —
+`r2e_core::di::meta::schema_of::<T>()` (re-exported by `r2e_openapi`) builds
+one from a `JsonSchema` type. `#[returns(T)]` probes `T` for the trait first,
+then as `Json<T>`. A handler
 answering JSON or an SSE stream depending on the request returns an enum and
 documents both under its success status:
 
@@ -173,8 +204,10 @@ impl ResponseBodySchema for ChatReply {
 }
 ```
 
-`text/*` media types without a schema render as `{"type": "string"}`. Return
-types containing `impl Trait` are never probed.
+A `None` schema renders from the media type: `text/*` → `{"type": "string"}`,
+`application/octet-stream` → `{"type": "string", "format": "binary"}`, form
+media types → free-form object, anything else → `{}`. Component names are
+schemars' `schema_name()` (`Array_of_User`, `Nullable_User`, …).
 
 ## Tags
 
