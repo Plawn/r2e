@@ -124,6 +124,15 @@ detailed under *Added*; the step-by-step developer migration is
 
 ### Added
 
+- **example-app: custom error envelope demo** — `Problem` (RFC 9457
+  `application/problem+json`, `Validation` remapped to 422) in
+  `examples/example-app/src/error.rs`, `ProblemController` (`/problems`) showing a
+  route envelope next to an infallible route, `.error_projection::<AppError>()`
+  installed in `app.rs`, and `tests/http/error_envelope.rs` pinning the bodies
+  and the per-route OpenAPI error responses. The book chapter *Error Handling*
+  gains a "Rejection, envelopes and projection" section, *OpenAPI* an "Error
+  responses" section, and the 0.4 → 0.5 migration guide is linked from the book
+  and the README.
 - **`Rejection` — one typed value for every framework failure** (task #1072,
   phase P0 of `plans/error-projection.md`). `r2e_core::error::Rejection { kind:
   RejectionKind, status, message, details, headers, source }` is the hub every

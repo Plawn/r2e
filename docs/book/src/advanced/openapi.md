@@ -87,7 +87,7 @@ Route metadata is automatically collected via `Controller::register_meta()` duri
 | Description | Remaining lines of `///` doc comment |
 | Deprecated | `#[deprecated]` (standard Rust attribute) |
 | Status codes | Smart defaults (GET→200, POST→201, DELETE→204) or `#[status(N)]` |
-| Auth responses | 401/403 auto-added only for authenticated routes |
+| Error responses | Inferred from the route's `RejectionKind`s × its error envelope's `status_of` — see [Error responses](#error-responses) |
 
 ## Route attributes for OpenAPI
 
@@ -160,6 +160,67 @@ The macro automatically detects the response type from common patterns:
 > error). Add `#[derive(JsonSchema)]` to your response types to see them in
 > the spec.
 
+## Error responses
+
+Error responses come from what the route can actually fail with, not from a
+fixed list. The `#[routes]` macro records the route's `RejectionKind`s in
+`RouteInfo::rejection_kinds`:
+
+| Route shape | Inferred kinds (default status) |
+|-------------|--------------------------------|
+| JSON or `Form<T>` body | `MissingContentType`/`UnsupportedMediaType` (415), `PayloadTooLarge` (413), `MalformedBody` (400), `InvalidBody` (422) |
+| GET `Form<T>` | `InvalidForm` (400) |
+| `Path<T>` | `InvalidPath` (400) |
+| `Query<T>` / `#[derive(Params)]` | `InvalidQuery` (400) |
+| garde `Validate` parameter | `Validation` (400) |
+| identity — required or `Option<..>` | `Unauthenticated` (401) |
+| `#[roles]` / guards | `Forbidden` (403) |
+| rate-limit guard | `RateLimited` (429) |
+| always | `Internal` (500) |
+
+SSE and WebSocket routes are inferred from their parameters the same way.
+
+The builder then emits **one response per distinct status** the route's error
+envelope maps those kinds to (`ErrorSchema::status_of`), with the envelope's
+`body_schema` / `body_schema_for(kind)` as the component, plus its
+`extra_statuses`. The envelope is the handler's `Result<T, E>` error type when
+it is one, else the application's (`AppBuilder::error_projection::<E>()`, read
+from the `ErrorProjector` bean by the plugin; `OpenApiConfig::with_error_schema::<E>()`
+for direct `build_spec` callers), else `HttpError` (`ErrorResponse` /
+`ValidationErrorResponse`). Runtime and spec call the same `status_of`, so an
+envelope remapping `Validation` to 422 documents 422 — never both. See
+[Rejection, envelopes and projection](../core-concepts/error-handling.md#rejection-envelopes-and-projection).
+
+Rules the builder applies:
+
+- **Dedup by schema.** The same body under two names is documented once, under
+  the first-recorded name (the route envelope's).
+- **`anyOf`, never `oneOf`.** Distinct bodies on one status render as `anyOf`
+  (a validation body is also a valid plain error body, so `oneOf` would reject
+  it).
+- **Panic 500 uses the application envelope.** The catch-panic layer renders
+  through the `ErrorProjector`, never the route's envelope, so every route
+  documents the 500 with the app envelope's body — an `anyOf` beside the route's
+  own 500 body when they differ.
+- **Name collisions are inlined.** An error body whose component name is already
+  taken by a different schema (a DTO, a registry entry, a nested `$defs` type,
+  another envelope's body) leaves that component alone and is documented inline,
+  with a boot warning (`SchemaGap::ErrorBodyInlined`).
+- Nested types in an envelope body schema are promoted to `components/schemas`
+  like any other schema.
+
+A custom body extractor (the handler's last parameter, read with `FromRequest`)
+is documented when it implements `r2e::di::meta::RequestBodySchema`
+(`content_type()`, `body_schema()`, `rejection_kinds()`); otherwise the route
+has no request body in the spec.
+
+The demo app's `POST /problems/` (`Result<Json<Ticket>, Problem>`) documents
+400/401/413/415/422/500 with the `Problem` component, the 500 as an `anyOf` of
+`Problem` and the app-level `ErrorResponse`; its infallible neighbour
+`GET /problems/legacy/{id}` documents a 400 `ErrorResponse` only. The test
+`openapi_documents_the_problem_envelope_per_route` in
+`examples/example-app/tests/http/error_envelope.rs` pins this.
+
 ## Full example
 
 ```rust
@@ -213,9 +274,9 @@ impl UserController {
 ```
 
 This produces a spec with:
-- `POST /users` → 201 with `User` schema, `CreateUser` request body, 401/403 responses
+- `POST /users` → 201 with `User` schema, `CreateUser` request body; error responses inferred from the route — 403 (`#[roles]`), 400/413/415/422 (JSON body), 500 — all with the default `ErrorResponse` body
 - `GET /users` → 200 with `Vec<User>` schema
-- `DELETE /users/{id}` → 204 no body, 401/403 responses
+- `DELETE /users/{id}` → 204 no body; 400 (`Path`), 403 (`#[roles]`) and 500 error responses
 - Summaries and descriptions from doc comments
 - All schemas under `components/schemas`
 
