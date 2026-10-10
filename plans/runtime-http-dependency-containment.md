@@ -252,12 +252,12 @@ bridge and write the list down.
 | site | disposition | why |
 |---|---|---|
 | `r2e-http/src/json.rs` `Json<T>` (`FromRequest` + `OptionalFromRequest`) | **stays — named bridge point** (added 2026-08-24, `plans/json-codec-containment.md` §3.2) | R2E's own `Json<T>` replaced the `axum::Json` re-export so the codec is R2E's choice; its body-reading impl is the one place it speaks the backend's extraction contract. Response side goes through `IntoHttpResponse`. |
-| `r2e-core/src/web/extract.rs` `Via<T, M>` | **stays — the bridge** | *The* reverse adapter `FromRequestPartsVia` → backend. A swap rewrites this one impl. That is the 3b deliverable, not debt. |
+| `r2e-core/src/web/extract.rs` `Via<T, M>` | **removed** (#1072 P1, 2026-10-09) | The generated entry fn calls `FromRequestPartsVia` directly and converts the failure into a `Rejection`, so route parameters need no backend-trait adapter. The `ViaAxum` marker (backend extractors) stays and requires the rejection to be `Into<Rejection>`. |
 | `r2e-core/src/web/extract.rs` `PeerAddr` | **stays — named bridge point** | Emitted into the generated handler's argument tuple *and* usable as a route-method parameter. Both positions are extracted by the backend's `Handler`, not by R2E. |
 | `r2e-core/src/web/extract.rs` `BeanExtract<T, I>` | **stays — named bridge point** | Exists *for* hand-written backend handlers merged via `merge_router` (now `axum_compat` territory, §5.3d). Being a backend extractor is its entire purpose. |
 | `r2e-core/src/builtins/request_id.rs` `RequestId` | **stays — named bridge point** (extract); **migrated** (response) | Documented route-method parameter. Its `IntoResponse` impl became `IntoHttpResponse`. |
 | `r2e-scheduler/src/lib.rs` `SchedulerHandle` | **stays — named bridge point** | Same: documented route-method parameter. |
-| `r2e-macros` `controller_codegen.rs:252` + `:311` (`__R2eRequestData_<C>`) | **stays — named bridge point** | This IS the generated extractor the backend invokes per request; its *fields* already go through `FromRequestPartsVia` with inferred markers. Removing it would mean removing the boundary itself. |
+| `r2e-macros` `controller_codegen.rs` (`__R2eRequestData_<C>`) | **migrated** (#1072 P1, 2026-10-09) | The generated request-data struct implements R2E's own `RequestData<S>` (`extract(&mut Parts, &S) -> Result<Self, Rejection>`), called by the generated entry fn; its `FromRequestParts` bridge impl is gone. Its fields still go through `FromRequestPartsVia` with inferred markers. |
 | `r2e-macros` `params_derive.rs:230` (`#[derive(Params)]`) | **stays — named bridge point** | Same, for user parameter structs used as route-method parameters. |
 
 The rejected alternative — wrapping **every** route-method parameter in

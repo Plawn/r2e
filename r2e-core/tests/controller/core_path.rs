@@ -88,7 +88,7 @@ impl<I: Identity> Guard<I> for AllowAll {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }
@@ -215,7 +215,7 @@ impl PreAuthGuard for AllowAllPre {
     fn check(
         &self,
         _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }
@@ -365,7 +365,7 @@ async fn sse_controller_uses_captured_core() {
 }
 
 /// Pre-auth-guarded controller — the route uses the captured core and the
-/// pre-auth middleware fires before dispatch.
+/// pre-auth guard runs first in the entry fn, before identity extraction.
 #[r2e_core::test]
 async fn pre_auth_route_uses_captured_core() {
     let router = r2e_core::AppBuilder::new()

@@ -115,7 +115,7 @@ pub use crate::decorators::interceptors::{Interceptor, InterceptorContext};
 pub use crate::di::event_subscriber::EventSubscriber;
 pub use crate::di::module::FeatureModule;
 pub use crate::di::scheduled_source::ScheduledSource;
-pub use crate::error::{HttpError, HttpErrorExt};
+pub use crate::error::{ErrorSchema, HttpError, HttpErrorExt, Rejection, RejectionKind};
 pub use crate::plugin::{
     GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext,
 };
@@ -124,7 +124,7 @@ pub use crate::runtime::panic::{PanicOrigin, PanicReport};
 pub use crate::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use crate::type_list::BeanLookup;
 pub use crate::web::extract::{
-    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr, Via,
+    BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia, PeerAddr,
 };
 pub use crate::web::managed::{
     ManagedContext, ManagedDeps, ManagedErr, ManagedOutcome, ManagedOutcomeKind, ManagedResource,

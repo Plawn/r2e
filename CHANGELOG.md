@@ -19,7 +19,238 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+Task #1072 (error projection layers) is the 0.5.0 break: one typed `Rejection`
+per failure, projected once per route through an error envelope. Each item is
+detailed under *Added*; the step-by-step developer migration is
+[`docs/migration/error-projection.md`](docs/migration/error-projection.md).
+
+- **Breaking: extractor rejections render as the envelope's JSON** (task
+  #1072). Every extractor rejection — `Json`/`Path`/`Query`/`Form`/header/
+  multipart failures, a missing or unsupported `content-type`, a 413 body
+  limit — is now projected through the route's envelope, so with the default
+  `HttpError` it answers `{"error": "..."}` (`application/json`) where 0.4
+  returned axum's `text/plain` body. Status codes are unchanged; `HttpError`'s
+  own bodies stay byte-equal to 0.4. Clients parsing those plain-text bodies
+  must be updated.
+- **Breaking: `HttpError::Validation` is a struct variant**
+  `Validation { status: StatusCode, response: ValidationErrorResponse }` (was
+  the tuple `Validation(ValidationErrorResponse)`). Build it with
+  `HttpError::validation(response)` (status 400); match with
+  `HttpError::Validation { response, .. }`. The carried status keeps an
+  envelope's `status_of(Validation)` remap (e.g. 422) through
+  `From<Rejection> for HttpError` and back. The default 400 body is unchanged.
+- **Breaking: guards return `Result<(), Rejection>`** (task #1072, phase P1).
+  `Guard<I>::check` and `PreAuthGuard::check` no longer build a `Response`;
+  they return a `Rejection` (`Rejection::forbidden(..)`,
+  `Rejection::unauthenticated()`, or a typed error through `?`/`From`) that the
+  route projects through its envelope. `GuardContext::parse_path_param` returns
+  `Result<T, GuardError>`. Pre-auth guards are the first step of the route's
+  entry fn, not a middleware layer.
+- **Breaking: `ManagedResource::Error: Into<Rejection>`** (was
+  `Into<Response>`). Acquire/finalize failures are projected like any other
+  rejection; `HttpError` still qualifies. `ManagedErr<E>` still requires
+  `E: Into<Rejection>`; an error that was only `Into<Response>` must be mapped
+  (e.g. to `HttpError`) first.
+- **Breaking: `ParamsRejectionFormat` and `server.params-rejection-format`
+  removed.** `#[derive(Params)]` failures always render through the route's
+  envelope (default `HttpError`, same body as the previous default).
+- **Breaking: `Via<T, M>` removed.** The generated handlers resolve bean-backed
+  extractors inline; hand-written handlers keep `BeanExtract<T, I>`. The
+  `ViaAxum` bridge now requires the axum rejection to convert `Into<Rejection>`
+  (every axum built-in does).
+- **Breaking: the gRPC guard family is gone** (task #1072, phase P3).
+  `GrpcGuard`, `GrpcGuardContext`, `GrpcRolesGuard` and `GrpcRoleBasedIdentity`
+  are removed from `r2e-grpc` (and its prelude); write `Guard<I>` impls and put
+  them on the method or impl block with `#[guard]` — they now work on HTTP,
+  gRPC and MCP alike. Manual `GrpcIdentityExtractor::extract_claims` wiring
+  still compiles but is no longer needed: use an `#[inject(identity)]`
+  parameter.
+- **Breaking: `r2e_mcp::guard::guard_response_to_error` removed**; the
+  generated tool code uses `McpError::from(rejection)`.
+- **Breaking: `RouteInfo.has_auth` removed** (task #1072, phase P2) in favour
+  of `rejection_kinds`; `RouteInfo` literals need the two new fields. The
+  OpenAPI spec no longer hardcodes 401/403/500/400: default-envelope routes
+  now list 415/413/422 for JSON bodies and 400 for path/query parameters
+  (what the runtime already answered), and the `FieldError` component is gone
+  (`ValidationErrorResponse.details` items are inline). `RejectionKind` is
+  `Serialize`.
+- **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
+  `Header`), so a `#[derive(Params)]` failure converts into the right
+  `RejectionKind`. Code that builds a `ParamError` by struct literal or
+  destructures it exhaustively (`let ParamError { message } = e`) must name
+  the new field; hand-written `PrefixedExtract` impls (below) now return it.
+- **Breaking: `PrefixedExtract::extract_prefixed` returns
+  `Result<Self, ParamError>`** (was `Result<Self, Response>`). A hand-written
+  impl (nested `#[derive(Params)]` support) returns a `ParamError` with its
+  `location` instead of a rendered response.
+- **Breaking: `#[derive(Params)]` rejects with `ParamError`** —
+  `<T as FromRequestParts<S>>::Rejection` is `ParamError` (was `Response`).
+  Code naming the rejection type or calling `.into_response()` on it still
+  works (`ParamError: IntoHttpResponse`); code matching it as a `Response`
+  must convert first.
+- **Breaking: `TypedMultipart<T>` rejects with `MultipartError`**
+  (`<TypedMultipart<T> as FromRequest<S>>::Rejection` was `Response`). It
+  converts into `Rejection` by its variant; hand-written handlers that
+  forwarded the `Response` call `.into_response()` (or `Rejection::from`).
+- **Breaking: a `Form<T>` body that does not deserialize is `InvalidBody`
+  (422)**, no longer `InvalidForm`; the status axum carries (422) is
+  unchanged, so `HttpError` responses do not move, but an envelope remapping
+  `InvalidForm` no longer sees it. A query-string form (GET/HEAD) stays
+  `InvalidForm` (400). `RawForm`: a wrong content type was already
+  `UnsupportedMediaType`; the other failures, previously all `InvalidForm`,
+  now map to `PayloadTooLarge` (413), `BodyRead` (unreadable body) or the
+  kind matching their status.
+- **Breaking: OpenAPI documents the panic 500 on every route** through the
+  application envelope (`ErrorProjector`, default `HttpError`) — what the
+  catch-panic layer answers — merged as an `anyOf` when the route's envelope
+  shares the status. Optional identities (`Option<identity>` field or
+  parameter) now document 401 (an invalid token still fails), SSE routes
+  document their `Query`/`Path`/`Form`/garde failures and WS routes their
+  `Query`/`Path`/garde failures (WS extracts request parts only, so `Form<T>`
+  does not apply there), and a `Form<T>` body documents 415/413/400/422
+  instead of 400.
+- **Breaking: unknown routes and wrong methods answer JSON** (task #1072, phase P4). An
+  app without a fallback of its own used to get axum's empty-bodied 404 and
+  bodiless 405; they are now `404 {"error":"Not found"}` and `405
+  {"error":"Method not allowed"}` with `content-type: application/json` (or
+  the `error_projection::<E>()` envelope). `CatchPanicLayer::with_hook(hook)`
+  is replaced by `CatchPanicLayer::with(hook, projector)` and
+  `catch_panic_layer_with` takes the projector too.
+- **Breaking: `SchemaGap` gains the `ErrorBodyInlined { component }` variant**
+  (r2e-openapi, see *Added*). Exhaustive `match`es on `SchemaGap` need a new
+  arm or a fallback.
+
 ### Added
+
+- **example-app: custom error envelope demo** — `Problem` (RFC 9457
+  `application/problem+json`, `Validation` remapped to 422) in
+  `examples/example-app/src/error.rs`, `ProblemController` (`/problems`) showing a
+  route envelope next to an infallible route, `.error_projection::<AppError>()`
+  installed in `app.rs`, and `tests/http/error_envelope.rs` pinning the bodies
+  and the per-route OpenAPI error responses. The book chapter *Error Handling*
+  gains a "Rejection, envelopes and projection" section, *OpenAPI* an "Error
+  responses" section, and the 0.4 → 0.5 migration guide is linked from the book
+  and the README.
+- **`Rejection` — one typed value for every framework failure** (task #1072,
+  phase P0 of `plans/error-projection.md`). `r2e_core::error::Rejection { kind:
+  RejectionKind, status, message, details, headers, source }` is the hub every
+  fault converts into with plain `From`: the axum `Json`/`Path`/`Query`/`Form`
+  rejections, `ParamError` (by its new `location`), `HttpError`, `GuardError`,
+  `MultipartError`, garde reports, `SecurityError` (with `WWW-Authenticate`),
+  `TenantError` (`TenantError::into_rejection(TenantStatuses)` keeps the
+  configured statuses), a raw `Response` (kind `Opaque`).
+  `RejectionKind::default_status()` is the one status table and
+  `RejectionKind::from_status` its inverse. `Rejection::project::<E>()` renders
+  through an envelope `E: From<Rejection> + IntoHttpResponse + ErrorSchema`;
+  `HttpError` is the default envelope and its bodies are byte-equal to 0.4.
+- **`ErrorSchema`** (`r2e_core::error`, prelude): the static side of an error
+  envelope — `status_of(kind)`, `body_schema()`, `body_schema_for(kind)`,
+  `extra_statuses()`, `opaque_passthrough()` — read by the runtime and, from
+  phase P2, by the OpenAPI builder.
+- **Typed guard errors**: `r2e_security::RolesDenied`,
+  `r2e_rate_limit::RateLimited { retry_after }` (emits `Retry-After`, seconds
+  rounded up) and `r2e_openfga::FgaDenied`. Each is `Error`, converts into
+  `Rejection`, and renders through it; the built-in guards use them and their
+  bodies are unchanged.
+- **`#[derive(ApiError)]`: `#[error(rejection)]`** on one variant holding a
+  `Rejection` (alias: `#[error(transparent)]` over a `Rejection` field). The
+  derive then also emits `From<Rejection>` and `ErrorSchema`. An enum with
+  exactly one `#[error(transparent)]` variant over `HttpError` inherits both
+  impls. `status`/`message` on that variant and two such variants are compile
+  errors.
+- **One projection point per route** (task #1072, phase P1). Every HTTP
+  route, SSE and WS endpoint is now one generated entry fn `(State, Request)
+  -> Response` that owns the whole pipeline — pre-auth guards → request data
+  (identity + `#[inject(request)]`) → guards → head parameters → body
+  parameter (last) → garde validation → managed acquire → interceptors →
+  handler → managed finalize — and converts every failure into a `Rejection`
+  projected **once** through the route's error envelope. The envelope is
+  inferred from the handler's return type: `Result<T, E>` with
+  `E: From<Rejection> + IntoHttpResponse + ErrorSchema` projects through `E`
+  (no attribute to write); any other return type uses the app-level
+  projection. Guards run before the route's own parameters, so a denied or
+  unauthenticated request never reads its body. New tests:
+  `r2e-core/tests/http/projection.rs`.
+- **`AppBuilder::error_projection::<E>()`** — the app-level error envelope
+  (the JAX-RS/Quarkus `ExceptionMapper` equivalent), provided as the
+  `ErrorProjector` bean (`r2e_core::ErrorProjector`, `of::<E>()` /
+  `project(rejection)`). Routes whose return type declares no envelope, SSE
+  and WS routes, and the framework's own responses (phase P4: the catch-panic
+  500, the router's 404 and 405, the `Json` extractor's 413) render through
+  it; without the bean the default is `HttpError`, byte-equal to 0.4.
+- **Framework 404/405/panic through the application envelope** (task #1072,
+  phase P4). `build_inner` reads the `ErrorProjector` bean once
+  (`ErrorProjector::default()` = `HttpError`) and hands it to the two
+  catch-panic slots (`CatchPanicLayer::with(hook, projector)`, the 500 being
+  `Rejection::internal("Internal server error")` projected) and to the
+  router: a framework `fallback` answering `Rejection::not_found("Not found")`
+  — installed only when nothing else claimed the fallback, so a controller
+  `#[fallback]`, a merged `Router::fallback(..)` and the `r2e-static` SPA
+  fallback keep winning — and a `method_not_allowed_fallback` answering the new
+  `RejectionKind::MethodNotAllowed` (405; `Allow` kept). `E::status_of` applies
+  to all three. New: `r2e_http::routing::has_custom_fallback(&Router)` (reads
+  the bit axum only exposes through `Router`'s `Debug` output; pinned by
+  `r2e-http/tests/routing.rs`). Tests: `r2e-core/tests/http/fallback.rs`,
+  `tests/http/panic.rs`.
+- **OpenAPI error responses from the route's real failures** (task #1072,
+  phase P2). `RouteInfo` gains `rejection_kinds: Vec<RejectionKind>` (inferred
+  by `#[routes]`: body extractor kinds, `Path`/`Query`/`Form`/`#[derive(Params)]`
+  locations, garde validation, identity (required or optional), roles/guards, rate-limit
+  guards, always `Internal`) and `error_schema: Option<ErrorSchemaInfo>` (the
+  envelope of a `Result<T, E>` return type). `build_spec` documents one
+  response per distinct `ErrorSchema::status_of(kind)` of the route's envelope
+  — the route's own, else the application's `error_projection::<E>()` (read
+  from the `ErrorProjector` bean by `OpenApiPlugin`, or set with
+  `OpenApiConfig::with_error_schema::<E>()`), else `HttpError` — with the
+  envelope's body components and `extra_statuses`; bodies are deduplicated
+  by schema and distinct bodies on one status become an `anyOf`; an error
+  body whose component name is taken by a different schema (DTO, registry,
+  nested `$defs`) is inlined and warned about (`SchemaGap::ErrorBodyInlined`,
+  `build_spec_with_warnings`). New `r2e_core::error::ErrorSchemaInfo` (`Copy`
+  capture of an `ErrorSchema` impl, also exposed as `ErrorProjector::schema()`)
+  and `r2e_core::di::meta::RequestBodySchema` (a custom last-parameter body
+  extractor documents its content type, schema and rejection kinds).
+- **`RequestData<S>`** (`r2e_core::web::extract`): the R2E-owned trait the
+  generated `__R2eRequestData_<C>` extractor implements —
+  `extract(&mut Parts, &S) -> Result<Self, Rejection>` — replacing its
+  `FromRequestParts` bridge impl.
+- **gRPC guards and identity** (task #1072, phase P3). `#[grpc_routes]`
+  methods and impl blocks take `#[guard(..)]`, `#[roles(..)]` and
+  `#[all_roles(..)]` — the HTTP `Guard<I>` impls, built once at registration
+  through `DecoratorSpec` with their bean deps checked at
+  `register_grpc_service` — and `#[inject(identity)]` **method parameters**
+  (`AuthenticatedUser` or `Option<AuthenticatedUser>`, any position). The
+  guard sees a `GuardContext` built by `r2e_grpc::guard_context` (request
+  metadata as `headers`, `extensions`, `peer_addr`). Per call: identity →
+  controller guards → method guards → interceptors → method.
+- **`r2e_grpc::GrpcIdentity`**: how an `#[inject(identity)]` gRPC parameter is
+  read — `type Spec: DecoratorSpec` resolves the extractor from the graph at
+  registration (so the bean is a compile-time dependency of the service),
+  `extract` / `extract_optional` read the metadata per call and return a
+  `Rejection`. `r2e-security` (feature `grpc`) implements it for
+  `AuthenticatedUser` with `JwtIdentitySpec` (product: the
+  `Arc<JwtClaimsValidator>` bean): `authorization: Bearer <jwt>`, validated by
+  the same bean HTTP uses. `r2e_grpc::bearer_token` is the typed metadata read.
+- **`r2e_grpc::rejection_to_status`** (+ `code_from_status`): projects a
+  `Rejection` onto `tonic::Status` by kind — Unauthenticated →
+  `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`, NotFound → `NOT_FOUND`,
+  Conflict → `ABORTED`, RateLimited/PayloadTooLarge → `RESOURCE_EXHAUSTED`,
+  Unavailable → `UNAVAILABLE`, Timeout → `DEADLINE_EXCEEDED`, Internal →
+  `INTERNAL`, request-shape kinds → `INVALID_ARGUMENT`, others by HTTP status;
+  the message becomes the status message and the rejection's headers
+  (`Retry-After`, `WWW-Authenticate`) become response metadata. A free
+  function because `From<Rejection> for Status` would be an orphan impl.
+- **`McpError: From<Rejection>`**: MCP guard rejections map by kind
+  (Unauthenticated → `Unauthorized`, Forbidden → `Forbidden`, NotFound →
+  `NotFound`, request-shape kinds → `InvalidParams`, Internal/Unavailable/
+  Timeout → `Internal`, Conflict/RateLimited → `Tool` with the details, others
+  by status) instead of re-reading a rendered response body.
+- Compile-time checks on gRPC services: a `#[roles]` method (or any guard
+  whose spec sets `REQUIRES_IDENTITY`) without an `#[inject(identity)]`
+  parameter, a struct-level `#[inject(identity)]`, and a missing
+  `Arc<JwtClaimsValidator>` bean all fail to build.
 
 - **`StopPhase::AfterDrain` background services** (task #1071). A
   `ServiceComponent` can declare `fn stop_phase() -> StopPhase` and
@@ -40,6 +271,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- `MultipartError` now implements `std::error::Error`.
 - **`r2e-executor`: the pool drains after the HTTP drain, not before it**
   (task #1071). The `Executor` plugin's graceful drain moved from
   `on_shutdown_async` (step 2) to `on_shutdown_after_drain_async` (step 5).
@@ -51,6 +283,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **gRPC: controller-level and method-level guards get separate
+  `GuardContext`s**, as on HTTP and MCP: impl-block guards are built once per
+  controller and run with `method_name: "*"`, method guards with the method
+  name. A controller-level `RateLimit` on a gRPC service is now one
+  service-wide budget instead of being charged twice per call under the
+  method's key.
+- **Rejection headers merge per name on every path.** `Rejection::project`
+  now adds the hub's headers to an opaque passthrough response too (a
+  `Retry-After` added to `Rejection::from(response)` used to be dropped), and
+  keeps every value of a repeated header (two `WWW-Authenticate` challenges).
+  A header name the rendered response already carries still wins.
+- **`Result<impl Trait, E>` routes keep their envelope.** The return-type
+  probe can't name an opaque success type, so such routes fell back to the
+  app-level projection (runtime and OpenAPI); they now project through `E`.
 - **`r2e-executor`: an aborted job no longer leaks the pool's counters**
   (task #1066). `JobHandle::abort` drops the job future at its next await, so
   the bookkeeping written after `fut.await` never ran: one aborted running job

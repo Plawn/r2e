@@ -39,13 +39,19 @@ handler therefore receives identity as an extractor parameter and never
 reconstructs the controller:
 
 ```rust,ignore
-move |request_data: __R2eRequestData_AccountController<__M>, /* Axum args */| {
-    let core = captured_core.clone();
-    async move {
-        let request_controller =
-            __r2e_meta_AccountController::bind_request(core, request_data);
-        request_controller.me().await
-    }
+move |State(state), req: Request| async move {
+    __r2e_invoke_AccountController_me(state, req, /* decorator sets */, captured_core.clone()).await
+}
+
+async fn __r2e_invoke_AccountController_me<S, __M>(state: S, req: Request, /* … */, core: Arc<AccountController>) -> Response {
+    let (mut parts, body) = req.into_parts();
+    // pre-auth guards → request data → guards → params → body → validation → managed
+    let request_data = match __R2eRequestData_AccountController::<__M>::extract(&mut parts, &state).await {
+        Ok(d) => d,
+        Err(rejection) => return /* project through the route's envelope */,
+    };
+    let request_controller = __r2e_meta_AccountController::bind_request(core, request_data);
+    request_controller.me().await.into_http_response()
 }
 ```
 
@@ -112,7 +118,8 @@ A hidden type holds request-only values:
 struct __R2eRequestData_AccountController<__M> { user: AuthenticatedUser, /* … */ }
 ```
 
-It is state-generic: each field is extracted through
+It is state-generic and implements R2E's `RequestData<S>` (not axum's
+`FromRequestParts`): each field is extracted through
 `FromRequestPartsVia<S, M>` / `OptionalFromRequestPartsVia<S, M>` (R2E-owned,
 with a marker slot carrying the `HasBean` witness — plain axum extractors reach
 it through the blanket `ViaAxum` bridge). Controllers without request-scoped
@@ -221,9 +228,9 @@ Router::new().route(
     "/me",
     get({
         let core = core.clone(); // once per registered route
-        move |data: __R2eRequestData_AccountController<_>, /* args */| {
+        move |State(state), req: Request| {
             let core = core.clone(); // once per request
-            async move { bind_request(core, data).me(/* args */).await }
+            async move { __r2e_invoke_AccountController_me(state, req, core).await }
         }
     }),
 )

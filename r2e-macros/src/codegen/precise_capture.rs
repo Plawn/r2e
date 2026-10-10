@@ -89,21 +89,6 @@ pub fn add_handler_precise_captures(sig: &mut syn::Signature) {
     AddCaptures { params }.visit_type_mut(ret);
 }
 
-/// The handler's return type with the same rewrite applied, for the sites that
-/// re-emit it on a **generated** signature.
-///
-/// The generated invocation function (`__r2e_invoke_<Ctrl>_<method>`) copies the
-/// user's return type verbatim onto a `fn(&__R2eRequest_<Ctrl>) -> …`, so it
-/// needs the clause for exactly the same reason the façade method does: the
-/// tokens come from the user's crate and are therefore read under *its* edition,
-/// while everything `quote!` produces here is read under this crate's. Rewriting
-/// only the façade method leaves the invocation function failing on its own.
-pub fn handler_return_type(sig: &syn::Signature) -> syn::ReturnType {
-    let mut sig = sig.clone();
-    add_handler_precise_captures(&mut sig);
-    sig.output
-}
-
 struct AddCaptures {
     params: Vec<syn::Ident>,
 }

@@ -441,11 +441,11 @@ async fn per_user_guard_rejects_a_request_without_identity() {
         .check(&anon)
         .await
         .expect_err("a per-user limit without an identity must be rejected");
-    assert_eq!(err.status(), r2e_core::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(err.status, r2e_core::http::StatusCode::UNAUTHORIZED);
 
     // Repeat calls keep 401-ing (they are not consuming any bucket).
     let err = guard.check(&anon).await.expect_err("still rejected");
-    assert_eq!(err.status(), r2e_core::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(err.status, r2e_core::http::StatusCode::UNAUTHORIZED);
 
     // And an authenticated caller still has their full budget.
     let identity = TestIdentity {
@@ -654,4 +654,63 @@ async fn configured_user_guard_rejects_a_zero_window_from_config() {
         ConfiguredRateLimit::per_user("rate-limit.api").defaults(60, 60),
     )
     .await;
+}
+
+// ---------------------------------------------------------------------------
+// RateLimited: the typed rate-limit error (error projection, #1072)
+// ---------------------------------------------------------------------------
+
+mod rate_limited {
+    use std::time::Duration;
+
+    use r2e_core::error::{Rejection, RejectionKind};
+    use r2e_core::http::header::RETRY_AFTER;
+    use r2e_core::http::{IntoHttpResponse, StatusCode};
+    use r2e_rate_limit::RateLimited;
+
+    fn retry_after(rejection: &Rejection) -> Option<&str> {
+        rejection
+            .headers
+            .get(RETRY_AFTER)
+            .map(|v| v.to_str().expect("ascii"))
+    }
+
+    #[test]
+    fn is_a_429_rejection_with_the_legacy_message() {
+        let rejection = Rejection::from(RateLimited::default());
+        assert_eq!(rejection.kind, RejectionKind::RateLimited);
+        assert_eq!(rejection.status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rejection.message, "Rate limit exceeded");
+        assert_eq!(RateLimited::default().to_string(), "Rate limit exceeded");
+    }
+
+    #[test]
+    fn no_retry_after_header_without_a_hint() {
+        let rejection = Rejection::from(RateLimited::default());
+        assert_eq!(retry_after(&rejection), None);
+    }
+
+    #[test]
+    fn retry_after_is_rounded_up_to_whole_seconds() {
+        let cases = [
+            (Duration::from_secs(30), "30"),
+            (Duration::from_millis(1500), "2"),
+            (Duration::from_millis(1), "1"),
+            (Duration::from_secs(0), "0"),
+        ];
+        for (after, expected) in cases {
+            let rejection = Rejection::from(RateLimited::after(after));
+            assert_eq!(retry_after(&rejection), Some(expected), "{after:?}");
+        }
+    }
+
+    #[test]
+    fn renders_through_the_rejection() {
+        let resp = RateLimited::after(Duration::from_secs(7)).into_http_response();
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            resp.headers().get(RETRY_AFTER).map(|v| v.to_str().unwrap()),
+            Some("7")
+        );
+    }
 }

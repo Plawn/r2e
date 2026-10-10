@@ -1,7 +1,7 @@
 ---
 topic: coming-from-axum
 features: core
-tokens: ~1300
+tokens: ~1500
 requires: 
 ---
 
@@ -12,6 +12,7 @@ requires:
 - Reach for the R2E construct first; dropping to raw axum forfeits compile-time checking, DI, guards, OpenAPI and TestApp support.
 - Do NOT add `axum` to `Cargo.toml` — reach every HTTP type through `r2e::http` / `r2e::prelude`.
 - Implement R2E's contracts, not axum's: `IntoHttpResponse` (+ the `r2e::http::impl_into_response!` bridge) for responses, `FromRequestPartsVia` for bean-backed extractors.
+- One error shape for the whole API: return `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` + one `#[error(rejection)]` variant), or set it app-wide with `AppBuilder::error_projection::<E>()` — never rewrite error bodies in middleware or write never-rejecting extractors.
 - Typed JSON goes through `r2e::json` (`to_vec`, `to_string`, `from_slice`, `from_str`), never `serde_json::to_vec`; `serde_json::Value` / `json!` stay `serde_json`.
 - Use the table below as the translation: identity injection instead of a custom `FromRequestParts`, a `Guard` instead of in-handler `if`, `.provide()` + `#[inject]` instead of `State<Arc<..>>`, `#[scheduled]` / `PoolExecutor` instead of `tokio::spawn`.
 - When raw axum is unavoidable, climb the ladder in order: `#[any]`/`#[fallback]` → `merge_router` → `with_layer_fn` → `r2e::http::axum_compat` (off the supported surface, deliberately greppable).
@@ -51,6 +52,8 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 | Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
 | Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
 | A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
+| One error body for every failure, extractor rejections included | `IntoResponse` per error type + middleware rewriting 4xx bodies, or never-rejecting extractors | `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` with an `#[error(rejection)]` variant); app-wide: `AppBuilder::error_projection::<E>()` |
+| Custom 404 / 405 / panic bodies | `Router::fallback` + `method_not_allowed_fallback` + a catch-panic layer | `AppBuilder::error_projection::<E>()` — the framework's 404/405/413/500 render through the same envelope |
 | Endpoints grouped by resource | A `Router` of free functions | A `#[controller(path = "...")]` + `#[routes]` impl |
 | Shared services | `State<Arc<MyState>>` + field access | `.provide(bean)` / `.register::<T>()` + `#[inject]` fields |
 | Config values in handlers | Lazy statics / `std::env` | `#[config("key")]` fields, `load_config::<Root>()` + `#[inject]` typed sections |

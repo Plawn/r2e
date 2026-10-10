@@ -75,7 +75,7 @@ async fn roles_guard_rejects() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -89,7 +89,7 @@ async fn roles_guard_rejects_no_identity() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -135,7 +135,7 @@ async fn all_roles_guard_rejects_when_one_missing() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -149,7 +149,7 @@ async fn all_roles_guard_rejects_no_identity() {
     let result = guard.check(&ctx).await;
     assert!(result.is_err());
     let resp = result.unwrap_err();
-    assert_eq!(resp.status(), r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(resp.status, r2e_core::http::StatusCode::FORBIDDEN);
 }
 
 #[r2e_core::test]
@@ -179,4 +179,46 @@ async fn all_roles_guard_rejects_empty_requirements() {
     let ctx = make_ctx(Some(&user), &uri, &headers);
 
     assert!(guard.check(&ctx).await.is_err());
+}
+
+// ---------------------------------------------------------------------------
+// RolesDenied: the typed roles-guard error (error projection, #1072)
+// ---------------------------------------------------------------------------
+
+mod roles_denied {
+    use http_body_util::BodyExt;
+    use r2e_core::error::{Rejection, RejectionKind};
+    use r2e_core::http::response::IntoResponse;
+    use r2e_core::http::StatusCode;
+    use r2e_security::RolesDenied;
+
+    #[test]
+    fn messages_match_the_legacy_bodies() {
+        assert_eq!(
+            RolesDenied::NoIdentity.message(),
+            "No identity available for role check"
+        );
+        assert_eq!(RolesDenied::Insufficient.message(), "Insufficient roles");
+        assert_eq!(RolesDenied::Insufficient.to_string(), "Insufficient roles");
+    }
+
+    #[test]
+    fn both_variants_are_forbidden_rejections() {
+        for denied in [RolesDenied::NoIdentity, RolesDenied::Insufficient] {
+            let rejection = Rejection::from(denied);
+            assert_eq!(rejection.kind, RejectionKind::Forbidden, "{denied:?}");
+            assert_eq!(rejection.status, StatusCode::FORBIDDEN, "{denied:?}");
+            assert_eq!(rejection.message, denied.message(), "{denied:?}");
+            assert!(rejection.headers.is_empty(), "{denied:?}");
+        }
+    }
+
+    #[r2e_core::test]
+    async fn renders_the_same_response_as_the_rejection() {
+        let resp = RolesDenied::Insufficient.into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json, serde_json::json!({ "error": "Insufficient roles" }));
+    }
 }

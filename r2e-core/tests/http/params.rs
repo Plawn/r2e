@@ -5,17 +5,14 @@
 //! swapping the derive, with no attribute rewriting: the derive reads the
 //! `#[serde(rename_all)]` / `#[serde(rename)]` / `#[serde(default)]` /
 //! `#[serde(skip)]` the struct already carries, and a field with no r2e
-//! attribute at all is a query parameter. The 400 body shape is an
-//! app-level setting, pinned here in both forms.
+//! attribute at all is a query parameter. A failed extraction is a typed
+//! `Rejection` projected through the route's error envelope — the default
+//! `HttpError` JSON shape is pinned here.
 
 use r2e_core::http::routing::get;
 use r2e_core::http::{Router, StatusCode};
-use r2e_core::web::params::{
-    params_rejection_format, set_params_rejection_format, ParamsRejectionFormat,
-};
 use r2e_macros::Params;
 use serde::Deserialize;
-use std::sync::Mutex;
 
 use crate::support::send_get;
 
@@ -183,18 +180,10 @@ async fn serde_flatten_reads_the_nested_struct_keys() {
     assert_eq!(body, "1|0|-");
 }
 
-// ── Rejection body format (app-level, `server.params-rejection-format`) ───
-
-/// The format is a process-global installed by `build_state()`; these two
-/// tests write it, so they must not overlap.
-static FORMAT_LOCK: Mutex<()> = Mutex::new(());
+// ── Rejection body: the default `HttpError` projection ────────────────────
 
 #[r2e_core::test]
-async fn json_rejection_is_the_default_body_format() {
-    let _guard = FORMAT_LOCK.lock().unwrap();
-    set_params_rejection_format(ParamsRejectionFormat::default());
-    assert_eq!(params_rejection_format(), ParamsRejectionFormat::Json);
-
+async fn rejection_projects_to_the_default_json_envelope() {
     let resp = crate::support::raw(
         router(),
         "GET",
@@ -216,17 +205,4 @@ async fn json_rejection_is_the_default_body_format() {
         parsed["error"].as_str().unwrap().contains("pageSize"),
         "body: {body}"
     );
-}
-
-#[r2e_core::test]
-async fn plain_text_rejection_matches_raw_query_compat() {
-    let _guard = FORMAT_LOCK.lock().unwrap();
-    set_params_rejection_format(ParamsRejectionFormat::PlainText);
-
-    let (status, body) = send_get(router(), "/search?q=x").await;
-    set_params_rejection_format(ParamsRejectionFormat::Json);
-
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    // The bare message, no JSON envelope.
-    assert_eq!(body, "Missing query parameter 'pageSize'");
 }

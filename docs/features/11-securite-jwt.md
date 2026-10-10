@@ -309,11 +309,12 @@ built once at router-build time and shared as an `Arc`) and a per-request **faç
 (`__R2eRequest_UserController`) that holds the request-scoped `user` plus an `Arc` to the
 core, with `Deref<Target = Core>`. The core is built by `ContextConstruct::from_context`,
 which pulls each `#[inject]` field from the resolved `BeanContext` **by type**. The macros
-also generate a `FromRequestParts` extractor `__R2eRequestData_UserController` that produces
-**only** the request-scoped values (the identity here); `#[inject]` and `#[config]` live on
-the shared core and are not re-resolved per request. Each registered route closure captures
-the core `Arc`, extracts the request data, and `bind_request` binds the stack façade before
-invoking the method on it:
+also generate a `RequestData<S>` extractor `__R2eRequestData_UserController` that produces
+**only** the request-scoped values (the identity here) or a typed `Rejection`; `#[inject]`
+and `#[config]` live on the shared core and are not re-resolved per request. Each registered
+route closure captures the core `Arc`, extracts the request data, and `bind_request` binds
+the stack façade before invoking the method on it; a failed extraction (missing or invalid
+token) is projected through the route's error envelope — 401 with the default `HttpError`:
 
 ```rust
 // Generated (simplified)
@@ -322,9 +323,14 @@ let core: Arc<UserController> = Arc::new(UserController::from_context(&ctx));
 
 get({
     let core = core.clone();
-    move |data: __R2eRequestData_UserController| {
+    move |State(state), req: Request| {
         let core = core.clone(); // one Arc clone per request
         async move {
+            let (mut parts, _body) = req.into_parts();
+            let data = match __R2eRequestData_UserController::extract(&mut parts, &state).await {
+                Ok(d) => d,
+                Err(rejection) => return rejection.project::<HttpError>(), // 401
+            };
             // Binds the request-scoped values (identity) into the façade.
             let ctrl = __r2e_meta_UserController::bind_request(core, data);
             // self.user is a façade field; self.<inject/config> resolves through Deref to the core.

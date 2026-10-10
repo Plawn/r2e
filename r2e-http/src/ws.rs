@@ -1,1 +1,3 @@
-pub use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+pub use axum::extract::ws::{
+    rejection::WebSocketUpgradeRejection, CloseFrame, Message, WebSocket, WebSocketUpgrade,
+};

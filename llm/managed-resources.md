@@ -1,7 +1,7 @@
 ---
 topic: managed-resources
 features: data, data-sqlx | data-diesel
-tokens: ~2900
+tokens: ~3100
 requires: error-handling
 ---
 
@@ -12,6 +12,7 @@ requires: error-handling
 - Transactions are `#[managed]` handler params — the only transaction attribute (`#[transactional]` was removed).
 - `use r2e::r2e_data_sqlx::Tx;` then `#[managed] tx: &mut Tx<'_, Sqlite>`; the pool is resolved from the bean graph by type, no `HasPool` impl.
 - A custom resource implements BOTH `ManagedResource<S>` and `ManagedDeps` — there is no blanket impl. List the beans `acquire()` looks up in `type Deps`, or `type Deps = TNil;` when it reads none; a bean that was never provided is then a compile error at `register_controller()`.
+- `type Error` is anything `Into<Rejection>` — `ManagedErr<HttpError>` in practice; acquire/finalize failures are projected through the route's error envelope exactly like an extractor rejection (see llm/error-handling.md).
 - In `acquire`, take the request head with `context.require_request()?` (uniform 500 off-request) instead of unwrapping `ManagedContext::request`.
 - `RequestHead<'a>` is the same `Copy` view guards see through `GuardContext::head()` — use its helpers (`header`, `path_param`, `host`, `extension::<T>()`).
 - SSE and WebSocket handlers acquire no managed resources; every other HTTP handler shape does.
@@ -54,6 +55,13 @@ Every `#[managed]` type must also implement `ManagedDeps`, listing the beans
 bean that was never provided is a compile error at `register_controller()`
 instead of a 500 on the first request. A resource that reads no bean says
 `type Deps = TNil;`.
+
+`type Error` is any `Into<Rejection>`. `ManagedErr<E>` wraps an error you cannot
+write `From<E> for Rejection` for (a foreign type such as `sqlx::Error`);
+`ManagedErr<HttpError>` is the usual choice. Whatever the type, an `Err` from
+`acquire` or `finalize` is projected once through the route's error envelope —
+the route's `Result<T, E>` type when it qualifies, else the app-level
+`error_projection::<E>()` (default `HttpError`).
 
 `ManagedContext<'_, S>` (passed to `acquire`) carries:
 

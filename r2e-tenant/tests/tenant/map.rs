@@ -1393,7 +1393,21 @@ async fn a_flood_of_post_shutdown_requests_cannot_starve_the_drain() {
         rejected > 0,
         "the flood really did keep hitting the latched map"
     );
-    assert_eq!(source.disposals(), ["acme"]);
+    // A stream admitted just before the latch can find the slot already taken
+    // by the drain's pass, build a fresh value, notice the latch and dispose of
+    // it — the documented "creation in flight" shape. So more than one
+    // disposal is legitimate; what must hold is that every value ever built
+    // was closed, exactly once, and nothing but `acme` was ever involved.
+    let disposals = source.disposals();
+    assert!(
+        disposals.iter().all(|tenant| tenant == "acme"),
+        "only acme was ever resolved: {disposals:?}"
+    );
+    assert_eq!(
+        disposals.len(),
+        source.creates(),
+        "every value built was disposed of: {disposals:?}"
+    );
     assert_eq!(source.double_disposals(), 0);
 }
 

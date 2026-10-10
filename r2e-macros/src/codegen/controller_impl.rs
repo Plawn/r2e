@@ -24,7 +24,6 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let route_registrations = generate_route_registrations(def);
     let sse_route_registrations = generate_sse_route_registrations(def);
     let ws_route_registrations = generate_ws_route_registrations(def);
-    let pre_auth_registrations = generate_pre_auth_registrations(def, name, &meta_mod);
     // Controller deps = core `ContextConstruct::Deps` ++ every decorator
     // site's `<Spec as DecoratorSpec>::Deps`. Emitted once, on the
     // `EndpointDeps` carrier — checked by `AllSatisfied` at
@@ -97,7 +96,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // route. Emitted when some surface actually captures it: any route (they
     // take the set whenever it exists — interceptors and/or guards), or an
     // SSE/WS endpoint when the set carries guards, or any endpoint when it
-    // carries pre-guards (the pre-auth middleware clones it).
+    // carries pre-guards (the entry function runs them first).
     let ctrl_deco_items = super::decorators::generate_ctrl_deco_items(def);
     let ctrl_router_setup = super::decorators::ctrl_deco_set(def)
         .filter(|set| {
@@ -117,11 +116,10 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     let application_router_body = quote! {
         |__ctrl: ::std::sync::Arc<#name>, __ctx: &#krate::beans::BeanContext| {
             #ctrl_router_setup
-            let mut __inner = #krate::http::Router::new()
+            let __inner = #krate::http::Router::new()
                 #(#route_registrations)*
                 #(#sse_route_registrations)*
                 #(#ws_route_registrations)*;
-            #(#pre_auth_registrations)*
             match #meta_mod::PATH_PREFIX {
                 Some("/") | None => __inner,
                 Some(__prefix) => #krate::http::Router::new().nest(__prefix, __inner),
@@ -218,7 +216,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             #state_ident: #state_bounds,
             #md: Send + Sync + 'static,
             #(#param_markers: Send + Sync + 'static,)*
-            #data_name<#md>: #krate::http::extract::FromRequestParts<#state_ident>,
+            #data_name<#md>: #krate::web::extract::RequestData<#state_ident>,
             #(#param_marker_bounds,)*
             #(#managed_bounds,)*
         {
@@ -293,8 +291,11 @@ fn generate_route_metadata(
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
 
             let params_expr = params_expr(&rm.fn_item.sig, None, &krate);
-            let (body_type_token, body_schema_token, body_content_type_token) =
-                extract_body_info(rm);
+            let request = super::handlers::RequestParams::route(rm);
+            let extracted = request.owned();
+            let body = extract_body_info(&rm.fn_item.sig, &extracted);
+            let (body_type_token, body_schema_token, body_content_type_token) = body.tokens();
+            let body_probe = body.probe_expr();
             let (response_type_token, response_schema_token) = extract_response_info(rm);
             let response_unmapped_token = response_unmapped_token(rm);
 
@@ -318,70 +319,262 @@ fn generate_route_metadata(
             let body_required = detect_body_required(rm);
 
             let has_roles = !role_strs.is_empty();
-            let has_identity_param = rm.identity_param.is_some();
-            let has_guards = !rm.decorators.guard_fns.is_empty()
-                || (ctrl_applies && !ctrl.guard_fns.is_empty());
-            let has_auth = has_auth_expr(
-                rm.decorators.anonymous,
+            let static_kinds = static_rejection_kinds(
+                def,
+                &rm.decorators,
+                rm.identity_param.as_ref(),
                 has_roles,
-                has_identity_param,
-                has_guards,
+                &extracted,
+                request.last_consumes_body,
+                &rm.method,
+                body.as_ref(),
+            );
+            let kinds_expr = rejection_kinds_expr(
+                &static_kinds,
+                rm.decorators.anonymous,
+                &extracted,
                 meta_mod,
             );
+            let error_schema =
+                super::handlers::Projection::for_signature(&rm.fn_item.sig).schema_expr(&krate);
 
             quote! {
-                #krate::di::meta::RouteInfo {
-                    path: match #meta_mod::PATH_PREFIX {
-                        Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
-                        None => #route_path_str.to_string(),
-                    },
-                    method: #method.to_string(),
-                    operation_id: #op_id.to_string(),
-                    summary: #summary_token,
-                    description: #description_token,
-                    request_body_type: #body_type_token,
-                    request_body_schema: #body_schema_token,
-                    request_body_content_type: #body_content_type_token,
-                    request_body_required: #body_required,
-                    response_type: #response_type_token,
-                    response_schema: #response_schema_token,
-                    response_status: #status_code,
-                    response_unmapped: #response_unmapped_token,
-                    params: #params_expr,
-                    roles: vec![#(#roles),*],
-                    tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
-                    deprecated: #deprecated,
-                    has_auth: #has_auth,
+                {
+                    let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
+                    let __body: Option<#krate::di::meta::__BodyProbeResult> = #body_probe;
+                    let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
+                    #krate::di::meta::RouteInfo {
+                        path: match #meta_mod::PATH_PREFIX {
+                            Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
+                            None => #route_path_str.to_string(),
+                        },
+                        method: #method.to_string(),
+                        operation_id: #op_id.to_string(),
+                        summary: #summary_token,
+                        description: #description_token,
+                        request_body_type: #body_type_token,
+                        request_body_schema: #body_schema_token,
+                        request_body_content_type: #body_content_type_token,
+                        request_body_required: #body_required,
+                        response_type: #response_type_token,
+                        response_schema: #response_schema_token,
+                        response_status: #status_code,
+                        response_unmapped: #response_unmapped_token,
+                        params: __params,
+                        roles: vec![#(#roles),*],
+                        tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
+                        deprecated: #deprecated,
+                        rejection_kinds: __kinds,
+                        error_schema: #error_schema,
+                    }
                 }
             }
         })
         .collect()
 }
 
-/// The `RouteInfo.has_auth` expression for a route.
+/// Whether a guard expression names a rate-limit guard (`RateLimit::per_user(..)`,
+/// `PreRateLimit`, `ConfiguredRateLimit`, …): its only failure is `RateLimited`.
+fn is_rate_limit_guard(expr: &syn::Expr) -> bool {
+    super::decorators::spec_type_of(expr)
+        .ok()
+        .and_then(|(path, _)| path.segments.last().map(|s| s.ident.to_string()))
+        .is_some_and(|name| name.contains("RateLimit"))
+}
+
+/// Rejection kinds known at macro time, as `RejectionKind` variant names.
 ///
-/// Normal routes: roles, an identity param, guard fns, or the struct-level
-/// identity all mark the operation as secured. `#[anonymous]` routes bypass
-/// the struct identity, cannot carry roles or a *required* identity param
-/// (rejected at parse time), and an *optional* identity param never rejects —
-/// so only explicit guards (which may still reject, e.g. an API-key check)
-/// keep the flag on.
+/// Inference table (see `plans/error-projection.md` §6): the body extractor's
+/// failures; `Path<T>` → `InvalidPath`, `Query<T>` → `InvalidQuery`, `Form<T>`
+/// → `InvalidForm` on a GET (query string) or `InvalidBody` (422) + media-type,
+/// size and read failures on a body-carrying method (both on `#[any]`), raw
+/// `Bytes`/`String` bodies → read failures; an identity parameter →
+/// `Unauthenticated`, `Option<..>` included (an absent credential is `None`,
+/// but a present invalid one is still a 401);
+/// roles → `Forbidden`; each guard → `Forbidden`, or `RateLimited` when it is
+/// a rate-limit guard; and `Internal` always (handler, managed resources,
+/// anything the framework cannot type). Controller-level guards fold in for
+/// non-`#[anonymous]` routes only (the same rule as their execution);
+/// pre-auth guards run on every route.
 ///
-/// Call sites fold controller-level (impl-block) roles/guards into
-/// `has_roles`/`has_guards` for non-anonymous endpoints only — anonymous
-/// endpoints skip the controller's post-auth checks, so controller decorators
-/// never turn their flag back on.
-fn has_auth_expr(
-    anonymous: bool,
+/// Runtime-only facts (struct identity, `#[derive(Params)]` locations, garde
+/// validation, a custom body extractor) are added by [`rejection_kinds_expr`].
+fn static_rejection_kinds(
+    def: &RoutesImplDef,
+    decorators: &crate::model::types::MethodDecorators,
+    identity_param: Option<&crate::model::types::IdentityParam>,
     has_roles: bool,
-    has_identity_param: bool,
-    has_guards: bool,
+    extracted: &[syn::PatType],
+    last_consumes_body: bool,
+    method: &crate::model::route::HttpMethod,
+    body: Option<&BodyExtractor>,
+) -> Vec<&'static str> {
+    use crate::model::route::HttpMethod;
+    let mut kinds: Vec<&'static str> = Vec::new();
+
+    match body {
+        Some(BodyExtractor::Json { .. }) => kinds.extend([
+            "MissingContentType",
+            "PayloadTooLarge",
+            "BodyRead",
+            "MalformedBody",
+            "InvalidBody",
+        ]),
+        Some(BodyExtractor::TypedMultipart { .. } | BodyExtractor::RawMultipart) => {
+            kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "MalformedBody"]);
+        }
+        // A custom extractor declares its kinds through `RequestBodySchema`,
+        // read at runtime by `rejection_kinds_expr` (`__body`).
+        Some(BodyExtractor::Custom { .. }) | None => {}
+    }
+
+    let n = extracted.len();
+    for (pos, pt) in extracted.iter().enumerate() {
+        let last = last_consumes_body && pos + 1 == n;
+        if type_last_segment_is(&pt.ty, "Path") {
+            kinds.push("InvalidPath");
+        } else if type_last_segment_is(&pt.ty, "Query") {
+            kinds.push("InvalidQuery");
+        } else if last && type_last_segment_is(&pt.ty, "Form") {
+            // axum's `Form` reads the query string on GET/HEAD (400) and the
+            // body otherwise (415 / 413 / read failure / 422).
+            if matches!(method, HttpMethod::Get | HttpMethod::Any) {
+                kinds.push("InvalidForm");
+            }
+            if !matches!(method, HttpMethod::Get) {
+                kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "BodyRead", "InvalidBody"]);
+            }
+        } else if last && type_last_segment_is(&pt.ty, "Bytes") {
+            kinds.extend(["PayloadTooLarge", "BodyRead"]);
+        } else if last && type_last_segment_is(&pt.ty, "String") {
+            kinds.extend(["PayloadTooLarge", "BodyRead", "MalformedBody"]);
+        }
+    }
+
+    if identity_param.is_some() {
+        kinds.push("Unauthenticated");
+    }
+    if has_roles {
+        kinds.push("Forbidden");
+    }
+
+    let ctrl = &def.controller_decorators;
+    let post_auth = decorators.guard_fns.iter().chain(
+        (!decorators.anonymous)
+            .then_some(ctrl.guard_fns.iter())
+            .into_iter()
+            .flatten(),
+    );
+    let pre_auth = decorators
+        .pre_auth_guard_fns
+        .iter()
+        .chain(ctrl.pre_auth_guard_fns.iter());
+    for guard in post_auth.chain(pre_auth) {
+        kinds.push(if is_rate_limit_guard(guard) {
+            "RateLimited"
+        } else {
+            "Forbidden"
+        });
+    }
+
+    kinds.push("Internal");
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
+}
+
+/// The type garde validation runs on for a handler parameter: the inner `T`
+/// of a `Json<T>` / `Query<T>` / `Path<T>` / `Form<T>` wrapper (the entry
+/// function validates `.0`), else the parameter type itself.
+fn validation_target_type(ty: &syn::Type) -> syn::Type {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            let ident = segment.ident.to_string();
+            if matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form") {
+                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return inner.clone();
+                    }
+                }
+            }
+        }
+    }
+    ty.clone()
+}
+
+/// The `RouteInfo::rejection_kinds` expression: the static kinds, plus what
+/// only the compiled program knows — the struct-level identity
+/// (`HAS_STRUCT_IDENTITY`, skipped by `#[anonymous]`), the locations of
+/// `#[derive(Params)]` fields (`__params`, bound by the caller), whether a
+/// parameter type implements `garde::Validate` (autoref probe, the same
+/// decision `__maybe_validate` makes), and the kinds a custom body extractor
+/// declares (`__body`, bound by the caller). Deduplicated, order-insensitive.
+fn rejection_kinds_expr(
+    static_kinds: &[&str],
+    anonymous: bool,
+    extracted: &[syn::PatType],
     meta_mod: &syn::Ident,
 ) -> TokenStream {
-    if anonymous {
-        quote! { #has_guards }
+    let krate = r2e_core_path();
+    let statics: Vec<TokenStream> = static_kinds
+        .iter()
+        .map(|k| {
+            let ident = format_ident!("{}", k);
+            quote! { #krate::RejectionKind::#ident }
+        })
+        .collect();
+    let struct_identity = if anonymous {
+        quote! { false }
     } else {
-        quote! { #has_roles || #has_identity_param || #has_guards || #meta_mod::HAS_STRUCT_IDENTITY }
+        quote! { #meta_mod::HAS_STRUCT_IDENTITY }
+    };
+    let validate_probes: Vec<TokenStream> = extracted
+        .iter()
+        .map(|pt| {
+            let ty = validation_target_type(&pt.ty);
+            quote! {
+                {
+                    struct __ValidateProbe<T>(::core::marker::PhantomData<T>);
+                    trait __NoValidate {
+                        fn __validates(&self) -> bool { false }
+                    }
+                    impl<T> __NoValidate for &__ValidateProbe<T> {}
+                    impl<T: #krate::web::validation::Validate> __ValidateProbe<T>
+                    where
+                        T::Context: Default,
+                    {
+                        fn __validates(&self) -> bool { true }
+                    }
+                    use __NoValidate as _;
+                    if (&__ValidateProbe::<#ty>(::core::marker::PhantomData)).__validates() {
+                        __kinds.push(#krate::RejectionKind::Validation);
+                    }
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        {
+            let mut __kinds: Vec<#krate::RejectionKind> = vec![#(#statics),*];
+            for __p in &__params {
+                __kinds.push(match __p.location {
+                    #krate::di::meta::ParamLocation::Path => #krate::RejectionKind::InvalidPath,
+                    #krate::di::meta::ParamLocation::Query => #krate::RejectionKind::InvalidQuery,
+                    #krate::di::meta::ParamLocation::Header => #krate::RejectionKind::InvalidHeader,
+                });
+            }
+            if #struct_identity {
+                __kinds.push(#krate::RejectionKind::Unauthenticated);
+            }
+            #(#validate_probes)*
+            if let Some(__b) = &__body {
+                __kinds.extend(__b.rejection_kinds.iter().copied());
+            }
+            let mut __seen = ::std::collections::HashSet::new();
+            __kinds.retain(|__k| __seen.insert(*__k));
+            __kinds
+        }
     }
 }
 
@@ -801,57 +994,133 @@ enum BodyExtractor {
     TypedMultipart { name: String, ty: syn::Type },
     /// Raw `Multipart` — `multipart/form-data`, free-form (no named schema).
     RawMultipart,
+    /// Any other type in the body position (the last extracted parameter):
+    /// probed for `RequestBodySchema` at runtime — documented when the type
+    /// implements it, no request body otherwise.
+    Custom { ty: syn::Type },
 }
 
 /// Media type emitted for multipart body extractors.
 const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data";
 
-/// Extract request body information.
-/// Returns (type_name_token, schema_token, content_type_token).
-fn extract_body_info(
-    rm: &crate::model::types::RouteMethod,
-) -> (TokenStream, TokenStream, TokenStream) {
-    let body_info: Option<BodyExtractor> = rm.fn_item.sig.inputs.iter().find_map(|arg| {
+/// The request-body classification of a route, with its `RouteInfo` tokens.
+struct BodyInfo(Option<BodyExtractor>);
+
+impl BodyInfo {
+    fn as_ref(&self) -> Option<&BodyExtractor> {
+        self.0.as_ref()
+    }
+
+    /// `(request_body_type, request_body_schema, request_body_content_type)`
+    /// expressions. A `Custom` body reads them from `__body` (bound by the
+    /// caller to [`probe_expr`](Self::probe_expr)).
+    fn tokens(&self) -> (TokenStream, TokenStream, TokenStream) {
+        let multipart_ct = MULTIPART_CONTENT_TYPE;
+        match &self.0 {
+            Some(BodyExtractor::Json { name, ty }) => {
+                let schema_token =
+                    if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
+                        let krate = r2e_core_path();
+                        quote! {
+                            Some({
+                                let __schema = #schemars::schema_for!(#ty);
+                                #krate::serde_json::to_value(__schema).unwrap()
+                            })
+                        }
+                    } else {
+                        quote! { None }
+                    };
+                (
+                    quote! { Some(#name.to_string()) },
+                    schema_token,
+                    quote! { None },
+                )
+            }
+            Some(BodyExtractor::TypedMultipart { name, ty }) => (
+                quote! { Some(#name.to_string()) },
+                multipart_schema_token(ty),
+                quote! { Some(#multipart_ct.to_string()) },
+            ),
+            Some(BodyExtractor::RawMultipart) => (
+                quote! { None },
+                quote! { None },
+                quote! { Some(#multipart_ct.to_string()) },
+            ),
+            Some(BodyExtractor::Custom { .. }) => (
+                quote! { __body.as_ref().and_then(|__b| __b.schema.as_ref().map(|(__n, _)| __n.clone())) },
+                quote! { __body.as_ref().and_then(|__b| __b.schema.as_ref().map(|(_, __s)| __s.clone())) },
+                quote! { __body.as_ref().map(|__b| __b.content_type.to_string()) },
+            ),
+            None => (quote! { None }, quote! { None }, quote! { None }),
+        }
+    }
+
+    /// The `__body` binding: an autoref probe of the custom body type for
+    /// `RequestBodySchema`, `None` for every other classification.
+    fn probe_expr(&self) -> TokenStream {
+        let Some(BodyExtractor::Custom { ty }) = &self.0 else {
+            return quote! { None };
+        };
+        let krate = r2e_core_path();
+        quote! {
+            {
+                struct __BodyProbe<T>(::core::marker::PhantomData<T>);
+                trait __NoBodySchema {
+                    fn __body(&self) -> Option<#krate::di::meta::__BodyProbeResult> { None }
+                }
+                impl<T> __NoBodySchema for &__BodyProbe<T> {}
+                impl<T: #krate::di::meta::RequestBodySchema> __BodyProbe<T> {
+                    fn __body(&self) -> Option<#krate::di::meta::__BodyProbeResult> {
+                        Some(#krate::di::meta::__BodyProbeResult {
+                            content_type: <T as #krate::di::meta::RequestBodySchema>::content_type(),
+                            schema: <T as #krate::di::meta::RequestBodySchema>::body_schema(),
+                            rejection_kinds: <T as #krate::di::meta::RequestBodySchema>::rejection_kinds(),
+                        })
+                    }
+                }
+                use __NoBodySchema as _;
+                (&__BodyProbe::<#ty>(::core::marker::PhantomData)).__body()
+            }
+        }
+    }
+}
+
+/// Classify the route's request body: a `Json` / `TypedMultipart` /
+/// `Multipart` parameter anywhere in the signature (by name, as before), else
+/// the last extracted parameter as a `Custom` candidate — the entry function
+/// reads exactly that parameter through `FromRequest`, so it is the only one
+/// that can be a body extractor.
+fn extract_body_info(sig: &syn::Signature, extracted: &[syn::PatType]) -> BodyInfo {
+    let named = sig.inputs.iter().find_map(|arg| {
         if let syn::FnArg::Typed(pt) = arg {
             extract_body_type_info(&pt.ty)
         } else {
             None
         }
     });
-
-    let multipart_ct = MULTIPART_CONTENT_TYPE;
-    match &body_info {
-        Some(BodyExtractor::Json { name, ty }) => {
-            let schema_token = if let Some(schemars) = crate::util::crate_path::r2e_schemars_path()
-            {
-                let krate = r2e_core_path();
-                quote! {
-                    Some({
-                        let __schema = #schemars::schema_for!(#ty);
-                        #krate::serde_json::to_value(__schema).unwrap()
-                    })
-                }
-            } else {
-                quote! { None }
-            };
-            (
-                quote! { Some(#name.to_string()) },
-                schema_token,
-                quote! { None },
-            )
-        }
-        Some(BodyExtractor::TypedMultipart { name, ty }) => (
-            quote! { Some(#name.to_string()) },
-            multipart_schema_token(ty),
-            quote! { Some(#multipart_ct.to_string()) },
-        ),
-        Some(BodyExtractor::RawMultipart) => (
-            quote! { None },
-            quote! { None },
-            quote! { Some(#multipart_ct.to_string()) },
-        ),
-        None => (quote! { None }, quote! { None }, quote! { None }),
+    if named.is_some() {
+        return BodyInfo(named);
     }
+    let custom = extracted
+        .last()
+        .filter(|pt| !is_known_non_body_type(&pt.ty))
+        .map(|pt| BodyExtractor::Custom { ty: (*pt.ty).clone() });
+    BodyInfo(custom)
+}
+
+/// Parameter types that never read the body — skipped by the custom body
+/// probe so the generated metadata stays free of pointless probes.
+fn is_known_non_body_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return matches!(
+                segment.ident.to_string().as_str(),
+                "Path" | "Query" | "HeaderMap" | "Method" | "Uri" | "Version" | "Extension"
+                    | "ConnectInfo" | "State" | "Option"
+            );
+        }
+    }
+    matches!(ty, syn::Type::Reference(_))
 }
 
 /// Generate a schema token for a `TypedMultipart<T>` body via autoref
@@ -1189,15 +1458,31 @@ fn generate_sse_route_metadata(
     def.sse_methods
         .iter()
         .map(|sm| {
-            let (roles, has_guards) = streaming_effective_auth(def, &sm.decorators);
+            let roles = streaming_effective_roles(def, &sm.decorators);
+            // The same params the SSE entry fn extracts (its last may read
+            // the body) — see `handlers::RequestParams`.
+            let request = super::handlers::RequestParams::sse(sm);
+            let extracted = request.owned();
+            let body = extract_body_info(&sm.fn_item.sig, &extracted);
+            let kinds = static_rejection_kinds(
+                def,
+                &sm.decorators,
+                sm.identity_param.as_ref(),
+                !roles.is_empty(),
+                &extracted,
+                request.last_consumes_body,
+                &crate::model::route::HttpMethod::Get,
+                body.as_ref(),
+            );
             emit_streaming_route_info(
                 name,
                 meta_mod,
                 &sm.path,
                 &sm.fn_item.sig,
                 &roles,
-                has_guards,
-                sm.identity_param.is_some(),
+                &kinds,
+                &extracted,
+                body.probe_expr(),
                 sm.decorators.anonymous,
                 &sm.fn_item.attrs,
                 None,
@@ -1215,15 +1500,29 @@ fn generate_ws_route_metadata(
     def.ws_methods
         .iter()
         .map(|wm| {
-            let (roles, has_guards) = streaming_effective_auth(def, &wm.decorators);
+            let roles = streaming_effective_roles(def, &wm.decorators);
+            // The same params the WS entry fn extracts (none reads the body).
+            let request = super::handlers::RequestParams::ws(wm);
+            let extracted = request.owned();
+            let kinds = static_rejection_kinds(
+                def,
+                &wm.decorators,
+                wm.identity_param.as_ref(),
+                !roles.is_empty(),
+                &extracted,
+                request.last_consumes_body,
+                &crate::model::route::HttpMethod::Get,
+                None,
+            );
             emit_streaming_route_info(
                 name,
                 meta_mod,
                 &wm.path,
                 &wm.fn_item.sig,
                 &roles,
-                has_guards,
-                wm.identity_param.is_some(),
+                &kinds,
+                &extracted,
+                quote! { None },
                 wm.decorators.anonymous,
                 &wm.fn_item.attrs,
                 // The socket itself comes from the upgrade, not from an
@@ -1235,14 +1534,14 @@ fn generate_ws_route_metadata(
         .collect()
 }
 
-/// Effective (method + controller) role strings and guard presence for a
-/// streaming route's metadata. Controller-level decorators apply on the same
-/// rule as routes: every non-`#[anonymous]` endpoint (anonymous opts out of
-/// the controller's post-auth checks).
-fn streaming_effective_auth(
+/// Effective (method + controller) role strings for a streaming route's
+/// metadata. Controller-level decorators apply on the same rule as routes:
+/// every non-`#[anonymous]` endpoint (anonymous opts out of the controller's
+/// post-auth checks).
+fn streaming_effective_roles(
     def: &RoutesImplDef,
     decorators: &crate::model::types::MethodDecorators,
-) -> (Vec<String>, bool) {
+) -> Vec<String> {
     let ctrl = &def.controller_decorators;
     let mut roles: Vec<String> = decorators
         .roles
@@ -1250,12 +1549,10 @@ fn streaming_effective_auth(
         .chain(decorators.all_roles.iter())
         .cloned()
         .collect();
-    let mut has_guards = !decorators.guard_fns.is_empty();
     if !decorators.anonymous {
         roles.extend(ctrl.roles.iter().chain(ctrl.all_roles.iter()).cloned());
-        has_guards |= !ctrl.guard_fns.is_empty();
     }
-    (roles, has_guards)
+    roles
 }
 
 /// Emit a `RouteInfo` literal for SSE / WS routes.
@@ -1274,6 +1571,14 @@ fn streaming_effective_auth(
 /// method extracts `Path<T>` / `#[derive(Params)]` arguments like any other
 /// handler, so it documents them the same way. `ws_param` is the index of the
 /// socket parameter, excluded from that list.
+///
+/// `static_kinds` are the macro-time rejection kinds, computed over the same
+/// extracted parameters as the entry fn (`handlers::RequestParams`);
+/// `extracted` feeds the runtime garde probes and `body_probe` a custom body
+/// extractor's declared kinds (SSE only — a WS endpoint reads no body), so a
+/// `Query<T>` or a validated parameter is documented exactly as on a verb
+/// route. Its return type is a stream, never an envelope, so `error_schema` is
+/// `None` (application projection).
 #[allow(clippy::too_many_arguments)]
 fn emit_streaming_route_info(
     controller_name: &syn::Ident,
@@ -1281,8 +1586,9 @@ fn emit_streaming_route_info(
     path: &str,
     sig: &syn::Signature,
     roles: &[String],
-    has_guards: bool,
-    has_identity_param: bool,
+    static_kinds: &[&str],
+    extracted: &[syn::PatType],
+    body_probe: TokenStream,
     anonymous: bool,
     attrs: &[syn::Attribute],
     ws_param: Option<usize>,
@@ -1292,14 +1598,7 @@ fn emit_streaming_route_info(
     let op_id = format!("{}_{}", controller_name, sig.ident);
     let params_expr = params_expr(sig, ws_param, &krate);
     let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
-    let has_roles = !roles.is_empty();
-    let has_auth = has_auth_expr(
-        anonymous,
-        has_roles,
-        has_identity_param,
-        has_guards,
-        meta_mod,
-    );
+    let kinds_expr = rejection_kinds_expr(static_kinds, anonymous, extracted, meta_mod);
 
     let (doc_summary, doc_description) = crate::extract::route::extract_doc_comments(attrs);
     let summary = doc_summary.unwrap_or_else(|| fallback_summary.to_string());
@@ -1309,28 +1608,34 @@ fn emit_streaming_route_info(
     };
 
     quote! {
-        #krate::di::meta::RouteInfo {
-            path: match #meta_mod::PATH_PREFIX {
-                Some(__prefix) => format!("{}{}", __prefix, #path),
-                None => #path.to_string(),
-            },
-            method: "GET".to_string(),
-            operation_id: #op_id.to_string(),
-            summary: Some(#summary.to_string()),
-            description: #description_token,
-            request_body_type: None,
-            request_body_schema: None,
-            request_body_content_type: None,
-            request_body_required: true,
-            response_type: None,
-            response_schema: None,
-            response_status: 200,
-            response_unmapped: None,
-            params: #params_expr,
-            roles: vec![#(#roles_tokens),*],
-            tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
-            deprecated: false,
-            has_auth: #has_auth,
+        {
+            let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
+            let __body: Option<#krate::di::meta::__BodyProbeResult> = #body_probe;
+            let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
+            #krate::di::meta::RouteInfo {
+                path: match #meta_mod::PATH_PREFIX {
+                    Some(__prefix) => format!("{}{}", __prefix, #path),
+                    None => #path.to_string(),
+                },
+                method: "GET".to_string(),
+                operation_id: #op_id.to_string(),
+                summary: Some(#summary.to_string()),
+                description: #description_token,
+                request_body_type: None,
+                request_body_schema: None,
+                request_body_content_type: None,
+                request_body_required: true,
+                response_type: None,
+                response_schema: None,
+                response_status: 200,
+                response_unmapped: None,
+                params: __params,
+                roles: vec![#(#roles_tokens),*],
+                tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
+                deprecated: false,
+                rejection_kinds: __kinds,
+                error_schema: None,
+            }
         }
     }
 }
@@ -1339,24 +1644,14 @@ fn emit_streaming_route_info(
 //
 // These produce the `.route(path, METHOD(closure))` fragments registered
 // inside the state-aware application-controller closure. Each fragment
-// captures the controller `Arc` once and forwards to the common handler
-// wrapper emitted by `handlers.rs`.
-
-/// Whether controller-level `#[pre_guard]`s apply (the shared set exists and
-/// carries pre-guard fields — a non-inferable controller spec degrades the set
-/// to `None`, with the compile_error emitted by `generate_ctrl_deco_items`).
-/// When true, EVERY route/SSE/WS endpoint — `#[anonymous]` included —
-/// registers through the pre-auth middleware, which runs the controller
-/// pre-guards before the method's own.
-fn ctrl_has_pre_guards(def: &RoutesImplDef) -> bool {
-    super::decorators::ctrl_deco_set(def).is_some_and(|s| !s.pre_guard_fields.is_empty())
-}
+// captures the controller `Arc` (and the prebuilt decorator sets) once and
+// forwards to the entry function emitted by `handlers.rs`, which runs the
+// whole request pipeline — pre-auth guards included.
 
 fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.route_methods
         .iter()
-        .filter(|rm| rm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_has_pre_guards(def))
         .map(|rm| {
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
@@ -1398,7 +1693,6 @@ fn generate_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.sse_methods
         .iter()
-        .filter(|sm| sm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_has_pre_guards(def))
         .map(|sm| {
             let path = &sm.path;
             let closure = super::handlers::generate_sse_closure(def, sm);
@@ -1430,7 +1724,6 @@ fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
     let krate = r2e_core_path();
     def.ws_methods
         .iter()
-        .filter(|wm| wm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_has_pre_guards(def))
         .map(|wm| {
             let path = &wm.path;
             let closure = super::handlers::generate_ws_closure(def, wm);
@@ -1456,223 +1749,4 @@ fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
             }
         })
         .collect()
-}
-
-/// Generate `__inner = __inner.route(...);` statements wrapping
-/// pre-auth-guarded routes with the captured-core closure + pre-auth middleware.
-/// Paths are bare here because the
-/// surrounding `match PATH_PREFIX` re-nests the router afterwards.
-///
-/// Pre-auth guards are prebuilt (once, from the bean context) into the
-/// method's `__R2ePreDeco_*` set; the middleware closure captures one `Arc`
-/// of it — no state access, no per-request construction.
-fn generate_pre_auth_registrations(
-    def: &RoutesImplDef,
-    name: &syn::Ident,
-    _meta_mod: &syn::Ident,
-) -> Vec<TokenStream> {
-    let mut registrations: Vec<TokenStream> = Vec::new();
-    let ctrl_pre = ctrl_has_pre_guards(def);
-
-    for rm in &def.route_methods {
-        if rm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_pre {
-            continue;
-        }
-        let method_fn = format_ident!("{}", rm.method.as_routing_fn());
-        registrations.push(pre_auth_registration(
-            def,
-            name,
-            &rm.fn_item.sig.ident,
-            &rm.path,
-            &rm.decorators,
-            quote! { #method_fn },
-            super::handlers::generate_route_closure(def, rm),
-        ));
-    }
-    // SSE/WS endpoints run their pre-auth guards through the same middleware.
-    for sm in &def.sse_methods {
-        if sm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_pre {
-            continue;
-        }
-        registrations.push(pre_auth_registration(
-            def,
-            name,
-            &sm.fn_item.sig.ident,
-            &sm.path,
-            &sm.decorators,
-            quote! { get },
-            super::handlers::generate_sse_closure(def, sm),
-        ));
-    }
-    for wm in &def.ws_methods {
-        if wm.decorators.pre_auth_guard_fns.is_empty() && !ctrl_pre {
-            continue;
-        }
-        registrations.push(pre_auth_registration(
-            def,
-            name,
-            &wm.fn_item.sig.ident,
-            &wm.path,
-            &wm.decorators,
-            quote! { get },
-            super::handlers::generate_ws_closure(def, wm),
-        ));
-    }
-    registrations
-}
-
-fn pre_auth_registration(
-    def: &RoutesImplDef,
-    name: &syn::Ident,
-    fn_ident: &syn::Ident,
-    path: &str,
-    decorators: &crate::model::types::MethodDecorators,
-    method_fn: TokenStream,
-    closure: TokenStream,
-) -> TokenStream {
-    let krate = r2e_core_path();
-
-    // Controller-level pre-guards from the shared set (`None` when the set
-    // degraded on a non-inferable controller spec — the compile_error comes
-    // from `generate_ctrl_deco_items`).
-    let ctrl_pre_fields: Vec<syn::Ident> = super::decorators::ctrl_deco_set(def)
-        .map(|s| s.pre_guard_fields)
-        .unwrap_or_default();
-    // Mirror the post-auth degrade: when a method pre-guard spec type is not
-    // inferable, `generate_predeco_items` emitted the compile_error and no
-    // ctor — drop the method checks so the only error the user sees is the
-    // spec-type one. With no controller pre-guards left either, register the
-    // route without the pre-auth layer entirely.
-    let method_pre_ok =
-        super::decorators::all_specs_inferable(decorators.pre_auth_guard_fns.iter());
-    let has_method_pre = method_pre_ok && !decorators.pre_auth_guard_fns.is_empty();
-
-    let middleware_layers: Vec<_> = decorators
-        .middleware_fns
-        .iter()
-        .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-        .collect();
-    let direct_layers: Vec<_> = decorators
-        .layer_exprs
-        .iter()
-        .map(|expr| quote! { .layer(#expr) })
-        .collect();
-
-    if !has_method_pre && ctrl_pre_fields.is_empty() {
-        return quote! {
-            __inner = __inner.route(
-                #path,
-                #krate::http::routing::#method_fn(#closure)
-                    #(#middleware_layers)*
-                    #(#direct_layers)*
-            );
-        };
-    }
-
-    // Pre-auth guard contexts get the module-qualified name, like the
-    // post-auth ones (rate-limit bucket keys must be route-unique). The
-    // controller-level checks run FIRST, against the shared set and a `"*"`
-    // context (one stateful-guard bucket per controller).
-    let controller_name_str = super::handlers::qualified_controller_name(name);
-    let fn_name_str = fn_ident.to_string();
-    let controller_name = &def.controller_name;
-    let predeco_ctor = format_ident!("__r2e_predeco_{}_{}", controller_name, fn_ident);
-
-    let ctrl_pre_setup = (!ctrl_pre_fields.is_empty()).then(|| {
-        quote! { let __ctrl_pre_capture = ::std::sync::Arc::clone(&__r2e_ctrl_deco); }
-    });
-    let ctrl_pre_clone = (!ctrl_pre_fields.is_empty()).then(|| {
-        quote! { let __ctrl_pre = __ctrl_pre_capture.clone(); }
-    });
-    let ctrl_pre_ctx = (!ctrl_pre_fields.is_empty()).then(|| {
-        quote! {
-            let __ctrl_pre_ctx = #krate::PreAuthGuardContext {
-                method_name: "*",
-                controller_name: #controller_name_str,
-                headers: __req.headers(),
-                uri: __req.uri(),
-                peer_addr: __peer_addr,
-                path_params: #krate::PathParams::EMPTY,
-            };
-        }
-    });
-    let ctrl_pre_checks: Vec<_> = ctrl_pre_fields
-        .iter()
-        .map(|field| {
-            quote! {
-                if let Err(__resp) = #krate::PreAuthGuard::check(
-                    &__ctrl_pre.#field,
-                    &__ctrl_pre_ctx,
-                ).await {
-                    return __resp;
-                }
-            }
-        })
-        .collect();
-
-    let pre_deco_setup = has_method_pre.then(|| {
-        quote! { let __pre_deco_capture = ::std::sync::Arc::new(#predeco_ctor(__ctx)); }
-    });
-    let pre_deco_clone = has_method_pre.then(|| {
-        quote! { let __pre_deco = __pre_deco_capture.clone(); }
-    });
-    let pre_ctx = has_method_pre.then(|| {
-        quote! {
-            let __pre_ctx = #krate::PreAuthGuardContext {
-                method_name: #fn_name_str,
-                controller_name: #controller_name_str,
-                headers: __req.headers(),
-                uri: __req.uri(),
-                peer_addr: __peer_addr,
-                path_params: #krate::PathParams::EMPTY,
-            };
-        }
-    });
-    let pre_auth_checks: Vec<_> = if has_method_pre {
-        (0..decorators.pre_auth_guard_fns.len())
-            .map(|i| {
-                let field = format_ident!("__p{}", i);
-                quote! {
-                    if let Err(__resp) = #krate::PreAuthGuard::check(
-                        &__pre_deco.#field,
-                        &__pre_ctx,
-                    ).await {
-                        return __resp;
-                    }
-                }
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    quote! {
-        {
-            #ctrl_pre_setup
-            #pre_deco_setup
-            let __pre_auth_mw = move |__req: #krate::http::extract::Request,
-                                      __next: #krate::http::middleware::Next| {
-                #ctrl_pre_clone
-                #pre_deco_clone
-                async move {
-                    let __peer_addr = __req
-                        .extensions()
-                        .get::<#krate::http::ConnectInfo<::std::net::SocketAddr>>()
-                        .map(|__info| __info.0);
-                    #ctrl_pre_ctx
-                    #(#ctrl_pre_checks)*
-                    #pre_ctx
-                    #(#pre_auth_checks)*
-                    __next.run(__req).await
-                }
-            };
-            __inner = __inner.route(
-                #path,
-                #krate::http::routing::#method_fn(#closure)
-                    #(#middleware_layers)*
-                    #(#direct_layers)*
-                    .layer(#krate::http::middleware::from_fn(__pre_auth_mw))
-            );
-        }
-    }
 }

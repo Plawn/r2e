@@ -66,7 +66,7 @@ extra).
 
 | Your task involves… | Read | features |
 |---|---|---|
-| `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, panic capture / `on_panic` | `llm/error-handling.md` | core |
+| `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, `Rejection` / `RejectionKind`, `ErrorSchema`, error envelopes, `#[error(rejection)]`, panic capture / `on_panic` | `llm/error-handling.md` | core |
 | `#[bean]`, `#[producer]`, `AsyncBean`, `.provide` / `.register`, `ProvideBundle`, `Option<T>` beans, same-typed beans (newtypes) | `llm/di-beans.md` | core |
 | writing a `Plugin`, `Provided` / `Deps`, plugin config, plugin-shipped controllers, `HealthRegistry` | `llm/plugins.md` | core |
 | `#[post_construct]`, `#[pre_destroy]`, `#[on_start]`, startup/shutdown hooks | `llm/lifecycle-hooks.md` | core |
@@ -316,6 +316,7 @@ name that type: there is no state derive to write, and `state = ...` on
 - Reach for the R2E construct first; dropping to raw axum forfeits compile-time checking, DI, guards, OpenAPI and TestApp support.
 - Do NOT add `axum` to `Cargo.toml` — reach every HTTP type through `r2e::http` / `r2e::prelude`.
 - Implement R2E's contracts, not axum's: `IntoHttpResponse` (+ the `r2e::http::impl_into_response!` bridge) for responses, `FromRequestPartsVia` for bean-backed extractors.
+- One error shape for the whole API: return `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` + one `#[error(rejection)]` variant), or set it app-wide with `AppBuilder::error_projection::<E>()` — never rewrite error bodies in middleware or write never-rejecting extractors.
 - Typed JSON goes through `r2e::json` (`to_vec`, `to_string`, `from_slice`, `from_str`), never `serde_json::to_vec`; `serde_json::Value` / `json!` stay `serde_json`.
 - Use the table below as the translation: identity injection instead of a custom `FromRequestParts`, a `Guard` instead of in-handler `if`, `.provide()` + `#[inject]` instead of `State<Arc<..>>`, `#[scheduled]` / `PoolExecutor` instead of `tokio::spawn`.
 - When raw axum is unavoidable, climb the ladder in order: `#[any]`/`#[fallback]` → `merge_router` → `with_layer_fn` → `r2e::http::axum_compat` (off the supported surface, deliberately greppable).
@@ -355,6 +356,8 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 | Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
 | Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
 | A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
+| One error body for every failure, extractor rejections included | `IntoResponse` per error type + middleware rewriting 4xx bodies, or never-rejecting extractors | `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` with an `#[error(rejection)]` variant); app-wide: `AppBuilder::error_projection::<E>()` |
+| Custom 404 / 405 / panic bodies | `Router::fallback` + `method_not_allowed_fallback` + a catch-panic layer | `AppBuilder::error_projection::<E>()` — the framework's 404/405/413/500 render through the same envelope |
 | Endpoints grouped by resource | A `Router` of free functions | A `#[controller(path = "...")]` + `#[routes]` impl |
 | Shared services | `State<Arc<MyState>>` + field access | `.provide(bean)` / `.register::<T>()` + `#[inject]` fields |
 | Config values in handlers | Lazy statics / `std::env` | `#[config("key")]` fields, `load_config::<Root>()` + `#[inject]` typed sections |
@@ -589,6 +592,17 @@ type StatusResult  = Result<StatusCode, HttpError>;
   impls so `?` converts into your error type; the bare `{ Err => Variant }` form
   targets `HttpError` and is orphan-rule-illegal outside `r2e-core` — convert at
   the call site with `.map_err(|e| HttpError::internal(e.to_string()))` instead.
+- Framework failures (extractor rejections, guard denials, garde reports, …) are
+  typed as one hub value, `Rejection { kind: RejectionKind, status, message,
+  details, headers, source }`. Every fault type converts with plain `From`;
+  `HttpError: From<Rejection>` renders the default bodies; your own envelope
+  implements `From<Rejection> + IntoHttpResponse + ErrorSchema` — or gets all
+  three from `#[derive(ApiError)]` with one `#[error(rejection)]` variant.
+- The envelope that renders a route is inferred from its return type:
+  `Result<T, E>` projects every framework failure on that route through `E`;
+  any other return type uses `AppBuilder::error_projection::<E>()` (default
+  `HttpError`), which also renders the framework's own 404 / 405 / 413 and the
+  panic 500. There is no attribute to write.
 - Panics are caught automatically (no plugin): JSON 500, plus one `error` event
   on target `r2e::panic` inside the request span (so `request_id` + `route`).
   Count them with `.on_panic(|report| ...)` — one hook for HTTP handlers,
@@ -598,7 +612,7 @@ type StatusResult  = Result<StatusCode, HttpError>;
 
 `HttpError` is the default error type (`#[non_exhaustive]` — wildcard arm when
 matching). Variants: `NotFound`, `Unauthorized`, `Forbidden`, `BadRequest`,
-`Internal` (all `Cow<'static, str>`), `Validation(...)`, `Custom { status, body }`,
+`Internal` (all `Cow<'static, str>`), `Validation { status, response }` (build with `HttpError::validation(resp)` → 400), `Custom { status, body }`,
 `WithSource { status, message, source }`.
 
 ```rust
@@ -634,6 +648,184 @@ pub enum MyError {
     Http(#[from] HttpError),
 }
 ```
+
+### `Rejection` — the typed framework failure
+
+Everything the framework rejects before or around your handler — a malformed
+JSON body, a missing `content-type`, a bad path segment, a failed JWT, a denied
+guard, a garde report, a rate limit — is one value: `Rejection` (prelude).
+
+```rust
+# fn __doc(r: Rejection) {
+let kind: RejectionKind = r.kind;        // closed enum, `#[non_exhaustive]`
+let status: StatusCode = r.status;       // starts at `kind.default_status()`
+let message: &str = &r.message;          // client-facing; `Display` prints it
+let details = r.details.as_ref();        // `Option<serde_json::Value>` — garde field errors
+let headers = &r.headers;                // `WWW-Authenticate`, `Retry-After`, …
+# }
+```
+
+`RejectionKind::default_status()` is the one status table: `MissingContentType`
+/ `UnsupportedMediaType` 415, `PayloadTooLarge` 413, `BodyRead` / `MalformedBody`
+/ `InvalidPath` / `InvalidQuery` / `InvalidForm` / `InvalidHeader` / `BadRequest`
+/ `Validation` 400, `InvalidBody` 422 (deserialized but semantically wrong),
+`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `MethodNotAllowed` 405,
+`Conflict` 409,
+`RateLimited` 429, `Internal` 500, `Unavailable` 503, `Timeout` 504, and
+`Opaque` for a pre-rendered `Response` the framework could not type.
+
+Faults reach the hub through std `From`, implemented in the crate that owns the
+fault: `JsonRejection` / `PathRejection` / `QueryRejection` / `FormRejection`,
+`ParamError` (by `location`), `HttpError`, `GuardError` (kind from the status,
+status kept), `SecurityError` (401 + `WWW-Authenticate: Bearer`, or 503 for a
+JWKS failure), `RolesDenied` (r2e-security), `RateLimited` (r2e-rate-limit,
+sets `Retry-After`), `FgaDenied` (r2e-openfga), `TenantError` (r2e-tenant; use
+`into_rejection(statuses)` to keep configured statuses), garde `Report`,
+`Response` (→ `Opaque`). Build one directly with `Rejection::new(kind, msg)`,
+`Rejection::with_status(kind, status, msg)`, `Rejection::from_status(status, msg)`
+or the shortcuts `unauthenticated()` / `forbidden(msg)` / `not_found(msg)` /
+`bad_request(msg)` / `internal(msg)`, then `.details(value)` /
+`.header(name, value)` / `.source(err)`.
+
+### Error envelopes — `From<Rejection> + IntoHttpResponse + ErrorSchema`
+
+An **envelope** is the type a rejection is projected into before it is
+rendered. `HttpError` is the default and reproduces the plain bodies
+(`{"error": msg}`, `{"error":"Validation failed","details":[…]}`). A foreign
+wire shape (OpenAI-style `{"error":{"type":…}}`, RFC 9457 problem details, …)
+is an envelope `E` with three impls:
+
+- `From<Rejection>` — build the body from `r.kind` / `r.message` / `r.details`,
+  and **read `r.status`**, never the table: the status may have been remapped or
+  carried by the fault (a 413 body read, a configured tenant status).
+- `IntoHttpResponse` (+ `impl_into_response!`), as for any response type.
+- `ErrorSchema` — the static side, read by the runtime **and** the OpenAPI
+  builder so the spec cannot say 422 where the server answers 400:
+
+```rust
+pub trait ErrorSchema {
+    /// Status for `kind`. Default: `kind.default_status()`. A kind left at its
+    /// default keeps whatever status the fault carried.
+    fn status_of(kind: RejectionKind) -> StatusCode { kind.default_status() }
+    /// `(component name, JSON Schema)` of the body; `None` = undocumented.
+    fn body_schema() -> Option<(String, serde_json::Value)>;
+    /// Per-kind body when one envelope has several shapes.
+    fn body_schema_for(_kind: RejectionKind) -> Option<(String, serde_json::Value)> { None }
+    /// Statuses the envelope emits that no inferred kind covers (502 for a proxy).
+    fn extra_statuses() -> Vec<(StatusCode, &'static str)> { Vec::new() }
+    /// Return an `Opaque` rejection untouched instead of re-wrapping it (`HttpError`: true).
+    fn opaque_passthrough() -> bool { false }
+}
+```
+
+`rejection.project::<E>()` is the one projection step: it applies
+`E::status_of(kind)` when that differs from the default, honours
+`opaque_passthrough`, calls `E::from(rejection).into_http_response()` and adds
+the hub headers (the envelope's own header of the same name wins).
+
+The quickest envelope is a derive: mark **one** variant `#[error(rejection)]`
+over a single `Rejection` field (or `#[error(transparent)]` over a `Rejection`
+field, which means the same). The derive then also emits `From<Rejection>` and
+`ErrorSchema` — `status_of` is the default table, `body_schema` delegates to
+`HttpError`'s, `extra_statuses` lists the other variants' fixed statuses, and
+`opaque_passthrough()` is `true`. The variant takes no `status`/`message`;
+remap statuses by implementing `ErrorSchema` by hand instead.
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+
+    #[error(rejection)]                 // From<Rejection> + ErrorSchema come with it
+    Rejected(Rejection),
+}
+
+fn __assert<E: From<Rejection> + IntoHttpResponse + ErrorSchema>() {}
+# fn __doc() {
+__assert::<ApiEnvelope>();
+__assert::<HttpError>();               // the default envelope
+# }
+```
+
+An enum whose only link to the framework is `#[error(transparent)] Http(#[from] HttpError)`
+inherits the same two impls through `HttpError`.
+
+### Which envelope renders a route
+
+There is no attribute to wire an envelope: the **handler's return type** decides.
+
+- `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` —
+  every framework failure on that route (extractor rejection, failed identity,
+  guard denial, garde report, managed acquire/finalize) is projected through
+  `E`, so the handler's own `Err(E)` and the framework's errors share one wire
+  shape. Nothing to annotate. `HttpError` qualifies, so a `Result<T, HttpError>`
+  route renders `HttpError` bodies **regardless** of the app-level projection.
+  `T` is never constrained: `Result<impl IntoResponse, E>` keeps `E` too (the
+  probe uses `Result<(), E>` when the success type is an opaque `impl Trait`).
+- Any other return type (`Json<T>`, a bare `impl IntoResponse`, `Result<T, E>`
+  with `E` lacking one of the three traits, a plain `String`) — the route uses
+  the **app-level** projection: `AppBuilder::error_projection::<E>()`, default
+  `HttpError`. The app-level one is the JAX-RS/Quarkus `ExceptionMapper`
+  equivalent: one place that decides how unmapped failures look.
+
+A route declared infallible (`-> Json<T>`) is a definition the framework trusts:
+its failures still exist (a bad body, a missing identity) and render with the
+app-level envelope. Declare `Result<T, E>` when the route must speak `E`.
+
+```rust
+# use r2e::ErrorProjector;
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+    #[error(rejection)]
+    Rejected(Rejection),
+}
+
+#[controller(path = "/items")]
+pub struct ItemController;
+
+#[routes]
+impl ItemController {
+    #[post("/")]
+    async fn create(&self, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiEnvelope> {
+        Ok(Json(body))                     // a malformed body answers as `ApiEnvelope` too
+    }
+
+    #[get("/{id}")]
+    async fn get(&self, Path(id): Path<u32>) -> Json<u32> {
+        Json(id)                           // a bad `id` answers with the app-level envelope
+    }
+}
+
+# async fn __doc() {
+let state = AppBuilder::new()
+    .error_projection::<ApiEnvelope>()     // app-level envelope (default: HttpError)
+    .build_state()
+    .await;
+let projector = r2e::BeanAccess::get::<ErrorProjector>(state.state());
+let _resp = projector.project(Rejection::not_found("gone"));
+# }
+# fn main() {}
+```
+
+`error_projection::<E>()` provides an `ErrorProjector` bean (`project(rejection)
+-> Response`); plugins and hand-written handlers can inject it to render a
+`Rejection` with the app's envelope. The framework's own responses go through
+it too: a panicking handler (500, kind `Internal`), an unknown route (404,
+`NotFound` — unless the app installed a fallback of its own: a controller
+`#[fallback]`, a merged `Router::fallback(..)`, the static SPA fallback), a
+known path with the wrong method (405, `MethodNotAllowed`, `Allow` kept) and
+an oversized body (413, `PayloadTooLarge`). With the default envelope these
+are `{"error":"Not found"}`, `{"error":"Method not allowed"}`, and so on.
+`E::status_of` applies to them like to any other kind. The runtime order on
+every route is fixed:
+pre-auth guards → identity + `#[inject(request)]` fields → guards → path/query/
+header parameters → body → garde validation → managed acquire → interceptors →
+handler → managed finalize. A failure at any step is projected once, through
+the route's envelope, and the body is never read before identity and guards
+have passed.
 
 ### Hand-written response types
 
@@ -705,7 +897,8 @@ For a one-off, convert at the call site instead:
 ### Panics
 
 Panic capture is always on — no plugin, no opt-in. A panicking handler answers
-`500 {"error":"Internal server error"}` and R2E emits **one** `error` event on
+`500 {"error":"Internal server error"}` (`Rejection::internal` through the
+app-level envelope, see above) and R2E emits **one** `error` event on
 target `r2e::panic` with `panic_message` and the matched `route`. The layer sits
 *below* the tracing and metrics layers, so the event is inside the request span
 (it carries `request_id`) and the request still gets its `request completed`
@@ -2060,7 +2253,7 @@ of `run()` while leaving registration and config validation untouched.
 - There is no `#[params(...)]` renaming spelling: `#[serde(rename)]`, `rename_all`, `default`, `skip`, `flatten` are read as-is.
 - Precedence: explicit R2E name > `#[serde(rename)]` > `#[serde(rename_all)]` > field identifier; `#[param(default)]` > `#[serde(default)]`.
 - `#[serde(skip)]` combined with an R2E param attribute is a compile error.
-- Migrate `Query<T>` to `Params` by adding the derive and dropping the wrapper; the only visible change is the 400 body, controlled app-wide by `server.params-rejection-format` (`json` default, `plain-text` for compatibility).
+- Migrate `Query<T>` to `Params` by adding the derive and dropping the wrapper; the only visible change is the 400 body, which is rendered by the route's error envelope like every other rejection (`{"error": "..."}` with the default `HttpError`).
 - To handle a rejection yourself, take `Result<Query<T>, QueryRejection>` — `QueryRejection`/`PathRejection`/`FormRejection`/`JsonRejection` come from `r2e::http`.
 
 Always available (via `garde`). `Json<T>` extraction auto-validates when
@@ -2188,18 +2381,11 @@ impl SearchController {
 # fn main() {}
 ```
 
-The one visible difference is the 400 body. `Query<T>` answers with plain text
-from serde; `Params` answers with a JSON problem body by default. It is an
-**app-level** setting, never a per-struct one, read once at `build_state()`:
-
-```yaml
-server:
-  params-rejection-format: json        # default; { "error": "...", "message": "..." }
-  # params-rejection-format: plain-text  # raw `Query<T>` compatibility
-```
-
-Unknown values fail boot. In Rust the enum is `r2e::ParamsRejectionFormat`
-(`Json` | `PlainText`); the JSON body is `{"error": "<message>"}`.
+The one visible difference is the 400 body. A `Params` failure is a
+`Rejection` (`InvalidPath` / `InvalidQuery` / `InvalidHeader`) rendered by the
+route's error envelope — `{"error": "<message>"}` with the default `HttpError`,
+your own shape with a custom envelope (`llm/error-handling.md`). There is no
+per-struct or app-level format switch.
 
 Axum's own rejection types are re-exported for handlers that take a
 `Result<Query<T>, QueryRejection>`: `QueryRejection`, `PathRejection`,
@@ -2552,10 +2738,18 @@ The same `Arc<JwtClaimsValidator>` bean validates the JWT once; light
 - Bean or config deps: `#[derive(DecoratorBean)]` with `#[inject]` / `#[config]`
   fields, applied as `MyGuard::spec(args)` (plain fields, declaration order). A
   missing bean is a compile error at `register_controller()`.
-- Deny with `Err(GuardError::forbidden(…).into())` / `unauthorized` /
-  `new(status, msg)`; read the request through `GuardContext`.
-- Checks that must run **before** JWT extraction implement `PreAuthGuard` and
-  are applied with `#[pre_guard(…)]`.
+- `check` returns `Result<(), Rejection>`: deny with
+  `Err(GuardError::forbidden(…).into())` / `unauthorized` / `new(status, msg)`
+  or any `Rejection` constructor; read the request through `GuardContext`. The
+  built-in guards deny with typed errors — `RolesDenied` (r2e-security),
+  `RateLimited` (r2e-rate-limit, carries `Retry-After`), `FgaDenied`
+  (r2e-openfga) — which convert into `Rejection` with `?`. The denial is
+  rendered by the route's error envelope (see `llm/error-handling.md`).
+- Guards run **before** the handler's own parameters are extracted and before
+  the body is read: a denied request never deserializes its body.
+- Checks that must run **before** identity extraction implement `PreAuthGuard`
+  and are applied with `#[pre_guard(…)]`; they are the first step of the
+  generated handler, not a middleware layer.
 - Rate limiting needs feature `rate-limit` and `.provide(RateLimitRegistry::default())`;
   `PreRateLimit` is pre-auth, `RateLimit::per_user` is post-auth.
 - `window_secs` must be > 0 (every constructor panics on 0), and a per-user
@@ -2580,7 +2774,7 @@ pub struct BlockUser;
 impl SelfBuilt for BlockUser {}            // one line: the expression IS the guard
 
 impl<I: Identity> Guard<I> for BlockUser {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
         if ctx.identity_sub() == Some("blocked-user") {
             return Err(GuardError::forbidden("Blocked").into());
         }
@@ -2626,7 +2820,7 @@ pub struct ProjectGuard {
 }
 
 impl<I: Identity> Guard<I> for ProjectGuard {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
         Ok(())                              // uses self.pool / self.tenant / self.min_role
     }
 }
@@ -2659,9 +2853,11 @@ that names every missing key at once, not a late panic when the guard is built.
 
 ### Pre-auth guards
 
-Run as middleware **before** JWT extraction (IP allowlists, pre-auth rate
-limits). Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no identity),
-apply with `#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
+Run **before** identity extraction (IP allowlists, pre-auth rate limits) as
+the first step of the generated handler — controller-level pre-guards, then the
+route's own. Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no
+identity; `check` returns `Result<(), Rejection>`), apply with
+`#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
 
 ### Rate limiting
 
@@ -3182,7 +3378,7 @@ Semantics:
   **once** per controller and shared by all its routes; its context reports
   `method_name: "*"`. A stateful spec (e.g. a rate limit) therefore uses a
   single bucket for the whole controller, unlike the per-route bucket it gets
-  at method level.
+  at method level. gRPC services and MCP tools follow the same rule.
 - **`#[anonymous]` opts out of the post-auth half** — anonymous routes skip
   controller `#[guard]`/`#[roles]`/`#[all_roles]` (they run with no identity)
   but keep controller `#[pre_guard]`s and interceptors.
@@ -3341,6 +3537,7 @@ missing/forged/replayed = 400 `invalid_request`.
 - Transactions are `#[managed]` handler params — the only transaction attribute (`#[transactional]` was removed).
 - `use r2e::r2e_data_sqlx::Tx;` then `#[managed] tx: &mut Tx<'_, Sqlite>`; the pool is resolved from the bean graph by type, no `HasPool` impl.
 - A custom resource implements BOTH `ManagedResource<S>` and `ManagedDeps` — there is no blanket impl. List the beans `acquire()` looks up in `type Deps`, or `type Deps = TNil;` when it reads none; a bean that was never provided is then a compile error at `register_controller()`.
+- `type Error` is anything `Into<Rejection>` — `ManagedErr<HttpError>` in practice; acquire/finalize failures are projected through the route's error envelope exactly like an extractor rejection (see llm/error-handling.md).
 - In `acquire`, take the request head with `context.require_request()?` (uniform 500 off-request) instead of unwrapping `ManagedContext::request`.
 - `RequestHead<'a>` is the same `Copy` view guards see through `GuardContext::head()` — use its helpers (`header`, `path_param`, `host`, `extension::<T>()`).
 - SSE and WebSocket handlers acquire no managed resources; every other HTTP handler shape does.
@@ -3383,6 +3580,13 @@ Every `#[managed]` type must also implement `ManagedDeps`, listing the beans
 bean that was never provided is a compile error at `register_controller()`
 instead of a 500 on the first request. A resource that reads no bean says
 `type Deps = TNil;`.
+
+`type Error` is any `Into<Rejection>`. `ManagedErr<E>` wraps an error you cannot
+write `From<E> for Rejection` for (a foreign type such as `sqlx::Error`);
+`ManagedErr<HttpError>` is the usual choice. Whatever the type, an `Err` from
+`acquire` or `finalize` is projected once through the route's error envelope —
+the route's `Result<T, E>` type when it qualifies, else the app-level
+`error_projection::<E>()` (default `HttpError`).
 
 `ManagedContext<'_, S>` (passed to `acquire`) carries:
 
@@ -5313,7 +5517,39 @@ b.plugin(OpenApiPlugin::new(
 
 Spec at `/openapi.json`. Request/response schemas auto-detected from `Json<T>`
 params and return types; `#[status(N)]` / `#[returns(T)]` override; doc
-comments become summary/description; 401/403 only emitted on authed routes.
+comments become summary/description.
+
+**Error responses** come from what the route can actually fail with. The
+`#[routes]` macro records the route's `RejectionKind`s in
+`RouteInfo::rejection_kinds` (JSON body → 415/413/400/422, `Form<T>` body →
+415/413/400/422, GET `Form<T>` → 400, `Path` → 400, `Query`/`#[derive(Params)]`
+→ 400, garde `Validate` parameter → 400, identity — required or `Option<..>` —
+→ 401, `#[roles]`/guards → 403, a rate-limit guard → 429, always 500; SSE and
+WS routes are inferred from their parameters the same way)
+and the builder emits one response per distinct status the route's **error
+envelope** maps them to (`ErrorSchema::status_of`), with the envelope's
+`body_schema` / `body_schema_for(kind)` as the component (+ its
+`extra_statuses`). The envelope is the handler's `Result<T, E>` error type when
+it is one, else the application's (`AppBuilder::error_projection::<E>()`, read
+from the `ErrorProjector` bean by the plugin; `OpenApiConfig::with_error_schema::<E>()`
+for direct `build_spec` callers), else `HttpError` (`ErrorResponse` /
+`ValidationErrorResponse`). Runtime and spec call the same `status_of`, so an
+envelope remapping 422 → 400 documents 400 only. Bodies are deduplicated by schema (the same body under two names is
+documented once, under the first-recorded name — the route envelope's); distinct
+bodies on one status render as `anyOf` (a validation body is also a valid plain
+error body, so `oneOf` would reject it). An error body whose component name is
+already taken by a different schema (a DTO, a registry entry, a nested `$defs`
+type, another envelope's body) leaves that component alone and is documented
+**inline**, with a boot warning (`SchemaGap::ErrorBodyInlined`). Every route also documents the panic 500 with the
+**application** envelope's body (the catch-panic layer renders through the
+`ErrorProjector`, never the route's envelope) — an `anyOf` beside the route's
+own 500 body when they differ. Nested types in an envelope body schema are
+promoted to `components/schemas` like any other schema.
+
+A custom body extractor (the handler's last parameter, read with
+`FromRequest`) is documented when it implements
+`r2e::di::meta::RequestBodySchema` (`content_type()`, `body_schema()`,
+`rejection_kinds()`); otherwise the route has no request body in the spec.
 
 When a route's successful response body can't be mapped to a schema (an
 `impl Trait` return, or a concrete non-`Json` type), the spec still generates
@@ -5324,7 +5560,9 @@ method, path, and offending return type, and suggesting `#[returns(T)]` /
 `schemars::JsonSchema` — rendered as a generic `object` — are warned about too.
 The gaps are also available programmatically via
 `r2e::r2e_openapi::spec_warnings(&routes) -> Vec<SpecWarning>` (each carries
-`method`, `path`, a `SchemaGap`, and a `.message()`).
+`method`, `path`, a `SchemaGap`, and a `.message()`);
+`r2e::r2e_openapi::build_spec_with_warnings(&config, &routes)` returns the spec
+plus every warning, inlined error bodies included.
 
 **Tags.** A route's OpenAPI tag defaults to the controller's struct name.
 `#[controller(path = "…", tag = "…")]` overrides it, so several controllers can
@@ -5360,11 +5598,19 @@ struct CatalogCategoriesController;   // both merge under the "Catalog" tag
 - Browser clients need `.with_grpc_web()` (features `grpc-web` on `r2e`, `web`
   on `r2e-grpc`) — otherwise grpc-web requests get 415; that arm carries its
   own CORS, so no `Cors` plugin is needed.
-- `#[guard]`, `#[roles]`, `#[inject(identity)]`, `#[post_construct]`,
-  `#[pre_destroy]` and `#[on_start]` are compile errors on `#[grpc_routes]`
-  methods; `#[intercept]` is the only decorator supported.
-- For auth, wire it by hand: `#[inject] jwt_validator: Arc<JwtClaimsValidator>`
-  then `GrpcIdentityExtractor::extract_claims(request.metadata(), &self.jwt_validator)`.
+- Guards are the HTTP ones: `#[guard(..)]`, `#[roles(..)]`, `#[all_roles(..)]`
+  and `#[intercept(..)]` on methods or on the impl block; a `Guard<I>` written
+  for HTTP runs unchanged. A guard or identity `Rejection` is projected onto
+  `tonic::Status` by kind (`r2e_grpc::rejection_to_status`: Unauthenticated →
+  `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`, RateLimited →
+  `RESOURCE_EXHAUSTED`, request-shape kinds → `INVALID_ARGUMENT`, …).
+- Identity is a method **parameter**: `#[inject(identity)] user:
+  AuthenticatedUser` (or `Option<..>`), read from `authorization: Bearer ..`
+  metadata and validated by the `Arc<JwtClaimsValidator>` bean — provide it,
+  or `register_grpc_service` fails to compile. `#[roles]` needs that parameter.
+- Not supported on `#[grpc_routes]` (compile errors): struct-level
+  `#[inject(identity)]`, `#[pre_guard]`, `#[anonymous]`, `#[post_construct]`,
+  `#[pre_destroy]`, `#[on_start]`.
 - `register_grpc_service` panics on a missing config key; use
   `try_register_grpc_service::<S>()` to report the failure yourself.
 - A service owned by a feature module is registered by
@@ -5454,17 +5700,66 @@ impl GreeterService {
 
 (`descriptor = …` is optional — only needed for reflection.)
 
-NOT supported on `#[grpc_routes]` methods (compile errors): `#[guard(...)]`,
-`#[roles(...)]`, `#[inject(identity)]`, `#[post_construct]`, `#[pre_destroy]`,
+### Guards and identity
+
+gRPC methods take the same decorators as HTTP routes — `#[guard]`, `#[roles]`,
+`#[all_roles]`, `#[intercept]` — on the method or on the impl block
+(controller-level sites run first). Guards are `Guard<I>` impls, built once at
+registration through `DecoratorSpec` (bean deps checked at
+`register_grpc_service`), and receive a `GuardContext` whose `headers` is the
+request metadata (`method` is `POST`, `uri` is `/`, `path_params` empty).
+
+Identity is an `#[inject(identity)]` **method parameter** (any position;
+`Option<T>` for optional). The type must implement `r2e_grpc::GrpcIdentity`;
+`AuthenticatedUser` does (features `grpc` + `security`): `authorization:
+Bearer <jwt>` metadata validated by the `Arc<JwtClaimsValidator>` bean, which
+becomes a compile-time dependency of the service. Optional identity is `None`
+without `authorization` metadata but still rejects an invalid token.
+
+```rust
+use r2e::r2e_grpc::tonic::{Request, Response, Status};
+use r2e::r2e_security::AuthenticatedUser;
+
+#[controller]
+pub struct SecureGreeter {
+    #[inject] user_service: UserService,
+}
+
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+#[intercept(Logged::info())]
+impl SecureGreeter {
+    #[roles("admin")]
+    async fn say_hello(
+        &self,
+        #[inject(identity)] user: AuthenticatedUser,
+        request: Request<HelloRequest>,
+    ) -> Result<Response<HelloReply>, Status> {
+        Ok(Response::new(HelloReply { message: format!("Hello {} from {}", request.into_inner().name, user.sub) }))
+    }
+}
+# fn main() {}
+```
+
+Per call: identity extraction → controller guards → method guards →
+interceptors → method. Every `Rejection` is projected onto `tonic::Status` by
+kind with `r2e_grpc::rejection_to_status` (Unauthenticated → `UNAUTHENTICATED`,
+Forbidden → `PERMISSION_DENIED`, NotFound → `NOT_FOUND`, Conflict → `ABORTED`,
+RateLimited/PayloadTooLarge → `RESOURCE_EXHAUSTED`, Unavailable →
+`UNAVAILABLE`, Timeout → `DEADLINE_EXCEEDED`, Internal → `INTERNAL`,
+request-shape kinds → `INVALID_ARGUMENT`, else by HTTP status); the message is
+the status message and the rejection's headers (`Retry-After`,
+`WWW-Authenticate`) become response metadata. It is a free function (orphan
+rule) — call it yourself only when projecting a `Rejection` by hand.
+
+Compile errors: `#[roles]` on a method without an `#[inject(identity)]`
+parameter (`NoIdentity: RoleBasedIdentity` unsatisfied); a guard whose spec
+has `REQUIRES_IDENTITY` on such a method; struct-level `#[inject(identity)]`;
+`#[pre_guard]`, `#[anonymous]`, `#[post_construct]`, `#[pre_destroy]`,
 `#[on_start]`.
-The guard/identity infrastructure (`GrpcGuard`, `GrpcRolesGuard`,
-`GrpcIdentityExtractor`) exists in `r2e-grpc` for manual wiring but is not yet
-macro-wired. Manual wiring: `#[inject] jwt_validator: Arc<JwtClaimsValidator>`
-on the service, then `GrpcIdentityExtractor::extract_claims(request.metadata(),
-&self.jwt_validator).await?` → `r2e::StandardClaims` (same typed claims as
-HTTP; `Status::unauthenticated` on failure). `JwtClaimsValidator` implements
-`JwtClaimsValidatorLike` under `r2e-security/grpc`, enabled by `r2e`'s `grpc` +
-`security` features.
+
+Manual claims: `r2e_grpc::bearer_token(metadata) -> Result<&str, Rejection>`,
+`extract_jwt_claims_from_metadata(metadata, &validator).await ->
+Result<StandardClaims, Status>`.
 
 ---
 
@@ -5583,8 +5878,13 @@ arguments; `T: Deserialize + JsonSchema + ObjectParams` becomes the
 (dual-encoded: `structuredContent` + JSON text, advertises `outputSchema`),
 `CallToolResult`, or `Result<_, E: Into<McpError>>`. `McpError::tool(...)` →
 `isError: true` result the agent can read; other variants map to JSON-RPC
-errors (bad args → -32602, unknown tool → -32601, guard rejection → -32600 with
-the HTTP status text). Beans/config go on the struct, never as parameters.
+errors (bad args → -32602, unknown tool → -32601). A guard or identity
+`Rejection` becomes `McpError::from(rejection)` by kind: `Unauthenticated` →
+`Unauthorized` and `Forbidden` → `Forbidden` (-32600, `data` `"unauthorized"` /
+`"forbidden"`), `NotFound` → `NotFound` (-32002), request-shape kinds →
+`InvalidParams` (-32602), `Internal`/`Unavailable`/`Timeout` → `Internal`
+(-32603), `Conflict`/`RateLimited` → `McpError::tool(..)` carrying the details.
+Beans/config go on the struct, never as parameters.
 
 Resources and prompts — the same impl block can carry the two other MCP
 member families (one marker per method):

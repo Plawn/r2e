@@ -255,12 +255,14 @@ Custom guards:
 ```rust
 struct TenantGuard;
 
-impl<S: Send + Sync, I: Identity> Guard<S, I> for TenantGuard {
-    fn check(&self, state: &S, ctx: &GuardContext<'_, I>) -> impl Future<Output = Result<(), Response>> + Send {
+impl SelfBuilt for TenantGuard {}        // no bean deps: the expression is the guard
+
+impl<I: Identity> Guard<I> for TenantGuard {
+    fn check(&self, ctx: &GuardContext<'_, I>) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() => Ok(()),
-                _ => Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
+                _ => Err(Rejection::forbidden("Missing tenant")),   // rendered by the route's error envelope
             }
         }
     }
@@ -570,6 +572,10 @@ Historical note: tags up to `v0.2.163` were a pure release counter detached
 from the manifest — `v0.2.132`–`v0.2.163` actually contain workspace version
 `0.3.0`, and the 0.3 plugin-API rework ships from `v0.2.140` onward (see
 [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)).
+
+0.4 → 0.5 reworks error handling around `Rejection` and error envelopes
+(task #1072); the step-by-step guide is
+[`docs/migration/error-projection.md`](docs/migration/error-projection.md).
 
 ## For AI agents
 

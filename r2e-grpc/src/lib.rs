@@ -1,7 +1,11 @@
 //! gRPC server support for R2E.
 //!
 //! Provides gRPC service hosting with the same DX as HTTP controllers:
-//! `#[inject]`, `#[config]`, guards, interceptors, and identity extraction.
+//! `#[inject]`, `#[config]`, `#[guard]`/`#[roles]`/`#[all_roles]` (the shared
+//! [`Guard<I>`](r2e_core::Guard) family), `#[intercept]`, and
+//! `#[inject(identity)]` parameters ([`GrpcIdentity`]). A guard or identity
+//! [`Rejection`](r2e_core::Rejection) is projected onto a [`tonic::Status`]
+//! by kind ([`rejection_to_status`]).
 //!
 //! # Two transport modes
 //!
@@ -28,14 +32,15 @@ pub mod multiplex;
 pub mod registry;
 pub mod server;
 pub mod service;
+pub mod status;
 
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
 
-pub use guard::{GrpcGuard, GrpcGuardContext, GrpcRoleBasedIdentity, GrpcRolesGuard};
+pub use guard::guard_context;
 pub use identity::{
-    extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentityExtractor,
-    JwtClaimsValidatorLike,
+    bearer_token, extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentity,
+    GrpcIdentityExtractor, JwtClaimsValidatorLike,
 };
 pub use module::ModuleGrpcServices;
 pub use multiplex::{
@@ -44,6 +49,7 @@ pub use multiplex::{
 pub use registry::{DuplicateService, GrpcServiceRegistry, RegisteredServices};
 pub use server::{GrpcMarker, GrpcServer, GrpcTransport};
 pub use service::GrpcService;
+pub use status::{code_from_status, rejection_to_status};
 
 // Re-export tonic for use by generated code.
 pub use prost;
@@ -251,9 +257,10 @@ where
 /// Re-exports for generated code.
 #[doc(hidden)]
 pub mod __macro_support {
-    pub use crate::guard::{GrpcGuard, GrpcGuardContext, GrpcRoleBasedIdentity, GrpcRolesGuard};
-    pub use crate::identity::{GrpcIdentityExtractor, JwtClaimsValidatorLike};
+    pub use crate::guard::guard_context;
+    pub use crate::identity::GrpcIdentity;
     pub use crate::service::GrpcService;
+    pub use crate::status::rejection_to_status;
     pub use r2e_core::ContextConstruct;
     pub use r2e_core::Identity;
     pub use tonic;
@@ -261,7 +268,7 @@ pub mod __macro_support {
 
 pub mod prelude {
     //! Re-exports of the most commonly used gRPC types.
-    pub use crate::guard::{GrpcGuard, GrpcGuardContext, GrpcRoleBasedIdentity};
+    pub use crate::identity::GrpcIdentity;
     pub use crate::module::ModuleGrpcServices;
     pub use crate::server::GrpcServer;
     pub use crate::service::GrpcService;

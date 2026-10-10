@@ -1,3 +1,11 @@
+pub mod projection;
+mod rejection;
+mod schema;
+
+pub use projection::{project_default, ErrorProjector};
+pub use rejection::{Rejection, RejectionKind};
+pub use schema::{ErrorSchema, ErrorSchemaInfo};
+
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -37,7 +45,16 @@ pub enum HttpError {
     Forbidden(Cow<'static, str>),
     BadRequest(Cow<'static, str>),
     Internal(Cow<'static, str>),
-    Validation(crate::web::validation::ValidationErrorResponse),
+    /// Field-level validation failure, rendered as
+    /// `{"error":"Validation failed","details":[…]}` at `status`.
+    ///
+    /// The status is carried (400 by default — [`HttpError::validation`]) so
+    /// an envelope delegating to `HttpError` keeps a remapped
+    /// `status_of(Validation)` (e.g. 422) instead of a fixed 400.
+    Validation {
+        status: StatusCode,
+        response: crate::web::validation::ValidationErrorResponse,
+    },
     Custom {
         status: StatusCode,
         body: serde_json::Value,
@@ -65,7 +82,10 @@ impl Clone for HttpError {
             HttpError::Forbidden(msg) => HttpError::Forbidden(msg.clone()),
             HttpError::BadRequest(msg) => HttpError::BadRequest(msg.clone()),
             HttpError::Internal(msg) => HttpError::Internal(msg.clone()),
-            HttpError::Validation(resp) => HttpError::Validation(resp.clone()),
+            HttpError::Validation { status, response } => HttpError::Validation {
+                status: *status,
+                response: response.clone(),
+            },
             HttpError::Custom { status, body } => HttpError::Custom {
                 status: *status,
                 body: body.clone(),
@@ -102,6 +122,14 @@ impl HttpError {
         }
     }
 
+    /// Shortcut for a 400 `HttpError::Validation` with the given field errors.
+    pub fn validation(response: crate::web::validation::ValidationErrorResponse) -> Self {
+        HttpError::Validation {
+            status: StatusCode::BAD_REQUEST,
+            response,
+        }
+    }
+
     /// Shortcut for `HttpError::Internal` with the given message.
     pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
         HttpError::Internal(message.into())
@@ -133,9 +161,11 @@ impl HttpError {
             HttpError::NotFound(_) => StatusCode::NOT_FOUND,
             HttpError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             HttpError::Forbidden(_) => StatusCode::FORBIDDEN,
-            HttpError::BadRequest(_) | HttpError::Validation(_) => StatusCode::BAD_REQUEST,
+            HttpError::BadRequest(_) => StatusCode::BAD_REQUEST,
             HttpError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            HttpError::Custom { status, .. } | HttpError::WithSource { status, .. } => *status,
+            HttpError::Validation { status, .. }
+            | HttpError::Custom { status, .. }
+            | HttpError::WithSource { status, .. } => *status,
         }
     }
 
@@ -148,7 +178,7 @@ impl HttpError {
             | HttpError::BadRequest(msg)
             | HttpError::Internal(msg) => Some(msg),
             HttpError::WithSource { message, .. } => Some(message),
-            HttpError::Validation(_) => Some("Validation failed"),
+            HttpError::Validation { .. } => Some("Validation failed"),
             HttpError::Custom { .. } => None,
         }
     }
@@ -187,12 +217,12 @@ impl HttpError {
 impl IntoHttpResponse for HttpError {
     fn into_http_response(self) -> Response {
         match self {
-            HttpError::Validation(resp) => {
+            HttpError::Validation { status, response } => {
                 let body = serde_json::json!({
                     "error": "Validation failed",
-                    "details": resp.errors,
+                    "details": response.errors,
                 });
-                (StatusCode::BAD_REQUEST, Json(body)).into_response()
+                (status, Json(body)).into_response()
             }
             HttpError::Custom { status, body } => (status, Json(body)).into_response(),
             HttpError::WithSource {
@@ -225,8 +255,8 @@ impl std::fmt::Display for HttpError {
             HttpError::Forbidden(msg) => write!(f, "Forbidden: {msg}"),
             HttpError::BadRequest(msg) => write!(f, "Bad Request: {msg}"),
             HttpError::Internal(msg) => write!(f, "Internal Error: {msg}"),
-            HttpError::Validation(resp) => {
-                write!(f, "Validation Error: {} errors", resp.errors.len())
+            HttpError::Validation { response, .. } => {
+                write!(f, "Validation Error: {} errors", response.errors.len())
             }
             HttpError::Custom { status, body } => write!(f, "Custom Error ({status}): {body}"),
             HttpError::WithSource {
@@ -333,4 +363,107 @@ macro_rules! map_error {
             }
         )*
     };
+}
+
+// ── Rejection → HttpError: the default envelope ───────────────────────
+
+/// `HttpError` is the default projector. Its **own** bodies are byte-equal to
+/// 0.4 (`{"error": msg}`, `{"error":"Validation failed","details":[…]}`; an
+/// opaque response is passed through by [`Rejection::project`]). Extractor
+/// rejections that 0.4 answered with axum's `text/plain` body (`Json`, `Path`,
+/// `Query`, `Form`, headers, multipart, content type, body limit) now render
+/// through this envelope as `{"error": msg}`, at the same status — see
+/// `docs/migration/error-projection.md`.
+///
+/// Reads `rejection.status`, never the kind table, so an envelope built on
+/// top of `HttpError` (`#[error(transparent)]`) inherits status remaps.
+impl From<Rejection> for HttpError {
+    fn from(rejection: Rejection) -> Self {
+        let Rejection {
+            kind,
+            status,
+            message,
+            details,
+            source,
+            ..
+        } = rejection;
+        match (kind, details) {
+            (RejectionKind::Validation, Some(details)) => {
+                match serde_json::from_value::<Vec<crate::web::validation::FieldError>>(details) {
+                    // Keep the (possibly remapped) status: an envelope that
+                    // delegates to `HttpError` must render its own
+                    // `status_of(Validation)`, not a fixed 400.
+                    Ok(errors) => HttpError::Validation {
+                        status,
+                        response: crate::web::validation::ValidationErrorResponse { errors },
+                    },
+                    Err(_) => HttpError::from_status(status, message),
+                }
+            }
+            // `HttpError::Custom` round-trips through `details`; so does any
+            // fault that ships a full body.
+            (_, Some(body)) => HttpError::Custom { status, body },
+            (_, None) => match source {
+                Some(source) => HttpError::WithSource {
+                    status,
+                    message,
+                    source,
+                },
+                None => HttpError::from_status(status, message),
+            },
+        }
+    }
+}
+
+impl ErrorSchema for HttpError {
+    fn body_schema() -> Option<(String, serde_json::Value)> {
+        Some((
+            "ErrorResponse".to_string(),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "error": {
+                        "type": "string",
+                        "description": "A human-readable error message"
+                    }
+                },
+                "required": ["error"]
+            }),
+        ))
+    }
+
+    fn body_schema_for(kind: RejectionKind) -> Option<(String, serde_json::Value)> {
+        match kind {
+            RejectionKind::Validation => Some((
+                "ValidationErrorResponse".to_string(),
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "error": {
+                            "type": "string",
+                            "description": "Always \"Validation failed\""
+                        },
+                        "details": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "field": { "type": "string" },
+                                    "message": { "type": "string" },
+                                    "code": { "type": "string" }
+                                },
+                                "required": ["field", "message", "code"]
+                            }
+                        }
+                    },
+                    "required": ["error", "details"]
+                }),
+            )),
+            _ => None,
+        }
+    }
+
+    fn opaque_passthrough() -> bool {
+        true
+    }
 }

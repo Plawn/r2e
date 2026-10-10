@@ -206,14 +206,10 @@ async fn search(&self, q: SearchQuery) -> Json<Hits> { /* ... */ }
 ```
 
 The one visible difference is the 400 body: `Query<T>` answers with serde's
-plain text, `Params` with a JSON problem body by default. It is an app-level
-setting, resolved once at `build_state()`:
-
-```yaml
-server:
-  params-rejection-format: json         # default → {"error": "..."}
-  # params-rejection-format: plain-text # byte-for-byte `Query<T>` compatibility
-```
+plain text, `Params` with a `Rejection` (`InvalidPath` / `InvalidQuery` /
+`InvalidHeader`) rendered by the route's error envelope — `{"error": "..."}`
+with the default `HttpError`, or whatever a custom envelope emits
+(`docs/claude/error-handling.md`).
 
 Handlers that want to inspect a raw rejection themselves can take
 `Result<Query<T>, QueryRejection>`: `QueryRejection`, `PathRejection`,

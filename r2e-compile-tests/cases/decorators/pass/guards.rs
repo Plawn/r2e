@@ -26,7 +26,7 @@ impl<I: Identity> Guard<I> for CustomGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }
@@ -94,7 +94,7 @@ impl Guard<AuthenticatedUser> for ProjectGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, AuthenticatedUser>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let _user = ctx
                 .identity
@@ -129,7 +129,7 @@ impl Guard<AuthenticatedUser> for SbomGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, AuthenticatedUser>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let _user = ctx
                 .identity

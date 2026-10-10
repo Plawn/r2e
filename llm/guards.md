@@ -1,7 +1,7 @@
 ---
 topic: guards
 features: core, rate-limit
-tokens: ~2500
+tokens: ~2700
 requires: security
 ---
 
@@ -16,10 +16,18 @@ requires: security
 - Bean or config deps: `#[derive(DecoratorBean)]` with `#[inject]` / `#[config]`
   fields, applied as `MyGuard::spec(args)` (plain fields, declaration order). A
   missing bean is a compile error at `register_controller()`.
-- Deny with `Err(GuardError::forbidden(…).into())` / `unauthorized` /
-  `new(status, msg)`; read the request through `GuardContext`.
-- Checks that must run **before** JWT extraction implement `PreAuthGuard` and
-  are applied with `#[pre_guard(…)]`.
+- `check` returns `Result<(), Rejection>`: deny with
+  `Err(GuardError::forbidden(…).into())` / `unauthorized` / `new(status, msg)`
+  or any `Rejection` constructor; read the request through `GuardContext`. The
+  built-in guards deny with typed errors — `RolesDenied` (r2e-security),
+  `RateLimited` (r2e-rate-limit, carries `Retry-After`), `FgaDenied`
+  (r2e-openfga) — which convert into `Rejection` with `?`. The denial is
+  rendered by the route's error envelope (see `llm/error-handling.md`).
+- Guards run **before** the handler's own parameters are extracted and before
+  the body is read: a denied request never deserializes its body.
+- Checks that must run **before** identity extraction implement `PreAuthGuard`
+  and are applied with `#[pre_guard(…)]`; they are the first step of the
+  generated handler, not a middleware layer.
 - Rate limiting needs feature `rate-limit` and `.provide(RateLimitRegistry::default())`;
   `PreRateLimit` is pre-auth, `RateLimit::per_user` is post-auth.
 - `window_secs` must be > 0 (every constructor panics on 0), and a per-user
@@ -44,7 +52,7 @@ pub struct BlockUser;
 impl SelfBuilt for BlockUser {}            // one line: the expression IS the guard
 
 impl<I: Identity> Guard<I> for BlockUser {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
         if ctx.identity_sub() == Some("blocked-user") {
             return Err(GuardError::forbidden("Blocked").into());
         }
@@ -90,7 +98,7 @@ pub struct ProjectGuard {
 }
 
 impl<I: Identity> Guard<I> for ProjectGuard {
-    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
         Ok(())                              // uses self.pool / self.tenant / self.min_role
     }
 }
@@ -123,9 +131,11 @@ that names every missing key at once, not a late panic when the guard is built.
 
 ### Pre-auth guards
 
-Run as middleware **before** JWT extraction (IP allowlists, pre-auth rate
-limits). Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no identity),
-apply with `#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
+Run **before** identity extraction (IP allowlists, pre-auth rate limits) as
+the first step of the generated handler — controller-level pre-guards, then the
+route's own. Implement `PreAuthGuard` (context: `PreAuthGuardContext`, no
+identity; `check` returns `Result<(), Rejection>`), apply with
+`#[pre_guard(MyPreGuard)]`. Supported on SSE and WS routes too.
 
 ### Rate limiting
 

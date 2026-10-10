@@ -125,13 +125,19 @@ impl DecoratorSpec for DbAudit {
 ## Guards
 
 Handler-level guards run before the handler body and can short-circuit with
-an error response. The `Guard<I: Identity>` trait
+a typed denial. The `Guard<I: Identity>` trait
 (`r2e-core/src/decorators/guards.rs`) defines async
-`check(&self, ctx) -> Result<(), Response>` — **no state parameter**; a
-guard's beans are fields, injected at build time.
+`check(&self, ctx) -> Result<(), Rejection>` — **no state parameter**; a
+guard's beans are fields, injected at build time. The `Rejection` is rendered
+by the route's error envelope (return-type `Result<T, E>` or the app-level
+`error_projection::<E>()`, see `docs/claude/error-handling.md`), never by the
+guard itself. Guards run **before** the handler's own parameters are extracted
+(path/query/header, then body): a denied request never reads its body.
 
 `GuardContext<'a, I: Identity>` provides:
-- `method_name`, `controller_name` — handler identification
+- `method_name`, `controller_name` — handler identification. `controller_name`
+  is module-qualified (`concat!(module_path!(), "::", "Name")`) on every
+  transport — HTTP, gRPC and MCP — since rate-limit buckets key on it.
 - `headers` — request headers (`&HeaderMap`)
 - `uri` — request URI (`&Uri`) with convenience methods `path()` and `query_string()`
 - `path_params` — typed path parameters (`path_param()`, `parse_path_param()`)
@@ -204,10 +210,12 @@ concrete `AuthenticatedUser` type: `sub()` (required), `email()` /
 ### Pre-authentication guards
 
 For checks that don't need identity (IP rate limiting, allowlisting):
-`PreAuthGuard` (no generics). Pre-auth guards run as middleware **before**
-JWT extraction. Context: `PreAuthGuardContext` (no identity). They are
-prebuilt like everything else (`__R2ePreDeco_*` set, one `Arc` captured by
-the middleware closure). SSE and WS endpoints support `#[pre_guard]` too.
+`PreAuthGuard` (no generics, `check(&self, ctx) -> Result<(), Rejection>`).
+Pre-auth guards are the **first step of the generated entry fn**, before
+identity / `#[inject(request)]` extraction — not a middleware layer. Context:
+`PreAuthGuardContext` (no identity). They are prebuilt like everything else
+(`__R2ePreDeco_*` set, passed to the entry fn by `Controller::routes`). SSE and
+WS endpoints support `#[pre_guard]` too.
 
 ### Custom guards
 
@@ -226,7 +234,9 @@ the middleware closure). SSE and WS endpoints support `#[pre_guard]` too.
 Cross-cutting concerns (logging, timing, caching) implement `Interceptor<R>`
 with an `around` pattern (`r2e-core/src/decorators/interceptors.rs`). All calls are
 monomorphized (no `dyn`). `InterceptorContext` is a `Copy` struct
-`{ method_name, controller_name }` — no state field.
+`{ method_name, controller_name }` — no state field. Here `controller_name` is
+the bare type name (a log/metric label, not a key) on every transport;
+only guard contexts carry the qualified name.
 
 ### Built-in interceptors (in `r2e-utils`)
 
@@ -242,11 +252,18 @@ monomorphized (no `dyn`). `InterceptorContext` is a `Copy` struct
 
 ## Execution order (outermost → innermost)
 
-Pre-auth middleware level (runs BEFORE Axum extraction/JWT validation):
+Everything below runs inside one generated entry fn per route
+(`move |State(state), req: Request|`), which splits the request head first and
+reads the body only at the parameter step. Each failure is projected **once**
+through the route's error envelope (`Rejection` → `E`).
+
+Entry (before identity extraction):
 0. Controller-level `#[pre_guard]`s, then method-level `#[pre_guard]`s
    (`PreRateLimit::global/per_ip(...)`, custom pre-auth guards)
+0b. Request data: identity + `#[inject(request)]` fields (`RequestData<S>`),
+   then the identity parameter when the route takes one
 
-Handler level (after extraction, before controller body):
+Handler level (after identity, before parameters and controller body):
 1. Controller-level guards, then method-level guards — within each level,
    declaration order: `#[roles]`/`#[all_roles]` desugar to guard sites that
    run first, then `#[guard(...)]` sites top-to-bottom
@@ -280,7 +297,7 @@ one per intercepted `#[scheduled]`/`#[consumer]` method).
 
 **Design invariant:** Interceptors always see the handler's **raw return
 type** (`Json<T>`, `Result<Json<T>, E>`, etc.), never `Response`. The
-`IntoResponse::into_response()` conversion happens *after* the outermost
+`IntoHttpResponse::into_http_response()` conversion happens *after* the outermost
 interceptor. Guards short-circuit *before* interceptors.
 
 ## Controller-level guard family (impl-block `#[guard]`/`#[pre_guard]`/`#[roles]`/`#[all_roles]`)
@@ -301,8 +318,9 @@ macro), not just `#[intercept]`. Semantics (locked in task #906):
 - **`#[anonymous]` opts out of the post-auth half only** (Option Y): anonymous
   routes skip controller `#[guard]`/`#[roles]`/`#[all_roles]` but keep
   controller `#[pre_guard]`s and interceptors. Metadata follows suit:
-  controller roles/guards fold into `RouteInfo.roles`/`has_auth` for
-  non-anonymous endpoints only.
+  controller roles/guards fold into `RouteInfo.roles`/`rejection_kinds`
+  (`Forbidden` / `RateLimited`) for non-anonymous endpoints only; controller
+  pre-guards fold into every endpoint's kinds.
 - **`REQUIRES_IDENTITY` asserts** for controller guards use the OR over
   applicable endpoints: the placement is rejected only when it is statically
   always-`None` (no struct identity AND no non-anonymous route with an

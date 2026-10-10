@@ -757,8 +757,11 @@ Kept where the context lives rather than duplicated here:
   beat later registrations.
 - **Dev-reload re-reads `application.yaml` per patch** (deliberate: config is
   not pinned across hot-patches, unlike `.provide()`-ed beans).
-- **Per-transport guards until a third wire exists** (rule of three);
-  `GrpcRolesGuard`≈`RolesGuard` ~30-line duplication accepted.
+- **One guard trait for every wire** (superseded 2026-10-09 by #1072 P3): the
+  former "per-transport guards until a third wire" rule and its
+  `GrpcRolesGuard`≈`RolesGuard` duplication are gone — gRPC and MCP build a
+  `GuardContext` and project the `Rejection` by kind. Do not reintroduce a
+  transport-specific guard trait.
 - **Dev services are explicit** (`DevPostgres::shared()`), never
   config-sniffed.
 - **Bean interception is Quarkus-style, opt-in via `#[bean]` on the struct**

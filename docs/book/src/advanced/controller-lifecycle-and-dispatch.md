@@ -106,11 +106,14 @@ register_controller
   -> routes(&state, core.clone(), ctx)   // state is the inferred HList;
                                          // ctx is the resolved bean graph
                                          // (guards/interceptors are built from it)
-       for each route, register a closure that:
-         - captures an Arc clone of the core
-         - extracts __R2eRequestData_<Name> via FromRequestParts (state-generic)
+       for each route, register a `(State, Request)` closure that:
+         - captures an Arc clone of the core (+ prebuilt guards/interceptors)
+         - runs pre-auth guards, then extracts __R2eRequestData_<Name>
+           via RequestData<S> (state-generic, fails with a Rejection)
          - binds a stack façade (bind_request)
+         - runs guards, extracts the parameters (body last), validates
          - invokes the route method on the façade
+         - projects any failure once through the route's error envelope
 ```
 
 This is uniform for every controller, whether or not it declares request-scoped
@@ -148,32 +151,40 @@ Router::new().route(
     "/me",
     get({
         let core = core.clone(); // once per registered route
-        move |data: __R2eRequestData_AccountController, /* Axum extractors */| {
+        move |State(state), req: Request| {
             // Axum cloned this closure once for the request. Move that Arc
-            // directly into the façade; do not clone it again here.
+            // directly into the entry fn; do not clone it again here.
             async move {
+                let (mut parts, body) = req.into_parts();
+                let data = match __R2eRequestData_AccountController::extract(&mut parts, &state).await {
+                    Ok(d) => d,
+                    // one projection point: the route's error envelope
+                    Err(rejection) => return rejection.project::<HttpError>(),
+                };
                 // Bind the request-scoped values into the stack façade.
                 let controller = __r2e_meta_AccountController::bind_request(core, data);
+                let _ = body; // no body parameter: never read
                 // Route body runs on the façade: self.user is a façade field,
                 // self.service resolves to the core through Deref.
-                controller.me(/* arguments */).await
+                controller.me(/* arguments */).await.into_http_response()
             }
         }
     }),
 )
 ```
 
-`__R2eRequestData_AccountController` is the generated `FromRequestParts`
+`__R2eRequestData_AccountController` is the generated `RequestData<S>`
 extractor that produces the request-scoped values (identity and any
-`#[inject(request)]` fields). `bind_request` moves those values, together with
-the core `Arc`, into the `__R2eRequest_AccountController` façade.
+`#[inject(request)]` fields) or a typed `Rejection`. `bind_request` moves those
+values, together with the core `Arc`, into the `__R2eRequest_AccountController`
+façade.
 
 This provides the current runtime properties per request:
 
 - one core construction at registration (shared across all requests);
 - one `Arc` clone of the core per request;
-- one `FromRequestParts` extraction binding a stack façade;
-- pre-auth guards assembled within the same state-aware registration path,
+- one `RequestData` extraction binding a stack façade;
+- pre-auth guards running first inside the same entry fn (no middleware layer),
 
 with one generated Axum handler and one full invocation body per endpoint. No
 request `Extension<Arc<C>>` lookup, no task-local identity, and no per-request DI

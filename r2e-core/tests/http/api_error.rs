@@ -238,3 +238,165 @@ fn source_some_for_from_variant() {
     let err: MixedError = io_err.into();
     assert!(std::error::Error::source(&err).is_some());
 }
+
+// ── #[error(rejection)]: the enum becomes a projection envelope ─────────
+
+#[derive(Debug, ApiError)]
+pub enum Envelope {
+    #[error(status = CONFLICT)]
+    Duplicate,
+    #[error(status = 418)]
+    Teapot,
+    #[error(rejection)]
+    Rejected(Rejection),
+}
+
+#[r2e_core::test]
+async fn rejection_variant_wraps_the_framework_failure() {
+    let err: Envelope = Rejection::not_found("no such thing").into();
+    assert!(matches!(err, Envelope::Rejected(_)));
+    assert_eq!(err.to_string(), "no such thing");
+    assert!(std::error::Error::source(&err).is_some());
+
+    let (status, body) = error_parts(err).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "no such thing");
+}
+
+#[r2e_core::test]
+async fn rejection_variant_keeps_hub_headers_and_carried_status() {
+    use r2e_core::http::header::{HeaderValue, RETRY_AFTER};
+    let r = Rejection::with_status(
+        RejectionKind::RateLimited,
+        StatusCode::TOO_MANY_REQUESTS,
+        "Rate limit exceeded",
+    )
+    .header(RETRY_AFTER, HeaderValue::from_static("3"));
+    let resp = Envelope::from(r).into_response();
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(resp.headers()[RETRY_AFTER], "3");
+
+    let resp = Rejection::with_status(RejectionKind::BadRequest, StatusCode::IM_A_TEAPOT, "t")
+        .project::<Envelope>();
+    assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+}
+
+#[test]
+fn rejection_variant_derives_error_schema() {
+    assert_eq!(
+        Envelope::status_of(RejectionKind::Validation),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        Envelope::status_of(RejectionKind::InvalidBody),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(Envelope::body_schema(), HttpError::body_schema());
+    assert_eq!(
+        Envelope::body_schema_for(RejectionKind::Validation),
+        HttpError::body_schema_for(RejectionKind::Validation)
+    );
+    assert!(Envelope::opaque_passthrough());
+    assert_eq!(
+        Envelope::extra_statuses(),
+        vec![
+            (StatusCode::CONFLICT, "Duplicate"),
+            (StatusCode::IM_A_TEAPOT, "Teapot"),
+        ]
+    );
+}
+
+#[derive(Debug, ApiError)]
+pub enum NamedEnvelope {
+    #[error(status = BAD_GATEWAY, message = "upstream {service} is down")]
+    Upstream { service: String },
+    #[error(status = BAD_GATEWAY)]
+    UpstreamToo,
+    #[error(rejection)]
+    Rejected { inner: Rejection },
+}
+
+#[r2e_core::test]
+async fn rejection_variant_with_a_named_field() {
+    let err = NamedEnvelope::from(Rejection::forbidden("nope"));
+    assert!(matches!(err, NamedEnvelope::Rejected { .. }));
+    let (status, body) = error_parts(err).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error"], "nope");
+    // Duplicate statuses collapse.
+    assert_eq!(
+        NamedEnvelope::extra_statuses(),
+        vec![(StatusCode::BAD_GATEWAY, "Upstream")]
+    );
+}
+
+// `#[error(transparent)]` over a `Rejection` field is the same thing.
+#[derive(Debug, ApiError)]
+pub enum TransparentEnvelope {
+    #[error(status = NOT_FOUND)]
+    Missing,
+    #[error(transparent)]
+    Framework(#[from] Rejection),
+}
+
+#[r2e_core::test]
+async fn transparent_over_rejection_is_the_rejection_variant() {
+    let err: TransparentEnvelope = Rejection::unauthenticated().into();
+    assert!(matches!(err, TransparentEnvelope::Framework(_)));
+    assert_eq!(err.to_string(), "Unauthorized");
+    let (status, body) = error_parts(err).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "Unauthorized");
+    assert_eq!(
+        TransparentEnvelope::extra_statuses(),
+        vec![(StatusCode::NOT_FOUND, "Missing")]
+    );
+}
+
+// An enum transparent over `HttpError` inherits its projection.
+#[derive(Debug, ApiError)]
+pub enum OverHttpError {
+    #[error(status = BAD_GATEWAY)]
+    Upstream,
+    #[error(transparent)]
+    Http(#[from] HttpError),
+}
+
+#[r2e_core::test]
+async fn transparent_over_http_error_inherits_projection() {
+    let err = OverHttpError::from(Rejection::not_found("gone"));
+    assert!(matches!(err, OverHttpError::Http(HttpError::NotFound(_))));
+    let (status, body) = error_parts(err).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "gone");
+
+    // `From<HttpError>` from `#[from]` is still there.
+    let err = OverHttpError::from(HttpError::Forbidden("no".into()));
+    assert!(matches!(err, OverHttpError::Http(_)));
+
+    assert!(OverHttpError::opaque_passthrough());
+    assert_eq!(OverHttpError::body_schema(), HttpError::body_schema());
+    assert_eq!(
+        OverHttpError::extra_statuses(),
+        vec![(StatusCode::BAD_GATEWAY, "Upstream")]
+    );
+}
+
+// Generic enums get the impls too.
+#[derive(Debug, ApiError)]
+pub enum GenericEnvelope<T: std::fmt::Debug + Send + Sync + 'static> {
+    #[error(status = CONFLICT)]
+    Conflict(T),
+    #[error(rejection)]
+    Rejected(Rejection),
+}
+
+#[test]
+fn generic_envelope_projects() {
+    let err: GenericEnvelope<u32> = Rejection::internal("x").into();
+    assert!(matches!(err, GenericEnvelope::Rejected(_)));
+    assert_eq!(
+        <GenericEnvelope<u32>>::extra_statuses(),
+        vec![(StatusCode::CONFLICT, "Conflict")]
+    );
+}

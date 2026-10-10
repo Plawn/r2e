@@ -111,3 +111,64 @@ async fn json_body_format() {
     assert!(body.get("error").is_some());
     assert!(body.get("error").unwrap().is_string());
 }
+
+// ---------------------------------------------------------------------------
+// Rejection hub (error projection, #1072)
+// ---------------------------------------------------------------------------
+
+mod rejection {
+    use r2e_core::error::{Rejection, RejectionKind};
+    use r2e_core::http::header::WWW_AUTHENTICATE;
+    use r2e_core::http::StatusCode;
+    use r2e_security::error::SecurityError;
+
+    #[test]
+    fn client_errors_become_unauthenticated_with_a_challenge() {
+        for err in [
+            SecurityError::MissingAuthHeader,
+            SecurityError::InvalidAuthScheme,
+            SecurityError::InvalidToken("bad".into()),
+            SecurityError::TokenExpired,
+            SecurityError::UnknownKeyId("kid".into()),
+            SecurityError::ValidationFailed("aud".into()),
+        ] {
+            let debug = format!("{err:?}");
+            let rejection = Rejection::from(err);
+            assert_eq!(rejection.kind, RejectionKind::Unauthenticated, "{debug}");
+            assert_eq!(rejection.status, StatusCode::UNAUTHORIZED, "{debug}");
+            assert_eq!(rejection.message, "Unauthorized", "{debug}");
+            assert_eq!(
+                rejection.headers.get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap()),
+                Some("Bearer"),
+                "{debug}"
+            );
+            assert!(rejection.source.is_some(), "{debug}: source is kept");
+        }
+    }
+
+    #[test]
+    fn jwks_failure_is_unavailable_without_a_challenge() {
+        let rejection = Rejection::from(SecurityError::JwksFetchError("timeout".into()));
+        assert_eq!(rejection.kind, RejectionKind::Unavailable);
+        assert_eq!(rejection.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(rejection.message, "Service unavailable");
+        assert!(rejection.headers.get(WWW_AUTHENTICATE).is_none());
+    }
+
+    #[test]
+    fn the_source_is_the_original_error() {
+        let rejection = Rejection::from(SecurityError::InvalidToken("bad".into()));
+        let source = rejection.source.expect("source");
+        let sec = source
+            .downcast_ref::<SecurityError>()
+            .expect("source is the SecurityError");
+        assert!(matches!(sec, SecurityError::InvalidToken(s) if s == "bad"));
+    }
+
+    #[test]
+    fn public_message_never_leaks_the_detail() {
+        let rejection = Rejection::from(SecurityError::InvalidToken("secret detail".into()));
+        assert!(!rejection.message.contains("secret detail"));
+        assert!(!format!("{rejection}").contains("secret detail"));
+    }
+}

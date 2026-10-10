@@ -94,26 +94,27 @@ pub struct __R2eRequestData_UserController<__M> {
 // State-generic: works with any inferred HList state `S`. Each request-scoped
 // field is extracted through `FromRequestPartsVia<S, M>`, which lets a
 // bean-backed extractor park its `HasBean` index witness in the marker `M`.
-impl<S> r2e::http::extract::FromRequestParts<S> for __R2eRequestData_UserController<()>
+// The impl is R2E's `RequestData<S>` (not axum's `FromRequestParts`): a
+// failure is a typed `Rejection` the route projects through its error envelope.
+impl<S> r2e::web::extract::RequestData<S> for __R2eRequestData_UserController<()>
 where
     S: Send + Sync,
 {
-    type Rejection = r2e::http::response::Response;
-
-    async fn from_request_parts(
+    async fn extract(
         __parts: &mut r2e::http::header::Parts,
         __state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    ) -> Result<Self, r2e::Rejection> {
         Ok(Self { __markers: core::marker::PhantomData })
     }
 }
 ```
 
-This is the only per-request extraction. When the controller has no request-scoped
-fields the extractor is marker-only and infallible (implemented for `__M = ()`).
-Plain axum `FromRequestParts<S>` extractors reach this path through the blanket
-`ViaAxum` bridge; R2E-owned extractors (like `AuthenticatedUser`) go through
-`FromRequestPartsVia` / `BeanExtract<T, I>`.
+This is the only per-request extraction of request-scoped values. When the
+controller has no request-scoped fields the extractor is marker-only and
+infallible (implemented for `__M = ()`). Plain axum `FromRequestParts<S>`
+extractors reach this path through the blanket `ViaAxum` bridge (their
+rejection must convert `Into<Rejection>`); R2E-owned extractors (like
+`AuthenticatedUser`) go through `FromRequestPartsVia` / `BeanExtract<T, I>`.
 
 ### 4. Request façade `__R2eRequest_UserController` + `Deref`
 
@@ -195,20 +196,35 @@ impl __R2eRequest_UserController {
     }
 }
 
-// Route closure (one Arc clone of the core captured once, cloned per request).
+// Route closure (one Arc clone of the core captured once, cloned per request)
+// delegating to one generated entry fn per endpoint.
 {
     let core = core.clone();
-    move |__data: __R2eRequestData_UserController| {
+    move |State(__state), __req: Request| {
         let core = core.clone();
-        async move {
-            let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
-            __ctrl.list().await
-        }
+        async move { __r2e_invoke_UserController_list(__state, __req, core).await }
     }
+}
+
+async fn __r2e_invoke_UserController_list<S, __M>(
+    __state: S, __req: Request, __core: Arc<UserController>,
+) -> Response {
+    let (mut __parts, __body) = __req.into_parts();
+    let __data = match __R2eRequestData_UserController::<__M>::extract(&mut __parts, &__state).await {
+        Ok(d) => d,
+        // Projected once through the route's error envelope (default: HttpError).
+        Err(rejection) => return rejection.project::<HttpError>(),
+    };
+    let __ctrl = __r2e_meta_UserController::bind_request(__core, __data);
+    let _ = __body; // no body parameter on this route: never read
+    __ctrl.list().await.into_http_response()
 }
 ```
 
-The closure binds the façade from the captured core `Arc` and the extracted request data, then delegates to the method.
+The entry fn splits the request head, extracts the request data, binds the
+façade from the captured core `Arc`, then delegates to the method. Every
+failure site returns through the same projection step: the route's `Result<T,
+E>` envelope when the return type declares one, else the app-level projection.
 
 ### Guarded handler (with `#[roles]`)
 
@@ -217,44 +233,49 @@ Guards are **built once at registration** from the resolved `BeanContext` (via
 (`__deco`) — one `Arc` per route, no state access at request time:
 
 ```rust
-move |
-    __headers: axum::http::HeaderMap,
-    __uri: axum::http::Uri,
-    __raw_path_params: axum::extract::RawPathParams,
-    __data: __R2eRequestData_UserController<()>,
-    Path(id): Path<i64>,
-| {
-    let core = core.clone();
-    let __deco = __deco.clone();     // prebuilt guards/interceptors
-    async move {
-        let __ctrl = __r2e_meta_UserController::bind_request(core, __data);
+async fn __r2e_invoke_UserController_get_by_id<S, __M>(
+    __state: S, __req: Request, __deco: Arc<__R2eDeco_get_by_id>, __core: Arc<UserController>,
+) -> Response {
+    let (mut __parts, __body) = __req.into_parts();
+    // 1. pre-auth guards (none here)  2. request data → façade
+    let __data = match __R2eRequestData_UserController::<__M>::extract(&mut __parts, &__state).await {
+        Ok(d) => d,
+        Err(rejection) => return rejection.project::<HttpError>(),
+    };
+    let __ctrl = __r2e_meta_UserController::bind_request(__core, __data);
 
-        // Guard check runs before method body; identity is read off the façade.
-        let __identity_ref = __r2e_meta_UserController::guard_identity(&__ctrl);
-        let __path_params = r2e::PathParams::from_raw(&__raw_path_params);
-        let __guard_ctx = r2e::GuardContext {
-            method_name: "get_by_id",
-            controller_name: "UserController",
-            headers: &__headers,
-            uri: &__uri,
-            path_params: __path_params,
-            identity: __identity_ref,
-        };
-        // The guard was built at registration; check() takes no state.
-        r2e::Guard::check(&__deco.__g0, &__guard_ctx)
-            .await
-            .map_err(/* ... */)?;
-
-        // Original method body, on the façade.
-        __ctrl.get_by_id(Path(id)).await
+    // 3. guards — before the route's own parameters, so a denied request never
+    //    deserializes its body. Identity is read off the façade.
+    let __guard_ctx = r2e::GuardContext {
+        method_name: "get_by_id",
+        controller_name: "UserController",
+        headers: &__parts.headers,
+        uri: &__parts.uri,
+        path_params: r2e::PathParams::from_parts(&__parts),
+        identity: __r2e_meta_UserController::guard_identity(&__ctrl),
+    };
+    // The guard was built at registration; check() takes no state and
+    // returns a typed `Rejection`.
+    if let Err(rejection) = r2e::Guard::check(&__deco.__g0, &__guard_ctx).await {
+        return rejection.project::<HttpError>();
     }
+
+    // 4. parameters (head extractors, then the body one last)
+    let Path(id) = match Path::<i64>::from_request_parts(&mut __parts, &__state).await {
+        Ok(v) => v,
+        Err(e) => return Rejection::from(e).project::<HttpError>(),
+    };
+    let _ = __body;
+
+    // Original method body, on the façade.
+    __ctrl.get_by_id(Path(id)).await.into_http_response()
 }
 ```
 
-Guarded handlers extract `HeaderMap` and `Uri` to build a `GuardContext`.
-`guard_identity` reads the identity directly from the façade. The guard itself
-(`__deco.__g0`) was constructed once at registration, so there is no `State`
-extraction and no per-request DI.
+Guarded handlers build the `GuardContext` from the already-split request
+parts. `guard_identity` reads the identity directly from the façade. The guard
+itself (`__deco.__g0`) was constructed once at registration, so there is no
+`State` lookup and no per-request DI.
 
 ### `Controller<S, W>` impl
 

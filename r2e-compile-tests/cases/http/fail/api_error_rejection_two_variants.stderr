@@ -1,0 +1,5 @@
+error: only one variant may carry the `Rejection` (`First` already does): `From<Rejection>` would be ambiguous
+ --> cases/http/fail/api_error_rejection_two_variants.rs:8:5
+  |
+8 |     Second(Rejection),
+  |     ^^^^^^

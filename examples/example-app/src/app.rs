@@ -30,6 +30,7 @@ use controllers::event_controller::UserEventConsumer;
 use controllers::mixed_controller::MixedController;
 use controllers::notification_controller::NotificationController;
 use controllers::order_controller::OrderController;
+use controllers::problem_controller::{ProblemController, TicketService};
 use controllers::proxy_controller::ProxyController;
 use controllers::report_controller::ReportController;
 use controllers::scheduled_controller::ScheduledJobs;
@@ -38,6 +39,7 @@ use controllers::upload_controller::UploadController;
 use controllers::user_controller::UserController;
 use controllers::ws_controller::WsEchoController;
 pub use env::demo_token;
+use error::AppError;
 use env::{provision_env, AppEnv};
 use services::{OrderService, UserService};
 
@@ -142,6 +144,15 @@ impl App for ExampleApp {
             .provide(env.notification_service)
             .provide(fga)
             .provide(DocumentService::seeded())
+            .provide(TicketService::seeded())
+            // App-level error envelope (the JAX-RS `ExceptionMapper` seat):
+            // renders every failure of a route whose return type is not a
+            // `Result<T, E>` envelope, plus 404/405/413 and caught panics.
+            // `AppError` inherits `From<Rejection>` + `ErrorSchema` from its
+            // transparent `HttpError` variant, so the bodies stay `{"error": ..}`.
+            // Routes returning `Result<T, Problem>` keep their own shape — see
+            // `ProblemController`.
+            .error_projection::<AppError>()
             .register_module::<UserModule>()
             // Both modules must be registered — `imports(module(UserModule))`
             // wires the dependency at the type level but does not auto-register.
@@ -199,6 +210,7 @@ impl App for ExampleApp {
                 UploadController,
                 ProxyController,
                 DocumentController,
+                ProblemController,
             )>()
     })
     }

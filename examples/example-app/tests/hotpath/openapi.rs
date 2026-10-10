@@ -34,7 +34,8 @@ fn route(i: usize) -> RouteInfo {
         roles: Vec::new(),
         tag: Some("generated".into()),
         deprecated: false,
-        has_auth: false,
+        rejection_kinds: vec![],
+        error_schema: None,
     }
 }
 

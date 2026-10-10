@@ -115,6 +115,7 @@ fn make_deferred_context<'a>(
         // Slots the raw-mechanics tests below don't inspect. Leaked so the
         // helper can hand out `&'a mut` without changing every call site.
         routes_effects: Box::leak(Box::new(Vec::new())),
+        post_drain_async_hooks: Box::leak(Box::new(Vec::new())),
         normalize_path: Box::leak(Box::new(false)),
         dev_reload_applied: Box::leak(Box::new(false)),
     }

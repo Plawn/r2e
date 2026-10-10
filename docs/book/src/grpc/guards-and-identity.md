@@ -1,72 +1,19 @@
 # Guards and Identity
 
-> **Status:** The guard and identity infrastructure is implemented in `r2e-grpc` as runtime types, but **not yet wired into the `#[grpc_routes]` macro**. Currently, only `#[intercept]` is supported as a method decorator. `#[roles]`, `#[guard]`, and `#[inject(identity)]` will be enabled in a future release.
+gRPC methods use the **same** guard model as HTTP routes: `Guard<I>`,
+`#[guard(...)]`, `#[roles(...)]`, `#[all_roles(...)]` and `#[inject(identity)]`
+parameters. A guard written for HTTP runs on a gRPC method unchanged. The only
+transport-specific pieces are *how* the identity is read (from `authorization`
+metadata) and *how* a `Rejection` becomes a `tonic::Status`.
 
-## Manual identity extraction (available now)
+## Identity extraction
 
-While `#[inject(identity)]` is not yet available as a macro decorator, you can extract identity manually using the runtime functions:
-
-```rust
-use r2e::r2e_grpc::{extract_bearer_token, GrpcIdentityExtractor};
-
-#[grpc_routes(proto::greeter::greeter_server::Greeter)]
-impl GreeterService {
-    async fn say_hello(
-        &self,
-        request: tonic::Request<HelloRequest>,
-    ) -> Result<tonic::Response<HelloReply>, tonic::Status> {
-        let metadata = request.metadata();
-        let claims = GrpcIdentityExtractor::extract_claims(metadata, &self.jwt_validator).await?;
-        // `claims` is `r2e::StandardClaims` — the same typed claim set HTTP uses.
-        let tenant = claims.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("-");
-
-        Ok(tonic::Response::new(HelloReply {
-            message: format!("Hello {} ({tenant})!", claims.sub),
-        }))
-    }
-}
-```
-
-This requires the controller to have `#[inject] jwt_validator: Arc<JwtClaimsValidator>`, and `r2e-security`'s `grpc` feature — turned on automatically when `r2e` is built with both `grpc` and `security` — which implements `JwtClaimsValidatorLike` for `JwtClaimsValidator`.
-
-## Runtime types (available now)
-
-The following types are exported by `r2e-grpc` and ready for use:
-
-| Type | Description |
-|------|-------------|
-| `GrpcGuard<I>` | Guard trait for gRPC methods (analog of `Guard<I>` for HTTP) |
-| `GrpcGuardContext<'a, I>` | Context passed to guards (service name, method name, metadata, identity) |
-| `GrpcRolesGuard` | Built-in guard that checks required roles |
-| `GrpcRoleBasedIdentity` | Extension trait for identity types that carry roles |
-| `GrpcIdentityExtractor` | JWT extraction from gRPC metadata |
-| `JwtClaimsValidatorLike` | Trait abstracting JWT validation → `StandardClaims` (implemented by `JwtClaimsValidator` under `r2e-security/grpc`; blanket impl for `Arc<T>`) |
-
-### Guard context
-
-`GrpcGuardContext` provides access to service metadata and identity:
-
-| Field/Method | Type | Description |
-|---|---|---|
-| `service_name` | `&'static str` | Proto service name |
-| `method_name` | `&'static str` | RPC method name |
-| `metadata` | `&MetadataMap` | gRPC request metadata |
-| `identity` | `Option<&I>` | Authenticated identity (if extracted) |
-| `identity_sub()` | `Option<&str>` | Subject from identity |
-| `identity_email()` | `Option<&str>` | Email from identity |
-| `identity_claims()` | `Option<&StandardClaims>` | Typed JWT claims |
-
----
-
-The following sections document the **planned API** for when macro support is enabled. The runtime types above already support these patterns — only the macro integration is pending.
-
----
-
-## Identity extraction (planned)
-
-`#[inject(identity)]` on method parameters will extract authenticated identity from gRPC metadata:
+Add an `#[inject(identity)]` parameter to the method. The identity is extracted
+from the request metadata before the handler body runs:
 
 ```rust
+use r2e::r2e_security::AuthenticatedUser;
+
 #[grpc_routes(proto::greeter::greeter_server::Greeter)]
 impl GreeterService {
     async fn say_hello(
@@ -82,11 +29,19 @@ impl GreeterService {
 }
 ```
 
-Identity is extracted from the `authorization` metadata key using the `Bearer` scheme, then validated with `JwtClaimsValidator` — the same validator used for HTTP requests.
+The identity parameter can sit before or after the request parameter — the
+generated tonic method keeps the trait's signature and passes both to yours.
 
-### Optional identity (planned)
+Identity is read from the `authorization` metadata key using the `Bearer`
+scheme, then validated with `JwtClaimsValidator` — the same validator bean HTTP
+uses. A missing or invalid token answers `UNAUTHENTICATED` before any guard
+runs; the `WWW-Authenticate: Bearer` header the HTTP side emits travels as
+response metadata.
 
-Use `Option<AuthenticatedUser>` for methods that work with or without authentication:
+### Optional identity
+
+Use `Option<AuthenticatedUser>` for methods that work with or without
+authentication:
 
 ```rust
 async fn say_hello(
@@ -102,20 +57,57 @@ async fn say_hello(
 }
 ```
 
+No `authorization` metadata yields `None`. A token that *is* present but
+invalid is still rejected with `UNAUTHENTICATED` — optional means "anonymous is
+fine", not "garbage is fine".
+
 ### How extraction works
 
-The extraction pipeline (implemented in `r2e_grpc::identity`):
+`#[inject(identity)]` on a gRPC method requires the parameter type to implement
+`GrpcIdentity` (`r2e_grpc::GrpcIdentity`):
 
-1. Read `authorization` metadata from `tonic::Request`
-2. Strip the `Bearer ` prefix (supports `Bearer` and `bearer`)
-3. Validate the token with `JwtClaimsValidator` (the `Arc<JwtClaimsValidator>` bean read from the resolved graph)
-4. Build `AuthenticatedUser` from the validated claims
+```rust,ignore
+pub trait GrpcIdentity: Identity + Sized {
+    /// The `DecoratorSpec` that resolves the extractor (e.g. the validator bean)
+    /// from the bean graph — once, at registration.
+    type Spec: DecoratorSpec;
+    fn spec() -> Self::Spec;
 
-If validation fails, the method returns `Status::unauthenticated` before the handler body runs.
+    /// Per call: read the metadata, build the identity.
+    fn extract(
+        extractor: &<Self::Spec as DecoratorSpec>::Product,
+        metadata: &MetadataMap,
+    ) -> impl Future<Output = Result<Self, Rejection>> + Send;
 
-## Role-based guards (planned)
+    /// `Ok(None)` when no `authorization` metadata is present; otherwise `extract`.
+    fn extract_optional(..) -> impl Future<Output = Result<Option<Self>, Rejection>> + Send;
+}
+```
 
-`#[roles("...")]` will restrict methods to specific roles:
+`AuthenticatedUser` implements it (under `r2e-security`'s `grpc` feature — on
+automatically when `r2e` is built with `grpc` + `security`) with
+`Spec = JwtIdentitySpec`, whose product is the `Arc<JwtClaimsValidator>` bean.
+The pipeline per call:
+
+1. Read `authorization` metadata (`r2e_grpc::bearer_token`, accepts `Bearer`
+   and `bearer`).
+2. Validate the token with the `JwtClaimsValidator` bean resolved at
+   registration.
+3. Build `AuthenticatedUser` from the validated `StandardClaims`.
+
+Any failure is a `Rejection` of kind `Unauthenticated`, projected onto
+`Status::unauthenticated` by `rejection_to_status`.
+
+Because the extractor is a `DecoratorSpec`, the validator is a **compile-time
+dependency** of the service: forgetting to `.provide()` the
+`Arc<JwtClaimsValidator>` bean fails at `register_grpc_service::<S>()` with the
+usual "was not provided to the AppBuilder" error, exactly like a missing guard
+dependency.
+
+## Role-based guards
+
+`#[roles("...")]` restricts a method to callers holding one of the roles;
+`#[all_roles("...")]` requires all of them:
 
 ```rust
 #[grpc_routes(proto::greeter::greeter_server::Greeter)]
@@ -123,6 +115,7 @@ impl GreeterService {
     #[roles("admin")]
     async fn say_hello_admin(
         &self,
+        #[inject(identity)] user: AuthenticatedUser,
         request: tonic::Request<HelloRequest>,
     ) -> Result<tonic::Response<HelloReply>, tonic::Status> {
         // Only reachable if the caller has the "admin" role
@@ -133,40 +126,44 @@ impl GreeterService {
 }
 ```
 
-The built-in `GrpcRolesGuard` checks roles via the `GrpcRoleBasedIdentity` trait. If the caller lacks the required role, the guard returns `Status::permission_denied("Insufficient roles")`.
+This is the HTTP `RolesGuard` — it needs an identity to read roles from, so a
+`#[roles]` method **must** declare an `#[inject(identity)]` parameter. Without
+one the identity type is `NoIdentity`, which does not implement
+`RoleBasedIdentity`, and the build fails with
+"the trait bound `NoIdentity: RoleBasedIdentity` is not satisfied". A caller
+lacking the role gets `PERMISSION_DENIED` ("Insufficient roles").
 
-## Custom guards (planned)
+## Custom guards
 
-Implement the `GrpcGuard` trait for custom authorization logic:
+Implement `Guard<I>` — the HTTP guard trait — and apply it with `#[guard(...)]`.
+The context is a `GuardContext` built from the request: `headers` is the
+metadata map viewed as an `http::HeaderMap`, `extensions` and `peer_addr` come
+from the tonic request.
 
 ```rust
 use std::future::Future;
-use r2e::r2e_grpc::{GrpcGuard, GrpcGuardContext};
-use r2e::Identity;
-use tonic::Status;
+use r2e::{Guard, GuardContext, Identity, Rejection, SelfBuilt};
 
-struct TenantGuard;
+pub struct TenantGuard;
 
-impl<I: Identity> GrpcGuard<I> for TenantGuard {
+impl SelfBuilt for TenantGuard {}
+
+impl<I: Identity> Guard<I> for TenantGuard {
     fn check(
         &self,
-        ctx: &GrpcGuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Status>> + Send {
+        ctx: &GuardContext<'_, I>,
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
+        let has_tenant = ctx.headers.contains_key("x-tenant-id");
         async move {
-            let tenant = ctx.metadata
-                .get("x-tenant-id")
-                .and_then(|v| v.to_str().ok());
-
-            match tenant {
-                Some(_) => Ok(()),
-                None => Err(Status::permission_denied("Missing tenant ID")),
+            if has_tenant {
+                Ok(())
+            } else {
+                Err(Rejection::forbidden("Missing tenant ID"))
             }
         }
     }
 }
 ```
-
-Once enabled, apply with `#[guard(...)]`:
 
 ```rust
 #[guard(TenantGuard)]
@@ -178,46 +175,31 @@ async fn create_user(
 }
 ```
 
-### Guards that need beans (planned)
+Guards go through `DecoratorSpec` exactly as on HTTP: a guard that needs a
+bean uses `#[derive(DecoratorBean)]`, and the dependency is checked at
+`register_grpc_service`. See [Custom Guards](../advanced/custom-guards.md) —
+every pattern there applies verbatim.
 
-Unlike HTTP guards, gRPC guards do **not** go through `DecoratorSpec` — they are
-plain `GrpcGuard<I>` implementations. A guard that needs a database pool (or any
-service) holds it as a **field**, constructed by the caller who wires the guard
-onto the service:
+A guard whose spec declares `REQUIRES_IDENTITY` (it only makes sense with a
+`Some` identity) on a method without an `#[inject(identity)]` parameter is a
+compile error: the guard could never pass.
+
+### Controller-level guards
+
+`#[guard]`, `#[roles]` and `#[all_roles]` on the `#[grpc_routes]` impl block
+apply to every method, before the method's own guards:
 
 ```rust
-struct ActiveUserGuard {
-    pool: SqlitePool,   // resolved by the caller, held as a field
-}
-
-impl<I: Identity> GrpcGuard<I> for ActiveUserGuard {
-    fn check(
-        &self,
-        ctx: &GrpcGuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Status>> + Send {
-        async move {
-            let sub = ctx.identity_sub().unwrap_or("");
-
-            let active = sqlx::query_scalar::<_, bool>(
-                "SELECT active FROM users WHERE sub = ?"
-            )
-            .bind(sub)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|_| Status::internal("Database error"))?;
-
-            match active {
-                Some(true) => Ok(()),
-                _ => Err(Status::permission_denied("Account suspended")),
-            }
-        }
-    }
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+#[guard(TenantGuard)]
+impl GreeterService {
+    // every method checks TenantGuard first
 }
 ```
 
-### Combining guards (planned)
+### Combining guards
 
-Guards will be stackable and execute in order:
+Guards stack and run in order:
 
 ```rust
 #[roles("editor")]
@@ -225,30 +207,47 @@ Guards will be stackable and execute in order:
 #[guard(ActiveUserGuard)]
 async fn update_user(
     &self,
+    #[inject(identity)] user: AuthenticatedUser,
     request: tonic::Request<UpdateUserRequest>,
 ) -> Result<tonic::Response<UserResponse>, tonic::Status> {
     // Reached only if all guards pass
 }
 ```
 
-Execution order: roles check first, then custom guards in declaration order. Short-circuits on first failure.
+Per call: identity extraction → controller guards → method guards in
+declaration order → interceptors → your method. Short-circuits on the first
+failure.
 
-## HTTP vs gRPC comparison
+## From `Rejection` to `tonic::Status`
 
-| | HTTP | gRPC |
-|-|------|------|
-| Guard trait | `Guard<I>` | `GrpcGuard<I>` |
-| Error type | `Response` (HTTP response) | `tonic::Status` |
-| Context type | `GuardContext` | `GrpcGuardContext` |
-| Request metadata | `&HeaderMap` + `&Uri` | `&MetadataMap` |
-| Role guard | `RolesGuard` | `GrpcRolesGuard` |
-| Attribute | `#[guard(...)]` | `#[guard(...)]` (same syntax) |
+Guards and identity return a `Rejection` (see
+[Error Handling](../core-concepts/error-handling.md)). On gRPC it is projected by
+**kind** with `r2e_grpc::rejection_to_status`:
 
-The concepts are identical — only the error type and metadata source differ.
+| `RejectionKind` | `tonic::Code` |
+|---|---|
+| `Unauthenticated` | `UNAUTHENTICATED` |
+| `Forbidden` | `PERMISSION_DENIED` |
+| `NotFound` | `NOT_FOUND` |
+| `Conflict` | `ABORTED` |
+| `RateLimited`, `PayloadTooLarge` | `RESOURCE_EXHAUSTED` |
+| `Unavailable` | `UNAVAILABLE` |
+| `Timeout` | `DEADLINE_EXCEEDED` |
+| `Internal` | `INTERNAL` |
+| request-shape kinds (`BadRequest`, `Validation`, `Invalid*`, `MalformedBody`, …) | `INVALID_ARGUMENT` |
+| anything else (incl. `Opaque`) | by HTTP status (`code_from_status`): 4xx → `INVALID_ARGUMENT`, 5xx → `INTERNAL` |
+
+The rejection's message becomes the status message (an empty message falls
+back to `request rejected with status N`), and its headers (`Retry-After`,
+`WWW-Authenticate`, …) become response metadata. Because `tonic::Status` is a
+foreign type, this is a free function rather than a `From` impl; the generated
+code calls it for you — you only need it when projecting a `Rejection` by hand
+inside a method.
 
 ## Setup for identity
 
-To use identity extraction in gRPC services, `Arc<JwtClaimsValidator>` must be a bean in the graph (same requirement as HTTP) — provide it before `build_state()`:
+`Arc<JwtClaimsValidator>` must be a bean in the graph — the same requirement as
+HTTP identity. Provide it before `build_state()`:
 
 ```rust
 use std::sync::Arc;
@@ -262,32 +261,39 @@ AppBuilder::new()
     .register_grpc_service::<GreeterService>();
 ```
 
-There is no hand-written state struct: the application state is the inferred HList of everything you `.provide()`/`.register()`, and beans are read back by type. The gRPC identity extractor uses `JwtClaimsValidatorLike`; `JwtClaimsValidator` implements it under `r2e-security`'s `grpc` feature (on when `r2e` has `grpc` + `security`), and the `Arc<T>` blanket impl covers the bean. No additional setup needed beyond what HTTP authentication already requires.
+There is no hand-written state struct: the application state is the inferred
+HList of everything you `.provide()`/`.register()`, and the service's
+`EndpointDeps` includes the validator whenever a method injects an
+`AuthenticatedUser`. Nothing beyond what HTTP authentication already requires.
 
-### GrpcRoleBasedIdentity
+### Manual extraction
 
-For role-based guards, your identity type must implement `GrpcRoleBasedIdentity`:
+Inside a method you can still read claims by hand — for a custom identity type,
+or a method that only needs one claim:
 
 ```rust
-use r2e::r2e_grpc::GrpcRoleBasedIdentity;
+use r2e::r2e_grpc::{bearer_token, extract_jwt_claims_from_metadata, rejection_to_status};
 
-impl GrpcRoleBasedIdentity for AuthenticatedUser {
-    fn roles(&self) -> &[String] {
-        &self.roles
-    }
-}
+let token = bearer_token(request.metadata()).map_err(rejection_to_status)?;
+let claims = extract_jwt_claims_from_metadata(request.metadata(), &self.jwt_validator).await?;
 ```
 
-`AuthenticatedUser` from `r2e-security` already has role information — if you're using it, this is the only additional trait needed.
+`extract_bearer_token` is the same read already projected to a `tonic::Status`.
 
 ## Limitations
 
-- **No pre-auth guards** — gRPC doesn't have the same pre-auth/post-auth distinction as HTTP. All guards run after identity extraction is attempted.
-- **No struct-level identity** — gRPC services cannot have `#[inject(identity)]` on struct fields (the core is built from the bean context via `ContextConstruct`, with no request to extract from). Use param-level injection instead.
-- **Metadata vs headers** — gRPC uses `tonic::metadata::MetadataMap`, not HTTP `HeaderMap`. Custom guards must use the metadata API.
+- **No pre-auth guards** — `#[pre_guard]` is rejected on `#[grpc_routes]`;
+  every gRPC guard runs after identity extraction has been attempted.
+- **No struct-level identity** — `#[inject(identity)]` on a field of the
+  service struct is a compile error for gRPC services: the core is built once
+  from the bean graph, there is no request to extract from. Use a method
+  parameter.
+- **`GuardContext` is partially filled** — `method` is always `POST`, `uri` is
+  `/`, `path_params` is empty. Guards that key on the HTTP path do not apply to
+  gRPC.
 
 ## Next steps
 
 - [gRPC Services](./services.md) — setup and service implementation
-- [Custom Guards](../advanced/custom-guards.md) — HTTP guard patterns (same concepts apply)
+- [Custom Guards](../advanced/custom-guards.md) — the shared guard model
 - [JWT / OIDC Authentication](../security/jwt-oidc.md) — JWT validator setup

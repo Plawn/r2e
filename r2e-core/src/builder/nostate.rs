@@ -163,6 +163,27 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         self.with_updated_types()
     }
 
+    /// Install the application-level error envelope `E`.
+    ///
+    /// Every route whose return type declares no envelope (an infallible
+    /// handler, or a `Result<T, E2>` whose `E2` is not `From<Rejection> +
+    /// ErrorSchema`) projects its request failures — extractor rejections,
+    /// identity, guards, validation, managed resources — through `E` instead
+    /// of the default [`HttpError`](crate::HttpError). So do the framework's
+    /// own responses: the catch-panic 500, the router's 404 (unless the app
+    /// installed a fallback of its own) and 405, and the `Json` extractor's
+    /// 413 — like a JAX-RS `ExceptionMapper`, one mapping for the whole app.
+    ///
+    /// Provides an [`ErrorProjector`](crate::ErrorProjector) bean: it appears
+    /// in the state like any provided bean and may be injected. One per
+    /// application; the last call wins.
+    pub fn error_projection<E>(self) -> AppBuilder<NoState, TCons<crate::ErrorProjector, P>, R, Mods>
+    where
+        E: From<crate::Rejection> + crate::http::response::IntoHttpResponse + crate::ErrorSchema + 'static,
+    {
+        self.provide(crate::ErrorProjector::of::<E>())
+    }
+
     /// Provide every field of a bundle in one call — the
     /// [`App::Env`](crate::App::Env) shortcut.
     ///
@@ -1077,27 +1098,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // trusted once the configuration did not load.
         if let Some(err) = self.shared.deferred_boot_error.take() {
             return Err(err);
-        }
-
-        // App-level, resolved once here (and again on every dev-reload cycle,
-        // so a config edit lands): the `#[derive(Params)]` 400 body format.
-        // A mistyped value is a boot error like any other config mismatch.
-        if let Some(config) = &self.shared.config {
-            match config.get_opt::<crate::web::params::ParamsRejectionFormat>(
-                crate::web::params::PARAMS_REJECTION_FORMAT_KEY,
-            ) {
-                Ok(format) => {
-                    crate::web::params::set_params_rejection_format(format.unwrap_or_default())
-                }
-                Err(e) => {
-                    return Err(crate::beans::BeanError::ConfigLoad {
-                        context: "Invalid server.params-rejection-format",
-                        source: Box::new(e),
-                    })
-                }
-            }
-        } else {
-            crate::web::params::set_params_rejection_format(Default::default());
         }
 
         let mut registry = std::mem::take(&mut self.shared.bean_registry);

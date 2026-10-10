@@ -204,7 +204,8 @@ pub use client::FgaClient;
 pub use config::OpenFgaConfig;
 pub use error::OpenFgaError;
 pub use guard::{
-    FgaCheck, FgaCheckBuilder, FgaGuard, FgaObjectBuilder, ObjectResolver, PathParamName,
+    FgaCheck, FgaCheckBuilder, FgaDenied, FgaGuard, FgaObjectBuilder, ObjectResolver,
+    PathParamName,
 };
 pub use plugin::{OpenFga, OpenFgaHandle, OpenFgaPluginConfig};
 pub use registry::OpenFgaRegistry;

@@ -64,10 +64,13 @@ references.
 
 6. **Wire-specific pieces, kept wire-specific** (do not abstract these —
    deliberate decision):
-   - identity extraction (HTTP: `FromRequestParts`; gRPC:
-     `GrpcIdentityExtractor` over metadata),
-   - a guard trait with the wire's context and reject type (HTTP:
-     `Guard<I>` → `HttpError`; gRPC: `GrpcGuard<I>` → `tonic::Status`),
+   - identity extraction (HTTP: `FromRequestParts`; gRPC: `GrpcIdentity`
+     over metadata — a `DecoratorSpec`-backed extractor, so the validator
+     bean is a compile-time dep of the service),
+   - the `GuardContext` builder and the `Rejection` → wire-error projection
+     (HTTP: the route envelope; gRPC: `guard_context` +
+     `rejection_to_status`; MCP: `member_guard_context` +
+     `From<Rejection> for McpError`) — the guard trait itself is shared,
    - error mapping and the serve loop / plugin (registry filled at
      registration, drained ONCE at serve time — see `GrpcServiceRegistry`:
      the `GrpcServer` plugin's `on_serve` hook drains it and spawns tonic on
@@ -94,10 +97,13 @@ references.
   2026-08-27) and resolved the OTHER way — **new adapters with HTTP request
   context reuse `Guard<I>`/`GuardContext` directly** instead of minting a
   per-transport guard trait. MCP builds a `GuardContext` from the transport
-  request's `http::request::Parts` and maps the rejection `Response` back to
-  a JSON-RPC error by status (`r2e-mcp/src/guard.rs::guard_response_to_error`)
-  — so `#[guard]`, `#[roles]`-style specs, `RateLimitGuard` and every user
-  `#[derive(DecoratorBean)]` guard work on MCP members (tools, resources, prompts) with zero new impls.
-  `GrpcGuard`/`GrpcRolesGuard` remain the outlier (tonic metadata is not
-  HTTP parts); a transport with no HTTP-shaped request may still need its
-  own guard trait, but that is now the exception to justify, not the rule.
+  request's `http::request::Parts`; guards return a typed `Rejection`, which
+  each wire projects by **kind** (`From<Rejection> for McpError`,
+  `r2e_grpc::rejection_to_status` — a free fn, orphan rule) — so `#[guard]`,
+  `#[roles]`-style specs, `RateLimitGuard` and every user
+  `#[derive(DecoratorBean)]` guard work on MCP members and gRPC methods with
+  zero new impls. gRPC joined in #1072 P3: `guard_context` views the tonic
+  metadata as the `HeaderMap` (`MetadataMap: AsRef<HeaderMap>`), `method` is
+  `POST`, `uri` is `/`, `path_params` empty; the former `GrpcGuard` /
+  `GrpcRolesGuard` / `GrpcGuardContext` are gone. A per-transport guard trait
+  is no longer an option to reach for — build a `GuardContext` instead.

@@ -83,6 +83,8 @@ impl std::fmt::Display for MultipartError {
     }
 }
 
+impl std::error::Error for MultipartError {}
+
 impl IntoHttpResponse for MultipartError {
     fn into_http_response(self) -> Response {
         let status = match &self {
@@ -323,21 +325,16 @@ where
     T: FromMultipart,
     S: Send + Sync,
 {
-    type Rejection = Response;
+    type Rejection = MultipartError;
 
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         let multipart = Multipart::from_request(req, state)
             .await
-            .map_err(|rejection| {
-                let err = MultipartError::AxumError(rejection.body_text());
-                err.into_response()
-            })?;
+            .map_err(|rejection| MultipartError::AxumError(rejection.body_text()))?;
 
-        let fields = MultipartFields::collect_from(multipart)
-            .await
-            .map_err(|e| e.into_response())?;
+        let fields = MultipartFields::collect_from(multipart).await?;
 
-        let value = T::from_multipart(fields).map_err(|e| e.into_response())?;
+        let value = T::from_multipart(fields)?;
 
         Ok(TypedMultipart(value))
     }

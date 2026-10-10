@@ -72,7 +72,9 @@ pub use di::lazy::Lazy;
 pub use di::meta::MetaRegistry;
 pub use di::module::FeatureModule;
 pub use di::scheduled_source::ScheduledSource;
-pub use error::{HttpError, HttpErrorExt};
+pub use error::{
+    ErrorProjector, ErrorSchema, ErrorSchemaInfo, HttpError, HttpErrorExt, Rejection, RejectionKind,
+};
 pub use plugin::{
     DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
     PluginInstall, PluginSetupContext, RoutesContext,
@@ -108,14 +110,14 @@ pub use type_list::{
 };
 pub use web::extract::{
     assert_unambiguous_extractor, BeanExtract, FromRequestPartsVia, OptionalFromRequestPartsVia,
-    PeerAddr, Via, ViaAxum, ViaBean, ViaOpt,
+    PeerAddr, ViaAxum, ViaBean, ViaOpt,
 };
 pub use web::managed::{
     record_managed_finalize_error, ManagedContext, ManagedDeps, ManagedErr, ManagedGuard,
     ManagedOutcome, ManagedOutcomeKind, ManagedResource,
 };
 pub use web::pagination::{Page, Pageable};
-pub use web::params::{ParamsRejectionFormat, PARAMS_REJECTION_FORMAT_KEY};
+pub use web::params::ParamLocation;
 pub use web::request_head::RequestHead;
 
 // Dev-reload helpers

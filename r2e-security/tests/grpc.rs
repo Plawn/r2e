@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
-use r2e_grpc::identity::{extract_jwt_claims_from_metadata, GrpcIdentityExtractor};
+use r2e_core::decorators::guards::Identity;
+use r2e_core::RejectionKind;
+use r2e_grpc::identity::{extract_jwt_claims_from_metadata, GrpcIdentity, GrpcIdentityExtractor};
+use r2e_grpc::rejection_to_status;
 use r2e_security::config::SecurityConfig;
 use r2e_security::jwt::JwtClaimsValidator;
+use r2e_security::AuthenticatedUser;
 use tonic::metadata::MetadataMap;
 
 const TEST_SECRET: &[u8] = b"r2e-test-secret-do-not-use-in-production";
@@ -79,4 +83,59 @@ async fn expired_token_is_unauthenticated() {
         status.message().contains("JWT validation failed"),
         "{status}"
     );
+}
+
+// ── GrpcIdentity for AuthenticatedUser ──────────────────────────────────
+
+#[r2e_core::test]
+async fn authenticated_user_is_a_grpc_identity() {
+    let validator = Arc::new(validator());
+    let user = AuthenticatedUser::extract(&validator, &metadata(&token("user-3", 3600)))
+        .await
+        .unwrap();
+    assert_eq!(user.sub(), "user-3");
+    assert!(user.has_role("admin"));
+}
+
+#[r2e_core::test]
+async fn optional_identity_is_none_without_credentials() {
+    let validator = Arc::new(validator());
+    let user = AuthenticatedUser::extract_optional(&validator, &MetadataMap::new())
+        .await
+        .unwrap();
+    assert!(user.is_none());
+}
+
+#[r2e_core::test]
+async fn optional_identity_still_rejects_a_bad_token() {
+    // A presented-but-invalid credential is a failure, never anonymous.
+    let validator = Arc::new(validator());
+    let rejection = AuthenticatedUser::extract_optional(&validator, &metadata("not-a-jwt"))
+        .await
+        .unwrap_err();
+    assert_eq!(rejection.kind, RejectionKind::Unauthenticated);
+}
+
+#[r2e_core::test]
+async fn identity_rejections_project_onto_unauthenticated_statuses() {
+    let validator = Arc::new(validator());
+
+    let missing = AuthenticatedUser::extract(&validator, &MetadataMap::new())
+        .await
+        .unwrap_err();
+    assert_eq!(missing.kind, RejectionKind::Unauthenticated);
+    let status = rejection_to_status(missing);
+    assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    assert_eq!(status.message(), "Missing authorization metadata");
+
+    let expired = AuthenticatedUser::extract(&validator, &metadata(&token("user-1", -3600)))
+        .await
+        .unwrap_err();
+    assert_eq!(expired.kind, RejectionKind::Unauthenticated);
+    assert!(expired.source.is_some(), "the SecurityError is kept as source");
+    let status = rejection_to_status(expired);
+    assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    // `From<SecurityError> for Rejection` sets the challenge header; it
+    // travels as status metadata.
+    assert!(status.metadata().get("www-authenticate").is_some());
 }

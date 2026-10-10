@@ -17,7 +17,7 @@ impl<I: Identity> Guard<I> for AllowGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }
@@ -32,8 +32,8 @@ impl<I: Identity> Guard<I> for DenyGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
-        async { Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into_response()) }
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
+        async { Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into()) }
     }
 }
 
@@ -47,12 +47,12 @@ impl<I: Identity> Guard<I> for SubCheckGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let sub = ctx.identity_sub().map(|s| s.to_string());
         async move {
             match sub {
                 Some(s) if s == "allowed-user" => Ok(()),
-                _ => Err(HttpError::Forbidden("Wrong user".into()).into_response()),
+                _ => Err(HttpError::Forbidden("Wrong user".into()).into()),
             }
         }
     }
@@ -68,13 +68,13 @@ impl<I: Identity> Guard<I> for HeaderCheckGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let has_header = ctx.headers.get("x-custom-token").is_some();
         async move {
             if has_header {
                 Ok(())
             } else {
-                Err(HttpError::BadRequest("Missing x-custom-token header".into()).into_response())
+                Err(HttpError::BadRequest("Missing x-custom-token header".into()).into())
             }
         }
     }
@@ -90,13 +90,13 @@ impl<I: Identity> Guard<I> for PathCheckGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let path = ctx.path().to_string();
         async move {
             if path.contains("path-check") {
                 Ok(())
             } else {
-                Err(HttpError::Forbidden("Invalid path".into()).into_response())
+                Err(HttpError::Forbidden("Invalid path".into()).into())
             }
         }
     }
@@ -112,8 +112,8 @@ impl PreAuthGuard for DenyPreAuthGuard {
     fn check(
         &self,
         _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
-        async { Err(HttpError::Forbidden("Pre-auth denied".into()).into_response()) }
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
+        async { Err(HttpError::Forbidden("Pre-auth denied".into()).into()) }
     }
 }
 
@@ -127,7 +127,7 @@ impl PreAuthGuard for ApiKeyPreAuthGuard {
     fn check(
         &self,
         ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let has_key = ctx
             .headers
             .get("x-api-key")
@@ -138,7 +138,7 @@ impl PreAuthGuard for ApiKeyPreAuthGuard {
             if has_key {
                 Ok(())
             } else {
-                Err(HttpError::Unauthorized("Missing or invalid API key".into()).into_response())
+                Err(HttpError::Unauthorized("Missing or invalid API key".into()).into())
             }
         }
     }

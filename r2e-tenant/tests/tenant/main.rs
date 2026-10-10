@@ -4,6 +4,7 @@
 mod fixtures;
 
 mod cascade;
+mod error;
 mod extractor;
 mod id;
 mod map;

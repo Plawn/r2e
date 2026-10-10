@@ -366,19 +366,19 @@ See [CLI Reference](../reference/cli-reference.md) for full details.
 
 ## Supported decorators
 
-Currently, `#[grpc_routes]` supports:
+`#[grpc_routes]` takes the HTTP decorators:
 
-| Decorator | Status | Description |
-|-----------|--------|-------------|
-| `#[intercept(...)]` | Supported | Interceptors (impl and method level) |
-| `#[roles(...)]` | Planned | Role-based guards |
-| `#[guard(...)]` | Planned | Custom guards |
-| `#[inject(identity)]` | Planned | Identity extraction from metadata |
+| Decorator | Description |
+|-----------|-------------|
+| `#[intercept(...)]` | Interceptors (impl and method level) |
+| `#[roles(...)]` / `#[all_roles(...)]` | Role guards (impl and method level); the method needs an `#[inject(identity)]` parameter |
+| `#[guard(...)]` | Any `Guard<I>` (impl and method level) — the same guards as HTTP |
+| `#[inject(identity)]` | Identity method parameter (`AuthenticatedUser` / `Option<AuthenticatedUser>`) from `authorization` metadata |
 
-The guard and identity infrastructure exists in `r2e-grpc` (`GrpcGuard`, `GrpcGuardContext`, `GrpcRolesGuard`, `GrpcIdentityExtractor`) and will be enabled in a future release. See [Guards and Identity](./guards-and-identity.md) for the API design.
+Rejections become `tonic::Status` by kind. See [Guards and Identity](./guards-and-identity.md).
 
 ## Next steps
 
-- [Guards and Identity](./guards-and-identity.md) — guard and identity API design for gRPC
+- [Guards and Identity](./guards-and-identity.md) — guards, `#[inject(identity)]`, status mapping
 - [Interceptors](../advanced/interceptors.md) — interceptor patterns (shared with HTTP)
 - [CLI Reference](../reference/cli-reference.md) — `r2e generate grpc-service`

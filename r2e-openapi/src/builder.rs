@@ -1,6 +1,7 @@
 use r2e_core::di::meta::{ParamLocation, RouteInfo};
+use r2e_core::{ErrorSchema, ErrorSchemaInfo, HttpError, RejectionKind};
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::schema::SchemaRegistry;
 
@@ -30,6 +31,27 @@ fn sanitize_schema(value: &mut Value) {
     }
 }
 
+/// Strip `$schema`, move the schema's `$defs` into `extra_definitions`
+/// (promoted to `components/schemas` by `build_spec`) and rewrite its
+/// `#/$defs/X` references to `#/components/schemas/X`.
+///
+/// Every schema that lands in `components/schemas` goes through this — route
+/// bodies, registry entries and error-envelope bodies alike — so a rewritten
+/// reference always has a component to resolve to.
+fn promote_defs(mut schema: Value, extra_definitions: &mut Vec<(String, Value)>) -> Value {
+    if let Some(obj) = schema.as_object_mut() {
+        obj.remove("$schema");
+        // schemars 1.x uses "$defs" (Draft 2020-12)
+        if let Some(Value::Object(defs)) = obj.remove("$defs") {
+            for (def_name, def_schema) in defs {
+                extra_definitions.push((def_name, def_schema));
+            }
+        }
+    }
+    sanitize_schema(&mut schema);
+    schema
+}
+
 /// Insert a schema into the schemas map, promoting `$defs` to top-level components.
 fn insert_schema(
     schemas: &mut Map<String, Value>,
@@ -38,17 +60,7 @@ fn insert_schema(
     root_schema: &Option<Value>,
 ) {
     if let Some(root) = root_schema {
-        let mut schema = root.clone();
-        if let Some(obj) = schema.as_object_mut() {
-            obj.remove("$schema");
-            // schemars 1.x uses "$defs" (Draft 2020-12)
-            if let Some(Value::Object(defs)) = obj.remove("$defs") {
-                for (def_name, def_schema) in defs {
-                    extra_definitions.push((def_name, def_schema));
-                }
-            }
-        }
-        sanitize_schema(&mut schema);
+        let schema = promote_defs(root.clone(), extra_definitions);
         schemas.insert(type_name.to_string(), schema);
     } else {
         schemas.insert(type_name.to_string(), json!({ "type": "object" }));
@@ -69,6 +81,12 @@ pub enum SchemaGap {
     /// The named request type is documented, but it has no
     /// `schemars::JsonSchema`, so its body renders as a generic `object`.
     SchemalessRequestBody { type_name: String },
+    /// An error body of the route's envelope is named like a different
+    /// schema already in `components/schemas` (a DTO, a registry entry, a
+    /// promoted `$defs` type or another envelope's body). That schema keeps
+    /// the component; the error body is documented **inline** in the
+    /// route's responses.
+    ErrorBodyInlined { component: String },
 }
 
 /// A single OpenAPI spec-generation warning: a [`SchemaGap`] tied to the route
@@ -100,6 +118,12 @@ impl SpecWarning {
                 "OpenAPI: {} {} — request type `{}` does not implement `schemars::JsonSchema`; \
                  it is documented as a generic `object`. Derive `schemars::JsonSchema` on `{}`.",
                 self.method, self.path, type_name, type_name
+            ),
+            SchemaGap::ErrorBodyInlined { component } => format!(
+                "OpenAPI: {} {} — error body `{}` collides with a different schema of the same \
+                 name in components/schemas; the error body is documented inline. Rename the \
+                 envelope's body (`ErrorSchema::body_schema`) or the colliding type.",
+                self.method, self.path, component
             ),
         }
     }
@@ -173,6 +197,9 @@ pub struct OpenApiConfig {
     pub docs_ui: bool,
     pub(crate) schema_registry: SchemaRegistry,
     pub(crate) schema_overrides: HashMap<String, Value>,
+    /// The application-level error envelope, documented on every route whose
+    /// return type carries no envelope of its own. `None` = `HttpError`.
+    pub(crate) error_schema: Option<ErrorSchemaInfo>,
 }
 
 impl OpenApiConfig {
@@ -184,6 +211,7 @@ impl OpenApiConfig {
             docs_ui: false,
             schema_registry: SchemaRegistry::new(),
             schema_overrides: HashMap::new(),
+            error_schema: None,
         }
     }
 
@@ -222,18 +250,150 @@ impl OpenApiConfig {
 
     /// Override the auto-generated schema for a type.
     ///
-    /// This takes precedence over both route-derived and registry schemas.
+    /// This takes precedence over both route-derived and registry schemas,
+    /// including the error envelope components (`ErrorResponse`, …).
     pub fn with_schema_override(mut self, name: &str, schema: Value) -> Self {
         self.schema_overrides.insert(name.to_string(), schema);
         self
     }
+
+    /// Document error responses with the envelope `E` — the type passed to
+    /// `AppBuilder::error_projection::<E>()`. Routes whose handler returns
+    /// `Result<T, E2>` with an envelope `E2` keep documenting `E2`.
+    ///
+    /// The [`OpenApiPlugin`](crate::OpenApiPlugin) sets this from the
+    /// application's `ErrorProjector` bean automatically; this method is for
+    /// callers of [`build_spec`] / [`openapi_routes`](crate::openapi_routes).
+    pub fn with_error_schema<E: ErrorSchema + ?Sized>(mut self) -> Self {
+        self.error_schema = Some(ErrorSchemaInfo::of::<E>());
+        self
+    }
+
+    /// Same as [`with_error_schema`](Self::with_error_schema), from an
+    /// already-captured [`ErrorSchemaInfo`].
+    pub fn with_error_schema_info(mut self, info: ErrorSchemaInfo) -> Self {
+        self.error_schema = Some(info);
+        self
+    }
+
+    /// The envelope documented on `route`: the route's own (from its return
+    /// type), else the application's, else `HttpError`.
+    fn error_schema_for(&self, route: &RouteInfo) -> ErrorSchemaInfo {
+        route.error_schema.unwrap_or_else(|| self.app_error_schema())
+    }
+
+    /// The application-level envelope (the `ErrorProjector`'s), else
+    /// `HttpError` — what the catch-panic layer renders with.
+    fn app_error_schema(&self) -> ErrorSchemaInfo {
+        self.error_schema
+            .unwrap_or_else(ErrorSchemaInfo::of::<HttpError>)
+    }
+}
+
+/// One documented error body: its component name and its schema, already
+/// through [`promote_defs`] (so two bodies compare by what they document).
+#[derive(Clone, PartialEq)]
+struct ErrorBody {
+    name: String,
+    schema: Value,
+    /// Recorded from the route's own envelope (a `Result<T, E>` return type)
+    /// rather than the application's — takes the component slot first.
+    declared: bool,
+}
+
+/// The error responses of one route: `status → distinct bodies`, from the
+/// envelope's `status_of` over the inferred rejection kinds plus its
+/// `extra_statuses`. A status with no body maps to an empty list.
+///
+/// Bodies are deduplicated **by schema**: the same body met under two names
+/// (or twice under one) is documented once, under the first-recorded name —
+/// the route's envelope is recorded before the application's panic body.
+/// Distinct bodies on one status (e.g. the default envelope's
+/// `ValidationErrorResponse` and `ErrorResponse` on 400) document as an
+/// `anyOf`: a validation body is also a valid plain error body, so `oneOf`
+/// would reject it.
+///
+/// **Panics are documented through `app`, not the route's envelope.** The
+/// catch-panic layer renders with the application's `ErrorProjector` whatever
+/// the route returns, so every route also gets `app`'s `Internal` response.
+/// When the route's envelope is the app's, that is the same status and body
+/// (deduplicated); when it differs, both are listed — a different status
+/// (e.g. the route remaps `Internal` to 503) as its own response, the same
+/// status as an `anyOf`.
+///
+/// `Internal` stays in every route's inferred kinds: the route's envelope also
+/// renders the failures the macro cannot enumerate (`#[managed]` acquire /
+/// finalize, `#[inject(request)]` extraction, a route/extractor mismatch).
+///
+/// Each body's `$defs` are pushed to `error_defs` (merged into
+/// `components/schemas` after the route and registry schemas).
+fn error_responses(
+    schema: &ErrorSchemaInfo,
+    app: &ErrorSchemaInfo,
+    route: &RouteInfo,
+    error_defs: &mut Vec<(String, Value)>,
+) -> BTreeMap<u16, Vec<ErrorBody>> {
+    let declared = route.error_schema.is_some();
+    let mut by_status: BTreeMap<u16, Vec<ErrorBody>> = BTreeMap::new();
+    let mut record = |status: u16, body: Option<(String, Value)>, declared: bool| {
+        let bodies = by_status.entry(status).or_default();
+        if let Some((name, raw)) = body {
+            let schema = promote_defs(raw, error_defs);
+            if !bodies.iter().any(|b| b.schema == schema) {
+                bodies.push(ErrorBody { name, schema, declared });
+            }
+        }
+    };
+    for kind in &route.rejection_kinds {
+        record(schema.status_of(*kind).as_u16(), schema.body_schema_for(*kind), declared);
+    }
+    for (status, _) in schema.extra_statuses() {
+        record(status.as_u16(), schema.body_schema(), declared);
+    }
+    // The catch-panic 500, rendered by the application projector.
+    record(
+        app.status_of(RejectionKind::Internal).as_u16(),
+        app.body_schema_for(RejectionKind::Internal),
+        false,
+    );
+    by_status
+}
+
+/// The OpenAPI response object for an error status with the given bodies
+/// (none = description only). A body whose component slot holds its schema
+/// is a `$ref`; one whose name is taken by a different schema is inlined.
+fn error_response_object(status: u16, bodies: &[ErrorBody], slots: &Map<String, Value>) -> Value {
+    let description = r2e_core::http::StatusCode::from_u16(status)
+        .ok()
+        .and_then(|s| s.canonical_reason())
+        .unwrap_or("Error");
+    let one = |b: &ErrorBody| {
+        if slots.get(&b.name) == Some(&b.schema) {
+            json!({ "$ref": format!("#/components/schemas/{}", b.name) })
+        } else {
+            b.schema.clone()
+        }
+    };
+    let schema = match bodies {
+        [] => return json!({ "description": description }),
+        [b] => one(b),
+        many => json!({ "anyOf": many.iter().map(one).collect::<Vec<_>>() }),
+    };
+    json!({
+        "description": description,
+        "content": { "application/json": { "schema": schema } }
+    })
 }
 
 /// Build an OpenAPI 3.1.0 JSON spec from config and route metadata.
+///
+/// Every [`SpecWarning`] (see [`build_spec_with_warnings`]) is logged once
+/// through `tracing::warn!`.
 pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
+    let (spec, warnings) = build_spec_with_warnings(config, routes);
     // Surface schema gaps once, at boot (build_spec runs during plugin install),
     // so silently-undocumented bodies become visible instead of vanishing.
-    for warning in spec_warnings(routes) {
+    for warning in warnings {
         // Render the message eagerly (once per gap, at boot) so the warning path
         // is observable without relying on a subscriber-gated lazy format arg.
         let message = warning.message();
@@ -243,10 +403,116 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
             "{message}"
         );
     }
+    spec
+}
 
-    let mut paths: Map<String, Value> = Map::new();
+/// [`build_spec`] without logging: the spec plus every warning it would log —
+/// the route gaps of [`spec_warnings`] and the error bodies documented inline
+/// because their component name is taken ([`SchemaGap::ErrorBodyInlined`]).
+pub fn build_spec_with_warnings(
+    config: &OpenApiConfig,
+    routes: &[RouteInfo],
+) -> (Value, Vec<SpecWarning>) {
+    let mut warnings = spec_warnings(routes);
+
+    // ── Error bodies, per route (aligned with `routes`) ────────────────────
+    let app_schema = config.app_error_schema();
+    let mut error_defs: Vec<(String, Value)> = Vec::new();
+    let route_errors: Vec<BTreeMap<u16, Vec<ErrorBody>>> = routes
+        .iter()
+        .map(|route| {
+            error_responses(&config.error_schema_for(route), &app_schema, route, &mut error_defs)
+        })
+        .collect();
+
+    // ── components/schemas ──────────────────────────────────────────────────
+    // Collect all referenced types (request body + response) into components/schemas.
+    // If the route carries a schemars-generated schema, use it;
+    // otherwise fall back to a generic object.
+    //
+    // schemars 1.x generates JSON Schema Draft 2020-12 (aligned with OpenAPI 3.1.0).
+    // We strip `$schema`, promote `$defs` entries to components/schemas,
+    // and rewrite `$ref` paths from `#/$defs/X` to `#/components/schemas/X`.
+    let mut schemas: Map<String, Value> = Map::new();
+    let mut extra_definitions: Vec<(String, Value)> = Vec::new();
 
     for route in routes {
+        // Collect request body schemas
+        if let Some(ref body_type) = route.request_body_type {
+            if !schemas.contains_key(body_type) {
+                insert_schema(
+                    &mut schemas,
+                    &mut extra_definitions,
+                    body_type,
+                    &route.request_body_schema,
+                );
+            }
+        }
+
+        // Collect response schemas
+        if let Some(ref resp_type) = route.response_type {
+            if !schemas.contains_key(resp_type) {
+                insert_schema(
+                    &mut schemas,
+                    &mut extra_definitions,
+                    resp_type,
+                    &route.response_schema,
+                );
+            }
+        }
+    }
+
+    // Merge extra schemas from registry (route schemas take precedence).
+    for (name, schema) in config.schema_registry.iter() {
+        if !schemas.contains_key(name) {
+            insert_schema(
+                &mut schemas,
+                &mut extra_definitions,
+                name,
+                &Some(schema.clone()),
+            );
+        }
+    }
+
+    // Merge promoted $defs of the route and registry schemas.
+    for (def_name, mut def_schema) in extra_definitions {
+        sanitize_schema(&mut def_schema);
+        schemas.entry(def_name).or_insert(def_schema);
+    }
+
+    // Error envelope components fill the slots left free, the routes' own
+    // envelopes before the application's. A body whose name is already taken
+    // by a different schema (a DTO, a registry entry, another envelope's
+    // body) is inlined in its responses — see `error_response_object`.
+    for declared in [true, false] {
+        for body in route_errors.iter().flat_map(|r| r.values().flatten()) {
+            if body.declared == declared {
+                schemas
+                    .entry(body.name.clone())
+                    .or_insert_with(|| body.schema.clone());
+            }
+        }
+    }
+    for (def_name, mut def_schema) in error_defs {
+        sanitize_schema(&mut def_schema);
+        schemas.entry(def_name).or_insert(def_schema);
+    }
+
+    // The slots error references resolve against: explicit overrides (below)
+    // are deliberate and never turn a `$ref` into an inline schema.
+    let slots = schemas.clone();
+
+    // Apply explicit overrides (replace any existing schema).
+    for (name, schema) in &config.schema_overrides {
+        let mut s = schema.clone();
+        sanitize_schema(&mut s);
+        schemas.insert(name.clone(), s);
+    }
+
+    // ── paths ───────────────────────────────────────────────────────────────
+    let mut paths: Map<String, Value> = Map::new();
+
+    for (route, errors) in routes.iter().zip(&route_errors) {
         let axum_path = route.path.replace('{', "{").replace('}', "}");
         let method_lower = route.method.to_lowercase();
 
@@ -347,56 +613,28 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
             responses.insert(status_key, json!({ "description": status_desc }));
         }
 
-        // Conditional 401/403 only when route has auth
-        if route.has_auth {
-            responses.insert(
-                "401".into(),
-                json!({
-                    "description": "Unauthorized",
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-                        }
-                    }
-                }),
-            );
-            responses.insert(
-                "403".into(),
-                json!({
-                    "description": "Forbidden",
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-                        }
-                    }
-                }),
-            );
-        }
-
-        // Default 500 response
-        responses.insert(
-            "500".into(),
-            json!({
-                "description": "Internal server error",
-                "content": {
-                    "application/json": {
-                        "schema": { "$ref": "#/components/schemas/ErrorResponse" }
-                    }
+        // Error responses: one per distinct status the route's envelope
+        // projects its inferred rejection kinds to (+ `extra_statuses`).
+        // The success status wins when a kind collides with it.
+        let mut inlined: Vec<&str> = Vec::new();
+        for (status, bodies) in errors {
+            if responses.contains_key(&status.to_string()) {
+                continue;
+            }
+            for b in bodies {
+                if slots.get(&b.name) != Some(&b.schema) && !inlined.contains(&b.name.as_str()) {
+                    inlined.push(&b.name);
                 }
-            }),
-        );
-
-        // If route has a request body, it may return 400
-        if route.request_body_type.is_some() || route.request_body_content_type.is_some() {
-            responses.entry("400".to_string()).or_insert_with(|| {
-                json!({
-                    "description": "Bad request / Validation error",
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": "#/components/schemas/ValidationErrorResponse" }
-                        }
-                    }
-                })
+            }
+            responses.insert(status.to_string(), error_response_object(*status, bodies, &slots));
+        }
+        for component in inlined {
+            warnings.push(SpecWarning {
+                method: route.method.clone(),
+                path: route.path.clone(),
+                gap: SchemaGap::ErrorBodyInlined {
+                    component: component.to_string(),
+                },
             });
         }
 
@@ -421,114 +659,6 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         info.insert("description".into(), json!(desc));
     }
 
-    // Collect all referenced types (request body + response) into components/schemas.
-    // If the route carries a schemars-generated schema, use it;
-    // otherwise fall back to a generic object.
-    //
-    // schemars 1.x generates JSON Schema Draft 2020-12 (aligned with OpenAPI 3.1.0).
-    // We strip `$schema`, promote `$defs` entries to components/schemas,
-    // and rewrite `$ref` paths from `#/$defs/X` to `#/components/schemas/X`.
-    let mut schemas: Map<String, Value> = Map::new();
-    let mut extra_definitions: Vec<(String, Value)> = Vec::new();
-
-    for route in routes {
-        // Collect request body schemas
-        if let Some(ref body_type) = route.request_body_type {
-            if !schemas.contains_key(body_type) {
-                insert_schema(
-                    &mut schemas,
-                    &mut extra_definitions,
-                    body_type,
-                    &route.request_body_schema,
-                );
-            }
-        }
-
-        // Collect response schemas
-        if let Some(ref resp_type) = route.response_type {
-            if !schemas.contains_key(resp_type) {
-                insert_schema(
-                    &mut schemas,
-                    &mut extra_definitions,
-                    resp_type,
-                    &route.response_schema,
-                );
-            }
-        }
-    }
-
-    // Merge extra schemas from registry (route schemas take precedence).
-    for (name, schema) in config.schema_registry.iter() {
-        if !schemas.contains_key(name) {
-            insert_schema(
-                &mut schemas,
-                &mut extra_definitions,
-                name,
-                &Some(schema.clone()),
-            );
-        }
-    }
-
-    // Merge promoted $defs from all sources (routes + registry).
-    for (def_name, mut def_schema) in extra_definitions {
-        sanitize_schema(&mut def_schema);
-        schemas.entry(def_name).or_insert(def_schema);
-    }
-
-    // Apply explicit overrides (replace any existing schema).
-    for (name, schema) in &config.schema_overrides {
-        let mut s = schema.clone();
-        sanitize_schema(&mut s);
-        schemas.insert(name.clone(), s);
-    }
-
-    // Insert standard error schemas
-    schemas
-        .entry("ErrorResponse".to_string())
-        .or_insert_with(|| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "error": {
-                        "type": "string",
-                        "description": "A human-readable error message"
-                    }
-                },
-                "required": ["error"]
-            })
-        });
-    schemas
-        .entry("ValidationErrorResponse".to_string())
-        .or_insert_with(|| {
-            json!({
-                "type": "object",
-                "properties": {
-                    "error": {
-                        "type": "string",
-                        "description": "Always \"Validation failed\""
-                    },
-                    "details": {
-                        "type": "array",
-                        "items": {
-                            "$ref": "#/components/schemas/FieldError"
-                        }
-                    }
-                },
-                "required": ["error", "details"]
-            })
-        });
-    schemas.entry("FieldError".to_string()).or_insert_with(|| {
-        json!({
-            "type": "object",
-            "properties": {
-                "field": { "type": "string" },
-                "message": { "type": "string" },
-                "code": { "type": "string" }
-            },
-            "required": ["field", "message", "code"]
-        })
-    });
-
     let mut components: Map<String, Value> = Map::new();
     components.insert(
         "securitySchemes".into(),
@@ -544,10 +674,11 @@ pub fn build_spec(config: &OpenApiConfig, routes: &[RouteInfo]) -> Value {
         components.insert("schemas".into(), Value::Object(schemas));
     }
 
-    json!({
+    let spec = json!({
         "openapi": "3.1.0",
         "info": info,
         "paths": paths,
         "components": components
-    })
+    });
+    (spec, warnings)
 }

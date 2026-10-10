@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~1800
+tokens: ~4200
 requires: core-concepts
 ---
 
@@ -18,6 +18,17 @@ requires: core-concepts
   impls so `?` converts into your error type; the bare `{ Err => Variant }` form
   targets `HttpError` and is orphan-rule-illegal outside `r2e-core` — convert at
   the call site with `.map_err(|e| HttpError::internal(e.to_string()))` instead.
+- Framework failures (extractor rejections, guard denials, garde reports, …) are
+  typed as one hub value, `Rejection { kind: RejectionKind, status, message,
+  details, headers, source }`. Every fault type converts with plain `From`;
+  `HttpError: From<Rejection>` renders the default bodies; your own envelope
+  implements `From<Rejection> + IntoHttpResponse + ErrorSchema` — or gets all
+  three from `#[derive(ApiError)]` with one `#[error(rejection)]` variant.
+- The envelope that renders a route is inferred from its return type:
+  `Result<T, E>` projects every framework failure on that route through `E`;
+  any other return type uses `AppBuilder::error_projection::<E>()` (default
+  `HttpError`), which also renders the framework's own 404 / 405 / 413 and the
+  panic 500. There is no attribute to write.
 - Panics are caught automatically (no plugin): JSON 500, plus one `error` event
   on target `r2e::panic` inside the request span (so `request_id` + `route`).
   Count them with `.on_panic(|report| ...)` — one hook for HTTP handlers,
@@ -27,7 +38,7 @@ requires: core-concepts
 
 `HttpError` is the default error type (`#[non_exhaustive]` — wildcard arm when
 matching). Variants: `NotFound`, `Unauthorized`, `Forbidden`, `BadRequest`,
-`Internal` (all `Cow<'static, str>`), `Validation(...)`, `Custom { status, body }`,
+`Internal` (all `Cow<'static, str>`), `Validation { status, response }` (build with `HttpError::validation(resp)` → 400), `Custom { status, body }`,
 `WithSource { status, message, source }`.
 
 ```rust
@@ -63,6 +74,184 @@ pub enum MyError {
     Http(#[from] HttpError),
 }
 ```
+
+### `Rejection` — the typed framework failure
+
+Everything the framework rejects before or around your handler — a malformed
+JSON body, a missing `content-type`, a bad path segment, a failed JWT, a denied
+guard, a garde report, a rate limit — is one value: `Rejection` (prelude).
+
+```rust
+# fn __doc(r: Rejection) {
+let kind: RejectionKind = r.kind;        // closed enum, `#[non_exhaustive]`
+let status: StatusCode = r.status;       // starts at `kind.default_status()`
+let message: &str = &r.message;          // client-facing; `Display` prints it
+let details = r.details.as_ref();        // `Option<serde_json::Value>` — garde field errors
+let headers = &r.headers;                // `WWW-Authenticate`, `Retry-After`, …
+# }
+```
+
+`RejectionKind::default_status()` is the one status table: `MissingContentType`
+/ `UnsupportedMediaType` 415, `PayloadTooLarge` 413, `BodyRead` / `MalformedBody`
+/ `InvalidPath` / `InvalidQuery` / `InvalidForm` / `InvalidHeader` / `BadRequest`
+/ `Validation` 400, `InvalidBody` 422 (deserialized but semantically wrong),
+`Unauthenticated` 401, `Forbidden` 403, `NotFound` 404, `MethodNotAllowed` 405,
+`Conflict` 409,
+`RateLimited` 429, `Internal` 500, `Unavailable` 503, `Timeout` 504, and
+`Opaque` for a pre-rendered `Response` the framework could not type.
+
+Faults reach the hub through std `From`, implemented in the crate that owns the
+fault: `JsonRejection` / `PathRejection` / `QueryRejection` / `FormRejection`,
+`ParamError` (by `location`), `HttpError`, `GuardError` (kind from the status,
+status kept), `SecurityError` (401 + `WWW-Authenticate: Bearer`, or 503 for a
+JWKS failure), `RolesDenied` (r2e-security), `RateLimited` (r2e-rate-limit,
+sets `Retry-After`), `FgaDenied` (r2e-openfga), `TenantError` (r2e-tenant; use
+`into_rejection(statuses)` to keep configured statuses), garde `Report`,
+`Response` (→ `Opaque`). Build one directly with `Rejection::new(kind, msg)`,
+`Rejection::with_status(kind, status, msg)`, `Rejection::from_status(status, msg)`
+or the shortcuts `unauthenticated()` / `forbidden(msg)` / `not_found(msg)` /
+`bad_request(msg)` / `internal(msg)`, then `.details(value)` /
+`.header(name, value)` / `.source(err)`.
+
+### Error envelopes — `From<Rejection> + IntoHttpResponse + ErrorSchema`
+
+An **envelope** is the type a rejection is projected into before it is
+rendered. `HttpError` is the default and reproduces the plain bodies
+(`{"error": msg}`, `{"error":"Validation failed","details":[…]}`). A foreign
+wire shape (OpenAI-style `{"error":{"type":…}}`, RFC 9457 problem details, …)
+is an envelope `E` with three impls:
+
+- `From<Rejection>` — build the body from `r.kind` / `r.message` / `r.details`,
+  and **read `r.status`**, never the table: the status may have been remapped or
+  carried by the fault (a 413 body read, a configured tenant status).
+- `IntoHttpResponse` (+ `impl_into_response!`), as for any response type.
+- `ErrorSchema` — the static side, read by the runtime **and** the OpenAPI
+  builder so the spec cannot say 422 where the server answers 400:
+
+```rust
+pub trait ErrorSchema {
+    /// Status for `kind`. Default: `kind.default_status()`. A kind left at its
+    /// default keeps whatever status the fault carried.
+    fn status_of(kind: RejectionKind) -> StatusCode { kind.default_status() }
+    /// `(component name, JSON Schema)` of the body; `None` = undocumented.
+    fn body_schema() -> Option<(String, serde_json::Value)>;
+    /// Per-kind body when one envelope has several shapes.
+    fn body_schema_for(_kind: RejectionKind) -> Option<(String, serde_json::Value)> { None }
+    /// Statuses the envelope emits that no inferred kind covers (502 for a proxy).
+    fn extra_statuses() -> Vec<(StatusCode, &'static str)> { Vec::new() }
+    /// Return an `Opaque` rejection untouched instead of re-wrapping it (`HttpError`: true).
+    fn opaque_passthrough() -> bool { false }
+}
+```
+
+`rejection.project::<E>()` is the one projection step: it applies
+`E::status_of(kind)` when that differs from the default, honours
+`opaque_passthrough`, calls `E::from(rejection).into_http_response()` and adds
+the hub headers (the envelope's own header of the same name wins).
+
+The quickest envelope is a derive: mark **one** variant `#[error(rejection)]`
+over a single `Rejection` field (or `#[error(transparent)]` over a `Rejection`
+field, which means the same). The derive then also emits `From<Rejection>` and
+`ErrorSchema` — `status_of` is the default table, `body_schema` delegates to
+`HttpError`'s, `extra_statuses` lists the other variants' fixed statuses, and
+`opaque_passthrough()` is `true`. The variant takes no `status`/`message`;
+remap statuses by implementing `ErrorSchema` by hand instead.
+
+```rust
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+
+    #[error(rejection)]                 // From<Rejection> + ErrorSchema come with it
+    Rejected(Rejection),
+}
+
+fn __assert<E: From<Rejection> + IntoHttpResponse + ErrorSchema>() {}
+# fn __doc() {
+__assert::<ApiEnvelope>();
+__assert::<HttpError>();               // the default envelope
+# }
+```
+
+An enum whose only link to the framework is `#[error(transparent)] Http(#[from] HttpError)`
+inherits the same two impls through `HttpError`.
+
+### Which envelope renders a route
+
+There is no attribute to wire an envelope: the **handler's return type** decides.
+
+- `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` —
+  every framework failure on that route (extractor rejection, failed identity,
+  guard denial, garde report, managed acquire/finalize) is projected through
+  `E`, so the handler's own `Err(E)` and the framework's errors share one wire
+  shape. Nothing to annotate. `HttpError` qualifies, so a `Result<T, HttpError>`
+  route renders `HttpError` bodies **regardless** of the app-level projection.
+  `T` is never constrained: `Result<impl IntoResponse, E>` keeps `E` too (the
+  probe uses `Result<(), E>` when the success type is an opaque `impl Trait`).
+- Any other return type (`Json<T>`, a bare `impl IntoResponse`, `Result<T, E>`
+  with `E` lacking one of the three traits, a plain `String`) — the route uses
+  the **app-level** projection: `AppBuilder::error_projection::<E>()`, default
+  `HttpError`. The app-level one is the JAX-RS/Quarkus `ExceptionMapper`
+  equivalent: one place that decides how unmapped failures look.
+
+A route declared infallible (`-> Json<T>`) is a definition the framework trusts:
+its failures still exist (a bad body, a missing identity) and render with the
+app-level envelope. Declare `Result<T, E>` when the route must speak `E`.
+
+```rust
+# use r2e::ErrorProjector;
+#[derive(Debug, ApiError)]
+pub enum ApiEnvelope {
+    #[error(status = CONFLICT, message = "already exists: {0}")]
+    Duplicate(String),
+    #[error(rejection)]
+    Rejected(Rejection),
+}
+
+#[controller(path = "/items")]
+pub struct ItemController;
+
+#[routes]
+impl ItemController {
+    #[post("/")]
+    async fn create(&self, Json(body): Json<serde_json::Value>) -> Result<Json<serde_json::Value>, ApiEnvelope> {
+        Ok(Json(body))                     // a malformed body answers as `ApiEnvelope` too
+    }
+
+    #[get("/{id}")]
+    async fn get(&self, Path(id): Path<u32>) -> Json<u32> {
+        Json(id)                           // a bad `id` answers with the app-level envelope
+    }
+}
+
+# async fn __doc() {
+let state = AppBuilder::new()
+    .error_projection::<ApiEnvelope>()     // app-level envelope (default: HttpError)
+    .build_state()
+    .await;
+let projector = r2e::BeanAccess::get::<ErrorProjector>(state.state());
+let _resp = projector.project(Rejection::not_found("gone"));
+# }
+# fn main() {}
+```
+
+`error_projection::<E>()` provides an `ErrorProjector` bean (`project(rejection)
+-> Response`); plugins and hand-written handlers can inject it to render a
+`Rejection` with the app's envelope. The framework's own responses go through
+it too: a panicking handler (500, kind `Internal`), an unknown route (404,
+`NotFound` — unless the app installed a fallback of its own: a controller
+`#[fallback]`, a merged `Router::fallback(..)`, the static SPA fallback), a
+known path with the wrong method (405, `MethodNotAllowed`, `Allow` kept) and
+an oversized body (413, `PayloadTooLarge`). With the default envelope these
+are `{"error":"Not found"}`, `{"error":"Method not allowed"}`, and so on.
+`E::status_of` applies to them like to any other kind. The runtime order on
+every route is fixed:
+pre-auth guards → identity + `#[inject(request)]` fields → guards → path/query/
+header parameters → body → garde validation → managed acquire → interceptors →
+handler → managed finalize. A failure at any step is projected once, through
+the route's envelope, and the body is never read before identity and guards
+have passed.
 
 ### Hand-written response types
 
@@ -134,7 +323,8 @@ For a one-off, convert at the call site instead:
 ### Panics
 
 Panic capture is always on — no plugin, no opt-in. A panicking handler answers
-`500 {"error":"Internal server error"}` and R2E emits **one** `error` event on
+`500 {"error":"Internal server error"}` (`Rejection::internal` through the
+app-level envelope, see above) and R2E emits **one** `error` event on
 target `r2e::panic` with `panic_message` and the matched `route`. The layer sits
 *below* the tracing and metrics layers, so the event is inside the request span
 (it carries `request_id`) and the request still gets its `request completed`

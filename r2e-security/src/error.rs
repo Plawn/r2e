@@ -1,5 +1,7 @@
+use r2e_core::http::header::{HeaderValue, WWW_AUTHENTICATE};
 use r2e_core::http::response::{IntoHttpResponse, Response};
 use r2e_core::http::StatusCode;
+use r2e_core::{Rejection, RejectionKind};
 
 /// Security-related errors for JWT validation and authentication.
 #[derive(Debug)]
@@ -91,5 +93,24 @@ r2e_core::http::impl_into_response!(SecurityError);
 impl From<SecurityError> for r2e_core::HttpError {
     fn from(err: SecurityError) -> Self {
         r2e_core::HttpError::from_status(err.status(), err.public_message())
+    }
+}
+
+/// Authentication failures project as `Unauthenticated` (401, with
+/// `WWW-Authenticate: Bearer`); a JWKS outage as `Unavailable` (503). The
+/// client-facing message is [`SecurityError::public_message`] — the detailed
+/// cause travels in [`Rejection::source`] only.
+impl From<SecurityError> for Rejection {
+    fn from(err: SecurityError) -> Self {
+        let kind = if err.is_server_error() {
+            RejectionKind::Unavailable
+        } else {
+            RejectionKind::Unauthenticated
+        };
+        let mut rejection = Rejection::new(kind, err.public_message());
+        if kind == RejectionKind::Unauthenticated {
+            rejection = rejection.header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        rejection.source(err)
     }
 }

@@ -239,7 +239,7 @@ impl<S: Send + Sync> r2e_core::http::extract::FromRequestParts<S> for Subject {
             .get("x-user")
             .and_then(|v| v.to_str().ok())
             .map(|s| Subject(s.to_owned()))
-            .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+            .ok_or_else(|| GuardError::unauthorized("missing header").into())
     }
 }
 
@@ -262,7 +262,7 @@ impl Guard<Subject> for RecordingGuardReady {
     fn check(
         &self,
         ctx: &GuardContext<'_, Subject>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         let sub = ctx.identity.map(|i| i.sub().to_string());
         async move {
             if let Some(s) = sub {

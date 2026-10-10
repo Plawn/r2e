@@ -14,7 +14,7 @@ pub mod openid;
 pub use config::SecurityConfig;
 pub use error::SecurityError;
 pub use extractor::{extract_jwt_claims, extract_jwt_claims_as, extract_jwt_identity};
-pub use guards::{AllRolesGuard, RoleBasedIdentity, RolesGuard};
+pub use guards::{AllRolesGuard, RoleBasedIdentity, RolesDenied, RolesGuard};
 pub use identity::{
     AuthenticatedUser, ClaimsIdentity, DefaultIdentityBuilder, DefaultRoleExtractor,
     FromValidatedJwtClaims, IdentityBuilder, IdentityBuilderWith,

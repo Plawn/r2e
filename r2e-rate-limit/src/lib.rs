@@ -1,7 +1,7 @@
 pub mod guard;
 pub use guard::{
     ConfiguredPreRateLimit, ConfiguredRateLimit, IpSource, PreAuthRateLimitGuard, PreRateLimit,
-    RateLimit, RateLimitGuard, RateLimitKeyKind,
+    RateLimit, RateLimitGuard, RateLimitKeyKind, RateLimited,
 };
 
 use dashmap::DashMap;

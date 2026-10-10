@@ -5,6 +5,7 @@ use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::codegen::decorators::wrap_with_interceptor_refs;
+use crate::codegen::handlers::qualified_controller_name;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool, McpToolArg};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
@@ -136,7 +137,7 @@ fn generate_invoke_method(
                         #krate::Guard::check(&self.#field, &__ctrl_gctx).await
                     {
                         return ::core::result::Result::Err(
-                            #mcp::__macro_support::guard_response_to_error(__resp).await,
+                            #mcp::__macro_support::McpError::from(__resp),
                         );
                     }
                 }
@@ -151,18 +152,21 @@ fn generate_invoke_method(
                         #krate::Guard::check(&self.#field, &__member_gctx).await
                     {
                         return ::core::result::Result::Err(
-                            #mcp::__macro_support::guard_response_to_error(__resp).await,
+                            #mcp::__macro_support::McpError::from(__resp),
                         );
                     }
                 }
             })
             .collect();
+        // Guard contexts carry the module-qualified controller name, like the
+        // HTTP and gRPC ones: rate-limit buckets key on it.
+        let controller_name_q = qualified_controller_name(&def.controller_name);
         let controller_context = if has_controller_guards {
             quote! {
                 let __ctrl_gctx = #mcp::__macro_support::member_guard_context(
                     __call.parts.as_deref(),
                     "*",
-                    #controller_name_str,
+                    #controller_name_q,
                     #identity_ref,
                 );
                 #(#controller_checks)*
@@ -175,7 +179,7 @@ fn generate_invoke_method(
                 let __member_gctx = #mcp::__macro_support::member_guard_context(
                     __call.parts.as_deref(),
                     #fn_name_str,
-                    #controller_name_str,
+                    #controller_name_q,
                     #identity_ref,
                 );
                 #(#member_checks)*

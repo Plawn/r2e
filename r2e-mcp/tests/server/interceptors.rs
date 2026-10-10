@@ -4,7 +4,6 @@
 //! gRPC interceptors — so bean-reading specs work on tools. (The MCP peer of
 //! `examples/example-grpc/tests/grpc_intercept.rs`.)
 
-use r2e_core::http::response::Response;
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, TCons, TNil};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
@@ -96,12 +95,20 @@ impl DecoratorSpec for TraceControllerGuard {
 }
 
 impl Guard<NoIdentity> for TraceControllerGuardReady {
-    async fn check(&self, ctx: &GuardContext<'_, NoIdentity>) -> Result<(), Response> {
+    async fn check(&self, ctx: &GuardContext<'_, NoIdentity>) -> Result<(), Rejection> {
         let CallLog(entries) = &self.0;
         entries
             .lock()
             .unwrap()
             .push(format!("guard:{}", ctx.method_name));
+        // Module-qualified, like the HTTP / gRPC guard contexts (rate-limit
+        // buckets key on it).
+        if ctx.controller_name != concat!(module_path!(), "::StatefulImplDecorators") {
+            entries
+                .lock()
+                .unwrap()
+                .push(format!("unqualified:{}", ctx.controller_name));
+        }
         Ok(())
     }
 }

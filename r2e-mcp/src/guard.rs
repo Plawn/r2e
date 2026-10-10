@@ -8,20 +8,15 @@
 //! [`ToolCall`](crate::ToolCall) without parts falls back to the same
 //! neutral statics guard unit tests use.
 //!
-//! A guard rejection (an HTTP [`Response`]) is folded back into an
-//! [`McpError`] by status via [`guard_response_to_error`].
+//! A guard [`Rejection`](r2e_core::Rejection) is projected onto an
+//! [`McpError`](crate::McpError) **by kind** through
+//! `From<Rejection> for McpError` (see `error.rs`) — never by re-reading an
+//! HTTP status or response body.
 
 use std::net::SocketAddr;
 
-use r2e_core::http::body::to_bytes;
-use r2e_core::http::{ConnectInfo, Response, Uri};
+use r2e_core::http::{ConnectInfo, Uri};
 use r2e_core::{default_method, no_extensions, GuardContext, Identity, PathParams};
-
-use crate::error::{from_status, McpError};
-
-/// Cap on how much of a guard rejection body is read back into the JSON-RPC
-/// error message.
-const REJECTION_BODY_LIMIT: usize = 64 * 1024;
 
 fn default_uri() -> &'static Uri {
     static URI: std::sync::LazyLock<Uri> = std::sync::LazyLock::new(|| Uri::from_static("/"));
@@ -66,21 +61,4 @@ pub fn member_guard_context<'a, I: Identity>(
             identity,
         },
     }
-}
-
-/// Fold a guard rejection [`Response`] into an [`McpError`] by status:
-/// 401 → [`Unauthorized`](McpError::Unauthorized), 403 →
-/// [`Forbidden`](McpError::Forbidden), 404 → [`NotFound`](McpError::NotFound),
-/// 400/422 → [`InvalidParams`](McpError::InvalidParams), 5xx →
-/// [`Internal`](McpError::Internal), anything else a domain
-/// [`Tool`](McpError::Tool) failure. The response body (typically the guard's
-/// JSON error payload) becomes the message.
-pub async fn guard_response_to_error(response: Response) -> McpError {
-    let (parts, body) = response.into_parts();
-    let status = parts.status.as_u16();
-    let message = match to_bytes(body, REJECTION_BODY_LIMIT).await {
-        Ok(bytes) if !bytes.is_empty() => String::from_utf8_lossy(&bytes).into_owned(),
-        _ => format!("request rejected with status {status}"),
-    };
-    from_status(status, message)
 }

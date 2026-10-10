@@ -404,7 +404,8 @@ impl<'a, I: Identity> GuardContext<'a, I> {
 }
 
 /// Handler-level guard. Runs before the handler body.
-/// Returns `Ok(())` to proceed, `Err(Response)` to short-circuit.
+/// Returns `Ok(())` to proceed, `Err(Rejection)` to short-circuit: the
+/// generated route projects the rejection through the route's error envelope.
 ///
 /// Guards are the handler-level counterpart of `Interceptor<R>` (which is method-level).
 /// Built-in guards: `RolesGuard` (in `r2e-security`), `RateLimitGuard` (in `r2e-rate-limit`).
@@ -423,7 +424,7 @@ pub trait Guard<I: Identity>: Send + Sync {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), crate::error::Rejection>> + Send;
 }
 
 /// Context available to pre-authentication guards.
@@ -517,13 +518,15 @@ impl<'a> PreAuthGuardContext<'a> {
 /// A convenient error type for guard implementations.
 ///
 /// Instead of constructing `Response` manually, guards can return
-/// `GuardError` and convert it with `.into()`.
+/// `GuardError` and convert it with `.into()`. It also converts into a
+/// [`Rejection`](crate::error::Rejection) (kind chosen from the status, status
+/// preserved), which is what the projection layer consumes.
 ///
 /// # Example
 /// ```ignore
 /// use r2e_core::decorators::guards::GuardError;
 ///
-/// async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Response> {
+/// async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
 ///     if ctx.identity.is_none() {
 ///         return Err(GuardError::new(StatusCode::FORBIDDEN, "access denied").into());
 ///     }
@@ -605,5 +608,5 @@ pub trait PreAuthGuard: Send + Sync {
     fn check(
         &self,
         ctx: &PreAuthGuardContext<'_>,
-    ) -> impl std::future::Future<Output = Result<(), Response>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), crate::error::Rejection>> + Send;
 }

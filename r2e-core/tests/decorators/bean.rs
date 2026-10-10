@@ -20,7 +20,6 @@ use std::sync::{Arc, Mutex};
 
 use http_body_util::BodyExt;
 use r2e_core::config::{ConfigValue, R2eConfig};
-use r2e_core::http::response::Response;
 use r2e_core::http::{Body, Request, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, GuardContext, Identity};
@@ -49,7 +48,7 @@ impl<I: Identity> Guard<I> for QuotaGuard {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             if self.counter.hits.fetch_add(1, Ordering::SeqCst) >= self.max {
                 Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "quota exhausted").into())
@@ -110,7 +109,7 @@ impl<I: Identity> Guard<I> for RequireHeader {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             if ctx.headers.contains_key(self.0) {
                 Ok(())

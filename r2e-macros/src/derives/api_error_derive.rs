@@ -44,6 +44,10 @@ enum ErrorAttr {
         message: Option<String>,
     },
     Transparent,
+    /// `#[error(rejection)]` (or `#[error(transparent)]` over a `Rejection`
+    /// field): the variant carries the framework-side failure, so the enum
+    /// gets `From<Rejection>` + `ErrorSchema` and can be a route's envelope.
+    Rejection,
 }
 
 enum StatusExpr {
@@ -88,11 +92,14 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         variants: parsed,
     };
 
+    validate_rejection_variants(&def)?;
+
     let krate = r2e_core_path();
     let display_impl = gen_display(&def);
     let into_response_impl = gen_into_response(&def, &krate);
     let error_impl = gen_error(&def);
     let from_impls = gen_from_impls(&def);
+    let projection_impls = gen_projection_impls(&def, &krate);
 
     let (impl_generics, ty_generics, where_clause) = def.generics.split_for_impl();
 
@@ -126,7 +133,29 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         #from_impls
+
+        #projection_impls
     })
+}
+
+/// At most one variant may carry the `Rejection`.
+fn validate_rejection_variants(def: &ApiErrorDef) -> syn::Result<()> {
+    let mut seen: Option<&Ident> = None;
+    for v in &def.variants {
+        if matches!(v.error_attr, ErrorAttr::Rejection) {
+            if let Some(first) = seen {
+                return Err(syn::Error::new_spanned(
+                    &v.ident,
+                    format!(
+                        "only one variant may carry the `Rejection` (`{first}` already does): \
+                         `From<Rejection>` would be ambiguous"
+                    ),
+                ));
+            }
+            seen = Some(&v.ident);
+        }
+    }
+    Ok(())
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────
@@ -140,20 +169,36 @@ fn parse_variants(
 fn parse_variant(variant: &Variant) -> syn::Result<ApiErrorVariant> {
     let ident = variant.ident.clone();
 
-    let error_attr = parse_error_attr(&variant.attrs, &ident)?;
+    let mut error_attr = parse_error_attr(&variant.attrs, &ident)?;
     let fields = parse_fields(&variant.fields)?;
+
+    let field_count = match &fields {
+        VariantFields::Unit => 0,
+        VariantFields::Tuple(f) => f.len(),
+        VariantFields::Named(f) => f.len(),
+    };
 
     // Validate: transparent requires exactly one field
     if let ErrorAttr::Transparent = &error_attr {
-        let field_count = match &fields {
-            VariantFields::Unit => 0,
-            VariantFields::Tuple(f) => f.len(),
-            VariantFields::Named(f) => f.len(),
-        };
         if field_count != 1 {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
                 "#[error(transparent)] requires exactly one field",
+            ));
+        }
+        // `#[error(transparent)]` over a `Rejection` field is the rejection
+        // variant: same Display/response delegation, plus `From<Rejection>`.
+        if single_field_type(&fields).is_some_and(|ty| type_last_segment_is(ty, "Rejection")) {
+            error_attr = ErrorAttr::Rejection;
+        }
+    }
+
+    // Validate: rejection requires exactly one field
+    if let ErrorAttr::Rejection = &error_attr {
+        if field_count != 1 {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                "#[error(rejection)] requires exactly one field, of type `Rejection`",
             ));
         }
     }
@@ -193,13 +238,31 @@ fn parse_error_attr(attrs: &[Attribute], variant_ident: &Ident) -> syn::Result<E
         syn::punctuated::Punctuated::<Meta, syn::token::Comma>::parse_terminated,
     )?;
 
-    // Check for #[error(transparent)]
+    // Check for #[error(transparent)] / #[error(rejection)]
+    let mut is_rejection = false;
     for meta in &nested {
         if let Meta::Path(p) = meta {
             if p.is_ident("transparent") {
                 return Ok(ErrorAttr::Transparent);
             }
+            if p.is_ident("rejection") {
+                is_rejection = true;
+            }
         }
+    }
+    if is_rejection {
+        for meta in &nested {
+            if let Meta::NameValue(nv) = meta {
+                if nv.path.is_ident("status") || nv.path.is_ident("message") {
+                    return Err(syn::Error::new_spanned(
+                        nv,
+                        "#[error(rejection)] takes no `status`/`message`: both come from the \
+                         carried `Rejection` (remap statuses via `ErrorSchema::status_of`)",
+                    ));
+                }
+            }
+        }
+        return Ok(ErrorAttr::Rejection);
     }
 
     let mut status: Option<StatusExpr> = None;
@@ -322,8 +385,8 @@ fn gen_display_arm(enum_name: &Ident, variant: &ApiErrorVariant) -> TokenStream2
     let vname = &variant.ident;
 
     match &variant.error_attr {
-        ErrorAttr::Transparent => {
-            // Delegate to inner Display
+        ErrorAttr::Transparent | ErrorAttr::Rejection => {
+            // Delegate to inner Display (a `Rejection` displays its message)
             let (pattern, inner_expr) = single_field_pattern(enum_name, variant);
             quote! {
                 #pattern => ::core::fmt::Display::fmt(#inner_expr, f),
@@ -437,6 +500,13 @@ fn gen_response_arm(
             let (pattern, inner_expr) = single_field_pattern(enum_name, variant);
             quote! {
                 #pattern => #krate::http::response::IntoResponse::into_response(#inner_expr),
+            }
+        }
+        ErrorAttr::Rejection => {
+            // Default projection: `HttpError` bodies + the hub's headers.
+            let (pattern, inner_expr) = single_field_pattern(enum_name, variant);
+            quote! {
+                #pattern => #krate::http::response::IntoHttpResponse::into_http_response(#inner_expr),
             }
         }
         ErrorAttr::Standard { status, message } => {
@@ -560,12 +630,14 @@ fn gen_error(def: &ApiErrorDef) -> TokenStream2 {
     // Only return source for non-transparent #[from] variants.
     // Transparent variants delegate Display + IntoResponse but don't
     // require the inner type to implement std::error::Error.
-    let has_any_non_transparent_from = def
-        .variants
-        .iter()
-        .any(|v| !matches!(v.error_attr, ErrorAttr::Transparent) && variant_has_from(v));
+    // A `Rejection` variant always has a source (`Rejection: Error`).
+    let has_any_source = def.variants.iter().any(|v| match v.error_attr {
+        ErrorAttr::Transparent => false,
+        ErrorAttr::Rejection => true,
+        ErrorAttr::Standard { .. } => variant_has_from(v),
+    });
 
-    if !has_any_non_transparent_from {
+    if !has_any_source {
         return quote! { None };
     }
 
@@ -574,13 +646,21 @@ fn gen_error(def: &ApiErrorDef) -> TokenStream2 {
         .iter()
         .map(|v| {
             let vname = &v.ident;
-            let is_transparent = matches!(v.error_attr, ErrorAttr::Transparent);
-            if !is_transparent {
-                if let Some((pattern, source_expr)) = from_source_pattern(name, v) {
+            match v.error_attr {
+                ErrorAttr::Rejection => {
+                    let (pattern, inner_expr) = single_field_pattern(name, v);
                     return quote! {
-                        #pattern => Some(#source_expr as &(dyn ::std::error::Error + 'static)),
+                        #pattern => Some(#inner_expr as &(dyn ::std::error::Error + 'static)),
                     };
                 }
+                ErrorAttr::Standard { .. } => {
+                    if let Some((pattern, source_expr)) = from_source_pattern(name, v) {
+                        return quote! {
+                            #pattern => Some(#source_expr as &(dyn ::std::error::Error + 'static)),
+                        };
+                    }
+                }
+                ErrorAttr::Transparent => {}
             }
             // Wildcard arm for variants without #[from] or transparent variants
             match &v.fields {
@@ -607,6 +687,7 @@ fn gen_from_impls(def: &ApiErrorDef) -> TokenStream2 {
     let impls: Vec<TokenStream2> = def
         .variants
         .iter()
+        .filter(|v| !matches!(v.error_attr, ErrorAttr::Rejection))
         .filter_map(|v| {
             let vname = &v.ident;
             match &v.fields {
@@ -665,7 +746,128 @@ fn gen_from_impls(def: &ApiErrorDef) -> TokenStream2 {
     quote! { #(#impls)* }
 }
 
+// ── Codegen: From<Rejection> + ErrorSchema ───────────────────────────────
+
+/// How the enum receives a framework-side failure, if it can.
+enum ProjectionSource<'a> {
+    /// `#[error(rejection)]` variant: wraps the `Rejection` itself.
+    Rejection(&'a ApiErrorVariant),
+    /// Exactly one `#[error(transparent)]` variant over `HttpError`: the
+    /// enum inherits `HttpError`'s projection (`HttpError: From<Rejection>`).
+    HttpError(&'a ApiErrorVariant),
+}
+
+fn projection_source(def: &ApiErrorDef) -> Option<ProjectionSource<'_>> {
+    if let Some(v) = def
+        .variants
+        .iter()
+        .find(|v| matches!(v.error_attr, ErrorAttr::Rejection))
+    {
+        return Some(ProjectionSource::Rejection(v));
+    }
+    let mut over_http_error = def.variants.iter().filter(|v| {
+        matches!(v.error_attr, ErrorAttr::Transparent)
+            && single_field_type(&v.fields).is_some_and(|ty| type_last_segment_is(ty, "HttpError"))
+    });
+    let first = over_http_error.next()?;
+    // Two transparent `HttpError` variants: no unambiguous `From<Rejection>`.
+    if over_http_error.next().is_some() {
+        return None;
+    }
+    Some(ProjectionSource::HttpError(first))
+}
+
+/// Emits `From<Rejection>` + `ErrorSchema` when the enum can receive a
+/// framework-side failure. Bodies and statuses are `HttpError`'s (the
+/// default projection); `extra_statuses` lists every fixed-status variant so
+/// the OpenAPI builder documents the whole envelope.
+fn gen_projection_impls(def: &ApiErrorDef, krate: &TokenStream2) -> TokenStream2 {
+    let Some(source) = projection_source(def) else {
+        return quote! {};
+    };
+    let name = &def.name;
+    let (impl_generics, ty_generics, where_clause) = def.generics.split_for_impl();
+
+    let (variant, wrap) = match source {
+        ProjectionSource::Rejection(v) => (v, quote!(rejection)),
+        ProjectionSource::HttpError(v) => (
+            v,
+            quote!(<#krate::error::HttpError as ::core::convert::From<#krate::error::Rejection>>::from(rejection)),
+        ),
+    };
+    let vname = &variant.ident;
+    let construct = match &variant.fields {
+        VariantFields::Tuple(_) => quote!(#name::#vname(#wrap)),
+        VariantFields::Named(fields) => {
+            let fname = &fields[0].name;
+            quote!(#name::#vname { #fname: #wrap })
+        }
+        VariantFields::Unit => unreachable!("projection variants carry one field"),
+    };
+
+    let extra: Vec<TokenStream2> = def
+        .variants
+        .iter()
+        .filter_map(|v| match &v.error_attr {
+            ErrorAttr::Standard { status, .. } => {
+                let status_tokens = status_to_tokens(status, krate);
+                let description = humanize_ident(&v.ident);
+                Some(quote! { (#status_tokens, #description) })
+            }
+            ErrorAttr::Transparent | ErrorAttr::Rejection => None,
+        })
+        .collect();
+
+    quote! {
+        impl #impl_generics ::core::convert::From<#krate::error::Rejection> for #name #ty_generics #where_clause {
+            fn from(rejection: #krate::error::Rejection) -> Self {
+                #construct
+            }
+        }
+
+        impl #impl_generics #krate::error::ErrorSchema for #name #ty_generics #where_clause {
+            fn body_schema() -> Option<(String, #krate::serde_json::Value)> {
+                <#krate::error::HttpError as #krate::error::ErrorSchema>::body_schema()
+            }
+
+            fn body_schema_for(
+                kind: #krate::error::RejectionKind,
+            ) -> Option<(String, #krate::serde_json::Value)> {
+                <#krate::error::HttpError as #krate::error::ErrorSchema>::body_schema_for(kind)
+            }
+
+            fn extra_statuses() -> Vec<(#krate::http::StatusCode, &'static str)> {
+                let mut statuses: Vec<(#krate::http::StatusCode, &'static str)> = vec![#(#extra),*];
+                statuses.sort_by_key(|(status, _)| status.as_u16());
+                statuses.dedup_by_key(|(status, _)| status.as_u16());
+                statuses
+            }
+
+            fn opaque_passthrough() -> bool {
+                true
+            }
+        }
+    }
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+fn single_field_type(fields: &VariantFields) -> Option<&Type> {
+    match fields {
+        VariantFields::Tuple(f) if f.len() == 1 => Some(&f[0].ty),
+        VariantFields::Named(f) if f.len() == 1 => Some(&f[0].ty),
+        _ => None,
+    }
+}
+
+fn type_last_segment_is(ty: &Type, name: &str) -> bool {
+    if let Type::Path(tp) = ty {
+        if let Some(seg) = tp.path.segments.last() {
+            return seg.ident == name;
+        }
+    }
+    false
+}
 
 fn status_to_tokens(status: &StatusExpr, krate: &TokenStream2) -> TokenStream2 {
     match status {

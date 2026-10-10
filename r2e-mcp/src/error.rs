@@ -13,7 +13,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use r2e_core::HttpError;
+use r2e_core::{HttpError, Rejection, RejectionKind};
 use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData};
 
 /// Error type returned by MCP tool methods.
@@ -144,7 +144,7 @@ impl From<HttpError> for McpError {
             HttpError::Forbidden(m) => McpError::Forbidden(msg(m)),
             HttpError::BadRequest(m) => McpError::InvalidParams(msg(m)),
             HttpError::Internal(m) => McpError::Internal(msg(m)),
-            HttpError::Validation(v) => match serde_json::to_value(&v) {
+            HttpError::Validation { response, .. } => match serde_json::to_value(&response) {
                 Ok(data) => McpError::Tool {
                     message: "validation failed".to_string(),
                     data: Some(data),
@@ -165,6 +165,61 @@ impl From<HttpError> for McpError {
             // `HttpError` is #[non_exhaustive]; future variants degrade to a
             // generic internal error rather than breaking this crate.
             other => McpError::Internal(other.to_string()),
+        }
+    }
+}
+
+/// A framework [`Rejection`] (guard denial, identity failure, …) maps **by
+/// kind** — the wire-neutral meaning, not the HTTP status it would have
+/// rendered as:
+///
+/// | kind | `McpError` |
+/// |---|---|
+/// | `Unauthenticated` | [`Unauthorized`](McpError::Unauthorized) |
+/// | `Forbidden` | [`Forbidden`](McpError::Forbidden) |
+/// | `NotFound` | [`NotFound`](McpError::NotFound) |
+/// | request-shape kinds (`MissingContentType`, `UnsupportedMediaType`, `PayloadTooLarge`, `BodyRead`, `MalformedBody`, `InvalidBody`, `InvalidPath`, `InvalidQuery`, `InvalidForm`, `InvalidHeader`, `BadRequest`, `Validation`) | [`InvalidParams`](McpError::InvalidParams) |
+/// | `Internal`, `Unavailable`, `Timeout` | [`Internal`](McpError::Internal) |
+/// | `Conflict`, `RateLimited` | domain [`Tool`](McpError::Tool) failure (details as structured data) — the agent can retry |
+/// | `Opaque` (and future kinds) | by [`Rejection::status`], as [`HttpError`] does |
+///
+/// The rejection message becomes the error message; an empty message falls
+/// back to `request rejected with status N`.
+impl From<Rejection> for McpError {
+    fn from(rejection: Rejection) -> Self {
+        let status = rejection.status.as_u16();
+        let message = if rejection.message.is_empty() {
+            format!("request rejected with status {status}")
+        } else {
+            rejection.message.into_owned()
+        };
+        match rejection.kind {
+            RejectionKind::Unauthenticated => McpError::Unauthorized(message),
+            RejectionKind::Forbidden => McpError::Forbidden(message),
+            RejectionKind::NotFound => McpError::NotFound(message),
+            RejectionKind::MissingContentType
+            | RejectionKind::UnsupportedMediaType
+            | RejectionKind::PayloadTooLarge
+            | RejectionKind::BodyRead
+            | RejectionKind::MalformedBody
+            | RejectionKind::InvalidBody
+            | RejectionKind::InvalidPath
+            | RejectionKind::InvalidQuery
+            | RejectionKind::InvalidForm
+            | RejectionKind::InvalidHeader
+            | RejectionKind::BadRequest
+            | RejectionKind::Validation => McpError::InvalidParams(message),
+            RejectionKind::Internal | RejectionKind::Unavailable | RejectionKind::Timeout => {
+                McpError::Internal(message)
+            }
+            RejectionKind::Conflict | RejectionKind::RateLimited => McpError::Tool {
+                message,
+                data: rejection.details,
+            },
+            // `Opaque` carries a foreign response whose status is all we
+            // know; `RejectionKind` is #[non_exhaustive], so future kinds
+            // degrade the same way instead of breaking this crate.
+            _ => from_status(status, message),
         }
     }
 }

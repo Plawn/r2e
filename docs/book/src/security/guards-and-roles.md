@@ -41,11 +41,11 @@ impl<I: Identity> Guard<I> for TenantGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             match ctx.identity_claims() {
                 Some(claims) if claims["tenant_id"].is_string() => Ok(()),
-                _ => Err(HttpError::Forbidden("Missing tenant".into()).into_response()),
+                _ => Err(Rejection::forbidden("Missing tenant")),
             }
         }
     }
@@ -143,7 +143,7 @@ impl Guard<AuthenticatedUser> for ProjectGuardReady {
     fn check(
         &self,
         ctx: &GuardContext<'_, AuthenticatedUser>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let user = ctx
                 .identity
@@ -154,7 +154,7 @@ impl Guard<AuthenticatedUser> for ProjectGuardReady {
             self.authz
                 .require_project_role(user.sub(), project_id, self.min_role)
                 .await
-                .map_err(|_| Response::from(GuardError::forbidden("insufficient project role")))
+                .map_err(|_| Rejection::forbidden("insufficient project role"))
         }
     }
 }
@@ -233,13 +233,13 @@ impl PreAuthGuard for IpAllowlistGuard {
     fn check(
         &self,
         ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let ip = ctx.headers.get("x-forwarded-for")
                 .and_then(|v| v.to_str().ok());
             match ip {
                 Some("10.0.0.1") => Ok(()),
-                _ => Err(HttpError::Forbidden("IP not allowed".into()).into_response()),
+                _ => Err(Rejection::forbidden("IP not allowed")),
             }
         }
     }
@@ -270,7 +270,7 @@ impl<I: Identity> Guard<I> for DatabaseGuard {
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async move {
             let allowed = sqlx::query_scalar::<_, bool>(
                 "SELECT active FROM users WHERE sub = ?"
@@ -278,11 +278,11 @@ impl<I: Identity> Guard<I> for DatabaseGuard {
             .bind(ctx.identity_sub().unwrap_or(""))
             .fetch_optional(&self.pool)
             .await
-            .map_err(|_| HttpError::Internal("DB error".into()).into_response())?;
+            .map_err(|_| Rejection::internal("DB error"))?;
 
             match allowed {
                 Some(true) => Ok(()),
-                _ => Err(HttpError::Forbidden("Account suspended".into()).into_response()),
+                _ => Err(Rejection::forbidden("Account suspended")),
             }
         }
     }

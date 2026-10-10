@@ -12,10 +12,11 @@
 //! - [`response::IntoHttpResponse`] + [`impl_into_response!`] — the response
 //!   side. R2E error types implement `IntoHttpResponse`; the macro emits the
 //!   single bridging impl of the backend's `IntoResponse`.
-//! - `r2e_core::web::extract::FromRequestPartsVia` + `Via<T, M>` — the
+//! - `r2e_core::web::extract::FromRequestPartsVia` + `RequestData<S>` — the
 //!   extraction side (it lives in `r2e-core` because it needs the bean-graph
-//!   witness types). Bean-backed extractors implement the R2E trait; `Via` is
-//!   the single adapter back to the backend's `FromRequestParts`.
+//!   witness types). Bean-backed extractors implement the R2E trait; the
+//!   generated entry fn calls it directly, and `BeanExtract<T, I>` is the one
+//!   adapter back to the backend's `FromRequestParts` for hand-written handlers.
 //!
 //! Everything else that still speaks the backend's contracts is listed as a
 //! named bridge point in `plans/runtime-http-dependency-containment.md` §5.3b.

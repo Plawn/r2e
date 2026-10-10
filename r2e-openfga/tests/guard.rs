@@ -406,7 +406,7 @@ async fn built_guard_forbids_when_tuple_absent() {
     };
 
     let response = guard.check(&ctx).await.expect_err("should be denied");
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -437,7 +437,7 @@ async fn built_guard_unauthorized_without_identity() {
     };
 
     let response = guard.check(&ctx).await.expect_err("should be unauthorized");
-    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(response.status, StatusCode::UNAUTHORIZED);
 }
 
 /// A crafted subject must never be interpolated into `user:{sub}`:
@@ -477,6 +477,61 @@ async fn built_guard_forbids_subject_with_reserved_characters() {
         };
 
         let response = guard.check(&ctx).await.expect_err("must be rejected");
-        assert_eq!(response.status(), StatusCode::FORBIDDEN, "sub = {sub:?}");
+        assert_eq!(response.status, StatusCode::FORBIDDEN, "sub = {sub:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FgaDenied: the typed OpenFGA guard error (error projection, #1072)
+// ---------------------------------------------------------------------------
+
+mod fga_denied {
+    use r2e_core::error::{Rejection, RejectionKind};
+    use r2e_core::http::{IntoHttpResponse, StatusCode};
+    use r2e_openfga::FgaDenied;
+
+    #[test]
+    fn each_variant_maps_to_its_kind_and_status() {
+        let cases = [
+            (
+                FgaDenied::NoIdentity,
+                RejectionKind::Unauthenticated,
+                StatusCode::UNAUTHORIZED,
+                "Authentication required for authorization check",
+            ),
+            (
+                FgaDenied::Denied,
+                RejectionKind::Forbidden,
+                StatusCode::FORBIDDEN,
+                "Access denied",
+            ),
+            (
+                FgaDenied::ObjectResolution("missing `id`".into()),
+                RejectionKind::BadRequest,
+                StatusCode::BAD_REQUEST,
+                "Failed to resolve object: missing `id`",
+            ),
+            (
+                FgaDenied::CheckFailed,
+                RejectionKind::Internal,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Authorization check failed",
+            ),
+        ];
+        for (denied, kind, status, message) in cases {
+            let debug = format!("{denied:?}");
+            assert_eq!(denied.kind(), kind, "{debug}");
+            assert_eq!(denied.to_string(), message, "{debug}");
+            let rejection = Rejection::from(denied);
+            assert_eq!(rejection.kind, kind, "{debug}");
+            assert_eq!(rejection.status, status, "{debug}");
+            assert_eq!(rejection.message, message, "{debug}");
+        }
+    }
+
+    #[test]
+    fn renders_through_the_rejection() {
+        let resp = FgaDenied::Denied.into_http_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }

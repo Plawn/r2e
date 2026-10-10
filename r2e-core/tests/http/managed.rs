@@ -1,6 +1,6 @@
 use http_body_util::BodyExt;
 use r2e_core::http::extract::FromRequestParts;
-use r2e_core::http::{IntoResponse, Response, StatusCode};
+use r2e_core::http::{Response, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::web::extract::OptionalFromRequestPartsVia;
 use r2e_core::web::managed::ManagedErr;
@@ -17,7 +17,8 @@ use crate::support::send_get_with;
 #[r2e_core::test]
 async fn managed_err_http_error_into_response() {
     let err = ManagedErr(HttpError::NotFound("gone".into()));
-    let resp: Response = err.into();
+    let rej: Rejection = err.into();
+    let resp: Response = rej.into();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -33,19 +34,24 @@ impl std::fmt::Display for TestError {
     }
 }
 
-impl IntoResponse for TestError {
-    fn into_response(self) -> Response {
-        (StatusCode::CONFLICT, self.0).into_response()
+impl From<TestError> for Rejection {
+    fn from(err: TestError) -> Self {
+        Rejection::from_status(StatusCode::CONFLICT, err.0)
     }
 }
 
 #[r2e_core::test]
 async fn managed_err_wraps_custom_error() {
     let err = ManagedErr(TestError("conflict!".into()));
-    let resp: Response = err.into();
+    let rej: Rejection = err.into();
+    assert_eq!(rej.status, StatusCode::CONFLICT);
+    assert_eq!(rej.message, "conflict!");
+    // Default projection: the `HttpError` JSON envelope.
+    let resp: Response = rej.into();
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    assert_eq!(String::from_utf8_lossy(&body), "conflict!");
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], "conflict!");
 }
 
 #[test]
@@ -103,7 +109,7 @@ impl<I: Identity> Guard<I> for AllowAll {
     fn check(
         &self,
         _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Response>> + Send {
+    ) -> impl Future<Output = Result<(), Rejection>> + Send {
         async { Ok(()) }
     }
 }
@@ -142,7 +148,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Subject {
             .get("x-user")
             .and_then(|value| value.to_str().ok())
             .map(|sub| Subject(sub.to_owned()))
-            .ok_or_else(|| StatusCode::UNAUTHORIZED.into_response())
+            .ok_or_else(|| GuardError::unauthorized("missing header").into())
     }
 }
 
@@ -308,8 +314,8 @@ async fn require_request_reports_a_missing_head_uniformly() {
         "message must explain the requirement: {message}"
     );
 
-    let resp: Response = err.into();
-    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let rej: Rejection = err.into();
+    assert_eq!(rej.status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 // ── Guard arm/disarm ─────────────────────────────────────────────────────
