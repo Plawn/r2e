@@ -135,7 +135,9 @@ guard itself. Guards run **before** the handler's own parameters are extracted
 (path/query/header, then body): a denied request never reads its body.
 
 `GuardContext<'a, I: Identity>` provides:
-- `method_name`, `controller_name` — handler identification
+- `method_name`, `controller_name` — handler identification. `controller_name`
+  is module-qualified (`concat!(module_path!(), "::", "Name")`) on every
+  transport — HTTP, gRPC and MCP — since rate-limit buckets key on it.
 - `headers` — request headers (`&HeaderMap`)
 - `uri` — request URI (`&Uri`) with convenience methods `path()` and `query_string()`
 - `path_params` — typed path parameters (`path_param()`, `parse_path_param()`)
@@ -232,7 +234,9 @@ WS endpoints support `#[pre_guard]` too.
 Cross-cutting concerns (logging, timing, caching) implement `Interceptor<R>`
 with an `around` pattern (`r2e-core/src/decorators/interceptors.rs`). All calls are
 monomorphized (no `dyn`). `InterceptorContext` is a `Copy` struct
-`{ method_name, controller_name }` — no state field.
+`{ method_name, controller_name }` — no state field. Here `controller_name` is
+the bare type name (a log/metric label, not a key) on every transport;
+only guard contexts carry the qualified name.
 
 ### Built-in interceptors (in `r2e-utils`)
 

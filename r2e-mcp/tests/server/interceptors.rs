@@ -101,6 +101,14 @@ impl Guard<NoIdentity> for TraceControllerGuardReady {
             .lock()
             .unwrap()
             .push(format!("guard:{}", ctx.method_name));
+        // Module-qualified, like the HTTP / gRPC guard contexts (rate-limit
+        // buckets key on it).
+        if ctx.controller_name != concat!(module_path!(), "::StatefulImplDecorators") {
+            entries
+                .lock()
+                .unwrap()
+                .push(format!("unqualified:{}", ctx.controller_name));
+        }
         Ok(())
     }
 }

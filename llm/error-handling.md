@@ -1,7 +1,7 @@
 ---
 topic: error-handling
 features: core
-tokens: ~4100
+tokens: ~4200
 requires: core-concepts
 ---
 
@@ -38,7 +38,7 @@ requires: core-concepts
 
 `HttpError` is the default error type (`#[non_exhaustive]` — wildcard arm when
 matching). Variants: `NotFound`, `Unauthorized`, `Forbidden`, `BadRequest`,
-`Internal` (all `Cow<'static, str>`), `Validation(...)`, `Custom { status, body }`,
+`Internal` (all `Cow<'static, str>`), `Validation { status, response }` (build with `HttpError::validation(resp)` → 400), `Custom { status, body }`,
 `WithSource { status, message, source }`.
 
 ```rust
@@ -185,10 +185,13 @@ There is no attribute to wire an envelope: the **handler's return type** decides
   every framework failure on that route (extractor rejection, failed identity,
   guard denial, garde report, managed acquire/finalize) is projected through
   `E`, so the handler's own `Err(E)` and the framework's errors share one wire
-  shape. Nothing to annotate.
-- Any other return type (`Json<T>`, `Result<T, HttpError>`, `Result<T, E>` with
-  `E` lacking one of the three traits, a plain `String`) — the route uses the
-  **app-level** projection: `AppBuilder::error_projection::<E>()`, default
+  shape. Nothing to annotate. `HttpError` qualifies, so a `Result<T, HttpError>`
+  route renders `HttpError` bodies **regardless** of the app-level projection.
+  `T` is never constrained: `Result<impl IntoResponse, E>` keeps `E` too (the
+  probe uses `Result<(), E>` when the success type is an opaque `impl Trait`).
+- Any other return type (`Json<T>`, a bare `impl IntoResponse`, `Result<T, E>`
+  with `E` lacking one of the three traits, a plain `String`) — the route uses
+  the **app-level** projection: `AppBuilder::error_projection::<E>()`, default
   `HttpError`. The app-level one is the JAX-RS/Quarkus `ExceptionMapper`
   equivalent: one place that decides how unmapped failures look.
 

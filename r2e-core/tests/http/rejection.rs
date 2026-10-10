@@ -63,6 +63,35 @@ impl IntoHttpResponse for Envelope {
     }
 }
 
+/// An envelope that delegates conversion and rendering to `HttpError` but
+/// remaps `Validation` to 422 — the `#[error(transparent)]` shape.
+struct Delegating(HttpError);
+
+impl From<Rejection> for Delegating {
+    fn from(r: Rejection) -> Self {
+        Self(HttpError::from(r))
+    }
+}
+
+impl IntoHttpResponse for Delegating {
+    fn into_http_response(self) -> Response {
+        self.0.into_http_response()
+    }
+}
+
+impl ErrorSchema for Delegating {
+    fn status_of(kind: RejectionKind) -> StatusCode {
+        match kind {
+            RejectionKind::Validation => StatusCode::UNPROCESSABLE_ENTITY,
+            other => other.default_status(),
+        }
+    }
+
+    fn body_schema() -> Option<(String, serde_json::Value)> {
+        HttpError::body_schema()
+    }
+}
+
 impl ErrorSchema for Envelope {
     fn status_of(kind: RejectionKind) -> StatusCode {
         match kind {
@@ -198,6 +227,52 @@ async fn query_and_form_rejections() {
     assert_eq!(r.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
 
+/// `Form<T>` failures by source: a body that does not deserialize is a body
+/// failure (`InvalidBody`, 422 — the status axum carries), a query-string form
+/// (GET/HEAD) stays `InvalidForm` (400).
+#[r2e_core::test]
+async fn form_rejection_kind_follows_the_source() {
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct Q {
+        n: u32,
+    }
+    async fn reject(req: Request) -> Rejection {
+        let rejection = <Form<Q> as FromRequest<()>>::from_request(req, &())
+            .await
+            .err()
+            .expect("rejected");
+        Rejection::from(rejection)
+    }
+
+    let body = Request::builder()
+        .method("POST")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from("n=abc"))
+        .unwrap();
+    let r = reject(body).await;
+    assert_eq!(r.kind, RejectionKind::InvalidBody);
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let query = Request::builder()
+        .method("GET")
+        .uri("/x?n=abc")
+        .body(Body::empty())
+        .unwrap();
+    let r = reject(query).await;
+    assert_eq!(r.kind, RejectionKind::InvalidForm);
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    let media = Request::builder()
+        .method("POST")
+        .header("content-type", "text/plain")
+        .body(Body::from("n=1"))
+        .unwrap();
+    let r = reject(media).await;
+    assert_eq!(r.kind, RejectionKind::UnsupportedMediaType);
+    assert_eq!(r.status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
 #[r2e_core::test]
 async fn path_rejection_keeps_its_carried_status() {
     // No matched route → axum answers 500 (`MissingPathParams`); the kind
@@ -290,8 +365,16 @@ fn http_error_maps_by_variant() {
         assert!(r.details.is_none());
     }
 
-    let r = Rejection::from(HttpError::Validation(validation()));
+    let r = Rejection::from(HttpError::validation(validation()));
     assert_eq!(r.kind, RejectionKind::Validation);
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    // A carried validation status survives the round trip.
+    let r = Rejection::from(HttpError::Validation {
+        status: StatusCode::UNPROCESSABLE_ENTITY,
+        response: validation(),
+    });
+    assert_eq!(r.kind, RejectionKind::Validation);
+    assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY);
 
     let body = serde_json::json!({"error": "teapot", "code": 7});
     let r = Rejection::from(HttpError::Custom {
@@ -344,7 +427,8 @@ fn rejection_to_http_error_by_shape() {
     ));
     assert!(matches!(
         HttpError::from(Rejection::from(validation())),
-        HttpError::Validation(v) if v.errors.len() == 1
+        HttpError::Validation { status: StatusCode::BAD_REQUEST, response }
+            if response.errors.len() == 1
     ));
     assert!(matches!(
         HttpError::from(Rejection::new(RejectionKind::Conflict, "dup")),
@@ -391,7 +475,7 @@ async fn default_projection_is_byte_equal_to_http_error() {
         ),
         (
             Rejection::from(validation()),
-            HttpError::Validation(validation()),
+            HttpError::validation(validation()),
         ),
         (
             Rejection::internal("boom").source(std::io::Error::other("disk")),
@@ -460,6 +544,47 @@ async fn hub_headers_are_added_unless_the_envelope_set_them() {
     assert_eq!(resp.headers()[RETRY_AFTER], "envelope");
 }
 
+#[r2e_core::test]
+async fn hub_headers_are_merged_into_an_opaque_passthrough() {
+    let original = (StatusCode::SERVICE_UNAVAILABLE, [("x-custom", "yes")], "down").into_response();
+    let resp = Rejection::from(original)
+        .header(RETRY_AFTER, HeaderValue::from_static("30"))
+        .project::<HttpError>();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.headers()[RETRY_AFTER], "30");
+    assert_eq!(resp.headers()["x-custom"], "yes");
+}
+
+#[r2e_core::test]
+async fn opaque_response_own_header_wins_over_the_hub() {
+    let original = (StatusCode::SERVICE_UNAVAILABLE, [(RETRY_AFTER, "5")], "down").into_response();
+    let resp = Rejection::from(original)
+        .header(RETRY_AFTER, HeaderValue::from_static("30"))
+        .project::<HttpError>();
+    let values: Vec<_> = resp.headers().get_all(RETRY_AFTER).iter().collect();
+    assert_eq!(values, ["5"]);
+}
+
+#[r2e_core::test]
+async fn repeated_hub_header_values_are_all_kept() {
+    let resp = Rejection::unauthenticated()
+        .header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
+        .header(WWW_AUTHENTICATE, HeaderValue::from_static("Basic realm=\"r2e\""))
+        .project::<HttpError>();
+    let values: Vec<_> = resp.headers().get_all(WWW_AUTHENTICATE).iter().collect();
+    assert_eq!(values, ["Bearer", "Basic realm=\"r2e\""]);
+}
+
+#[r2e_core::test]
+async fn envelope_header_wins_over_every_repeated_hub_value() {
+    let resp = Rejection::unauthenticated()
+        .header(RETRY_AFTER, HeaderValue::from_static("1"))
+        .header(RETRY_AFTER, HeaderValue::from_static("2"))
+        .project::<Envelope>();
+    let values: Vec<_> = resp.headers().get_all(RETRY_AFTER).iter().collect();
+    assert_eq!(values, ["envelope"]);
+}
+
 // ── status remap ─────────────────────────────────────────────────────────
 
 #[r2e_core::test]
@@ -485,23 +610,53 @@ async fn carried_status_survives_when_the_envelope_does_not_remap() {
 
 #[test]
 fn projection_status_is_coherent_with_status_of() {
+    // A `Validation` rejection is built the way the framework builds it —
+    // with populated field-error `details` — since that is the branch where
+    // `HttpError` rebuilds a dedicated variant.
+    let sample = |kind: RejectionKind| match kind {
+        RejectionKind::Validation => Rejection::from(validation()),
+        kind => Rejection::new(kind, Cow::Borrowed("m")),
+    };
     for kind in RejectionKind::ALL {
         if *kind == RejectionKind::Opaque {
             continue;
         }
-        let r = Rejection::new(*kind, Cow::Borrowed("m"));
         assert_eq!(
-            r.project::<HttpError>().status(),
+            sample(*kind).project::<HttpError>().status(),
             HttpError::status_of(*kind),
             "HttpError {kind:?}"
         );
-        let r = Rejection::new(*kind, Cow::Borrowed("m"));
         assert_eq!(
-            r.project::<Envelope>().status(),
+            sample(*kind).project::<Envelope>().status(),
             Envelope::status_of(*kind),
             "Envelope {kind:?}"
         );
+        assert_eq!(
+            sample(*kind).project::<Delegating>().status(),
+            Delegating::status_of(*kind),
+            "Delegating {kind:?}"
+        );
     }
+}
+
+#[r2e_core::test]
+async fn validation_remap_survives_an_envelope_delegating_to_http_error() {
+    let mut report = garde::Report::new();
+    report.append(garde::Path::new("email"), garde::Error::new("not an email"));
+    let (status, body) = json_parts(Rejection::from(&report).project::<Delegating>()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"], "Validation failed");
+    assert_eq!(body["details"][0]["field"], "email");
+}
+
+#[r2e_core::test]
+async fn default_validation_body_is_byte_equal_to_0_4() {
+    let (status, body) = parts(Rejection::from(validation()).project::<HttpError>()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        String::from_utf8_lossy(&body),
+        r#"{"details":[{"code":"required","field":"name","message":"required"}],"error":"Validation failed"}"#
+    );
 }
 
 // ── ErrorSchema for HttpError ────────────────────────────────────────────

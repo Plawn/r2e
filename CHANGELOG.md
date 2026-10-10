@@ -26,6 +26,21 @@ per failure, projected once per route through an error envelope. Each item is
 detailed under *Added*; the step-by-step developer migration is
 [`docs/migration/error-projection.md`](docs/migration/error-projection.md).
 
+- **Breaking: extractor rejections render as the envelope's JSON** (task
+  #1072). Every extractor rejection — `Json`/`Path`/`Query`/`Form`/header/
+  multipart failures, a missing or unsupported `content-type`, a 413 body
+  limit — is now projected through the route's envelope, so with the default
+  `HttpError` it answers `{"error": "..."}` (`application/json`) where 0.4
+  returned axum's `text/plain` body. Status codes are unchanged; `HttpError`'s
+  own bodies stay byte-equal to 0.4. Clients parsing those plain-text bodies
+  must be updated.
+- **Breaking: `HttpError::Validation` is a struct variant**
+  `Validation { status: StatusCode, response: ValidationErrorResponse }` (was
+  the tuple `Validation(ValidationErrorResponse)`). Build it with
+  `HttpError::validation(response)` (status 400); match with
+  `HttpError::Validation { response, .. }`. The carried status keeps an
+  envelope's `status_of(Validation)` remap (e.g. 422) through
+  `From<Rejection> for HttpError` and back. The default 400 body is unchanged.
 - **Breaking: guards return `Result<(), Rejection>`** (task #1072, phase P1).
   `Guard<I>::check` and `PreAuthGuard::check` no longer build a `Response`;
   they return a `Rejection` (`Rejection::forbidden(..)`,
@@ -34,8 +49,10 @@ detailed under *Added*; the step-by-step developer migration is
   `Result<T, GuardError>`. Pre-auth guards are the first step of the route's
   entry fn, not a middleware layer.
 - **Breaking: `ManagedResource::Error: Into<Rejection>`** (was
-  `IntoHttpResponse`). Acquire/finalize failures are projected like any other
-  rejection; `HttpError` still qualifies.
+  `Into<Response>`). Acquire/finalize failures are projected like any other
+  rejection; `HttpError` still qualifies. `ManagedErr<E>` still requires
+  `E: Into<Rejection>`; an error that was only `Into<Response>` must be mapped
+  (e.g. to `HttpError`) first.
 - **Breaking: `ParamsRejectionFormat` and `server.params-rejection-format`
   removed.** `#[derive(Params)]` failures always render through the route's
   envelope (default `HttpError`, same body as the previous default).
@@ -50,7 +67,7 @@ detailed under *Added*; the step-by-step developer migration is
   gRPC and MCP alike. Manual `GrpcIdentityExtractor::extract_claims` wiring
   still compiles but is no longer needed: use an `#[inject(identity)]`
   parameter.
-- **Breaking: `r2e_mcp::guard::guard_rejection_to_error` removed**; the
+- **Breaking: `r2e_mcp::guard::guard_response_to_error` removed**; the
   generated tool code uses `McpError::from(rejection)`.
 - **Breaking: `RouteInfo.has_auth` removed** (task #1072, phase P2) in favour
   of `rejection_kinds`; `RouteInfo` literals need the two new fields. The
@@ -61,8 +78,39 @@ detailed under *Added*; the step-by-step developer migration is
   `Serialize`.
 - **Breaking: `ParamError` gains `location: ParamLocation`** (`Path` / `Query` /
   `Header`), so a `#[derive(Params)]` failure converts into the right
-  `RejectionKind`. Only code that builds `ParamError` by struct literal is
-  affected.
+  `RejectionKind`. Code that builds a `ParamError` by struct literal or
+  destructures it exhaustively (`let ParamError { message } = e`) must name
+  the new field; hand-written `PrefixedExtract` impls (below) now return it.
+- **Breaking: `PrefixedExtract::extract_prefixed` returns
+  `Result<Self, ParamError>`** (was `Result<Self, Response>`). A hand-written
+  impl (nested `#[derive(Params)]` support) returns a `ParamError` with its
+  `location` instead of a rendered response.
+- **Breaking: `#[derive(Params)]` rejects with `ParamError`** —
+  `<T as FromRequestParts<S>>::Rejection` is `ParamError` (was `Response`).
+  Code naming the rejection type or calling `.into_response()` on it still
+  works (`ParamError: IntoHttpResponse`); code matching it as a `Response`
+  must convert first.
+- **Breaking: `TypedMultipart<T>` rejects with `MultipartError`**
+  (`<TypedMultipart<T> as FromRequest<S>>::Rejection` was `Response`). It
+  converts into `Rejection` by its variant; hand-written handlers that
+  forwarded the `Response` call `.into_response()` (or `Rejection::from`).
+- **Breaking: a `Form<T>` body that does not deserialize is `InvalidBody`
+  (422)**, no longer `InvalidForm`; the status axum carries (422) is
+  unchanged, so `HttpError` responses do not move, but an envelope remapping
+  `InvalidForm` no longer sees it. A query-string form (GET/HEAD) stays
+  `InvalidForm` (400). `RawForm`: a wrong content type was already
+  `UnsupportedMediaType`; the other failures, previously all `InvalidForm`,
+  now map to `PayloadTooLarge` (413), `BodyRead` (unreadable body) or the
+  kind matching their status.
+- **Breaking: OpenAPI documents the panic 500 on every route** through the
+  application envelope (`ErrorProjector`, default `HttpError`) — what the
+  catch-panic layer answers — merged as an `anyOf` when the route's envelope
+  shares the status. Optional identities (`Option<identity>` field or
+  parameter) now document 401 (an invalid token still fails), SSE routes
+  document their `Query`/`Path`/`Form`/garde failures and WS routes their
+  `Query`/`Path`/garde failures (WS extracts request parts only, so `Form<T>`
+  does not apply there), and a `Form<T>` body documents 415/413/400/422
+  instead of 400.
 - **Breaking: unknown routes and wrong methods answer JSON** (task #1072, phase P4). An
   app without a fallback of its own used to get axum's empty-bodied 404 and
   bodiless 405; they are now `404 {"error":"Not found"}` and `405
@@ -70,6 +118,9 @@ detailed under *Added*; the step-by-step developer migration is
   the `error_projection::<E>()` envelope). `CatchPanicLayer::with_hook(hook)`
   is replaced by `CatchPanicLayer::with(hook, projector)` and
   `catch_panic_layer_with` takes the projector too.
+- **Breaking: `SchemaGap` gains the `ErrorBodyInlined { component }` variant**
+  (r2e-openapi, see *Added*). Exhaustive `match`es on `SchemaGap` need a new
+  arm or a fallback.
 
 ### Added
 
@@ -137,15 +188,18 @@ detailed under *Added*; the step-by-step developer migration is
 - **OpenAPI error responses from the route's real failures** (task #1072,
   phase P2). `RouteInfo` gains `rejection_kinds: Vec<RejectionKind>` (inferred
   by `#[routes]`: body extractor kinds, `Path`/`Query`/`Form`/`#[derive(Params)]`
-  locations, garde validation, required identity, roles/guards, rate-limit
+  locations, garde validation, identity (required or optional), roles/guards, rate-limit
   guards, always `Internal`) and `error_schema: Option<ErrorSchemaInfo>` (the
   envelope of a `Result<T, E>` return type). `build_spec` documents one
   response per distinct `ErrorSchema::status_of(kind)` of the route's envelope
   — the route's own, else the application's `error_projection::<E>()` (read
   from the `ErrorProjector` bean by `OpenApiPlugin`, or set with
   `OpenApiConfig::with_error_schema::<E>()`), else `HttpError` — with the
-  envelope's body components and `extra_statuses`; several bodies on one
-  status become a `oneOf`. New `r2e_core::error::ErrorSchemaInfo` (`Copy`
+  envelope's body components and `extra_statuses`; bodies are deduplicated
+  by schema and distinct bodies on one status become an `anyOf`; an error
+  body whose component name is taken by a different schema (DTO, registry,
+  nested `$defs`) is inlined and warned about (`SchemaGap::ErrorBodyInlined`,
+  `build_spec_with_warnings`). New `r2e_core::error::ErrorSchemaInfo` (`Copy`
   capture of an `ErrorSchema` impl, also exposed as `ErrorProjector::schema()`)
   and `r2e_core::di::meta::RequestBodySchema` (a custom last-parameter body
   extractor documents its content type, schema and rejection kinds).
@@ -220,6 +274,20 @@ detailed under *Added*; the step-by-step developer migration is
 
 ### Fixed
 
+- **gRPC: controller-level and method-level guards get separate
+  `GuardContext`s**, as on HTTP and MCP: impl-block guards are built once per
+  controller and run with `method_name: "*"`, method guards with the method
+  name. A controller-level `RateLimit` on a gRPC service is now one
+  service-wide budget instead of being charged twice per call under the
+  method's key.
+- **Rejection headers merge per name on every path.** `Rejection::project`
+  now adds the hub's headers to an opaque passthrough response too (a
+  `Retry-After` added to `Rejection::from(response)` used to be dropped), and
+  keeps every value of a repeated header (two `WWW-Authenticate` challenges).
+  A header name the rendered response already carries still wins.
+- **`Result<impl Trait, E>` routes keep their envelope.** The return-type
+  probe can't name an opaque success type, so such routes fell back to the
+  app-level projection (runtime and OpenAPI); they now project through `E`.
 - **`r2e-executor`: an aborted job no longer leaks the pool's counters**
   (task #1066). `JobHandle::abort` drops the job future at its next await, so
   the bookkeeping written after `fut.await` never ran: one aborted running job

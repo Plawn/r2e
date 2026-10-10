@@ -103,11 +103,14 @@ The macro infers the `RejectionKind`s a route can fail with — the body
 extractor's failures (`Json<T>`: `MissingContentType` 415, `PayloadTooLarge`
 413, `BodyRead`/`MalformedBody` 400, `InvalidBody` 422), `Path<T>` →
 `InvalidPath`, `Query<T>` / `#[derive(Params)]` fields → `InvalidQuery` /
-`InvalidHeader`, `Form<T>` → `InvalidForm`, a garde `Validate` body →
-`Validation`, a required identity (struct-level or parameter) →
-`Unauthenticated`, `#[roles]` / guards → `Forbidden`, a rate-limit guard →
-`RateLimited`, and always `Internal`. Controller-level guards fold in for
-non-`#[anonymous]` routes, pre-auth guards for every route.
+`InvalidHeader`, a `Form<T>` body → `UnsupportedMediaType` / `PayloadTooLarge`
+/ `BodyRead` / `InvalidBody` (422), a GET `Form<T>` (query string) →
+`InvalidForm`, a garde `Validate` parameter → `Validation`, an identity
+(struct-level or parameter, required or `Option<..>` — a present but invalid
+token still fails) → `Unauthenticated`, `#[roles]` / guards → `Forbidden`, a
+rate-limit guard → `RateLimited`, and always `Internal`. Controller-level
+guards fold in for non-`#[anonymous]` routes, pre-auth guards for every route.
+SSE and WS routes are inferred from their parameters by the same rules.
 
 The builder documents one response per distinct status the route's **error
 envelope** maps those kinds to, through `ErrorSchema::status_of(kind)`, with
@@ -118,8 +121,27 @@ the application's `AppBuilder::error_projection::<E>()` (the plugin reads the
 `ErrorProjector` bean; `OpenApiConfig::with_error_schema::<E>()` does the same
 for direct `build_spec` callers), else `HttpError` — `ErrorResponse`
 everywhere, `ValidationErrorResponse` (inline `details` items) for
-`Validation`. Several bodies on one status render as a `oneOf`. Runtime and
+`Validation`. Bodies are deduplicated by schema — the same body under two
+names is documented once, under the first-recorded (route envelope's) name —
+and distinct bodies on one status render as an `anyOf` (a validation body is
+also a valid plain error body, which a `oneOf` would reject). Runtime and
 spec share `status_of`, so a remap (422 → 400) is documented as 400 only.
+
+Every route also documents the **panic 500** with the application envelope's
+body: the catch-panic layer renders through the `ErrorProjector`, never the
+route's envelope. When the route's own envelope puts a different body on 500
+the two render as an `anyOf`; when it remaps `Internal` elsewhere (say 503) the
+spec lists both 500 (application body) and 503 (route body). Nested types in
+an envelope body schema (`$defs`) are promoted to `components/schemas`.
+
+Route, registry and nested `$defs` schemas own their component names. An
+error body named like a different schema already there — say a success DTO
+nesting its own `ErrorResponse`, or a route envelope reusing `HttpError`'s
+`ErrorResponse` with another shape — keeps the existing component and is
+documented **inline** in its responses; spec generation warns once at boot
+(`SchemaGap::ErrorBodyInlined`, naming the route and the component).
+`build_spec_with_warnings(&config, &routes)` returns the spec with every
+warning instead of logging them.
 
 A custom body extractor — the handler's last parameter, read with
 `FromRequest` — is documented when it implements

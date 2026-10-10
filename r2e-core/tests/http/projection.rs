@@ -252,6 +252,20 @@ impl ProjController {
         "infallible"
     }
 
+    /// An opaque success type does not hide a nameable envelope: the route
+    /// still projects through `Wire` (probed as `Result<(), Wire>`).
+    #[post("/opaque")]
+    async fn opaque(&self, Json(body): Json<Payload>) -> Result<impl IntoResponse, Wire> {
+        Ok(body.name)
+    }
+
+    /// Redundant parentheses around the `Result` do not hide the envelope.
+    #[post("/opaque-paren")]
+    #[allow(unused_parens)]
+    async fn opaque_paren(&self, Json(body): Json<Payload>) -> (Result<impl IntoResponse, Wire>) {
+        Ok(body.name)
+    }
+
     /// `#[anonymous]` routes still project through their envelope.
     #[get("/anon/{id}")]
     #[anonymous]
@@ -404,6 +418,30 @@ async fn validation_failure_projects() {
         json["error"]["details"].to_string().contains("name"),
         "{json}"
     );
+}
+
+#[r2e_core::test]
+async fn opaque_success_type_keeps_the_route_envelope() {
+    // Even with an app-level envelope installed, `Result<impl Trait, Wire>`
+    // projects framework failures through `Wire`, like its handler `Err`.
+    let headers = [("x-user", "zoe"), ("content-type", "application/json")];
+    let app = router_with_app_envelope().await;
+    let resp = raw(app.clone(), "POST", "/proj/opaque", &headers, Body::from("{bad")).await;
+    assert_wire(resp, StatusCode::BAD_REQUEST, "MalformedBody").await;
+    let resp = raw(app, "POST", "/proj/opaque", &headers, Body::from(r#"{"name":"x"}"#)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[r2e_core::test]
+async fn parenthesized_opaque_result_keeps_the_route_envelope() {
+    // `-> (Result<impl Trait, Wire>)` probes `Result<(), Wire>` exactly like
+    // the unparenthesized spelling.
+    let headers = [("x-user", "zoe"), ("content-type", "application/json")];
+    let app = router_with_app_envelope().await;
+    let resp = raw(app.clone(), "POST", "/proj/opaque-paren", &headers, Body::from("{bad")).await;
+    assert_wire(resp, StatusCode::BAD_REQUEST, "MalformedBody").await;
+    let resp = raw(app, "POST", "/proj/opaque-paren", &headers, Body::from(r#"{"name":"x"}"#)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[r2e_core::test]

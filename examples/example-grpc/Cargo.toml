@@ -27,6 +27,8 @@ base64 = {workspace = true}
 tonic-reflection = {workspace = true}
 # HS256 test tokens + validator for the guards e2e test.
 r2e-test = {workspace = true}
+# Guard-scope e2e test: impl-level vs method-level `RateLimit` buckets.
+r2e = {workspace = true, features = ["rate-limit"]}
 
 [build-dependencies]
 r2e-grpc-build = {workspace = true}

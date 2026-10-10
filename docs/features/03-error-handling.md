@@ -35,7 +35,7 @@ The enum is `#[non_exhaustive]`; the message variants carry `Cow<'static, str>`
 | `Forbidden(Cow<'static, str>)` | 403 | Insufficient permissions |
 | `BadRequest(Cow<'static, str>)` | 400 | Malformed request |
 | `Internal(Cow<'static, str>)` | 500 | Server error |
-| `Validation(ValidationErrorResponse)` | 400 | Validation failure (feature `validation`) |
+| `Validation { status, response: ValidationErrorResponse }` | `status` (400 via `HttpError::validation(..)`) | Validation failure (feature `validation`) |
 | `Custom { status, body }` | Custom | Arbitrary HTTP code and JSON body |
 | `WithSource { status, message, source }` | Custom | Preserves the source error chain (produced by `From` conversions); only `message` is sent to the client |
 

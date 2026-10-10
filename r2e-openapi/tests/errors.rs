@@ -129,15 +129,20 @@ fn each_kind_documents_at_its_default_status() {
 }
 
 #[test]
-fn no_kinds_means_only_the_success_response() {
+fn no_kinds_still_documents_the_panic_500() {
+    // The catch-panic layer answers on every route, whatever its kinds.
     let routes = vec![route("GET", "/ping", vec![])];
     let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
-    assert_eq!(statuses(responses(&spec, "/ping", "get")), ["200"]);
-    assert!(spec["components"]["schemas"].get("ErrorResponse").is_none());
+    let resp = responses(&spec, "/ping", "get");
+    assert_eq!(statuses(resp), ["200", "500"]);
+    assert_eq!(
+        body_ref(&resp["500"])["$ref"],
+        "#/components/schemas/ErrorResponse"
+    );
 }
 
 #[test]
-fn validation_and_malformed_share_400_as_one_of() {
+fn validation_and_malformed_share_400_as_any_of() {
     // `HttpError` renders `Validation` with a `details` array
     // (`ValidationErrorResponse`) and every other 400 kind as `ErrorResponse`.
     let routes = vec![route(
@@ -148,10 +153,10 @@ fn validation_and_malformed_share_400_as_one_of() {
     let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
     let four_hundred = &responses(&spec, "/items", "post")["400"];
 
-    let one_of = body_ref(four_hundred)["oneOf"]
+    let any_of = body_ref(four_hundred)["anyOf"]
         .as_array()
-        .expect("two bodies on 400 → oneOf");
-    let mut refs: Vec<&str> = one_of.iter().map(|r| r["$ref"].as_str().unwrap()).collect();
+        .expect("two bodies on 400 → anyOf");
+    let mut refs: Vec<&str> = any_of.iter().map(|r| r["$ref"].as_str().unwrap()).collect();
     refs.sort();
     assert_eq!(
         refs,
@@ -230,9 +235,11 @@ fn route_envelope_overrides_the_config_envelope() {
     let config = OpenApiConfig::new("t", "1").with_error_schema::<Bare>();
     let spec = build_spec(&config, &routes);
 
-    // `Wire` on the route: remap + its own extra 502; `Bare` elsewhere.
-    assert_eq!(statuses(responses(&spec, "/wire", "post")), ["200", "400", "502"]);
-    assert_eq!(statuses(responses(&spec, "/app", "post")), ["200", "422"]);
+    // `Wire` on the route: remap + its own extra 502; `Bare` elsewhere. The
+    // panic 500 is the app envelope's (`Bare`) on both.
+    assert_eq!(statuses(responses(&spec, "/wire", "post")), ["200", "400", "500", "502"]);
+    assert_eq!(statuses(responses(&spec, "/app", "post")), ["200", "422", "500"]);
+    assert!(responses(&spec, "/wire", "post")["500"].get("content").is_none());
 }
 
 #[test]
@@ -319,6 +326,17 @@ mod plugin {
         async fn get(&self, r2e_core::http::extract::Path(_id): r2e_core::http::extract::Path<u32>) -> &'static str {
             "thing"
         }
+
+        #[post("/form")]
+        async fn submit(&self, r2e_core::http::Form(_f): r2e_core::http::Form<ThingForm>) -> &'static str {
+            "ok"
+        }
+    }
+
+    #[derive(serde::Deserialize, schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct ThingForm {
+        name: String,
     }
 
     async fn spec(router: r2e_core::http::Router) -> Value {
@@ -356,6 +374,22 @@ mod plugin {
         assert!(spec["components"]["schemas"].get("ErrorResponse").is_none());
     }
 
+    /// A form body that does not deserialize is a 422 (`InvalidBody`), with
+    /// the media-type and size failures of any body.
+    #[r2e_core::test]
+    async fn form_body_route_documents_422() {
+        let router = AppBuilder::new()
+            .plugin(OpenApiPlugin::new(OpenApiConfig::new("t", "1")))
+            .build_state()
+            .await
+            .register_controller::<ThingsController>()
+            .build();
+        let spec = spec(router).await;
+        let resp = &spec["paths"]["/things/form"]["post"]["responses"];
+
+        assert_eq!(statuses(resp), ["201", "400", "413", "415", "422", "500"]);
+    }
+
     #[r2e_core::test]
     async fn plugin_falls_back_to_http_error_without_a_projector() {
         let router = AppBuilder::new()
@@ -373,4 +407,409 @@ mod plugin {
             "#/components/schemas/ErrorResponse"
         );
     }
+}
+
+// ── Panic 500: the application envelope, not the route's (S9) ────────────
+
+/// A route envelope remapping `Internal` to 503.
+struct Unavailable;
+
+impl ErrorSchema for Unavailable {
+    fn status_of(kind: RejectionKind) -> StatusCode {
+        match kind {
+            RejectionKind::Internal => StatusCode::SERVICE_UNAVAILABLE,
+            k => k.default_status(),
+        }
+    }
+
+    fn body_schema() -> Option<(String, Value)> {
+        Some(("UnavailableError".to_string(), json!({ "type": "object" })))
+    }
+}
+
+#[test]
+fn panic_500_uses_the_app_envelope_when_the_route_remaps_internal() {
+    let routes = vec![RouteInfo {
+        error_schema: Some(ErrorSchemaInfo::of::<Unavailable>()),
+        ..route("GET", "/x", vec![RejectionKind::Internal])
+    }];
+    // Default app projector: `HttpError`.
+    let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
+    let resp = responses(&spec, "/x", "get");
+
+    assert_eq!(statuses(resp), ["200", "500", "503"]);
+    assert_eq!(
+        body_ref(&resp["500"])["$ref"],
+        "#/components/schemas/ErrorResponse"
+    );
+    assert_eq!(
+        body_ref(&resp["503"])["$ref"],
+        "#/components/schemas/UnavailableError"
+    );
+}
+
+#[test]
+fn panic_500_merges_as_any_of_when_the_route_envelope_differs() {
+    let routes = vec![RouteInfo {
+        error_schema: Some(ErrorSchemaInfo::of::<Wire>()),
+        ..route("GET", "/x", vec![RejectionKind::Internal])
+    }];
+    let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
+    let refs: Vec<&Value> = body_ref(&responses(&spec, "/x", "get")["500"])["anyOf"]
+        .as_array()
+        .expect("anyOf on 500")
+        .iter()
+        .map(|r| &r["$ref"])
+        .collect();
+    assert_eq!(
+        refs,
+        [
+            "#/components/schemas/WireError",
+            "#/components/schemas/ErrorResponse"
+        ]
+    );
+}
+
+#[test]
+fn panic_500_is_a_single_body_when_route_and_app_envelopes_agree() {
+    let routes = vec![RouteInfo {
+        error_schema: Some(ErrorSchemaInfo::of::<Wire>()),
+        ..route("GET", "/x", vec![RejectionKind::Internal])
+    }];
+    let config = OpenApiConfig::new("t", "1").with_error_schema::<Wire>();
+    let spec = build_spec(&config, &routes);
+    let five_hundred = body_ref(&responses(&spec, "/x", "get")["500"]);
+
+    assert!(five_hundred.get("anyOf").is_none());
+    assert_eq!(five_hundred["$ref"], "#/components/schemas/WireError");
+}
+
+// ── Nested error bodies: `$defs` promoted like any schema (S6) ───────────
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[allow(dead_code)]
+struct NestedDetail {
+    field: String,
+    reason: String,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[allow(dead_code)]
+struct NestedErrorBody {
+    error: String,
+    detail: NestedDetail,
+}
+
+struct NestedEnvelope;
+
+impl ErrorSchema for NestedEnvelope {
+    fn body_schema() -> Option<(String, Value)> {
+        let schema = schemars::schema_for!(NestedErrorBody);
+        Some((
+            "NestedErrorBody".to_string(),
+            serde_json::to_value(schema).expect("schema json"),
+        ))
+    }
+}
+
+fn collect_refs<'a>(value: &'a Value, out: &mut Vec<&'a str>) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(r)) = obj.get("$ref") {
+                out.push(r);
+            }
+            obj.values().for_each(|v| collect_refs(v, out));
+        }
+        Value::Array(arr) => arr.iter().for_each(|v| collect_refs(v, out)),
+        _ => {}
+    }
+}
+
+#[test]
+fn nested_error_body_refs_all_resolve() {
+    let routes = vec![route("GET", "/x", vec![RejectionKind::Forbidden])];
+    let config = OpenApiConfig::new("t", "1").with_error_schema::<NestedEnvelope>();
+    let spec = build_spec(&config, &routes);
+    let schemas = &spec["components"]["schemas"];
+
+    let mut refs = Vec::new();
+    collect_refs(&spec, &mut refs);
+    assert!(
+        refs.contains(&"#/components/schemas/NestedDetail"),
+        "the nested type is referenced: {refs:?}"
+    );
+    for r in refs {
+        let name = r
+            .strip_prefix("#/components/schemas/")
+            .unwrap_or_else(|| panic!("non-component ref {r}"));
+        assert!(schemas.get(name).is_some(), "dangling $ref {r}");
+    }
+    assert!(schemas["NestedErrorBody"].get("$defs").is_none());
+}
+
+// ── Error components: schema-equality dedup, collisions inlined (S9/N1/N2) ─
+
+/// `HttpError`'s plain body, verbatim, under another name.
+struct AliasEnvelope;
+
+impl ErrorSchema for AliasEnvelope {
+    fn body_schema() -> Option<(String, Value)> {
+        r2e_core::HttpError::body_schema().map(|(_, schema)| ("Problem".to_string(), schema))
+    }
+}
+
+/// A route envelope whose body reuses `HttpError`'s component name with a
+/// different shape.
+struct CodeEnvelope;
+
+impl ErrorSchema for CodeEnvelope {
+    fn body_schema() -> Option<(String, Value)> {
+        Some((
+            "ErrorResponse".to_string(),
+            json!({
+                "type": "object",
+                "properties": { "code": { "type": "integer" } },
+                "required": ["code"]
+            }),
+        ))
+    }
+}
+
+fn inline_warnings(warnings: &[r2e_openapi::SpecWarning]) -> Vec<(String, String, String)> {
+    warnings
+        .iter()
+        .filter_map(|w| match &w.gap {
+            r2e_openapi::SchemaGap::ErrorBodyInlined { component } => {
+                Some((w.method.clone(), w.path.clone(), component.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn equal_bodies_under_two_names_document_once() {
+    // Route envelope `Problem` and the app's panic `ErrorResponse` are the
+    // same schema: one `$ref` (the first-recorded, the route's), no union.
+    let routes = vec![RouteInfo {
+        error_schema: Some(ErrorSchemaInfo::of::<AliasEnvelope>()),
+        ..route("GET", "/x", vec![RejectionKind::Internal])
+    }];
+    let (spec, warnings) =
+        r2e_openapi::build_spec_with_warnings(&OpenApiConfig::new("t", "1"), &routes);
+    let five_hundred = body_ref(&responses(&spec, "/x", "get")["500"]);
+
+    assert!(five_hundred.get("anyOf").is_none(), "{five_hundred}");
+    assert_eq!(five_hundred["$ref"], "#/components/schemas/Problem");
+    assert!(spec["components"]["schemas"].get("ErrorResponse").is_none());
+    assert!(inline_warnings(&warnings).is_empty());
+}
+
+#[test]
+fn colliding_app_body_is_inlined_next_to_the_route_body() {
+    // Route `ErrorResponse{code}` vs the app's `HttpError` `ErrorResponse`:
+    // the route envelope owns the component, the app body is inlined.
+    let routes = vec![RouteInfo {
+        error_schema: Some(ErrorSchemaInfo::of::<CodeEnvelope>()),
+        ..route("GET", "/x", vec![RejectionKind::Internal])
+    }];
+    let (spec, warnings) =
+        r2e_openapi::build_spec_with_warnings(&OpenApiConfig::new("t", "1"), &routes);
+    let any_of = body_ref(&responses(&spec, "/x", "get")["500"])["anyOf"]
+        .as_array()
+        .expect("anyOf on 500")
+        .clone();
+
+    let app_body = r2e_core::HttpError::body_schema().unwrap().1;
+    assert_eq!(
+        any_of,
+        [json!({ "$ref": "#/components/schemas/ErrorResponse" }), app_body]
+    );
+    assert_eq!(
+        spec["components"]["schemas"]["ErrorResponse"],
+        CodeEnvelope::body_schema().unwrap().1
+    );
+    assert_eq!(
+        inline_warnings(&warnings),
+        [("GET".to_string(), "/x".to_string(), "ErrorResponse".to_string())]
+    );
+    let msg = warnings
+        .iter()
+        .find(|w| matches!(w.gap, r2e_openapi::SchemaGap::ErrorBodyInlined { .. }))
+        .unwrap()
+        .message();
+    assert!(msg.contains("/x") && msg.contains("ErrorResponse"), "{msg}");
+}
+
+/// A success DTO nesting a type named like the framework's error body.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[allow(dead_code)]
+struct Report {
+    errors: Vec<ErrorResponse>,
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+#[allow(dead_code)]
+struct ErrorResponse {
+    line: u32,
+    text: String,
+}
+
+#[test]
+fn nested_dto_keeps_its_component_and_the_error_body_is_inlined() {
+    let report = serde_json::to_value(schemars::schema_for!(Report)).unwrap();
+    let routes = vec![RouteInfo {
+        response_type: Some("Report".to_string()),
+        response_schema: Some(report),
+        ..route(
+            "POST",
+            "/reports",
+            vec![RejectionKind::MalformedBody, RejectionKind::Validation],
+        )
+    }];
+    let (spec, warnings) =
+        r2e_openapi::build_spec_with_warnings(&OpenApiConfig::new("t", "1"), &routes);
+    let schemas = &spec["components"]["schemas"];
+
+    // The DTO owns `ErrorResponse`; `Report` still resolves to it.
+    assert!(schemas["ErrorResponse"]["properties"]["line"].is_object(), "{schemas}");
+    let mut refs = Vec::new();
+    collect_refs(&schemas["Report"], &mut refs);
+    assert_eq!(refs, ["#/components/schemas/ErrorResponse"]);
+
+    // The framework body is inlined on 400 (beside the validation `$ref`)
+    // and on 500.
+    let resp = responses(&spec, "/reports", "post");
+    let app_body = r2e_core::HttpError::body_schema().unwrap().1;
+    assert_eq!(
+        body_ref(&resp["400"])["anyOf"],
+        json!([app_body, { "$ref": "#/components/schemas/ValidationErrorResponse" }])
+    );
+    assert_eq!(*body_ref(&resp["500"]), app_body);
+    assert_eq!(
+        inline_warnings(&warnings),
+        [("POST".to_string(), "/reports".to_string(), "ErrorResponse".to_string())]
+    );
+}
+
+// ── Runtime bodies validate against the documented schemas ─────────────────
+
+/// A minimal JSON Schema matcher for the subset the error components use:
+/// `$ref` (to `components/schemas`), `anyOf`, `type`, `properties`,
+/// `required`, `items`.
+fn matches(schema: &Value, value: &Value, components: &Value) -> bool {
+    if let Some(r) = schema["$ref"].as_str() {
+        let name = r.strip_prefix("#/components/schemas/").expect("component ref");
+        return matches(&components[name], value, components);
+    }
+    if let Some(branches) = schema["anyOf"].as_array() {
+        return branches.iter().any(|b| matches(b, value, components));
+    }
+    let type_ok = match schema["type"].as_str() {
+        None => true,
+        Some("object") => value.is_object(),
+        Some("array") => value.is_array(),
+        Some("string") => value.is_string(),
+        Some("integer") => value.is_i64() || value.is_u64(),
+        Some(other) => panic!("matcher: unsupported type {other}"),
+    };
+    if !type_ok {
+        return false;
+    }
+    if let Some(required) = schema["required"].as_array() {
+        if required.iter().any(|k| value.get(k.as_str().unwrap()).is_none()) {
+            return false;
+        }
+    }
+    if let Some(props) = schema["properties"].as_object() {
+        for (k, sub) in props {
+            if let Some(v) = value.get(k) {
+                if !matches(sub, v, components) {
+                    return false;
+                }
+            }
+        }
+    }
+    if let (Some(items), Some(arr)) = (schema.get("items"), value.as_array()) {
+        if !arr.iter().all(|v| matches(items, v, components)) {
+            return false;
+        }
+    }
+    true
+}
+
+/// The indices of the `anyOf` branches `value` matches.
+fn matching_branches(schema: &Value, value: &Value, components: &Value) -> Vec<usize> {
+    schema["anyOf"]
+        .as_array()
+        .expect("anyOf")
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| matches(b, value, components))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+async fn rendered(err: r2e_core::HttpError) -> Value {
+    use http_body_util::BodyExt;
+    use r2e_core::http::response::IntoResponse;
+    let bytes = err.into_response().into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).expect("json body")
+}
+
+#[tokio::test]
+async fn rendered_bodies_validate_against_the_documented_any_of() {
+    use r2e_core::web::validation::{FieldError, ValidationErrorResponse};
+    let plain = rendered(r2e_core::HttpError::BadRequest("x".into())).await;
+    let validation = rendered(r2e_core::HttpError::validation(ValidationErrorResponse {
+        errors: vec![FieldError {
+            field: "name".into(),
+            message: "too short".into(),
+            code: "validation".into(),
+        }],
+    }))
+    .await;
+    assert_eq!(plain, json!({ "error": "x" }));
+
+    // Default envelope, 400: [ErrorResponse, ValidationErrorResponse].
+    let routes = vec![route(
+        "POST",
+        "/items",
+        vec![RejectionKind::MalformedBody, RejectionKind::Validation],
+    )];
+    let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
+    let components = &spec["components"]["schemas"];
+    let four_hundred = body_ref(&responses(&spec, "/items", "post")["400"]);
+    let names: Vec<&str> = four_hundred["anyOf"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["$ref"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "#/components/schemas/ErrorResponse",
+            "#/components/schemas/ValidationErrorResponse"
+        ]
+    );
+    // The plain body is only an `ErrorResponse`; the validation body is
+    // both — which is why the union is `anyOf` (a `oneOf` rejects it).
+    assert_eq!(matching_branches(four_hundred, &plain, components), [0]);
+    assert_eq!(matching_branches(four_hundred, &validation, components), [0, 1]);
+    assert!(matches(four_hundred, &plain, components));
+    assert!(matches(four_hundred, &validation, components));
+
+    // Colliding route envelope, 500: [route `ErrorResponse{code}` ref, inlined
+    // app body]. Each body matches exactly its own branch.
+    let routes = vec![RouteInfo {
+        error_schema: Some(ErrorSchemaInfo::of::<CodeEnvelope>()),
+        ..route("GET", "/x", vec![RejectionKind::Internal])
+    }];
+    let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
+    let components = &spec["components"]["schemas"];
+    let five_hundred = body_ref(&responses(&spec, "/x", "get")["500"]);
+    let panic_body = rendered(r2e_core::HttpError::Internal("boom".into())).await;
+    assert_eq!(matching_branches(five_hundred, &json!({ "code": 7 }), components), [0]);
+    assert_eq!(matching_branches(five_hundred, &panic_body, components), [1]);
 }

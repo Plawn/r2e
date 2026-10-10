@@ -334,9 +334,15 @@ impl Rejection {
     ///    envelope that does not remap the kind);
     /// 2. an `Opaque` rejection is returned as-is when
     ///    `E::opaque_passthrough()`;
-    /// 3. otherwise `E::from(self).into_http_response()`, with
-    ///    [`headers`](Self::headers) added to the result (an envelope's own
-    ///    header of the same name wins).
+    /// 3. otherwise `E::from(self).into_http_response()`.
+    ///
+    /// On both paths the rejection's [`headers`](Self::headers) are then
+    /// merged into the rendered response, per name: a name the response
+    /// already carries (the envelope's or the opaque response's own header)
+    /// wins and every rejection value for it is dropped; any other name gets
+    /// **all** its rejection values appended in order (two
+    /// [`header`](Self::header) calls with `WWW-Authenticate` yield two
+    /// challenges).
     ///
     /// Generated handlers call this; so does `From<Rejection> for Response`
     /// (with `E = HttpError`).
@@ -348,27 +354,47 @@ impl Rejection {
         if remapped != self.kind.default_status() {
             self.status = remapped;
         }
-        if E::opaque_passthrough() {
-            if let Some(mut response) = self.opaque.take() {
+        let headers = std::mem::take(&mut self.headers);
+        // A non-passthrough envelope sees the opaque response untouched
+        // (`take_opaque` stays available to its `From<Rejection>`).
+        let passthrough = if E::opaque_passthrough() {
+            self.opaque.take()
+        } else {
+            None
+        };
+        let mut response = match passthrough {
+            Some(mut response) => {
                 if self.status != response.status() {
                     *response.status_mut() = self.status;
                 }
-                return response;
+                response
             }
-        }
-        let headers = std::mem::take(&mut self.headers);
-        let mut response = E::from(self).into_http_response();
-        if !headers.is_empty() {
-            let target = response.headers_mut();
-            for (name, value) in headers {
-                // `HeaderMap::into_iter` yields `None` for the 2nd+ value of a
-                // repeated name; we only set each name once anyway.
-                if let Some(name) = name {
-                    target.entry(name).or_insert(value);
-                }
-            }
-        }
+            None => E::from(self).into_http_response(),
+        };
+        merge_headers(response.headers_mut(), headers);
         response
+    }
+}
+
+/// Merge a rejection's headers into a rendered response: names already
+/// present in `target` are left alone (the renderer wins, all rejection
+/// values for that name are skipped); other names get every rejection value,
+/// in order.
+fn merge_headers(target: &mut HeaderMap, from: HeaderMap) {
+    if from.is_empty() {
+        return;
+    }
+    // `HeaderMap::into_iter` yields `Some(name)` for the first value of a
+    // name and `None` for each following value of the same name.
+    let mut current: Option<(HeaderName, bool)> = None;
+    for (name, value) in from {
+        if let Some(name) = name {
+            let skip = target.contains_key(&name);
+            current = Some((name, skip));
+        }
+        if let Some((name, false)) = &current {
+            target.append(name.clone(), value);
+        }
     }
 }
 
@@ -483,13 +509,26 @@ impl From<QueryRejection> for Rejection {
     }
 }
 
+/// `Form<T>` failures, kind ↔ status kept honest with axum's split:
+///
+/// | axum rejection | kind | status |
+/// |---|---|---|
+/// | `InvalidFormContentType` | `UnsupportedMediaType` | 415 |
+/// | `FailedToDeserializeForm` (GET/HEAD: the query string) | `InvalidForm` | 400 |
+/// | `FailedToDeserializeFormBody` (a request body) | `InvalidBody` | 422 — like a JSON data error |
+/// | `BytesRejection` | `PayloadTooLarge` (413) / `BodyRead` | carried |
+///
+/// The carried status always wins over the kind's default.
 impl From<FormRejection> for Rejection {
     fn from(r: FormRejection) -> Self {
         let status = r.status();
-        let kind = match status {
-            StatusCode::UNSUPPORTED_MEDIA_TYPE => RejectionKind::UnsupportedMediaType,
-            StatusCode::PAYLOAD_TOO_LARGE => RejectionKind::PayloadTooLarge,
-            _ => RejectionKind::InvalidForm,
+        let kind = match &r {
+            FormRejection::InvalidFormContentType(_) => RejectionKind::UnsupportedMediaType,
+            FormRejection::FailedToDeserializeFormBody(_) => RejectionKind::InvalidBody,
+            FormRejection::FailedToDeserializeForm(_) => RejectionKind::InvalidForm,
+            _ if status == StatusCode::PAYLOAD_TOO_LARGE => RejectionKind::PayloadTooLarge,
+            FormRejection::BytesRejection(_) => RejectionKind::BodyRead,
+            _ => RejectionKind::from_status(status),
         };
         let mut rejection = Self::with_status(kind, status, r.body_text());
         rejection.source = Some(Arc::new(r));
@@ -596,7 +635,9 @@ impl From<RawFormRejection> for Rejection {
     fn from(r: RawFormRejection) -> Self {
         let kind = match &r {
             RawFormRejection::InvalidFormContentType(_) => RejectionKind::UnsupportedMediaType,
-            _ => RejectionKind::InvalidForm,
+            _ if r.status() == StatusCode::PAYLOAD_TOO_LARGE => RejectionKind::PayloadTooLarge,
+            RawFormRejection::BytesRejection(_) => RejectionKind::BodyRead,
+            _ => RejectionKind::from_status(r.status()),
         };
         let mut rejection = Self::with_status(kind, r.status(), r.body_text());
         rejection.source = Some(Arc::new(r));
@@ -684,7 +725,11 @@ impl From<HttpError> for Rejection {
             HttpError::Forbidden(m) => Self::new(RejectionKind::Forbidden, m),
             HttpError::BadRequest(m) => Self::new(RejectionKind::BadRequest, m),
             HttpError::Internal(m) => Self::new(RejectionKind::Internal, m),
-            HttpError::Validation(v) => v.into(),
+            HttpError::Validation { status, response } => {
+                let mut r = Self::from(response);
+                r.status = status;
+                r
+            }
             HttpError::Custom { status, body } => {
                 let message: Cow<'static, str> = body
                     .get("error")

@@ -3,7 +3,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::codegen::decorators::wrap_with_deco_interceptors;
+use crate::codegen::decorators::{wrap_with_interceptor_refs, DecoSet};
+use crate::codegen::handlers::qualified_controller_name;
 use crate::parsing::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
 
@@ -22,7 +23,14 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -
         .iter()
         .enumerate()
         .map(|(i, m)| {
-            generate_method_impl(m, deco.set_for(i), &krate, &grpc_krate, controller_name)
+            generate_method_impl(
+                m,
+                deco.ctrl(),
+                deco.set_for(i),
+                &krate,
+                &grpc_krate,
+                controller_name,
+            )
         })
         .collect();
 
@@ -36,13 +44,20 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -
 
 /// Generate a single tonic trait method implementation.
 ///
-/// Shape: identity extraction (if the method injects one) → guard checks
-/// (controller sites then method sites, one shared `GuardContext` built from
-/// the request) → interceptor chain → user method. Identity and guard
-/// rejections return early as a `tonic::Status` (`rejection_to_status`).
+/// Shape: identity extraction (if the method injects one) → guard checks →
+/// interceptor chain → user method. Identity and guard rejections return
+/// early as a `tonic::Status` (`rejection_to_status`).
+///
+/// Guard scoping mirrors HTTP: the shared controller-level guards are checked
+/// against a controller-scoped `GuardContext` (`method_name = "*"`), then the
+/// method's own guards against a method-scoped one (`method_name = <fn>`).
+/// A controller-site guard is never checked against the method's own name,
+/// so a stateful impl-level guard (`RateLimit`) keeps one service-wide bucket
+/// and never shares a bucket with a method-level site.
 fn generate_method_impl(
     method: &GrpcMethod,
-    deco_set: Option<&crate::codegen::decorators::DecoSet>,
+    ctrl_set: Option<&DecoSet>,
+    deco_set: Option<&DecoSet>,
     krate: &TokenStream,
     grpc_krate: &TokenStream,
     controller_name: &syn::Ident,
@@ -116,44 +131,55 @@ fn generate_method_impl(
     };
 
     // --- guard checks ------------------------------------------------------
-    let guard_stmts = match deco_set {
-        Some(set) if !set.guard_fields.is_empty() => {
-            let deco_field = GrpcDecoSets::field_ident(fn_name);
-            let identity_ref = match &method.identity_param {
-                Some(p) if p.is_optional => quote! { __identity.as_ref() },
-                Some(_) => quote! { ::core::option::Option::Some(&__identity) },
-                None => quote! { ::core::option::Option::<&#krate::NoIdentity>::None },
-            };
-            let checks: Vec<TokenStream> = set
-                .guard_fields
-                .iter()
-                .map(|field| {
-                    quote! {
-                        if let ::core::result::Result::Err(__rej) =
-                            #krate::Guard::check(&self.__decos.#deco_field.#field, &__gctx).await
-                        {
-                            return ::core::result::Result::Err(
-                                #grpc_krate::__macro_support::rejection_to_status(__rej),
-                            );
-                        }
+    let ctrl_guards: &[syn::Ident] = ctrl_set.map_or(&[], |s| &s.guard_fields);
+    let method_guards: &[syn::Ident] = deco_set.map_or(&[], |s| &s.guard_fields);
+    let guard_stmts = if ctrl_guards.is_empty() && method_guards.is_empty() {
+        quote! {}
+    } else {
+        let identity_ref = match &method.identity_param {
+            Some(p) if p.is_optional => quote! { __identity.as_ref() },
+            Some(_) => quote! { ::core::option::Option::Some(&__identity) },
+            None => quote! { ::core::option::Option::<&#krate::NoIdentity>::None },
+        };
+        // Module-qualified, like HTTP: identically named services in two
+        // modules must not share identity-scoped guard state.
+        let controller_name_q = qualified_controller_name(controller_name);
+        let checks = |set_field: syn::Ident, fields: &[syn::Ident], method_name: TokenStream| {
+            if fields.is_empty() {
+                return quote! {};
+            }
+            let checks = fields.iter().map(|field| {
+                quote! {
+                    if let ::core::result::Result::Err(__rej) =
+                        #krate::Guard::check(&self.__decos.#set_field.#field, &__gctx).await
+                    {
+                        return ::core::result::Result::Err(
+                            #grpc_krate::__macro_support::rejection_to_status(__rej),
+                        );
                     }
-                })
-                .collect();
+                }
+            });
             // Scoped: the context borrows `request`, which the user method
             // then takes by value.
             quote! {
                 {
                     let __gctx = #grpc_krate::__macro_support::guard_context(
                         &request,
-                        #fn_name_str,
-                        #controller_name_str,
+                        #method_name,
+                        #controller_name_q,
                         #identity_ref,
                     );
                     #(#checks)*
                 }
             }
-        }
-        _ => quote! {},
+        };
+        let ctrl = checks(GrpcDecoSets::ctrl_field_ident(), ctrl_guards, quote! { "*" });
+        let own = checks(
+            GrpcDecoSets::field_ident(fn_name),
+            method_guards,
+            quote! { #fn_name_str },
+        );
+        quote! { #ctrl #own }
     };
 
     // The core is shared — built once at registration, cloned per call site.
@@ -182,26 +208,37 @@ fn generate_method_impl(
 
     let method_call = quote! { __ctrl.#fn_name(#(#call_args),*).await };
 
-    // Interceptors are prebuilt wrapper fields (one set per method, built
-    // once from the bean graph in `add_to_routes`); `deco_set` is `None` when
-    // the method has no decorator sites or when spec inference failed (the
-    // `compile_error!` is already emitted — degrade to the unwrapped shape).
-    let body = match deco_set {
-        Some(set) if !set.intercept_fields.is_empty() => {
-            let deco_field = GrpcDecoSets::field_ident(fn_name);
-            let wrapped = wrap_with_deco_interceptors(
-                method_call,
-                &fn_name_str,
-                &controller_name_str,
-                &set.intercept_fields,
-                krate,
-            );
-            quote! {
-                let __deco = &self.__decos.#deco_field;
-                #wrapped
-            }
+    // Interceptors are prebuilt container fields: the shared controller-level
+    // ones (outermost) then the method's own. A set is `None` when it has no
+    // decorator sites or when spec inference failed (the `compile_error!` is
+    // already emitted — degrade to the unwrapped shape).
+    let ctrl_field = GrpcDecoSets::ctrl_field_ident();
+    let method_field = GrpcDecoSets::field_ident(fn_name);
+    let interceptor_refs: Vec<TokenStream> = ctrl_set
+        .into_iter()
+        .flat_map(|s| s.intercept_fields.iter())
+        .map(|f| quote! { &__decos.#ctrl_field.#f })
+        .chain(
+            deco_set
+                .into_iter()
+                .flat_map(|s| s.intercept_fields.iter())
+                .map(|f| quote! { &__decos.#method_field.#f }),
+        )
+        .collect();
+    let body = if interceptor_refs.is_empty() {
+        method_call
+    } else {
+        let wrapped = wrap_with_interceptor_refs(
+            method_call,
+            &fn_name_str,
+            &controller_name_str,
+            &interceptor_refs,
+            krate,
+        );
+        quote! {
+            let __decos = &*self.__decos;
+            #wrapped
         }
-        _ => method_call,
     };
 
     quote! {

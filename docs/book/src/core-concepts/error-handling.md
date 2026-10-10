@@ -26,7 +26,7 @@ async fn get_by_id(&self, Path(id): Path<u64>) -> Result<Json<User>, HttpError> 
 | `HttpError::Forbidden(msg)` | 403 | `{"error": "..."}` |
 | `HttpError::BadRequest(msg)` | 400 | `{"error": "..."}` |
 | `HttpError::Internal(msg)` | 500 | `{"error": "..."}` |
-| `HttpError::Validation(resp)` | 400 | `{"error": "Validation failed", "details": [...]}` |
+| `HttpError::Validation { status, response }` | 400 (carried `status`) | `{"error": "Validation failed", "details": [...]}` |
 | `HttpError::Custom { status, body }` | any | custom JSON body |
 
 ### Custom status codes
@@ -46,12 +46,12 @@ async fn create(&self, body: Json<Request>) -> Result<Json<Response>, HttpError>
 
 ### Validation variant
 
-`HttpError::Validation` carries a `ValidationErrorResponse` with per-field error details. This is the variant produced by automatic `garde` validation (see [Validation](./validation.md)), but you can also construct it manually:
+`HttpError::Validation { status, response }` carries a `ValidationErrorResponse` with per-field error details plus the status it renders with (400 by default; an envelope's `status_of` remap, e.g. to 422, is kept when the hub converts into `HttpError`). This is the variant produced by automatic `garde` validation (see [Validation](./validation.md)), but you can also construct it manually with `HttpError::validation(..)` (status 400):
 
 ```rust
 use r2e_core::web::validation::{ValidationErrorResponse, FieldError};
 
-Err(HttpError::Validation(ValidationErrorResponse {
+Err(HttpError::validation(ValidationErrorResponse {
     errors: vec![
         FieldError { field: "email".into(), message: "already taken".into(), code: "unique".into() },
     ],
