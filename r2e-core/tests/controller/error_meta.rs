@@ -91,13 +91,13 @@ impl PreAuthGuard for PreRateLimit {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct Plain {
     #[allow(dead_code)]
     name: String,
 }
 
-#[derive(Deserialize, garde::Validate)]
+#[derive(Deserialize, garde::Validate, schemars::JsonSchema)]
 struct Validated {
     #[garde(length(min = 1))]
     #[allow(dead_code)]
@@ -675,11 +675,12 @@ fn infallible_route_documents_through_the_application_projection() {
 #[test]
 fn request_body_schema_extractor_is_documented() {
     let r = route!(OpenController, "/open/csv");
-    assert_eq!(r.request_body_content_type.as_deref(), Some("text/csv"));
-    assert_eq!(r.request_body_type.as_deref(), Some("Csv"));
+    let body = r.request_body.as_ref().expect("documented body");
+    assert_eq!(body.content_type, "text/csv");
+    assert!(body.required);
     assert_eq!(
-        r.request_body_schema,
-        Some(serde_json::json!({ "type": "string" }))
+        body.schema,
+        Some(("Csv".to_string(), serde_json::json!({ "type": "string" })))
     );
     let k = sorted(r.rejection_kinds);
     assert_eq!(
@@ -693,11 +694,33 @@ fn request_body_schema_extractor_is_documented() {
 }
 
 #[test]
+fn json_body_is_documented_through_the_framework_impl() {
+    let r = route!(OpenController, "/open/json");
+    let body = r.request_body.as_ref().expect("documented body");
+    assert_eq!(body.content_type, "application/json");
+    assert!(body.required);
+    assert!(r.request_body_unmapped.is_none());
+    // The JSON schema itself needs the `openapi` feature (schemars), which
+    // feature unification may or may not enable for this target: when it is
+    // present it is `Plain`'s schema.
+    if let Some((name, _)) = &body.schema {
+        assert_eq!(name, "Plain");
+    }
+}
+
+#[test]
 fn body_type_without_request_body_schema_is_undocumented() {
     let r = route!(OpenController, "/open/opaque");
-    assert!(r.request_body_content_type.is_none());
-    assert!(r.request_body_type.is_none());
+    assert!(r.request_body.is_none());
+    // Flagged for the OpenAPI boot warning, by readable type name.
+    assert_eq!(r.request_body_unmapped.as_deref(), Some("Opaque"));
     assert_eq!(r.rejection_kinds, vec![RejectionKind::Internal]);
+    assert!(route!(OpenController, "/open/csv")
+        .request_body_unmapped
+        .is_none());
+    assert!(route!(OpenController, "/open/bare")
+        .request_body_unmapped
+        .is_none());
 }
 
 // ── Custom response types ──────────────────────────────────────────────────
@@ -734,7 +757,23 @@ fn response_type_without_response_body_schema_stays_unmapped() {
 }
 
 #[test]
-fn json_and_impl_trait_returns_are_not_probed() {
-    assert!(route!(OpenController, "/open/bare").response_contents.is_empty());
-    assert!(route!(OpenController, "/open/sse").response_contents.is_empty());
+fn framework_return_types_are_documented_through_their_impls() {
+    assert_eq!(
+        content_types(&route!(OpenController, "/open/bare")),
+        vec!["text/plain"]
+    );
+    assert_eq!(
+        content_types(&route!(OpenController, "/open/sse")),
+        vec!["text/event-stream"]
+    );
+    assert!(route!(OpenController, "/open/bare")
+        .response_unmapped
+        .is_none());
+}
+
+#[test]
+fn impl_trait_returns_stay_unmapped() {
+    let r = route!(OpenController, "/open/all-opaque");
+    assert!(r.response_contents.is_empty());
+    assert!(r.response_unmapped.is_some());
 }

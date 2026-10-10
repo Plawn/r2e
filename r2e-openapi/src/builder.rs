@@ -52,35 +52,35 @@ fn promote_defs(mut schema: Value, extra_definitions: &mut Vec<(String, Value)>)
     schema
 }
 
-/// Insert a schema into the schemas map, promoting `$defs` to top-level components.
+/// Insert a schema into the schemas map (first writer wins), promoting
+/// `$defs` to top-level components.
 fn insert_schema(
     schemas: &mut Map<String, Value>,
     extra_definitions: &mut Vec<(String, Value)>,
     type_name: &str,
-    root_schema: &Option<Value>,
+    root_schema: &Value,
 ) {
-    if let Some(root) = root_schema {
-        let schema = promote_defs(root.clone(), extra_definitions);
-        schemas.insert(type_name.to_string(), schema);
-    } else {
-        schemas.insert(type_name.to_string(), json!({ "type": "object" }));
+    if schemas.contains_key(type_name) {
+        return;
     }
+    let schema = promote_defs(root_schema.clone(), extra_definitions);
+    schemas.insert(type_name.to_string(), schema);
 }
 
 /// A gap between a route and its generated OpenAPI schema, surfaced as a
 /// once-at-boot warning so silently-undocumented bodies become visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaGap {
+    /// A body-position parameter has no `RequestBodySchema` impl (a custom
+    /// extractor, or `Json<T>` with `T` lacking `schemars::JsonSchema`). The
+    /// operation is documented **without a request body** and without the
+    /// body's rejection kinds.
+    MissingRequestBody { type_name: String },
     /// A successful response carries a body whose Rust return type could not be
-    /// mapped to a schema (an `impl Trait` return, or a concrete non-`Json`
-    /// type). The response is documented **without a body**.
+    /// mapped: an `impl Trait` return, or a concrete type without a
+    /// `ResponseBodySchema` impl. The response is documented **without a
+    /// body**.
     MissingResponseBody { type_name: String },
-    /// The named response type is documented, but it has no
-    /// `schemars::JsonSchema`, so its body renders as a generic `object`.
-    SchemalessResponseBody { type_name: String },
-    /// The named request type is documented, but it has no
-    /// `schemars::JsonSchema`, so its body renders as a generic `object`.
-    SchemalessRequestBody { type_name: String },
     /// An error body of the route's envelope is named like a different
     /// schema already in `components/schemas` (a DTO, a registry entry, a
     /// promoted `$defs` type or another envelope's body). That schema keeps
@@ -103,22 +103,21 @@ impl SpecWarning {
     /// offending type, and how to fix it.
     pub fn message(&self) -> String {
         match &self.gap {
-            SchemaGap::MissingResponseBody { type_name } => format!(
-                "OpenAPI: {} {} — response body (return type `{}`) could not be mapped to a schema; \
-                 the response is documented without a body. Return `Json<T>` (with \
-                 `T: schemars::JsonSchema`), annotate the handler with `#[returns(T)]`, or \
-                 implement `ResponseBodySchema` for the return type.",
+            SchemaGap::MissingRequestBody { type_name } => format!(
+                "OpenAPI: {} {} — request body (parameter type `{}`) has no `RequestBodySchema` \
+                 impl; the operation is documented without a request body. Use a framework \
+                 extractor (`Json<T>` with `T: schemars::JsonSchema`, `Form<T>`, `Bytes`, \
+                 `String`, `TypedMultipart<T>`, …) or implement `RequestBodySchema` for the \
+                 extractor.",
                 self.method, self.path, type_name
             ),
-            SchemaGap::SchemalessResponseBody { type_name } => format!(
-                "OpenAPI: {} {} — response type `{}` does not implement `schemars::JsonSchema`; \
-                 it is documented as a generic `object`. Derive `schemars::JsonSchema` on `{}`.",
-                self.method, self.path, type_name, type_name
-            ),
-            SchemaGap::SchemalessRequestBody { type_name } => format!(
-                "OpenAPI: {} {} — request type `{}` does not implement `schemars::JsonSchema`; \
-                 it is documented as a generic `object`. Derive `schemars::JsonSchema` on `{}`.",
-                self.method, self.path, type_name, type_name
+            SchemaGap::MissingResponseBody { type_name } => format!(
+                "OpenAPI: {} {} — response body (return type `{}`) has no `ResponseBodySchema` \
+                 impl; the response is documented without a body. Return a concrete framework \
+                 type (`Json<T>` with `T: schemars::JsonSchema`, `String`, `Html<_>`, …), \
+                 annotate an `impl Trait` handler with `#[returns(T)]`, or implement \
+                 `ResponseBodySchema` for the return type.",
+                self.method, self.path, type_name
             ),
             SchemaGap::ErrorBodyInlined { component } => format!(
                 "OpenAPI: {} {} — error body `{}` collides with a different schema of the same \
@@ -134,57 +133,34 @@ impl SpecWarning {
 /// spec or emitting any log. This is the testable seam behind the boot-time
 /// warnings emitted by [`build_spec`].
 ///
-/// A route is flagged when:
-/// - a successful (non-204) response has an unmappable body type
-///   ([`SchemaGap::MissingResponseBody`]); the `#[routes]` macro records the
-///   offending return type in `RouteInfo.response_unmapped`;
-/// - a named response type has no `JsonSchema`
-///   ([`SchemaGap::SchemalessResponseBody`]);
-/// - a named request type has no `JsonSchema`
-///   ([`SchemaGap::SchemalessRequestBody`]).
+/// A route is flagged when its body-position parameter is unmapped
+/// ([`SchemaGap::MissingRequestBody`], from `RouteInfo.request_body_unmapped`)
+/// or when a successful (non-204) response has an unmapped body type
+/// ([`SchemaGap::MissingResponseBody`], from `RouteInfo.response_unmapped`);
+/// the `#[routes]` macro records the offending type names.
 pub fn spec_warnings(routes: &[RouteInfo]) -> Vec<SpecWarning> {
     let mut warnings = Vec::new();
     for route in routes {
-        // Missing response body: no mappable type, and not an intentional
-        // no-body 204.
-        if route.response_status != 204 && route.response_type.is_none() {
-            if let Some(type_name) = &route.response_unmapped {
-                warnings.push(SpecWarning {
-                    method: route.method.clone(),
-                    path: route.path.clone(),
-                    gap: SchemaGap::MissingResponseBody {
-                        type_name: type_name.clone(),
-                    },
-                });
-            }
+        if let Some(type_name) = &route.request_body_unmapped {
+            warnings.push(SpecWarning {
+                method: route.method.clone(),
+                path: route.path.clone(),
+                gap: SchemaGap::MissingRequestBody {
+                    type_name: type_name.clone(),
+                },
+            });
         }
-
-        // Named response type present but no schema → generic object.
-        if let Some(type_name) = &route.response_type {
-            if route.response_schema.is_none() {
-                warnings.push(SpecWarning {
-                    method: route.method.clone(),
-                    path: route.path.clone(),
-                    gap: SchemaGap::SchemalessResponseBody {
-                        type_name: type_name.clone(),
-                    },
-                });
-            }
+        if route.response_status == 204 || !route.response_contents.is_empty() {
+            continue;
         }
-
-        // Named request type present but no schema → generic object. Raw
-        // multipart bodies carry a content type but no named type, so they are
-        // not flagged.
-        if let Some(type_name) = &route.request_body_type {
-            if route.request_body_schema.is_none() {
-                warnings.push(SpecWarning {
-                    method: route.method.clone(),
-                    path: route.path.clone(),
-                    gap: SchemaGap::SchemalessRequestBody {
-                        type_name: type_name.clone(),
-                    },
-                });
-            }
+        if let Some(type_name) = &route.response_unmapped {
+            warnings.push(SpecWarning {
+                method: route.method.clone(),
+                path: route.path.clone(),
+                gap: SchemaGap::MissingResponseBody {
+                    type_name: type_name.clone(),
+                },
+            });
         }
     }
     warnings
@@ -386,14 +362,28 @@ fn error_response_object(status: u16, bodies: &[ErrorBody], slots: &Map<String, 
     })
 }
 
-/// The schema of one media type of a custom response type: a `$ref` to its
-/// component, else a string for `text/*` and a free-form value otherwise.
-fn response_content_schema(content: &ResponseContent) -> Value {
-    match &content.schema {
+/// The schema of one media type of a body: a `$ref` to its component, else a
+/// string for `text/*`, a binary string for `application/octet-stream`, a
+/// free-form object for `multipart/form-data` /
+/// `application/x-www-form-urlencoded`, and a free-form value otherwise.
+fn media_type_schema(content_type: &str, schema: Option<&(String, Value)>) -> Value {
+    match schema {
         Some((name, _)) => json!({ "$ref": format!("#/components/schemas/{name}") }),
-        None if content.content_type.starts_with("text/") => json!({ "type": "string" }),
+        None if content_type.starts_with("text/") => json!({ "type": "string" }),
+        None if content_type == "application/octet-stream" => {
+            json!({ "type": "string", "format": "binary" })
+        }
+        None if content_type == "multipart/form-data"
+            || content_type == "application/x-www-form-urlencoded" =>
+        {
+            json!({ "type": "object" })
+        }
         None => json!({}),
     }
+}
+
+fn response_content_schema(content: &ResponseContent) -> Value {
+    media_type_schema(&content.content_type, content.schema.as_ref())
 }
 
 /// Build an OpenAPI 3.1.0 JSON spec from config and route metadata.
@@ -448,55 +438,16 @@ pub fn build_spec_with_warnings(
     let mut extra_definitions: Vec<(String, Value)> = Vec::new();
 
     for route in routes {
-        // Collect request body schemas
-        if let Some(ref body_type) = route.request_body_type {
-            if !schemas.contains_key(body_type) {
-                insert_schema(
-                    &mut schemas,
-                    &mut extra_definitions,
-                    body_type,
-                    &route.request_body_schema,
-                );
-            }
-        }
-
-        // Collect the schemas of a custom response type's media types.
-        for content in &route.response_contents {
-            if let Some((name, schema)) = &content.schema {
-                if !schemas.contains_key(name) {
-                    insert_schema(
-                        &mut schemas,
-                        &mut extra_definitions,
-                        name,
-                        &Some(schema.clone()),
-                    );
-                }
-            }
-        }
-
-        // Collect response schemas
-        if let Some(ref resp_type) = route.response_type {
-            if !schemas.contains_key(resp_type) {
-                insert_schema(
-                    &mut schemas,
-                    &mut extra_definitions,
-                    resp_type,
-                    &route.response_schema,
-                );
-            }
+        let request = route.request_body.iter().filter_map(|b| b.schema.as_ref());
+        let responses = route.response_contents.iter().filter_map(|c| c.schema.as_ref());
+        for (name, schema) in request.chain(responses) {
+            insert_schema(&mut schemas, &mut extra_definitions, name, schema);
         }
     }
 
     // Merge extra schemas from registry (route schemas take precedence).
     for (name, schema) in config.schema_registry.iter() {
-        if !schemas.contains_key(name) {
-            insert_schema(
-                &mut schemas,
-                &mut extra_definitions,
-                name,
-                &Some(schema.clone()),
-            );
-        }
+        insert_schema(&mut schemas, &mut extra_definitions, name, schema);
     }
 
     // Merge promoted $defs of the route and registry schemas.
@@ -585,27 +536,14 @@ pub fn build_spec_with_warnings(
             operation.insert("deprecated".into(), json!(true));
         }
 
-        // Request body. The media type defaults to application/json; multipart
-        // routes carry an explicit request_body_content_type. A content type
-        // without a named body type (raw Multipart) is modeled as a free-form
-        // object.
-        let body_schema = match (&route.request_body_type, &route.request_body_content_type) {
-            (Some(body_type), _) => {
-                Some(json!({ "$ref": format!("#/components/schemas/{body_type}") }))
-            }
-            (None, Some(_)) => Some(json!({ "type": "object" })),
-            (None, None) => None,
-        };
-        if let Some(schema) = body_schema {
-            let content_type = route
-                .request_body_content_type
-                .as_deref()
-                .unwrap_or("application/json");
+        // Request body: the extractor's `RequestBodySchema`.
+        if let Some(body) = &route.request_body {
+            let schema = media_type_schema(&body.content_type, body.schema.as_ref());
             operation.insert(
                 "requestBody".into(),
                 json!({
-                    "required": route.request_body_required,
-                    "content": { content_type: { "schema": schema } }
+                    "required": body.required,
+                    "content": { &body.content_type: { "schema": schema } }
                 }),
             );
         }
@@ -619,12 +557,13 @@ pub fn build_spec_with_warnings(
         };
         let mut responses: Map<String, Value> = Map::new();
 
-        if route.response_status == 204 {
-            // 204 No Content — no response body
+        if route.response_status == 204 || route.response_contents.is_empty() {
+            // No body: 204, an intentional no-body return, or an unmapped one
+            // (warned about by `spec_warnings`).
             responses.insert(status_key, json!({ "description": status_desc }));
-        } else if !route.response_contents.is_empty() {
-            // A custom response type (`ResponseBodySchema`): one entry per
-            // media type it can be served as.
+        } else {
+            // The return type's `ResponseBodySchema`: one entry per media type
+            // it can be served as.
             let content: Map<String, Value> = route
                 .response_contents
                 .iter()
@@ -634,20 +573,6 @@ pub fn build_spec_with_warnings(
                 status_key,
                 json!({ "description": status_desc, "content": content }),
             );
-        } else if let Some(ref resp_type) = route.response_type {
-            responses.insert(
-                status_key,
-                json!({
-                    "description": status_desc,
-                    "content": {
-                        "application/json": {
-                            "schema": { "$ref": format!("#/components/schemas/{resp_type}") }
-                        }
-                    }
-                }),
-            );
-        } else {
-            responses.insert(status_key, json!({ "description": status_desc }));
         }
 
         // Error responses: one per distinct status the route's envelope

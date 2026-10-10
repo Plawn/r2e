@@ -61,6 +61,7 @@ fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream> {
     }
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let name_str = name.to_string();
 
     Ok(quote! {
         impl #impl_generics #core::web::multipart::FromMultipart for #name #ty_generics #where_clause {
@@ -80,6 +81,10 @@ fn expand_inner(input: &DeriveInput) -> syn::Result<TokenStream> {
                     "properties": { #(#schema_properties,)* },
                     "required": [ #(#schema_required,)* ],
                 })
+            }
+
+            fn schema_name() -> &'static str {
+                #name_str
             }
         }
     })

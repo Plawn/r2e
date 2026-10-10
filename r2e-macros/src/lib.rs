@@ -807,8 +807,11 @@ pub fn status(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Specify the response type explicitly for OpenAPI documentation.
 ///
-/// Use this when the return type is an opaque wrapper (e.g., `impl IntoResponse`)
-/// and the macro cannot auto-detect the response schema.
+/// Use this when the return type is opaque (e.g., `impl IntoResponse`) and
+/// cannot be probed for `ResponseBodySchema`. `T` is probed for
+/// `ResponseBodySchema` first, then as `Json<T>` (`T: JsonSchema`), so both a
+/// JSON DTO and a custom multi-media-type response work. A concrete custom
+/// return type needs no `#[returns]`: implement `ResponseBodySchema` on it.
 ///
 /// ```ignore
 /// #[get("/widgets/{id}")]

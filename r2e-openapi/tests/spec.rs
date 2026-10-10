@@ -1,4 +1,4 @@
-use r2e_core::di::meta::{ParamInfo, ParamLocation, ResponseContent, RouteInfo};
+use r2e_core::di::meta::{ParamInfo, ParamLocation, RequestBody, ResponseContent, RouteInfo};
 use r2e_core::RejectionKind;
 use r2e_openapi::{build_spec, OpenApiConfig};
 use serde_json::{json, Value};
@@ -9,6 +9,26 @@ fn default_config() -> OpenApiConfig {
     OpenApiConfig::new("Test API", "0.1.0")
 }
 
+/// A documented body: `content_type` with an optional `(component, schema)`.
+fn body(content_type: &str, schema: Option<(String, Value)>) -> RequestBody {
+    RequestBody {
+        content_type: content_type.to_string(),
+        schema,
+        required: true,
+    }
+}
+
+/// An `application/json` body with a named component schema (what
+/// `Json<T>: RequestBodySchema` yields).
+fn json_body(name: &str, schema: Value) -> RequestBody {
+    body("application/json", Some((name.to_string(), schema)))
+}
+
+/// What `Json<T>: ResponseBodySchema` yields.
+fn json_response(name: &str, schema: Value) -> Vec<ResponseContent> {
+    vec![ResponseContent::json(Some((name.to_string(), schema)))]
+}
+
 fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
     RouteInfo {
         path: path.to_string(),
@@ -16,12 +36,8 @@ fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
         operation_id: operation_id.to_string(),
         summary: None,
         description: None,
-        request_body_type: None,
-        request_body_schema: None,
-        request_body_content_type: None,
-        request_body_required: true,
-        response_type: None,
-        response_schema: None,
+        request_body: None,
+        request_body_unmapped: None,
         response_status: 200,
         response_unmapped: None,
         response_contents: Vec::new(),
@@ -130,7 +146,7 @@ fn route_with_query_param() {
 #[test]
 fn route_with_request_body() {
     let routes = vec![RouteInfo {
-        request_body_type: Some("CreateUser".to_string()),
+        request_body: Some(json_body("CreateUser", json!({"type": "object"}))),
         ..route("POST", "/users", "create_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -155,8 +171,7 @@ fn route_with_request_body_schema() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("CreateUser".to_string()),
-        request_body_schema: Some(schema.clone()),
+        request_body: Some(json_body("CreateUser", schema.clone())),
         ..route("POST", "/users", "create_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -278,8 +293,7 @@ fn ref_rewrite_definitions_to_components() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("User".to_string()),
-        request_body_schema: Some(schema),
+        request_body: Some(json_body("User", schema)),
         ..route("POST", "/users", "create_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -304,8 +318,7 @@ fn additional_properties_true_removed() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("Data".to_string()),
-        request_body_schema: Some(schema),
+        request_body: Some(json_body("Data", schema)),
         ..route("POST", "/data", "create_data")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -325,8 +338,7 @@ fn additional_properties_false_kept() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("Strict".to_string()),
-        request_body_schema: Some(schema),
+        request_body: Some(json_body("Strict", schema)),
         ..route("POST", "/strict", "create_strict")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -347,8 +359,7 @@ fn nested_ref_rewrite() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("Order".to_string()),
-        request_body_schema: Some(schema),
+        request_body: Some(json_body("Order", schema)),
         ..route("POST", "/orders", "create_order")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -372,8 +383,7 @@ fn definitions_promoted_to_components() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("User".to_string()),
-        request_body_schema: Some(schema),
+        request_body: Some(json_body("User", schema)),
         ..route("POST", "/users", "create_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -416,7 +426,10 @@ fn response_contents_document_every_media_type() {
         json!({ "$ref": "#/components/schemas/Chunk" })
     );
     assert_eq!(content["text/plain"]["schema"], json!({ "type": "string" }));
-    assert_eq!(content["application/octet-stream"]["schema"], json!({}));
+    assert_eq!(
+        content["application/octet-stream"]["schema"],
+        json!({ "type": "string", "format": "binary" })
+    );
 
     // Schemas are registered, their `$defs` hoisted.
     let schemas = &spec["components"]["schemas"];
@@ -435,8 +448,7 @@ fn schema_key_stripped() {
         }
     });
     let routes = vec![RouteInfo {
-        request_body_type: Some("Data".to_string()),
-        request_body_schema: Some(schema),
+        request_body: Some(json_body("Data", schema)),
         ..route("POST", "/data", "create_data")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -461,11 +473,13 @@ fn generated_spec_is_valid_openapi_structure() {
             ..route("GET", "/users/{id}", "get_user")
         },
         RouteInfo {
-            request_body_type: Some("CreateUser".to_string()),
-            request_body_schema: Some(json!({
-                "type": "object",
-                "properties": { "name": { "type": "string" } }
-            })),
+            request_body: Some(json_body(
+                "CreateUser",
+                json!({
+                    "type": "object",
+                    "properties": { "name": { "type": "string" } }
+                }),
+            )),
             ..route("POST", "/users", "create_user")
         },
     ];
@@ -495,8 +509,7 @@ fn generated_spec_paths_non_empty() {
 #[test]
 fn generated_spec_components_present() {
     let routes = vec![RouteInfo {
-        request_body_type: Some("Payload".to_string()),
-        request_body_schema: Some(json!({"type": "object"})),
+        request_body: Some(json_body("Payload", json!({"type": "object"}))),
         ..route("POST", "/submit", "submit")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -517,13 +530,11 @@ fn duplicate_body_types_not_duplicated() {
     let schema = json!({"type": "object", "properties": {"name": {"type": "string"}}});
     let routes = vec![
         RouteInfo {
-            request_body_type: Some("User".to_string()),
-            request_body_schema: Some(schema.clone()),
+            request_body: Some(json_body("User", schema.clone())),
             ..route("POST", "/users", "create_user")
         },
         RouteInfo {
-            request_body_type: Some("User".to_string()),
-            request_body_schema: Some(schema),
+            request_body: Some(json_body("User", schema)),
             ..route("PUT", "/users/{id}", "update_user")
         },
     ];
@@ -535,16 +546,32 @@ fn duplicate_body_types_not_duplicated() {
 }
 
 #[test]
-fn request_body_without_schema_gets_generic_object() {
-    let routes = vec![RouteInfo {
-        request_body_type: Some("Unknown".to_string()),
-        request_body_schema: None,
-        ..route("POST", "/submit", "submit")
-    }];
-    let spec = build_spec(&default_config(), &routes);
-
-    let schema = &spec["components"]["schemas"]["Unknown"];
-    assert_eq!(schema, &json!({"type": "object"}));
+fn schemaless_bodies_render_by_media_type() {
+    // A `RequestBodySchema` with no schema (`Bytes`, `String`, raw
+    // `Multipart`, …) is documented from its media type alone.
+    let cases = [
+        ("application/octet-stream", json!({"type": "string", "format": "binary"})),
+        ("text/plain", json!({"type": "string"})),
+        ("application/x-www-form-urlencoded", json!({"type": "object"})),
+        ("application/vnd.custom", json!({})),
+    ];
+    for (content_type, expected) in cases {
+        let routes = vec![RouteInfo {
+            request_body: Some(body(content_type, None)),
+            ..route("POST", "/submit", "submit")
+        }];
+        let spec = build_spec(&default_config(), &routes);
+        assert_eq!(
+            spec["paths"]["/submit"]["post"]["requestBody"]["content"][content_type]["schema"],
+            expected,
+            "{content_type}"
+        );
+        let bodyless = build_spec(&default_config(), &[route("POST", "/submit", "submit")]);
+        assert_eq!(
+            spec["components"], bodyless["components"],
+            "{content_type}: no component schema expected"
+        );
+    }
 }
 
 #[test]
@@ -591,8 +618,7 @@ fn response_schema_in_spec() {
         }
     });
     let routes = vec![RouteInfo {
-        response_type: Some("User".to_string()),
-        response_schema: Some(schema.clone()),
+        response_contents: json_response("User", schema.clone()),
         ..route("GET", "/users/{id}", "get_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -628,10 +654,7 @@ fn response_204_has_no_content_block() {
 fn post_defaults_to_201() {
     let routes = vec![RouteInfo {
         response_status: 201,
-        response_unmapped: None,
-        response_contents: Vec::new(),
-        response_type: Some("User".to_string()),
-        response_schema: Some(json!({"type": "object"})),
+        response_contents: json_response("User", json!({"type": "object"})),
         ..route("POST", "/users", "create_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -709,8 +732,10 @@ fn non_deprecated_has_no_deprecated_key() {
 #[test]
 fn optional_request_body() {
     let routes = vec![RouteInfo {
-        request_body_type: Some("PatchUser".to_string()),
-        request_body_required: false,
+        request_body: Some(RequestBody {
+            required: false,
+            ..json_body("PatchUser", json!({"type": "object"}))
+        }),
         ..route("PATCH", "/users/{id}", "patch_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -750,8 +775,7 @@ fn response_schema_ref_rewrite() {
         }
     });
     let routes = vec![RouteInfo {
-        response_type: Some("User".to_string()),
-        response_schema: Some(schema),
+        response_contents: json_response("User", schema),
         ..route("GET", "/users/{id}", "get_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -839,8 +863,7 @@ fn route_schema_takes_precedence_over_registry() {
 
     let routes = vec![{
         let mut r = route("POST", "/users", "create_user");
-        r.request_body_type = Some("User".to_string());
-        r.request_body_schema = Some(json!({"type": "object", "description": "from route"}));
+        r.request_body = Some(json_body("User", json!({"type": "object", "description": "from route"})));
         r
     }];
     let spec = build_spec(&config, &routes);
@@ -860,8 +883,7 @@ fn schema_override_replaces_route_schema() {
 
     let routes = vec![{
         let mut r = route("POST", "/users", "create_user");
-        r.request_body_type = Some("User".to_string());
-        r.request_body_schema = Some(json!({"type": "object", "description": "from route"}));
+        r.request_body = Some(json_body("User", json!({"type": "object", "description": "from route"})));
         r
     }];
     let spec = build_spec(&config, &routes);
@@ -952,9 +974,10 @@ fn multipart_form_schema() -> Value {
 #[test]
 fn typed_multipart_request_body_uses_form_data_content_type() {
     let routes = vec![RouteInfo {
-        request_body_type: Some("ProfileUpload".to_string()),
-        request_body_schema: Some(multipart_form_schema()),
-        request_body_content_type: Some("multipart/form-data".to_string()),
+        request_body: Some(body(
+            "multipart/form-data",
+            Some(("ProfileUpload".to_string(), multipart_form_schema())),
+        )),
         ..route("POST", "/uploads", "upload_profile")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -974,9 +997,10 @@ fn typed_multipart_request_body_uses_form_data_content_type() {
 #[test]
 fn typed_multipart_schema_lands_in_components() {
     let routes = vec![RouteInfo {
-        request_body_type: Some("ProfileUpload".to_string()),
-        request_body_schema: Some(multipart_form_schema()),
-        request_body_content_type: Some("multipart/form-data".to_string()),
+        request_body: Some(body(
+            "multipart/form-data",
+            Some(("ProfileUpload".to_string(), multipart_form_schema())),
+        )),
         ..route("POST", "/uploads", "upload_profile")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -991,7 +1015,7 @@ fn typed_multipart_schema_lands_in_components() {
 fn raw_multipart_request_body_is_free_form() {
     // Raw `Multipart` extractor: a content type but no named body type.
     let routes = vec![RouteInfo {
-        request_body_content_type: Some("multipart/form-data".to_string()),
+        request_body: Some(body("multipart/form-data", None)),
         ..route("POST", "/uploads/raw", "upload_raw")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -1009,7 +1033,7 @@ fn multipart_request_body_documents_its_rejections() {
     // The macro infers a multipart body's kinds; the builder documents each
     // one at the envelope's status (default: 415 / 413 / 400).
     let routes = vec![RouteInfo {
-        request_body_content_type: Some("multipart/form-data".to_string()),
+        request_body: Some(body("multipart/form-data", None)),
         rejection_kinds: vec![
             RejectionKind::UnsupportedMediaType,
             RejectionKind::PayloadTooLarge,
@@ -1029,10 +1053,9 @@ fn multipart_request_body_documents_its_rejections() {
 }
 
 #[test]
-fn json_request_body_content_type_defaults_to_json() {
-    // `None` content type keeps the historical application/json behavior.
+fn json_request_body_uses_application_json() {
     let routes = vec![RouteInfo {
-        request_body_type: Some("CreateUser".to_string()),
+        request_body: Some(json_body("CreateUser", json!({"type": "object"}))),
         ..route("POST", "/users", "create_user")
     }];
     let spec = build_spec(&default_config(), &routes);

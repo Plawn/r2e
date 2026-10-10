@@ -8,7 +8,7 @@
 //! the config's (`with_error_schema`, set by the plugin from the
 //! application's `ErrorProjector`), else `HttpError`.
 
-use r2e_core::di::meta::RouteInfo;
+use r2e_core::di::meta::{ResponseContent, RouteInfo};
 use r2e_core::http::StatusCode;
 use r2e_core::{ErrorSchema, ErrorSchemaInfo, RejectionKind};
 use r2e_openapi::{build_spec, OpenApiConfig};
@@ -21,12 +21,8 @@ fn route(method: &str, path: &str, kinds: Vec<RejectionKind>) -> RouteInfo {
         operation_id: format!("{}_{}", method.to_lowercase(), path.trim_start_matches('/')),
         summary: None,
         description: None,
-        request_body_type: None,
-        request_body_schema: None,
-        request_body_content_type: None,
-        request_body_required: true,
-        response_type: None,
-        response_schema: None,
+        request_body: None,
+        request_body_unmapped: None,
         response_status: 200,
         response_unmapped: None,
         response_contents: Vec::new(),
@@ -660,8 +656,7 @@ struct ErrorResponse {
 fn nested_dto_keeps_its_component_and_the_error_body_is_inlined() {
     let report = serde_json::to_value(schemars::schema_for!(Report)).unwrap();
     let routes = vec![RouteInfo {
-        response_type: Some("Report".to_string()),
-        response_schema: Some(report),
+        response_contents: vec![ResponseContent::json(Some(("Report".to_string(), report)))],
         ..route(
             "POST",
             "/reports",

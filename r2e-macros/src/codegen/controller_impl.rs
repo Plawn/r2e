@@ -7,7 +7,7 @@ use quote::{format_ident, quote};
 use crate::codegen::transverse::{self, ConsumerMethodDef, DecoFieldDef, ScheduledSourceMethod};
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
-use crate::util::type_utils::{type_last_segment_is, unwrap_json_type, unwrap_result_type};
+use crate::util::type_utils::{type_last_segment_is, unwrap_option_type, unwrap_result_type};
 
 /// Generate the `Controller<State>` trait implementation.
 pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
@@ -293,12 +293,16 @@ fn generate_route_metadata(
             let params_expr = params_expr(&rm.fn_item.sig, None, &krate);
             let request = super::handlers::RequestParams::route(rm);
             let extracted = request.owned();
-            let body = extract_body_info(&rm.fn_item.sig, &extracted);
-            let (body_type_token, body_schema_token, body_content_type_token) = body.tokens();
+            let body = extract_body_info(&extracted, request.last_consumes_body, &rm.method);
             let body_probe = body.probe_expr();
-            let (response_type_token, response_schema_token) = extract_response_info(rm);
-            let response_unmapped_token = response_unmapped_token(rm);
-            let response_probe = response_contents_probe(rm);
+            let body_required = body.required;
+            let body_unmapped_token = body.unmapped_token();
+            let response = response_info(rm);
+            let response_probe = &response.probe;
+            let response_unmapped_token = match &response.unmapped {
+                Some(name) => quote! { Some(#name.to_string()) },
+                None => quote! { None },
+            };
 
             // Extract doc comments for summary + description
             let (doc_summary, doc_description) =
@@ -317,7 +321,6 @@ fn generate_route_metadata(
                 .unwrap_or_else(|| default_status_for_method(&rm.method));
 
             let deprecated = rm.decorators.deprecated;
-            let body_required = detect_body_required(rm);
 
             let has_roles = !role_strs.is_empty();
             let static_kinds = static_rejection_kinds(
@@ -328,7 +331,6 @@ fn generate_route_metadata(
                 &extracted,
                 request.last_consumes_body,
                 &rm.method,
-                body.as_ref(),
             );
             let kinds_expr = rejection_kinds_expr(
                 &static_kinds,
@@ -344,7 +346,9 @@ fn generate_route_metadata(
                     let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
                     let __body: Option<#krate::di::meta::__BodyProbeResult> = #body_probe;
                     let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
-                    let __response: Vec<#krate::di::meta::ResponseContent> = #response_probe;
+                    // `None`: the return type has no `ResponseBodySchema` impl
+                    // (or is opaque) → unmapped. `Some(vec![])`: no body.
+                    let __response: Option<Vec<#krate::di::meta::ResponseContent>> = #response_probe;
                     #krate::di::meta::RouteInfo {
                         path: match #meta_mod::PATH_PREFIX {
                             Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
@@ -354,20 +358,23 @@ fn generate_route_metadata(
                         operation_id: #op_id.to_string(),
                         summary: #summary_token,
                         description: #description_token,
-                        request_body_type: #body_type_token,
-                        request_body_schema: #body_schema_token,
-                        request_body_content_type: #body_content_type_token,
-                        request_body_required: #body_required,
-                        response_type: #response_type_token,
-                        response_schema: #response_schema_token,
+                        request_body_unmapped: if __body.is_none() {
+                            #body_unmapped_token
+                        } else {
+                            None
+                        },
+                        request_body: __body.map(|__b| #krate::di::meta::RequestBody {
+                            content_type: __b.content_type.to_string(),
+                            schema: __b.schema,
+                            required: #body_required,
+                        }),
                         response_status: #status_code,
-                        // A `ResponseBodySchema` impl maps the body after all.
-                        response_unmapped: if __response.is_empty() {
+                        response_unmapped: if __response.is_none() {
                             #response_unmapped_token
                         } else {
                             None
                         },
-                        response_contents: __response,
+                        response_contents: __response.unwrap_or_default(),
                         params: __params,
                         roles: vec![#(#roles),*],
                         tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
@@ -415,27 +422,13 @@ fn static_rejection_kinds(
     extracted: &[syn::PatType],
     last_consumes_body: bool,
     method: &crate::model::route::HttpMethod,
-    body: Option<&BodyExtractor>,
 ) -> Vec<&'static str> {
     use crate::model::route::HttpMethod;
     let mut kinds: Vec<&'static str> = Vec::new();
 
-    match body {
-        Some(BodyExtractor::Json { .. }) => kinds.extend([
-            "MissingContentType",
-            "PayloadTooLarge",
-            "BodyRead",
-            "MalformedBody",
-            "InvalidBody",
-        ]),
-        Some(BodyExtractor::TypedMultipart { .. } | BodyExtractor::RawMultipart) => {
-            kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "MalformedBody"]);
-        }
-        // A custom extractor declares its kinds through `RequestBodySchema`,
-        // read at runtime by `rejection_kinds_expr` (`__body`).
-        Some(BodyExtractor::Custom { .. }) | None => {}
-    }
-
+    // Body extractors declare their kinds through `RequestBodySchema`, read
+    // at runtime by `rejection_kinds_expr` (`__body`). Only the non-body
+    // extractors are known here by name.
     let n = extracted.len();
     for (pos, pt) in extracted.iter().enumerate() {
         let last = last_consumes_body && pos + 1 == n;
@@ -443,19 +436,13 @@ fn static_rejection_kinds(
             kinds.push("InvalidPath");
         } else if type_last_segment_is(&pt.ty, "Query") {
             kinds.push("InvalidQuery");
-        } else if last && type_last_segment_is(&pt.ty, "Form") {
-            // axum's `Form` reads the query string on GET/HEAD (400) and the
-            // body otherwise (415 / 413 / read failure / 422).
-            if matches!(method, HttpMethod::Get | HttpMethod::Any) {
-                kinds.push("InvalidForm");
-            }
-            if !matches!(method, HttpMethod::Get) {
-                kinds.extend(["UnsupportedMediaType", "PayloadTooLarge", "BodyRead", "InvalidBody"]);
-            }
-        } else if last && type_last_segment_is(&pt.ty, "Bytes") {
-            kinds.extend(["PayloadTooLarge", "BodyRead"]);
-        } else if last && type_last_segment_is(&pt.ty, "String") {
-            kinds.extend(["PayloadTooLarge", "BodyRead", "MalformedBody"]);
+        } else if last
+            && type_last_segment_is(&pt.ty, "Form")
+            && matches!(method, HttpMethod::Get | HttpMethod::Any)
+        {
+            // axum's `Form` reads the query string on GET/HEAD (400); on other
+            // methods it is the body and `Form<T>: RequestBodySchema` applies.
+            kinds.push("InvalidForm");
         }
     }
 
@@ -750,180 +737,93 @@ fn is_wildcard_path(path: &str) -> bool {
     path.contains("{*")
 }
 
-/// Check if the body parameter is `Option<Json<T>>` → required: false, `Json<T>` → required: true.
-fn detect_body_required(rm: &crate::model::types::RouteMethod) -> bool {
-    for arg in rm.fn_item.sig.inputs.iter() {
-        if let syn::FnArg::Typed(pt) = arg {
-            if has_json_type(&pt.ty) {
-                // Check if it's wrapped in Option
-                if is_option_wrapping_json(&pt.ty) {
-                    return false;
-                }
-                return true;
+/// The success-response classification of a route for `RouteInfo`.
+struct ResponseInfo {
+    /// Expression of type `Option<Vec<ResponseContent>>`: `Some(contents)`
+    /// when the return type implements `ResponseBodySchema` (an empty vec is
+    /// an intentional no-body return), `None` when it is unmapped.
+    probe: TokenStream,
+    /// The readable type name reported as `response_unmapped` when the probe
+    /// yields `None`.
+    unmapped: Option<String>,
+}
+
+/// Classify the route's successful response.
+///
+/// * `#[returns(T)]`: `T` is probed for `ResponseBodySchema`, then `Json<T>`
+///   is — so `#[returns(User)]` on an `impl IntoResponse` handler documents
+///   `application/json` with `User`'s schema when `User: JsonSchema`.
+/// * No return type → no body.
+/// * `impl Trait` → unmapped (nothing to probe).
+/// * Otherwise the return type (its `Result<T, E>` unwrapped for the warning
+///   name; the probe works on the full type since `Result<T, E>` delegates to
+///   `T`) is probed. A type containing `impl Trait` (`Sse<impl Stream<..>>`)
+///   cannot be named in a turbofish: `Sse<..>` documents an event stream, any
+///   other such type is unmapped.
+fn response_info(rm: &crate::model::types::RouteMethod) -> ResponseInfo {
+    let krate = r2e_core_path();
+    if let Some(returns_ty) = &rm.decorators.returns_type {
+        let direct = response_probe_tokens(returns_ty);
+        let json_ty: syn::Type = syn::parse_quote!(#krate::http::Json<#returns_ty>);
+        let as_json = response_probe_tokens(&json_ty);
+        return ResponseInfo {
+            probe: quote! { #direct.or_else(|| #as_json) },
+            unmapped: Some(readable_type(returns_ty)),
+        };
+    }
+    let ret_ty = match &rm.fn_item.sig.output {
+        syn::ReturnType::Default => {
+            return ResponseInfo {
+                probe: quote! { Some(Vec::new()) },
+                unmapped: None,
             }
         }
+        syn::ReturnType::Type(_, ty) => ty.as_ref(),
+    };
+    if matches!(ret_ty, syn::Type::ImplTrait(_)) {
+        return ResponseInfo {
+            probe: quote! { None },
+            unmapped: Some(readable_type(ret_ty)),
+        };
     }
-    true
-}
-
-/// Check if a type is `Option<Json<T>>`.
-fn is_option_wrapping_json(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return has_json_type(inner);
-                    }
-                }
-            }
+    let unwrapped = unwrap_result_type(ret_ty);
+    if contains_impl_trait(&quote!(#unwrapped)) {
+        if type_last_segment_is(unwrapped, "Sse") {
+            return ResponseInfo {
+                probe: quote! { Some(vec![#krate::di::meta::ResponseContent::event_stream(None)]) },
+                unmapped: None,
+            };
         }
+        return ResponseInfo {
+            probe: quote! { None },
+            unmapped: Some(readable_type(unwrapped)),
+        };
     }
-    false
+    ResponseInfo {
+        probe: response_probe_tokens(ret_ty),
+        unmapped: Some(readable_type(unwrapped)),
+    }
 }
 
-/// Check if a type contains Json (is `Json<T>` or a destructured pattern).
-fn has_json_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "Json";
-        }
-    }
-    false
-}
-
-/// Check if a type is a "no body" type (StatusCode, StatusResult, ()).
-fn is_no_body_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident_str = segment.ident.to_string();
-            return matches!(ident_str.as_str(), "StatusCode" | "StatusResult");
-        }
-    }
-    if let syn::Type::Tuple(tuple) = ty {
-        return tuple.elems.is_empty(); // ()
-    }
-    false
-}
-
-/// Convert a syn::Type to an OpenAPI-friendly name string.
-fn type_to_schema_name(ty: &syn::Type) -> String {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident = segment.ident.to_string();
-            if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                let inner_names: Vec<String> = args
-                    .args
-                    .iter()
-                    .filter_map(|arg| {
-                        if let syn::GenericArgument::Type(inner_ty) = arg {
-                            Some(type_to_schema_name(inner_ty))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                if !inner_names.is_empty() {
-                    return format!("{}_{}", ident, inner_names.join("_"));
-                }
-            }
-            return ident;
-        }
-    }
-    quote!(#ty).to_string().replace(' ', "")
-}
-
-/// Emit an autoref-specialization schema probe: when `ty` satisfies `bound`,
-/// the inherent method wins and returns `Some(#some_body)` (with `T` bound to
-/// `ty`); otherwise the trait fallback returns `None`. Lets optional schema
-/// discovery work without requiring the bound on every type.
-fn autoref_schema_probe(ty: &syn::Type, bound: TokenStream, some_body: TokenStream) -> TokenStream {
+/// An autoref-specialization probe of `ty` for `ResponseBodySchema`:
+/// `Some(T::response_contents())` when implemented, `None` otherwise.
+fn response_probe_tokens(ty: &syn::Type) -> TokenStream {
     let krate = r2e_core_path();
     quote! {
         {
-            struct __SchemaProbe<T>(::core::marker::PhantomData<T>);
-            trait __NoSchema {
-                fn __schema(&self) -> Option<#krate::serde_json::Value> { None }
+            struct __ResponseProbe<T>(::core::marker::PhantomData<T>);
+            trait __NoResponseSchema {
+                fn __contents(&self) -> Option<Vec<#krate::di::meta::ResponseContent>> { None }
             }
-            impl<T> __NoSchema for &__SchemaProbe<T> {}
-            impl<T: #bound> __SchemaProbe<T> {
-                fn __schema(&self) -> Option<#krate::serde_json::Value> {
-                    Some(#some_body)
+            impl<T> __NoResponseSchema for &__ResponseProbe<T> {}
+            impl<T: #krate::di::meta::ResponseBodySchema> __ResponseProbe<T> {
+                fn __contents(&self) -> Option<Vec<#krate::di::meta::ResponseContent>> {
+                    Some(<T as #krate::di::meta::ResponseBodySchema>::response_contents())
                 }
             }
-            let __p = __SchemaProbe::<#ty>(::core::marker::PhantomData);
-            use __NoSchema as _;
-            (&__p).__schema()
+            use __NoResponseSchema as _;
+            (&__ResponseProbe::<#ty>(::core::marker::PhantomData)).__contents()
         }
-    }
-}
-
-/// Generate a schema token for a response type, using autoref specialization
-/// so that types not implementing `JsonSchema` gracefully return `None`.
-fn response_schema_token(ty: &syn::Type) -> TokenStream {
-    if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
-        let krate = r2e_core_path();
-        autoref_schema_probe(
-            ty,
-            quote! { #schemars::JsonSchema },
-            quote! { #krate::serde_json::to_value(#schemars::schema_for!(T)).unwrap() },
-        )
-    } else {
-        quote! { None }
-    }
-}
-
-/// Resolve the inner response type from the route method.
-/// Returns `Some(ty)` if a JSON response body type is detected, `None` otherwise.
-fn resolve_response_type(rm: &crate::model::types::RouteMethod) -> Option<syn::Type> {
-    // #[returns(T)] override takes priority
-    if let Some(ref returns_ty) = rm.decorators.returns_type {
-        return Some(returns_ty.clone());
-    }
-
-    // Analyze return type
-    let output = &rm.fn_item.sig.output;
-    let ret_ty = match output {
-        syn::ReturnType::Default => return None,
-        syn::ReturnType::Type(_, ty) => ty.as_ref(),
-    };
-
-    // impl Trait → no detection
-    if matches!(ret_ty, syn::Type::ImplTrait(_)) {
-        return None;
-    }
-
-    // Unwrap Result/ApiResult/JsonResult
-    let unwrapped = unwrap_result_type(ret_ty);
-
-    // Check for no-body types
-    if is_no_body_type(unwrapped) {
-        return None;
-    }
-
-    // Check for String — no schema
-    if let syn::Type::Path(type_path) = unwrapped {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "String" {
-                return None;
-            }
-        }
-    }
-
-    // Try to unwrap Json<T>
-    unwrap_json_type(unwrapped).cloned()
-}
-
-/// Extract response type information from a route method.
-/// Returns (response_type_name_token, response_schema_token).
-fn extract_response_info(rm: &crate::model::types::RouteMethod) -> (TokenStream, TokenStream) {
-    match resolve_response_type(rm) {
-        Some(inner_ty) => {
-            let name = type_to_schema_name(&inner_ty);
-            let schema_token = response_schema_token(&inner_ty);
-            (quote! { Some(#name.to_string()) }, schema_token)
-        }
-        None => (quote! { None }, quote! { None }),
     }
 }
 
@@ -941,98 +841,6 @@ fn readable_type(ty: &syn::Type) -> String {
         .replace(":: ", "::")
 }
 
-/// The `RouteInfo.response_unmapped` token for a route.
-///
-/// Emits `Some("<type>".to_string())` when a **successful** response body
-/// cannot be auto-mapped to an OpenAPI schema yet clearly carries a body
-/// (an `impl Trait` return, or a concrete non-`Json` type), so spec generation
-/// can warn about it. Emits `None` for mapped bodies (`Json<T>`, `#[returns]`)
-/// and intentional no-body returns (`()`, `StatusCode`, `StatusResult`,
-/// `String`, or no return type).
-fn response_unmapped_token(rm: &crate::model::types::RouteMethod) -> TokenStream {
-    match response_unmapped_name(rm) {
-        Some(name) => quote! { Some(#name.to_string()) },
-        None => quote! { None },
-    }
-}
-
-fn response_unmapped_name(rm: &crate::model::types::RouteMethod) -> Option<String> {
-    // A resolvable response type (`Json<T>` or `#[returns(T)]`) is mappable.
-    if resolve_response_type(rm).is_some() {
-        return None;
-    }
-
-    let ret_ty = match &rm.fn_item.sig.output {
-        // No return type → no body; nothing to document.
-        syn::ReturnType::Default => return None,
-        syn::ReturnType::Type(_, ty) => ty.as_ref(),
-    };
-
-    // `impl Trait` (e.g. `impl IntoResponse`) is opaque but usually carries a
-    // body the spec cannot see.
-    if matches!(ret_ty, syn::Type::ImplTrait(_)) {
-        return Some(readable_type(ret_ty));
-    }
-
-    let unwrapped = unwrap_result_type(ret_ty);
-
-    // Intentional no-body returns.
-    if is_no_body_type(unwrapped) {
-        return None;
-    }
-
-    // `String` → `text/plain`; there is no named schema to attach.
-    if let syn::Type::Path(type_path) = unwrapped {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "String" {
-                return None;
-            }
-        }
-    }
-
-    // A concrete type we could not map (not `Json<T>`).
-    Some(readable_type(unwrapped))
-}
-
-/// The `__response` binding: an autoref probe of the route's concrete return
-/// type (the `T` of a `Result<T, E>`) for `ResponseBodySchema`, an empty list
-/// when the body is already mapped (`Json<T>`, `#[returns]`), intentionally
-/// absent, opaque (`impl Trait`) or the type does not implement it.
-fn response_contents_probe(rm: &crate::model::types::RouteMethod) -> TokenStream {
-    let krate = r2e_core_path();
-    let empty = quote! { Vec::new() };
-    if resolve_response_type(rm).is_some() {
-        return empty;
-    }
-    let syn::ReturnType::Type(_, ret_ty) = &rm.fn_item.sig.output else {
-        return empty;
-    };
-    if matches!(ret_ty.as_ref(), syn::Type::ImplTrait(_)) {
-        return empty;
-    }
-    let ty = unwrap_result_type(ret_ty);
-    // `Sse<impl Stream<..>>` cannot be named in the probe's turbofish.
-    if is_no_body_type(ty) || contains_impl_trait(&quote!(#ty)) {
-        return empty;
-    }
-    quote! {
-        {
-            struct __ResponseProbe<T>(::core::marker::PhantomData<T>);
-            trait __NoResponseSchema {
-                fn __contents(&self) -> Vec<#krate::di::meta::ResponseContent> { Vec::new() }
-            }
-            impl<T> __NoResponseSchema for &__ResponseProbe<T> {}
-            impl<T: #krate::di::meta::ResponseBodySchema> __ResponseProbe<T> {
-                fn __contents(&self) -> Vec<#krate::di::meta::ResponseContent> {
-                    <T as #krate::di::meta::ResponseBodySchema>::response_contents()
-                }
-            }
-            use __NoResponseSchema as _;
-            (&__ResponseProbe::<#ty>(::core::marker::PhantomData)).__contents()
-        }
-    }
-}
-
 fn contains_impl_trait(tokens: &TokenStream) -> bool {
     tokens.clone().into_iter().any(|tt| match tt {
         proc_macro2::TokenTree::Ident(ident) => ident == "impl",
@@ -1041,79 +849,36 @@ fn contains_impl_trait(tokens: &TokenStream) -> bool {
     })
 }
 
-/// A handler parameter recognized as the request body extractor.
-enum BodyExtractor {
-    /// `Json<T>` — `application/json` with a schemars-generated schema.
-    Json { name: String, ty: syn::Type },
-    /// `TypedMultipart<T>` — `multipart/form-data` with a `MultipartSchema`-probed schema.
-    TypedMultipart { name: String, ty: syn::Type },
-    /// Raw `Multipart` — `multipart/form-data`, free-form (no named schema).
-    RawMultipart,
-    /// Any other type in the body position (the last extracted parameter):
-    /// probed for `RequestBodySchema` at runtime — documented when the type
-    /// implements it, no request body otherwise.
-    Custom { ty: syn::Type },
+/// The request-body classification of a route.
+struct BodyInfo {
+    /// The body extractor type (its `Option<..>` unwrapped), probed for
+    /// `RequestBodySchema` at runtime. `None` when no parameter reads the body.
+    ty: Option<syn::Type>,
+    /// `false` for an `Option<..>`-wrapped extractor.
+    required: bool,
 }
 
-/// Media type emitted for multipart body extractors.
-const MULTIPART_CONTENT_TYPE: &str = "multipart/form-data";
-
-/// The request-body classification of a route, with its `RouteInfo` tokens.
-struct BodyInfo(Option<BodyExtractor>);
-
 impl BodyInfo {
-    fn as_ref(&self) -> Option<&BodyExtractor> {
-        self.0.as_ref()
-    }
+    const NONE: Self = Self { ty: None, required: true };
 
-    /// `(request_body_type, request_body_schema, request_body_content_type)`
-    /// expressions. A `Custom` body reads them from `__body` (bound by the
-    /// caller to [`probe_expr`](Self::probe_expr)).
-    fn tokens(&self) -> (TokenStream, TokenStream, TokenStream) {
-        let multipart_ct = MULTIPART_CONTENT_TYPE;
-        match &self.0 {
-            Some(BodyExtractor::Json { name, ty }) => {
-                let schema_token =
-                    if let Some(schemars) = crate::util::crate_path::r2e_schemars_path() {
-                        let krate = r2e_core_path();
-                        quote! {
-                            Some({
-                                let __schema = #schemars::schema_for!(#ty);
-                                #krate::serde_json::to_value(__schema).unwrap()
-                            })
-                        }
-                    } else {
-                        quote! { None }
-                    };
-                (
-                    quote! { Some(#name.to_string()) },
-                    schema_token,
-                    quote! { None },
-                )
+    /// `Some("<readable type>")` token when a body-position parameter exists,
+    /// reported as `request_body_unmapped` if its probe yields `None`.
+    fn unmapped_token(&self) -> TokenStream {
+        match &self.ty {
+            Some(ty) => {
+                let name = readable_type(ty);
+                quote! { Some(#name.to_string()) }
             }
-            Some(BodyExtractor::TypedMultipart { name, ty }) => (
-                quote! { Some(#name.to_string()) },
-                multipart_schema_token(ty),
-                quote! { Some(#multipart_ct.to_string()) },
-            ),
-            Some(BodyExtractor::RawMultipart) => (
-                quote! { None },
-                quote! { None },
-                quote! { Some(#multipart_ct.to_string()) },
-            ),
-            Some(BodyExtractor::Custom { .. }) => (
-                quote! { __body.as_ref().and_then(|__b| __b.schema.as_ref().map(|(__n, _)| __n.clone())) },
-                quote! { __body.as_ref().and_then(|__b| __b.schema.as_ref().map(|(_, __s)| __s.clone())) },
-                quote! { __body.as_ref().map(|__b| __b.content_type.to_string()) },
-            ),
-            None => (quote! { None }, quote! { None }, quote! { None }),
+            None => quote! { None },
         }
     }
 
-    /// The `__body` binding: an autoref probe of the custom body type for
-    /// `RequestBodySchema`, `None` for every other classification.
+    /// The `__body` binding: an autoref probe of the body type for
+    /// `RequestBodySchema` — `Some(..)` when the type implements it (the
+    /// framework's `Json`, `Bytes`, `String`, `Form`, `Multipart`,
+    /// `TypedMultipart` and any custom extractor), `None` otherwise.
     fn probe_expr(&self) -> TokenStream {
-        let Some(BodyExtractor::Custom { ty }) = &self.0 else {
+        let Some(ty) = &self.ty else {
             return quote! { None };
         };
         let krate = r2e_core_path();
@@ -1140,89 +905,51 @@ impl BodyInfo {
     }
 }
 
-/// Classify the route's request body: a `Json` / `TypedMultipart` /
-/// `Multipart` parameter anywhere in the signature (by name, as before), else
-/// the last extracted parameter as a `Custom` candidate — the entry function
-/// reads exactly that parameter through `FromRequest`, so it is the only one
-/// that can be a body extractor.
-fn extract_body_info(sig: &syn::Signature, extracted: &[syn::PatType]) -> BodyInfo {
-    let named = sig.inputs.iter().find_map(|arg| {
-        if let syn::FnArg::Typed(pt) = arg {
-            extract_body_type_info(&pt.ty)
-        } else {
-            None
-        }
-    });
-    if named.is_some() {
-        return BodyInfo(named);
+/// Classify the route's request body: the last extracted parameter when the
+/// entry function reads it through `FromRequest` — it is the only one that can
+/// be a body extractor. `Option<X>` unwraps to `X` with `required: false`.
+/// Parameter types that never read the body are skipped so the generated
+/// metadata stays free of pointless probes; `Form<T>` on GET reads the query
+/// string, not the body.
+fn extract_body_info(
+    extracted: &[syn::PatType],
+    last_consumes_body: bool,
+    method: &crate::model::route::HttpMethod,
+) -> BodyInfo {
+    if !last_consumes_body {
+        return BodyInfo::NONE;
     }
-    let custom = extracted
-        .last()
-        .filter(|pt| !is_known_non_body_type(&pt.ty))
-        .map(|pt| BodyExtractor::Custom { ty: (*pt.ty).clone() });
-    BodyInfo(custom)
+    let Some(last) = extracted.last() else {
+        return BodyInfo::NONE;
+    };
+    let (ty, required) = match unwrap_option_type(&last.ty) {
+        Some(inner) => (inner.clone(), false),
+        None => ((*last.ty).clone(), true),
+    };
+    if is_known_non_body_type(&ty) {
+        return BodyInfo::NONE;
+    }
+    if type_last_segment_is(&ty, "Form") && matches!(method, crate::model::route::HttpMethod::Get) {
+        return BodyInfo::NONE;
+    }
+    BodyInfo {
+        ty: Some(ty),
+        required,
+    }
 }
 
-/// Parameter types that never read the body — skipped by the custom body
-/// probe so the generated metadata stays free of pointless probes.
+/// Parameter types that never read the body.
 fn is_known_non_body_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
             return matches!(
                 segment.ident.to_string().as_str(),
                 "Path" | "Query" | "HeaderMap" | "Method" | "Uri" | "Version" | "Extension"
-                    | "ConnectInfo" | "State" | "Option"
+                    | "ConnectInfo" | "State"
             );
         }
     }
     matches!(ty, syn::Type::Reference(_))
-}
-
-/// Generate a schema token for a `TypedMultipart<T>` body via autoref
-/// specialization: the derived `MultipartSchema` impl yields `Some(schema)`;
-/// a manual `FromMultipart` impl without it degrades to `None`.
-///
-/// The `MultipartSchema` trait lives in `r2e_core::di::meta` (always compiled,
-/// not the feature-gated `multipart` module) so this probe also compiles in
-/// apps that use a `TypedMultipart`-shaped extractor without the feature.
-fn multipart_schema_token(ty: &syn::Type) -> TokenStream {
-    let krate = r2e_core_path();
-    autoref_schema_probe(
-        ty,
-        quote! { #krate::di::meta::MultipartSchema },
-        quote! { <T as #krate::di::meta::MultipartSchema>::multipart_schema() },
-    )
-}
-
-/// Classify a handler parameter type as a body extractor.
-fn extract_body_type_info(ty: &syn::Type) -> Option<BodyExtractor> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident = segment.ident.to_string();
-            match ident.as_str() {
-                "Json" | "TypedMultipart" => {
-                    if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                        if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
-                            if let syn::Type::Path(inner_path) = inner_ty {
-                                if let Some(inner_seg) = inner_path.path.segments.last() {
-                                    let name = inner_seg.ident.to_string();
-                                    let ty = inner_ty.clone();
-                                    return Some(if ident == "Json" {
-                                        BodyExtractor::Json { name, ty }
-                                    } else {
-                                        BodyExtractor::TypedMultipart { name, ty }
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                "Multipart" => return Some(BodyExtractor::RawMultipart),
-                _ => {}
-            }
-        }
-    }
-    None
 }
 
 /// Generate the off-request (transverse) wiring for a controller core.
@@ -1510,6 +1237,7 @@ fn generate_sse_route_metadata(
     name: &syn::Ident,
     meta_mod: &syn::Ident,
 ) -> Vec<TokenStream> {
+    let krate = r2e_core_path();
     def.sse_methods
         .iter()
         .map(|sm| {
@@ -1518,7 +1246,11 @@ fn generate_sse_route_metadata(
             // the body) — see `handlers::RequestParams`.
             let request = super::handlers::RequestParams::sse(sm);
             let extracted = request.owned();
-            let body = extract_body_info(&sm.fn_item.sig, &extracted);
+            let body = extract_body_info(
+                &extracted,
+                request.last_consumes_body,
+                &crate::model::route::HttpMethod::Get,
+            );
             let kinds = static_rejection_kinds(
                 def,
                 &sm.decorators,
@@ -1527,7 +1259,6 @@ fn generate_sse_route_metadata(
                 &extracted,
                 request.last_consumes_body,
                 &crate::model::route::HttpMethod::Get,
-                body.as_ref(),
             );
             emit_streaming_route_info(
                 name,
@@ -1538,6 +1269,9 @@ fn generate_sse_route_metadata(
                 &kinds,
                 &extracted,
                 body.probe_expr(),
+                body.required,
+                body.unmapped_token(),
+                quote! { vec![#krate::di::meta::ResponseContent::event_stream(None)] },
                 sm.decorators.anonymous,
                 &sm.fn_item.attrs,
                 None,
@@ -1567,7 +1301,6 @@ fn generate_ws_route_metadata(
                 &extracted,
                 request.last_consumes_body,
                 &crate::model::route::HttpMethod::Get,
-                None,
             );
             emit_streaming_route_info(
                 name,
@@ -1578,6 +1311,9 @@ fn generate_ws_route_metadata(
                 &kinds,
                 &extracted,
                 quote! { None },
+                true,
+                quote! { None },
+                quote! { Vec::new() },
                 wm.decorators.anonymous,
                 &wm.fn_item.attrs,
                 // The socket itself comes from the upgrade, not from an
@@ -1644,6 +1380,9 @@ fn emit_streaming_route_info(
     static_kinds: &[&str],
     extracted: &[syn::PatType],
     body_probe: TokenStream,
+    body_required: bool,
+    body_unmapped: TokenStream,
+    response_contents: TokenStream,
     anonymous: bool,
     attrs: &[syn::Attribute],
     ws_param: Option<usize>,
@@ -1676,15 +1415,15 @@ fn emit_streaming_route_info(
                 operation_id: #op_id.to_string(),
                 summary: Some(#summary.to_string()),
                 description: #description_token,
-                request_body_type: None,
-                request_body_schema: None,
-                request_body_content_type: None,
-                request_body_required: true,
-                response_type: None,
-                response_schema: None,
+                request_body_unmapped: if __body.is_none() { #body_unmapped } else { None },
+                request_body: __body.map(|__b| #krate::di::meta::RequestBody {
+                    content_type: __b.content_type.to_string(),
+                    schema: __b.schema,
+                    required: #body_required,
+                }),
                 response_status: 200,
                 response_unmapped: None,
-                response_contents: Vec::new(),
+                response_contents: #response_contents,
                 params: __params,
                 roles: vec![#(#roles_tokens),*],
                 tag: Some(#meta_mod::OPENAPI_TAG.to_string()),

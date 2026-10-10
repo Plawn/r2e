@@ -5883,6 +5883,7 @@ dependencies = [
  "r2e-http",
  "r2e-macros",
  "r2e-rt",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "serde_yaml",
