@@ -12,7 +12,18 @@ and read only the matched file(s).
 
 ## Project Status
 
-R2E is **not in production yet**. Breaking changes are always allowed — no need to gate them behind feature flags or maintain backward compatibility. Just mention breaking changes explicitly in plans so they are acknowledged.
+R2E is **in production** (since 0.5.0, 2026-10-10): real applications depend on the
+published crates. Breaking changes are still possible — the API is pre-1.0 — but they are
+no longer free:
+
+- A breaking change **bumps the minor version** (`0.X` → `0.X+1`) and never lands in a
+  patch release. Call it out explicitly in the plan so it is acknowledged before work starts.
+- It ships with a **`Breaking` entry in `CHANGELOG.md`** and, when the migration is more than
+  a rename, a step-by-step guide under `docs/migration/` (see `error-projection.md`).
+- Prefer a **compile-time migration path** (the old API fails to build with an error naming
+  the migration page) over silent behaviour changes; no runtime feature flags or shims.
+- Don't break for taste. A rename or reshuffle with no user-facing gain is not worth a
+  minor bump.
 
 ## Build Commands
 
