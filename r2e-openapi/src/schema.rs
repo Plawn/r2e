@@ -126,3 +126,13 @@ pub trait SchemaProvider {
         registry.register(&Self::schema_name(), Self::json_schema());
     }
 }
+
+/// `(component name, JSON Schema)` of `T` — the pair
+/// [`ResponseBodySchema`](r2e_core::di::meta::ResponseBodySchema),
+/// [`RequestBodySchema`](r2e_core::di::meta::RequestBodySchema) and
+/// [`ErrorSchema`](r2e_core::ErrorSchema) implementations return. `$defs` are
+/// promoted to `components/schemas` by the spec builder.
+pub fn schema_of<T: schemars::JsonSchema + ?Sized>() -> (String, Value) {
+    let schema = schemars::SchemaGenerator::default().into_root_schema_for::<T>();
+    (T::schema_name().into_owned(), Value::from(schema))
+}

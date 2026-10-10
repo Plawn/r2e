@@ -1,4 +1,4 @@
-use r2e_core::di::meta::{ParamInfo, ParamLocation, RouteInfo};
+use r2e_core::di::meta::{ParamInfo, ParamLocation, ResponseContent, RouteInfo};
 use r2e_core::RejectionKind;
 use r2e_openapi::{build_spec, OpenApiConfig};
 use serde_json::{json, Value};
@@ -24,6 +24,7 @@ fn route(method: &str, path: &str, operation_id: &str) -> RouteInfo {
         response_schema: None,
         response_status: 200,
         response_unmapped: None,
+        response_contents: Vec::new(),
         params: vec![],
         roles: vec![],
         tag: None,
@@ -388,6 +389,43 @@ fn definitions_promoted_to_components() {
 }
 
 #[test]
+fn response_contents_document_every_media_type() {
+    let completion = json!({
+        "type": "object",
+        "properties": { "role": { "$ref": "#/$defs/Role" } },
+        "$defs": { "Role": { "type": "string", "enum": ["assistant"] } }
+    });
+    let routes = vec![RouteInfo {
+        response_contents: vec![
+            ResponseContent::json(Some(("Completion".to_string(), completion))),
+            ResponseContent::event_stream(Some(("Chunk".to_string(), json!({ "type": "object" })))),
+            ResponseContent::text(),
+            ResponseContent::new("application/octet-stream", None),
+        ],
+        ..route("POST", "/chat", "chat")
+    }];
+    let spec = build_spec(&default_config(), &routes);
+
+    let content = &spec["paths"]["/chat"]["post"]["responses"]["200"]["content"];
+    assert_eq!(
+        content["application/json"]["schema"],
+        json!({ "$ref": "#/components/schemas/Completion" })
+    );
+    assert_eq!(
+        content["text/event-stream"]["schema"],
+        json!({ "$ref": "#/components/schemas/Chunk" })
+    );
+    assert_eq!(content["text/plain"]["schema"], json!({ "type": "string" }));
+    assert_eq!(content["application/octet-stream"]["schema"], json!({}));
+
+    // Schemas are registered, their `$defs` hoisted.
+    let schemas = &spec["components"]["schemas"];
+    assert_eq!(schemas["Role"]["enum"], json!(["assistant"]));
+    assert!(schemas["Completion"].get("$defs").is_none());
+    assert_eq!(schemas["Chunk"]["type"], "object");
+}
+
+#[test]
 fn schema_key_stripped() {
     let schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -576,6 +614,7 @@ fn response_204_has_no_content_block() {
     let routes = vec![RouteInfo {
         response_status: 204,
         response_unmapped: None,
+        response_contents: Vec::new(),
         ..route("DELETE", "/users/{id}", "delete_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -590,6 +629,7 @@ fn post_defaults_to_201() {
     let routes = vec![RouteInfo {
         response_status: 201,
         response_unmapped: None,
+        response_contents: Vec::new(),
         response_type: Some("User".to_string()),
         response_schema: Some(json!({"type": "object"})),
         ..route("POST", "/users", "create_user")
@@ -606,6 +646,7 @@ fn status_override() {
     let routes = vec![RouteInfo {
         response_status: 202,
         response_unmapped: None,
+        response_contents: Vec::new(),
         ..route("POST", "/jobs", "create_job")
     }];
     let spec = build_spec(&default_config(), &routes);

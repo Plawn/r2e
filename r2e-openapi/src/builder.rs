@@ -1,4 +1,4 @@
-use r2e_core::di::meta::{ParamLocation, RouteInfo};
+use r2e_core::di::meta::{ParamLocation, ResponseContent, RouteInfo};
 use r2e_core::{ErrorSchema, ErrorSchemaInfo, HttpError, RejectionKind};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -106,7 +106,8 @@ impl SpecWarning {
             SchemaGap::MissingResponseBody { type_name } => format!(
                 "OpenAPI: {} {} — response body (return type `{}`) could not be mapped to a schema; \
                  the response is documented without a body. Return `Json<T>` (with \
-                 `T: schemars::JsonSchema`) or annotate the handler with `#[returns(T)]`.",
+                 `T: schemars::JsonSchema`), annotate the handler with `#[returns(T)]`, or \
+                 implement `ResponseBodySchema` for the return type.",
                 self.method, self.path, type_name
             ),
             SchemaGap::SchemalessResponseBody { type_name } => format!(
@@ -385,6 +386,16 @@ fn error_response_object(status: u16, bodies: &[ErrorBody], slots: &Map<String, 
     })
 }
 
+/// The schema of one media type of a custom response type: a `$ref` to its
+/// component, else a string for `text/*` and a free-form value otherwise.
+fn response_content_schema(content: &ResponseContent) -> Value {
+    match &content.schema {
+        Some((name, _)) => json!({ "$ref": format!("#/components/schemas/{name}") }),
+        None if content.content_type.starts_with("text/") => json!({ "type": "string" }),
+        None => json!({}),
+    }
+}
+
 /// Build an OpenAPI 3.1.0 JSON spec from config and route metadata.
 ///
 /// Every [`SpecWarning`] (see [`build_spec_with_warnings`]) is logged once
@@ -446,6 +457,20 @@ pub fn build_spec_with_warnings(
                     body_type,
                     &route.request_body_schema,
                 );
+            }
+        }
+
+        // Collect the schemas of a custom response type's media types.
+        for content in &route.response_contents {
+            if let Some((name, schema)) = &content.schema {
+                if !schemas.contains_key(name) {
+                    insert_schema(
+                        &mut schemas,
+                        &mut extra_definitions,
+                        name,
+                        &Some(schema.clone()),
+                    );
+                }
             }
         }
 
@@ -597,6 +622,18 @@ pub fn build_spec_with_warnings(
         if route.response_status == 204 {
             // 204 No Content — no response body
             responses.insert(status_key, json!({ "description": status_desc }));
+        } else if !route.response_contents.is_empty() {
+            // A custom response type (`ResponseBodySchema`): one entry per
+            // media type it can be served as.
+            let content: Map<String, Value> = route
+                .response_contents
+                .iter()
+                .map(|c| (c.content_type.clone(), json!({ "schema": response_content_schema(c) })))
+                .collect();
+            responses.insert(
+                status_key,
+                json!({ "description": status_desc, "content": content }),
+            );
         } else if let Some(ref resp_type) = route.response_type {
             responses.insert(
                 status_key,

@@ -105,6 +105,10 @@ pub struct RouteInfo {
     /// emit a once-at-boot warning naming the route and offending type instead
     /// of silently documenting the response without a body.
     pub response_unmapped: Option<String>,
+    /// The media types of a custom response type implementing
+    /// [`ResponseBodySchema`]. When non-empty they document the success
+    /// response instead of `response_type` / `response_schema`.
+    pub response_contents: Vec<ResponseContent>,
     pub params: Vec<ParamInfo>,
     pub roles: Vec<String>,
     pub tag: Option<String>,
@@ -171,6 +175,73 @@ pub trait RequestBodySchema {
     /// Failure kinds the extractor can reject with; they are documented as
     /// error responses through the route's envelope.
     fn rejection_kinds() -> Vec<RejectionKind>;
+}
+
+/// One media type a successful response can be served as.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResponseContent {
+    /// Media type (`application/json`, `text/event-stream`, `text/plain`, …).
+    pub content_type: String,
+    /// `(component name, JSON Schema)` of the body under this media type.
+    /// `None` documents a string for `text/*` media types and a free-form
+    /// value otherwise.
+    pub schema: Option<(String, Value)>,
+}
+
+impl ResponseContent {
+    /// A media type carrying the given `(component name, schema)`.
+    pub fn new(content_type: impl Into<String>, schema: Option<(String, Value)>) -> Self {
+        Self {
+            content_type: content_type.into(),
+            schema,
+        }
+    }
+
+    /// `application/json` with the given schema.
+    pub fn json(schema: Option<(String, Value)>) -> Self {
+        Self::new("application/json", schema)
+    }
+
+    /// `text/event-stream`; `schema` describes one event's `data` payload.
+    pub fn event_stream(schema: Option<(String, Value)>) -> Self {
+        Self::new("text/event-stream", schema)
+    }
+
+    /// `text/plain`, documented as a string.
+    pub fn text() -> Self {
+        Self::new("text/plain", None)
+    }
+}
+
+/// Describes a **custom response type** for OpenAPI.
+///
+/// The routes macro maps `Json<T>` (or `#[returns(T)]`) to an
+/// `application/json` body by name. Any other concrete return type — the `T`
+/// of a `Result<T, E>` included — is probed for this trait (autoref
+/// specialization): an implementation lists every media type the response can
+/// be served as, so a handler answering JSON or an SSE stream depending on the
+/// request documents both under its success status. Without one, the route
+/// documents no body (and spec generation warns about it).
+///
+/// ```rust,ignore
+/// pub enum ChatReply {
+///     Json(Json<Completion>),
+///     Stream(Sse<BoxStream<'static, Result<Event, Infallible>>>),
+/// }
+///
+/// impl ResponseBodySchema for ChatReply {
+///     fn response_contents() -> Vec<ResponseContent> {
+///         vec![
+///             ResponseContent::json(Some(r2e::r2e_openapi::schema_of::<Completion>())),
+///             ResponseContent::event_stream(Some(r2e::r2e_openapi::schema_of::<Chunk>())),
+///         ]
+///     }
+/// }
+/// ```
+pub trait ResponseBodySchema {
+    /// Every media type the response can be served as, in documentation
+    /// order. An empty list documents no body.
+    fn response_contents() -> Vec<ResponseContent>;
 }
 
 /// What the routes macro's `RequestBodySchema` probe yields for a custom

@@ -30,6 +30,7 @@ fn route(i: usize) -> RouteInfo {
         response_schema: None,
         response_status: 200,
         response_unmapped: None,
+        response_contents: Vec::new(),
         params: Vec::new(),
         roles: Vec::new(),
         tag: Some("generated".into()),

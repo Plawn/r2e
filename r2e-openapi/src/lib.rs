@@ -59,5 +59,5 @@ pub mod schema;
 pub use builder::{build_spec, build_spec_with_warnings, spec_warnings, OpenApiConfig, SchemaGap, SpecWarning};
 pub use ext::OpenApiPlugin;
 pub use handlers::openapi_routes;
-pub use schema::{SchemaProvider, SchemaRegistry};
+pub use schema::{schema_of, SchemaProvider, SchemaRegistry};
 pub use schemars;

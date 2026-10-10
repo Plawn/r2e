@@ -298,6 +298,7 @@ fn generate_route_metadata(
             let body_probe = body.probe_expr();
             let (response_type_token, response_schema_token) = extract_response_info(rm);
             let response_unmapped_token = response_unmapped_token(rm);
+            let response_probe = response_contents_probe(rm);
 
             // Extract doc comments for summary + description
             let (doc_summary, doc_description) =
@@ -343,6 +344,7 @@ fn generate_route_metadata(
                     let __params: Vec<#krate::di::meta::ParamInfo> = #params_expr;
                     let __body: Option<#krate::di::meta::__BodyProbeResult> = #body_probe;
                     let __kinds: Vec<#krate::RejectionKind> = #kinds_expr;
+                    let __response: Vec<#krate::di::meta::ResponseContent> = #response_probe;
                     #krate::di::meta::RouteInfo {
                         path: match #meta_mod::PATH_PREFIX {
                             Some(__prefix) => format!("{}{}", __prefix, #route_path_str),
@@ -359,7 +361,13 @@ fn generate_route_metadata(
                         response_type: #response_type_token,
                         response_schema: #response_schema_token,
                         response_status: #status_code,
-                        response_unmapped: #response_unmapped_token,
+                        // A `ResponseBodySchema` impl maps the body after all.
+                        response_unmapped: if __response.is_empty() {
+                            #response_unmapped_token
+                        } else {
+                            None
+                        },
+                        response_contents: __response,
                         params: __params,
                         roles: vec![#(#roles),*],
                         tag: Some(#meta_mod::OPENAPI_TAG.to_string()),
@@ -984,6 +992,53 @@ fn response_unmapped_name(rm: &crate::model::types::RouteMethod) -> Option<Strin
 
     // A concrete type we could not map (not `Json<T>`).
     Some(readable_type(unwrapped))
+}
+
+/// The `__response` binding: an autoref probe of the route's concrete return
+/// type (the `T` of a `Result<T, E>`) for `ResponseBodySchema`, an empty list
+/// when the body is already mapped (`Json<T>`, `#[returns]`), intentionally
+/// absent, opaque (`impl Trait`) or the type does not implement it.
+fn response_contents_probe(rm: &crate::model::types::RouteMethod) -> TokenStream {
+    let krate = r2e_core_path();
+    let empty = quote! { Vec::new() };
+    if resolve_response_type(rm).is_some() {
+        return empty;
+    }
+    let syn::ReturnType::Type(_, ret_ty) = &rm.fn_item.sig.output else {
+        return empty;
+    };
+    if matches!(ret_ty.as_ref(), syn::Type::ImplTrait(_)) {
+        return empty;
+    }
+    let ty = unwrap_result_type(ret_ty);
+    // `Sse<impl Stream<..>>` cannot be named in the probe's turbofish.
+    if is_no_body_type(ty) || contains_impl_trait(&quote!(#ty)) {
+        return empty;
+    }
+    quote! {
+        {
+            struct __ResponseProbe<T>(::core::marker::PhantomData<T>);
+            trait __NoResponseSchema {
+                fn __contents(&self) -> Vec<#krate::di::meta::ResponseContent> { Vec::new() }
+            }
+            impl<T> __NoResponseSchema for &__ResponseProbe<T> {}
+            impl<T: #krate::di::meta::ResponseBodySchema> __ResponseProbe<T> {
+                fn __contents(&self) -> Vec<#krate::di::meta::ResponseContent> {
+                    <T as #krate::di::meta::ResponseBodySchema>::response_contents()
+                }
+            }
+            use __NoResponseSchema as _;
+            (&__ResponseProbe::<#ty>(::core::marker::PhantomData)).__contents()
+        }
+    }
+}
+
+fn contains_impl_trait(tokens: &TokenStream) -> bool {
+    tokens.clone().into_iter().any(|tt| match tt {
+        proc_macro2::TokenTree::Ident(ident) => ident == "impl",
+        proc_macro2::TokenTree::Group(group) => contains_impl_trait(&group.stream()),
+        _ => false,
+    })
 }
 
 /// A handler parameter recognized as the request body extractor.
@@ -1629,6 +1684,7 @@ fn emit_streaming_route_info(
                 response_schema: None,
                 response_status: 200,
                 response_unmapped: None,
+                response_contents: Vec::new(),
                 params: __params,
                 roles: vec![#(#roles_tokens),*],
                 tag: Some(#meta_mod::OPENAPI_TAG.to_string()),

@@ -148,6 +148,34 @@ A custom body extractor — the handler's last parameter, read with
 `r2e_core::di::meta::RequestBodySchema` (`content_type()`, `body_schema()`,
 `rejection_kinds()`). Without it the route has no request body in the spec.
 
+A custom **response** type — any concrete return type other than `Json<T>`,
+the `T` of a `Result<T, E>` included — is documented when it implements
+`r2e_core::di::meta::ResponseBodySchema`: `response_contents()` lists every media type it
+can be served as (`ResponseContent::json(..)`, `::event_stream(..)`,
+`::text()`, `::new(ct, ..)`), each with an optional `(component name, schema)`
+— `r2e_openapi::schema_of::<T>()` builds one from a `JsonSchema` type. A handler
+answering JSON or an SSE stream depending on the request returns an enum and
+documents both under its success status:
+
+```rust,ignore
+enum ChatReply {
+    Json(Json<Completion>),
+    Stream(Sse<BoxStream<'static, Result<SseEvent, Infallible>>>),
+}
+
+impl ResponseBodySchema for ChatReply {
+    fn response_contents() -> Vec<ResponseContent> {
+        vec![
+            ResponseContent::json(Some(schema_of::<Completion>())),
+            ResponseContent::event_stream(Some(schema_of::<Chunk>())),
+        ]
+    }
+}
+```
+
+`text/*` media types without a schema render as `{"type": "string"}`. Return
+types containing `impl Trait` are never probed.
+
 ## Tags
 
 `tag` defaults to the controller's struct name. `#[controller(path = "…", tag =

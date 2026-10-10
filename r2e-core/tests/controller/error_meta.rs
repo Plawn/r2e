@@ -11,11 +11,13 @@
 use std::convert::Infallible;
 
 use r2e_core::controller::Controller;
-use r2e_core::di::meta::{MetaRegistry, RequestBodySchema, RouteInfo};
+use r2e_core::di::meta::{
+    MetaRegistry, RequestBodySchema, ResponseBodySchema, ResponseContent, RouteInfo,
+};
 use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
 use r2e_core::http::extract::{FromRequest, Path, Query};
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
-use r2e_core::http::{Form, Json, Request, Response, StatusCode};
+use r2e_core::http::{Form, Json, Request, Response, Sse, SseEvent, StatusCode};
 use r2e_core::type_list::HNil;
 use r2e_core::{Guard, GuardContext, Identity, PreAuthGuard, SelfBuilt};
 use r2e_macros::{controller, routes, Params};
@@ -147,6 +149,44 @@ impl<S: Send + Sync> FromRequest<S> for Opaque {
     }
 }
 
+/// A reply served as JSON or as an SSE stream, documented through
+/// `ResponseBodySchema`.
+enum Reply {
+    Json(Json<&'static str>),
+}
+
+impl IntoResponse for Reply {
+    fn into_response(self) -> Response {
+        match self {
+            Reply::Json(j) => j.into_response(),
+        }
+    }
+}
+
+impl ResponseBodySchema for Reply {
+    fn response_contents() -> Vec<ResponseContent> {
+        vec![
+            ResponseContent::json(Some((
+                "Completion".to_string(),
+                serde_json::json!({ "type": "object" }),
+            ))),
+            ResponseContent::event_stream(Some((
+                "Chunk".to_string(),
+                serde_json::json!({ "type": "object" }),
+            ))),
+        ]
+    }
+}
+
+/// A response type without `ResponseBodySchema` → still unmapped.
+struct OpaqueReply;
+
+impl IntoResponse for OpaqueReply {
+    fn into_response(self) -> Response {
+        StatusCode::OK.into_response()
+    }
+}
+
 // ── Controllers ────────────────────────────────────────────────────────────
 
 /// No struct identity: every auth kind comes from the route.
@@ -263,6 +303,27 @@ impl OpenController {
     #[post("/opaque")]
     async fn opaque(&self, _b: Opaque) -> &'static str {
         "ok"
+    }
+
+    #[post("/reply")]
+    async fn reply(&self) -> Result<Reply, Envelope> {
+        Ok(Reply::Json(Json("ok")))
+    }
+
+    #[post("/reply-plain")]
+    async fn reply_plain(&self) -> Reply {
+        Reply::Json(Json("ok"))
+    }
+
+    #[post("/opaque-reply")]
+    async fn opaque_reply(&self) -> OpaqueReply {
+        OpaqueReply
+    }
+
+    /// An `impl Trait` inside the return type is never probed.
+    #[post("/sse")]
+    async fn sse(&self) -> Sse<impl futures_core::Stream<Item = Result<SseEvent, Infallible>>> {
+        Sse::new(r2e_core::rt::stream::empty())
     }
 }
 
@@ -637,4 +698,43 @@ fn body_type_without_request_body_schema_is_undocumented() {
     assert!(r.request_body_content_type.is_none());
     assert!(r.request_body_type.is_none());
     assert_eq!(r.rejection_kinds, vec![RejectionKind::Internal]);
+}
+
+// ── Custom response types ──────────────────────────────────────────────────
+
+fn content_types(r: &RouteInfo) -> Vec<&str> {
+    r.response_contents
+        .iter()
+        .map(|c| c.content_type.as_str())
+        .collect()
+}
+
+#[test]
+fn response_body_schema_documents_every_media_type() {
+    for path in ["/open/reply", "/open/reply-plain"] {
+        let r = route!(OpenController, path);
+        assert_eq!(
+            content_types(&r),
+            vec!["application/json", "text/event-stream"],
+            "{path}"
+        );
+        assert_eq!(
+            r.response_contents[0].schema.as_ref().map(|(n, _)| n.as_str()),
+            Some("Completion")
+        );
+        assert!(r.response_unmapped.is_none(), "{path}");
+    }
+}
+
+#[test]
+fn response_type_without_response_body_schema_stays_unmapped() {
+    let r = route!(OpenController, "/open/opaque-reply");
+    assert!(r.response_contents.is_empty());
+    assert!(r.response_unmapped.is_some());
+}
+
+#[test]
+fn json_and_impl_trait_returns_are_not_probed() {
+    assert!(route!(OpenController, "/open/bare").response_contents.is_empty());
+    assert!(route!(OpenController, "/open/sse").response_contents.is_empty());
 }

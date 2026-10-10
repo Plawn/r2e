@@ -29,6 +29,7 @@ fn route(method: &str, path: &str, kinds: Vec<RejectionKind>) -> RouteInfo {
         response_schema: None,
         response_status: 200,
         response_unmapped: None,
+        response_contents: Vec::new(),
         params: vec![],
         roles: vec![],
         tag: None,

@@ -19,6 +19,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`ResponseBodySchema`** (`r2e_core::di::meta`): a custom response type —
+  including the `T` of `Result<T, E>` — lists the media types it can be served
+  as (`ResponseContent::json` / `event_stream` / `text` / `new`). The routes
+  macro probes it (autoref) on any concrete return type it cannot map by name,
+  and the OpenAPI builder documents one `content` entry per media type under
+  the success status. A handler that answers JSON or SSE depending on the
+  request can now return a typed enum instead of `Response` and keep a
+  documented body. New `RouteInfo.response_contents` field (struct literals
+  must add `response_contents: Vec::new()`).
+- **`r2e_openapi::schema_of::<T>()`**: `(component name, JSON Schema)` of a
+  `JsonSchema` type, the shape `RequestBodySchema` / `ResponseBodySchema` take.
+
 ## [0.5.0] - 2026-10-10
 
 ### Breaking

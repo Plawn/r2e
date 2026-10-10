@@ -19,6 +19,7 @@ fn base(method: &str, path: &str) -> RouteInfo {
         response_schema: None,
         response_status: 200,
         response_unmapped: None,
+        response_contents: Vec::new(),
         params: vec![],
         roles: vec![],
         tag: None,
@@ -34,6 +35,7 @@ fn base(method: &str, path: &str) -> RouteInfo {
 fn warns_on_unmappable_response_body() {
     let routes = vec![RouteInfo {
         response_unmapped: Some("impl IntoResponse".to_string()),
+        response_contents: Vec::new(),
         ..base("GET", "/stream")
     }];
 
@@ -90,6 +92,7 @@ fn no_missing_body_warning_at_204_even_if_flagged() {
     let routes = vec![RouteInfo {
         response_status: 204,
         response_unmapped: Some("Bytes".to_string()),
+        response_contents: Vec::new(),
         ..base("DELETE", "/thing")
     }];
     assert!(spec_warnings(&routes).is_empty());
@@ -161,6 +164,7 @@ fn no_warning_for_raw_multipart_body() {
 fn build_spec_documents_unmapped_response_without_body() {
     let routes = vec![RouteInfo {
         response_unmapped: Some("Html<String>".to_string()),
+        response_contents: Vec::new(),
         ..base("GET", "/page")
     }];
     let spec = build_spec(&OpenApiConfig::new("Test", "1.0"), &routes);
