@@ -81,3 +81,4 @@
 - [CLI Reference](./reference/cli-reference.md)
 - [API Documentation](./reference/api-docs.md)
 - [Migration 0.4 → 0.5: error projection](./reference/migration-0.5.md)
+- [Migration 0.5 → 0.6: body schemas](./reference/migration-0.6.md)

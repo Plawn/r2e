@@ -12,7 +12,7 @@ categories = ["web-programming"]
 description = "OpenAPI 3.1 spec generation for R2E - automatic API documentation with Swagger UI"
 
 [dependencies]
-r2e-core = {workspace = true}
+r2e-core = {workspace = true, features = ["openapi"]}
 schemars = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}

@@ -11,11 +11,13 @@
 use std::convert::Infallible;
 
 use r2e_core::controller::Controller;
-use r2e_core::di::meta::{MetaRegistry, RequestBodySchema, RouteInfo};
+use r2e_core::di::meta::{
+    MetaRegistry, RequestBodySchema, ResponseBodySchema, ResponseContent, RouteInfo,
+};
 use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
 use r2e_core::http::extract::{FromRequest, Path, Query};
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
-use r2e_core::http::{Form, Json, Request, Response, StatusCode};
+use r2e_core::http::{Form, Json, Request, Response, Sse, SseEvent, StatusCode};
 use r2e_core::type_list::HNil;
 use r2e_core::{Guard, GuardContext, Identity, PreAuthGuard, SelfBuilt};
 use r2e_macros::{controller, routes, Params};
@@ -89,13 +91,13 @@ impl PreAuthGuard for PreRateLimit {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, schemars::JsonSchema)]
 struct Plain {
     #[allow(dead_code)]
     name: String,
 }
 
-#[derive(Deserialize, garde::Validate)]
+#[derive(Deserialize, garde::Validate, schemars::JsonSchema)]
 struct Validated {
     #[garde(length(min = 1))]
     #[allow(dead_code)]
@@ -144,6 +146,44 @@ impl<S: Send + Sync> FromRequest<S> for Opaque {
 
     async fn from_request(_req: Request, _state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self)
+    }
+}
+
+/// A reply served as JSON or as an SSE stream, documented through
+/// `ResponseBodySchema`.
+enum Reply {
+    Json(Json<&'static str>),
+}
+
+impl IntoResponse for Reply {
+    fn into_response(self) -> Response {
+        match self {
+            Reply::Json(j) => j.into_response(),
+        }
+    }
+}
+
+impl ResponseBodySchema for Reply {
+    fn response_contents() -> Vec<ResponseContent> {
+        vec![
+            ResponseContent::json(Some((
+                "Completion".to_string(),
+                serde_json::json!({ "type": "object" }),
+            ))),
+            ResponseContent::event_stream(Some((
+                "Chunk".to_string(),
+                serde_json::json!({ "type": "object" }),
+            ))),
+        ]
+    }
+}
+
+/// A response type without `ResponseBodySchema` → still unmapped.
+struct OpaqueReply;
+
+impl IntoResponse for OpaqueReply {
+    fn into_response(self) -> Response {
+        StatusCode::OK.into_response()
     }
 }
 
@@ -263,6 +303,27 @@ impl OpenController {
     #[post("/opaque")]
     async fn opaque(&self, _b: Opaque) -> &'static str {
         "ok"
+    }
+
+    #[post("/reply")]
+    async fn reply(&self) -> Result<Reply, Envelope> {
+        Ok(Reply::Json(Json("ok")))
+    }
+
+    #[post("/reply-plain")]
+    async fn reply_plain(&self) -> Reply {
+        Reply::Json(Json("ok"))
+    }
+
+    #[post("/opaque-reply")]
+    async fn opaque_reply(&self) -> OpaqueReply {
+        OpaqueReply
+    }
+
+    /// An `impl Trait` inside the return type is never probed.
+    #[post("/sse")]
+    async fn sse(&self) -> Sse<impl futures_core::Stream<Item = Result<SseEvent, Infallible>>> {
+        Sse::new(r2e_core::rt::stream::empty())
     }
 }
 
@@ -614,11 +675,12 @@ fn infallible_route_documents_through_the_application_projection() {
 #[test]
 fn request_body_schema_extractor_is_documented() {
     let r = route!(OpenController, "/open/csv");
-    assert_eq!(r.request_body_content_type.as_deref(), Some("text/csv"));
-    assert_eq!(r.request_body_type.as_deref(), Some("Csv"));
+    let body = r.request_body.as_ref().expect("documented body");
+    assert_eq!(body.content_type, "text/csv");
+    assert!(body.required);
     assert_eq!(
-        r.request_body_schema,
-        Some(serde_json::json!({ "type": "string" }))
+        body.schema,
+        Some(("Csv".to_string(), serde_json::json!({ "type": "string" })))
     );
     let k = sorted(r.rejection_kinds);
     assert_eq!(
@@ -632,9 +694,86 @@ fn request_body_schema_extractor_is_documented() {
 }
 
 #[test]
+fn json_body_is_documented_through_the_framework_impl() {
+    let r = route!(OpenController, "/open/json");
+    let body = r.request_body.as_ref().expect("documented body");
+    assert_eq!(body.content_type, "application/json");
+    assert!(body.required);
+    assert!(r.request_body_unmapped.is_none());
+    // The JSON schema itself needs the `openapi` feature (schemars), which
+    // feature unification may or may not enable for this target: when it is
+    // present it is `Plain`'s schema.
+    if let Some((name, _)) = &body.schema {
+        assert_eq!(name, "Plain");
+    }
+}
+
+#[test]
 fn body_type_without_request_body_schema_is_undocumented() {
     let r = route!(OpenController, "/open/opaque");
-    assert!(r.request_body_content_type.is_none());
-    assert!(r.request_body_type.is_none());
+    assert!(r.request_body.is_none());
+    // Flagged for the OpenAPI boot warning, by readable type name.
+    assert_eq!(r.request_body_unmapped.as_deref(), Some("Opaque"));
     assert_eq!(r.rejection_kinds, vec![RejectionKind::Internal]);
+    assert!(route!(OpenController, "/open/csv")
+        .request_body_unmapped
+        .is_none());
+    assert!(route!(OpenController, "/open/bare")
+        .request_body_unmapped
+        .is_none());
+}
+
+// ── Custom response types ──────────────────────────────────────────────────
+
+fn content_types(r: &RouteInfo) -> Vec<&str> {
+    r.response_contents
+        .iter()
+        .map(|c| c.content_type.as_str())
+        .collect()
+}
+
+#[test]
+fn response_body_schema_documents_every_media_type() {
+    for path in ["/open/reply", "/open/reply-plain"] {
+        let r = route!(OpenController, path);
+        assert_eq!(
+            content_types(&r),
+            vec!["application/json", "text/event-stream"],
+            "{path}"
+        );
+        assert_eq!(
+            r.response_contents[0].schema.as_ref().map(|(n, _)| n.as_str()),
+            Some("Completion")
+        );
+        assert!(r.response_unmapped.is_none(), "{path}");
+    }
+}
+
+#[test]
+fn response_type_without_response_body_schema_stays_unmapped() {
+    let r = route!(OpenController, "/open/opaque-reply");
+    assert!(r.response_contents.is_empty());
+    assert!(r.response_unmapped.is_some());
+}
+
+#[test]
+fn framework_return_types_are_documented_through_their_impls() {
+    assert_eq!(
+        content_types(&route!(OpenController, "/open/bare")),
+        vec!["text/plain"]
+    );
+    assert_eq!(
+        content_types(&route!(OpenController, "/open/sse")),
+        vec!["text/event-stream"]
+    );
+    assert!(route!(OpenController, "/open/bare")
+        .response_unmapped
+        .is_none());
+}
+
+#[test]
+fn impl_trait_returns_stay_unmapped() {
+    let r = route!(OpenController, "/open/all-opaque");
+    assert!(r.response_contents.is_empty());
+    assert!(r.response_unmapped.is_some());
 }

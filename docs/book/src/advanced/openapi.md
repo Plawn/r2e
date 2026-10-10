@@ -79,8 +79,8 @@ Route metadata is automatically collected via `Controller::register_meta()` duri
 | Paths | `#[controller(path = "...")]` + `#[get("/...")]` |
 | HTTP methods | `#[get]`, `#[post]`, `#[put]`, `#[delete]`, `#[patch]` |
 | Operation IDs | Handler method names |
-| Request body schemas | `Json<T>` parameters where `T: JsonSchema` |
-| Response schemas | Return type analysis (`Json<T>`, `JsonResult<T>`, `Result<Json<T>, _>`) |
+| Request body | The last parameter's `RequestBodySchema` impl (`Json<T>`, `Form<T>`, `Bytes`, `String`, `Multipart`, `TypedMultipart<T>`, custom) |
+| Response body | The return type's `ResponseBodySchema` impl (`Json<T>`, `String`, `Html<T>`, `Bytes`, `()`, `StatusCode`, `Sse<S>`, custom), through `Result<T, E>` and `(StatusCode, T)` |
 | Path/query/header params | `Path`, `Query`, `#[derive(Params)]` |
 | Required roles | `#[roles("admin", "editor")]` |
 | Summary | First line of `///` doc comment |
@@ -103,7 +103,9 @@ Default status codes: GET/PUT/PATCH → 200, POST → 201, DELETE → 204.
 
 ### `#[returns(T)]` — Explicit response type
 
-Use when the return type is opaque (e.g., `impl IntoResponse`):
+Use when the return type is opaque (e.g., `impl IntoResponse`). `T` is probed
+for `ResponseBodySchema` first, then as `Json<T>`, so a `JsonSchema` DTO and a
+custom multi-media-type response work alike:
 
 ```rust
 #[get("/widgets/{id}")]
@@ -143,22 +145,26 @@ async fn update(&self, Path(id): Path<u64>, body: Option<Json<PatchUser>>) -> Js
 
 ## Return type detection
 
-The macro automatically detects the response type from common patterns:
+The macro probes the return type for `ResponseBodySchema` — never for a type
+name — so every alias works, and `Result<T, E>` / `(StatusCode, T)` /
+`(HeaderMap, T)` / `(StatusCode, HeaderMap, T)` delegate to `T`:
 
-| Return type | Detected response |
-|-------------|-------------------|
-| `Json<T>` | Schema for `T` |
-| `JsonResult<T>` | Schema for `T` |
-| `Result<Json<T>, HttpError>` | Schema for `T` |
-| `ApiResult<Json<T>>` | Schema for `T` |
-| `StatusCode` / `StatusResult` | No body |
-| `String` | No schema |
-| `impl IntoResponse` | Use `#[returns(T)]` |
+| Return type | Documented response |
+|-------------|---------------------|
+| `Json<T>` | `application/json`, schema for `T: JsonSchema` |
+| `JsonResult<T>`, `Result<Json<T>, E>`, `ApiResult<Json<T>>` | same, through `Result` |
+| `String`, `&'static str`, `Cow<'static, str>` | `text/plain` string |
+| `Html<T>` | `text/html` string |
+| `Bytes`, `Vec<u8>` | `application/octet-stream` binary |
+| `()`, `StatusCode`, `StatusResult`, `Redirect` | No body |
+| `Sse<S>` | `text/event-stream` |
+| `impl IntoResponse` | Not probed — use `#[returns(T)]` |
 
-> **Note:** Response schemas are generated via autoref specialization — if `T`
-> does not implement `JsonSchema`, the schema is silently omitted (no compile
-> error). Add `#[derive(JsonSchema)]` to your response types to see them in
-> the spec.
+> **Note:** A `Json<T>` whose `T` does not implement `JsonSchema`, or a
+> concrete type without `ResponseBodySchema`, is documented **without a body**
+> and warned about once at boot (`SchemaGap::MissingResponseBody`); there is
+> no compile error. Add `#[derive(JsonSchema)]` to your DTOs, or implement
+> `ResponseBodySchema` on custom response types.
 
 ## Error responses
 
@@ -209,10 +215,46 @@ Rules the builder applies:
 - Nested types in an envelope body schema are promoted to `components/schemas`
   like any other schema.
 
-A custom body extractor (the handler's last parameter, read with `FromRequest`)
-is documented when it implements `r2e::di::meta::RequestBodySchema`
-(`content_type()`, `body_schema()`, `rejection_kinds()`); otherwise the route
-has no request body in the spec.
+## Custom body types
+
+The request body is the handler's last parameter when it reads the body
+(`FromRequest`). It is documented through `r2e::di::meta::RequestBodySchema`
+(`content_type()`, `body_schema()` — defaults to `None`, `rejection_kinds()`),
+which R2E implements for `Json<T>`, `Form<T>`, `Bytes`, `String`, `Multipart`
+and `TypedMultipart<T>`. A custom extractor implements the same trait; a
+body-position type without it has no request body in the spec and is warned
+about once at boot (`SchemaGap::MissingRequestBody`).
+
+A custom **response** type is documented when it implements
+`r2e::di::meta::ResponseBodySchema`: `response_contents()` lists every media type it
+can be served as (`ResponseContent::json(..)`, `::event_stream(..)`,
+`::text()`, `::html()`, `::binary()`, `::new(ct, ..)`), each with an optional
+`(component name, schema)` — `r2e::di::meta::schema_of::<T>()` (re-exported as
+`r2e_openapi::schema_of`) builds one from a `JsonSchema` type. A handler
+answering JSON or an SSE stream depending on the request returns an enum and
+documents both under its success status:
+
+```rust,ignore
+enum ChatReply {
+    Json(Json<Completion>),
+    Stream(Sse<BoxStream<'static, Result<SseEvent, Infallible>>>),
+}
+
+impl ResponseBodySchema for ChatReply {
+    fn response_contents() -> Vec<ResponseContent> {
+        vec![
+            ResponseContent::json(Some(schema_of::<Completion>())),
+            ResponseContent::event_stream(Some(schema_of::<Chunk>())),
+        ]
+    }
+}
+```
+
+A `None` schema renders from the media type: `text/*` → `{"type": "string"}`,
+`application/octet-stream` → binary string, form media types → free-form
+object, anything else → `{}`. Return types containing `impl Trait` are never
+probed. Component names are schemars' `schema_name()` (`User`,
+`Array_of_User`, `Nullable_User`).
 
 The demo app's `POST /problems/` (`Result<Json<Ticket>, Problem>`) documents
 400/401/413/415/422/500 with the `Problem` component, the 500 as an `anyOf` of

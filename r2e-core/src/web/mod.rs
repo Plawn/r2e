@@ -1,5 +1,6 @@
 //! Request-scoped HTTP surface: extractors, params, streaming, managed resources.
 
+pub mod body_schema;
 pub mod extract;
 pub mod managed;
 #[cfg(feature = "multipart")]

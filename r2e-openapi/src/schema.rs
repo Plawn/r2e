@@ -126,3 +126,5 @@ pub trait SchemaProvider {
         registry.register(&Self::schema_name(), Self::json_schema());
     }
 }
+
+pub use r2e_core::di::meta::schema_of;

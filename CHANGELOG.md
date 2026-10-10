@@ -19,6 +19,75 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Breaking
+
+OpenAPI bodies are now documented **only** through `RequestBodySchema` /
+`ResponseBodySchema`: the `#[routes]` macro probes the body parameter's type
+and the return type for the traits instead of matching `Json<T>` /
+`JsonResult<T>` / `Bytes` / … by name, and R2E implements the traits for its
+own types. Handlers using framework types need no change; the developer
+migration is [`docs/migration/response-schema.md`](docs/migration/response-schema.md).
+
+- **Breaking: `RouteInfo` reshaped.** `request_body_type`,
+  `request_body_schema`, `request_body_content_type` and
+  `request_body_required` are replaced by
+  `request_body: Option<RequestBody { content_type, schema, required }>` plus
+  `request_body_unmapped: Option<String>`; `response_type` and
+  `response_schema` are replaced by `response_contents: Vec<ResponseContent>`
+  (`response_unmapped` is kept). Struct literals add
+  `request_body: None, request_body_unmapped: None, response_contents: Vec::new()`.
+- **Breaking: `SchemaGap` variants.** `SchemalessRequestBody` and
+  `SchemalessResponseBody` are gone — a schemaless body renders from its media
+  type (`text/*` → string, `application/octet-stream` → binary string, form
+  media types → object) and is not a gap. `MissingRequestBody { type_name }`
+  is new; `MissingResponseBody` and `ErrorBodyInlined` are unchanged.
+- **Breaking: `Json<T>` with `T: !JsonSchema` is undocumented.** It was
+  rendered as a generic `object`; it now has no body in the spec and is
+  warned about once at boot (`MissingRequestBody` / `MissingResponseBody`).
+  Derive `schemars::JsonSchema` on the DTO.
+- **Breaking: component names are schemars' `schema_name()`** — `Vec<User>`
+  is `Array_of_User` (was `Vec_User`), `Option<User>` is `Nullable_User`.
+  Generated clients and tests pinning `components/schemas` keys must follow.
+- **Breaking: `String` returns document a body.** `String` / `&'static str` /
+  `Cow<'static, str>` return types (and `Html<T>`, `Bytes`, `Vec<u8>`) carry
+  their media type through their `ResponseBodySchema` impl instead of "no
+  schema".
+- **Breaking: `MultipartSchema::schema_name()`** is required (the
+  `#[derive(FromMultipart)]` emits it; hand-written impls add it).
+- **Breaking: `schema_of` moved** to `r2e_core::di::meta::schema_of` behind
+  the new `r2e-core` feature `openapi` (`r2e-openapi` enables it and keeps
+  the `r2e_openapi::schema_of` re-export).
+- **Breaking: `#[returns(T)]` widened.** `T` is probed for
+  `ResponseBodySchema` first, then as `Json<T>`; existing `JsonSchema` uses
+  are unchanged, a custom multi-media-type response type now works too.
+
+### Added
+
+- **`RequestBodySchema` / `ResponseBodySchema` for every framework type**
+  (`r2e_core::web::body_schema`): `Json<T>`, `Form<T>`, `Bytes`, `String`,
+  `Multipart`, `TypedMultipart<T>` on the request side; `Json<T>`, `String`,
+  `&'static str`, `Cow<'static, str>`, `Html<T>`, `Bytes`, `Vec<u8>`, `()`,
+  `StatusCode`, `Redirect`, `Sse<S>` on the response side, with blanket
+  `Result<T, E>` → `T` and `(StatusCode, T)` / `(HeaderMap, T)` /
+  `(StatusCode, HeaderMap, T)` → `T`. Any alias (`ApiResult<T>`,
+  `anyhow::Result<T>`) is therefore documented. `Option<..>` around a body
+  extractor → `required: false`.
+- **`ResponseBodySchema`** (`r2e_core::di::meta`): a custom response type
+  lists the media types it can be served as (`ResponseContent::json` /
+  `event_stream` / `text` / `html` / `binary` / `new`); the OpenAPI builder
+  documents one `content` entry per media type under the success status. A
+  handler that answers JSON or SSE depending on the request can return a typed
+  enum instead of `Response` and keep a documented body.
+- **`RequestBodySchema::body_schema()` defaults to `None`**, so a schemaless
+  extractor only declares `content_type()` and `rejection_kinds()`.
+- **`RequestBody`**, **`ResponseContent::html()` / `::binary()`** and
+  **`OCTET_STREAM`** in `r2e_core::di::meta`; **`r2e-core` feature `openapi`**
+  (schemars) gating `schema_of` and the `Json<T>` schemas — without it the
+  `Json<T>` impls still document media type and rejection kinds, schema-less.
+- **Boot warning `SchemaGap::MissingRequestBody`** for a body-position
+  parameter without `RequestBodySchema`, the request-side twin of
+  `MissingResponseBody`.
+
 ## [0.5.0] - 2026-10-10
 
 ### Breaking

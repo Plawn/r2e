@@ -1,4 +1,4 @@
-use r2e_core::di::meta::RouteInfo;
+use r2e_core::di::meta::{RequestBody, ResponseContent, RouteInfo};
 use r2e_openapi::{build_spec, spec_warnings, OpenApiConfig, SchemaGap, SpecWarning};
 use serde_json::json;
 
@@ -11,14 +11,11 @@ fn base(method: &str, path: &str) -> RouteInfo {
         operation_id: format!("{method}_{path}"),
         summary: None,
         description: None,
-        request_body_type: None,
-        request_body_schema: None,
-        request_body_content_type: None,
-        request_body_required: true,
-        response_type: None,
-        response_schema: None,
+        request_body: None,
+        request_body_unmapped: None,
         response_status: 200,
         response_unmapped: None,
+        response_contents: Vec::new(),
         params: vec![],
         roles: vec![],
         tag: None,
@@ -28,12 +25,43 @@ fn base(method: &str, path: &str) -> RouteInfo {
     }
 }
 
+// ── Missing request body (unmappable body extractor) ────────────────────────
+
+#[test]
+fn warns_on_unmappable_request_body() {
+    let routes = vec![RouteInfo {
+        request_body_unmapped: Some("Json<Plain>".to_string()),
+        ..base("POST", "/items")
+    }];
+    let warnings = spec_warnings(&routes);
+    assert_eq!(
+        warnings,
+        vec![SpecWarning {
+            method: "POST".to_string(),
+            path: "/items".to_string(),
+            gap: SchemaGap::MissingRequestBody {
+                type_name: "Json<Plain>".to_string(),
+            },
+        }]
+    );
+    let msg = warnings[0].message();
+    assert!(msg.contains("POST /items"), "{msg}");
+    assert!(msg.contains("Json<Plain>"), "{msg}");
+    assert!(msg.contains("RequestBodySchema"), "{msg}");
+    assert!(msg.contains("JsonSchema"), "{msg}");
+
+    // The spec itself still renders, without a requestBody.
+    let spec = build_spec(&OpenApiConfig::new("t", "1"), &routes);
+    assert!(spec["paths"]["/items"]["post"].get("requestBody").is_none());
+}
+
 // ── Missing response body (unmappable return type) ──────────────────────────
 
 #[test]
 fn warns_on_unmappable_response_body() {
     let routes = vec![RouteInfo {
         response_unmapped: Some("impl IntoResponse".to_string()),
+        response_contents: Vec::new(),
         ..base("GET", "/stream")
     }];
 
@@ -56,14 +84,17 @@ fn warns_on_unmappable_response_body() {
     assert!(msg.contains("/stream"));
     assert!(msg.contains("impl IntoResponse"));
     assert!(msg.contains("#[returns(T)]"));
+    assert!(msg.contains("ResponseBodySchema"));
 }
 
 #[test]
 fn no_warning_when_response_body_is_mapped() {
-    // A resolved response type with a schema is fully mapped.
+    // A return type with a `ResponseBodySchema` impl is fully mapped.
     let routes = vec![RouteInfo {
-        response_type: Some("User".to_string()),
-        response_schema: Some(json!({ "type": "object" })),
+        response_contents: vec![ResponseContent::json(Some((
+            "User".to_string(),
+            json!({ "type": "object" }),
+        )))],
         ..base("GET", "/users")
     }];
     assert!(spec_warnings(&routes).is_empty());
@@ -72,7 +103,7 @@ fn no_warning_when_response_body_is_mapped() {
 #[test]
 fn no_warning_for_intentional_no_body() {
     // response_unmapped is None (macro did not flag it): no warning even though
-    // there is no response_type.
+    // there are no response contents.
     let routes = vec![
         base("DELETE", "/users/{id}"),
         RouteInfo {
@@ -90,68 +121,33 @@ fn no_missing_body_warning_at_204_even_if_flagged() {
     let routes = vec![RouteInfo {
         response_status: 204,
         response_unmapped: Some("Bytes".to_string()),
+        response_contents: Vec::new(),
         ..base("DELETE", "/thing")
     }];
     assert!(spec_warnings(&routes).is_empty());
 }
 
-// ── Schemaless named bodies (no JsonSchema → generic object) ─────────────────
+// ── Schemaless bodies are not gaps ──────────────────────────────────────────
 
 #[test]
-fn warns_on_schemaless_response_type() {
-    let routes = vec![RouteInfo {
-        response_type: Some("User".to_string()),
-        response_schema: None,
-        ..base("GET", "/users")
-    }];
-
-    let warnings = spec_warnings(&routes);
-    assert_eq!(warnings.len(), 1);
-    assert_eq!(
-        warnings[0].gap,
-        SchemaGap::SchemalessResponseBody {
-            type_name: "User".to_string(),
-        }
-    );
-    assert!(warnings[0].message().contains("JsonSchema"));
-}
-
-#[test]
-fn warns_on_schemaless_request_type() {
-    let routes = vec![RouteInfo {
-        request_body_type: Some("CreateUser".to_string()),
-        request_body_schema: None,
-        ..base("POST", "/users")
-    }];
-
-    let warnings = spec_warnings(&routes);
-    assert_eq!(warnings.len(), 1);
-    assert_eq!(
-        warnings[0].gap,
-        SchemaGap::SchemalessRequestBody {
-            type_name: "CreateUser".to_string(),
-        }
-    );
-
-    // The message renders the request-body arm: names the route, the type, and
-    // points at the `JsonSchema` derive fix.
-    let msg = warnings[0].message();
-    assert!(msg.contains("POST"));
-    assert!(msg.contains("/users"));
-    assert!(msg.contains("CreateUser"));
-    assert!(msg.contains("request type"));
-    assert!(msg.contains("JsonSchema"));
-}
-
-#[test]
-fn no_warning_for_raw_multipart_body() {
-    // Raw multipart bodies carry a content type but no named type — not flagged.
-    let routes = vec![RouteInfo {
-        request_body_type: None,
-        request_body_content_type: Some("multipart/form-data".to_string()),
-        request_body_schema: None,
-        ..base("POST", "/upload")
-    }];
+fn no_warning_for_schemaless_bodies() {
+    // A body documented from its media type alone (raw `Multipart`, `Bytes`,
+    // `String`, a text response) is a deliberate choice of its
+    // `RequestBodySchema` / `ResponseBodySchema` impl — not flagged.
+    let routes = vec![
+        RouteInfo {
+            request_body: Some(RequestBody {
+                content_type: "multipart/form-data".to_string(),
+                schema: None,
+                required: true,
+            }),
+            ..base("POST", "/upload")
+        },
+        RouteInfo {
+            response_contents: vec![ResponseContent::text()],
+            ..base("GET", "/plain")
+        },
+    ];
     assert!(spec_warnings(&routes).is_empty());
 }
 
@@ -161,6 +157,7 @@ fn no_warning_for_raw_multipart_body() {
 fn build_spec_documents_unmapped_response_without_body() {
     let routes = vec![RouteInfo {
         response_unmapped: Some("Html<String>".to_string()),
+        response_contents: Vec::new(),
         ..base("GET", "/page")
     }];
     let spec = build_spec(&OpenApiConfig::new("Test", "1.0"), &routes);

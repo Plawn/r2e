@@ -198,15 +198,16 @@ async fn submit_job(
 
 ## `#[returns]` — Explicit response type for OpenAPI
 
-R2E's OpenAPI generator inspects handler return types to generate response schemas. It can auto-detect types like `Json<T>`, `Result<Json<T>, E>`, `JsonResult<T>`, and `ApiResult<T>`. However, when you return an opaque type such as `impl IntoResponse`, the macro cannot determine the schema.
+R2E's OpenAPI generator probes the handler's return type for the `ResponseBodySchema` trait, which the framework implements for its own types (`Json<T>`, `String`, `Html<T>`, `Bytes`, `()`, `StatusCode`, `Sse<S>`, …) and which delegates through `Result<T, E>` — so `JsonResult<T>`, `ApiResult<Json<T>>` and your own aliases work. However, when you return an opaque type such as `impl IntoResponse`, there is no type to probe.
 
-Use `#[returns(T)]` to explicitly tell the OpenAPI generator what type the response body contains.
+Use `#[returns(T)]` to explicitly tell the OpenAPI generator what the response body is. `T` is probed for `ResponseBodySchema` first, then as `Json<T>`: a `JsonSchema` DTO documents an `application/json` body, a custom `ResponseBodySchema` type documents every media type it lists.
 
 ### When to use it
 
 - Your handler returns `impl IntoResponse`
-- Your handler returns a custom wrapper type that the macro does not recognize
 - You want the OpenAPI schema to reflect a different type than the literal return type
+
+A concrete custom response type does not need `#[returns]`: implement `ResponseBodySchema` on it instead and it is documented wherever it is returned.
 
 ### Examples
 

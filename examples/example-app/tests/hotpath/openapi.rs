@@ -22,14 +22,11 @@ fn route(i: usize) -> RouteInfo {
         description: Some(format!(
             "A generated route used to inflate the rendered OpenAPI document ({i})"
         )),
-        request_body_type: None,
-        request_body_schema: None,
-        request_body_content_type: None,
-        request_body_required: false,
-        response_type: None,
-        response_schema: None,
+        request_body: None,
+        request_body_unmapped: None,
         response_status: 200,
         response_unmapped: None,
+        response_contents: Vec::new(),
         params: Vec::new(),
         roles: Vec::new(),
         tag: Some("generated".into()),

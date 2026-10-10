@@ -520,8 +520,10 @@ DELETE→204.
 
 ### `#[returns(Type)]` — Explicit response type for OpenAPI
 
-Declares the response body type when the macro cannot infer it
-(`impl IntoResponse`, custom wrappers). Combines with `#[status]`.
+Declares the response body type when the return type cannot be probed
+(`impl IntoResponse`). `Type` is probed for `ResponseBodySchema` first, then
+as `Json<Type>` (`Type: JsonSchema`). A concrete custom type needs no
+`#[returns]` — implement `ResponseBodySchema` on it. Combines with `#[status]`.
 
 ### `#[raw]` — Mark raw Axum extractors
 

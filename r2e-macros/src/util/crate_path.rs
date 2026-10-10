@@ -52,24 +52,6 @@ fn resolve_cached(
         .expect("r2e-macros: cached crate path must be valid Rust")
 }
 
-fn resolve_cached_optional(
-    cache: &'static OnceLock<Option<String>>,
-    candidates: &[Candidate],
-) -> Option<TokenStream> {
-    let rendered = cache.get_or_init(|| {
-        for (crate_candidate, suffix) in candidates {
-            if let Ok(found) = crate_name(crate_candidate) {
-                return Some(render_found(&found, suffix));
-            }
-        }
-        None
-    });
-    rendered.as_ref().map(|s| {
-        s.parse()
-            .expect("r2e-macros: cached crate path must be valid Rust")
-    })
-}
-
 /// Returns the token stream for accessing `r2e_core` types.
 ///
 /// If the user depends on `r2e`, returns `::r2e`.
@@ -107,18 +89,6 @@ pub fn r2e_scheduler_path() -> TokenStream {
         &[("r2e", "r2e_scheduler"), ("r2e-scheduler", "")],
         "::r2e_scheduler",
     )
-}
-
-/// Returns the token stream for accessing `schemars` through `r2e-openapi`.
-///
-/// Resolution order:
-/// 1. Direct `schemars` dependency → `::schemars`
-/// 2. Direct `r2e-openapi` dependency → `::r2e_openapi::schemars`
-///
-/// Returns `None` if no path is found (i.e. user hasn't opted into OpenAPI).
-pub fn r2e_schemars_path() -> Option<TokenStream> {
-    static CACHE: OnceLock<Option<String>> = OnceLock::new();
-    resolve_cached_optional(&CACHE, &[("schemars", ""), ("r2e-openapi", "schemars")])
 }
 
 /// Returns the token stream for accessing `r2e_grpc` types.
