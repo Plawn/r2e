@@ -112,6 +112,18 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     }
 }
 
+/// The `meta:` field initializer: `#[tool(meta = <expr>)]` converts the
+/// expression through `Into<MetaObject>` (spanned at the expression so a
+/// type mismatch points at the attribute), absent otherwise.
+fn meta_expr(member: &McpTool) -> TokenStream {
+    match &member.meta.meta {
+        Some(expr) => quote_spanned! {expr.span()=>
+            ::core::option::Option::Some(::core::convert::Into::into(#expr))
+        },
+        None => quote! { ::core::option::Option::None },
+    }
+}
+
 /// One `__routes.tools.push(ToolRoute { ... })` statement for a tool.
 fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream) -> TokenStream {
     let invoke_name = super::invoke_ident(McpMemberKind::Tool, &tool.name);
@@ -151,6 +163,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     let destructive = opt_bool(tool.meta.destructive);
     let idempotent = opt_bool(tool.meta.idempotent);
     let open_world = opt_bool(tool.meta.open_world);
+    let meta = meta_expr(tool);
 
     quote! {
         {
@@ -170,6 +183,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
                 },
                 requirements: #requirements,
                 group: #group,
+                meta: #meta,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ToolCall|
                         -> #mcp::__macro_support::ToolFuture {
@@ -201,6 +215,7 @@ fn generate_resource_route(
     let group = group_expr(resource, mcp);
     let requirements = super::requirements_expr(def, resource, mcp);
     let completions = completions_expr(resource, mcp);
+    let meta = meta_expr(resource);
 
     quote! {
         {
@@ -214,6 +229,7 @@ fn generate_resource_route(
                 requirements: #requirements,
                 group: #group,
                 completions: #completions,
+                meta: #meta,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ResourceCall|
                         -> #mcp::__macro_support::ResourceFuture {
@@ -244,6 +260,7 @@ fn generate_prompt_route(
     let group = group_expr(prompt, mcp);
     let requirements = super::requirements_expr(def, prompt, mcp);
     let completions = completions_expr(prompt, mcp);
+    let meta = meta_expr(prompt);
 
     let arguments = match prompt.params_type() {
         Some(params_ty) => quote_spanned! {params_ty.span()=>
@@ -265,6 +282,7 @@ fn generate_prompt_route(
                 requirements: #requirements,
                 group: #group,
                 completions: #completions,
+                meta: #meta,
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::PromptCall|
                         -> #mcp::__macro_support::PromptFuture {

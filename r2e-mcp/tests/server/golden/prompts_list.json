@@ -20,6 +20,13 @@
     {
       "description": "A prompt without arguments.",
       "name": "usage"
+    },
+    {
+      "_meta": {
+        "category": "help"
+      },
+      "description": "A prompt with `_meta`.",
+      "name": "tagged"
     }
   ]
 }

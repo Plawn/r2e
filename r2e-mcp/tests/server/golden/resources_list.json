@@ -6,6 +6,17 @@
       "name": "info",
       "title": "Golden info",
       "uri": "r2e://golden/info"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "prefersBorder": true
+        }
+      },
+      "description": "An MCP Apps UI resource with `_meta`.",
+      "mimeType": "text/html;profile=mcp-app",
+      "name": "widget_ui",
+      "uri": "ui://golden/widget"
     }
   ]
 }

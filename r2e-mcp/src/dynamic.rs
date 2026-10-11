@@ -24,6 +24,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use r2e_core::http::Parts;
+use rmcp::model::MetaObject;
 use schemars::JsonSchema;
 
 use crate::auth::tools::{check_access, ToolRequirements};
@@ -167,9 +168,11 @@ pub struct DynamicTool {
     name: Cow<'static, str>,
     title: Option<String>,
     description: Option<Cow<'static, str>>,
+    input_schema: Option<Arc<SchemaObject>>,
     output_schema: Option<Arc<SchemaObject>>,
     annotations: ToolAnnotations,
     requirements: ToolRequirements,
+    meta: Option<MetaObject>,
 }
 
 impl DynamicTool {
@@ -179,9 +182,11 @@ impl DynamicTool {
             name: name.into(),
             title: None,
             description: None,
+            input_schema: None,
             output_schema: None,
             annotations: ToolAnnotations::default(),
             requirements: ToolRequirements::NONE,
+            meta: None,
         }
     }
 
@@ -209,22 +214,44 @@ impl DynamicTool {
         self
     }
 
+    /// Advertise a hand-built JSON Schema object as the tool's `inputSchema`
+    /// instead of deriving it from the handler's parameter type.
+    ///
+    /// For tools whose shape is only known at runtime (schemas loaded from
+    /// config, proxied tools, …): pair it with a raw `|call: ToolCall|`
+    /// handler that reads [`ToolCall::arguments`] itself. The schema is not
+    /// validated against the arguments.
+    pub fn input_schema(mut self, schema: impl Into<Arc<SchemaObject>>) -> Self {
+        self.input_schema = Some(schema.into());
+        self
+    }
+
+    /// Free-form `_meta` object passed through verbatim in `tools/list` —
+    /// usually built with [`meta!`](crate::meta).
+    pub fn meta(mut self, meta: impl Into<MetaObject>) -> Self {
+        self.meta = Some(meta.into());
+        self
+    }
+
     requirement_setters!();
 
     /// Finish with the handler: `|call: ToolCall| async { … }` or
     /// `|p: MyParams, call: ToolCall| async { … }` (the input schema comes
-    /// from `MyParams`).
+    /// from `MyParams` unless [`input_schema`](Self::input_schema) was set).
     pub fn handler<M, H: DynamicToolHandler<M>>(self, handler: H) -> ToolRoute {
         let invoke = handler.into_invoke(Arc::from(self.name.as_ref()), self.requirements);
         ToolRoute {
             name: self.name,
             title: self.title,
             description: self.description,
-            input_schema: Arc::new(H::input_schema()),
+            input_schema: self
+                .input_schema
+                .unwrap_or_else(|| Arc::new(H::input_schema())),
             output_schema: self.output_schema,
             annotations: self.annotations,
             requirements: self.requirements,
             group: None,
+            meta: self.meta,
             invoke,
         }
     }
@@ -241,6 +268,7 @@ pub struct DynamicResource {
     mime_type: Option<String>,
     requirements: ToolRequirements,
     completions: Vec<CompletionProvider>,
+    meta: Option<MetaObject>,
 }
 
 impl DynamicResource {
@@ -254,6 +282,7 @@ impl DynamicResource {
             mime_type: None,
             requirements: ToolRequirements::NONE,
             completions: Vec::new(),
+            meta: None,
         }
     }
 
@@ -272,6 +301,14 @@ impl DynamicResource {
     /// MIME type of text-shaped returns.
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// Free-form `_meta` object passed through verbatim in `resources/list`
+    /// / `resources/templates/list` — usually built with
+    /// [`meta!`](crate::meta).
+    pub fn meta(mut self, meta: impl Into<MetaObject>) -> Self {
+        self.meta = Some(meta.into());
         self
     }
 
@@ -328,6 +365,7 @@ impl DynamicResource {
             requirements,
             group: None,
             completions: self.completions,
+            meta: self.meta,
             invoke,
         }
     }
@@ -420,6 +458,7 @@ pub struct DynamicPrompt {
     description: Option<String>,
     requirements: ToolRequirements,
     completions: Vec<CompletionProvider>,
+    meta: Option<MetaObject>,
 }
 
 impl DynamicPrompt {
@@ -431,6 +470,7 @@ impl DynamicPrompt {
             description: None,
             requirements: ToolRequirements::NONE,
             completions: Vec::new(),
+            meta: None,
         }
     }
 
@@ -443,6 +483,13 @@ impl DynamicPrompt {
     /// Description.
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    /// Free-form `_meta` object passed through verbatim in `prompts/list` —
+    /// usually built with [`meta!`](crate::meta).
+    pub fn meta(mut self, meta: impl Into<MetaObject>) -> Self {
+        self.meta = Some(meta.into());
         self
     }
 
@@ -484,6 +531,7 @@ impl DynamicPrompt {
             requirements: self.requirements,
             group: None,
             completions: self.completions,
+            meta: self.meta,
             invoke,
         }
     }

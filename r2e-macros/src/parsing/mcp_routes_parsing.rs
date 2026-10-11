@@ -98,6 +98,9 @@ pub struct McpToolMeta {
     /// `complete(arg = "method", …)`: the `#[completion]` method providing
     /// suggestions for each prompt argument / template variable, in order.
     pub complete: Vec<(syn::Ident, syn::LitStr)>,
+    /// `meta = <expr>`: an expression evaluating to something `Into<MetaObject>`
+    /// (typically `meta!({ … })`), advertised as the member's `_meta`.
+    pub meta: Option<syn::Expr>,
 }
 
 /// A resolved member group: `#[mcp_routes(group = "...", opt_in)]` or the
@@ -218,6 +221,7 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "any_scopes",
             "group",
             "opt_in",
+            "meta",
         ],
         McpMemberKind::Resource => &[
             "uri",
@@ -230,6 +234,7 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "group",
             "opt_in",
             "complete",
+            "meta",
         ],
         McpMemberKind::Prompt => &[
             "name",
@@ -240,6 +245,7 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "group",
             "opt_in",
             "complete",
+            "meta",
         ],
         McpMemberKind::Completion => &[],
     }
@@ -322,6 +328,7 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
             "any_scopes" => meta.any_scopes = parse_scope_list(&nested)?,
             "group" => meta.group = Some(parse_group_name(&nested)?),
             "opt_in" => meta.opt_in = parse_flag(&nested)?,
+            "meta" => meta.meta = Some(nested.value()?.parse::<syn::Expr>()?),
             "complete" => nested.parse_nested_meta(|entry| {
                 let arg = entry
                     .path

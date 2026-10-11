@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use r2e_core::http::Parts;
 use r2e_core::rt::CancelToken;
-use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
+use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
 use serde_json::Value;
 
 use crate::auth::ToolRequirements;
@@ -237,6 +237,10 @@ pub struct ToolRoute {
     pub requirements: ToolRequirements,
     /// The member group, if any — see [`McpGroup`].
     pub group: Option<McpGroup>,
+    /// Free-form `_meta` object passed through verbatim in `tools/list`
+    /// (MCP Apps `ui.resourceUri`, vendor extensions, …). See [`MetaObject`]
+    /// and the [`meta!`](crate::meta) macro.
+    pub meta: Option<MetaObject>,
     /// The dispatch closure.
     pub invoke: ToolInvoke,
 }
@@ -262,6 +266,7 @@ impl ToolRoute {
         if !self.annotations.is_empty() {
             tool.annotations = Some(self.annotations.clone().into_rmcp());
         }
+        tool.meta = self.meta.clone();
         tool
     }
 }
@@ -383,6 +388,10 @@ pub struct ResourceRoute {
     /// Completion providers for the URI-template variables
     /// (`completion/complete` with a `ref/resource`). Empty for a fixed URI.
     pub completions: Vec<CompletionProvider>,
+    /// Free-form `_meta` object passed through verbatim in `resources/list`
+    /// and `resources/templates/list`. See [`MetaObject`] and
+    /// [`meta!`](crate::meta).
+    pub meta: Option<MetaObject>,
     /// The read closure.
     pub invoke: ResourceInvoke,
 }
@@ -395,6 +404,7 @@ impl ResourceRoute {
         resource.title = self.title.clone();
         resource.description = self.description.clone();
         resource.mime_type = self.mime_type.clone();
+        resource.meta = self.meta.clone();
         resource
     }
 
@@ -409,6 +419,7 @@ impl ResourceRoute {
         resource.title = self.title.clone();
         resource.description = self.description.clone();
         resource.mime_type = self.mime_type.clone();
+        resource.meta = self.meta.clone();
         resource
     }
 }
@@ -540,6 +551,9 @@ pub struct PromptRoute {
     /// Completion providers for the arguments (`completion/complete` with a
     /// `ref/prompt`).
     pub completions: Vec<CompletionProvider>,
+    /// Free-form `_meta` object passed through verbatim in `prompts/list`.
+    /// See [`MetaObject`] and [`meta!`](crate::meta).
+    pub meta: Option<MetaObject>,
     /// The expansion closure.
     pub invoke: PromptInvoke,
 }
@@ -563,6 +577,7 @@ impl PromptRoute {
         let mut prompt =
             rmcp::model::Prompt::new(self.name.clone(), self.description.clone(), arguments);
         prompt.title = self.title.clone();
+        prompt.meta = self.meta.clone();
         prompt
     }
 }

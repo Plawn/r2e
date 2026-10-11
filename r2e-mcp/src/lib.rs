@@ -89,6 +89,26 @@ pub use session::{
 
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
 pub use rmcp::model::Role as PromptMessageRole;
+/// The free-form `_meta` object a tool, resource or prompt advertises in its
+/// list entry (`ToolRoute::meta`, `#[tool(meta = …)]`, `DynamicTool::meta`).
+/// Build one with [`meta!`].
+pub use rmcp::model::MetaObject;
+
+/// Build a [`MetaObject`] from a JSON object literal (`serde_json::json!`
+/// syntax, braces required):
+///
+/// ```rust
+/// use r2e_mcp::{meta, MetaObject};
+///
+/// let m: MetaObject = meta!({ "ui": { "resourceUri": "ui://widget" } });
+/// assert_eq!(m["ui"]["resourceUri"], "ui://widget");
+/// ```
+#[macro_export]
+macro_rules! meta {
+    ({ $($tt:tt)* }) => {
+        $crate::__macro_support::meta_from_value($crate::__macro_support::json!({ $($tt)* }))
+    };
+}
 /// Raw wire result/content types, re-exported for tools, resources and
 /// prompts that build results by hand without importing rmcp directly.
 pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
@@ -213,7 +233,17 @@ pub mod __macro_support {
     pub use crate::service::McpService;
     pub use crate::session::McpSession;
     pub use r2e_core::NoIdentity;
-    pub use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
+    pub use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
+    pub use serde_json::json;
+
+    /// `meta!` support: the `json!({ … })` literal is an object by
+    /// construction.
+    pub fn meta_from_value(value: serde_json::Value) -> MetaObject {
+        match value {
+            serde_json::Value::Object(map) => MetaObject::from(map),
+            _ => unreachable!("meta! only accepts a braced object literal"),
+        }
+    }
 }
 
 pub mod prelude {
@@ -233,5 +263,5 @@ pub mod prelude {
     pub use crate::session::{
         McpSession, McpSessionInit, McpSessions, SessionInit, SessionToolset,
     };
-    pub use crate::AppBuilderMcpExt;
+    pub use crate::{meta, AppBuilderMcpExt, MetaObject};
 }
