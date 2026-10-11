@@ -62,7 +62,9 @@ mod uri_template;
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
 
-pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements};
+pub use auth::{
+    McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements,
+};
 pub use config::McpConfig;
 pub use dynamic::{
     DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
@@ -249,7 +251,7 @@ pub mod __macro_support {
 
 pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
-    pub use crate::auth::{McpAuthConfig, McpTokenValidator};
+    pub use crate::auth::{McpAuthConfig, McpBasicAuthConfig, McpTokenValidator};
     pub use crate::dynamic::{DynamicPrompt, DynamicResource, DynamicTool};
     pub use crate::elicitation::{ElicitError, Elicited, McpClient};
     pub use crate::error::McpError;

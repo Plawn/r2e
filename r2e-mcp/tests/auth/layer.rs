@@ -38,7 +38,7 @@ async fn missing_token_gets_401_with_resource_metadata_challenge() {
     assert_eq!(response.status, StatusCode::UNAUTHORIZED);
     let (code, description) = error_body(&response.raw_body);
     assert_eq!(code, "unauthorized");
-    assert_eq!(description, "missing bearer token");
+    assert_eq!(description, "missing credentials");
     // The exact RFC 9728 challenge — what turns the 401 into a working
     // OAuth flow. No `error` param on a missing (vs invalid) token.
     // (`raw_headers` is not exposed by support::post; re-issue via oneshot.)

@@ -1,21 +1,25 @@
 //! Auth-layer errors and `WWW-Authenticate` challenge building.
 
+use std::sync::Arc;
+
 use r2e_core::http::header::{self, HeaderValue};
 use r2e_core::http::{Response, StatusCode};
 
-/// Why a bearer token was not accepted.
+/// Why a request's credentials were not accepted.
 ///
 /// Rendered by the auth layer as an OAuth-shaped HTTP error (RFC 6750): 401
-/// with a `WWW-Authenticate: Bearer …` challenge, 403 for
-/// `insufficient_scope`, 503 when the upstream IdP is unreachable (no
-/// challenge — an IdP outage must not send clients into a re-auth loop).
+/// with the configured `WWW-Authenticate` challenge(s) (`Bearer …` and/or
+/// `Basic realm=…`), 403 for `insufficient_scope`, 503 when the upstream
+/// IdP is unreachable (no challenge — an IdP outage must not send clients
+/// into a re-auth loop).
 #[derive(Debug, Clone)]
 pub enum McpAuthError {
-    /// No `Authorization: Bearer …` header (401; the challenge carries
+    /// No usable `Authorization` header (401; a Bearer challenge carries
     /// `resource_metadata` so the client can discover the IdP).
     MissingToken,
-    /// The token failed validation (401, `error="invalid_token"`). The
-    /// message is a static, allow-listed reason — never token contents.
+    /// The token or credentials failed validation (401,
+    /// `error="invalid_token"`). The message is a static, allow-listed
+    /// reason — never token or credential contents.
     InvalidToken(&'static str),
     /// The token lacks the server-wide `required-scopes` (403,
     /// `error="insufficient_scope"`).
@@ -34,7 +38,7 @@ impl McpAuthError {
     /// The static reason string used in `error_description`.
     pub fn description(&self) -> &str {
         match self {
-            McpAuthError::MissingToken => "missing bearer token",
+            McpAuthError::MissingToken => "missing credentials",
             McpAuthError::InvalidToken(reason) => reason,
             McpAuthError::InsufficientScope { .. } => "token lacks a required scope",
             McpAuthError::InvalidOrigin => "origin not allowed",
@@ -97,12 +101,27 @@ pub fn www_authenticate(params: &[(&str, &str)]) -> HeaderValue {
     HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
 }
 
+/// Build a `WWW-Authenticate: Basic …` header value (RFC 7617).
+pub fn basic_challenge(realm: &str) -> HeaderValue {
+    let value = format!("Basic realm={}, charset=\"UTF-8\"", quote(realm));
+    HeaderValue::from_str(&value).unwrap_or_else(|_| HeaderValue::from_static("Basic"))
+}
+
+/// The challenges a 401/403 advertises, fixed at boot per auth layer.
+pub(crate) struct Challenges {
+    /// `Bearer resource_metadata="…"` — set when OAuth is configured.
+    pub resource_metadata_url: Option<Arc<str>>,
+    /// `Basic realm="…"` — set when `mcp.auth.basic` is configured.
+    pub basic_realm: Option<Arc<str>>,
+}
+
 /// Render an auth failure as the OAuth-shaped HTTP response.
 ///
-/// `challenge` is the prebuilt base challenge (carrying `resource_metadata`
-/// and advertised scopes); scope/description parameters are appended per
-/// error.
-pub(crate) fn auth_error_response(error: &McpAuthError, resource_metadata_url: &str) -> Response {
+/// The Bearer challenge carries `resource_metadata` plus the per-error
+/// `error`/`error_description`/`scope` parameters; the Basic challenge is a
+/// second `WWW-Authenticate` value (RFC 9110 §11.6.1 allows several), on
+/// 401 only — a 403 is not an invitation to retry with other credentials.
+pub(crate) fn auth_error_response(error: &McpAuthError, challenges: &Challenges) -> Response {
     let (status, oauth_code) = match error {
         McpAuthError::MissingToken => (StatusCode::UNAUTHORIZED, None),
         McpAuthError::InvalidToken(_) => (StatusCode::UNAUTHORIZED, Some("invalid_token")),
@@ -128,7 +147,10 @@ pub(crate) fn auth_error_response(error: &McpAuthError, resource_metadata_url: &
     );
 
     // 503 carries no challenge: the client should retry, not re-authorize.
-    if status != StatusCode::SERVICE_UNAVAILABLE {
+    if status == StatusCode::SERVICE_UNAVAILABLE {
+        return response;
+    }
+    if let Some(resource_metadata_url) = &challenges.resource_metadata_url {
         let mut params: Vec<(&str, &str)> = vec![("resource_metadata", resource_metadata_url)];
         if let Some(code) = oauth_code {
             params.push(("error", code));
@@ -141,7 +163,14 @@ pub(crate) fn auth_error_response(error: &McpAuthError, resource_metadata_url: &
         }
         response
             .headers_mut()
-            .insert(header::WWW_AUTHENTICATE, www_authenticate(&params));
+            .append(header::WWW_AUTHENTICATE, www_authenticate(&params));
+    }
+    if let Some(realm) = &challenges.basic_realm
+        && status == StatusCode::UNAUTHORIZED
+    {
+        response
+            .headers_mut()
+            .append(header::WWW_AUTHENTICATE, basic_challenge(realm));
     }
     response
 }

@@ -1,4 +1,5 @@
-//! The tower layer enforcing OAuth on the MCP endpoint.
+//! The tower layer enforcing `mcp.auth.*` (OAuth bearer and/or HTTP Basic)
+//! on the MCP endpoint.
 //!
 //! Modelled on `r2e-prometheus/src/layer.rs`, but with a BOXED response
 //! future: token validation is async and must complete *before* the inner
@@ -25,7 +26,8 @@ use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{HeaderMap, Method, Request, Response, StatusCode, AUTHORIZATION};
 use tower::{Layer, Service};
 
-use super::error::{auth_error_response, McpAuthError};
+use super::basic::{basic_credentials, BasicCredentials};
+use super::error::{auth_error_response, Challenges, McpAuthError};
 use super::validator::{McpPrincipal, McpTokenValidator};
 use crate::session::{SessionBindings, SessionLink};
 
@@ -38,9 +40,14 @@ pub(crate) struct AuthState {
     /// Filled by the plugin's `after_build` from the bean context, so a
     /// test-pinned validator (`override_bean`) is RESOLVED, not captured.
     pub validator: Arc<OnceLock<McpTokenValidator>>,
-    /// Absolute URL of the protected-resource-metadata document, carried in
-    /// every challenge (`WWW-Authenticate: Bearer resource_metadata="…"`).
-    pub resource_metadata_url: Arc<str>,
+    /// Whether bearer tokens are accepted at all (`mcp.auth.issuer` set).
+    /// Off ⇒ `Authorization: Bearer …` is an unsupported scheme and the
+    /// validator slot is never read.
+    pub oauth: bool,
+    /// `mcp.auth.basic` credentials, when configured.
+    pub basic: Option<BasicCredentials>,
+    /// The `WWW-Authenticate` challenge(s) every 401 carries.
+    pub challenges: Challenges,
     /// Server-wide `mcp.auth.required-scopes` — enforced at HTTP level.
     pub required_scopes: Arc<[String]>,
     /// `mcp.allowed-origins` — when set, a present `Origin` header must
@@ -116,24 +123,30 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
         }
     }
 
-    let bearer = headers
+    let header = headers
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .ok_or(McpAuthError::MissingToken)
-        .and_then(|header| {
-            r2e_security::extractor::extract_bearer_token(header)
-                .map_err(|_| McpAuthError::MissingToken)
-        })?;
+        .ok_or(McpAuthError::MissingToken)?;
 
-    let Some(validator) = state.validator.get() else {
-        // after_build has not run — a wiring bug, never a client error.
-        tracing::error!("MCP auth validator not initialised (after_build did not run)");
-        return Err(McpAuthError::Upstream(
-            "authentication not initialised".into(),
-        ));
+    // The scheme selects the path: Basic when configured and presented,
+    // otherwise the bearer path (its own scheme check keeps a stray `Basic`
+    // on an OAuth-only endpoint a 401, as before).
+    let principal = match (&state.basic, basic_credentials(header)) {
+        (Some(basic), Some(encoded)) => basic.authenticate(encoded)?,
+        _ if state.oauth => {
+            let bearer = r2e_security::extractor::extract_bearer_token(header)
+                .map_err(|_| McpAuthError::MissingToken)?;
+            let Some(validator) = state.validator.get() else {
+                // after_build has not run — a wiring bug, never a client error.
+                tracing::error!("MCP auth validator not initialised (after_build did not run)");
+                return Err(McpAuthError::Upstream(
+                    "authentication not initialised".into(),
+                ));
+            };
+            validator.validate(bearer).await?
+        }
+        _ => return Err(McpAuthError::InvalidToken("unsupported authorization scheme")),
     };
-
-    let principal = validator.validate(bearer).await?;
 
     let missing: Vec<String> = state
         .required_scopes
@@ -224,7 +237,7 @@ where
                     }
                     Ok(response)
                 }
-                Err(err) => Ok(auth_error_response(&err, &state.resource_metadata_url)),
+                Err(err) => Ok(auth_error_response(&err, &state.challenges)),
             }
         })
     }

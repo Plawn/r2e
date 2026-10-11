@@ -6123,6 +6123,7 @@ dependencies = [
 name = "r2e-mcp"
 version = "0.6.0"
 dependencies = [
+ "base64 0.22.1",
  "http-body-util",
  "percent-encoding",
  "r2e-core",
@@ -6134,6 +6135,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
  "tower",
  "tower-http 0.7.0",
