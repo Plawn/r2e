@@ -45,8 +45,8 @@ fi
 status=0
 fail() { echo "error: $*" >&2; status=1; }
 
-VERSION=$(grep -m1 -E '^version = "' Cargo.toml | sed -E 's/^version = "([^"]+)"/\1/')
-[ -n "$VERSION" ] || { echo "error: cannot read workspace version from Cargo.toml" >&2; exit 2; }
+VERSION=$(python3 scripts/versions.py version r2e)
+[ -n "$VERSION" ] || { echo "error: cannot read the r2e facade version" >&2; exit 2; }
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

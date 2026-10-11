@@ -561,25 +561,30 @@ cargo run -p example-app       # run the demo app on port 3001
 
 ## Versioning
 
-R2E is consumed as a git dependency pinned to a tag. Since `v0.3.0`, tags
-follow the workspace version: **`vX.Y.*` is the compatibility series** declared
-in the root `Cargo.toml` (a breaking change bumps `X.Y` and starts a new tag
-series), and the **patch is a monotone release counter** — every merge to
-`master` cuts the next tag in the current series. Pin the latest tag of the
-series you target; upgrading within a series is non-breaking.
+R2E is published on crates.io; depend on the facade `r2e` (plus `r2e-test` in
+`[dev-dependencies]`). **Every crate is versioned independently** and follows
+semver with pre-1.0 semantics: a breaking change in a crate bumps **that
+crate's** minor version and, because they re-export its types, the minor of
+every crate depending on it — `r2e` included. A patch of one crate is picked up
+by a plain `cargo update`. Each crate has its own `CHANGELOG.md`
+(`r2e/CHANGELOG.md` is the one to read for the facade) and its own tags,
+`<crate>-vX.Y.Z`; `r2e-cli` is versioned with `r2e`.
 
-Historical note: tags up to `v0.2.163` were a pure release counter detached
-from the manifest — `v0.2.132`–`v0.2.163` actually contain workspace version
-`0.3.0`, and the 0.3 plugin-API rework ships from `v0.2.140` onward (see
+Up to 0.6.0 the whole workspace moved in lockstep under a single `vX.Y.Z` tag
+and the root [`CHANGELOG.md`](CHANGELOG.md), kept as frozen history: a legacy
+`vX.Y.Z` tag is release `X.Y.Z` of every crate. Older still, tags up to
+`v0.2.163` were a pure release counter detached from the manifest —
+`v0.2.132`–`v0.2.163` actually contain workspace version `0.3.0`, and the 0.3
+plugin-API rework ships from `v0.2.140` onward (see
 [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)).
 
-0.4 → 0.5 reworks error handling around `Rejection` and error envelopes
-(task #1072); the step-by-step guide is
-[`docs/migration/error-projection.md`](docs/migration/error-projection.md).
+Migration guides for the breaking releases live under `docs/migration/`:
 
-0.5 → 0.6 documents OpenAPI bodies only through `RequestBodySchema` /
-`ResponseBodySchema` (no name-based `Json<T>` detection); the guide is
-[`docs/migration/response-schema.md`](docs/migration/response-schema.md).
+- 0.4 → 0.5 reworks error handling around `Rejection` and error envelopes
+  (task #1072): [`docs/migration/error-projection.md`](docs/migration/error-projection.md).
+- 0.5 → 0.6 documents OpenAPI bodies only through `RequestBodySchema` /
+  `ResponseBodySchema` (no name-based `Json<T>` detection):
+  [`docs/migration/response-schema.md`](docs/migration/response-schema.md).
 
 ## For AI agents
 

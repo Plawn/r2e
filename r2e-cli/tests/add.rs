@@ -259,7 +259,10 @@ fn add_mcp_repairs_missing_schemars_for_direct_dependency() {
     let _cwd = CwdGuard::new(tmp.path());
     fs::write(
         "Cargo.toml",
-        "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e-mcp = \"0.3\"\n",
+        &format!(
+            "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e-mcp = \"{}\"\n",
+            add::R2E_DEP_VERSION
+        ),
     )
     .unwrap();
 
@@ -284,8 +287,9 @@ fn add_mcp_adds_direct_dependency_without_facade() {
     add::run("mcp").unwrap();
 
     let cargo = fs::read_to_string("Cargo.toml").unwrap();
-    assert!(cargo.contains("r2e-mcp = \"0.3\""));
-    assert!(cargo.contains("r2e-core = \"0.3\""));
+    let v = add::R2E_DEP_VERSION;
+    assert!(cargo.contains(&format!("r2e-mcp = \"{v}\"")));
+    assert!(cargo.contains(&format!("r2e-core = \"{v}\"")));
     assert!(cargo.contains("schemars = \"1\""));
 }
 

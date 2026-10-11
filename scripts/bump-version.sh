@@ -1,28 +1,35 @@
 #!/usr/bin/env bash
 #
-# bump-version.sh — prepare a release: move the whole workspace to a new version.
+# bump-version.sh — cut a release PR for one or more crates.
 #
-# The version in [workspace.package] is the single source of truth for a
-# release. Changing it on master is what makes .github/workflows/release.yml
-# publish to crates.io and tag `vX.Y.Z`; nothing else does. This script makes
-# that change consistently:
+# Crates are versioned independently. Name the crates that changed and how:
 #
-#   * [workspace.package] version
-#   * every `r2e-* = { path = "…", version = "…" }` pin in [workspace.dependencies]
-#     (a pin left behind makes the published crates require the old version)
-#   * Cargo.lock (workspace members only)
-#   * CHANGELOG.md: `## [Unreleased]` becomes `## [X.Y.Z] - <date>`, a fresh
-#     empty `## [Unreleased]` goes on top — that section is the release notes
-#   * llm-full.txt (embeds the version) via scripts/check-llm-docs.sh --update
+#   scripts/bump-version.sh r2e-mcp breaking            # API break in r2e-mcp
+#   scripts/bump-version.sh r2e-core patch r2e-mcp minor
+#   scripts/bump-version.sh r2e-tenant 0.7.2            # explicit version
+#   scripts/bump-version.sh --dry-run r2e-core breaking # plan only
 #
-# Then commit it on a branch and open a PR titled `release: X.Y.Z`. Merging it
-# is the release.
+# `breaking` is `minor` below 1.0 and `major` from 1.0 on. A breaking bump
+# PROPAGATES: every publishable crate that depends on the bumped one (normal or
+# build dependency, transitively) is bumped breaking too, because it re-exports
+# that crate's types — the facade `r2e` always ends up in that set, and
+# `r2e-cli` follows `r2e` version for version. A patch bump propagates nothing.
+# `--no-propagate` turns the propagation off (you then own the consequences).
 #
-# Versioning: pre-1.0, any breaking change bumps the minor (0.3.x -> 0.4.0);
-# additions and fixes bump the patch.
+# What it does (scripts/versions.py does the editing):
+#   * each bumped crate's `[package] version` and its pin in
+#     `[workspace.dependencies]`;
+#   * each bumped crate's CHANGELOG.md: `[Unreleased]` -> `[X.Y.Z] - date`
+#     (a crate bumped by propagation gets a "Built against …" entry; a crate
+#     bumped by request must already have entries under `[Unreleased]`);
+#   * `R2E_DEP_VERSION` in r2e-cli when `r2e` moves; `Cargo.lock`;
+#     `llm-full.txt` (stamped with the facade version);
+#   * refuses a version already tagged or already on crates.io.
 #
-# Usage:
-#   scripts/bump-version.sh 0.4.0
+# Then commit on a `release/…` branch and open a PR titled `release: <crates>`.
+# Once it is merged and Tests pass, .github/workflows/release.yml publishes the
+# bumped crates, tags `<crate>-vX.Y.Z` and creates one GitHub release per crate
+# from its CHANGELOG section.
 #
 set -euo pipefail
 
@@ -30,73 +37,50 @@ cd "$(git rev-parse --show-toplevel)"
 
 die() { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 
-[[ $# -eq 1 ]] || { printf 'usage: %s X.Y.Z\n' "$0" >&2; exit 2; }
-new="$1"
-[[ "$new" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "'$new' is not X.Y.Z"
-[[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — bump from a clean tree"
+DRY_RUN=0
+ARGS=()
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) ARGS+=("$arg") ;;
+    esac
+done
+[[ ${#ARGS[@]} -gt 0 ]] || die "usage: $0 [--dry-run] [--no-propagate] <crate> <patch|minor|major|breaking|X.Y.Z> […]"
 
-old=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
-[[ -n "$old" ]] || die "could not read [workspace.package] version from Cargo.toml"
-
-python3 - "$old" "$new" <<'PY'
-import sys
-old, new = sys.argv[1], sys.argv[2]
-
-def key(v):
-    return tuple(int(x) for x in v.split("."))
-
-if key(new) <= key(old):
-    sys.exit(f"error: {new} is not greater than the current {old}")
-PY
-
-# Remote too: a local clone does not necessarily have every tag CI pushed.
-if git rev-parse -q --verify "refs/tags/v$new" >/dev/null \
-   || [[ -n "$(git ls-remote --tags origin "refs/tags/v$new")" ]]; then
-    die "tag v$new already exists — pick a version that was never tagged"
+if [[ $DRY_RUN -eq 1 ]]; then
+    exec python3 scripts/versions.py plan "${ARGS[@]}"
 fi
 
-python3 - "$old" "$new" <<'PY'
-import datetime, re, sys
+[[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — commit or stash first"
 
-old, new = sys.argv[1], sys.argv[2]
+title=$(python3 scripts/versions.py bump "${ARGS[@]}")
 
-# Cargo.toml: the [workspace.package] line and the r2e-* pins.
-text = open("Cargo.toml").read()
-text, n_pkg = re.subn(rf'(?m)^version = "{re.escape(old)}"$', f'version = "{new}"', text, count=1)
-pin = re.compile(rf'(?m)^(r2e[A-Za-z0-9_-]* *= *\{{[^}}\n]*\bversion *= *")({re.escape(old)})(")')
-text, n_pins = pin.subn(rf"\g<1>{new}\g<3>", text)
-if n_pkg != 1:
-    sys.exit("error: [workspace.package] version line not found")
-if n_pins == 0:
-    sys.exit("error: no r2e-* version pins found in [workspace.dependencies]")
-# A pin on another version would silently survive the bump.
-stale = re.findall(r'(?m)^(r2e[A-Za-z0-9_-]*) *= *\{[^}\n]*\bversion *= *"([^"]+)"', text)
-stale = [f"{name} = {ver}" for name, ver in stale if ver != new]
-if stale:
-    sys.exit("error: r2e-* pins not on the old version, fix by hand first:\n  " + "\n  ".join(stale))
-open("Cargo.toml", "w").write(text)
-print(f"Cargo.toml: workspace {old} -> {new}, {n_pins} pin(s)")
-
-# CHANGELOG.md: close the Unreleased section under the new version.
-cl = open("CHANGELOG.md").read()
-if "## [Unreleased]" not in cl:
-    sys.exit("error: CHANGELOG.md has no '## [Unreleased]' section")
-today = datetime.date.today().isoformat()
-cl = cl.replace("## [Unreleased]", f"## [Unreleased]\n\n## [{new}] - {today}", 1)
-open("CHANGELOG.md", "w").write(cl)
-print(f"CHANGELOG.md: [Unreleased] -> [{new}] - {today}")
-PY
-
+printf '\n==> Updating Cargo.lock\n'
 cargo update --workspace --quiet
+
+printf '==> Regenerating llm-full.txt\n'
 scripts/check-llm-docs.sh --update >/dev/null
 
-git status --short
+printf '==> Checking the invariants\n'
+scripts/check-versions.sh
+
+first=$(python3 - "$title" <<'PY'
+import sys; name, ver = sys.argv[1].split(", ")[0].split(" "); print(f"{name}-{ver}")
+PY
+)
+
 cat <<EOF
 
-Bumped $old -> $new. Review CHANGELOG.md's [$new] section (it is the GitHub
-release body), then:
+Bumped: $title
 
-  git switch -c release/$new
-  git commit -am "release: $new"
-  git push -u origin release/$new   # open the PR; merging it publishes $new
+Review the diff, then:
+
+  git switch -c release/$first
+  git commit -am "release: $title"
+  git push -u origin release/$first
+  gh pr create --title "release: $title" --body "Release PR made by scripts/bump-version.sh."
+
+Merging it (once Tests pass) publishes the bumped crates, tags <crate>-vX.Y.Z and
+creates one GitHub release per crate from its CHANGELOG section.
 EOF

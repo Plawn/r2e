@@ -16,7 +16,7 @@
 # instead of one per block).
 [package]
 name = "llm-doctests"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

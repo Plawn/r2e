@@ -16,10 +16,22 @@ R2E is **in production** (since 0.5.0, 2026-10-10): real applications depend on 
 published crates. Breaking changes are still possible — the API is pre-1.0 — but they are
 no longer free:
 
-- A breaking change **bumps the minor version** (`0.X` → `0.X+1`) and never lands in a
-  patch release. Call it out explicitly in the plan so it is acknowledged before work starts.
-- It ships with a **`Breaking` entry in `CHANGELOG.md`** and, when the migration is more than
-  a rename, a step-by-step guide under `docs/migration/` (see `error-projection.md`).
+- **Crates are versioned independently** (since 2026-10-11): each publishable crate owns
+  its `version`, has its own `<crate>/CHANGELOG.md` and is tagged `<crate>-vX.Y.Z`. The
+  root `CHANGELOG.md` is frozen history up to 0.6.0.
+- A breaking change in a crate **bumps that crate's minor version** (`0.X` → `0.X+1`) and
+  never lands in a patch release. The bump **propagates to every publishable crate that
+  depends on it** — they re-export its types — which always includes the facade `r2e`
+  (and `r2e-cli`, which tracks `r2e`). `r2e-core` is only bumped when it breaks itself.
+  Call the breaking change out explicitly in the plan so it is acknowledged before work
+  starts.
+- It ships with a **`Breaking` entry under `## [Unreleased]` in that crate's
+  `CHANGELOG.md`** and, when the migration is more than a rename, a step-by-step guide
+  under `docs/migration/` (see `error-projection.md`).
+- Feature PRs never change a version. A release is a separate `release: …` PR made by
+  `scripts/bump-version.sh <crate> <patch|breaking>` (computes the propagation, rewrites
+  manifests, pins and changelogs); CI publishes only the crates whose version changed.
+  `scripts/check-versions.sh` enforces the invariants on every PR.
 - Prefer a **compile-time migration path** (the old API fails to build with an error naming
   the migration page) over silent behaviour changes; no runtime feature flags or shims.
 - Don't break for taste. A rename or reshuffle with no user-facing gain is not worth a

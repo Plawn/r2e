@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
-# publish-crates.sh — publish the workspace to crates.io.
+# publish-crates.sh — publish what is not yet on crates.io.
 #
-# Cargo (>= 1.90) orders a multi-package publish itself: it computes the
-# dependency graph, publishes bottom-up, and waits for each crate to appear in
-# the index before the crates that need it. So this script is mostly a preflight
-# plus the HELD-BACK list below; it does not hand-roll publication waves.
+# Crates are versioned independently (scripts/versions.py): a crate whose
+# current version is already on crates.io is excluded, so a release uploads
+# exactly the crates the `release: …` PR bumped, and an interrupted run resumes
+# from the truth. Cargo (>= 1.90) orders a multi-package publish itself: it
+# computes the dependency graph, publishes bottom-up, and waits for each crate
+# to appear in the index before the crates that need it. So this script is
+# mostly a preflight plus the HELD-BACK list; it does not hand-roll waves.
 #
-# HELD BACK from the release, and why:
+# HELD BACK from the release (the list is `HELD_BACK` in scripts/versions.py),
+# and why:
 #
 #   r2e-cli             `src/commands/docs.rs` and `llm_docs.rs` reach outside
 #                       the package with include_str!("../../../docs/...") and
@@ -21,13 +25,14 @@
 #
 # CRATES.IO RATE LIMIT. A *new* crate name costs a token from a bucket that holds
 # 5 and refills at 1 per 10 minutes; new versions of an existing crate are a
-# different, far looser bucket (1/min, burst 30). This workspace publishes 30 new
-# names, so a single run uploads 5 and then takes HTTP 429 on the sixth — that is
-# the expected shape of a first release, not a failure. Two ways out:
+# different, far looser bucket (1/min, burst 30). Every r2e-* name is taken since
+# 0.4.0, so only a release that adds a crate meets the tight bucket: it uploads
+# 5 new names and then takes HTTP 429 on the sixth — expected, not a failure.
+# Two ways out:
 #
-#   * --resume: re-attempt every 10 minutes until the set is closed (~4h for the
-#     remaining 25). Each attempt re-derives what is already on crates.io and
-#     excludes it, so the script is idempotent and safe to interrupt.
+#   * --resume: re-attempt every 10 minutes until the set is closed. Each
+#     attempt re-derives what is already on crates.io and excludes it, so the
+#     script is idempotent and safe to interrupt.
 #   * Ask help@crates.io to lift the new-crate limit for this release. Say how
 #     many names and why (one workspace, one version). Then a single run finishes.
 #
@@ -46,7 +51,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-HELD_BACK=(r2e-cli)
+HELD_BACK=($(python3 scripts/versions.py held-back))
 
 DRY_RUN=0
 RESUME=0
@@ -76,6 +81,9 @@ die() { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
 say "Preflight"
 
 [[ -z "$(git status --porcelain)" ]] || die "working tree is dirty — publish from a clean tree"
+
+say "Checking the versioning invariants"
+scripts/check-versions.sh
 
 # The published crates must build for users on stable, not just under the
 # nightly pinned by rust-toolchain.toml (that pin exists for trybuild's .stderr
@@ -196,39 +204,12 @@ PY
 # Publish
 # ---------------------------------------------------------------------------
 
-version=$(python3 -c "
-import json,subprocess
-m=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1']))
-print(next(p['version'] for p in m['packages'] if p['name']=='r2e'))")
-
-# Which of our names already carry $version on crates.io. Derived from the index
-# rather than remembered locally, so a run interrupted anywhere — a 429, a lost
-# connection, ^C — resumes from the truth.
+# Which of our crates already carry their CURRENT version on crates.io. Derived
+# from the index rather than remembered locally, so a run interrupted anywhere —
+# a 429, a lost connection, ^C — resumes from the truth; and in a release that
+# bumped three crates, the other thirty are "already up" and never re-sent.
 published_crates() {
-    python3 - "$version" "${HELD_BACK[@]}" <<'PY'
-import json, subprocess, sys, urllib.error, urllib.request
-
-version, held = sys.argv[1], set(sys.argv[2:])
-meta = json.loads(subprocess.check_output(
-    ["cargo", "metadata", "--no-deps", "--format-version", "1"]))
-
-for pkg in sorted(meta["packages"], key=lambda p: p["name"]):
-    name = pkg["name"]
-    if pkg.get("publish") == [] or name in held:
-        continue
-    req = urllib.request.Request(
-        f"https://crates.io/api/v1/crates/{name}",
-        headers={"User-Agent": f"r2e-publish-script ({name} {version})"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.load(resp)
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:      # name not taken yet
-            continue
-        raise
-    if any(v["num"] == version for v in data.get("versions", [])):
-        print(name)
-PY
+    python3 scripts/versions.py uploaded | cut -f1
 }
 
 # Held back by policy + already uploaded = what this attempt must skip.
@@ -264,19 +245,27 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 
 build_excludes
-[[ ${#DONE[@]} -eq 0 ]] || printf '\nAlready on crates.io at %s: %s\n' "$version" "${DONE[*]}"
+[[ ${#DONE[@]} -eq 0 ]] || printf '\nAlready on crates.io at their current version: %s\n' "${DONE[*]}"
 
 if [[ $REMAINING -eq 0 ]]; then
-    say "Nothing left to publish — every crate is on crates.io at $version"
+    say "Nothing left to publish — every crate is on crates.io at its current version"
     exit 0
 fi
 
 say "About to publish to crates.io — this cannot be undone"
 printf 'Held back: %s\n' "${HELD_BACK[*]}"
-printf 'To upload: %s crate(s)\n' "$REMAINING"
+printf 'To upload: %s crate(s):\n' "$REMAINING"
+python3 - "${HELD_BACK[@]}" ${DONE[@]+"${DONE[@]}"} <<'PY'
+import json,subprocess,sys
+skip=set(sys.argv[1:])
+m=json.loads(subprocess.check_output(['cargo','metadata','--no-deps','--format-version','1']))
+for p in sorted(m['packages'], key=lambda p: p['name']):
+    if p.get('publish') != [] and p['name'] not in skip:
+        print(f"  {p['name']} {p['version']}")
+PY
 if [[ $YES -eq 0 ]]; then
-    read -r -p 'Type the release version to confirm (e.g. 0.3.0): ' answer
-    [[ "$answer" == "$version" ]] || die "got '$answer', workspace is at '$version' — aborting"
+    read -r -p 'Type "publish" to confirm: ' answer
+    [[ "$answer" == "publish" ]] || die "aborting"
 fi
 
 # One attempt. Returns 0 when the whole remaining set went up, 1 when the
@@ -316,12 +305,13 @@ else
     done
 fi
 
-say "Published $version"
+say "Published"
 cat <<'EOF'
 
 Follow-ups:
-  * In CI, release.yml tags v<version> and creates the GitHub release next.
-    Run by hand, tag the commit you published from: git tag v<version>.
+  * In CI, release.yml tags <crate>-v<version> and creates one GitHub release
+    per crate next. Run by hand, tag the commit you published from:
+    git tag <crate>-v<version> for each crate that went up.
   * r2e-test ships without its dev-dependency on the facade (path-only on
     purpose — see the comment in r2e-test/Cargo.toml). Nothing to do; it is
     stripped at packaging and the tests still run in the workspace.
