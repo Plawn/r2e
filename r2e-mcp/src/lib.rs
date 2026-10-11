@@ -84,7 +84,8 @@ pub use route::{
 };
 pub use service::McpService;
 pub use session::{
-    McpSession, McpSessionError, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+    McpSession, McpSessionError, McpSessionInit, McpSessions, SessionId, SessionInit,
+    SessionToolset,
 };
 
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
@@ -261,7 +262,7 @@ pub mod prelude {
     };
     pub use crate::service::McpService;
     pub use crate::session::{
-        McpSession, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+        McpSession, McpSessionInit, McpSessions, SessionId, SessionInit, SessionToolset,
     };
     pub use crate::{meta, AppBuilderMcpExt, MetaObject};
 }

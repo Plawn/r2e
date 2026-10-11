@@ -30,7 +30,7 @@ use super::validator::{McpPrincipal, McpTokenValidator};
 use crate::session::{SessionBindings, SessionLink};
 
 /// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
-const SESSION_ID: &str = "mcp-session-id";
+const SESSION_ID: &str = crate::session::SESSION_ID_HEADER;
 
 /// Everything the auth service needs per request, prebuilt once at plugin
 /// build time.

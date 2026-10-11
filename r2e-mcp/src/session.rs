@@ -21,7 +21,8 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
-use r2e_core::http::Parts;
+use r2e_core::http::middleware::Next;
+use r2e_core::http::{Parts, Request, Response};
 use r2e_core::rt::sync::{broadcast, OnceCell};
 use rmcp::service::{Peer, RoleServer};
 
@@ -175,9 +176,16 @@ impl SessionToolset {
 pub struct SessionInit {
     parts: Option<Arc<Parts>>,
     persistent: bool,
+    session_id: Option<SessionId>,
 }
 
 impl SessionInit {
+    /// The transport session id, when already known — see [`SessionId`]
+    /// for why it is `None` while the `initialize` handshake runs.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session_id.as_ref()
+    }
+
     /// The authenticated MCP caller, when `mcp.auth` is on.
     pub fn principal(&self) -> Option<&McpPrincipal> {
         self.extension_ref::<McpPrincipal>()
@@ -269,10 +277,84 @@ pub(crate) fn erase_init<T: McpSessionInit + Clone>(hook: T) -> SessionInitFn {
     })
 }
 
+/// The transport-assigned identifier of an MCP session — the value of the
+/// `Mcp-Session-Id` header under streamable HTTP.
+///
+/// Cheap to clone (a shared string). Read it from a call
+/// ([`ToolCall::session_id`](crate::ToolCall::session_id)) or a handle
+/// ([`McpSession::id`]), and look a session up with [`McpSessions::get`].
+///
+/// Known from the request *after* `initialize` on: the handshake itself
+/// is the request that mints the id, so [`SessionInit::session_id`] is
+/// `None` for an [`McpSessionInit`] hook running during `initialize`
+/// (the id is attached as soon as rmcp's response leaves the server).
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SessionId(Arc<str>);
+
+impl SessionId {
+    /// The id as sent on the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for SessionId {
+    fn from(id: &str) -> Self {
+        SessionId(Arc::from(id))
+    }
+}
+
+impl From<String> for SessionId {
+    fn from(id: String) -> Self {
+        SessionId(Arc::from(id))
+    }
+}
+
+impl AsRef<str> for SessionId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SessionId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for SessionId {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for SessionId {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl fmt::Debug for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
 /// The mutable state of one MCP session (one per rmcp session handler).
 pub(crate) struct SessionState {
     catalog: Arc<Catalog>,
     view: RwLock<Arc<SessionView>>,
+    /// The transport session id, attached by [`track_session_id`] when the
+    /// `initialize` response leaves (or by the handler from the request
+    /// header, whichever runs first). Never set for a sessionless request.
+    id: OnceLock<SessionId>,
     /// Serializes copy-on-write updates (readers never take it).
     write: Mutex<()>,
     /// Captured on the first request: the channel `list_changed`
@@ -292,6 +374,7 @@ impl SessionState {
         SessionState {
             catalog,
             view,
+            id: OnceLock::new(),
             write: Mutex::new(()),
             peer: OnceLock::new(),
             subject: OnceLock::new(),
@@ -302,6 +385,18 @@ impl SessionState {
 
     pub(crate) fn catalog(&self) -> &Catalog {
         &self.catalog
+    }
+
+    /// Attach the transport session id (first writer wins; a repeat of the
+    /// same id is a no-op).
+    pub(crate) fn set_id(&self, id: &str) {
+        if self.id.get().is_none() {
+            let _ = self.id.set(SessionId::from(id));
+        }
+    }
+
+    pub(crate) fn id(&self) -> Option<&SessionId> {
+        self.id.get()
     }
 
     pub(crate) fn view(&self) -> Arc<SessionView> {
@@ -347,6 +442,7 @@ impl SessionState {
                 let init = SessionInit {
                     parts: parts.cloned().map(Arc::new),
                     persistent: self.is_persistent(),
+                    session_id: self.id().cloned(),
                 };
                 let toolset = hook(init).await?;
                 // No notification: the session has not listed anything yet.
@@ -429,6 +525,47 @@ impl SessionLink {
     pub(crate) fn take(&self) -> Option<Weak<SessionState>> {
         self.0.lock().expect("MCP session link poisoned").take()
     }
+
+    fn peek(&self) -> Option<Arc<SessionState>> {
+        self.0
+            .lock()
+            .expect("MCP session link poisoned")
+            .as_ref()
+            .and_then(Weak::upgrade)
+    }
+}
+
+/// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
+pub(crate) const SESSION_ID_HEADER: &str = "mcp-session-id";
+
+/// Innermost middleware on the MCP endpoint: when a request without an
+/// `Mcp-Session-Id` turns out to open a session, attach the id rmcp minted
+/// (response header) to the session the handler linked — so
+/// [`McpSessions::get`] and [`McpSession::id`] work from the moment the
+/// `initialize` response is on its way, not only from the client's next
+/// request. Reuses the [`SessionLink`] the auth layer deposited, if any.
+pub(crate) async fn track_session_id(mut req: Request, next: Next) -> Response {
+    if req.headers().contains_key(SESSION_ID_HEADER) {
+        return next.run(req).await;
+    }
+    let link = match req.extensions().get::<SessionLink>() {
+        Some(link) => link.clone(),
+        None => {
+            let link = SessionLink::default();
+            req.extensions_mut().insert(link.clone());
+            link
+        }
+    };
+    let response = next.run(req).await;
+    if let Some(id) = response
+        .headers()
+        .get(SESSION_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        && let Some(state) = link.peek()
+    {
+        state.set_id(id);
+    }
+    response
 }
 
 /// `Mcp-Session-Id` → session, for the auth layer's session ↔ principal
@@ -631,6 +768,12 @@ impl McpSession {
         self.state.subject()
     }
 
+    /// The transport session id (`Mcp-Session-Id`); `None` for a
+    /// sessionless request or while the `initialize` handshake runs.
+    pub fn id(&self) -> Option<&SessionId> {
+        self.state.id()
+    }
+
     /// Whether `group` is currently enabled (`false` for an unknown group).
     pub fn is_group_enabled(&self, group: &str) -> bool {
         self.state
@@ -791,6 +934,14 @@ impl McpSessions {
     /// Every live session.
     pub fn all(&self) -> Vec<McpSession> {
         self.live().into_iter().map(McpSession::new).collect()
+    }
+
+    /// The live session with the transport id `id`, if any.
+    pub fn get(&self, id: &str) -> Option<McpSession> {
+        self.live()
+            .into_iter()
+            .find(|state| state.id().is_some_and(|known| known == id))
+            .map(McpSession::new)
     }
 
     /// The live sessions bound to `subject` (the principal's `sub`).

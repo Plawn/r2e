@@ -21,7 +21,7 @@ use crate::auth::ToolRequirements;
 use crate::elicitation::{ClientChannel, McpClient};
 use crate::error::McpError;
 use crate::progress::Progress;
-use crate::session::McpSession;
+use crate::session::{McpSession, SessionId};
 
 /// A JSON Schema object body (the map under `inputSchema`).
 pub type SchemaObject = serde_json::Map<String, Value>;
@@ -97,6 +97,12 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// Requests to the client (elicitation) for the duration of this call —
     /// what an `McpClient` member parameter resolves to.
     pub fn client(&self) -> McpClient<'_> {
@@ -315,6 +321,12 @@ pub struct ResourceCall {
 }
 
 impl ResourceCall {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// Requests to the client (elicitation) for the duration of this call —
     /// what an `McpClient` member parameter resolves to.
     pub fn client(&self) -> McpClient<'_> {
@@ -466,6 +478,12 @@ pub struct PromptCall {
 }
 
 impl PromptCall {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// Requests to the client (elicitation) for the duration of this call —
     /// what an `McpClient` member parameter resolves to.
     pub fn client(&self) -> McpClient<'_> {
@@ -664,6 +682,12 @@ pub struct Completion {
 }
 
 impl Completion {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// A hand-built completion request (tests, adapters).
     ///
     /// No parts, an empty request id and context, a fresh [`CancelToken`]

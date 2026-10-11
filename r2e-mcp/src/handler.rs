@@ -31,7 +31,7 @@ use crate::resource_updates::McpResourceUpdates;
 use crate::route::{
     Completion, CompletionRef, Completions, PromptCall, ResourceCall, ResourceRoute, ToolCall,
 };
-use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState};
+use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState, SESSION_ID_HEADER};
 
 /// Extract the per-call HTTP parts from the request context, by value.
 ///
@@ -167,6 +167,12 @@ impl R2eMcpHandler {
     async fn prepare(&self, context: &RequestContext<RoleServer>) -> Result<(), ErrorData> {
         self.state.capture_peer(&context.peer);
         let parts = context.extensions.get::<Parts>();
+        if let Some(id) = parts
+            .and_then(|parts| parts.headers.get(SESSION_ID_HEADER))
+            .and_then(|v| v.to_str().ok())
+        {
+            self.state.set_id(id);
+        }
         let subject = principal_in(parts).map(|p| p.user.sub.as_str());
         if !self.state.bind(subject) {
             tracing::warn!(
