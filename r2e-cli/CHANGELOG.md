@@ -14,3 +14,10 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
+
+## [0.7.0] - 2026-10-11
+
+### Changed
+
+- Tracks `r2e` 0.7.0: `r2e new`, `r2e add` and `r2e docs --llm` target that facade version.
+

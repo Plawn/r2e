@@ -75,7 +75,7 @@ categories = ["web-programming::http-server", "asynchronous"]
 
 [workspace.dependencies]
 # Internal crates
-r2e = { path = "r2e", version = "0.6.0" }
+r2e = { path = "r2e", version = "0.7.0" }
 r2e-rt = { path = "r2e-rt", version = "0.6.0" }
 r2e-core = { path = "r2e-core", version = "0.6.0" }
 r2e-macros = { path = "r2e-macros", version = "0.6.0" }
@@ -100,7 +100,7 @@ r2e-openfga-model = { path = "r2e-openfga/model", version = "0.6.0" }
 r2e-openfga-macros = { path = "r2e-openfga/macros", version = "0.6.0" }
 r2e-grpc = { path = "r2e-grpc", version = "0.6.0" }
 r2e-grpc-build = { path = "r2e-grpc/build", version = "0.6.0" }
-r2e-mcp = { path = "r2e-mcp", version = "0.6.0" }
+r2e-mcp = { path = "r2e-mcp", version = "0.7.0" }
 r2e-oidc = { path = "r2e-oidc", version = "0.6.0" }
 r2e-devtools = { path = "r2e-devtools", version = "0.6.0" }
 r2e-static = { path = "r2e-static", version = "0.6.0" }
