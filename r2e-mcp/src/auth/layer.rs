@@ -145,7 +145,11 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
             };
             validator.validate(bearer).await?
         }
-        _ => return Err(McpAuthError::InvalidToken("unsupported authorization scheme")),
+        _ => {
+            return Err(McpAuthError::InvalidToken(
+                "unsupported authorization scheme",
+            ))
+        }
     };
 
     let missing: Vec<String> = state

@@ -147,8 +147,12 @@ fn allowed_origins(inputs: &AuthInputs<'_>) -> Option<Arc<[String]>> {
 /// validator bean is the disabled one.
 fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArtifacts {
     let slot: Arc<OnceLock<McpTokenValidator>> = Arc::new(OnceLock::new());
-    let required_scopes: Arc<[String]> =
-        inputs.cfg.required_scopes.clone().unwrap_or_default().into();
+    let required_scopes: Arc<[String]> = inputs
+        .cfg
+        .required_scopes
+        .clone()
+        .unwrap_or_default()
+        .into();
     tracing::info!(
         realm = %basic.realm(),
         "MCP HTTP Basic auth enabled (no OAuth issuer configured)"

@@ -45,7 +45,9 @@ impl BasicCredentials {
         if username.contains(':') {
             // RFC 7617 §2: the user-id cannot contain a colon — it is the
             // separator on the wire, so such a pair could never match.
-            return Err(format!("mcp.auth.basic.username `{username}` must not contain ':'").into());
+            return Err(
+                format!("mcp.auth.basic.username `{username}` must not contain ':'").into(),
+            );
         }
         if cfg.password.is_empty() {
             return Err("mcp.auth.basic.password must not be empty".into());

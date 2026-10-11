@@ -271,7 +271,9 @@ async fn validate_jwt(
         _ => McpAuthError::InvalidToken("token validation failed"),
     })?;
     let scope_values: Arc<[String]> = scopes.scopes(&claims).into();
-    let user = Arc::new(r2e_security::identity::build_authenticated_user(claims, scopes));
+    let user = Arc::new(r2e_security::identity::build_authenticated_user(
+        claims, scopes,
+    ));
     Ok(McpPrincipal {
         user,
         scopes: scope_values,

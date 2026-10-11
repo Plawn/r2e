@@ -118,10 +118,7 @@ pub fn check_access(
 /// List handlers use this form so one request performs one extensions lookup,
 /// not one lookup per registered member.
 #[doc(hidden)]
-pub fn requirements_visible(
-    principal: Option<&McpPrincipal>,
-    req: &ToolRequirements,
-) -> bool {
+pub fn requirements_visible(principal: Option<&McpPrincipal>, req: &ToolRequirements) -> bool {
     if req.is_empty() {
         return true;
     }
