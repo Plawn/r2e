@@ -529,6 +529,18 @@ Follow-ups:
 sampling, roots and logging are deliberately NOT implemented. Plan:
 `plans/w16-p4-mcp-protocol-gaps.md`.
 
+**P5 — plexus prerequisites (task #1073, branch `feat/mcp-1073`, 2026-10-11):**
+`McpRegistry` (endpoint-wide dynamic members, precedence catalog >
+session-private > registry, request-time merge so a change is O(registry)
+not O(sessions × members), one `list_changed` per touched family), `_meta`
+on members (`#[tool(meta = meta!(..))]`), `mcp.auth.basic`, and
+`ToolCall::session_id()`. Breaking (`r2e-mcp` 0.7.0 + `r2e` 0.7.0 at
+release; `r2e-core` stays 0.6.x): endpoint always
+mounted, every family always advertised, `Provided` 4-tuple,
+`McpSessionError` → `McpMemberError` (alias kept) —
+`docs/migration/mcp-registry.md`. Out of scope and still open: loopback
+in-memory session, idle timeout / SessionManager (#692).
+
 ## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
 
 **All 6 sprints landed on `task/w17-sprints`, one commit per sprint**
