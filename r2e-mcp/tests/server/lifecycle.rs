@@ -44,14 +44,10 @@ fn blocking_post(addr: &str, session: Option<&str>, body: &str) -> std::io::Resu
 /// Case-insensitive header lookup in a raw HTTP response.
 fn header_value(response: &str, name: &str) -> Option<String> {
     let lower = name.to_ascii_lowercase();
-    response
-        .split("\r\n\r\n")
-        .next()?
-        .lines()
-        .find_map(|line| {
-            let (key, value) = line.split_once(':')?;
-            (key.trim().to_ascii_lowercase() == lower).then(|| value.trim().to_string())
-        })
+    response.split("\r\n\r\n").next()?.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim().to_ascii_lowercase() == lower).then(|| value.trim().to_string())
+    })
 }
 
 const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"lifecycle","version":"0"}}}"#;

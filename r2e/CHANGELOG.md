@@ -14,3 +14,16 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
+
+### Breaking
+
+- `r2e::mcp` (feature `mcp`) re-exports `r2e-mcp` 0.7: the MCP endpoint is
+  always mounted and every family always advertised, `McpServer::Provided` is
+  a 4-tuple, `McpSessionError` → `McpMemberError` (alias kept), the route
+  structs gain `meta`. Migration: [`docs/migration/mcp-registry.md`](../docs/migration/mcp-registry.md);
+  details in [`r2e-mcp/CHANGELOG.md`](../r2e-mcp/CHANGELOG.md).
+
+### Added
+
+- `r2e::prelude` (feature `mcp`) re-exports `McpRegistry`, the `meta!` macro
+  and `MetaObject`.

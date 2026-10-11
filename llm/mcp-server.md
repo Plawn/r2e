@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~6400
+tokens: ~7500
 requires: guards, security
 ---
 
@@ -39,9 +39,20 @@ requires: guards, security
   until a session enables it; a member parameter `session: McpSession` lets a
   tool `enable_group`/`add_tool(DynamicTool::…)`; `McpServer::session_init::<T>()`
   shapes the list from the opening request; the `McpSessions` bean reaches
-  live sessions by subject. Hidden = unknown (not callable).
+  live sessions by subject or `SessionId`. Hidden = unknown (not callable).
+- Endpoint-wide dynamic members: inject the `McpRegistry` bean and
+  `add_tool`/`upsert_tool`/`remove_tool` (same for resources and prompts, or
+  `edit(|e| …)` for one atomic batch) — every session and sessionless caller
+  serves them, one `list_changed` per touched family, no per-session work.
+  Precedence: catalog > session-private > registry; a catalog key is never
+  overridable. The endpoint is mounted even with no `#[mcp_routes]` service.
+- `#[tool(meta = meta!({ … }))]` (also `#[resource]`/`#[prompt]`,
+  `DynamicTool::meta`) puts a free-form `_meta` on the list entry (MCP Apps:
+  `_meta.ui.resourceUri`). `ToolCall::session_id()` is the transport's
+  `Mcp-Session-Id` (`None` sessionless).
 - Auth: set `server.public-url` + `mcp.auth.issuer` (any OIDC IdP) and the rest
-  is discovered; with no `mcp.auth` section the server is unauthenticated.
+  is discovered; `mcp.auth.basic.{username,password}` adds (or stands in for)
+  HTTP Basic; with no `mcp.auth` section the server is unauthenticated.
 - Set `mcp.allowed-hosts` behind a proxy or public hostname (the default
   accepts loopback `Host` headers only); tests boot with `pin_mcp_validator`
   **before** `load_config` (feature `mcp-testing`).
@@ -76,7 +87,7 @@ pub struct MathTools {
 #[intercept(Logged::info())]               // impl-level interceptor wraps every tool
 impl MathTools {
     /// Add two numbers.                   // doc comment → tool description shown to the agent
-    #[tool(read_only, idempotent)]         // annotations: read_only/destructive/idempotent/open_world/name/title
+    #[tool(read_only, idempotent)]         // annotations: read_only/destructive/idempotent/open_world/name/title/meta
     async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
         Json(AddOut { value: self.calc.add(p.a, p.b) })
     }
@@ -309,8 +320,9 @@ JSON-RPC envelope to `/mcp` with `accept: application/json, text/event-stream`
 ### Dynamic members — per-session lists
 
 Every session starts from the boot-time catalog; groups, a session handle and
-session-private members change what ONE session sees. Typed `#[mcp_routes]`
-members stay compile-checked; the dynamism is *which* members a session sees.
+session-private members change what ONE session sees; the `McpRegistry` bean
+changes what EVERY session sees. Typed `#[mcp_routes]` members stay
+compile-checked; the dynamism is *which* members a caller sees.
 
 ```rust
 #[derive(serde::Deserialize, schemars::JsonSchema, ObjectParams)]
@@ -400,15 +412,18 @@ b.provide(RoleToolsets)                                    // the hook is a bean
   `identity::<T>()`, `header`, `parts`); `Err` fails that request and is
   retried. A missing hook bean is a boot panic.
 - `McpSessions` (plugin-provided bean — `#[inject] sessions: McpSessions`):
-  `for_subject(sub)`, `all()`, `len()`; each item is an `McpSession`. Use it
-  from an admin route or a `#[consumer]` to change a live user's toolset.
+  `get(&session_id)`, `for_subject(sub)`, `all()`, `len()`; each item is an
+  `McpSession`. Use it from an admin route or a `#[consumer]` to change a live
+  user's toolset. `ToolCall::session_id()` / `ResourceCall` / `PromptCall` /
+  `McpSession::id()` give the transport `SessionId` (`Mcp-Session-Id`;
+  `None` for sessionless or hand-built calls, and in `SessionInit` during the
+  `initialize` handshake that mints it).
 - Sessions are **bound to the principal that opened them**: under `mcp.auth`,
   the same session id with another token's subject gets HTTP `404` (identical
   to an unknown session) on `POST`, SSE `GET` and `DELETE`.
-- Stateful endpoints always advertise all three families with
-  `listChanged: true`, plus completion: `McpSessions` and raw call contexts
-  can add members even without an explicit `McpSession` parameter. Stateless
-  endpoints do the same when a `session_init` or an `opt_in` group exists.
+- All three families are always advertised with `listChanged: true`, plus
+  completion, stateless or not: `McpRegistry` can add a member of any family
+  at any time.
 - Modern `subscriptions/listen` acknowledges URI interests, then runs the
   async session-init hook before delivering updates. Each update must match
   a resource in the initialized view and the caller's scope/role requirements;
@@ -419,9 +434,71 @@ b.provide(RoleToolsets)                                    // the hook is a bean
   with a fresh access check.
 - Typed dynamic tool/prompt handlers retain the original arguments in
   `ToolCall.arguments` / `PromptCall.arguments` alongside their typed input.
-- `mcp.stateless: true`: groups and `session_init` work (recomputed per
-  request); a member taking `McpSession` is a **boot panic** (mutations would
-  not outlive the request).
+- `mcp.stateless: true`: groups, `session_init` and `McpRegistry` work
+  (recomputed per request); a member taking `McpSession` is a **boot panic**
+  (mutations would not outlive the request).
+
+### Endpoint-wide dynamic members — `McpRegistry`
+
+The plugin provides `McpRegistry`: members any bean adds after boot, served to
+every session and every sessionless caller. The plugin-host shape (tool packs
+loaded at runtime, MCP Apps `ui://` resources registered on demand):
+
+```rust
+#[derive(serde::Deserialize, schemars::JsonSchema, ObjectParams)]
+pub struct EchoIn { pub text: String }
+
+/// Loads a tool pack after boot — every session sees it.
+#[derive(Clone)]
+pub struct PackLoader { mcp: McpRegistry }
+
+#[bean]
+impl PackLoader {
+    pub fn new(mcp: McpRegistry) -> Self { Self { mcp } }   // the registry is a plugin-provided bean
+
+    pub fn load_echo(&self) -> Result<(), McpMemberError> {
+        self.mcp.edit(|edit| {                                // atomic: all or nothing, ONE list_changed per touched family
+            edit.upsert_tool(                                 // replaces a registry namesake; a catalog namesake is Err
+                DynamicTool::new("echo")
+                    .description("Echo the text back")
+                    .meta(meta!({ "ui": { "resourceUri": "ui://widgets/echo" } }))
+                    .handler(|p: EchoIn, _call: ToolCall| async move { p.text }),
+            )?;
+            edit.upsert_resource(
+                DynamicResource::new("ui://widgets/echo", "echo widget")
+                    .handler(|_call: ResourceCall| async { "<html></html>".to_string() }),
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn unload_echo(&self) {
+        self.mcp.remove_tool("echo");                         // `false` when absent — removals never fail
+        self.mcp.remove_resource("ui://widgets/echo");
+    }
+}
+# fn main() {}
+```
+
+- One-shot: `add_*` (Err on any namesake), `upsert_*` (replaces a registry
+  member of the same key; `Ok(true)` when it did), `remove_*` (`bool`), for
+  tools (by name), resources (by URI — a template by its URI text) and
+  prompts (by name); reads `has_tool`/`has_resource`/`has_prompt`,
+  `tool_names`, `is_empty`. `edit` runs the closure under the registry's write
+  lock: keep it synchronous.
+- Precedence **catalog > session-private > registry**: a catalog key can never
+  be taken (the add is `Err`; a member added before the endpoint is mounted —
+  from a `#[post_construct]`/`#[on_start]` — that clashes with the catalog is a
+  **boot panic**); a session-private member shadows a registry namesake for
+  that session only, with no cross-check at add time.
+- Every change notifies every live session and sessionless
+  `subscriptions/listen` stream, once per touched family, with no per-session
+  rebuild: the handler merges the session view and the registry view at
+  request time (O(registry members) per change; the no-registry hot path is
+  unchanged).
+- Works before the mount, under `mcp.stateless`, and with `mcp.enabled: false`
+  (accepts members, serves nothing). The endpoint is mounted even when no
+  `#[mcp_routes]` service is registered — a registry-only server is valid.
 
 ### MCP auth — OAuth 2.1 resource server (`mcp.auth.*`)
 
@@ -468,6 +545,15 @@ rewritten to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP
 with the params applied, server config winning over client duplicates),
 `filter-members` (true — list operations hide members the
 caller cannot invoke), `allow-insecure` (http issuer, dev), `allowed-origins`.
+
+**HTTP Basic** (`mcp.auth.basic.*`): `username` (no `:`), `password`
+(`${ENV}`), optional `realm` (default `mcp`), `roles`, `scopes`. Stands alone
+(no `issuer` ⇒ no PRM/discovery/shim, challenge `WWW-Authenticate: Basic
+realm="…"`) or composes with OAuth (the `Authorization` scheme picks the path;
+a 401 carries both challenges). The principal is built once at boot
+(`sub` = username); `#[roles]`, `#[tool(scopes)]` and `required-scopes` apply
+as to a token; compares are constant-time. Neither `issuer` nor `basic` under
+`mcp.auth` is a boot error.
 
 Per-tool authorization:
 

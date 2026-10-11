@@ -25,6 +25,9 @@ r2e-security = { workspace = true }
 # `testing` feature only — no cycle: r2e-test does not depend on r2e-mcp.
 r2e-test = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["json", "form", "rustls"] }
+# HTTP Basic auth (mcp.auth.basic.*): credential decoding + constant-time compare.
+base64 = { workspace = true }
+subtle = { workspace = true }
 url = { workspace = true }
 # Reverse-matching RFC 6570 resource templates: captured variables are
 # percent-decoded before reaching `ResourceCall::variables`.

@@ -14,14 +14,14 @@ use std::sync::Arc;
 
 use r2e_core::http::Parts;
 use r2e_core::rt::CancelToken;
-use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
+use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
 use serde_json::Value;
 
 use crate::auth::ToolRequirements;
 use crate::elicitation::{ClientChannel, McpClient};
 use crate::error::McpError;
 use crate::progress::Progress;
-use crate::session::McpSession;
+use crate::session::{McpSession, SessionId};
 
 /// A JSON Schema object body (the map under `inputSchema`).
 pub type SchemaObject = serde_json::Map<String, Value>;
@@ -97,6 +97,12 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// Requests to the client (elicitation) for the duration of this call —
     /// what an `McpClient` member parameter resolves to.
     pub fn client(&self) -> McpClient<'_> {
@@ -237,6 +243,10 @@ pub struct ToolRoute {
     pub requirements: ToolRequirements,
     /// The member group, if any — see [`McpGroup`].
     pub group: Option<McpGroup>,
+    /// Free-form `_meta` object passed through verbatim in `tools/list`
+    /// (MCP Apps `ui.resourceUri`, vendor extensions, …). See [`MetaObject`]
+    /// and the [`meta!`](crate::meta) macro.
+    pub meta: Option<MetaObject>,
     /// The dispatch closure.
     pub invoke: ToolInvoke,
 }
@@ -262,6 +272,7 @@ impl ToolRoute {
         if !self.annotations.is_empty() {
             tool.annotations = Some(self.annotations.clone().into_rmcp());
         }
+        tool.meta = self.meta.clone();
         tool
     }
 }
@@ -310,6 +321,12 @@ pub struct ResourceCall {
 }
 
 impl ResourceCall {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// Requests to the client (elicitation) for the duration of this call —
     /// what an `McpClient` member parameter resolves to.
     pub fn client(&self) -> McpClient<'_> {
@@ -383,6 +400,10 @@ pub struct ResourceRoute {
     /// Completion providers for the URI-template variables
     /// (`completion/complete` with a `ref/resource`). Empty for a fixed URI.
     pub completions: Vec<CompletionProvider>,
+    /// Free-form `_meta` object passed through verbatim in `resources/list`
+    /// and `resources/templates/list`. See [`MetaObject`] and
+    /// [`meta!`](crate::meta).
+    pub meta: Option<MetaObject>,
     /// The read closure.
     pub invoke: ResourceInvoke,
 }
@@ -395,6 +416,7 @@ impl ResourceRoute {
         resource.title = self.title.clone();
         resource.description = self.description.clone();
         resource.mime_type = self.mime_type.clone();
+        resource.meta = self.meta.clone();
         resource
     }
 
@@ -409,6 +431,7 @@ impl ResourceRoute {
         resource.title = self.title.clone();
         resource.description = self.description.clone();
         resource.mime_type = self.mime_type.clone();
+        resource.meta = self.meta.clone();
         resource
     }
 }
@@ -455,6 +478,12 @@ pub struct PromptCall {
 }
 
 impl PromptCall {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// Requests to the client (elicitation) for the duration of this call —
     /// what an `McpClient` member parameter resolves to.
     pub fn client(&self) -> McpClient<'_> {
@@ -540,6 +569,9 @@ pub struct PromptRoute {
     /// Completion providers for the arguments (`completion/complete` with a
     /// `ref/prompt`).
     pub completions: Vec<CompletionProvider>,
+    /// Free-form `_meta` object passed through verbatim in `prompts/list`.
+    /// See [`MetaObject`] and [`meta!`](crate::meta).
+    pub meta: Option<MetaObject>,
     /// The expansion closure.
     pub invoke: PromptInvoke,
 }
@@ -563,6 +595,7 @@ impl PromptRoute {
         let mut prompt =
             rmcp::model::Prompt::new(self.name.clone(), self.description.clone(), arguments);
         prompt.title = self.title.clone();
+        prompt.meta = self.meta.clone();
         prompt
     }
 }
@@ -649,6 +682,12 @@ pub struct Completion {
 }
 
 impl Completion {
+    /// The transport session id (`Mcp-Session-Id`) of the session serving
+    /// this call; `None` for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
     /// A hand-built completion request (tests, adapters).
     ///
     /// No parts, an empty request id and context, a fresh [`CancelToken`]

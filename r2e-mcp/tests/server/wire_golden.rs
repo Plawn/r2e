@@ -39,7 +39,7 @@
 use r2e_core::http::Router;
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
-use r2e_mcp::{AppBuilderMcpExt, McpError, McpServer, Params, ResourceCall};
+use r2e_mcp::{meta, AppBuilderMcpExt, McpError, McpServer, Params, ResourceCall};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -89,6 +89,12 @@ impl GoldenService {
         "plain".to_string()
     }
 
+    /// A tool advertising an MCP Apps `_meta` block.
+    #[tool(meta = meta!({ "ui": { "resourceUri": "ui://golden/widget" }, "vendor/tag": 1 }))]
+    async fn widget(&self) -> String {
+        "widget".to_string()
+    }
+
     /// A fixed resource.
     #[resource(
         uri = "r2e://golden/info",
@@ -106,6 +112,16 @@ impl GoldenService {
         format!("user:{}", call.variables["id"])
     }
 
+    /// An MCP Apps UI resource with `_meta`.
+    #[resource(
+        uri = "ui://golden/widget",
+        mime_type = "text/html;profile=mcp-app",
+        meta = meta!({ "ui": { "prefersBorder": true } })
+    )]
+    async fn widget_ui(&self) -> &'static str {
+        "<html></html>"
+    }
+
     /// Explain the echo tool.
     ///
     /// Walks the agent through calling `echo`.
@@ -118,6 +134,12 @@ impl GoldenService {
     #[prompt]
     async fn usage(&self) -> String {
         "Use `echo`.".to_string()
+    }
+
+    /// A prompt with `_meta`.
+    #[prompt(meta = meta!({ "category": "help" }))]
+    async fn tagged(&self) -> String {
+        "tagged".to_string()
     }
 }
 
@@ -180,7 +202,10 @@ async fn list_payloads_match_the_wire_goldens() {
     let router = golden_app().await;
     let session = support::initialize(&router, "/mcp").await;
 
-    assert_golden("tools_list", &list(&router, &session, 2, "tools/list").await);
+    assert_golden(
+        "tools_list",
+        &list(&router, &session, 2, "tools/list").await,
+    );
     assert_golden(
         "resources_list",
         &list(&router, &session, 3, "resources/list").await,

@@ -43,8 +43,11 @@ impl ToolsOnly {
     }
 }
 
+/// `McpRegistry` can add a member of any family after boot, so every
+/// family is advertised (with `listChanged`) even when the catalog has none
+/// — stateless serving included.
 #[r2e_core::test]
-async fn stateless_absent_families_are_not_advertised() {
+async fn every_family_is_advertised_even_when_absent_at_boot() {
     let router = AppBuilder::new()
         .plugin(McpServer::new().stateless(true))
         .build_state()
@@ -52,9 +55,13 @@ async fn stateless_absent_families_are_not_advertised() {
         .register_mcp_service::<ToolsOnly>()
         .build();
     let capabilities = &initialize_result(&router).await["capabilities"];
-    assert!(capabilities.get("tools").is_some(), "{capabilities}");
-    assert!(capabilities.get("resources").is_none(), "{capabilities}");
-    assert!(capabilities.get("prompts").is_none(), "{capabilities}");
+    for family in ["tools", "resources", "prompts"] {
+        assert_eq!(capabilities[family]["listChanged"], true, "{capabilities}");
+    }
+    assert_eq!(
+        capabilities["resources"]["subscribe"], true,
+        "{capabilities}"
+    );
 }
 
 #[r2e_core::test]
@@ -214,7 +221,10 @@ async fn simple_template_variables_stop_at_reserved_characters() {
 
     // `{+path}` is the reserved form: it does span segments.
     let read = support::resources_read(&router, "/mcp", &session, "r2e://files/a/b/c.txt").await;
-    assert_eq!(read["result"]["contents"][0]["text"], "file:a/b/c.txt", "{read}");
+    assert_eq!(
+        read["result"]["contents"][0]["text"], "file:a/b/c.txt",
+        "{read}"
+    );
 }
 
 #[r2e_core::test]
@@ -228,7 +238,10 @@ async fn template_variables_are_percent_decoded() {
         "r2e://users/a%2Fb?view=caf%C3%A9",
     )
     .await;
-    assert_eq!(read["result"]["contents"][0]["text"], "user:a/b:café", "{read}");
+    assert_eq!(
+        read["result"]["contents"][0]["text"], "user:a/b:café",
+        "{read}"
+    );
     // The echoed URI stays as the client sent it.
     assert_eq!(
         read["result"]["contents"][0]["uri"],

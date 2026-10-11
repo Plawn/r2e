@@ -38,7 +38,7 @@ async fn missing_token_gets_401_with_resource_metadata_challenge() {
     assert_eq!(response.status, StatusCode::UNAUTHORIZED);
     let (code, description) = error_body(&response.raw_body);
     assert_eq!(code, "unauthorized");
-    assert_eq!(description, "missing bearer token");
+    assert_eq!(description, "missing credentials");
     // The exact RFC 9728 challenge — what turns the 401 into a working
     // OAuth flow. No `error` param on a missing (vs invalid) token.
     // (`raw_headers` is not exposed by support::post; re-issue via oneshot.)
@@ -99,7 +99,10 @@ async fn expired_token_gets_the_expired_reason() {
 
     assert_eq!(response.status, StatusCode::UNAUTHORIZED);
     let (code, description) = error_body(&response.raw_body);
-    assert_eq!((code.as_str(), description.as_str()), ("invalid_token", "token expired"));
+    assert_eq!(
+        (code.as_str(), description.as_str()),
+        ("invalid_token", "token expired")
+    );
 }
 
 #[tokio::test]
@@ -110,7 +113,12 @@ async fn wrong_audience_and_wrong_issuer_are_rejected() {
         test_jwt().wrong_issuer_token("alice"),
     ] {
         let response = post_auth(&router, "/mcp", None, &token, &support::initialize_body()).await;
-        assert_eq!(response.status, StatusCode::UNAUTHORIZED, "{}", response.raw_body);
+        assert_eq!(
+            response.status,
+            StatusCode::UNAUTHORIZED,
+            "{}",
+            response.raw_body
+        );
         assert_eq!(error_body(&response.raw_body).0, "invalid_token");
     }
 }
@@ -132,7 +140,10 @@ async fn missing_required_scope_gets_403_with_missing_scopes() {
         ..offline_auth()
     })
     .await;
-    let token = test_jwt().token_builder("bob").scopes(&["mcp:read"]).build();
+    let token = test_jwt()
+        .token_builder("bob")
+        .scopes(&["mcp:read"])
+        .build();
     let (status, headers, body) = crate::fixtures::send(
         &router,
         "POST",
@@ -152,7 +163,10 @@ async fn missing_required_scope_gets_403_with_missing_scopes() {
     assert_eq!(description, "token lacks a required scope");
     // Only the MISSING scopes are advertised, space-joined.
     let challenge = www_authenticate(&headers);
-    assert!(challenge.contains("error=\"insufficient_scope\""), "{challenge}");
+    assert!(
+        challenge.contains("error=\"insufficient_scope\""),
+        "{challenge}"
+    );
     assert!(challenge.contains("scope=\"mcp:write\""), "{challenge}");
     assert!(!challenge.contains("mcp:read"), "{challenge}");
 }
@@ -164,7 +178,10 @@ async fn required_scopes_present_passes() {
         ..offline_auth()
     })
     .await;
-    let token = test_jwt().token_builder("bob").scopes(&["mcp:read"]).build();
+    let token = test_jwt()
+        .token_builder("bob")
+        .scopes(&["mcp:read"])
+        .build();
     initialize_auth(&router, "/mcp", &token).await;
 }
 
@@ -180,7 +197,10 @@ async fn cors_preflight_bypasses_auth() {
         &[
             ("origin", "https://claude.ai"),
             ("access-control-request-method", "POST"),
-            ("access-control-request-headers", "authorization, content-type"),
+            (
+                "access-control-request-headers",
+                "authorization, content-type",
+            ),
         ],
         r2e_core::http::Body::empty(),
     )
@@ -247,7 +267,10 @@ async fn disallowed_origin_gets_403_invalid_origin() {
 
     assert_eq!(response.status, StatusCode::FORBIDDEN);
     let (code, description) = error_body(&response.raw_body);
-    assert_eq!((code.as_str(), description.as_str()), ("invalid_origin", "origin not allowed"));
+    assert_eq!(
+        (code.as_str(), description.as_str()),
+        ("invalid_origin", "origin not allowed")
+    );
 }
 
 #[tokio::test]

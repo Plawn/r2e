@@ -27,7 +27,10 @@ async fn input_schema_reflects_the_params_type() {
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
-    assert!(required.contains(&"a") && required.contains(&"b"), "{schema}");
+    assert!(
+        required.contains(&"a") && required.contains(&"b"),
+        "{schema}"
+    );
     // The schemars `$schema` marker is stripped from the wire form.
     assert!(schema.get("$schema").is_none(), "{schema}");
 }
@@ -62,7 +65,10 @@ async fn parameterless_tools_get_an_empty_object_schema() {
     assert_eq!(locked["inputSchema"]["type"], "object");
     assert!(
         locked["inputSchema"].get("required").is_none()
-            || locked["inputSchema"]["required"].as_array().unwrap().is_empty(),
+            || locked["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
         "{list}"
     );
 }
@@ -81,12 +87,20 @@ async fn nested_and_enum_types_keep_defs_inline() {
         .map(|v| v.as_str().unwrap())
         .collect();
     assert!(required.contains(&"name"), "{schema}");
-    assert!(!required.contains(&"count"), "Option<T> must not be required: {schema}");
+    assert!(
+        !required.contains(&"count"),
+        "Option<T> must not be required: {schema}"
+    );
 
     // Nested struct and enum land in same-document `$defs` (kept inline —
     // draft 2020-12 refs, resolved by clients).
-    assert_eq!(schema["properties"]["name"]["description"], "A documented required field.");
-    let defs = schema["$defs"].as_object().expect("nested types produce $defs");
+    assert_eq!(
+        schema["properties"]["name"]["description"],
+        "A documented required field."
+    );
+    let defs = schema["$defs"]
+        .as_object()
+        .expect("nested types produce $defs");
     assert!(defs.contains_key("Inner"), "{schema}");
     let mode = &defs["Mode"];
     let variants = mode["enum"]
@@ -126,6 +140,10 @@ async fn annotations_carry_the_tool_hints() {
 async fn tool_names_honor_the_name_override() {
     let list = listed().await;
     // `divide` is renamed via #[tool(name = "div")].
-    assert!(list["tools"].as_array().unwrap().iter().all(|t| t["name"] != "divide"));
+    assert!(list["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|t| t["name"] != "divide"));
     tool(&list, "div");
 }

@@ -33,8 +33,10 @@ async fn disabled_plugin_mounts_nothing_but_registration_still_works() {
     assert_eq!(response.status, StatusCode::NOT_FOUND);
 }
 
+/// Every member may come from `McpRegistry` after boot, so an app with no
+/// `#[mcp_routes]` service still mounts the endpoint (empty lists).
 #[r2e_core::test]
-async fn no_registered_service_means_no_endpoint() {
+async fn no_registered_service_still_mounts_the_endpoint() {
     let router = AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()
@@ -42,7 +44,7 @@ async fn no_registered_service_means_no_endpoint() {
         .build();
 
     let response = support::post(&router, "/mcp", None, &support::initialize_body()).await;
-    assert_eq!(response.status, StatusCode::NOT_FOUND);
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
 }
 
 #[r2e_core::test]
@@ -155,4 +157,3 @@ async fn stateless_json_response_mode() {
     assert_eq!(call.status, StatusCode::OK, "{}", call.raw_body);
     assert_eq!(call.result()["structuredContent"]["value"], 5.0);
 }
-

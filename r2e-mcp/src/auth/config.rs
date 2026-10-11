@@ -57,6 +57,39 @@ pub enum AudienceMode {
     Skip,
 }
 
+/// HTTP Basic credentials for the MCP endpoint (`mcp.auth.basic.*`).
+///
+/// One static user-id/password pair, compared in constant time. Stands alone
+/// (no `issuer` ⇒ Basic only, no OAuth surface at all) or next to OAuth (the
+/// `Authorization` scheme picks the path per request). The configured
+/// `roles` and `scopes` are what `#[roles]`, `#[tool(scopes = …)]` and
+/// `required-scopes` check — the principal is indistinguishable from a
+/// token-backed one to application code.
+///
+/// ```yaml
+/// mcp:
+///   auth:
+///     basic:
+///       username: agent
+///       password: ${MCP_BASIC_PASSWORD}
+///       scopes: ["mcp:read"]
+/// ```
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct McpBasicAuthConfig {
+    /// The user-id (RFC 7617: must not contain `:`). Becomes the principal's
+    /// `sub`.
+    pub username: String,
+    /// The password. Use `${ENV_VAR}` interpolation rather than a literal.
+    pub password: String,
+    /// Realm advertised in the `WWW-Authenticate: Basic` challenge (default
+    /// `mcp`).
+    pub realm: Option<String>,
+    /// Roles granted to the principal (`#[roles]` checks).
+    pub roles: Option<Vec<String>>,
+    /// Scopes granted to the principal (`required-scopes`, `#[tool(scopes)]`).
+    pub scopes: Option<Vec<String>>,
+}
+
 /// Typed view of the `mcp.auth.*` config section (presence-based: no
 /// section ⇒ unauthenticated endpoint).
 ///
@@ -68,13 +101,22 @@ pub enum AudienceMode {
 ///     required-scopes: ["mcp"]
 /// ```
 ///
+/// At least one of `issuer` (OAuth 2.1) and `basic` (HTTP Basic) must be
+/// set; both may be.
+///
 /// Precedence for each knob: **programmatic builder setting > this file
 /// config > default** (same rule as [`McpConfig`](crate::McpConfig)).
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct McpAuthConfig {
-    /// The OAuth issuer URL (the ONE required key). Discovery, JWKS and the
-    /// `iss` claim check all derive from it.
+    /// The OAuth issuer URL. Discovery, JWKS and the `iss` claim check all
+    /// derive from it. Required unless [`basic`](Self::basic) is set — then
+    /// leaving it empty disables the whole OAuth surface (no
+    /// protected-resource metadata, no discovery, no bearer path).
+    #[config(default = "")]
     pub issuer: String,
+    /// HTTP Basic credentials (presence-based). See [`McpBasicAuthConfig`].
+    #[config(section)]
+    pub basic: Option<McpBasicAuthConfig>,
 
     /// Canonical resource URI of this MCP endpoint (RFC 8707). Default:
     /// `{server.public-url}{mcp.path}`, falling back to the loopback bind

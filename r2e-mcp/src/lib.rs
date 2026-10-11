@@ -43,6 +43,7 @@ pub mod config;
 pub mod dynamic;
 pub mod elicitation;
 pub mod error;
+mod global;
 pub mod guard;
 pub mod handler;
 mod pagination;
@@ -62,7 +63,9 @@ mod uri_template;
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
 
-pub use auth::{McpAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements};
+pub use auth::{
+    McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements,
+};
 pub use config::McpConfig;
 pub use dynamic::{
     DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
@@ -70,6 +73,7 @@ pub use dynamic::{
 };
 pub use elicitation::{ElicitError, Elicited, McpClient};
 pub use error::McpError;
+pub use global::{McpRegistry, RegistryEdit};
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
 pub use progress::Progress;
@@ -84,11 +88,32 @@ pub use route::{
 };
 pub use service::McpService;
 pub use session::{
-    McpSession, McpSessionError, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+    McpMemberError, McpSession, McpSessionError, McpSessionInit, McpSessions, SessionId,
+    SessionInit, SessionToolset,
 };
 
+/// The free-form `_meta` object a tool, resource or prompt advertises in its
+/// list entry (`ToolRoute::meta`, `#[tool(meta = …)]`, `DynamicTool::meta`).
+/// Build one with [`meta!`].
+pub use rmcp::model::MetaObject;
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
 pub use rmcp::model::Role as PromptMessageRole;
+
+/// Build a [`MetaObject`] from a JSON object literal (`serde_json::json!`
+/// syntax, braces required):
+///
+/// ```rust
+/// use r2e_mcp::{meta, MetaObject};
+///
+/// let m: MetaObject = meta!({ "ui": { "resourceUri": "ui://widget" } });
+/// assert_eq!(m["ui"]["resourceUri"], "ui://widget");
+/// ```
+#[macro_export]
+macro_rules! meta {
+    ({ $($tt:tt)* }) => {
+        $crate::__macro_support::meta_from_value($crate::__macro_support::json!({ $($tt)* }))
+    };
+}
 /// Raw wire result/content types, re-exported for tools, resources and
 /// prompts that build results by hand without importing rmcp directly.
 pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
@@ -213,15 +238,26 @@ pub mod __macro_support {
     pub use crate::service::McpService;
     pub use crate::session::McpSession;
     pub use r2e_core::NoIdentity;
-    pub use rmcp::model::{CallToolResult, GetPromptResult, ResourceContents};
+    pub use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
+    pub use serde_json::json;
+
+    /// `meta!` support: the `json!({ … })` literal is an object by
+    /// construction.
+    pub fn meta_from_value(value: serde_json::Value) -> MetaObject {
+        match value {
+            serde_json::Value::Object(map) => MetaObject::from(map),
+            _ => unreachable!("meta! only accepts a braced object literal"),
+        }
+    }
 }
 
 pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
-    pub use crate::auth::{McpAuthConfig, McpTokenValidator};
+    pub use crate::auth::{McpAuthConfig, McpBasicAuthConfig, McpTokenValidator};
     pub use crate::dynamic::{DynamicPrompt, DynamicResource, DynamicTool};
     pub use crate::elicitation::{ElicitError, Elicited, McpClient};
     pub use crate::error::McpError;
+    pub use crate::global::McpRegistry;
     pub use crate::params::{ObjectParams, Params};
     pub use crate::plugin::McpServer;
     pub use crate::progress::Progress;
@@ -231,7 +267,8 @@ pub mod prelude {
     };
     pub use crate::service::McpService;
     pub use crate::session::{
-        McpSession, McpSessionInit, McpSessions, SessionInit, SessionToolset,
+        McpMemberError, McpSession, McpSessionInit, McpSessions, SessionId, SessionInit,
+        SessionToolset,
     };
-    pub use crate::AppBuilderMcpExt;
+    pub use crate::{meta, AppBuilderMcpExt, MetaObject};
 }

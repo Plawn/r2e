@@ -17,8 +17,10 @@ use r2e_core::http::Router;
 use r2e_core::plugin::PluginBuildError;
 use r2e_security::{Algorithm, SecurityConfig};
 
+use super::basic::BasicCredentials;
 use super::config::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
 use super::discovery::{DiscoveryClient, OAuthServerMetadata};
+use super::error::Challenges;
 use super::layer::{origin_allowed, AuthState, McpAuthLayer};
 use super::opaque::{
     IntrospectionBackend, UserinfoBackend, DEFAULT_OPAQUE_CACHE_MAX_ENTRIES,
@@ -130,9 +132,68 @@ fn split_resource(resource: &str) -> Result<(String, String), PluginBuildError> 
     Ok((origin, path))
 }
 
+/// `mcp.allowed-origins` as the layer stores it (`None` = no check).
+fn allowed_origins(inputs: &AuthInputs<'_>) -> Option<Arc<[String]>> {
+    if inputs.allowed_origins.is_empty() {
+        None
+    } else {
+        Some(inputs.allowed_origins.to_vec().into())
+    }
+}
+
+/// The surface for `mcp.auth.basic` WITHOUT an issuer: the layer alone. No
+/// protected-resource metadata, no discovery, no shim — there is no
+/// authorization server for a client to be sent to — and the provided
+/// validator bean is the disabled one.
+fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArtifacts {
+    let slot: Arc<OnceLock<McpTokenValidator>> = Arc::new(OnceLock::new());
+    let required_scopes: Arc<[String]> = inputs
+        .cfg
+        .required_scopes
+        .clone()
+        .unwrap_or_default()
+        .into();
+    tracing::info!(
+        realm = %basic.realm(),
+        "MCP HTTP Basic auth enabled (no OAuth issuer configured)"
+    );
+    let layer = McpAuthLayer::new(AuthState {
+        validator: slot.clone(),
+        oauth: false,
+        challenges: Challenges {
+            resource_metadata_url: None,
+            basic_realm: Some(basic.realm().clone()),
+        },
+        basic: Some(basic),
+        required_scopes,
+        allowed_origins: allowed_origins(inputs),
+        bindings: Default::default(),
+    });
+    AuthArtifacts {
+        layer,
+        validator: McpTokenValidator::disabled(),
+        slot,
+        extra_routes: Router::new(),
+    }
+}
+
 /// Assemble the whole auth surface from the resolved `mcp.auth` section.
 pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, PluginBuildError> {
     let cfg = &inputs.cfg;
+
+    let basic = cfg
+        .basic
+        .as_ref()
+        .map(BasicCredentials::from_config)
+        .transpose()?;
+    if cfg.issuer.trim().is_empty() {
+        return match basic {
+            Some(basic) => Ok(build_basic_only(&inputs, basic)),
+            None => Err("mcp.auth.issuer must not be empty — set `mcp.auth.issuer` \
+                         (OAuth 2.1) and/or `mcp.auth.basic` (HTTP Basic)"
+                .into()),
+        };
+    }
 
     let validation_mode = cfg.token_validation.unwrap_or_default();
     if validation_mode == TokenValidationMode::Introspection
@@ -166,9 +227,6 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
 
     let allow_insecure = cfg.allow_insecure.unwrap_or(false);
     let issuer = cfg.issuer.trim().to_string();
-    if issuer.is_empty() {
-        return Err("mcp.auth.issuer must not be empty".into());
-    }
     // NOTE: the issuer is kept EXACTLY as configured (Auth0 issuers carry a
     // trailing slash that must survive into the `iss` claim check); only
     // discovery comparisons normalise it.
@@ -375,15 +433,17 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     // ── Layer state ─────────────────────────────────────────────────────────
     let slot: Arc<OnceLock<McpTokenValidator>> = Arc::new(OnceLock::new());
     let required_scopes: Arc<[String]> = cfg.required_scopes.clone().unwrap_or_default().into();
+    let basic_enabled = basic.is_some();
     let layer = McpAuthLayer::new(AuthState {
         validator: slot.clone(),
-        resource_metadata_url: resource_metadata_url.clone().into(),
-        required_scopes,
-        allowed_origins: if inputs.allowed_origins.is_empty() {
-            None
-        } else {
-            Some(inputs.allowed_origins.to_vec().into())
+        oauth: true,
+        challenges: Challenges {
+            resource_metadata_url: Some(resource_metadata_url.as_str().into()),
+            basic_realm: basic.as_ref().map(|b| b.realm().clone()),
         },
+        basic,
+        required_scopes,
+        allowed_origins: allowed_origins(&inputs),
         bindings: Default::default(),
     });
 
@@ -485,6 +545,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         authorization_servers = ?authorization_servers,
         shim = shim_on,
         discovery = ?discovery_mode,
+        basic = basic_enabled,
         "MCP OAuth resource server enabled"
     );
 

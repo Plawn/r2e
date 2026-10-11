@@ -61,6 +61,19 @@
         "type": "object"
       },
       "name": "plain"
+    },
+    {
+      "_meta": {
+        "ui": {
+          "resourceUri": "ui://golden/widget"
+        },
+        "vendor/tag": 1
+      },
+      "description": "A tool advertising an MCP Apps `_meta` block.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "widget"
     }
   ]
 }

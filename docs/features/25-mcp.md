@@ -103,6 +103,16 @@ Return types (`IntoToolResult`):
 - Doc comment → `description`, verbatim (paragraph breaks preserved).
 - `read_only` / `destructive` / `idempotent` / `open_world` — advisory MCP
   annotations (clients use them for confirmation UX, never for security).
+- `meta = <expr>` — a free-form `_meta` object passed through verbatim in
+  `tools/list` (MCP Apps use `_meta.ui.resourceUri` to bind a tool to its
+  `ui://` widget). Any `Into<MetaObject>` expression works; the `meta!` macro
+  takes a JSON object literal. `#[resource]` and `#[prompt]` accept the same
+  attribute, and dynamic members have a `.meta(..)` builder step.
+
+```rust
+#[tool(meta = meta!({ "ui": { "resourceUri": "ui://widgets/chart" } }))]
+async fn chart(&self) -> &'static str { "rendered" }
+```
 
 ## Error mapping
 
@@ -170,9 +180,10 @@ impl MathTools {
   `GetPromptResult`, and `Result<_, E: Into<McpError>>`; the doc-comment
   description is attached to the result unless it already carries one.
 
-`resources` / `prompts` capabilities are advertised when sessions are enabled
-(since `McpSessions` can add members), a session-init hook is installed, or
-members of that family exist. **Error mapping differs from tools**: resources
+`tools`, `resources` and `prompts` capabilities are always advertised with
+`listChanged: true` (and `completions`), whether or not the catalog holds a
+member of that family: the `McpRegistry` bean can add one at any time.
+**Error mapping differs from tools**: resources
 and prompts have no in-result error plane, so `McpError::Tool` degrades to a
 JSON-RPC `-32603` internal error (message preserved, structured data
 attached); everything else maps as in the table above. An unknown resource
@@ -334,12 +345,12 @@ async fn file_names(&self, c: Completion) -> Completions {
   method runs its own. Put guards (and any rate limiting — clients send one
   request per keystroke) on the `#[completion]` method.
 - An argument with no provider gets an empty list. The `completions`
-  capability is advertised only when a provider exists or a session may add
-  one.
+  capability is always advertised (a provider may arrive with any dynamic
+  member).
 - Dynamic members: `DynamicPrompt::with_completion(argument, handler)` and
   `DynamicResource::with_completion(variable, handler)`. A session refuses a
   provider naming no argument or variable with
-  `McpSessionError::InvalidCompletion`.
+  `McpMemberError::InvalidCompletion`.
 
 ## Not implemented (deliberately)
 
@@ -403,9 +414,18 @@ interceptors + `TestApp` e2e tests).
 
 By default every session sees the same list, fixed at boot (modulo the
 scope/role filter). Three levers let each session have its own list, for all
-three families. Typed `#[mcp_routes]` members stay declared and compile-checked;
-what changes at runtime is **which** members a session sees, plus private
-members built for one session.
+three families, and a fourth — the `McpRegistry` bean — changes the list every
+session sees. Typed `#[mcp_routes]` members stay declared and compile-checked;
+what changes at runtime is **which** members a session sees, plus members
+built after boot.
+
+Three holders serve one endpoint, in this precedence:
+
+| holder | who writes it | who sees it | key clash |
+|---|---|---|---|
+| **catalog** — `#[mcp_routes]` members | boot only (immutable) | everyone, through groups + scope filter | duplicate = boot panic |
+| **session-private** — `McpSession::add_*` | one session's code | that session only | catalog namesake = `Err`; shadows a global namesake for that session |
+| **global registry** — `McpRegistry::add_*` | any bean, after boot | every session + sessionless callers | catalog namesake = `Err` (boot panic if added before the mount); no cross-check with session-private members |
 
 ### Groups
 
@@ -458,8 +478,17 @@ Operations: `enable_group` / `disable_group`, `add_tool` / `remove_tool`,
 arguments from the handler's first parameter), and `apply(SessionToolset)` to
 batch several changes behind one notification. A private member whose name
 collides with the catalog (even a hidden member) or another private member is
-an `Err`, never a panic. Updates are copy-on-write: an in-flight call keeps
-the view it started with, and sessions that never change share one view.
+an `Err` (`McpMemberError`), never a panic. Updates are copy-on-write: an
+in-flight call keeps the view it started with, and sessions that never change
+share one view.
+
+A call knows its session: `ToolCall::session_id()` (also on `ResourceCall`,
+`PromptCall`, and `McpSession::id()`) is the transport's `Mcp-Session-Id` as a
+cheap-to-clone `SessionId`, `None` for a sessionless request or a hand-built
+call. `McpSessions::get(&id)` finds the live handle again later (an audit
+trail, a per-session cache keyed on the id). The `initialize` request is the
+one that mints the id, so a `McpSessionInit` hook sees `SessionInit::session_id()
+== None` during the handshake.
 
 ### At open — `McpSessionInit`
 
@@ -486,9 +515,71 @@ A missing hook bean is a boot panic.
 ### From outside — the `McpSessions` bean
 
 The plugin provides `McpSessions` (`#[inject] sessions: McpSessions`):
-`for_subject(sub)`, `all()`, `len()`, each item an `McpSession`. Use it from an
-admin endpoint or a `#[consumer]` to change a live user's toolset. Sessions are
-held weakly and listed from their `initialize` handshake on.
+`get(&session_id)`, `for_subject(sub)`, `all()`, `len()`, each item an
+`McpSession`. Use it from an admin endpoint or a `#[consumer]` to change a live
+user's toolset. Sessions are held weakly and listed from their `initialize`
+handshake on.
+
+### For everyone — the `McpRegistry` bean
+
+The plugin also provides `McpRegistry`: the endpoint-wide dynamic member list.
+Inject it anywhere (a `#[consumer]`, an admin controller, a `#[post_construct]`
+or `#[on_start]`) to add, replace or remove tools, resources and prompts that
+**every** session — and every sessionless caller — serves from then on. This is
+the plugin-host story: a runtime that loads tool packs after boot, or an MCP
+Apps server that registers `ui://` resources on demand.
+
+```rust
+#[derive(Clone)]
+pub struct PackLoader {
+    #[inject] mcp: McpRegistry,
+}
+
+impl PackLoader {
+    pub fn load(&self, pack: &Pack) -> Result<(), McpMemberError> {
+        // One atomic batch: all or nothing, ONE list_changed per touched family.
+        self.mcp.edit(|edit| {
+            for tool in pack.tools() { edit.upsert_tool(tool)?; }
+            for widget in pack.widgets() { edit.upsert_resource(widget)?; }
+            Ok(())
+        })
+    }
+
+    pub fn unload(&self, pack: &Pack) {
+        self.mcp.edit(|edit| {
+            for name in pack.tool_names() { edit.remove_tool(name); }
+            Ok(())
+        }).expect("removals cannot fail");
+    }
+}
+```
+
+- One-shot methods: `add_tool` / `upsert_tool` / `remove_tool` (and the
+  `_resource` / `_prompt` triples, resources keyed by URI, templates by their
+  URI text); reads: `has_tool`, `has_resource`, `has_prompt`, `tool_names`,
+  `is_empty`. `edit(|e| …)` batches several changes behind one notification
+  and runs under the registry's write lock — keep the closure synchronous.
+- `upsert_*` replaces a registry member of the same key; `add_*` fails on any
+  namesake (`McpMemberError::Duplicate`). A **catalog** key is never
+  overridable: the add fails, and a member added *before* the endpoint is
+  mounted that clashes with the catalog panics at boot like any duplicate.
+  Scope requirements without `mcp.auth` fail the same way the catalog would.
+- Every change broadcasts `notifications/<family>/list_changed` to every live
+  session (legacy sessions via their peer) and to sessionless
+  `subscriptions/listen` streams, with **no per-session work**: sessions are
+  not rebuilt. The handler merges the session view and the registry view at
+  request time, so a change costs O(global members), not O(sessions × members),
+  and with no global member the list hot path is unchanged (one clone of the
+  session's visible list).
+- A session-private member with the same key as a global one **wins for that
+  session** (resolution and lists; the global one is hidden there). There is
+  no cross-check at add time: the two holders belong to different code and
+  cannot break each other.
+- The registry works before the mount (members are validated when the catalog
+  appears), under `mcp.stateless` (served per request) and with
+  `mcp.enabled = false` (accepts members, serves nothing). The endpoint is
+  mounted even when no `#[mcp_routes]` service is registered, so a
+  registry-only server is a valid shape.
 
 ### Security, capabilities, stateless
 
@@ -499,15 +590,14 @@ held weakly and listed from their `initialize` handshake on.
   byte-identical to an unknown id (no oracle that the session exists; the
   client recovers by re-initializing). The handler keeps a JSON-RPC `-32600`
   "belongs to another principal" check as a backstop.
-- With sessions enabled, all three families and completion are advertised,
-  even when initially empty: `McpSessions` and raw call contexts can add
-  members at any time. A stateless endpoint with a `session_init` or an
-  `opt_in` group also advertises all three families with
-  `listChanged: true`. Changes are pushed to legacy sessions via their peer and
-  to 2026 `subscriptions/listen` streams that accepted `*_list_changed`.
-- `mcp.stateless: true`: groups and `session_init` work (recomputed per
-  request); a member taking `McpSession` is a boot panic, since a mutation
-  would not outlive its request.
+- All three families (with `listChanged: true`) and completion are always
+  advertised, even when initially empty: `McpRegistry` can add members at any
+  time, stateless or not. Changes are pushed to legacy sessions via their
+  peer and to 2026 `subscriptions/listen` streams that accepted
+  `*_list_changed`, one notification per touched family.
+- `mcp.stateless: true`: groups, `session_init` and `McpRegistry` work
+  (recomputed per request); a member taking `McpSession` is a boot panic,
+  since a mutation would not outlive its request.
 
 ## Configuration (`mcp.*`)
 
@@ -624,6 +714,37 @@ What you get, with zero additional code:
   when JWKS/discovery are briefly unreachable (stale-if-error caches on
   both).
 
+### HTTP Basic (`mcp.auth.basic.*`)
+
+One static credential pair, for deployments where an OAuth issuer is overkill:
+a private agent runtime, a gateway that already terminates the user-facing
+auth, a staging box.
+
+```yaml
+mcp:
+  auth:
+    basic:
+      username: agent
+      password: ${MCP_PASSWORD}      # interpolate, never a literal
+      realm: mcp                     # optional (default `mcp`)
+      roles: [operator]              # optional — what #[roles] sees
+      scopes: [mcp, db:read]         # optional — what required-scopes / #[tool(scopes)] see
+```
+
+- Stands alone (no `issuer` ⇒ no PRM document, no discovery, no shim: the 401
+  challenge is `WWW-Authenticate: Basic realm="mcp"`) or **composes with
+  OAuth** — the `Authorization` scheme selects the path per request, and a
+  401 then carries both challenges.
+- The principal is built once at boot: `sub` = `username`, roles and scopes
+  from the section; `#[tool(scopes)]`, `#[roles]` and `required-scopes` apply
+  exactly as to a token. A request costs a base64 decode and two constant-time
+  compares (a wrong user costs what a wrong password costs — no oracle).
+- Boot validation: non-empty `username` without `:` (RFC 7617), non-empty
+  `password`, printable `realm`. With neither `issuer` nor `basic`, the
+  `mcp.auth` section is a boot error.
+- A missing `Authorization` header is 401 `missing credentials`; an unknown
+  scheme is 401 `invalid_token`.
+
 ### The canonical resource URI
 
 The token audience, the PRM `resource` and the challenge URL all use one
@@ -688,7 +809,9 @@ impl AdminTools {
 
 | key | default | notes |
 |---|---|---|
-| `issuer` | — (required) | must be `https://` unless `allow-insecure: true` |
+| `issuer` | — (required unless `basic` is set) | must be `https://` unless `allow-insecure: true` |
+| `basic.username`, `basic.password` | — | HTTP Basic pair (presence enables the scheme; composes with `issuer`); `username` must not contain `:` |
+| `basic.realm`, `basic.roles`, `basic.scopes` | `mcp` / — / — | challenge realm; roles and scopes the Basic principal carries |
 | `resource`, `resource-name` | derived | canonical resource URI + display name |
 | `discovery` | `eager` (`lazy` under `dev` profile) | `eager` = fetch at boot, fail fast; `lazy` = first use; `off` = explicit endpoints only (requires `jwks-url` / `introspection-endpoint` / `userinfo-endpoint`, per validation mode) |
 | `discovery-ttl-secs` | 3600 | metadata cache TTL (stale-if-error) |

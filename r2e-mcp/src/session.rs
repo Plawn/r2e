@@ -14,16 +14,18 @@
 //! `notifications/*/list_changed` to the session.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
-use r2e_core::http::Parts;
+use r2e_core::http::middleware::Next;
+use r2e_core::http::{Parts, Request, Response};
 use r2e_core::rt::sync::{broadcast, OnceCell};
-use rmcp::service::{Peer, RoleServer};
+use rmcp::model::{Prompt, Resource, ResourceTemplate, Tool};
+use rmcp::service::{Peer, RequestContext, RoleServer};
 
 use crate::auth::McpPrincipal;
 use crate::catalog::{
@@ -31,13 +33,15 @@ use crate::catalog::{
     PrivateMembers, SessionView,
 };
 use crate::error::McpError;
+use crate::global::McpRegistry;
 use crate::route::{identity_in, PromptRoute, ResourceRoute, ToolRoute};
 use crate::uri_template::UriTemplate;
 
-/// Why a session change was refused.
+/// Why a member change — on a session ([`McpSession`]) or on the global
+/// registry ([`McpRegistry`](crate::McpRegistry)) — was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum McpSessionError {
+pub enum McpMemberError {
     /// The request has no MCP session to change: a sessionless client
     /// (protocol 2026-07-28+) or `mcp.stateless`. The change would be lost
     /// with the request.
@@ -45,7 +49,8 @@ pub enum McpSessionError {
     /// No catalog member declares this group.
     UnknownGroup(String),
     /// A member with this key is already served by the catalog (in any
-    /// group, hidden or not) or by this session.
+    /// group, hidden or not) or by the same holder (this session, or the
+    /// global registry).
     Duplicate {
         /// `"tool"`, `"resource"`, `"resource template"` or `"prompt"`.
         kind: &'static str,
@@ -59,51 +64,53 @@ pub enum McpSessionError {
         /// Parser diagnostic.
         reason: String,
     },
-    /// A session-private member declares OAuth scopes but `mcp.auth` is
-    /// disabled — the boot-time check, at runtime.
+    /// A dynamic member declares OAuth scopes but `mcp.auth` is disabled —
+    /// the boot-time check, at runtime.
     ScopesWithoutAuth {
         /// `"tool"`, `"resource"` or `"prompt"`.
         kind: &'static str,
         /// The member name / URI.
         key: String,
     },
-    /// A session-private member's completion provider names no argument
-    /// (prompt) or template variable (resource) of the member, or names one
-    /// twice.
+    /// A dynamic member's completion provider names no argument (prompt) or
+    /// template variable (resource) of the member, or names one twice.
     InvalidCompletion(String),
 }
 
-impl fmt::Display for McpSessionError {
+/// The former name of [`McpMemberError`], kept for source compatibility.
+pub type McpSessionError = McpMemberError;
+
+impl fmt::Display for McpMemberError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            McpSessionError::NoSession => f.write_str(
+            McpMemberError::NoSession => f.write_str(
                 "this client has no MCP session (sessionless protocol or stateless \
                  server): the session's member list cannot be changed",
             ),
-            McpSessionError::UnknownGroup(group) => write!(f, "unknown MCP group `{group}`"),
-            McpSessionError::Duplicate { kind, key } => {
+            McpMemberError::UnknownGroup(group) => write!(f, "unknown MCP group `{group}`"),
+            McpMemberError::Duplicate { kind, key } => {
                 write!(f, "an MCP {kind} `{key}` already exists")
             }
-            McpSessionError::InvalidTemplate { uri, reason } => {
+            McpMemberError::InvalidTemplate { uri, reason } => {
                 write!(f, "invalid MCP resource URI template `{uri}`: {reason}")
             }
-            McpSessionError::ScopesWithoutAuth { kind, key } => write!(
+            McpMemberError::ScopesWithoutAuth { kind, key } => write!(
                 f,
                 "MCP {kind} `{key}` declares OAuth scopes but `mcp.auth` is disabled"
             ),
-            McpSessionError::InvalidCompletion(reason) => f.write_str(reason),
+            McpMemberError::InvalidCompletion(reason) => f.write_str(reason),
         }
     }
 }
 
-impl std::error::Error for McpSessionError {}
+impl std::error::Error for McpMemberError {}
 
 /// Agent-actionable refusals (no session, name clash) become domain tool
 /// failures the agent can read; programming errors are internal.
-impl From<McpSessionError> for McpError {
-    fn from(err: McpSessionError) -> Self {
+impl From<McpMemberError> for McpError {
+    fn from(err: McpMemberError) -> Self {
         match err {
-            McpSessionError::NoSession | McpSessionError::Duplicate { .. } => {
+            McpMemberError::NoSession | McpMemberError::Duplicate { .. } => {
                 McpError::tool(err.to_string())
             }
             other => McpError::Internal(other.to_string()),
@@ -175,9 +182,16 @@ impl SessionToolset {
 pub struct SessionInit {
     parts: Option<Arc<Parts>>,
     persistent: bool,
+    session_id: Option<SessionId>,
 }
 
 impl SessionInit {
+    /// The transport session id, when already known — see [`SessionId`]
+    /// for why it is `None` while the `initialize` handshake runs.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session_id.as_ref()
+    }
+
     /// The authenticated MCP caller, when `mcp.auth` is on.
     pub fn principal(&self) -> Option<&McpPrincipal> {
         self.extension_ref::<McpPrincipal>()
@@ -269,10 +283,86 @@ pub(crate) fn erase_init<T: McpSessionInit + Clone>(hook: T) -> SessionInitFn {
     })
 }
 
+/// The transport-assigned identifier of an MCP session — the value of the
+/// `Mcp-Session-Id` header under streamable HTTP.
+///
+/// Cheap to clone (a shared string). Read it from a call
+/// ([`ToolCall::session_id`](crate::ToolCall::session_id)) or a handle
+/// ([`McpSession::id`]), and look a session up with [`McpSessions::get`].
+///
+/// Known from the request *after* `initialize` on: the handshake itself
+/// is the request that mints the id, so [`SessionInit::session_id`] is
+/// `None` for an [`McpSessionInit`] hook running during `initialize`
+/// (the id is attached as soon as rmcp's response leaves the server).
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SessionId(Arc<str>);
+
+impl SessionId {
+    /// The id as sent on the wire.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<&str> for SessionId {
+    fn from(id: &str) -> Self {
+        SessionId(Arc::from(id))
+    }
+}
+
+impl From<String> for SessionId {
+    fn from(id: String) -> Self {
+        SessionId(Arc::from(id))
+    }
+}
+
+impl AsRef<str> for SessionId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for SessionId {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl PartialEq<str> for SessionId {
+    fn eq(&self, other: &str) -> bool {
+        &*self.0 == other
+    }
+}
+
+impl PartialEq<&str> for SessionId {
+    fn eq(&self, other: &&str) -> bool {
+        &*self.0 == *other
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl fmt::Debug for SessionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.0, f)
+    }
+}
+
 /// The mutable state of one MCP session (one per rmcp session handler).
 pub(crate) struct SessionState {
     catalog: Arc<Catalog>,
+    /// The endpoint-wide dynamic members, served behind the session's own.
+    registry: McpRegistry,
     view: RwLock<Arc<SessionView>>,
+    /// The transport session id, attached by [`track_session_id`] when the
+    /// `initialize` response leaves (or by the handler from the request
+    /// header, whichever runs first). Never set for a sessionless request.
+    id: OnceLock<SessionId>,
     /// Serializes copy-on-write updates (readers never take it).
     write: Mutex<()>,
     /// Captured on the first request: the channel `list_changed`
@@ -287,11 +377,13 @@ pub(crate) struct SessionState {
 }
 
 impl SessionState {
-    pub(crate) fn new(catalog: Arc<Catalog>) -> Self {
+    pub(crate) fn new(catalog: Arc<Catalog>, registry: McpRegistry) -> Self {
         let view = RwLock::new(Arc::clone(&catalog.default_view));
         SessionState {
             catalog,
+            registry,
             view,
+            id: OnceLock::new(),
             write: Mutex::new(()),
             peer: OnceLock::new(),
             subject: OnceLock::new(),
@@ -304,8 +396,153 @@ impl SessionState {
         &self.catalog
     }
 
+    /// Attach the transport session id (first writer wins; a repeat of the
+    /// same id is a no-op).
+    pub(crate) fn set_id(&self, id: &str) {
+        if self.id.get().is_none() {
+            let _ = self.id.set(SessionId::from(id));
+        }
+    }
+
+    pub(crate) fn id(&self) -> Option<&SessionId> {
+        self.id.get()
+    }
+
     pub(crate) fn view(&self) -> Arc<SessionView> {
         Arc::clone(&self.view.read().expect("MCP session view lock poisoned"))
+    }
+
+    // ── Member resolution: the session's view first, then the global
+    // registry. A session-private member shadows a global namesake; the
+    // catalog never clashes with either (checked when they are added).
+
+    /// The tool `name` resolves to for this session.
+    pub(crate) fn tool(&self, name: &str) -> Option<Arc<ToolRoute>> {
+        if let Some(route) = self.view().tools.route(name) {
+            return Some(Arc::clone(route));
+        }
+        self.registry.view().tools.route(name).map(Arc::clone)
+    }
+
+    /// The resource `uri` resolves to (fixed URI, then template; session,
+    /// then registry), with the template variables it captured.
+    pub(crate) fn resource(
+        &self,
+        uri: &str,
+    ) -> Option<(Arc<ResourceRoute>, BTreeMap<String, String>)> {
+        if let Some((route, variables)) = self.view().resource_route(uri) {
+            return Some((Arc::clone(route), variables));
+        }
+        self.registry
+            .view()
+            .resource_route(uri)
+            .map(|(route, variables)| (Arc::clone(route), variables))
+    }
+
+    /// The prompt `name` resolves to for this session.
+    pub(crate) fn prompt(&self, name: &str) -> Option<Arc<PromptRoute>> {
+        if let Some(route) = self.view().prompts.route(name) {
+            return Some(Arc::clone(route));
+        }
+        self.registry.view().prompts.route(name).map(Arc::clone)
+    }
+
+    /// The resource a `completion/complete` `ref/resource` names.
+    pub(crate) fn completion_resource(&self, uri: &str) -> Option<Arc<ResourceRoute>> {
+        if let Some(route) = self.view().completion_resource(uri) {
+            return Some(Arc::clone(route));
+        }
+        self.registry
+            .view()
+            .completion_resource(uri)
+            .map(Arc::clone)
+    }
+
+    // ── List payloads: the session's list followed by the registry's,
+    // built into one allocation. With an empty registry (the common
+    // deployment) this is exactly the prebuilt list's clone.
+
+    pub(crate) fn tool_list(&self, context: &RequestContext<RoleServer>) -> Vec<Tool> {
+        let view = self.view();
+        let global = self.registry.view();
+        if global.tools.is_empty() {
+            return view.tools.visible_list(context);
+        }
+        let mut out = Vec::with_capacity(view.tools.len() + global.tools.len());
+        view.tools.extend_visible(context, &mut out, |_| false);
+        if view.private.tools.is_empty() {
+            global.tools.extend_visible(context, &mut out, |_| false);
+        } else {
+            global
+                .tools
+                .extend_visible(context, &mut out, |name| view.tools.route(name).is_some());
+        }
+        out
+    }
+
+    pub(crate) fn resource_list(&self, context: &RequestContext<RoleServer>) -> Vec<Resource> {
+        let view = self.view();
+        let global = self.registry.view();
+        if global.resources.is_empty() {
+            return view.resources.visible_list(context);
+        }
+        let mut out = Vec::with_capacity(view.resources.len() + global.resources.len());
+        view.resources.extend_visible(context, &mut out, |_| false);
+        if view.private.resources.is_empty() {
+            global
+                .resources
+                .extend_visible(context, &mut out, |_| false);
+        } else {
+            global
+                .resources
+                .extend_visible(context, &mut out, |uri| view.resources.route(uri).is_some());
+        }
+        out
+    }
+
+    pub(crate) fn resource_template_list(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Vec<ResourceTemplate> {
+        let view = self.view();
+        let global = self.registry.view();
+        if global.resource_templates.is_empty() {
+            return view.resource_templates.visible_list(context);
+        }
+        let mut out =
+            Vec::with_capacity(view.resource_templates.len() + global.resource_templates.len());
+        view.resource_templates
+            .extend_visible(context, &mut out, |_| false);
+        if view.private.resources.is_empty() {
+            global
+                .resource_templates
+                .extend_visible(context, &mut out, |_| false);
+        } else {
+            global
+                .resource_templates
+                .extend_visible(context, &mut out, |raw| {
+                    view.resource_templates.has_raw(raw)
+                });
+        }
+        out
+    }
+
+    pub(crate) fn prompt_list(&self, context: &RequestContext<RoleServer>) -> Vec<Prompt> {
+        let view = self.view();
+        let global = self.registry.view();
+        if global.prompts.is_empty() {
+            return view.prompts.visible_list(context);
+        }
+        let mut out = Vec::with_capacity(view.prompts.len() + global.prompts.len());
+        view.prompts.extend_visible(context, &mut out, |_| false);
+        if view.private.prompts.is_empty() {
+            global.prompts.extend_visible(context, &mut out, |_| false);
+        } else {
+            global
+                .prompts
+                .extend_visible(context, &mut out, |name| view.prompts.route(name).is_some());
+        }
+        out
     }
 
     pub(crate) fn capture_peer(&self, peer: &Peer<RoleServer>) {
@@ -347,6 +584,7 @@ impl SessionState {
                 let init = SessionInit {
                     parts: parts.cloned().map(Arc::new),
                     persistent: self.is_persistent(),
+                    session_id: self.id().cloned(),
                 };
                 let toolset = hook(init).await?;
                 // No notification: the session has not listed anything yet.
@@ -362,12 +600,12 @@ impl SessionState {
     /// view replaces it only when `f` succeeds.
     fn update<T>(
         &self,
-        f: impl FnOnce(&mut Draft<'_>) -> Result<T, McpSessionError>,
-    ) -> Result<(T, Changed), McpSessionError> {
+        f: impl FnOnce(&mut Draft<'_>) -> Result<T, McpMemberError>,
+    ) -> Result<(T, Changed), McpMemberError> {
         let _guard = self.write.lock().expect("MCP session write lock poisoned");
         let current = self.view();
         let mut draft = Draft {
-            catalog: &self.catalog,
+            catalog: Some(&self.catalog),
             enabled: current.enabled.to_vec(),
             private: current.private.clone(),
         };
@@ -380,7 +618,7 @@ impl SessionState {
         let next = self
             .catalog
             .view(draft.enabled.into_boxed_slice(), draft.private)
-            .map_err(|reason| McpSessionError::Duplicate {
+            .map_err(|reason| McpMemberError::Duplicate {
                 kind: "member",
                 key: reason,
             })?;
@@ -429,6 +667,47 @@ impl SessionLink {
     pub(crate) fn take(&self) -> Option<Weak<SessionState>> {
         self.0.lock().expect("MCP session link poisoned").take()
     }
+
+    fn peek(&self) -> Option<Arc<SessionState>> {
+        self.0
+            .lock()
+            .expect("MCP session link poisoned")
+            .as_ref()
+            .and_then(Weak::upgrade)
+    }
+}
+
+/// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
+pub(crate) const SESSION_ID_HEADER: &str = "mcp-session-id";
+
+/// Innermost middleware on the MCP endpoint: when a request without an
+/// `Mcp-Session-Id` turns out to open a session, attach the id rmcp minted
+/// (response header) to the session the handler linked — so
+/// [`McpSessions::get`] and [`McpSession::id`] work from the moment the
+/// `initialize` response is on its way, not only from the client's next
+/// request. Reuses the [`SessionLink`] the auth layer deposited, if any.
+pub(crate) async fn track_session_id(mut req: Request, next: Next) -> Response {
+    if req.headers().contains_key(SESSION_ID_HEADER) {
+        return next.run(req).await;
+    }
+    let link = match req.extensions().get::<SessionLink>() {
+        Some(link) => link.clone(),
+        None => {
+            let link = SessionLink::default();
+            req.extensions_mut().insert(link.clone());
+            link
+        }
+    };
+    let response = next.run(req).await;
+    if let Some(id) = response
+        .headers()
+        .get(SESSION_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        && let Some(state) = link.peek()
+    {
+        state.set_id(id);
+    }
+    response
 }
 
 /// `Mcp-Session-Id` → session, for the auth layer's session ↔ principal
@@ -463,19 +742,22 @@ impl SessionBindings {
     }
 }
 
-/// A mutable copy of a session view's inputs.
-struct Draft<'a> {
-    catalog: &'a Catalog,
-    enabled: Vec<bool>,
-    private: PrivateMembers,
+/// A mutable copy of a view's inputs: a session's (its enabled groups and
+/// private members, validated against the catalog) or the global registry's
+/// (members only; `catalog` is `None` until the endpoint is mounted, and the
+/// catalog checks run then).
+pub(crate) struct Draft<'a> {
+    pub(crate) catalog: Option<&'a Catalog>,
+    pub(crate) enabled: Vec<bool>,
+    pub(crate) private: PrivateMembers,
 }
 
 impl Draft<'_> {
-    fn set_group(&mut self, name: &str, on: bool) -> Result<(), McpSessionError> {
+    fn set_group(&mut self, name: &str, on: bool) -> Result<(), McpMemberError> {
         let index = self
             .catalog
-            .group(name)
-            .ok_or_else(|| McpSessionError::UnknownGroup(name.to_owned()))?;
+            .and_then(|catalog| catalog.group(name))
+            .ok_or_else(|| McpMemberError::UnknownGroup(name.to_owned()))?;
         self.enabled[index] = on;
         Ok(())
     }
@@ -485,23 +767,28 @@ impl Draft<'_> {
         kind: &'static str,
         key: &str,
         req: &crate::ToolRequirements,
-    ) -> Result<(), McpSessionError> {
-        if scopes_allowed(self.catalog.auth_enabled, req) {
+    ) -> Result<(), McpMemberError> {
+        let allowed = self
+            .catalog
+            .is_none_or(|catalog| scopes_allowed(catalog.auth_enabled, req));
+        if allowed {
             Ok(())
         } else {
-            Err(McpSessionError::ScopesWithoutAuth {
+            Err(McpMemberError::ScopesWithoutAuth {
                 kind,
                 key: key.to_owned(),
             })
         }
     }
 
-    fn add_tool(&mut self, tool: ToolRoute) -> Result<(), McpSessionError> {
+    pub(crate) fn add_tool(&mut self, tool: ToolRoute) -> Result<(), McpMemberError> {
         self.check_scopes("tool", &tool.name, &tool.requirements)?;
-        if self.catalog.has_tool_key(&tool.name)
+        if self
+            .catalog
+            .is_some_and(|catalog| catalog.has_tool_key(&tool.name))
             || self.private.tools.iter().any(|t| t.name == tool.name)
         {
-            return Err(McpSessionError::Duplicate {
+            return Err(McpMemberError::Duplicate {
                 kind: "tool",
                 key: tool.name.into_owned(),
             });
@@ -510,12 +797,14 @@ impl Draft<'_> {
         Ok(())
     }
 
-    fn add_resource(&mut self, resource: ResourceRoute) -> Result<(), McpSessionError> {
+    pub(crate) fn add_resource(&mut self, resource: ResourceRoute) -> Result<(), McpMemberError> {
         self.check_scopes("resource", &resource.uri, &resource.requirements)?;
-        resource_completions_valid(&resource).map_err(McpSessionError::InvalidCompletion)?;
+        resource_completions_valid(&resource).map_err(McpMemberError::InvalidCompletion)?;
         if resource.is_template() {
             let shape = template_shape(&resource.uri)?;
-            let clash = self.catalog.has_template_shape(&shape)
+            let clash = self
+                .catalog
+                .is_some_and(|catalog| catalog.has_template_shape(&shape))
                 || self
                     .private
                     .resources
@@ -523,15 +812,17 @@ impl Draft<'_> {
                     .filter(|r| r.is_template())
                     .any(|r| template_shape(&r.uri).is_ok_and(|s| s == shape));
             if clash {
-                return Err(McpSessionError::Duplicate {
+                return Err(McpMemberError::Duplicate {
                     kind: "resource template",
                     key: resource.uri.into_owned(),
                 });
             }
-        } else if self.catalog.has_resource_key(&resource.uri)
+        } else if self
+            .catalog
+            .is_some_and(|catalog| catalog.has_resource_key(&resource.uri))
             || self.private.resources.iter().any(|r| r.uri == resource.uri)
         {
-            return Err(McpSessionError::Duplicate {
+            return Err(McpMemberError::Duplicate {
                 kind: "resource",
                 key: resource.uri.into_owned(),
             });
@@ -540,13 +831,15 @@ impl Draft<'_> {
         Ok(())
     }
 
-    fn add_prompt(&mut self, prompt: PromptRoute) -> Result<(), McpSessionError> {
+    pub(crate) fn add_prompt(&mut self, prompt: PromptRoute) -> Result<(), McpMemberError> {
         self.check_scopes("prompt", &prompt.name, &prompt.requirements)?;
-        prompt_completions_valid(&prompt).map_err(McpSessionError::InvalidCompletion)?;
-        if self.catalog.has_prompt_key(&prompt.name)
+        prompt_completions_valid(&prompt).map_err(McpMemberError::InvalidCompletion)?;
+        if self
+            .catalog
+            .is_some_and(|catalog| catalog.has_prompt_key(&prompt.name))
             || self.private.prompts.iter().any(|p| p.name == prompt.name)
         {
-            return Err(McpSessionError::Duplicate {
+            return Err(McpMemberError::Duplicate {
                 kind: "prompt",
                 key: prompt.name.into_owned(),
             });
@@ -555,7 +848,7 @@ impl Draft<'_> {
         Ok(())
     }
 
-    fn apply(&mut self, toolset: SessionToolset) -> Result<(), McpSessionError> {
+    fn apply(&mut self, toolset: SessionToolset) -> Result<(), McpMemberError> {
         for group in &toolset.enable {
             self.set_group(group, true)?;
         }
@@ -575,10 +868,10 @@ impl Draft<'_> {
     }
 }
 
-fn template_shape(uri: &str) -> Result<String, McpSessionError> {
+fn template_shape(uri: &str) -> Result<String, McpMemberError> {
     UriTemplate::parse(uri)
         .map(|t| t.shape())
-        .map_err(|reason| McpSessionError::InvalidTemplate {
+        .map_err(|reason| McpMemberError::InvalidTemplate {
             uri: uri.to_owned(),
             reason,
         })
@@ -601,7 +894,7 @@ fn template_shape(uri: &str) -> Result<String, McpSessionError> {
 ///
 /// Only a real MCP session can change: for a sessionless client (protocol
 /// 2026-07-28+) the handle is read-only and every change returns
-/// [`McpSessionError::NoSession`].
+/// [`McpMemberError::NoSession`].
 #[derive(Clone)]
 pub struct McpSession {
     state: Arc<SessionState>,
@@ -631,6 +924,12 @@ impl McpSession {
         self.state.subject()
     }
 
+    /// The transport session id (`Mcp-Session-Id`); `None` for a
+    /// sessionless request or while the `initialize` handshake runs.
+    pub fn id(&self) -> Option<&SessionId> {
+        self.state.id()
+    }
+
     /// Whether `group` is currently enabled (`false` for an unknown group).
     pub fn is_group_enabled(&self, group: &str) -> bool {
         self.state
@@ -639,10 +938,10 @@ impl McpSession {
             .is_some_and(|index| self.state.view().enabled[index])
     }
 
-    /// Whether the session currently serves a tool named `name` (before the
-    /// per-caller auth filter).
+    /// Whether the session currently serves a tool named `name` — its own
+    /// or a global one (before the per-caller auth filter).
     pub fn has_tool(&self, name: &str) -> bool {
-        self.state.view().tools.route(name).is_some()
+        self.state.tool(name).is_some()
     }
 
     /// The groups declared by the catalog, in declaration order.
@@ -657,10 +956,10 @@ impl McpSession {
 
     fn change<T>(
         &self,
-        f: impl FnOnce(&mut Draft<'_>) -> Result<T, McpSessionError>,
-    ) -> Result<T, McpSessionError> {
+        f: impl FnOnce(&mut Draft<'_>) -> Result<T, McpMemberError>,
+    ) -> Result<T, McpMemberError> {
         if !self.is_persistent() {
-            return Err(McpSessionError::NoSession);
+            return Err(McpMemberError::NoSession);
         }
         let (out, changed) = self.state.update(f)?;
         self.state.notify(changed);
@@ -668,58 +967,58 @@ impl McpSession {
     }
 
     /// Show a group's members to this session.
-    pub fn enable_group(&self, group: &str) -> Result<(), McpSessionError> {
+    pub fn enable_group(&self, group: &str) -> Result<(), McpMemberError> {
         self.change(|d| d.set_group(group, true))
     }
 
     /// Hide a group's members from this session.
-    pub fn disable_group(&self, group: &str) -> Result<(), McpSessionError> {
+    pub fn disable_group(&self, group: &str) -> Result<(), McpMemberError> {
         self.change(|d| d.set_group(group, false))
     }
 
     /// Add a session-private tool (see [`DynamicTool`](crate::DynamicTool)).
     /// Its name must not clash with any catalog tool — hidden groups
     /// included — nor with another private tool.
-    pub fn add_tool(&self, tool: impl Into<ToolRoute>) -> Result<(), McpSessionError> {
+    pub fn add_tool(&self, tool: impl Into<ToolRoute>) -> Result<(), McpMemberError> {
         let tool = tool.into();
         self.change(|d| d.add_tool(tool))
     }
 
     /// Remove a session-private tool; `false` when none has that name.
     /// Catalog tools are hidden through their group instead.
-    pub fn remove_tool(&self, name: &str) -> Result<bool, McpSessionError> {
+    pub fn remove_tool(&self, name: &str) -> Result<bool, McpMemberError> {
         self.change(|d| Ok(remove_by(&mut d.private.tools, |t| t.name == name)))
     }
 
     /// Add a session-private resource (fixed URI or template).
-    pub fn add_resource(&self, resource: impl Into<ResourceRoute>) -> Result<(), McpSessionError> {
+    pub fn add_resource(&self, resource: impl Into<ResourceRoute>) -> Result<(), McpMemberError> {
         let resource = resource.into();
         self.change(|d| d.add_resource(resource))
     }
 
     /// Remove a session-private resource by its URI (or template text).
-    pub fn remove_resource(&self, uri: &str) -> Result<bool, McpSessionError> {
+    pub fn remove_resource(&self, uri: &str) -> Result<bool, McpMemberError> {
         self.change(|d| Ok(remove_by(&mut d.private.resources, |r| r.uri == uri)))
     }
 
     /// Add a session-private prompt.
-    pub fn add_prompt(&self, prompt: impl Into<PromptRoute>) -> Result<(), McpSessionError> {
+    pub fn add_prompt(&self, prompt: impl Into<PromptRoute>) -> Result<(), McpMemberError> {
         let prompt = prompt.into();
         self.change(|d| d.add_prompt(prompt))
     }
 
     /// Remove a session-private prompt; `false` when none has that name.
-    pub fn remove_prompt(&self, name: &str) -> Result<bool, McpSessionError> {
+    pub fn remove_prompt(&self, name: &str) -> Result<bool, McpMemberError> {
         self.change(|d| Ok(remove_by(&mut d.private.prompts, |p| p.name == name)))
     }
 
     /// Apply a batch of changes atomically: on `Err` nothing changed.
-    pub fn apply(&self, toolset: SessionToolset) -> Result<(), McpSessionError> {
+    pub fn apply(&self, toolset: SessionToolset) -> Result<(), McpMemberError> {
         self.change(|d| d.apply(toolset))
     }
 }
 
-fn remove_by<T>(items: &mut Vec<Arc<T>>, matches: impl Fn(&T) -> bool) -> bool {
+pub(crate) fn remove_by<T>(items: &mut Vec<Arc<T>>, matches: impl Fn(&T) -> bool) -> bool {
     let before = items.len();
     items.retain(|item| !matches(item));
     items.len() != before
@@ -728,7 +1027,7 @@ fn remove_by<T>(items: &mut Vec<Arc<T>>, matches: impl Fn(&T) -> bool) -> bool {
 struct SessionsInner {
     live: Mutex<Vec<Weak<SessionState>>>,
     /// Fan-out to sessionless `subscriptions/listen` streams.
-    changed: broadcast::Sender<()>,
+    changed: broadcast::Sender<Changed>,
 }
 
 /// Every live MCP session of the endpoint — a bean provided by the
@@ -774,8 +1073,20 @@ impl McpSessions {
         live.push(Arc::downgrade(state));
     }
 
-    pub(crate) fn subscribe_changes(&self) -> broadcast::Receiver<()> {
+    pub(crate) fn subscribe_changes(&self) -> broadcast::Receiver<Changed> {
         self.inner.changed.subscribe()
+    }
+
+    /// Tell every client — live sessions and sessionless
+    /// `subscriptions/listen` streams — to re-list the `changed` families.
+    pub(crate) fn notify(&self, changed: Changed) {
+        if !changed.any() {
+            return;
+        }
+        for state in self.live() {
+            state.notify(changed);
+        }
+        let _ = self.inner.changed.send(changed);
     }
 
     fn live(&self) -> Vec<Arc<SessionState>> {
@@ -791,6 +1102,14 @@ impl McpSessions {
     /// Every live session.
     pub fn all(&self) -> Vec<McpSession> {
         self.live().into_iter().map(McpSession::new).collect()
+    }
+
+    /// The live session with the transport id `id`, if any.
+    pub fn get(&self, id: &str) -> Option<McpSession> {
+        self.live()
+            .into_iter()
+            .find(|state| state.id().is_some_and(|known| known == id))
+            .map(McpSession::new)
     }
 
     /// The live sessions bound to `subject` (the principal's `sub`).
@@ -817,9 +1136,6 @@ impl McpSessions {
     /// compute (e.g. a role granted). Also reaches sessionless clients
     /// holding a `subscriptions/listen` stream.
     pub fn notify_list_changed(&self) {
-        for state in self.live() {
-            state.notify(Changed::ALL);
-        }
-        let _ = self.inner.changed.send(());
+        self.notify(Changed::ALL);
     }
 }

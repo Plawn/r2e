@@ -22,7 +22,9 @@
 //!   DCR (Keycloak, Google, Entra) — clients "register" and receive the
 //!   pre-configured public client id;
 //! - per-tool scope requirements (`#[tool(scopes = "...")]`) and `#[roles]`
-//!   over the validated principal.
+//!   over the validated principal;
+//! - optionally, HTTP Basic (`mcp.auth.basic`) — alone, for machine-to-machine
+//!   deployments without an IdP, or next to OAuth ([`McpBasicAuthConfig`]).
 //!
 //! Module map: [`config`] (the `mcp.auth.*` section), [`discovery`] (OIDC
 //! metadata probe + cache), [`validator`] ([`McpPrincipal`],
@@ -31,6 +33,7 @@
 //! [`wellknown`] (PRM), [`shim`] (DCR), [`tools`] (per-tool checks),
 //! [`error`] (challenge building).
 
+pub(crate) mod basic;
 pub mod config;
 pub mod discovery;
 pub mod error;
@@ -42,7 +45,9 @@ pub mod tools;
 pub mod validator;
 pub mod wellknown;
 
-pub use config::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
+pub use config::{
+    AudienceMode, DiscoveryMode, McpAuthConfig, McpBasicAuthConfig, TokenValidationMode,
+};
 pub use discovery::{DiscoveryClient, OAuthServerMetadata};
 pub use error::McpAuthError;
 pub use layer::McpAuthLayer;

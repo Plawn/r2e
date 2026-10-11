@@ -69,7 +69,10 @@ async fn get_expands_the_prompt_with_its_description() {
     let msg = &result["messages"][0];
     assert_eq!(msg["role"], "user");
     assert_eq!(msg["content"]["type"], "text");
-    assert_eq!(msg["content"]["text"], "Divide 6 by 3 using the `div` tool.");
+    assert_eq!(
+        msg["content"]["text"],
+        "Divide 6 by 3 using the `div` tool."
+    );
     // The #[intercept] on the prompt ran — decorators are shared with tools.
     assert_eq!(log.entries(), ["prompt:explain_division"]);
 }

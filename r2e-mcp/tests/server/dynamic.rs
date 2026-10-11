@@ -42,6 +42,14 @@ impl Toolbox {
         "pong"
     }
 
+    /// The transport session id as the tool sees it.
+    #[tool]
+    async fn whoami_session(&self, call: ToolCall) -> String {
+        call.session_id()
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "<none>".to_string())
+    }
+
     /// Reveal the git toolset to this session.
     #[tool]
     async fn enable_git(&self, session: McpSession) -> Result<&'static str, McpError> {
@@ -216,6 +224,26 @@ async fn enabling_a_group_changes_only_that_session() {
     tools_call(&router, "/mcp", &a, "disable_git", json!({})).await;
     let tools_a = support::tool_names(&tools_list(&router, "/mcp", &a).await);
     assert!(!tools_a.contains(&"git_status".to_string()), "{tools_a:?}");
+}
+
+#[r2e_core::test]
+async fn session_id_is_exposed_to_tools_and_the_sessions_bean() {
+    let (router, sessions) = dynamic_app().await;
+    let a = initialize(&router, "/mcp").await;
+    // Attached when the `initialize` response left, before any further request.
+    let by_id = sessions
+        .get(&a)
+        .expect("session looked up by its transport id");
+    assert_eq!(by_id.id().map(|id| id.as_str()), Some(a.as_str()));
+    assert!(sessions.get("not-a-session").is_none());
+
+    let seen = tools_call(&router, "/mcp", &a, "whoami_session", json!({})).await;
+    assert_eq!(text_of(&seen), a, "{seen}");
+
+    let b = initialize(&router, "/mcp").await;
+    assert_ne!(a, b);
+    let seen_b = tools_call(&router, "/mcp", &b, "whoami_session", json!({})).await;
+    assert_eq!(text_of(&seen_b), b, "{seen_b}");
 }
 
 #[r2e_core::test]
