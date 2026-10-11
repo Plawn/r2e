@@ -1,9 +1,12 @@
 use colored::Colorize;
 use std::path::Path;
 
-/// Version requirement written for every R2E dependency `r2e add` inserts.
-/// Keep in step with `[workspace.package] version` at the repo root.
-const R2E_DEP_VERSION: &str = "0.3";
+/// Version requirement written for every R2E dependency `r2e add` inserts:
+/// the `major.minor` of the `r2e` facade this CLI tracks. Rewritten by
+/// `scripts/bump-version.sh` when the facade moves and checked by
+/// `scripts/check-versions.sh`.
+#[doc(hidden)]
+pub const R2E_DEP_VERSION: &str = "0.6";
 
 const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("security", "r2e-security"),

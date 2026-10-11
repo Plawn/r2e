@@ -4,3 +4,4 @@ target
 .target-local
 .DS_Store
 docs/book/book/
+__pycache__/

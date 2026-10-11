@@ -67,6 +67,11 @@ jobs:
 
       # trybuild runs in its own step below (so a `.stderr` drift is named in
       # the job summary); excluding it here keeps it from running twice.
+      # Per-crate versions, pins, changelogs and derived stamps stay consistent
+      # (scripts/versions.py). Cheap: cargo metadata only.
+      - name: scripts/check-versions.sh
+        run: scripts/check-versions.sh
+
       - name: cargo test --workspace
         run: cargo test --workspace --exclude r2e-compile-tests
 

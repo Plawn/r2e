@@ -3,21 +3,25 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-> **Tags vs versions.** A tag `vX.Y.Z` means "`X.Y.Z` is published on
-> crates.io from this commit" — nothing else creates one. A release is a
-> `release: X.Y.Z` PR made by `scripts/bump-version.sh` (workspace version, pins,
-> lockfile, this file's `[Unreleased]` → `[X.Y.Z]`); once it is merged and Tests
-> pass, `.github/workflows/release.yml` publishes, tags, and uses the `[X.Y.Z]`
-> section below as the GitHub release notes.
+> **Since 2026-10-11, crates are versioned independently** and this file is
+> frozen history. Each publishable crate keeps its own `CHANGELOG.md`
+> (`r2e/CHANGELOG.md`, `r2e-core/CHANGELOG.md`, `r2e-mcp/CHANGELOG.md`, …);
+> write entries there, under `[Unreleased]`. A release is a `release: …` PR made
+> by `scripts/bump-version.sh <crate> <patch|breaking|X.Y.Z>` (a breaking bump
+> propagates to every crate that depends on the bumped one, the facade `r2e`
+> included); once merged and green, `.github/workflows/release.yml` publishes
+> the bumped crates, tags each `<crate>-vX.Y.Z` and turns its section into the
+> GitHub release notes.
 >
-> Before that, tags were a release counter pushed on every merge, detached from
-> what crates.io serves: `v0.2.132`–`v0.2.163` contain workspace version
-> `0.3.0` (the 0.3 plugin-API rework ships from **`v0.2.140`** onward, see
+> **Tags vs versions, up to 0.6.0.** A tag `vX.Y.Z` means "`X.Y.Z` of every
+> crate is published on crates.io from this commit" — the whole workspace moved
+> in lockstep, and the sections below describe those releases. Before that,
+> tags were a release counter pushed on every merge, detached from what
+> crates.io serves: `v0.2.132`–`v0.2.163` contain workspace version `0.3.0` (the
+> 0.3 plugin-API rework ships from **`v0.2.140`** onward, see
 > [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)), and
 > `v0.3.3`–`v0.3.15` are snapshots of master that were never published —
 > crates.io went from `0.3.2` straight to the next release.
-
-## [Unreleased]
 
 ## [0.6.0] - 2026-10-10
 

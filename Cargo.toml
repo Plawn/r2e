@@ -59,7 +59,6 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.6.0"
 edition = "2024"
 # The floor is empirical, not aspirational: it is the highest `rust-version` in
 # the resolved dependency graph (sqlx 0.9 = 1.94), verified by

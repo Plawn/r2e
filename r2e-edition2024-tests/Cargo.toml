@@ -13,7 +13,7 @@
 # borrowing from the receiver is legitimate). The compile is the assertion.
 [package]
 name = "r2e-edition2024-tests"
-version.workspace = true
+version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
