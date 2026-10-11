@@ -20,8 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > crates.io serves: `v0.2.132`–`v0.2.163` contain workspace version `0.3.0` (the
 > 0.3 plugin-API rework ships from **`v0.2.140`** onward, see
 > [`docs/migration/plugin-api.md`](docs/migration/plugin-api.md)), and
-> `v0.3.3`–`v0.3.15` are snapshots of master that were never published —
-> crates.io went from `0.3.2` straight to the next release.
+> the `v0.3.3`–`v0.3.15` snapshots of master were never published
+> (crates.io went from `0.3.2` straight to `0.4.0`) and their tags were removed
+> on 2026-10-11.
 
 ## [0.6.0] - 2026-10-10
 
