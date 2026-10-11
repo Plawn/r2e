@@ -5,7 +5,10 @@
 //! the catalog members of its enabled groups plus its session-private
 //! members — with the wire lists precomputed. Sessions that never reshape
 //! their list share [`Catalog::default_view`], so the common case costs one
-//! `Arc` clone per session.
+//! `Arc` clone per session. The global registry
+//! ([`McpRegistry`](crate::McpRegistry)) keeps a third kind of view — a
+//! [`SessionView::standalone`] with no catalog groups — merged with the
+//! session's at request time (see `SessionState` in `session.rs`).
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -20,6 +23,7 @@ use rmcp::service::{RequestContext, RoleServer};
 
 use crate::auth::tools::{requirements_visible, ToolRequirements};
 use crate::auth::McpPrincipal;
+use crate::pagination::ListKey;
 use crate::registry::RegisteredMcpService;
 use crate::route::{McpGroup, PromptRoute, ResourceRoute, ToolRoute};
 use crate::uri_template::UriTemplate;
@@ -40,8 +44,6 @@ pub(crate) struct CatalogOptions {
     pub auth_enabled: bool,
     /// MCP sessions exist (`mcp.stateless = false`).
     pub stateful: bool,
-    /// A session-init hook is installed.
-    pub session_init: bool,
 }
 
 /// The auth layer's principal, carried in the HTTP request parts that the
@@ -81,7 +83,11 @@ type FamilyMember<R, W> = (&'static str, String, ToolRequirements, W, Arc<R>);
 
 impl<R, W: Clone> Family<R, W> {
     /// Fold members into a dispatch table; `Err` names the first duplicate.
-    fn build(kind: &str, filter: bool, members: Vec<FamilyMember<R, W>>) -> Result<Self, String> {
+    pub(crate) fn build(
+        kind: &str,
+        filter: bool,
+        members: Vec<FamilyMember<R, W>>,
+    ) -> Result<Self, String> {
         let capacity = members.len();
         let mut routes = HashMap::with_capacity(capacity);
         let mut owners: HashMap<String, &'static str> = HashMap::with_capacity(capacity);
@@ -124,11 +130,43 @@ impl<R, W: Clone> Family<R, W> {
             .collect()
     }
 
+    /// Append this caller's visible members to `out`, skipping the keys
+    /// `shadowed` accepts — how the global registry's list is merged behind
+    /// a session's own (a session-private member hides a global namesake).
+    pub(crate) fn extend_visible(
+        &self,
+        context: &RequestContext<RoleServer>,
+        out: &mut Vec<W>,
+        shadowed: impl Fn(&str) -> bool,
+    ) where
+        W: ListKey,
+    {
+        let principal = principal_of(context);
+        out.extend(
+            self.list
+                .iter()
+                .zip(self.reqs.iter())
+                .filter(|(wire, req)| {
+                    !shadowed(wire.list_key())
+                        && (!self.filter || requirements_visible(principal, req))
+                })
+                .map(|(wire, _)| wire.clone()),
+        );
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
     pub(crate) fn route(&self, key: &str) -> Option<&Arc<R>> {
         self.routes.get(key).map(|entry| &entry.route)
     }
 
-    fn wire(&self, key: &str) -> Option<W> {
+    pub(crate) fn wire(&self, key: &str) -> Option<W> {
         let entry = self.routes.get(key)?;
         self.list.get(entry.wire_index).cloned()
     }
@@ -166,7 +204,7 @@ type TemplateMember = (
 );
 
 impl TemplateFamily {
-    fn build(filter: bool, members: Vec<TemplateMember>) -> Result<Self, String> {
+    pub(crate) fn build(filter: bool, members: Vec<TemplateMember>) -> Result<Self, String> {
         let mut owners = HashMap::with_capacity(members.len());
         let mut routes = Vec::with_capacity(members.len());
         let mut list = Vec::with_capacity(members.len());
@@ -220,7 +258,43 @@ impl TemplateFamily {
             .collect()
     }
 
-    fn route(&self, uri: &str) -> Option<(&Arc<ResourceRoute>, BTreeMap<String, String>)> {
+    /// See [`Family::extend_visible`]; templates are shadowed by their text.
+    pub(crate) fn extend_visible(
+        &self,
+        context: &RequestContext<RoleServer>,
+        out: &mut Vec<ResourceTemplate>,
+        shadowed: impl Fn(&str) -> bool,
+    ) {
+        let principal = principal_of(context);
+        out.extend(
+            self.list
+                .iter()
+                .zip(self.reqs.iter())
+                .filter(|(wire, req)| {
+                    !shadowed(&wire.uri_template)
+                        && (!self.filter || requirements_visible(principal, req))
+                })
+                .map(|(wire, _)| wire.clone()),
+        );
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.list.len()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+
+    /// Whether a template with exactly this text is served.
+    pub(crate) fn has_raw(&self, raw: &str) -> bool {
+        self.routes.iter().any(|entry| entry.matcher.raw() == raw)
+    }
+
+    pub(crate) fn route(
+        &self,
+        uri: &str,
+    ) -> Option<(&Arc<ResourceRoute>, BTreeMap<String, String>)> {
         self.routes.iter().find_map(|entry| {
             entry
                 .matcher
@@ -232,7 +306,7 @@ impl TemplateFamily {
     /// The template a `completion/complete` `ref/resource` names: the exact
     /// template text, else any template matching the same URIs (the client
     /// may spell the variables differently).
-    fn template(&self, raw: &str) -> Option<&Arc<ResourceRoute>> {
+    pub(crate) fn template(&self, raw: &str) -> Option<&Arc<ResourceRoute>> {
         if let Some(entry) = self.routes.iter().find(|e| e.matcher.raw() == raw) {
             return Some(&entry.route);
         }
@@ -323,6 +397,18 @@ pub(crate) struct SessionView {
 }
 
 impl SessionView {
+    /// A view of `members` alone, with no catalog behind it: the global
+    /// registry's view (`label` names it in duplicate diagnostics).
+    pub(crate) fn standalone(
+        label: &'static str,
+        filter: bool,
+        members: PrivateMembers,
+    ) -> Result<SessionView, String> {
+        let mut inputs = FamilyInputs::default();
+        inputs.extend_private(label, &members);
+        inputs.into_view(filter, Box::default(), members)
+    }
+
     pub(crate) fn resource_route(
         &self,
         uri: &str,
@@ -402,7 +488,6 @@ impl Catalog {
         let mut groups: Vec<GroupDef> = Vec::new();
         let mut group_index: HashMap<Cow<'static, str>, usize> = HashMap::new();
         let mut uses_session = false;
-        let mut has_completions = false;
         let mut tools = Vec::new();
         let mut resources = Vec::new();
         let mut templates = Vec::new();
@@ -463,7 +548,6 @@ impl Catalog {
                 if let Err(reason) = resource_completions_valid(&resource) {
                     panic!("{reason} (in `{name}`)");
                 }
-                has_completions |= !resource.completions.is_empty();
                 let group = intern(name, &resource.group);
                 if resource.is_template() {
                     templates.push(Member {
@@ -495,7 +579,6 @@ impl Catalog {
                 if let Err(reason) = prompt_completions_valid(&prompt) {
                     panic!("{reason} (in `{name}`)");
                 }
-                has_completions |= !prompt.completions.is_empty();
                 let group = intern(name, &prompt.group);
                 prompts.push(Member {
                     service: name,
@@ -543,41 +626,25 @@ impl Catalog {
         Family::build("prompt name", false, family_members(&prompts, &all_enabled))
             .unwrap_or_else(|e| panic!("{e}"));
 
-        // Every persistent session can be changed through the McpSessions bean,
-        // including applications whose members never take McpSession explicitly.
-        let dynamic = options.stateful
-            || uses_session
-            || options.session_init
-            || groups.iter().any(|g| g.opt_in);
-
+        // Every list is dynamic: the `McpRegistry` bean can add a tool, a
+        // resource (with completion providers) or a prompt to every session
+        // at any time, so all four capabilities are advertised with
+        // `listChanged` from the start — a client that only reads
+        // capabilities at `initialize` would otherwise never re-list.
         let mut info = ServerInfo::default();
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
-        // Tools are always advertised (the endpoint's primary purpose);
-        // resources/prompts only when at least one exists — or when session
-        // lists are dynamic, since a session may gain one later. The
-        // typestate builder cannot enable conditionally, so set the fields.
-        let list_changed = dynamic.then_some(true);
-        if dynamic {
-            let mut tools_capability = ToolsCapability::default();
-            tools_capability.list_changed = list_changed;
-            capabilities.tools = Some(tools_capability);
-        }
-        if dynamic || !resources.is_empty() || !templates.is_empty() {
-            let mut resource_capabilities = ResourcesCapability::default();
-            resource_capabilities.subscribe = Some(true);
-            resource_capabilities.list_changed = list_changed;
-            capabilities.resources = Some(resource_capabilities);
-        }
-        if dynamic || !prompts.is_empty() {
-            let mut prompt_capabilities = PromptsCapability::default();
-            prompt_capabilities.list_changed = list_changed;
-            capabilities.prompts = Some(prompt_capabilities);
-        }
-        // Same rule for completion: advertised when a provider exists, or
-        // when a session may gain one (a dynamic member `with_completion`).
-        if dynamic || has_completions {
-            capabilities.completions = Some(Default::default());
-        }
+        // The typestate builder cannot set `list_changed`; set the fields.
+        let mut tools_capability = ToolsCapability::default();
+        tools_capability.list_changed = Some(true);
+        capabilities.tools = Some(tools_capability);
+        let mut resource_capabilities = ResourcesCapability::default();
+        resource_capabilities.subscribe = Some(true);
+        resource_capabilities.list_changed = Some(true);
+        capabilities.resources = Some(resource_capabilities);
+        let mut prompt_capabilities = PromptsCapability::default();
+        prompt_capabilities.list_changed = Some(true);
+        capabilities.prompts = Some(prompt_capabilities);
+        capabilities.completions = Some(Default::default());
         info.capabilities = capabilities;
         info.server_info = Implementation::new(identity.name, identity.version);
         info.instructions = identity.instructions;
@@ -631,6 +698,11 @@ impl Catalog {
         self.group_index.get(name).copied()
     }
 
+    /// `mcp.auth.filter-members` (and auth on): per-caller list filtering.
+    pub(crate) fn filter(&self) -> bool {
+        self.filter
+    }
+
     /// The descriptor of any catalog tool, hidden groups included.
     ///
     /// Backs `ServerHandler::get_tool`, which rmcp calls on a FRESH handler
@@ -681,30 +753,49 @@ impl Members {
         enabled: Box<[bool]>,
         private: PrivateMembers,
     ) -> Result<SessionView, String> {
-        let private_service = "<session>";
-        let mut tools = family_members(&self.tools, &enabled);
-        tools.extend(private.tools.iter().map(|route| {
+        let mut inputs = FamilyInputs {
+            tools: family_members(&self.tools, &enabled),
+            resources: family_members(&self.resources, &enabled),
+            templates: template_members(&self.templates, &enabled),
+            prompts: family_members(&self.prompts, &enabled),
+        };
+        inputs.extend_private("<session>", &private);
+        inputs.into_view(filter, enabled, private)
+    }
+}
+
+/// The members of a view before they are folded into families.
+#[derive(Default)]
+struct FamilyInputs {
+    tools: Vec<FamilyMember<ToolRoute, Tool>>,
+    resources: Vec<FamilyMember<ResourceRoute, Resource>>,
+    templates: Vec<TemplateMember>,
+    prompts: Vec<FamilyMember<PromptRoute, Prompt>>,
+}
+
+impl FamilyInputs {
+    /// Append `private`'s members, owned by `label` for diagnostics.
+    fn extend_private(&mut self, label: &'static str, private: &PrivateMembers) {
+        self.tools.extend(private.tools.iter().map(|route| {
             (
-                private_service,
+                label,
                 route.name.to_string(),
                 route.requirements,
                 route.to_rmcp_tool(),
                 Arc::clone(route),
             )
         }));
-        let mut resources = family_members(&self.resources, &enabled);
-        let mut templates = template_members(&self.templates, &enabled);
         for route in &private.resources {
             if route.is_template() {
-                templates.push((
-                    private_service,
+                self.templates.push((
+                    label,
                     route.requirements,
                     route.to_rmcp_resource_template(),
                     Arc::clone(route),
                 ));
             } else {
-                resources.push((
-                    private_service,
+                self.resources.push((
+                    label,
                     route.uri.to_string(),
                     route.requirements,
                     route.to_rmcp_resource(),
@@ -712,21 +803,28 @@ impl Members {
                 ));
             }
         }
-        let mut prompts = family_members(&self.prompts, &enabled);
-        prompts.extend(private.prompts.iter().map(|route| {
+        self.prompts.extend(private.prompts.iter().map(|route| {
             (
-                private_service,
+                label,
                 route.name.to_string(),
                 route.requirements,
                 route.to_rmcp_prompt(),
                 Arc::clone(route),
             )
         }));
+    }
+
+    fn into_view(
+        self,
+        filter: bool,
+        enabled: Box<[bool]>,
+        private: PrivateMembers,
+    ) -> Result<SessionView, String> {
         Ok(SessionView {
-            tools: Family::build("tool name", filter, tools)?,
-            resources: Family::build("resource URI", filter, resources)?,
-            resource_templates: TemplateFamily::build(filter, templates)?,
-            prompts: Family::build("prompt name", filter, prompts)?,
+            tools: Family::build("tool name", filter, self.tools)?,
+            resources: Family::build("resource URI", filter, self.resources)?,
+            resource_templates: TemplateFamily::build(filter, self.templates)?,
+            prompts: Family::build("prompt name", filter, self.prompts)?,
             enabled,
             private,
         })

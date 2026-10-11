@@ -202,7 +202,10 @@ async fn list_payloads_match_the_wire_goldens() {
     let router = golden_app().await;
     let session = support::initialize(&router, "/mcp").await;
 
-    assert_golden("tools_list", &list(&router, &session, 2, "tools/list").await);
+    assert_golden(
+        "tools_list",
+        &list(&router, &session, 2, "tools/list").await,
+    );
     assert_golden(
         "resources_list",
         &list(&router, &session, 3, "resources/list").await,

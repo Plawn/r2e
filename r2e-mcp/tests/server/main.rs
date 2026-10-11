@@ -11,6 +11,7 @@ mod completion;
 mod dispatch;
 mod dynamic;
 mod elicitation;
+mod global;
 mod interceptors;
 mod lifecycle;
 mod pagination;

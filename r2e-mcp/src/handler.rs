@@ -22,16 +22,19 @@ use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
 
 use crate::auth::tools::requirements_visible;
-use crate::catalog::{principal_in, Catalog};
+use crate::catalog::{principal_in, Catalog, Changed};
 use crate::elicitation::ClientChannel;
 use crate::error::McpError;
+use crate::global::McpRegistry;
 use crate::pagination::{paginate, ListKey};
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
 use crate::route::{
     Completion, CompletionRef, Completions, PromptCall, ResourceCall, ResourceRoute, ToolCall,
 };
-use crate::session::{McpSession, McpSessions, SessionInitFn, SessionLink, SessionState, SESSION_ID_HEADER};
+use crate::session::{
+    McpSession, McpSessions, SessionInitFn, SessionLink, SessionState, SESSION_ID_HEADER,
+};
 
 /// Extract the per-call HTTP parts from the request context, by value.
 ///
@@ -120,6 +123,9 @@ impl CallContext {
 /// Everything the session handlers of one endpoint share.
 pub(crate) struct Endpoint {
     pub(crate) catalog: Arc<Catalog>,
+    /// The endpoint-wide dynamic members, served by every session behind
+    /// its own.
+    pub(crate) registry: McpRegistry,
     pub(crate) updates: McpResourceUpdates,
     pub(crate) sessions: McpSessions,
     pub(crate) init: Option<SessionInitFn>,
@@ -148,7 +154,10 @@ pub(crate) struct R2eMcpHandler {
 impl R2eMcpHandler {
     pub(crate) fn new(endpoint: Arc<Endpoint>) -> Self {
         R2eMcpHandler {
-            state: Arc::new(SessionState::new(Arc::clone(&endpoint.catalog))),
+            state: Arc::new(SessionState::new(
+                Arc::clone(&endpoint.catalog),
+                endpoint.registry.clone(),
+            )),
             endpoint,
             legacy_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             legacy_forwarder_alive: Arc::new(AtomicBool::new(false)),
@@ -197,9 +206,9 @@ impl R2eMcpHandler {
     /// Resource interests do not grant access: resolve against the initialized
     /// view and enforce scope/role visibility even when list filtering is off.
     fn resource_visible(&self, uri: &str, context: &RequestContext<RoleServer>) -> bool {
-        let view = self.state.view();
         let principal = principal_in(context.extensions.get::<Parts>());
-        view.resource_route(uri)
+        self.state
+            .resource(uri)
             .is_some_and(|(route, _)| requirements_visible(principal, &route.requirements))
     }
 
@@ -260,8 +269,8 @@ async fn forward_legacy_updates(
                         .expect("MCP subscription lock poisoned");
                     let matches = subscriptions.get(&uri).is_some_and(|subscribed_route| {
                         state.upgrade().is_some_and(|state| {
-                            state.view().resource_route(&uri).is_some_and(|(route, _)| {
-                                Weak::ptr_eq(subscribed_route, &Arc::downgrade(route))
+                            state.resource(&uri).is_some_and(|(route, _)| {
+                                Weak::ptr_eq(subscribed_route, &Arc::downgrade(&route))
                             })
                         })
                     });
@@ -286,21 +295,27 @@ async fn forward_legacy_updates(
     }
 }
 
-/// Relay an endpoint-wide list change ([`McpSessions::notify_list_changed`])
-/// to a sessionless `subscriptions/listen` stream, for each family the
-/// client subscribed to. `false` when the stream is gone.
-async fn forward_list_changed(context: &SubscriptionContext) -> bool {
+/// Relay an endpoint-wide list change ([`McpSessions::notify_list_changed`],
+/// a [`McpRegistry`] edit) to a sessionless `subscriptions/listen` stream,
+/// for each changed family the client subscribed to. `false` when the
+/// stream is gone.
+async fn forward_list_changed(context: &SubscriptionContext, changed: Changed) -> bool {
     let accepted = context.accepted();
     let sink = context.sink();
-    if accepted.tools_list_changed == Some(true) && sink.notify_tool_list_changed().await.is_err() {
+    if changed.tools
+        && accepted.tools_list_changed == Some(true)
+        && sink.notify_tool_list_changed().await.is_err()
+    {
         return false;
     }
-    if accepted.resources_list_changed == Some(true)
+    if changed.resources
+        && accepted.resources_list_changed == Some(true)
         && sink.notify_resource_list_changed().await.is_err()
     {
         return false;
     }
-    if accepted.prompts_list_changed == Some(true)
+    if changed.prompts
+        && accepted.prompts_list_changed == Some(true)
         && sink.notify_prompt_list_changed().await.is_err()
     {
         return false;
@@ -360,7 +375,7 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         self.prepare(&context).await?;
-        let list = self.state.view().tools.visible_list(&context);
+        let list = self.state.tool_list(&context);
         let (page, next_cursor) = self.page(list, request, &context)?;
         let mut result = ListToolsResult::with_all_items(page);
         result.next_cursor = next_cursor;
@@ -370,10 +385,16 @@ impl ServerHandler for R2eMcpHandler {
     /// Returning the real `Tool` lets rmcp validate `Mcp-Param-*` headers
     /// against `inputSchema` (SEP-2243). rmcp asks a fresh handler and
     /// caches the answer per name, so this is catalog-wide (hidden groups
-    /// included, session-private tools never): visibility is enforced by
-    /// `call_tool`.
+    /// included, session-private tools never) plus the global registry's
+    /// current tools: visibility is enforced by `call_tool`. The cache
+    /// means a registry tool's schema is the one rmcp first saw under that
+    /// name — `Mcp-Param-*` headers are a convenience, the body is
+    /// authoritative.
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.endpoint.catalog.tool_wire(name)
+        self.endpoint
+            .catalog
+            .tool_wire(name)
+            .or_else(|| self.endpoint.registry.view().tools.wire(name))
     }
 
     async fn call_tool(
@@ -382,10 +403,9 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         self.prepare(&context).await?;
-        let view = self.state.view();
         // A member hidden from this session answers exactly like an unknown
         // one — no enumeration oracle.
-        let Some(route) = view.tools.route(request.name.as_ref()) else {
+        let Some(route) = self.state.tool(request.name.as_ref()) else {
             // Unknown tool is a protocol error (unroutable request), per the
             // MCP convention rmcp documents on `call_tool`.
             return Err(ErrorData::new(
@@ -410,7 +430,7 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
         self.prepare(&context).await?;
-        let list = self.state.view().resources.visible_list(&context);
+        let list = self.state.resource_list(&context);
         let (page, next_cursor) = self.page(list, request, &context)?;
         let mut result = ListResourcesResult::with_all_items(page);
         result.next_cursor = next_cursor;
@@ -423,7 +443,7 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
         self.prepare(&context).await?;
-        let list = self.state.view().resource_templates.visible_list(&context);
+        let list = self.state.resource_template_list(&context);
         let (page, next_cursor) = self.page(list, request, &context)?;
         let mut result = ListResourceTemplatesResult::with_all_items(page);
         result.next_cursor = next_cursor;
@@ -436,8 +456,7 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         self.prepare(&context).await?;
-        let view = self.state.view();
-        let Some((route, variables)) = view.resource_route(request.uri.as_str()) else {
+        let Some((route, variables)) = self.state.resource(request.uri.as_str()) else {
             // Unknown resource URI has its own JSON-RPC code per the spec.
             return Err(ErrorData::new(
                 ErrorCode::RESOURCE_NOT_FOUND,
@@ -476,13 +495,15 @@ impl ServerHandler for R2eMcpHandler {
         loop {
             r2e_core::rt::select! {
                 _ = context.cancelled() => return Ok(()),
-                change = list_changes.recv() => match change {
-                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {
-                        if !forward_list_changed(&context).await {
-                            return Ok(());
-                        }
+                change = list_changes.recv() => {
+                    let changed = match change {
+                        Ok(changed) => changed,
+                        Err(broadcast::error::RecvError::Lagged(_)) => Changed::ALL,
+                        Err(broadcast::error::RecvError::Closed) => continue,
+                    };
+                    if !forward_list_changed(&context, changed).await {
+                        return Ok(());
                     }
-                    Err(broadcast::error::RecvError::Closed) => {}
                 },
                 update = updates.recv() => match update {
                     Ok(uri) => {
@@ -508,12 +529,12 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<(), ErrorData> {
         self.prepare(&context).await?;
-        // Authorize and bind from the SAME snapshot: a concurrent replacement
-        // must not inherit the authorization checked on the previous route.
-        let view = self.state.view();
+        // Authorize and bind the SAME route: a concurrent replacement must
+        // not inherit the authorization checked on the previous route.
         let principal = principal_in(context.extensions.get::<Parts>());
-        let Some((route, _)) = view
-            .resource_route(&request.uri)
+        let Some((route, _)) = self
+            .state
+            .resource(&request.uri)
             .filter(|(route, _)| requirements_visible(principal, &route.requirements))
         else {
             // Same answer for unknown and unauthorized URIs: no existence oracle.
@@ -526,7 +547,7 @@ impl ServerHandler for R2eMcpHandler {
         self.legacy_subscriptions
             .write()
             .expect("MCP subscription lock poisoned")
-            .insert(request.uri, Arc::downgrade(route));
+            .insert(request.uri, Arc::downgrade(&route));
 
         if !self.legacy_forwarder_alive.swap(true, Ordering::AcqRel) {
             let alive = Arc::clone(&self.legacy_forwarder_alive);
@@ -563,7 +584,7 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, ErrorData> {
         self.prepare(&context).await?;
-        let list = self.state.view().prompts.visible_list(&context);
+        let list = self.state.prompt_list(&context);
         let (page, next_cursor) = self.page(list, request, &context)?;
         let mut result = ListPromptsResult::with_all_items(page);
         result.next_cursor = next_cursor;
@@ -576,8 +597,7 @@ impl ServerHandler for R2eMcpHandler {
         context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
         self.prepare(&context).await?;
-        let view = self.state.view();
-        let Some(route) = view.prompts.route(request.name.as_str()) else {
+        let Some(route) = self.state.prompt(request.name.as_str()) else {
             // Unknown prompt name is invalid params per the MCP spec.
             return Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,
@@ -601,16 +621,21 @@ impl ServerHandler for R2eMcpHandler {
         mut context: RequestContext<RoleServer>,
     ) -> Result<CompleteResult, ErrorData> {
         self.prepare(&context).await?;
-        let view = self.state.view();
+        // The resolved route outlives the borrows below.
+        let (prompt_route, resource_route) = match &request.r#ref {
+            Reference::Prompt(prompt) => (self.state.prompt(&prompt.name), None),
+            Reference::Resource(resource) => (None, self.state.completion_resource(&resource.uri)),
+            _ => (None, None),
+        };
         let target = match &request.r#ref {
-            Reference::Prompt(prompt) => view.prompts.route(&prompt.name).map(|route| {
+            Reference::Prompt(prompt) => prompt_route.as_ref().map(|route| {
                 (
                     CompletionRef::Prompt(prompt.name.clone()),
                     &route.requirements,
                     &route.completions,
                 )
             }),
-            Reference::Resource(resource) => view.completion_resource(&resource.uri).map(|route| {
+            Reference::Resource(resource) => resource_route.as_ref().map(|route| {
                 (
                     CompletionRef::Resource(resource.uri.clone()),
                     &route.requirements,
@@ -640,7 +665,6 @@ impl ServerHandler for R2eMcpHandler {
         else {
             return Ok(CompleteResult::new(CompletionInfo::default()));
         };
-        drop(view);
 
         let parts = take_parts(&mut context);
         let completion = Completion {

@@ -17,6 +17,7 @@ use crate::auth::validator::McpTokenValidator;
 use crate::catalog::{Catalog, CatalogOptions, ServerIdentity};
 use crate::config::McpConfig;
 use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
+use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
 use crate::resource_updates::McpResourceUpdates;
@@ -249,8 +250,14 @@ impl Plugin for McpServer {
     /// [`McpTokenValidator::disabled`].
     ///
     /// [`McpSessions`] reaches every live MCP session (push list changes
-    /// from a consumer, an admin endpoint, …).
-    type Provided = (McpTokenValidator, McpResourceUpdates, McpSessions);
+    /// from a consumer, an admin endpoint, …); [`McpRegistry`] adds and
+    /// removes the members every session serves, after boot.
+    type Provided = (
+        McpTokenValidator,
+        McpResourceUpdates,
+        McpSessions,
+        McpRegistry,
+    );
     type Deps = ();
     type Config = McpConfig;
     type Controllers = ();
@@ -276,6 +283,7 @@ impl Plugin for McpServer {
                 McpTokenValidator::disabled(),
                 self.resource_updates,
                 McpSessions::default(),
+                McpRegistry::default(),
             ));
         }
         let cfg = config.unwrap_or_default();
@@ -400,17 +408,22 @@ impl Plugin for McpServer {
         // Session-shaping beans, resolved (not captured) from the bean
         // context — the Graph stage runs before `wrap_router` reads them.
         let sessions = McpSessions::default();
+        let members = McpRegistry::default();
         let sessions_slot: Arc<OnceLock<McpSessions>> = Arc::new(OnceLock::new());
+        let members_slot: Arc<OnceLock<McpRegistry>> = Arc::new(OnceLock::new());
         let init_slot: Arc<OnceLock<SessionInitFn>> = Arc::new(OnceLock::new());
-        let has_session_init = self.session_init.is_some();
         {
             let sessions_slot = Arc::clone(&sessions_slot);
+            let members_slot = Arc::clone(&members_slot);
             let init_slot = Arc::clone(&init_slot);
             let fallback = sessions.clone();
+            let members_fallback = members.clone();
             let session_init = self.session_init;
             ctx.after_build(move |dctx| {
                 let beans = dctx.bean_context();
                 let _ = sessions_slot.set(beans.try_get::<McpSessions>().unwrap_or(fallback));
+                let _ =
+                    members_slot.set(beans.try_get::<McpRegistry>().unwrap_or(members_fallback));
                 if let Some((type_name, resolve)) = session_init {
                     let hook = resolve(beans).unwrap_or_else(|| {
                         panic!(
@@ -454,14 +467,17 @@ impl Plugin for McpServer {
         let registry = self.registry;
         let resource_updates = self.resource_updates.clone();
         let sessions_fallback = sessions.clone();
+        let members_fallback = members.clone();
         ctx.wrap_router(move |router| {
-            let Some(services) = registry.take() else {
-                tracing::warn!(
-                    "McpServer is installed but no MCP service was registered \
-                     (`.register_mcp_service::<T>()`); endpoint not mounted"
+            // No service registered is a valid deployment: every member then
+            // comes from the global registry (or a session), after boot.
+            let services = registry.take().unwrap_or_default();
+            if services.is_empty() {
+                tracing::info!(
+                    "no MCP service registered (`.register_mcp_service::<T>()`); \
+                     the endpoint serves McpRegistry / session members only"
                 );
-                return router;
-            };
+            }
             let catalog = Arc::new(Catalog::build(
                 services,
                 identity,
@@ -469,7 +485,6 @@ impl Plugin for McpServer {
                     filter_members,
                     auth_enabled,
                     stateful: !stateless,
-                    session_init: has_session_init,
                 },
             ));
             tracing::info!(
@@ -480,10 +495,14 @@ impl Plugin for McpServer {
                 groups = ?catalog.group_names(),
                 "Mounting MCP endpoint"
             );
+            let sessions = sessions_slot.get().cloned().unwrap_or(sessions_fallback);
+            let members = members_slot.get().cloned().unwrap_or(members_fallback);
+            members.attach(Arc::clone(&catalog), sessions.clone());
             let endpoint = Arc::new(Endpoint {
                 catalog,
+                registry: members,
                 updates: resource_updates,
-                sessions: sessions_slot.get().cloned().unwrap_or(sessions_fallback),
+                sessions,
                 init: init_slot.get().cloned(),
                 shutdown: mcp_cancel.clone(),
                 elicitation_timeout,
@@ -531,6 +550,6 @@ impl Plugin for McpServer {
             }
         });
 
-        Ok((provided_validator, self.resource_updates, sessions))
+        Ok((provided_validator, self.resource_updates, sessions, members))
     }
 }

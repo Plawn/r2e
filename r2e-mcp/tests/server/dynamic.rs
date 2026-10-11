@@ -231,7 +231,9 @@ async fn session_id_is_exposed_to_tools_and_the_sessions_bean() {
     let (router, sessions) = dynamic_app().await;
     let a = initialize(&router, "/mcp").await;
     // Attached when the `initialize` response left, before any further request.
-    let by_id = sessions.get(&a).expect("session looked up by its transport id");
+    let by_id = sessions
+        .get(&a)
+        .expect("session looked up by its transport id");
     assert_eq!(by_id.id().map(|id| id.as_str()), Some(a.as_str()));
     assert!(sessions.get("not-a-session").is_none());
 

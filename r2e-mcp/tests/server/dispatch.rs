@@ -11,7 +11,14 @@ async fn call_with_json_return_is_dual_encoded() {
     let (router, _log) = fixture_app().await;
     let session = initialize(&router, "/mcp").await;
 
-    let msg = tools_call(&router, "/mcp", &session, "add", json!({"a": 2.0, "b": 3.0})).await;
+    let msg = tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "add",
+        json!({"a": 2.0, "b": 3.0}),
+    )
+    .await;
     let result = &msg["result"];
     assert_ne!(result["isError"], true, "{msg}");
     // `Json<T>` results are dual-encoded: structuredContent + a JSON text
@@ -29,7 +36,14 @@ async fn domain_error_is_an_is_error_result() {
 
     // `McpError::tool` → CallToolResult{isError:true}: readable by the
     // calling agent, NOT a protocol error.
-    let msg = tools_call(&router, "/mcp", &session, "div", json!({"a": 1.0, "b": 0.0})).await;
+    let msg = tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "div",
+        json!({"a": 1.0, "b": 0.0}),
+    )
+    .await;
     let result = &msg["result"];
     assert_eq!(result["isError"], true, "{msg}");
     let text = result["content"][0]["text"].as_str().unwrap();
@@ -42,7 +56,14 @@ async fn invalid_arguments_are_a_protocol_error() {
     let session = initialize(&router, "/mcp").await;
 
     // Wrong type.
-    let msg = tools_call(&router, "/mcp", &session, "add", json!({"a": "x", "b": 3.0})).await;
+    let msg = tools_call(
+        &router,
+        "/mcp",
+        &session,
+        "add",
+        json!({"a": "x", "b": 3.0}),
+    )
+    .await;
     assert_eq!(msg["error"]["code"], -32602, "{msg}");
 
     // Missing required field.

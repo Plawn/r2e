@@ -382,13 +382,16 @@ async fn provider_error_is_a_json_rpc_error() {
 }
 
 #[r2e_core::test]
-async fn capability_follows_the_providers() {
+async fn capability_is_always_advertised() {
+    // Every list is dynamic (`McpRegistry`), so a completion provider may
+    // appear after boot: the capability is advertised whether or not the
+    // catalog has one.
     let with = capabilities(&app().await).await;
     assert!(with.get("completions").is_some(), "{with}");
 
     let (plain, _log) = fixture_app_with(McpServer::new().stateless(true)).await;
     let without = capabilities(&plain).await;
-    assert!(without.get("completions").is_none(), "{without}");
+    assert!(without.get("completions").is_some(), "{without}");
 }
 
 #[r2e_core::test]

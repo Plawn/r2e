@@ -13,7 +13,9 @@ fn project(kind: RejectionKind) -> McpError {
 
 #[test]
 fn auth_kinds_map_to_their_protocol_errors() {
-    assert!(matches!(project(RejectionKind::Unauthenticated), McpError::Unauthorized(m) if m == "boom"));
+    assert!(
+        matches!(project(RejectionKind::Unauthenticated), McpError::Unauthorized(m) if m == "boom")
+    );
     assert!(matches!(project(RejectionKind::Forbidden), McpError::Forbidden(m) if m == "boom"));
     assert!(matches!(project(RejectionKind::NotFound), McpError::NotFound(m) if m == "boom"));
 }
@@ -57,8 +59,8 @@ fn server_side_kinds_map_to_internal() {
 
 #[test]
 fn conflict_and_rate_limit_are_tool_results_with_details() {
-    let rejection = Rejection::new(RejectionKind::RateLimited, "slow down")
-        .details(json!({"retry_after": 30}));
+    let rejection =
+        Rejection::new(RejectionKind::RateLimited, "slow down").details(json!({"retry_after": 30}));
     match McpError::from(rejection) {
         McpError::Tool { message, data } => {
             assert_eq!(message, "slow down");
@@ -66,7 +68,10 @@ fn conflict_and_rate_limit_are_tool_results_with_details() {
         }
         other => panic!("expected Tool, got {other:?}"),
     }
-    assert!(matches!(project(RejectionKind::Conflict), McpError::Tool { .. }));
+    assert!(matches!(
+        project(RejectionKind::Conflict),
+        McpError::Tool { .. }
+    ));
 }
 
 #[test]
