@@ -65,7 +65,10 @@ fn error_body(raw: &str) -> (String, String) {
 
 /// POST `initialize` with the given `Authorization` header (or none);
 /// returns status, headers and body.
-async fn initialize_with(router: &Router, authorization: Option<&str>) -> (StatusCode, HeaderMap, String) {
+async fn initialize_with(
+    router: &Router,
+    authorization: Option<&str>,
+) -> (StatusCode, HeaderMap, String) {
     let mut headers = vec![
         ("content-type", "application/json"),
         ("accept", "application/json, text/event-stream"),
@@ -115,7 +118,10 @@ async fn basic_only_challenges_with_basic_and_mounts_no_oauth_surface() {
     );
     assert_eq!(
         error_body(&body),
-        ("unauthorized".to_string(), "missing credentials".to_string())
+        (
+            "unauthorized".to_string(),
+            "missing credentials".to_string()
+        )
     );
 
     // No protected-resource metadata: there is no authorization server to
@@ -142,7 +148,10 @@ async fn valid_credentials_authenticate_as_the_configured_principal() {
     assert_eq!(whoami["result"]["content"][0]["text"], USER);
     // Configured roles feed `#[roles]`…
     let admin = call(&router, &session, &auth, "admin_only").await;
-    assert_eq!(admin["result"]["content"][0]["text"], format!("admin:{USER}"));
+    assert_eq!(
+        admin["result"]["content"][0]["text"],
+        format!("admin:{USER}")
+    );
     // …and configured scopes feed `#[tool(scopes)]`, including the
     // visibility filter: `write_data` needs `mcp:write`, which this
     // principal lacks.
@@ -167,7 +176,11 @@ async fn wrong_or_malformed_credentials_are_401_invalid_token() {
     let router = basic_only_app(basic_only_config()).await;
     let cases: [(&str, String, &str); 5] = [
         ("wrong password", basic(USER, "nope"), "invalid credentials"),
-        ("wrong user", basic("someone", PASSWORD), "invalid credentials"),
+        (
+            "wrong user",
+            basic("someone", PASSWORD),
+            "invalid credentials",
+        ),
         ("empty pair", basic("", ""), "invalid credentials"),
         (
             "no colon",
@@ -309,7 +322,13 @@ async fn both_schemes_are_accepted_and_both_challenges_advertised() {
     // Bearer path untouched.
     let token = test_jwt().token("bob", &[]);
     let bearer_session = initialize_auth(&router, "/mcp", &token).await;
-    let whoami = call(&router, &bearer_session, &format!("Bearer {token}"), "whoami").await;
+    let whoami = call(
+        &router,
+        &bearer_session,
+        &format!("Bearer {token}"),
+        "whoami",
+    )
+    .await;
     assert_eq!(whoami["result"]["content"][0]["text"], "bob");
 
     // Basic path alongside.
@@ -348,5 +367,10 @@ async fn sessions_are_bound_to_the_basic_principal() {
         &json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/list" }),
     )
     .await;
-    assert_eq!(response.status, StatusCode::NOT_FOUND, "{}", response.raw_body);
+    assert_eq!(
+        response.status,
+        StatusCode::NOT_FOUND,
+        "{}",
+        response.raw_body
+    );
 }
