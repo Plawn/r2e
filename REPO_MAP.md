@@ -356,9 +356,20 @@ src/
   lib.rs                    AppBuilderMcpExt (register_mcp_service + compile-time dep check), prelude, __macro_support
   plugin.rs                 McpServer plugin: path validation, shared session map, shutdown-token relay, endpoint mount
   config.rs                 McpConfig (`mcp.*`)
-  catalog.rs                Catalog (boot-time member table, groups, duplicate-name boot panic) + copy-on-write SessionView
+  catalog/                  Catalog (boot-time member table, groups, duplicate-name boot panic) + copy-on-write SessionView
+    mod.rs                  Catalog::build/view + key checks, CatalogOptions, ServerIdentity, principal_in
+    family.rs               Family/TemplateFamily dispatch tables, FamilyInputs, enabled-member folding
+    view.rs                 SessionView, PrivateMembers, Changed, catalog Member/GroupDef/Members
+    validate.rs             scope-vs-auth and completion-provider checks (boot + runtime)
   handler.rs                rmcp ServerHandler impl: per-session dispatch, session↔principal binding, list_changed delivery
-  session.rs                McpSession handle, McpSessions bean, McpSessionInit hook, SessionToolset
+  session/                  McpSession handle, McpSessions bean, McpSessionInit hook, SessionToolset
+    mod.rs                  module docs + re-exports (every r2e_mcp::session::* path)
+    error.rs                McpMemberError (+ McpSessionError alias)
+    id.rs                   SessionId, SESSION_ID_HEADER, track_session_id, SessionLink, SessionBindings
+    init.rs                 SessionToolset, SessionInit, McpSessionInit, erased init hook
+    state.rs                SessionState (per-session view, member resolution, copy-on-write update), Draft
+    handle.rs               McpSession
+    sessions.rs             McpSessions bean
   dynamic.rs                DynamicTool/DynamicResource/DynamicPrompt builders (session-private members)
   registry.rs               McpServiceRegistry (filled at registration, drained once at router build)
   resource_updates.rs       Injectable resource-update publisher (legacy + current subscriptions)
