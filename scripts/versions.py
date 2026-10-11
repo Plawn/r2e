@@ -503,8 +503,14 @@ def validate_plan(ws, bumps, tags):
         die("the plan cannot be applied")
 
 
-def rel_link(frm, to):
-    return os.path.relpath(os.path.join(ROOT, to.dir, "CHANGELOG.md"), os.path.join(ROOT, frm.dir))
+REPO_URL = "https://github.com/Plawn/r2e"
+
+
+def changelog_link(to, version):
+    """Absolute link to a crate's CHANGELOG at its release tag: the entry is
+    read both in the repo and on the GitHub release page, where a relative
+    path would not resolve."""
+    return f"{REPO_URL}/blob/{tag_of(to.name, version)}/{to.dir}/CHANGELOG.md"
 
 
 def release_changelog(ws, bumps, name, today):
@@ -524,7 +530,7 @@ def release_changelog(ws, bumps, name, today):
     for dep in b.via:
         extra.append(
             f"- Built against `{dep}` {fmt(bumps[dep].new)} — its breaking changes surface through "
-            f"this crate's re-exports (see [`{dep}/CHANGELOG.md`]({rel_link(c, ws[dep])}))."
+            f"this crate's re-exports (see [`{dep}/CHANGELOG.md`]({changelog_link(ws[dep], bumps[dep].new)}))."
         )
     if extra:
         span = changelog_section(text, f"## [{fmt(b.new)}]")
