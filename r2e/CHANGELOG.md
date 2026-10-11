@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-11
+
 ### Breaking
 
 - `r2e::mcp` (feature `mcp`) re-exports `r2e-mcp` 0.7: the MCP endpoint is
@@ -27,3 +29,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 - `r2e::prelude` (feature `mcp`) re-exports `McpRegistry`, the `meta!` macro
   and `MetaObject`.
+
+### Changed
+
+- Built against `r2e-mcp` 0.7.0 — its breaking changes surface through this crate's re-exports (see [`r2e-mcp/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-mcp-v0.7.0/r2e-mcp/CHANGELOG.md)).
+

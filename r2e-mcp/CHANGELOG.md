@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-11
+
 ### Breaking
 
 The endpoint gains a dynamic member registry (task #1073); the developer

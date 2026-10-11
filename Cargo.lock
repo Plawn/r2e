@@ -5787,7 +5787,7 @@ dependencies = [
 
 [[package]]
 name = "r2e"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "r2e-cache",
  "r2e-core",
@@ -5828,7 +5828,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "clap",
@@ -6121,7 +6121,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "http-body-util",
