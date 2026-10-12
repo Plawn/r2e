@@ -1,3 +1,6 @@
+// diesel's `QueryableByName` derive expands to `field: field` with our spans.
+#![allow(clippy::redundant_field_names)]
+
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{sql_query, QueryableByName, RunQueryDsl, SqliteConnection};
 use diesel_migrations::{embed_migrations, EmbeddedMigrations};

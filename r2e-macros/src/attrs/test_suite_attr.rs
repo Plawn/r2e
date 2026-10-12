@@ -339,8 +339,8 @@ fn validate_suite(def: &SuiteDef) -> syn::Result<()> {
                  the case body, or move the test out of the suite",
             ));
         }
-        if let Some(order) = case.order {
-            if let Some(first) = seen_orders.insert(order, &case.method.sig.ident) {
+        if let Some(order) = case.order
+            && let Some(first) = seen_orders.insert(order, &case.method.sig.ident) {
                 return Err(syn::Error::new_spanned(
                     &case.method.sig.ident,
                     format!(
@@ -349,7 +349,6 @@ fn validate_suite(def: &SuiteDef) -> syn::Result<()> {
                     ),
                 ));
             }
-        }
     }
     for method in &def.before_each {
         validate_receiver_only(method, "#[before_each]")?;
@@ -737,8 +736,8 @@ fn before_all_bindings(
         ));
     }
 
-    if let Some(app_ty) = &args.app_ty {
-        if needs_app {
+    if let Some(app_ty) = &args.app_ty
+        && needs_app {
             let configure: TokenStream2 = match &args.with_expr {
                 Some(with) => {
                     let expr = &with.expr;
@@ -770,7 +769,6 @@ fn before_all_bindings(
             };
             bindings.push(quote! { let __r2e_test_app = #boot_call; });
         }
-    }
 
     for input in &method.sig.inputs {
         let FnArg::Typed(param) = input else {
@@ -916,11 +914,10 @@ fn case_order(method: &ImplItemFn) -> syn::Result<Option<u32>> {
 }
 
 fn suite_ident(ty: &Type) -> syn::Result<syn::Ident> {
-    if let Type::Path(path) = ty {
-        if let Some(segment) = path.path.segments.last() {
+    if let Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last() {
             return Ok(segment.ident.clone());
         }
-    }
     Err(syn::Error::new_spanned(
         ty,
         "#[r2e::test_suite] requires an impl for a concrete path type",

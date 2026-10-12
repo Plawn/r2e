@@ -742,7 +742,7 @@ pub fn json_contains(actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {
         (Value::Object(a), Value::Object(e)) => e
             .iter()
-            .all(|(k, v)| a.get(k).map_or(false, |av| json_contains(av, v))),
+            .all(|(k, v)| a.get(k).is_some_and(|av| json_contains(av, v))),
         (Value::Array(a), Value::Array(e)) => {
             e.iter().all(|ev| a.iter().any(|av| json_contains(av, ev)))
         }

@@ -135,14 +135,13 @@ pub(crate) fn candidate_urls(issuer: &str) -> Vec<String> {
     ];
     if let Ok(parsed) = url::Url::parse(base) {
         let path = parsed.path();
-        if path != "/" && !path.is_empty() {
-            if let Some(origin) = base.strip_suffix(path) {
+        if path != "/" && !path.is_empty()
+            && let Some(origin) = base.strip_suffix(path) {
                 urls.push(format!(
                     "{origin}/.well-known/oauth-authorization-server{path}"
                 ));
                 urls.push(format!("{origin}/.well-known/openid-configuration{path}"));
             }
-        }
     }
     urls
 }
@@ -250,8 +249,8 @@ impl DiscoveryClient {
                 Ok(meta)
             }
             Err(err) => {
-                if let Some(meta) = &cache.metadata {
-                    if can_use_stale(cache.last_refresh, self.ttl, MAX_STALE) {
+                if let Some(meta) = &cache.metadata
+                    && can_use_stale(cache.last_refresh, self.ttl, MAX_STALE) {
                         tracing::warn!(
                             issuer = %self.issuer,
                             error = %err.description(),
@@ -259,7 +258,6 @@ impl DiscoveryClient {
                         );
                         return Ok(meta.clone());
                     }
-                }
                 Err(err)
             }
         }
@@ -315,11 +313,10 @@ impl DiscoveryClient {
 
 /// Read a response body, bounded by [`MAX_BODY_BYTES`].
 async fn read_limited(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
-    if let Some(len) = response.content_length() {
-        if len > MAX_BODY_BYTES as u64 {
+    if let Some(len) = response.content_length()
+        && len > MAX_BODY_BYTES as u64 {
             return Err(format!("body too large: {len} bytes"));
         }
-    }
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
         if body.len() + chunk.len() > MAX_BODY_BYTES {

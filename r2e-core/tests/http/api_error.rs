@@ -1,3 +1,6 @@
+// Envelopes wrap the framework's (large) `Rejection`, exactly as apps do.
+#![allow(clippy::large_enum_variant)]
+
 use http_body_util::BodyExt;
 use r2e_core::http::{IntoResponse, StatusCode};
 use r2e_core::prelude::*;
@@ -88,7 +91,7 @@ fn from_impl_works() {
 
 #[r2e_core::test]
 async fn from_variant_response() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+    let io_err = std::io::Error::other("disk full");
     let err: FromError = io_err.into();
     let (status, body) = error_parts(err).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -105,7 +108,7 @@ pub enum FromInferError {
 
 #[r2e_core::test]
 async fn from_inferred_message_uses_source() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "disk full");
+    let io_err = std::io::Error::other("disk full");
     let err: FromInferError = io_err.into();
     assert_eq!(err.to_string(), "disk full");
 
@@ -201,7 +204,7 @@ async fn mixed_enum_variants() {
     assert_eq!(b["error"], "Resource item-42 not found");
 
     // From impl
-    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "broken pipe");
+    let io_err = std::io::Error::other("broken pipe");
     let err: MixedError = io_err.into();
     let (s, b) = error_parts(err).await;
     assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
@@ -234,7 +237,7 @@ fn source_none_for_non_from_variants() {
 
 #[test]
 fn source_some_for_from_variant() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+    let io_err = std::io::Error::other("test");
     let err: MixedError = io_err.into();
     assert!(std::error::Error::source(&err).is_some());
 }
@@ -242,6 +245,7 @@ fn source_some_for_from_variant() {
 // ── #[error(rejection)]: the enum becomes a projection envelope ─────────
 
 #[derive(Debug, ApiError)]
+#[allow(dead_code)]
 pub enum Envelope {
     #[error(status = CONFLICT)]
     Duplicate,
@@ -307,6 +311,7 @@ fn rejection_variant_derives_error_schema() {
 }
 
 #[derive(Debug, ApiError)]
+#[allow(dead_code)]
 pub enum NamedEnvelope {
     #[error(status = BAD_GATEWAY, message = "upstream {service} is down")]
     Upstream { service: String },
@@ -332,6 +337,7 @@ async fn rejection_variant_with_a_named_field() {
 
 // `#[error(transparent)]` over a `Rejection` field is the same thing.
 #[derive(Debug, ApiError)]
+#[allow(dead_code)]
 pub enum TransparentEnvelope {
     #[error(status = NOT_FOUND)]
     Missing,
@@ -355,6 +361,7 @@ async fn transparent_over_rejection_is_the_rejection_variant() {
 
 // An enum transparent over `HttpError` inherits its projection.
 #[derive(Debug, ApiError)]
+#[allow(dead_code)]
 pub enum OverHttpError {
     #[error(status = BAD_GATEWAY)]
     Upstream,
@@ -384,6 +391,7 @@ async fn transparent_over_http_error_inherits_projection() {
 
 // Generic enums get the impls too.
 #[derive(Debug, ApiError)]
+#[allow(dead_code)]
 pub enum GenericEnvelope<T: std::fmt::Debug + Send + Sync + 'static> {
     #[error(status = CONFLICT)]
     Conflict(T),

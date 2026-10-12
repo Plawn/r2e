@@ -56,21 +56,19 @@ pub fn validate(model: &AuthorizationModel) -> Result<(), Vec<ValidationError>> 
                         reference.type_name
                     )),
                     Some(target) => {
-                        if let Some(rel) = &reference.relation {
-                            if !target.relations.contains_key(rel) {
+                        if let Some(rel) = &reference.relation
+                            && !target.relations.contains_key(rel) {
                                 push(format!(
                                     "relation `{}` does not exist on type `{}` (in `{}#{}`)",
                                     rel, reference.type_name, reference.type_name, rel
                                 ));
                             }
-                        }
                     }
                 }
-                if let Some(cond) = &reference.condition {
-                    if !model.conditions.contains_key(cond) {
+                if let Some(cond) = &reference.condition
+                    && !model.conditions.contains_key(cond) {
                         push(format!("unknown condition `{}` in `with {}`", cond, cond));
                     }
-                }
             }
 
             validate_rewrite(model, type_def, rewrite, &mut push);

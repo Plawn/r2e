@@ -154,6 +154,7 @@ fn register_provider_populates_registry() {
 // ── Phase 3: register_for (schemars integration) ───────────────────────────
 
 #[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
 struct Widget {
     name: String,
     count: u32,
@@ -172,11 +173,13 @@ fn register_for_json_schema_type() {
 }
 
 #[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
 struct Parent {
     child: Child,
 }
 
 #[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
 struct Child {
     value: String,
 }

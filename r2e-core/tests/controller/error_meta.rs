@@ -8,6 +8,9 @@
 //! itself. The OpenAPI builder turns every kind into a response at the
 //! envelope's `status_of(kind)`.
 
+// Envelopes wrap the framework's (large) `Rejection`, exactly as apps do.
+#![allow(clippy::result_large_err)]
+
 use std::convert::Infallible;
 
 use r2e_core::controller::Controller;
@@ -134,7 +137,10 @@ impl RequestBodySchema for CsvBody {
     }
 
     fn rejection_kinds() -> Vec<RejectionKind> {
-        vec![RejectionKind::UnsupportedMediaType, RejectionKind::MalformedBody]
+        vec![
+            RejectionKind::UnsupportedMediaType,
+            RejectionKind::MalformedBody,
+        ]
     }
 }
 
@@ -473,7 +479,10 @@ fn has(kinds: &[RejectionKind], kind: RejectionKind) -> bool {
 
 #[test]
 fn bare_route_can_only_fail_internally() {
-    assert_eq!(kinds!(OpenController, "/open/bare"), vec![RejectionKind::Internal]);
+    assert_eq!(
+        kinds!(OpenController, "/open/bare"),
+        vec![RejectionKind::Internal]
+    );
 }
 
 #[test]
@@ -536,7 +545,10 @@ fn identity_parameter_is_unauthenticated_required_or_optional() {
     // extraction still answers 401 on a present but bad token.
     assert_eq!(
         kinds!(OpenController, "/open/optional"),
-        sorted(vec![RejectionKind::Unauthenticated, RejectionKind::Internal])
+        sorted(vec![
+            RejectionKind::Unauthenticated,
+            RejectionKind::Internal
+        ])
     );
 }
 
@@ -544,7 +556,10 @@ fn identity_parameter_is_unauthenticated_required_or_optional() {
 fn optional_struct_identity_is_unauthenticated() {
     assert_eq!(
         kinds!(MaybeController, "/maybe/me"),
-        sorted(vec![RejectionKind::Unauthenticated, RejectionKind::Internal])
+        sorted(vec![
+            RejectionKind::Unauthenticated,
+            RejectionKind::Internal
+        ])
     );
 }
 
@@ -596,7 +611,10 @@ fn guards_are_forbidden_unless_rate_limit() {
 fn struct_identity_is_unauthenticated_except_anonymous() {
     assert_eq!(
         kinds!(SecuredController, "/secured/me"),
-        sorted(vec![RejectionKind::Unauthenticated, RejectionKind::Internal])
+        sorted(vec![
+            RejectionKind::Unauthenticated,
+            RejectionKind::Internal
+        ])
     );
     assert_eq!(
         kinds!(SecuredController, "/secured/public"),
@@ -605,7 +623,10 @@ fn struct_identity_is_unauthenticated_except_anonymous() {
     // Streaming routes carry the same inference.
     assert_eq!(
         kinds!(SecuredController, "/secured/events"),
-        sorted(vec![RejectionKind::Unauthenticated, RejectionKind::Internal])
+        sorted(vec![
+            RejectionKind::Unauthenticated,
+            RejectionKind::Internal
+        ])
     );
 }
 
@@ -630,7 +651,9 @@ fn controller_guard_folds_into_non_anonymous_routes_only() {
 #[test]
 fn result_envelope_return_type_captures_its_schema() {
     let r = route!(OpenController, "/open/envelope");
-    let schema = r.error_schema.expect("envelope captured from Result<_, Envelope>");
+    let schema = r
+        .error_schema
+        .expect("envelope captured from Result<_, Envelope>");
     assert_eq!(schema.type_name(), std::any::type_name::<Envelope>());
     assert_eq!(
         schema.status_of(RejectionKind::InvalidBody),
@@ -742,7 +765,10 @@ fn response_body_schema_documents_every_media_type() {
             "{path}"
         );
         assert_eq!(
-            r.response_contents[0].schema.as_ref().map(|(n, _)| n.as_str()),
+            r.response_contents[0]
+                .schema
+                .as_ref()
+                .map(|(n, _)| n.as_str()),
             Some("Completion")
         );
         assert!(r.response_unmapped.is_none(), "{path}");

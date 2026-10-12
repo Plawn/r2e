@@ -157,7 +157,7 @@ enum Rearm {
     /// [`MissedTickBehavior::Skip`](r2e_core::rt::MissedTickBehavior::Skip)).
     Interval { period: Duration, deadline: Instant },
     /// Cron schedule, parsed once at arming.
-    Cron(cron::Schedule),
+    Cron(Box<cron::Schedule>),
 }
 
 /// Per-job state retained by the driver.
@@ -585,7 +585,7 @@ async fn run_driver(
             ScheduleConfig::Cron(expr) => match expr.parse::<cron::Schedule>() {
                 Ok(schedule) => {
                     let first = cron_next_instant(&schedule);
-                    (Rearm::Cron(schedule), first)
+                    (Rearm::Cron(Box::new(schedule)), first)
                 }
                 Err(e) => {
                     // Retire the job: log and skip without registering it.

@@ -270,20 +270,6 @@ fn has_application_entrypoint(content: &str) -> bool {
         || content.contains("serve_auto(")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::has_application_entrypoint;
-
-    #[test]
-    fn recognizes_supported_entrypoints() {
-        assert!(has_application_entrypoint("r2e::app_main!(MyApp);"));
-        assert!(has_application_entrypoint("r2e::launch!(MyApp).await?;"));
-        assert!(has_application_entrypoint("builder.serve(addr).await?;"));
-        assert!(has_application_entrypoint("builder.serve_auto().await?;"));
-        assert!(!has_application_entrypoint("fn main() {}"));
-    }
-}
-
 /// Count dependency-injection registration calls across all `.rs` files
 /// under `dir` (recursively).
 ///
@@ -301,13 +287,12 @@ fn count_di_registrations(dir: &Path) -> usize {
         let path = entry.path();
         if path.is_dir() {
             count += count_di_registrations(&path);
-        } else if path.extension().map(|ext| ext == "rs").unwrap_or(false) {
-            if let Ok(content) = std::fs::read_to_string(&path) {
+        } else if path.extension().map(|ext| ext == "rs").unwrap_or(false)
+            && let Ok(content) = std::fs::read_to_string(&path) {
                 count += content.matches(".provide(").count();
                 count += content.matches(".register::<").count();
                 count += content.matches(".register(").count();
             }
-        }
     }
 
     count
@@ -330,5 +315,19 @@ where
             println!("  {} {} — {}", "x".red(), name, msg.red());
             *issues += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_application_entrypoint;
+
+    #[test]
+    fn recognizes_supported_entrypoints() {
+        assert!(has_application_entrypoint("r2e::app_main!(MyApp);"));
+        assert!(has_application_entrypoint("r2e::launch!(MyApp).await?;"));
+        assert!(has_application_entrypoint("builder.serve(addr).await?;"));
+        assert!(has_application_entrypoint("builder.serve_auto().await?;"));
+        assert!(!has_application_entrypoint("fn main() {}"));
     }
 }

@@ -14,11 +14,8 @@ pub struct AllowGuard;
 impl SelfBuilt for AllowGuard {}
 
 impl<I: Identity> Guard<I> for AllowGuard {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async { Ok(()) }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        Ok(())
     }
 }
 
@@ -29,11 +26,8 @@ pub struct DenyGuard;
 impl SelfBuilt for DenyGuard {}
 
 impl<I: Identity> Guard<I> for DenyGuard {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async { Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into()) }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        Err(HttpError::Forbidden("Access denied by DenyGuard".into()).into())
     }
 }
 
@@ -109,11 +103,8 @@ pub struct DenyPreAuthGuard;
 impl SelfBuilt for DenyPreAuthGuard {}
 
 impl PreAuthGuard for DenyPreAuthGuard {
-    fn check(
-        &self,
-        _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async { Err(HttpError::Forbidden("Pre-auth denied".into()).into()) }
+    async fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> Result<(), Rejection> {
+        Err(HttpError::Forbidden("Pre-auth denied".into()).into())
     }
 }
 

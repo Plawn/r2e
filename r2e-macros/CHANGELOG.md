@@ -14,3 +14,9 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
+
+### Changed
+
+- `#[bean]` emits `#[allow(clippy::new_without_default)]` on a zero-argument
+  constructor: the bean graph calls it, so users no longer need a `Default`
+  impl (or a hand-written `allow`) to keep clippy quiet.

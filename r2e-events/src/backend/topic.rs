@@ -43,8 +43,7 @@ impl TopicRegistry {
 pub fn sanitize_topic_name(name: &str) -> String {
     name.replace("::", ".")
         .replace('<', "_")
-        .replace('>', "")
-        .replace(' ', "")
+        .replace(['>', ' '], "")
 }
 
 /// Suffix appended to an event topic to form its request-reply request topic.

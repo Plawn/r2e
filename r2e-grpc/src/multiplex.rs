@@ -139,20 +139,23 @@ where
     }
 }
 
+/// The boxed response future of a [`MultiplexService`] call.
+type MultiplexFuture<GrpcResBody, HttpResBody, WebResBody> = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<
+                    Response<MultiplexBody<GrpcResBody, HttpResBody, WebResBody>>,
+                    Infallible,
+                >,
+            > + Send,
+    >,
+>;
+
 impl<GrpcSvc, HttpSvc, WebSvc> MultiplexService<GrpcSvc, HttpSvc, WebSvc> {
     fn call_web<ReqBody, GrpcResBody, HttpResBody, WebResBody>(
         &mut self,
         req: Request<ReqBody>,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<
-                        Response<MultiplexBody<GrpcResBody, HttpResBody, WebResBody>>,
-                        Infallible,
-                    >,
-                > + Send,
-        >,
-    >
+    ) -> MultiplexFuture<GrpcResBody, HttpResBody, WebResBody>
     where
         WebSvc: Service<Request<ReqBody>, Response = Response<WebResBody>, Error = Infallible>
             + Clone

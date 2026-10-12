@@ -380,11 +380,10 @@ fn fga_param_const_fns() -> TokenStream {
 /// `FgaCheck` path, taking a single string literal, are collected.
 fn collect_fga_path_refs(expr: &syn::Expr, out: &mut Vec<syn::LitStr>) {
     if let syn::Expr::MethodCall(mc) = expr {
-        if mc.method == "from_path" && chain_roots_in_fga(&mc.receiver) {
-            if let Some(lit) = single_str_lit_arg(&mc.args) {
+        if mc.method == "from_path" && chain_roots_in_fga(&mc.receiver)
+            && let Some(lit) = single_str_lit_arg(&mc.args) {
                 out.push(lit);
             }
-        }
         collect_fga_path_refs(&mc.receiver, out);
         return;
     }

@@ -13,6 +13,9 @@
 //! behind fails this target with an unresolved-name error. The `#[bean]` /
 //! `#[producer]` twins live in `r2e-core/tests/di/producer_attrs.rs`.
 
+// `cfg(all())` is the always-true cfg these tests feed through the macros.
+#![allow(clippy::non_minimal_cfg)]
+
 use r2e_core::prelude::*;
 use std::sync::Arc;
 

@@ -312,11 +312,10 @@ impl HealthState {
         // Check cache
         if let Some(ttl) = self.cache_ttl {
             let cache = self.cache.read().await;
-            if let Some((ref response, ref timestamp)) = *cache {
-                if timestamp.elapsed() < ttl {
+            if let Some((ref response, ref timestamp)) = *cache
+                && timestamp.elapsed() < ttl {
                     return response.clone();
                 }
-            }
         }
 
         let mut checks = Vec::with_capacity(self.checks.len());
@@ -368,8 +367,8 @@ impl HealthState {
         // Check cache — readiness uses the same cache as full health
         if let Some(ttl) = self.cache_ttl {
             let cache = self.cache.read().await;
-            if let Some((ref response, ref timestamp)) = *cache {
-                if timestamp.elapsed() < ttl {
+            if let Some((ref response, ref timestamp)) = *cache
+                && timestamp.elapsed() < ttl {
                     // Filter by check name so the result is stable even if the
                     // check registration order changes between builds.
                     let readiness_checks: Vec<_> = response
@@ -391,7 +390,6 @@ impl HealthState {
                         uptime_seconds: Some(self.start_time.elapsed().as_secs()),
                     };
                 }
-            }
         }
 
         let mut checks = Vec::new();

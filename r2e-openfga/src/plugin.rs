@@ -512,12 +512,11 @@ async fn resolve_model(
 
     // Apply mode: models are append-only, so an identical latest is reused
     // instead of writing a redundant new version.
-    if let Some(live) = &latest {
-        if models_equal(compiled, live) {
+    if let Some(live) = &latest
+        && models_equal(compiled, live) {
             tracing::debug!(model_id = %live.id, "OpenFGA model unchanged; reusing latest");
             return Ok(live.id.clone());
         }
-    }
 
     let resp = client
         .clone()

@@ -634,7 +634,8 @@ fn redirected_error(resp: &Response) -> (String, Option<String>) {
 async fn authorize_errors_redirect_to_the_registered_client() {
     let app = authorize_app().await;
     let challenge = challenge();
-    let cases: [(&str, Vec<(&str, Option<&str>)>); 5] = [
+    type Case<'a> = (&'a str, Vec<(&'a str, Option<&'a str>)>);
+    let cases: [Case<'_>; 5] = [
         (
             "unsupported_response_type",
             vec![("response_type", Some("token"))],

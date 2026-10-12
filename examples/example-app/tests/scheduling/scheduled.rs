@@ -296,29 +296,31 @@ async fn scheduled_interceptor_is_built_from_the_bean_graph() {
 
     // The interceptor ran around every tick, reading the injected bean.
     // (Interval tasks fire once immediately, so the sync task logs one entry.)
-    let entries = audit.entries.lock().unwrap();
-    let sched_ticks = entries.iter().filter(|e| *e == "sched:tick").count();
-    assert!(
-        sched_ticks >= 2,
-        "interceptor should have run per tick, got {entries:?}"
-    );
-    assert!(
-        entries
-            .iter()
-            .all(|e| e == "sched:tick" || e == "sync:sync_noop"),
-        "{entries:?}"
-    );
-    let entries_before_direct = entries.len();
-    drop(entries);
+    let entries_before_direct = {
+        let entries = audit.entries.lock().unwrap();
+        let sched_ticks = entries.iter().filter(|e| *e == "sched:tick").count();
+        assert!(
+            sched_ticks >= 2,
+            "interceptor should have run per tick, got {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|e| e == "sched:tick" || e == "sync:sync_noop"),
+            "{entries:?}"
+        );
+        entries.len()
+    };
 
     // Direct in-code call on a REGISTERED core: the method's dispatch
     // wrapper reads the prebuilt set from the core's DecoSlot, so the chain
     // runs here too.
     core.tick().await;
-    let entries = audit.entries.lock().unwrap();
-    assert_eq!(entries.len(), entries_before_direct + 1);
-    assert_eq!(entries.last().map(String::as_str), Some("sched:tick"));
-    drop(entries);
+    {
+        let entries = audit.entries.lock().unwrap();
+        assert_eq!(entries.len(), entries_before_direct + 1);
+        assert_eq!(entries.last().map(String::as_str), Some("sched:tick"));
+    }
 
     // Same for the SYNC method: its wrapper was promoted to `async fn`, so a
     // direct call awaits the chain instead of bypassing it.

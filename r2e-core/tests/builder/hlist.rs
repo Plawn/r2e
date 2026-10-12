@@ -40,6 +40,7 @@ impl Registrable for Greeter {
 
 /// Same provided type as [`Greeter`]'s default, used as an override.
 #[derive(Clone)]
+#[allow(dead_code)]
 struct LoudGreeter;
 
 impl Bean for LoudGreeter {

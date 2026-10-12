@@ -134,6 +134,7 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>
 /// ```
 pub trait RegisterModules<P, R, Mods, Idx>: Sized {
     /// Register every module of an aggregate, in declaration order.
+    #[allow(clippy::type_complexity)] // type-level HList result; an alias would only move it
     fn register_modules<A>(
         self,
     ) -> AppBuilder<

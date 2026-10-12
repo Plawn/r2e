@@ -482,18 +482,15 @@ fn static_rejection_kinds(
 /// of a `Json<T>` / `Query<T>` / `Path<T>` / `Form<T>` wrapper (the entry
 /// function validates `.0`), else the parameter type itself.
 fn validation_target_type(ty: &syn::Type) -> syn::Type {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last() {
             let ident = segment.ident.to_string();
-            if matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form") {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+            if matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form")
+                && let syn::PathArguments::AngleBracketed(ref args) = segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                         return inner.clone();
                     }
-                }
-            }
         }
-    }
     ty.clone()
 }
 
@@ -644,9 +641,9 @@ fn extract_path_params(params: &[&syn::PatType], krate: &TokenStream) -> Vec<Tok
         .iter()
         .filter_map(|pt| {
             let ty = &pt.ty;
-            if type_last_segment_is(ty, "Path") {
-                if let syn::Pat::TupleStruct(ts) = pt.pat.as_ref() {
-                    if let Some(elem) = ts.elems.first() {
+            if type_last_segment_is(ty, "Path")
+                && let syn::Pat::TupleStruct(ts) = pt.pat.as_ref()
+                    && let Some(elem) = ts.elems.first() {
                         let param_name = quote!(#elem).to_string();
                         let param_type = infer_path_param_openapi_type(&pt.ty);
                         return Some(quote! {
@@ -658,8 +655,6 @@ fn extract_path_params(params: &[&syn::PatType], krate: &TokenStream) -> Vec<Tok
                             }
                         });
                     }
-                }
-            }
             None
         })
         .collect()
@@ -668,18 +663,15 @@ fn extract_path_params(params: &[&syn::PatType], krate: &TokenStream) -> Vec<Tok
 /// Unwrap generic wrapper types to get the inner type for metadata probing.
 /// `Query<T>` → `T`, `Path<T>` → `T`, other types → unchanged.
 fn unwrap_extractor_inner(ty: &syn::Type) -> syn::Type {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last() {
             let ident_str = segment.ident.to_string();
-            if matches!(ident_str.as_str(), "Query" | "Path") {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+            if matches!(ident_str.as_str(), "Query" | "Path")
+                && let syn::PathArguments::AngleBracketed(ref args) = segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                         return inner.clone();
                     }
-                }
-            }
         }
-    }
     ty.clone()
 }
 
@@ -687,17 +679,13 @@ fn unwrap_extractor_inner(ty: &syn::Type) -> syn::Type {
 /// Returns "integer" for integer types, "number" for floats, "boolean" for bool, otherwise "string".
 fn infer_path_param_openapi_type(ty: &syn::Type) -> &'static str {
     // Extract the inner type from Path<T>
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Path" {
-                if let syn::PathArguments::AngleBracketed(ref args) = segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+            && segment.ident == "Path"
+                && let syn::PathArguments::AngleBracketed(ref args) = segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                         return type_to_openapi_str(inner);
                     }
-                }
-            }
-        }
-    }
     "string"
 }
 
@@ -705,8 +693,8 @@ fn infer_path_param_openapi_type(ty: &syn::Type) -> &'static str {
 /// Shared with the `FromMultipart` derive so path params and multipart text
 /// fields classify primitives identically.
 pub(crate) fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last() {
             return match segment.ident.to_string().as_str() {
                 "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64"
                 | "i128" | "isize" => "integer",
@@ -715,7 +703,6 @@ pub(crate) fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
                 _ => "string",
             };
         }
-    }
     "string"
 }
 
@@ -940,15 +927,14 @@ fn extract_body_info(
 
 /// Parameter types that never read the body.
 fn is_known_non_body_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last() {
             return matches!(
                 segment.ident.to_string().as_str(),
                 "Path" | "Query" | "HeaderMap" | "Method" | "Uri" | "Version" | "Extension"
                     | "ConnectInfo" | "State"
             );
         }
-    }
     matches!(ty, syn::Type::Reference(_))
 }
 

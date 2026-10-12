@@ -136,6 +136,12 @@ impl r2e_core::config::FromConfigValue for ScheduleConfig {
 /// [`ScheduledJobInfo::skip_count`](crate::ScheduledJobInfo), and nothing runs.
 pub type SkipFn = Box<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
 
+/// A task body receiving a clone of its [`ScheduledTaskDef`] state.
+type StateTaskFn<T> = Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+/// A skip predicate receiving a clone of its [`ScheduledTaskDef`] state.
+type StateSkipFn<T> = Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
 /// A runnable schedule handed to the driver.
 ///
 /// Produced by [`ScheduledTask::into_job`]. The task's state is already
@@ -209,12 +215,12 @@ pub struct ScheduledTaskDef<T: Clone + Send + Sync + 'static> {
     /// [`with_overlap`](Self::with_overlap).
     pub overlap: OverlapPolicy,
     pub state: T,
-    pub task: Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+    pub task: StateTaskFn<T>,
     /// Optional skip predicate (Quarkus `skipExecutionIf`), receiving a clone
     /// of the state on every fire. `None` (via [`new`](Self::new) /
     /// [`from_fn`](Self::from_fn)) means never skip; set it with
     /// [`with_skip_if`](Self::with_skip_if).
-    pub skip: Option<Box<dyn Fn(T) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>>,
+    pub skip: Option<StateSkipFn<T>>,
 }
 
 impl<T: Clone + Send + Sync + 'static> ScheduledTaskDef<T> {

@@ -1,4 +1,4 @@
-mod commands;
+use r2e_cli::commands;
 
 use clap::{Parser, Subcommand};
 use commands::{add, dev, docs, doctor, generate, llm_docs, new_project, routes, test};

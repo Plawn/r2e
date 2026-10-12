@@ -542,11 +542,10 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         // unless the test explicitly serves, and sessions then run inline as
         // they always did.
         #[cfg(feature = "ws")]
-        if matches!(mode, LifecycleMode::Serving) {
-            if let Some(ws_sessions) = graph.try_get::<super::WsSessions>() {
+        if matches!(mode, LifecycleMode::Serving)
+            && let Some(ws_sessions) = graph.try_get::<super::WsSessions>() {
                 ws_sessions.arm(service_handles.clone(), cancel_token.clone(), graph);
             }
-        }
 
         if !skip_lifecycle {
             // Controller-core `#[post_construct]` hooks run before consumers

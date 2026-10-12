@@ -394,18 +394,16 @@ impl IntrospectionBackend {
             ))
         })?;
         let exp = claims.exp;
-        if let Some(exp) = exp {
-            if exp.saturating_add(self.leeway_secs) < unix_now() {
+        if let Some(exp) = exp
+            && exp.saturating_add(self.leeway_secs) < unix_now() {
                 return deny(&self.cache, hash, bearer, "token expired");
             }
-        }
         // `iss` is optional in an introspection response; when present it
         // must be the configured issuer.
-        if let Some(iss) = &claims.iss {
-            if iss != self.discovery.issuer() {
+        if let Some(iss) = &claims.iss
+            && iss != self.discovery.issuer() {
                 return deny(&self.cache, hash, bearer, "token issuer mismatch");
             }
-        }
         if let Some(accepted) = &self.audiences {
             let ok = claims
                 .aud

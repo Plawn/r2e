@@ -77,6 +77,7 @@ pub struct RolesGuard {
 impl r2e_core::SelfBuilt for RolesGuard {}
 
 impl<I: RoleBasedIdentity> Guard<I> for RolesGuard {
+    #[allow(clippy::result_large_err)] // `Rejection` is the framework-wide error type
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,
@@ -118,6 +119,7 @@ pub struct AllRolesGuard {
 impl r2e_core::SelfBuilt for AllRolesGuard {}
 
 impl<I: RoleBasedIdentity> Guard<I> for AllRolesGuard {
+    #[allow(clippy::result_large_err)] // `Rejection` is the framework-wide error type
     fn check(
         &self,
         ctx: &GuardContext<'_, I>,

@@ -110,13 +110,12 @@ impl RabbitMqInner {
     /// connection mutex, so concurrent callers open at most one new connection.
     async fn create_channel(&self) -> Result<Channel, EventBusError> {
         let mut guard = self.connection.lock().await;
-        if guard.status().connected() {
-            if let Ok(channel) = guard.create_channel().await {
+        if guard.status().connected()
+            && let Ok(channel) = guard.create_channel().await {
                 return Ok(channel);
             }
             // Connection reported connected but channel creation failed — the
             // link is probably dead; fall through and reconnect.
-        }
 
         let new_conn = Self::connect(&self.config).await?;
         let channel = new_conn.create_channel().await.map_err(map_lapin_error)?;

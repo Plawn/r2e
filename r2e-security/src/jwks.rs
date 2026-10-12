@@ -205,27 +205,24 @@ fn validate_key_metadata(
             "JWK key type '{kty}' is incompatible with token algorithm {algorithm:?}"
         )));
     }
-    if let Some(advertised_algorithm) = advertised_algorithm {
-        if !advertised_algorithm.eq_ignore_ascii_case(name_for_algorithm(algorithm)) {
+    if let Some(advertised_algorithm) = advertised_algorithm
+        && !advertised_algorithm.eq_ignore_ascii_case(name_for_algorithm(algorithm)) {
             return Err(SecurityError::ValidationFailed(format!(
                 "JWK algorithm '{advertised_algorithm}' does not match token algorithm {algorithm:?}"
             )));
         }
-    }
-    if let Some(key_use) = key_use {
-        if key_use != "sig" {
+    if let Some(key_use) = key_use
+        && key_use != "sig" {
             return Err(SecurityError::ValidationFailed(format!(
                 "JWK use '{key_use}' does not permit signature verification"
             )));
         }
-    }
-    if let Some(key_ops) = key_ops {
-        if !key_ops.iter().any(|operation| operation == "verify") {
+    if let Some(key_ops) = key_ops
+        && !key_ops.iter().any(|operation| operation == "verify") {
             return Err(SecurityError::ValidationFailed(
                 "JWK key_ops does not permit signature verification".into(),
             ));
         }
-    }
     Ok(())
 }
 
@@ -500,13 +497,12 @@ async fn read_body_limited(
     response: reqwest::Response,
     max_bytes: u64,
 ) -> Result<Vec<u8>, SecurityError> {
-    if let Some(len) = response.content_length() {
-        if len > max_bytes {
+    if let Some(len) = response.content_length()
+        && len > max_bytes {
             return Err(SecurityError::JwksFetchError(format!(
                 "JWKS response too large: {len} bytes (max {max_bytes})"
             )));
         }
-    }
 
     let max = max_bytes as usize;
     let mut body = Vec::new();

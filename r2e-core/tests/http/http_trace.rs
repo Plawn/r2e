@@ -233,8 +233,8 @@ async fn record_path_puts_the_path_on_the_event_only() {
 // ── Enrichment channel ─────────────────────────────────────────────────────
 
 use r2e_core::http::Extension;
-use r2e_core::{MakeRequestSpan, RequestOutcome, RequestSpan, SpanState};
 use r2e_core::web::request_head::RequestHead;
+use r2e_core::{MakeRequestSpan, RequestOutcome, RequestSpan, SpanState};
 
 use crate::support::body_string;
 

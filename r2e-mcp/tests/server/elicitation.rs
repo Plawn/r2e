@@ -180,11 +180,10 @@ impl Stream {
             while let Some(end) = self.buf.find("\n\n") {
                 let event: String = self.buf.drain(..end + 2).collect();
                 for line in event.lines() {
-                    if let Some(data) = line.strip_prefix("data:").map(str::trim) {
-                        if !data.is_empty() {
+                    if let Some(data) = line.strip_prefix("data:").map(str::trim)
+                        && !data.is_empty() {
                             self.queue.push_back(serde_json::from_str(data).unwrap());
                         }
-                    }
                 }
             }
         }

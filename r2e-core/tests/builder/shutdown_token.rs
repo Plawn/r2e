@@ -28,10 +28,7 @@ impl Bean for Worker {
     type Error = ::std::convert::Infallible;
     type Deps = TCons<ShutdownToken, TNil>;
     fn dependencies() -> Vec<(TypeId, &'static str)> {
-        vec![(
-            TypeId::of::<ShutdownToken>(),
-            type_name::<ShutdownToken>(),
-        )]
+        vec![(TypeId::of::<ShutdownToken>(), type_name::<ShutdownToken>())]
     }
     fn build(ctx: &BeanContext) -> ::std::result::Result<Self, Self::Error> {
         ::std::result::Result::Ok(Worker {

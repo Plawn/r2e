@@ -26,7 +26,7 @@ type document
 "
 );
 
-/// A structurally different model (extra relation) for mismatch tests.
+// A structurally different model (extra relation) for mismatch tests.
 r2e_openfga::model!(
     pub mod authz_v2 = inline "
 model

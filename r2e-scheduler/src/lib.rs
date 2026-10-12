@@ -211,16 +211,14 @@ impl SchedulerHandle {
 impl<S: Send + Sync> FromRequestParts<S> for SchedulerHandle {
     type Rejection = (StatusCode, &'static str);
 
-    fn from_request_parts(
+    async fn from_request_parts(
         parts: &mut Parts,
         _state: &S,
-    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        async move {
-            parts.extensions.get::<SchedulerHandle>().cloned().ok_or((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Scheduler not installed. Add `.plugin(Scheduler)` before build_state().",
-            ))
-        }
+    ) -> Result<Self, Self::Rejection> {
+        parts.extensions.get::<SchedulerHandle>().cloned().ok_or((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Scheduler not installed. Add `.plugin(Scheduler)` before build_state().",
+        ))
     }
 }
 

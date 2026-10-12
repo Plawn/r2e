@@ -739,7 +739,7 @@ fn live_config_registry_for_cycle(
         }
         let fresh = crate::config::LiveConfigRegistry::from_config(config, pinned_keys);
         crate::runtime::dev::carry_live_config_registry(&fresh);
-        return fresh;
+        fresh
     }
     #[cfg(not(feature = "dev-reload"))]
     crate::config::LiveConfigRegistry::from_config(config, pinned_keys)

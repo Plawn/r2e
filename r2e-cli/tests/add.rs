@@ -259,7 +259,7 @@ fn add_mcp_repairs_missing_schemars_for_direct_dependency() {
     let _cwd = CwdGuard::new(tmp.path());
     fs::write(
         "Cargo.toml",
-        &format!(
+        format!(
             "[package]\nname = \"test-app\"\nversion = \"0.1.0\"\n\n[dependencies]\nr2e-mcp = \"{}\"\n",
             add::R2E_DEP_VERSION
         ),

@@ -52,7 +52,7 @@ pub(super) type DisposerBuilder =
 /// graph (override-aware, like post-construct hooks) and returns the bean's
 /// type-erased scheduled task definitions. Drained by `build_state()` into
 /// the scheduler's task registry.
-pub(super) type ScheduledSourceHook =
+pub(crate) type ScheduledSourceHook =
     Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Send>> + Send>;
 
 /// An event-subscriber hook: reads its target bean by type from the resolved
@@ -60,7 +60,7 @@ pub(super) type ScheduledSourceHook =
 /// [`EventSubscriber::subscribe`](crate::EventSubscriber::subscribe) future.
 /// Drained by `build_state()` into the builder's consumer registrations, which
 /// run at server startup (`serve` / `build_with_consumers`).
-pub(super) type EventSubscriberHook =
+pub(crate) type EventSubscriberHook =
     Box<dyn FnOnce(&BeanContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
 /// An on-start hook source: reads its target bean by type from the resolved

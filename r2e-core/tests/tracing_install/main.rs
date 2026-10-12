@@ -9,7 +9,9 @@
 //! order.
 
 use r2e_core::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
-use r2e_core::{init_tracing_from_config, try_init_tracing_with_config, SubscriberAlreadyInstalled};
+use r2e_core::{
+    init_tracing_from_config, try_init_tracing_with_config, SubscriberAlreadyInstalled,
+};
 
 /// The whole point of #1010: the entry point installs the **application's**
 /// `tracing:` section, not the built-in defaults, and a later init that would

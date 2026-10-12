@@ -106,9 +106,8 @@ async fn wire_app() -> Router {
 
 async fn json_body(resp: Response) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-        serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
-    })
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 fn header<'a>(resp: &'a Response, name: &str) -> Option<&'a str> {
@@ -129,7 +128,10 @@ fn oversized_json() -> Body {
 async fn unknown_route_answers_a_json_404_by_default() {
     let resp = raw(default_app().await, "GET", "/missing", &[], Body::empty()).await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    assert_eq!(header(&resp, CONTENT_TYPE.as_str()), Some("application/json"));
+    assert_eq!(
+        header(&resp, CONTENT_TYPE.as_str()),
+        Some("application/json")
+    );
     assert_eq!(
         json_body(resp).await,
         serde_json::json!({ "error": "Not found" })
@@ -140,7 +142,10 @@ async fn unknown_route_answers_a_json_404_by_default() {
 async fn wrong_method_answers_a_json_405_with_allow_by_default() {
     let resp = raw(default_app().await, "DELETE", "/ok", &[], Body::empty()).await;
     assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
-    assert_eq!(header(&resp, CONTENT_TYPE.as_str()), Some("application/json"));
+    assert_eq!(
+        header(&resp, CONTENT_TYPE.as_str()),
+        Some("application/json")
+    );
     let allow = header(&resp, "allow").expect("axum keeps the Allow header");
     assert!(allow.contains("GET"), "Allow: {allow}");
     assert_eq!(
@@ -160,7 +165,10 @@ async fn oversized_body_answers_a_json_413_by_default() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(header(&resp, CONTENT_TYPE.as_str()), Some("application/json"));
+    assert_eq!(
+        header(&resp, CONTENT_TYPE.as_str()),
+        Some("application/json")
+    );
     let body = json_body(resp).await;
     assert!(body.get("error").is_some(), "HttpError envelope: {body}");
 }

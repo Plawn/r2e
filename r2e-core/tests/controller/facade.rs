@@ -451,17 +451,15 @@ impl r2e_core::DecoratorSpec for Counting {
 }
 
 impl<R: Send> Interceptor<R> for CountingReady {
-    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+    async fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> R
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        async move {
-            self.before.fetch_add(1, Ordering::SeqCst);
-            let r = next().await;
-            self.after.0.fetch_add(1, Ordering::SeqCst);
-            r
-        }
+        self.before.fetch_add(1, Ordering::SeqCst);
+        let r = next().await;
+        self.after.0.fetch_add(1, Ordering::SeqCst);
+        r
     }
 }
 

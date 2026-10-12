@@ -243,6 +243,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// The value is pinned like any [`provide`](Self::provide)d bean: unlike
     /// `load_config`, nothing rebuilds it from `R2eConfig` on a dev-reload
     /// cycle.
+    #[allow(clippy::type_complexity)] // type-level HList result; an alias would only move it
     pub fn provide_config<C>(
         mut self,
         settings: C,
@@ -1136,8 +1137,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
             // reuse the whole state when no per-cycle hook needs a freshly
             // resolved context. Decorator fills and pre-destroy disposers must
             // pass through `resolve_reusing` even when every bean is reusable.
-            if cached_fp == Some(new_fp) && !requires_resolution {
-                if let Some((cached_state, cached_ctx)) =
+            if cached_fp == Some(new_fp) && !requires_resolution
+                && let Some((cached_state, cached_ctx)) =
                     crate::runtime::dev::get_cached_state::<Cached<P>>()
                 {
                     tracing::debug!(
@@ -1159,7 +1160,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
                 // Same graph but the provision list changed shape (e.g. a
                 // `.provide()` was added, so `Cached<P>` no longer downcasts):
                 // fall through to a rebuild that reuses every bean instance.
-            }
 
             // Phase 2: partial rebuild. Beans whose per-bean fingerprint is
             // unchanged since the previous cycle keep their instance (and

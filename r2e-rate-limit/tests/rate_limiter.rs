@@ -129,7 +129,7 @@ fn in_memory_backend_survives_racing_callers_with_different_budgets() {
     // With a one-hour window nothing meaningfully refills during the test, so
     // the total handed out is bounded by the widest budget seen.
     assert!(
-        granted >= 1 && granted <= 50,
+        (1..=50).contains(&granted),
         "expected 1..=50 grants under racing budgets, got {granted}"
     );
 }

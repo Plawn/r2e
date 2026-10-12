@@ -127,7 +127,6 @@ impl PulsarEventBus {
     /// Build message properties from `EventMetadata`.
     fn build_properties(metadata: &EventMetadata) -> HashMap<String, String> {
         encode_metadata(metadata)
-            .into_iter()
             .map(|(k, v)| (k.into_owned(), v))
             .collect()
     }
@@ -527,7 +526,6 @@ impl EventBus for PulsarEventBus {
             let (id, guard, rx) = bus.inner.pending.register();
 
             let mut properties: HashMap<String, String> = encode_metadata(&metadata)
-                .into_iter()
                 .map(|(k, v)| (k.into_owned(), v))
                 .collect();
             for (k, v) in encode_reply_headers(id, Some(&reply_to), None) {
@@ -832,11 +830,10 @@ fn message_property_pairs(message: &pulsar::consumer::Message<Vec<u8>>) -> Vec<(
         pairs.push((kv.key.clone(), kv.value.clone()));
     }
 
-    if let Some(ref key) = message.payload.metadata.partition_key {
-        if !key.is_empty() {
+    if let Some(ref key) = message.payload.metadata.partition_key
+        && !key.is_empty() {
             pairs.push((HEADER_PARTITION_KEY.to_string(), key.clone()));
         }
-    }
 
     pairs
 }
@@ -1011,7 +1008,6 @@ async fn handle_request(
 
     let properties: HashMap<String, String> =
         encode_reply_headers(reply_headers.request_id, None, error.as_deref())
-            .into_iter()
             .map(|(k, v)| (k.into_owned(), v))
             .collect();
 

@@ -120,6 +120,7 @@ fn test_config_properties_custom_key_metadata() {
 // =========================================================================
 
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[allow(dead_code)]
 struct PortConfig {
     #[config(default = 3000)]
     pub port: u16,

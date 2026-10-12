@@ -234,9 +234,9 @@ pub fn extract_sse_attr(
 
         for expr in iter {
             // Parse keep_alive = <value>
-            if let syn::Expr::Assign(assign) = expr {
-                if let syn::Expr::Path(ref p) = *assign.left {
-                    if p.path.is_ident("keep_alive") {
+            if let syn::Expr::Assign(assign) = expr
+                && let syn::Expr::Path(ref p) = *assign.left
+                    && p.path.is_ident("keep_alive") {
                         match *assign.right.clone() {
                             syn::Expr::Lit(syn::ExprLit {
                                 lit: syn::Lit::Bool(ref b),
@@ -262,8 +262,6 @@ pub fn extract_sse_attr(
                         }
                         continue;
                     }
-                }
-            }
             return Err(syn::Error::new_spanned(
                 expr,
                 "unexpected argument in #[sse]",
@@ -304,17 +302,15 @@ pub fn extract_doc_comments(attrs: &[syn::Attribute]) -> (Option<String>, Option
     let doc_lines: Vec<String> = attrs
         .iter()
         .filter_map(|attr| {
-            if attr.path().is_ident("doc") {
-                if let syn::Meta::NameValue(nv) = &attr.meta {
-                    if let syn::Expr::Lit(syn::ExprLit {
+            if attr.path().is_ident("doc")
+                && let syn::Meta::NameValue(nv) = &attr.meta
+                    && let syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Str(lit_str),
                         ..
                     }) = &nv.value
                     {
                         return Some(lit_str.value());
                     }
-                }
-            }
             None
         })
         .collect();

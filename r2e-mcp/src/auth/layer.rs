@@ -115,13 +115,11 @@ fn session_not_found() -> Response {
 /// Run the pre-call checks; `Ok` carries what to insert into extensions.
 async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipal, McpAuthError> {
     // Origin allowlist (browser clients only — no header, no check).
-    if let Some(allowed) = &state.allowed_origins {
-        if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-            if !origin_allowed(allowed, origin) {
+    if let Some(allowed) = &state.allowed_origins
+        && let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok())
+            && !origin_allowed(allowed, origin) {
                 return Err(McpAuthError::InvalidOrigin);
             }
-        }
-    }
 
     let header = headers
         .get(AUTHORIZATION)

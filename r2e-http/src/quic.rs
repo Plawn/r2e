@@ -281,9 +281,9 @@ where
     let (parts, ()) = req.into_parts();
 
     // Fast-reject if Content-Length is present and already exceeds the limit.
-    if let Some(cl) = parts.headers.get(http::header::CONTENT_LENGTH) {
-        if let Some(len) = cl.to_str().ok().and_then(|s| s.parse::<usize>().ok()) {
-            if len > DEFAULT_MAX_BODY_SIZE {
+    if let Some(cl) = parts.headers.get(http::header::CONTENT_LENGTH)
+        && let Some(len) = cl.to_str().ok().and_then(|s| s.parse::<usize>().ok())
+            && len > DEFAULT_MAX_BODY_SIZE {
                 let resp = http::Response::builder()
                     .status(http::StatusCode::PAYLOAD_TOO_LARGE)
                     .body(())
@@ -292,8 +292,6 @@ where
                 let _ = stream.finish().await;
                 return Ok(());
             }
-        }
-    }
 
     // Create a channel-backed streaming body. The body reader feeds chunks
     // into `tx` while the router pulls them through `ChannelBody`.
@@ -367,11 +365,10 @@ where
                     if let Ok(data) = frame.into_data() {
                         stream.send_data(data).await?;
                     }
-                } else if frame.is_trailers() {
-                    if let Ok(trailers) = frame.into_trailers() {
+                } else if frame.is_trailers()
+                    && let Ok(trailers) = frame.into_trailers() {
                         stream.send_trailers(trailers).await?;
                     }
-                }
             }
             Err(e) => {
                 tracing::debug!(error = %e, "error reading response body");

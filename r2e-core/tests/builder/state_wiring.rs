@@ -3,6 +3,9 @@
 //! conditional availability, profile gating, layer + hook registration, and
 //! raw route registration.
 
+// The hand-written bean impls below spell out `+ Send` like the macro output.
+#![allow(refining_impl_trait)]
+
 use r2e_core::beans::{AsyncBean, Bean, BeanContext, BeanRegistry, Producer, Registrable};
 use r2e_core::builder::AppBuilder;
 use r2e_core::builtins::Health;
@@ -19,6 +22,7 @@ fn build_app() -> AppBuilder<()> {
 // ── E.2 AppBuilder State Building ─────────────────────────────────────────
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 struct TestDep(i32);
 
 #[r2e_core::test]
@@ -36,6 +40,7 @@ async fn build_state_with_provide() {
 
 // Bean test types
 #[derive(Clone)]
+#[allow(dead_code)]
 struct TestService {
     label: String,
 }
@@ -77,6 +82,7 @@ async fn build_state_with_bean() {
 
 // Async bean
 #[derive(Clone)]
+#[allow(dead_code)]
 struct AsyncService {
     label: String,
 }
@@ -124,6 +130,7 @@ async fn build_state_with_async_bean() {
 
 // Producer
 #[derive(Clone)]
+#[allow(dead_code)]
 struct ProducedValue(String);
 
 struct TestProducer;

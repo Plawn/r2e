@@ -558,7 +558,7 @@ fn tokenize(line_no: usize, input: &str) -> Result<Vec<Token<'_>>, ParseError> {
                     line_no,
                     format!(
                         "unexpected character `{}`",
-                        &input[i..].chars().next().unwrap()
+                        input[i..].chars().next().unwrap()
                     ),
                 );
             }

@@ -195,15 +195,14 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         }
     }
     // `group` only groups tests that also declare an `order`.
-    if let Some(group_lit) = &args.group {
-        if args.order.is_none() {
+    if let Some(group_lit) = &args.group
+        && args.order.is_none() {
             return syn::Error::new_spanned(
                 group_lit,
                 "`group` requires `order` — `group` only names the barrier for tests that also declare an `order`",
             )
             .to_compile_error();
         }
-    }
 
     // Resolve the ordering hooks once (only when `order` is present). Parsing
     // the literal as `u32` here surfaces negative / non-integer literals as an

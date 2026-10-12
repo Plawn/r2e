@@ -180,11 +180,10 @@ impl SecureHeadersBuilder {
             ));
         }
 
-        if let Some(ref fo) = self.frame_options {
-            if let Ok(val) = HeaderValue::from_str(fo) {
+        if let Some(ref fo) = self.frame_options
+            && let Ok(val) = HeaderValue::from_str(fo) {
                 headers.push((HeaderName::from_static("x-frame-options"), val));
             }
-        }
 
         if self.hsts {
             let value = if self.hsts_include_subdomains {
@@ -204,23 +203,20 @@ impl SecureHeadersBuilder {
             ));
         }
 
-        if let Some(ref rp) = self.referrer_policy {
-            if let Ok(val) = HeaderValue::from_str(rp) {
+        if let Some(ref rp) = self.referrer_policy
+            && let Ok(val) = HeaderValue::from_str(rp) {
                 headers.push((HeaderName::from_static("referrer-policy"), val));
             }
-        }
 
-        if let Some(ref csp) = self.content_security_policy {
-            if let Ok(val) = HeaderValue::from_str(csp) {
+        if let Some(ref csp) = self.content_security_policy
+            && let Ok(val) = HeaderValue::from_str(csp) {
                 headers.push((HeaderName::from_static("content-security-policy"), val));
             }
-        }
 
-        if let Some(ref pp) = self.permissions_policy {
-            if let Ok(val) = HeaderValue::from_str(pp) {
+        if let Some(ref pp) = self.permissions_policy
+            && let Ok(val) = HeaderValue::from_str(pp) {
                 headers.push((HeaderName::from_static("permissions-policy"), val));
             }
-        }
 
         SecureHeaders { headers }
     }

@@ -670,9 +670,9 @@ impl BackendState {
                     HandlerResult::Nack(ref reason) => {
                         tracing::warn!("event handler returned Nack: {reason}");
                         let mut captured = false;
-                        if let Some(ref policy) = retry_policy {
-                            if let Some(ref dlq_topic) = policy.dead_letter_topic {
-                                if let (Some((pl, meta)), Some(publisher)) =
+                        if let Some(ref policy) = retry_policy
+                            && let Some(ref dlq_topic) = policy.dead_letter_topic
+                                && let (Some((pl, meta)), Some(publisher)) =
                                     (&dlq_data, &state.dlq_publisher)
                                 {
                                     match publisher(
@@ -690,8 +690,6 @@ impl BackendState {
                                         ),
                                     }
                                 }
-                            }
-                        }
                         captured
                     }
                 };
@@ -719,9 +717,9 @@ impl BackendState {
         type_id_hint: Option<TypeId>,
     ) {
         let mut map = self.handlers.write().await;
-        if let Some(type_id) = type_id_hint {
-            if let Some(topic_handlers) = map.get_mut(&type_id) {
-                if let Some(entry) = topic_handlers
+        if let Some(type_id) = type_id_hint
+            && let Some(topic_handlers) = map.get_mut(&type_id)
+                && let Some(entry) = topic_handlers
                     .entries
                     .iter_mut()
                     .find(|e| e.id == handler_id)
@@ -730,8 +728,6 @@ impl BackendState {
                     entry.retry_policy = retry_policy;
                     return;
                 }
-            }
-        }
         // Fallback: scan all types
         for topic_handlers in map.values_mut() {
             if let Some(entry) = topic_handlers

@@ -777,11 +777,10 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
 /// The last path-segment identifier of the impl type, used to name hidden
 /// per-bean items (decorator container, decorator sets).
 fn type_ident(self_ty: &syn::Type) -> syn::Ident {
-    if let Type::Path(tp) = self_ty {
-        if let Some(seg) = tp.path.segments.last() {
+    if let Type::Path(tp) = self_ty
+        && let Some(seg) = tp.path.segments.last() {
             return seg.ident.clone();
         }
-    }
     format_ident!("Bean")
 }
 
@@ -798,14 +797,13 @@ fn bean_deco_field_ident(fn_name: &syn::Ident) -> syn::Ident {
 /// inner call).
 fn consumer_event_param(item_impl: &ItemImpl, fn_name: &syn::Ident) -> Option<syn::PatType> {
     for item in &item_impl.items {
-        if let ImplItem::Fn(method) = item {
-            if &method.sig.ident == fn_name {
+        if let ImplItem::Fn(method) = item
+            && &method.sig.ident == fn_name {
                 return method.sig.inputs.iter().find_map(|arg| match arg {
                     FnArg::Typed(pt) => Some(pt.clone()),
                     _ => None,
                 });
             }
-        }
     }
     None
 }
@@ -847,8 +845,8 @@ fn reject_stray_intercepts(item_impl: &ItemImpl) -> syn::Result<()> {
 /// (the request façade only exists for `#[routes]` controllers).
 fn reject_request_helper(item_impl: &ItemImpl) -> syn::Result<()> {
     for item in &item_impl.items {
-        if let ImplItem::Fn(method) = item {
-            if let Some(attr) = method
+        if let ImplItem::Fn(method) = item
+            && let Some(attr) = method
                 .attrs
                 .iter()
                 .find(|a| a.path().is_ident("request_helper"))
@@ -859,7 +857,6 @@ fn reject_request_helper(item_impl: &ItemImpl) -> syn::Result<()> {
                      a helper onto the per-request façade, which a #[bean] impl does not have",
                 ));
             }
-        }
     }
     Ok(())
 }
@@ -1028,16 +1025,14 @@ fn find_constructor(item_impl: &ItemImpl) -> syn::Result<(&syn::ImplItemFn, bool
             if returns_self(&method.sig.output, &item_impl.self_ty) {
                 return Ok((method, is_async, None));
             }
-            if let ReturnType::Type(_, ty) = &method.sig.output {
-                if let Some((ok, err)) = crate::util::type_utils::result_ok_err_types(ty) {
-                    if returns_self(
+            if let ReturnType::Type(_, ty) = &method.sig.output
+                && let Some((ok, err)) = crate::util::type_utils::result_ok_err_types(ty)
+                    && returns_self(
                         &ReturnType::Type(syn::token::RArrow::default(), Box::new(ok.clone())),
                         &item_impl.self_ty,
                     ) {
                         return Ok((method, is_async, Some(err.clone())));
                     }
-                }
-            }
         }
     }
 
@@ -1059,13 +1054,12 @@ fn returns_self(ret: &ReturnType, self_ty: &Type) -> bool {
                 if tp.path.is_ident("Self") {
                     return true;
                 }
-                if let Type::Path(self_tp) = self_ty {
-                    if tp.path.segments.last().map(|s| &s.ident)
+                if let Type::Path(self_tp) = self_ty
+                    && tp.path.segments.last().map(|s| &s.ident)
                         == self_tp.path.segments.last().map(|s| &s.ident)
                     {
                         return true;
                     }
-                }
             }
             false
         }
@@ -1197,8 +1191,16 @@ fn emit_cleaned_impl(item_impl: &ItemImpl, generated: &GeneratedBean) -> TokenSt
                     })
                     .collect();
 
+                // A zero-arg `pub fn new() -> Self` trips
+                // `clippy::new_without_default`, but the bean graph is its
+                // caller — a `Default` impl would only be noise for users.
+                let new_without_default = method.sig.inputs.is_empty().then(|| {
+                    quote! { #[allow(clippy::new_without_default)] }
+                });
+
                 items.push(quote! {
                     #(#attrs)*
+                    #new_without_default
                     #vis #sig_constness #sig_asyncness #sig_unsafety #sig_abi
                     fn #sig_ident #sig_generics (#(#clean_params),*) #sig_output
                     #sig_where

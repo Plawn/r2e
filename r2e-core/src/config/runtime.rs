@@ -328,11 +328,10 @@ impl LiveConfigRegistry {
         if self.inner.has_providers.load(Ordering::Relaxed) {
             return false;
         }
-        if let Some(slot) = self.inner.slots.read().unwrap().get(key) {
-            if slot.sender.borrow().value.is_some() {
+        if let Some(slot) = self.inner.slots.read().unwrap().get(key)
+            && slot.sender.borrow().value.is_some() {
                 return false;
             }
-        }
         self.inner.boot.read().unwrap().config.raw(key).is_none()
     }
 
@@ -596,11 +595,10 @@ impl<T: FromConfigValue + Clone + Send + Sync + 'static> LiveConfig<T> {
     pub fn get(&self) -> Result<T, ConfigError> {
         let (version, raw) = {
             let snapshot = self.slot.sender.borrow();
-            if let Some(entry) = self.cache.load().as_ref() {
-                if entry.version == snapshot.version {
+            if let Some(entry) = self.cache.load().as_ref()
+                && entry.version == snapshot.version {
                     return Ok(entry.value.clone());
                 }
-            }
             (snapshot.version, snapshot.value.clone())
         };
         // A missing value caches nothing: the key stays `NotFound` until a

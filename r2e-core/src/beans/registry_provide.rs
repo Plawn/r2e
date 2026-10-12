@@ -1,7 +1,7 @@
 use super::{
     reuse_clone_of, AsyncBean, Bean, BeanContext, BeanRegistration, BeanRegistry,
-    LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct, PreDestroy, Producer,
-    ServiceSourceHook,
+    EventSubscriberHook, LazyBeanRegistration, OnStart, OnStartSourceHook, PostConstruct,
+    PreDestroy, Producer, ScheduledSourceHook, ServiceSourceHook,
 };
 use std::any::{type_name, Any, TypeId};
 use std::collections::{HashMap, HashSet};
@@ -507,10 +507,7 @@ impl BeanRegistry {
     #[doc(hidden)]
     pub fn take_scheduled_sources(
         &mut self,
-    ) -> Vec<(
-        &'static str,
-        Box<dyn FnOnce(&BeanContext) -> Vec<Box<dyn Any + Send>> + Send>,
-    )> {
+    ) -> Vec<(&'static str, ScheduledSourceHook)> {
         std::mem::take(&mut self.scheduled_sources)
             .into_iter()
             .map(|(_, name, hook)| (name, hook))
@@ -523,10 +520,7 @@ impl BeanRegistry {
     #[doc(hidden)]
     pub fn take_event_subscribers(
         &mut self,
-    ) -> Vec<(
-        &'static str,
-        Box<dyn FnOnce(&BeanContext) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>,
-    )> {
+    ) -> Vec<(&'static str, EventSubscriberHook)> {
         std::mem::take(&mut self.event_subscribers)
             .into_iter()
             .map(|(_, name, hook)| (name, hook))

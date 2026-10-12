@@ -91,11 +91,10 @@ async fn served_cycle(addr: SocketAddr) -> String {
 async fn wait_bound(expected_runs: u32) -> SocketAddr {
     r2e_core::rt::timeout(Duration::from_secs(5), async {
         loop {
-            if EACH_CYCLE_HOOK_RUNS.load(Ordering::SeqCst) >= expected_runs {
-                if let Some(addr) = *BOUND.lock().unwrap() {
+            if EACH_CYCLE_HOOK_RUNS.load(Ordering::SeqCst) >= expected_runs
+                && let Some(addr) = *BOUND.lock().unwrap() {
                     return addr;
                 }
-            }
             r2e_core::rt::sleep(Duration::from_millis(10)).await;
         }
     })

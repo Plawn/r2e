@@ -165,11 +165,10 @@ impl ObservabilityConfig {
         if let Ok(endpoint) = config.get::<String>("observability.otlp-endpoint") {
             cfg.otlp_endpoint = endpoint;
         }
-        if let Ok(protocol) = config.get::<String>("observability.otlp-protocol") {
-            if let Some(protocol) = parse_otlp_protocol(&protocol) {
+        if let Ok(protocol) = config.get::<String>("observability.otlp-protocol")
+            && let Some(protocol) = parse_otlp_protocol(&protocol) {
                 cfg.otlp_protocol = protocol;
             }
-        }
         if let Ok(ratio) = config.get::<f64>("observability.sampling-ratio") {
             cfg.sampling_ratio = ratio.clamp(0.0, 1.0);
         }

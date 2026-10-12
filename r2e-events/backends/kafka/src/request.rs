@@ -262,8 +262,8 @@ fn apply_responder_completion(
 ) {
     let mut t = tracker.lock().unwrap_or_else(|e| e.into_inner());
     if ok {
-        if let Some(store_offset) = t.on_ack(epoch, partition, offset) {
-            if let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
+        if let Some(store_offset) = t.on_ack(epoch, partition, offset)
+            && let Err(e) = consumer.store_offset(topic_name, partition, store_offset) {
                 tracing::warn!(
                     topic = %topic_name,
                     partition,
@@ -271,7 +271,6 @@ fn apply_responder_completion(
                     "failed to store responder offset: {e}"
                 );
             }
-        }
     } else {
         if !t.on_nack(epoch, partition, offset) {
             tracing::debug!(topic = %topic_name, partition, offset, epoch, "ignoring stale Kafka responder completion");

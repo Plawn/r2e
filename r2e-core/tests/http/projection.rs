@@ -16,14 +16,14 @@ use std::sync::Arc;
 use http_body_util::BodyExt;
 use r2e_core::decorators::guards::PreAuthGuardContext;
 use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
-use r2e_core::http::Bytes;
-use r2e_core::BeanAccess;
 use r2e_core::http::extract::{FromRequestParts, Path};
 use r2e_core::http::header::{HeaderValue, Parts, RETRY_AFTER};
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
+use r2e_core::http::Bytes;
 use r2e_core::http::{Body, Json, Response, Router, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::web::managed::ManagedErr;
+use r2e_core::BeanAccess;
 use r2e_core::{
     Guard, GuardContext, HttpError, Identity, ManagedContext, ManagedDeps, ManagedOutcome,
     ManagedResource, PreAuthGuard, TNil,
@@ -183,8 +183,12 @@ impl<S: Send + Sync> ManagedResource<S> for Flaky {
         let head = context.require_request()?;
         match head.header("x-fail") {
             Some("acquire") => Err(ManagedErr(HttpError::BadRequest("acquire failed".into()))),
-            Some("finalize") => Ok(Self { fail_finalize: true }),
-            _ => Ok(Self { fail_finalize: false }),
+            Some("finalize") => Ok(Self {
+                fail_finalize: true,
+            }),
+            _ => Ok(Self {
+                fail_finalize: false,
+            }),
         }
     }
 
@@ -295,9 +299,8 @@ async fn router_with_app_envelope() -> Router {
 
 async fn json_body(resp: Response) -> serde_json::Value {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-        serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned())
-    })
+    serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 /// `POST /proj/items/{id}` as `zoe` with JSON content-type, plus extra headers.
@@ -308,7 +311,9 @@ async fn post(path: &str, extra: &[(&str, &str)], body: &'static str) -> Respons
 }
 
 fn envelope(resp: &Response) -> Option<&str> {
-    resp.headers().get("x-envelope").and_then(|v| v.to_str().ok())
+    resp.headers()
+        .get("x-envelope")
+        .and_then(|v| v.to_str().ok())
 }
 
 /// Asserts a `Wire` envelope: marker header, status, `error.type`.
@@ -343,7 +348,11 @@ async fn pre_auth_guard_projects_before_identity() {
         Body::from(r#"{"name":"ok"}"#),
     )
     .await;
-    assert_eq!(resp.headers()[RETRY_AFTER], "7", "hub headers reach the wire");
+    assert_eq!(
+        resp.headers()[RETRY_AFTER],
+        "7",
+        "hub headers reach the wire"
+    );
     let json = assert_wire(resp, StatusCode::TOO_MANY_REQUESTS, "RateLimited").await;
     assert_eq!(json["error"]["message"], "slow down");
 }
@@ -386,7 +395,12 @@ async fn missing_content_type_projects() {
         Body::from(r#"{"name":"ok"}"#),
     )
     .await;
-    assert_wire(resp, StatusCode::UNSUPPORTED_MEDIA_TYPE, "MissingContentType").await;
+    assert_wire(
+        resp,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "MissingContentType",
+    )
+    .await;
 }
 
 #[r2e_core::test]
@@ -426,9 +440,23 @@ async fn opaque_success_type_keeps_the_route_envelope() {
     // projects framework failures through `Wire`, like its handler `Err`.
     let headers = [("x-user", "zoe"), ("content-type", "application/json")];
     let app = router_with_app_envelope().await;
-    let resp = raw(app.clone(), "POST", "/proj/opaque", &headers, Body::from("{bad")).await;
+    let resp = raw(
+        app.clone(),
+        "POST",
+        "/proj/opaque",
+        &headers,
+        Body::from("{bad"),
+    )
+    .await;
     assert_wire(resp, StatusCode::BAD_REQUEST, "MalformedBody").await;
-    let resp = raw(app, "POST", "/proj/opaque", &headers, Body::from(r#"{"name":"x"}"#)).await;
+    let resp = raw(
+        app,
+        "POST",
+        "/proj/opaque",
+        &headers,
+        Body::from(r#"{"name":"x"}"#),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -438,9 +466,23 @@ async fn parenthesized_opaque_result_keeps_the_route_envelope() {
     // the unparenthesized spelling.
     let headers = [("x-user", "zoe"), ("content-type", "application/json")];
     let app = router_with_app_envelope().await;
-    let resp = raw(app.clone(), "POST", "/proj/opaque-paren", &headers, Body::from("{bad")).await;
+    let resp = raw(
+        app.clone(),
+        "POST",
+        "/proj/opaque-paren",
+        &headers,
+        Body::from("{bad"),
+    )
+    .await;
     assert_wire(resp, StatusCode::BAD_REQUEST, "MalformedBody").await;
-    let resp = raw(app, "POST", "/proj/opaque-paren", &headers, Body::from(r#"{"name":"x"}"#)).await;
+    let resp = raw(
+        app,
+        "POST",
+        "/proj/opaque-paren",
+        &headers,
+        Body::from(r#"{"name":"x"}"#),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -477,7 +519,14 @@ async fn managed_acquire_and_finalize_project() {
     let json = assert_wire(resp, StatusCode::INTERNAL_SERVER_ERROR, "Internal").await;
     assert_eq!(json["error"]["message"], "finalize failed");
 
-    let resp = raw(router, "GET", "/proj/managed", &[("x-user", "zoe")], Body::empty()).await;
+    let resp = raw(
+        router,
+        "GET",
+        "/proj/managed",
+        &[("x-user", "zoe")],
+        Body::empty(),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -512,7 +561,11 @@ async fn identity_failure_never_reads_the_body() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(polls.load(Ordering::SeqCst), 0, "body polled before identity");
+    assert_eq!(
+        polls.load(Ordering::SeqCst),
+        0,
+        "body polled before identity"
+    );
 }
 
 #[r2e_core::test]
@@ -562,7 +615,14 @@ async fn plain_error_type_falls_back_to_http_error() {
 
 #[r2e_core::test]
 async fn infallible_route_falls_back_to_http_error() {
-    let resp = raw(router().await, "GET", "/proj/infallible", &[], Body::empty()).await;
+    let resp = raw(
+        router().await,
+        "GET",
+        "/proj/infallible",
+        &[],
+        Body::empty(),
+    )
+    .await;
     assert_eq!(envelope(&resp), None);
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     let json = json_body(resp).await;

@@ -118,17 +118,13 @@ pub fn extract_consumer(attrs: &[syn::Attribute]) -> syn::Result<Option<Consumer
 }
 
 pub fn extract_event_type_from_arc(ty: &syn::Type) -> syn::Result<syn::Type> {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            if segment.ident == "Arc" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+            && segment.ident == "Arc"
+                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                         return Ok(inner.clone());
                     }
-                }
-            }
-        }
-    }
     Err(syn::Error::new_spanned(
         ty,
         "consumer event parameter must be wrapped in Arc<T>:\n\

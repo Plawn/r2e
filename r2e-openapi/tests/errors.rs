@@ -712,25 +712,22 @@ fn matches(schema: &Value, value: &Value, components: &Value) -> bool {
     if !type_ok {
         return false;
     }
-    if let Some(required) = schema["required"].as_array() {
-        if required.iter().any(|k| value.get(k.as_str().unwrap()).is_none()) {
+    if let Some(required) = schema["required"].as_array()
+        && required.iter().any(|k| value.get(k.as_str().unwrap()).is_none()) {
             return false;
         }
-    }
     if let Some(props) = schema["properties"].as_object() {
         for (k, sub) in props {
-            if let Some(v) = value.get(k) {
-                if !matches(sub, v, components) {
+            if let Some(v) = value.get(k)
+                && !matches(sub, v, components) {
                     return false;
                 }
-            }
         }
     }
-    if let (Some(items), Some(arr)) = (schema.get("items"), value.as_array()) {
-        if !arr.iter().all(|v| matches(items, v, components)) {
+    if let (Some(items), Some(arr)) = (schema.get("items"), value.as_array())
+        && !arr.iter().all(|v| matches(items, v, components)) {
             return false;
         }
-    }
     true
 }
 

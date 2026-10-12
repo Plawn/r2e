@@ -92,15 +92,14 @@ fn generate(input: &DeriveInput) -> syn::Result<TokenStream2> {
     // `order` only means something on the after-drain lane; on the early lane
     // every service is cancelled at once, so an order there is a silent no-op
     // the author would mistake for sequencing.
-    if let Some(order) = &stop_order {
-        if !matches!(stop_phase, Some((_, StopPhaseArg::AfterDrain))) {
+    if let Some(order) = &stop_order
+        && !matches!(stop_phase, Some((_, StopPhaseArg::AfterDrain))) {
             return Err(syn::Error::new_spanned(
                 order,
                 "#[service(order = …)] requires `stop = \"after_drain\"`: early services are \
                  all cancelled together before the HTTP drain, so they have no stop order",
             ));
         }
-    }
     let stop_fns = stop_fns(
         &krate,
         stop_phase.as_ref().map(|(_, p)| *p),

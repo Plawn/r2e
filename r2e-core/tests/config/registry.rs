@@ -60,11 +60,13 @@ server:
 
 // Recursive nesting: grandchild config
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[allow(dead_code)]
 struct GrandchildConfig {
     pub value: String,
 }
 
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[allow(dead_code)]
 struct ChildWithNested {
     pub label: String,
     #[config(section)]

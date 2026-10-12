@@ -260,7 +260,7 @@ impl Rejection {
         Self::new(RejectionKind::BadRequest, message)
     }
 
-    /// 500. The message is what the client sees; keep internals in
+    /// 500 — the message is what the client sees; keep internals in
     /// [`source`](Self::source).
     pub fn internal(message: impl Into<Cow<'static, str>>) -> Self {
         Self::new(RejectionKind::Internal, message)

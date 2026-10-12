@@ -20,7 +20,13 @@ use serde::Deserialize;
 
 async fn parts(resp: Response) -> (StatusCode, Vec<u8>) {
     let status = resp.status();
-    let body = resp.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let body = resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, body)
 }
 
@@ -280,8 +286,7 @@ async fn path_rejection_keeps_its_carried_status() {
     let (mut parts, _) = Request::builder().body(Body::empty()).unwrap().into_parts();
     let rejection = <Path<u32> as FromRequestParts<()>>::from_request_parts(&mut parts, &())
         .await
-        .err()
-        .expect("rejected");
+        .expect_err("rejected");
     let r = Rejection::from(rejection);
     assert_eq!(r.kind, RejectionKind::InvalidPath);
     assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -347,15 +352,31 @@ fn guard_error_keeps_status_and_message() {
 #[test]
 fn http_error_maps_by_variant() {
     let cases: [(HttpError, RejectionKind, &str); 5] = [
-        (HttpError::NotFound("a".into()), RejectionKind::NotFound, "a"),
+        (
+            HttpError::NotFound("a".into()),
+            RejectionKind::NotFound,
+            "a",
+        ),
         (
             HttpError::Unauthorized("b".into()),
             RejectionKind::Unauthenticated,
             "b",
         ),
-        (HttpError::Forbidden("c".into()), RejectionKind::Forbidden, "c"),
-        (HttpError::BadRequest("d".into()), RejectionKind::BadRequest, "d"),
-        (HttpError::Internal("e".into()), RejectionKind::Internal, "e"),
+        (
+            HttpError::Forbidden("c".into()),
+            RejectionKind::Forbidden,
+            "c",
+        ),
+        (
+            HttpError::BadRequest("d".into()),
+            RejectionKind::BadRequest,
+            "d",
+        ),
+        (
+            HttpError::Internal("e".into()),
+            RejectionKind::Internal,
+            "e",
+        ),
     ];
     for (err, kind, message) in cases {
         let r = Rejection::from(err);
@@ -432,12 +453,18 @@ fn rejection_to_http_error_by_shape() {
     ));
     assert!(matches!(
         HttpError::from(Rejection::new(RejectionKind::Conflict, "dup")),
-        HttpError::Custom { status: StatusCode::CONFLICT, .. }
+        HttpError::Custom {
+            status: StatusCode::CONFLICT,
+            ..
+        }
     ));
     let io = std::io::Error::other("disk");
     assert!(matches!(
         HttpError::from(Rejection::internal("boom").source(io)),
-        HttpError::WithSource { status: StatusCode::INTERNAL_SERVER_ERROR, .. }
+        HttpError::WithSource {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            ..
+        }
     ));
     let body = serde_json::json!({"error": "teapot", "code": 7});
     let r = Rejection::from(HttpError::Custom {
@@ -546,7 +573,12 @@ async fn hub_headers_are_added_unless_the_envelope_set_them() {
 
 #[r2e_core::test]
 async fn hub_headers_are_merged_into_an_opaque_passthrough() {
-    let original = (StatusCode::SERVICE_UNAVAILABLE, [("x-custom", "yes")], "down").into_response();
+    let original = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [("x-custom", "yes")],
+        "down",
+    )
+        .into_response();
     let resp = Rejection::from(original)
         .header(RETRY_AFTER, HeaderValue::from_static("30"))
         .project::<HttpError>();
@@ -557,7 +589,12 @@ async fn hub_headers_are_merged_into_an_opaque_passthrough() {
 
 #[r2e_core::test]
 async fn opaque_response_own_header_wins_over_the_hub() {
-    let original = (StatusCode::SERVICE_UNAVAILABLE, [(RETRY_AFTER, "5")], "down").into_response();
+    let original = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        [(RETRY_AFTER, "5")],
+        "down",
+    )
+        .into_response();
     let resp = Rejection::from(original)
         .header(RETRY_AFTER, HeaderValue::from_static("30"))
         .project::<HttpError>();
@@ -569,7 +606,10 @@ async fn opaque_response_own_header_wins_over_the_hub() {
 async fn repeated_hub_header_values_are_all_kept() {
     let resp = Rejection::unauthenticated()
         .header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
-        .header(WWW_AUTHENTICATE, HeaderValue::from_static("Basic realm=\"r2e\""))
+        .header(
+            WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"r2e\""),
+        )
         .project::<HttpError>();
     let values: Vec<_> = resp.headers().get_all(WWW_AUTHENTICATE).iter().collect();
     assert_eq!(values, ["Bearer", "Basic realm=\"r2e\""]);
@@ -591,7 +631,10 @@ async fn envelope_header_wins_over_every_repeated_hub_value() {
 async fn envelope_status_remap_is_applied_before_from() {
     let (status, body) = json_parts(Rejection::from(validation()).project::<Envelope>()).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(body["status"], 422, "From<Rejection> saw the remapped status");
+    assert_eq!(
+        body["status"], 422,
+        "From<Rejection> saw the remapped status"
+    );
     assert_eq!(body["type"], "Validation");
 }
 
@@ -602,10 +645,7 @@ async fn carried_status_survives_when_the_envelope_does_not_remap() {
     assert_eq!(status, StatusCode::IM_A_TEAPOT);
 
     let r = Rejection::with_status(RejectionKind::BadRequest, StatusCode::IM_A_TEAPOT, "tea");
-    assert_eq!(
-        r.project::<HttpError>().status(),
-        StatusCode::IM_A_TEAPOT
-    );
+    assert_eq!(r.project::<HttpError>().status(), StatusCode::IM_A_TEAPOT);
 }
 
 #[test]

@@ -11,6 +11,9 @@
 //! `app.rs` (`.error_projection::<AppError>()` → `{"error": ".."}`): a route
 //! that must speak `Problem` has to say so in its signature.
 
+// `Problem` carries a full RFC 9457 body; boxing it would obscure the example.
+#![allow(clippy::result_large_err)]
+
 use std::sync::Arc;
 
 use garde::Validate;

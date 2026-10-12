@@ -78,6 +78,7 @@ impl<'a, DB: Database, Src: TxSource<DB>> ManagedTx<'a, DB, Src> {
         self.as_mut()
     }
 
+    #[allow(clippy::should_implement_trait)] // public API; renaming would be breaking
     pub fn as_mut(&mut self) -> &mut DB::Connection {
         &mut *self
             .inner

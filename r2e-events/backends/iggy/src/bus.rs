@@ -918,8 +918,8 @@ async fn apply_completion(
 ) {
     match outcome {
         DispatchOutcome::Ack => {
-            if let Some(commit) = tracker.on_ack(partition_id, offset) {
-                if let Err(e) = consumer.store_offset(commit, Some(partition_id)).await {
+            if let Some(commit) = tracker.on_ack(partition_id, offset)
+                && let Err(e) = consumer.store_offset(commit, Some(partition_id)).await {
                     tracing::warn!(
                         topic = %topic_name,
                         partition_id,
@@ -927,7 +927,6 @@ async fn apply_completion(
                         "failed to store Iggy consumer offset: {e}"
                     );
                 }
-            }
         }
         DispatchOutcome::Nack => {
             tracker.on_nack(partition_id, offset);
@@ -1220,8 +1219,8 @@ async fn apply_responder_completion(
     ok: bool,
 ) {
     if ok {
-        if let Some(commit) = tracker.on_ack(partition_id, offset) {
-            if let Err(e) = consumer.store_offset(commit, Some(partition_id)).await {
+        if let Some(commit) = tracker.on_ack(partition_id, offset)
+            && let Err(e) = consumer.store_offset(commit, Some(partition_id)).await {
                 tracing::warn!(
                     topic = %topic_name,
                     partition_id,
@@ -1229,7 +1228,6 @@ async fn apply_responder_completion(
                     "failed to store responder offset: {e}"
                 );
             }
-        }
     } else {
         tracker.on_nack(partition_id, offset);
         tracing::warn!(

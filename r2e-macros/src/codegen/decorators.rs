@@ -565,15 +565,14 @@ pub(crate) fn deps_fold_from_base<'a>(
     let mut seen = std::collections::HashSet::new();
     let mut deps = base;
     for expr in site_exprs {
-        if let Ok((spec, _)) = spec_type_of(expr) {
-            if seen.insert(quote!(#spec).to_string()) {
+        if let Ok((spec, _)) = spec_type_of(expr)
+            && seen.insert(quote!(#spec).to_string()) {
                 deps = quote! {
                     <#deps as #krate::type_list::TAppend<
                         <#spec as #krate::DecoratorSpec>::Deps,
                     >>::Output
                 };
             }
-        }
     }
     deps
 }
@@ -587,11 +586,10 @@ pub(crate) fn unique_spec_types<'a>(
     let mut seen = std::collections::HashSet::new();
     let mut specs = Vec::new();
     for expr in site_exprs {
-        if let Ok((spec, _)) = spec_type_of(expr) {
-            if seen.insert(quote!(#spec).to_string()) {
+        if let Ok((spec, _)) = spec_type_of(expr)
+            && seen.insert(quote!(#spec).to_string()) {
                 specs.push(spec);
             }
-        }
     }
     specs
 }
