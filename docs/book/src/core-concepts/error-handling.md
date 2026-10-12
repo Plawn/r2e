@@ -228,9 +228,18 @@ side the OpenAPI builder needs.
 let kind: RejectionKind = r.kind;   // closed enum, `#[non_exhaustive]`
 let status: StatusCode = r.status;  // starts at `kind.default_status()`
 let message: &str = &r.message;     // client-facing; `Display` prints it
-let details = r.details.as_ref();   // Option<serde_json::Value> — garde field errors
-let headers = &r.headers;           // `WWW-Authenticate`, `Retry-After`, …
+let source = r.source.as_ref();     // Option<Arc<dyn Error>> — the cause, never rendered
+let details = r.details();          // Option<&serde_json::Value> — garde field errors
+let headers = r.headers();          // &HeaderMap — `WWW-Authenticate`, `Retry-After`, …
 ```
+
+`kind`, `status`, `message` and `source` are public fields; `details` and
+`headers` are read through accessors (`details()` / `take_details()`,
+`headers()` / `headers_mut()` / `take_headers()`). They live in a lazily
+allocated block so that the hub is 56 bytes: `Result<T, Rejection>` and an
+envelope `enum E { Rejected(Rejection), … }` stay well under clippy's
+`result_large_err` / `large_enum_variant` threshold, and a bare `401`, `403`
+or `404` still allocates nothing.
 
 `RejectionKind::default_status()` is the single status table:
 
@@ -259,7 +268,7 @@ fault: the axum `Json`/`Path`/`Query`/`Form` rejections, `ParamError`,
 Build one yourself with `Rejection::new(kind, msg)`,
 `Rejection::with_status(kind, status, msg)`, `Rejection::from_status(status, msg)`
 or the shortcuts `unauthenticated()` / `forbidden(msg)` / `not_found(msg)` /
-`bad_request(msg)` / `internal(msg)`, then chain `.details(value)`,
+`bad_request(msg)` / `internal(msg)`, then chain `.with_details(value)`,
 `.header(name, value)` or `.source(err)`.
 
 ### Error envelopes
@@ -270,9 +279,10 @@ An **envelope** is the type a `Rejection` is projected into before rendering.
 OpenAI-style `{"error":{"type":…}}`, RFC 9457 problem details, … — is a type
 `E` with three impls:
 
-- `From<Rejection>` — build the body from `r.kind` / `r.message` / `r.details`
-  and **read `r.status`**, never the table: the status may have been remapped,
-  or carried by the fault (a configured tenant status, a 413 body read).
+- `From<Rejection>` — build the body from `r.kind` / `r.message` /
+  `r.take_details()` and **read `r.status`**, never the table: the status may
+  have been remapped, or carried by the fault (a configured tenant status, a
+  413 body read).
 - `IntoHttpResponse` (+ `impl_into_response!`), as for any response type.
 - `ErrorSchema` — the static side, read by the runtime **and** the OpenAPI
   builder, so the spec cannot say 422 where the server answers 400:
@@ -395,10 +405,11 @@ pub struct Problem {
 }
 
 impl From<Rejection> for Problem {
-    fn from(r: Rejection) -> Self {
+    fn from(mut r: Rejection) -> Self {
+        let errors = r.take_details();
         let mut p = Problem::new(r.status, r.message.into_owned()); // read r.status
         p.code = Some(format!("{:?}", r.kind));
-        p.errors = r.details;
+        p.errors = errors;
         p
     }
 }

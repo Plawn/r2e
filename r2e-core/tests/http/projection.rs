@@ -44,12 +44,12 @@ struct Wire {
 }
 
 impl From<Rejection> for Wire {
-    fn from(r: Rejection) -> Self {
+    fn from(mut r: Rejection) -> Self {
         Self {
             kind: format!("{:?}", r.kind),
             status: r.status,
+            details: r.take_details(),
             message: r.message.into_owned(),
-            details: r.details,
         }
     }
 }

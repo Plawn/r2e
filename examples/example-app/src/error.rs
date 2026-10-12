@@ -86,12 +86,13 @@ impl Problem {
 }
 
 impl From<Rejection> for Problem {
-    fn from(r: Rejection) -> Self {
+    fn from(mut r: Rejection) -> Self {
         // `r.status` is authoritative: `status_of` has already been applied and
         // a fault may carry its own status (a 413 body limit, a 503 JWKS outage).
+        let errors = r.take_details();
         let mut problem = Problem::new(r.status, r.message.into_owned());
         problem.code = Some(format!("{:?}", r.kind));
-        problem.errors = r.details;
+        problem.errors = errors;
         problem
     }
 }

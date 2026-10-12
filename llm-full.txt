@@ -660,10 +660,18 @@ guard, a garde report, a rate limit — is one value: `Rejection` (prelude).
 let kind: RejectionKind = r.kind;        // closed enum, `#[non_exhaustive]`
 let status: StatusCode = r.status;       // starts at `kind.default_status()`
 let message: &str = &r.message;          // client-facing; `Display` prints it
-let details = r.details.as_ref();        // `Option<serde_json::Value>` — garde field errors
-let headers = &r.headers;                // `WWW-Authenticate`, `Retry-After`, …
+let source = r.source.as_ref();          // `Option<Arc<dyn Error>>` — the cause, never rendered
+let details = r.details();               // `Option<&serde_json::Value>` — garde field errors
+let headers = r.headers();               // `&HeaderMap` — `WWW-Authenticate`, `Retry-After`, …
 # }
 ```
+
+`kind`, `status`, `message` and `source` are public fields (move them out of an
+owned `Rejection`); `details` and `headers` live behind accessors — `details()`
+/ `take_details()`, `headers()` / `headers_mut()` / `take_headers()` — so the
+hub stays 56 bytes and `Result<T, Rejection>` or an envelope enum holding one
+never trips clippy's `result_large_err` / `large_enum_variant`. Never
+`#[allow]` those lints for a `Rejection`.
 
 `RejectionKind::default_status()` is the one status table: `MissingContentType`
 / `UnsupportedMediaType` 415, `PayloadTooLarge` 413, `BodyRead` / `MalformedBody`
@@ -684,7 +692,7 @@ sets `Retry-After`), `FgaDenied` (r2e-openfga), `TenantError` (r2e-tenant; use
 `Response` (→ `Opaque`). Build one directly with `Rejection::new(kind, msg)`,
 `Rejection::with_status(kind, status, msg)`, `Rejection::from_status(status, msg)`
 or the shortcuts `unauthenticated()` / `forbidden(msg)` / `not_found(msg)` /
-`bad_request(msg)` / `internal(msg)`, then `.details(value)` /
+`bad_request(msg)` / `internal(msg)`, then `.with_details(value)` /
 `.header(name, value)` / `.source(err)`.
 
 ### Error envelopes — `From<Rejection> + IntoHttpResponse + ErrorSchema`
@@ -695,9 +703,10 @@ rendered. `HttpError` is the default and reproduces the plain bodies
 wire shape (OpenAI-style `{"error":{"type":…}}`, RFC 9457 problem details, …)
 is an envelope `E` with three impls:
 
-- `From<Rejection>` — build the body from `r.kind` / `r.message` / `r.details`,
-  and **read `r.status`**, never the table: the status may have been remapped or
-  carried by the fault (a 413 body read, a configured tenant status).
+- `From<Rejection>` — build the body from `r.kind` / `r.message` /
+  `r.take_details()`, and **read `r.status`**, never the table: the status may
+  have been remapped or carried by the fault (a 413 body read, a configured
+  tenant status).
 - `IntoHttpResponse` (+ `impl_into_response!`), as for any response type.
 - `ErrorSchema` — the static side, read by the runtime **and** the OpenAPI
   builder so the spec cannot say 422 where the server answers 400:

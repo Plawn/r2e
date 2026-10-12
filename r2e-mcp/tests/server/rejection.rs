@@ -60,7 +60,7 @@ fn server_side_kinds_map_to_internal() {
 #[test]
 fn conflict_and_rate_limit_are_tool_results_with_details() {
     let rejection =
-        Rejection::new(RejectionKind::RateLimited, "slow down").details(json!({"retry_after": 30}));
+        Rejection::new(RejectionKind::RateLimited, "slow down").with_details(json!({"retry_after": 30}));
     match McpError::from(rejection) {
         McpError::Tool { message, data } => {
             assert_eq!(message, "slow down");

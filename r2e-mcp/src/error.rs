@@ -186,8 +186,9 @@ impl From<HttpError> for McpError {
 /// The rejection message becomes the error message; an empty message falls
 /// back to `request rejected with status N`.
 impl From<Rejection> for McpError {
-    fn from(rejection: Rejection) -> Self {
+    fn from(mut rejection: Rejection) -> Self {
         let status = rejection.status.as_u16();
+        let details = rejection.take_details();
         let message = if rejection.message.is_empty() {
             format!("request rejected with status {status}")
         } else {
@@ -214,7 +215,7 @@ impl From<Rejection> for McpError {
             }
             RejectionKind::Conflict | RejectionKind::RateLimited => McpError::Tool {
                 message,
-                data: rejection.details,
+                data: details,
             },
             // `Opaque` carries a foreign response whose status is all we
             // know; `RejectionKind` is #[non_exhaustive], so future kinds

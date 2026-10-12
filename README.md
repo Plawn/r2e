@@ -585,6 +585,9 @@ Migration guides for the breaking releases live under `docs/migration/`:
 - 0.5 → 0.6 documents OpenAPI bodies only through `RequestBodySchema` /
   `ResponseBodySchema` (no name-based `Json<T>` detection):
   [`docs/migration/response-schema.md`](docs/migration/response-schema.md).
+- 0.6 → 0.7 (r2e-core) shrinks `Rejection` to 56 bytes; `details`/`headers`
+  become accessors (task #1086):
+  [`docs/migration/rejection-layout.md`](docs/migration/rejection-layout.md).
 
 ## For AI agents
 

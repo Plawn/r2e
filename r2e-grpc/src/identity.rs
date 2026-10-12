@@ -82,7 +82,6 @@ pub async fn extract_jwt_claims_from_metadata<V: JwtClaimsValidatorLike>(
 /// implementations use.
 ///
 /// Returns the token without the `Bearer ` prefix.
-#[allow(clippy::result_large_err)] // `Rejection` is the framework-wide error type
 pub fn bearer_token(metadata: &MetadataMap) -> Result<&str, Rejection> {
     let auth_header = metadata
         .get("authorization")

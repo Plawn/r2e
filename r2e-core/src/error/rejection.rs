@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::http::extract::rejection::{
     BytesRejection, ExtensionRejection, FormRejection, MatchedPathRejection, NestedPathRejection,
@@ -183,8 +183,24 @@ impl RejectionKind {
 /// [`status`](Self::status) rather than the kind table — the framework has
 /// already applied the envelope's [`ErrorSchema::status_of`] remap to it.
 ///
-/// Not `Clone`: an [`Opaque`](RejectionKind::Opaque) rejection owns a
-/// `Response`.
+/// # Layout
+///
+/// The hub is **small** (56 bytes on 64-bit, pinned by a test) so that
+/// `Result<T, Rejection>` and an envelope `enum E { Rejected(Rejection), … }`
+/// stay under clippy's `result_large_err` / `large_enum_variant` thresholds
+/// without any `#[allow]`, and so that a slot held across `.await`s does not
+/// inflate the generated handler future. The hot members — [`kind`](Self::kind),
+/// [`status`](Self::status), [`message`](Self::message) and
+/// [`source`](Self::source) — live inline: every constructor and nearly every
+/// `From` impl sets them, and none of them allocates. The cold members —
+/// structured [`details`](Self::details), response [`headers`](Self::headers)
+/// and the pre-rendered response of an [`Opaque`](RejectionKind::Opaque)
+/// rejection — share one lazily allocated block, so a bare `401`/`403`/`404`
+/// and a source-carrying extractor rejection still allocate nothing beyond
+/// what they already did. **A new field goes in the cold block**, never
+/// inline; the layout record is `docs/claude/rejection-layout.md`.
+///
+/// Not `Clone`: an `Opaque` rejection owns a `Response`.
 #[non_exhaustive]
 pub struct Rejection {
     /// What failed.
@@ -195,16 +211,27 @@ pub struct Rejection {
     pub status: StatusCode,
     /// Client-facing message. Must not leak internals.
     pub message: Cow<'static, str>,
-    /// Structured payload — validation field errors, …
-    pub details: Option<serde_json::Value>,
-    /// Headers the response must carry (`WWW-Authenticate`, `Retry-After`, …).
-    /// Applied to the projected response by [`Rejection::project`].
-    pub headers: HeaderMap,
     /// The underlying cause, for logging. Never rendered.
     pub source: Option<Arc<dyn StdError + Send + Sync>>,
+    /// The cold members, allocated on first use (see *Layout* above).
+    extras: Option<Box<Extras>>,
+}
+
+/// The cold half of a [`Rejection`]: only built when a rejection carries
+/// details, headers or an opaque response.
+#[derive(Default)]
+struct Extras {
+    /// Structured payload — validation field errors, …
+    details: Option<serde_json::Value>,
+    /// Headers the response must carry (`WWW-Authenticate`, `Retry-After`, …).
+    headers: HeaderMap,
     /// The pre-rendered response of an `Opaque` rejection.
     opaque: Option<Response>,
 }
+
+/// What [`Rejection::headers`] returns for a rejection that never got one —
+/// an empty `HeaderMap` allocates nothing, so this is a plain shared value.
+static NO_HEADERS: LazyLock<HeaderMap> = LazyLock::new(HeaderMap::new);
 
 impl Rejection {
     /// A rejection of `kind` at its default status.
@@ -213,10 +240,8 @@ impl Rejection {
             kind,
             status: kind.default_status(),
             message: message.into(),
-            details: None,
-            headers: HeaderMap::new(),
             source: None,
-            opaque: None,
+            extras: None,
         }
     }
 
@@ -277,22 +302,68 @@ impl Rejection {
             None => Cow::Owned(format!("request rejected with status {status}")),
         };
         let mut r = Self::with_status(RejectionKind::Opaque, status, message);
-        r.opaque = Some(response);
+        r.extras_mut().opaque = Some(response);
         r
     }
 
-    /// Attach structured details.
+    /// The cold block, allocated on first use.
+    #[inline]
+    fn extras_mut(&mut self) -> &mut Extras {
+        self.extras.get_or_insert_with(Box::default)
+    }
+
+    /// Attach structured details (validation field errors, a custom body, …).
+    ///
+    /// Named `with_details` because [`details`](Self::details) is the reader.
     #[must_use]
-    pub fn details(mut self, details: serde_json::Value) -> Self {
-        self.details = Some(details);
+    pub fn with_details(mut self, details: serde_json::Value) -> Self {
+        self.extras_mut().details = Some(details);
         self
+    }
+
+    /// Structured payload — validation field errors, … — if any.
+    #[must_use]
+    pub fn details(&self) -> Option<&serde_json::Value> {
+        self.extras.as_ref().and_then(|e| e.details.as_ref())
+    }
+
+    /// Take the structured payload out, for an envelope that embeds it.
+    #[must_use]
+    pub fn take_details(&mut self) -> Option<serde_json::Value> {
+        self.extras.as_mut().and_then(|e| e.details.take())
     }
 
     /// Add a response header.
     #[must_use]
     pub fn header(mut self, name: HeaderName, value: HeaderValue) -> Self {
-        self.headers.append(name, value);
+        self.extras_mut().headers.append(name, value);
         self
+    }
+
+    /// Headers the response must carry (`WWW-Authenticate`, `Retry-After`, …).
+    /// Applied to the projected response by [`Rejection::project`].
+    #[must_use]
+    pub fn headers(&self) -> &HeaderMap {
+        match &self.extras {
+            Some(extras) => &extras.headers,
+            None => &NO_HEADERS,
+        }
+    }
+
+    /// Mutable access to the response headers, allocating the cold block on
+    /// first use. Prefer [`header`](Self::header) when building.
+    pub fn headers_mut(&mut self) -> &mut HeaderMap {
+        &mut self.extras_mut().headers
+    }
+
+    /// Take the response headers out, leaving none — for a wire that carries
+    /// them itself (gRPC metadata).
+    #[must_use]
+    pub fn take_headers(&mut self) -> HeaderMap {
+        match &mut self.extras {
+            Some(extras) => std::mem::take(&mut extras.headers),
+            None => HeaderMap::new(),
+        }
     }
 
     /// Attach the underlying cause.
@@ -316,13 +387,13 @@ impl Rejection {
     /// plain `Opaque` with status and message.
     #[must_use]
     pub fn take_opaque(&mut self) -> Option<Response> {
-        self.opaque.take()
+        self.extras.as_mut().and_then(|e| e.opaque.take())
     }
 
     /// Whether this rejection carries a pre-rendered response.
     #[must_use]
     pub fn is_opaque(&self) -> bool {
-        self.opaque.is_some()
+        self.extras.as_ref().is_some_and(|e| e.opaque.is_some())
     }
 
     /// **The projection point.** Turn this rejection into the wire response
@@ -354,11 +425,11 @@ impl Rejection {
         if remapped != self.kind.default_status() {
             self.status = remapped;
         }
-        let headers = std::mem::take(&mut self.headers);
+        let headers = self.take_headers();
         // A non-passthrough envelope sees the opaque response untouched
         // (`take_opaque` stays available to its `From<Rejection>`).
         let passthrough = if E::opaque_passthrough() {
-            self.opaque.take()
+            self.take_opaque()
         } else {
             None
         };
@@ -404,10 +475,10 @@ impl fmt::Debug for Rejection {
             .field("kind", &self.kind)
             .field("status", &self.status)
             .field("message", &self.message)
-            .field("details", &self.details)
-            .field("headers", &self.headers)
+            .field("details", &self.details())
+            .field("headers", self.headers())
             .field("source", &self.source.as_ref().map(|s| s.to_string()))
-            .field("opaque", &self.opaque.is_some())
+            .field("opaque", &self.is_opaque())
             .finish()
     }
 }
@@ -584,7 +655,7 @@ impl From<crate::web::params::ParamError> for Rejection {
 impl From<crate::web::validation::ValidationErrorResponse> for Rejection {
     fn from(v: crate::web::validation::ValidationErrorResponse) -> Self {
         let details = serde_json::to_value(&v.errors).unwrap_or(serde_json::Value::Null);
-        Self::new(RejectionKind::Validation, "Validation failed").details(details)
+        Self::new(RejectionKind::Validation, "Validation failed").with_details(details)
     }
 }
 
@@ -738,7 +809,7 @@ impl From<HttpError> for Rejection {
                     .unwrap_or_else(|| {
                         Cow::Borrowed(status.canonical_reason().unwrap_or("Error"))
                     });
-                Self::from_status(status, message).details(body)
+                Self::from_status(status, message).with_details(body)
             }
             HttpError::WithSource {
                 status,

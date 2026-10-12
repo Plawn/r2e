@@ -138,7 +138,7 @@ mod rejection {
             assert_eq!(rejection.status, StatusCode::UNAUTHORIZED, "{debug}");
             assert_eq!(rejection.message, "Unauthorized", "{debug}");
             assert_eq!(
-                rejection.headers.get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap()),
+                rejection.headers().get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap()),
                 Some("Bearer"),
                 "{debug}"
             );
@@ -152,7 +152,7 @@ mod rejection {
         assert_eq!(rejection.kind, RejectionKind::Unavailable);
         assert_eq!(rejection.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(rejection.message, "Service unavailable");
-        assert!(rejection.headers.get(WWW_AUTHENTICATE).is_none());
+        assert!(rejection.headers().get(WWW_AUTHENTICATE).is_none());
     }
 
     #[test]
