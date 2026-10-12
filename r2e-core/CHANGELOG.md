@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
 ### Breaking
 
 - `Rejection` shrinks from 304 to 56 bytes (#1086): `details`, `headers` and
