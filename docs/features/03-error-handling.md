@@ -218,8 +218,9 @@ into the pool.
 Every failure the framework raises before, around or instead of a handler —
 extractor rejection, `#[inject(request)]` extraction, identity, guard, garde
 validation, managed `acquire`/`finalize`, panic, 404/405/413 — is one typed
-value, **`Rejection`** (`kind: RejectionKind`, `status`, `message`, `details`,
-`headers`). It is projected **once per route** into an *error envelope*
+value, **`Rejection`** (`kind: RejectionKind`, `status`, `message`, `source`,
+plus `details()` and `headers()`). It is projected **once per route** into an
+*error envelope*
 `E: From<Rejection> + IntoHttpResponse + ErrorSchema` and only then rendered.
 
 - `HttpError` is the default envelope and keeps the bodies above byte-for-byte.

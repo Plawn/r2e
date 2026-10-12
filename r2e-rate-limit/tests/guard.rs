@@ -670,7 +670,7 @@ mod rate_limited {
 
     fn retry_after(rejection: &Rejection) -> Option<&str> {
         rejection
-            .headers
+            .headers()
             .get(RETRY_AFTER)
             .map(|v| v.to_str().expect("ascii"))
     }

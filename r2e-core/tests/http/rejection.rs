@@ -54,7 +54,8 @@ impl From<Rejection> for Envelope {
 
 impl IntoHttpResponse for Envelope {
     fn into_http_response(self) -> Response {
-        let r = self.0;
+        let mut r = self.0;
+        let details = r.take_details();
         (
             r.status,
             [("x-envelope", "custom"), ("retry-after", "envelope")],
@@ -62,7 +63,7 @@ impl IntoHttpResponse for Envelope {
                 "type": format!("{:?}", r.kind),
                 "status": r.status.as_u16(),
                 "message": r.message,
-                "details": r.details,
+                "details": details,
             })),
         )
             .into_response()
@@ -327,7 +328,7 @@ fn validation_response_becomes_validation_with_details() {
     assert_eq!(r.kind, RejectionKind::Validation);
     assert_eq!(r.status, StatusCode::BAD_REQUEST, "0.4 answered 400");
     assert_eq!(r.message, "Validation failed");
-    assert_eq!(r.details.unwrap()[0]["field"], "name");
+    assert_eq!(r.details().unwrap()[0]["field"], "name");
 }
 
 #[test]
@@ -336,7 +337,7 @@ fn garde_report_becomes_validation() {
     report.append(garde::Path::new("email"), garde::Error::new("not an email"));
     let r = Rejection::from(&report);
     assert_eq!(r.kind, RejectionKind::Validation);
-    let details = r.details.unwrap();
+    let details = r.details().unwrap();
     assert_eq!(details[0]["field"], "email");
     assert_eq!(details[0]["message"], "not an email");
 }
@@ -383,7 +384,7 @@ fn http_error_maps_by_variant() {
         assert_eq!(r.kind, kind);
         assert_eq!(r.status, kind.default_status());
         assert_eq!(r.message, message);
-        assert!(r.details.is_none());
+        assert!(r.details().is_none());
     }
 
     let r = Rejection::from(HttpError::validation(validation()));
@@ -405,7 +406,7 @@ fn http_error_maps_by_variant() {
     assert_eq!(r.kind, RejectionKind::BadRequest);
     assert_eq!(r.status, StatusCode::IM_A_TEAPOT);
     assert_eq!(r.message, "teapot");
-    assert_eq!(r.details, Some(body));
+    assert_eq!(r.details(), Some(&body));
 
     let r = Rejection::from(HttpError::Custom {
         status: StatusCode::BAD_GATEWAY,
@@ -712,4 +713,84 @@ fn http_error_schema_describes_the_documented_bodies() {
     assert_eq!(name, "ValidationErrorResponse");
     assert_eq!(schema["properties"]["details"]["type"], "array");
     assert!(HttpError::body_schema_for(RejectionKind::NotFound).is_none());
+}
+
+// ── layout (#1086) ─────────────────────────────────────────────────────────
+//
+// The hub must stay small enough that `Result<T, Rejection>` and an envelope
+// `enum E { Rejected(Rejection), … }` pass clippy's `result_large_err` /
+// `large_enum_variant` (128 bytes) without an `#[allow]` anywhere, including
+// in downstream crates. `docs/claude/rejection-layout.md` is the record.
+
+#[test]
+fn rejection_is_small() {
+    use std::mem::size_of;
+    assert_eq!(size_of::<Rejection>(), 56, "a new field goes in the cold block");
+    assert_eq!(size_of::<Result<(), Rejection>>(), 56);
+    assert_eq!(size_of::<Option<Rejection>>(), 56);
+}
+
+// An envelope shaped exactly as the documented pattern: must not trip
+// `large_enum_variant` (this file is compiled with clippy in CI).
+#[allow(dead_code)]
+enum DocumentedEnvelope {
+    Rejected(Rejection),
+    NotFound,
+    Custom(u8),
+}
+
+// Nor `result_large_err`.
+#[allow(dead_code)]
+async fn documented_guard(deny: bool) -> Result<(), Rejection> {
+    if deny {
+        Err(Rejection::forbidden("no"))
+    } else {
+        Ok(())
+    }
+}
+
+#[test]
+fn bare_rejections_carry_no_cold_block() {
+    let r = Rejection::unauthenticated();
+    assert!(r.headers().is_empty());
+    assert!(r.details().is_none());
+    assert!(!r.is_opaque());
+    let mut r = Rejection::internal("x").source(std::io::Error::other("io"));
+    assert!(r.source.is_some());
+    assert!(r.take_headers().is_empty(), "no cold block was allocated");
+    assert!(r.take_details().is_none());
+}
+
+#[test]
+fn headers_accessors_round_trip() {
+    let mut r = Rejection::unauthenticated()
+        .header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
+        .header(WWW_AUTHENTICATE, HeaderValue::from_static("Basic"));
+    assert_eq!(r.headers().get_all(WWW_AUTHENTICATE).iter().count(), 2);
+    r.headers_mut()
+        .insert(RETRY_AFTER, HeaderValue::from_static("1"));
+    assert_eq!(r.headers().len(), 3);
+    let taken = r.take_headers();
+    assert_eq!(taken.len(), 3);
+    assert!(r.headers().is_empty(), "taken once, gone");
+    assert!(r.take_headers().is_empty());
+}
+
+#[test]
+fn details_accessors_round_trip() {
+    let body = serde_json::json!({"a": 1});
+    let mut r = Rejection::bad_request("x").with_details(body.clone());
+    assert_eq!(r.details(), Some(&body));
+    assert_eq!(r.take_details(), Some(body));
+    assert!(r.details().is_none());
+    assert!(r.take_details().is_none());
+}
+
+#[test]
+fn debug_shows_the_cold_block_through_accessors() {
+    let r = Rejection::opaque(Response::new(Body::empty()))
+        .header(RETRY_AFTER, HeaderValue::from_static("1"));
+    let debug = format!("{r:?}");
+    assert!(debug.contains("opaque: true"), "{debug}");
+    assert!(debug.contains("retry-after"), "{debug}");
 }

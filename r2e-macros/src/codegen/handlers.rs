@@ -1074,7 +1074,7 @@ impl<'a> Pipeline<'a> {
                 } else {
                     quote! { &#arg }
                 };
-                let project = self.project(quote! { *__rej });
+                let project = self.project(quote! { __rej });
                 quote! {
                     {
                         use #krate::web::validation::__DoValidate as _;

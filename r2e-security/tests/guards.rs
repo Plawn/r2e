@@ -209,7 +209,7 @@ mod roles_denied {
             assert_eq!(rejection.kind, RejectionKind::Forbidden, "{denied:?}");
             assert_eq!(rejection.status, StatusCode::FORBIDDEN, "{denied:?}");
             assert_eq!(rejection.message, denied.message(), "{denied:?}");
-            assert!(rejection.headers.is_empty(), "{denied:?}");
+            assert!(rejection.headers().is_empty(), "{denied:?}");
         }
     }
 

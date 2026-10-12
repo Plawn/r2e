@@ -14,3 +14,16 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
+
+### Breaking
+
+- `Rejection` shrinks from 304 to 56 bytes (#1086): `details`, `headers` and
+  the opaque response now live in a lazily allocated block, so
+  `Result<T, Rejection>` and an envelope `enum E { Rejected(Rejection), … }`
+  pass clippy's `result_large_err` / `large_enum_variant` without an
+  `#[allow]`, in the framework and in applications. `kind`, `status`,
+  `message` and `source` stay public fields. Read the cold members through
+  `details()` / `take_details()` and `headers()` / `headers_mut()` /
+  `take_headers()`; the `.details(value)` builder is now `.with_details(value)`
+  (`details()` is the reader). `__maybe_validate` returns an unboxed
+  `Result<(), Rejection>`. Migration: `docs/migration/rejection-layout.md`.

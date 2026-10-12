@@ -378,12 +378,12 @@ macro_rules! map_error {
 /// Reads `rejection.status`, never the kind table, so an envelope built on
 /// top of `HttpError` (`#[error(transparent)]`) inherits status remaps.
 impl From<Rejection> for HttpError {
-    fn from(rejection: Rejection) -> Self {
+    fn from(mut rejection: Rejection) -> Self {
+        let details = rejection.take_details();
         let Rejection {
             kind,
             status,
             message,
-            details,
             source,
             ..
         } = rejection;

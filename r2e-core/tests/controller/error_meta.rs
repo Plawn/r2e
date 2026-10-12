@@ -8,9 +8,6 @@
 //! itself. The OpenAPI builder turns every kind into a response at the
 //! envelope's `status_of(kind)`.
 
-// Envelopes wrap the framework's (large) `Rejection`, exactly as apps do.
-#![allow(clippy::result_large_err)]
-
 use std::convert::Infallible;
 
 use r2e_core::controller::Controller;

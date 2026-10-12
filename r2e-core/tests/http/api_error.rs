@@ -1,6 +1,3 @@
-// Envelopes wrap the framework's (large) `Rejection`, exactly as apps do.
-#![allow(clippy::large_enum_variant)]
-
 use http_body_util::BodyExt;
 use r2e_core::http::{IntoResponse, StatusCode};
 use r2e_core::prelude::*;

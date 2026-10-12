@@ -31,7 +31,7 @@ use tonic::{Code, Status};
 /// trailing metadata, so a `WWW-Authenticate` or `Retry-After` set by a guard
 /// reaches the client.
 #[must_use]
-pub fn rejection_to_status(rejection: Rejection) -> Status {
+pub fn rejection_to_status(mut rejection: Rejection) -> Status {
     let code = match rejection.kind {
         RejectionKind::Unauthenticated => Code::Unauthenticated,
         RejectionKind::Forbidden => Code::PermissionDenied,
@@ -57,15 +57,16 @@ pub fn rejection_to_status(rejection: Rejection) -> Status {
         // same way instead of breaking this crate.
         _ => code_from_status(rejection.status),
     };
+    let headers = rejection.take_headers();
     let message = if rejection.message.is_empty() {
         format!("request rejected with status {}", rejection.status.as_u16())
     } else {
         rejection.message.into_owned()
     };
-    if rejection.headers.is_empty() {
+    if headers.is_empty() {
         Status::new(code, message)
     } else {
-        Status::with_metadata(code, message, MetadataMap::from_headers(rejection.headers))
+        Status::with_metadata(code, message, MetadataMap::from_headers(headers))
     }
 }
 

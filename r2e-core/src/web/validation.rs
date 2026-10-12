@@ -57,32 +57,28 @@ pub struct __AutoValidator<'a, T>(pub &'a T);
 
 /// Matched when `T: garde::Validate<Context = ()>` (direct, higher priority).
 ///
-/// The error is boxed so the `Ok` path is not penalized by a
-/// `Rejection`-sized `Result` (clippy `result_large_err`); the generated
-/// handler dereferences the box and projects the rejection through the
-/// route's error envelope.
+/// The generated handler projects the rejection through the route's error
+/// envelope.
 pub trait __DoValidate {
-    fn __maybe_validate(&self) -> Result<(), Box<Rejection>>;
+    fn __maybe_validate(&self) -> Result<(), Rejection>;
 }
 
 impl<T: garde::Validate> __DoValidate for __AutoValidator<'_, T>
 where
     T::Context: Default,
 {
-    fn __maybe_validate(&self) -> Result<(), Box<Rejection>> {
-        self.0
-            .validate()
-            .map_err(|report| Box::new(Rejection::from(&report)))
+    fn __maybe_validate(&self) -> Result<(), Rejection> {
+        self.0.validate().map_err(|report| Rejection::from(&report))
     }
 }
 
 /// Fallback via autoref (lower priority) — no-op for types without Validate.
 pub trait __SkipValidate {
-    fn __maybe_validate(&self) -> Result<(), Box<Rejection>>;
+    fn __maybe_validate(&self) -> Result<(), Rejection>;
 }
 
 impl<T> __SkipValidate for &__AutoValidator<'_, T> {
-    fn __maybe_validate(&self) -> Result<(), Box<Rejection>> {
+    fn __maybe_validate(&self) -> Result<(), Rejection> {
         Ok(())
     }
 }
