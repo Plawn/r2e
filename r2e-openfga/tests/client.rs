@@ -66,8 +66,10 @@ mod authz {
         impl DirectlyAssignable<(super::team::Ty, super::team::Member)> for Viewer {}
         impl DirectlyAssignable<WildcardOf<super::user::Ty>> for Viewer {}
 
+        #[allow(dead_code)]
         pub struct Editor;
         #[allow(non_upper_case_globals)]
+        #[allow(dead_code)]
         pub const editor: FgaRel<Ty, Editor> = FgaRel::new("editor");
         impl DirectlyAssignable<super::user::Ty> for Editor {}
     }

@@ -920,6 +920,7 @@ fn schema_override_replaces_error_schema() {
 }
 
 #[derive(schemars::JsonSchema)]
+#[allow(dead_code)]
 struct Event {
     kind: String,
     payload: serde_json::Value,

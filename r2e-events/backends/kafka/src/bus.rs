@@ -889,11 +889,10 @@ async fn run_consumer_inner(
     // Final synchronous commit of everything stored during the drain, so a
     // clean shutdown does not needlessly redeliver acked messages. Only needed
     // when librdkafka's periodic committer is off.
-    if manual_commit {
-        if let Err(e) = consumer.commit_consumer_state(CommitMode::Sync) {
+    if manual_commit
+        && let Err(e) = consumer.commit_consumer_state(CommitMode::Sync) {
             tracing::debug!(topic = %topic_name, "final commit skipped: {e}");
         }
-    }
 }
 
 /// Apply a single completion decision to the tracker and consumer.
@@ -958,11 +957,10 @@ pub(crate) fn kafka_header_pairs(
     let mut pairs: Vec<(String, String)> = Vec::new();
     if let Some(headers) = msg.headers() {
         for header in headers.iter() {
-            if let Some(value) = header.value {
-                if let Ok(v) = std::str::from_utf8(value) {
+            if let Some(value) = header.value
+                && let Ok(v) = std::str::from_utf8(value) {
                     pairs.push((header.key.to_string(), v.to_string()));
                 }
-            }
         }
     }
     pairs

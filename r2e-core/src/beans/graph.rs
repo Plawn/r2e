@@ -102,8 +102,8 @@ impl BeanRegistry {
         reg: &BeanRegistration,
         plugin_owners: &HashMap<TypeId, (&'static str, Vec<Option<&'static str>>)>,
     ) -> BeanError {
-        if let Some(&(plugin, ref owners)) = plugin_owners.get(&reg.type_id) {
-            if owners.len() > 1 {
+        if let Some(&(plugin, ref owners)) = plugin_owners.get(&reg.type_id)
+            && owners.len() > 1 {
                 return BeanError::DuplicatePlugin {
                     plugin,
                     owners: owners
@@ -115,7 +115,6 @@ impl BeanRegistry {
                         .collect(),
                 };
             }
-        }
         BeanError::DuplicateBean {
             type_name: reg.type_name.to_string(),
         }
@@ -353,14 +352,13 @@ impl BeanRegistry {
         let mut color = vec![0u8; nodes.len()];
         let mut path = Vec::new();
         for i in 0..nodes.len() {
-            if in_degree[i] > 0 && color[i] == 0 {
-                if let Some(cycle) = dfs(i, nodes, id_to_idx, in_degree, &mut color, &mut path) {
+            if in_degree[i] > 0 && color[i] == 0
+                && let Some(cycle) = dfs(i, nodes, id_to_idx, in_degree, &mut color, &mut path) {
                     return cycle
                         .into_iter()
                         .map(|idx| nodes[idx].reg_type_name().to_string())
                         .collect();
                 }
-            }
         }
 
         // Unreachable when called after a stalled Kahn sort, but degrade

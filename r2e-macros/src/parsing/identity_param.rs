@@ -12,14 +12,13 @@ pub(crate) fn parse_identity_param(
     allow_legacy_identity: bool,
 ) -> syn::Result<Option<IdentityParam>> {
     let legacy_attr = param.attrs.iter().find(|a| a.path().is_ident("identity"));
-    if let Some(attr) = legacy_attr {
-        if !allow_legacy_identity {
+    if let Some(attr) = legacy_attr
+        && !allow_legacy_identity {
             return Err(syn::Error::new_spanned(
                 attr,
                 "`#[identity]` was removed; use `#[inject(identity)]`",
             ));
         }
-    }
 
     let has_inject_identity = param
         .attrs

@@ -2,6 +2,9 @@
 //! `#[bean]` impl — the marked method must return a `JobHandle<T>` whose
 //! result matches what the original body would have produced inline.
 
+// `cfg(all())` is the always-true cfg these tests feed through the macros.
+#![allow(clippy::non_minimal_cfg)]
+
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 

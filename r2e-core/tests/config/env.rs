@@ -7,6 +7,7 @@ use r2e_core::config::{ConfigProperties, ConfigValue, R2eConfig};
 // =========================================================================
 
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[allow(dead_code)]
 struct DbEnvConfig {
     #[config(env = "TEST_R2E_DATABASE_URL")]
     pub url: String,

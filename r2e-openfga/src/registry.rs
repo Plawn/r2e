@@ -101,12 +101,11 @@ impl OpenFgaRegistry {
             .as_ref()
             .map(|_| CacheKey::new(user, relation, object));
 
-        if let Some((cache, key)) = self.cache.as_ref().zip(cache_key.as_ref()) {
-            if let Some(cached) = cache.get(key) {
+        if let Some((cache, key)) = self.cache.as_ref().zip(cache_key.as_ref())
+            && let Some(cached) = cache.get(key) {
                 tracing::trace!(user, relation, object, allowed = cached, "cache hit");
                 return Ok(cached);
             }
-        }
 
         // Query backend.
         let allowed = self.backend.check(user, relation, object).await?;

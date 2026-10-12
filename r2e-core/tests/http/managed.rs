@@ -106,23 +106,20 @@ impl ManagedDeps for HeadProbe {
 struct AllowAll;
 impl SelfBuilt for AllowAll {}
 impl<I: Identity> Guard<I> for AllowAll {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async { Ok(()) }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        Ok(())
     }
 }
 
 struct PassThrough;
 impl SelfBuilt for PassThrough {}
 impl<R: Send> Interceptor<R> for PassThrough {
-    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+    async fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> R
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        async move { next().await }
+        next().await
     }
 }
 

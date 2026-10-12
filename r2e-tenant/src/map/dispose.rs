@@ -191,9 +191,7 @@ where
     /// report `None`: there is nothing to hand to a source, and pretending
     /// otherwise would leave a caller owing an await that cannot do anything.
     pub(super) fn commit_dispose(&self, slot: &Slot<T>) -> Option<DisposalDebt<T>> {
-        if slot.cell.get().is_none() {
-            return None;
-        }
+        slot.cell.get()?;
         slot.disposed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()

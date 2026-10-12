@@ -132,11 +132,10 @@ impl<'a> TestSession<'a> {
     fn capture_cookies(&self, headers: &HeaderMap) {
         let mut jar = self.cookies.borrow_mut();
         for value in headers.get_all(SET_COOKIE) {
-            if let Ok(s) = value.to_str() {
-                if let Some((name, val)) = parse_set_cookie(s) {
+            if let Ok(s) = value.to_str()
+                && let Some((name, val)) = parse_set_cookie(s) {
                     jar.insert(name.to_string(), val.to_string());
                 }
-            }
         }
     }
 }

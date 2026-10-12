@@ -1,6 +1,5 @@
 //! Scaffolding for `llm/tenancy.md`.
 
-use r2e::prelude::*;
 use r2e::tenant::TenantId;
 use serde::Serialize;
 

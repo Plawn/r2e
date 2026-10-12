@@ -89,6 +89,7 @@ mod common {
             user
         }
 
+        #[allow(dead_code)]
         pub async fn count(&self) -> usize {
             self.users.read().await.len()
         }
@@ -101,6 +102,7 @@ use r2e::r2e_events::LocalEventBus;
 // ─── Test controller for OpenAPI query params ───
 
 #[derive(serde::Deserialize, Params)]
+#[allow(dead_code)]
 pub struct TestSearchParams {
     #[query]
     pub name: Option<String>,
@@ -137,6 +139,7 @@ pub struct CustomPrefixParams {
 }
 
 #[controller(path = "/search")]
+#[allow(dead_code)]
 pub struct TestSearchController {
     #[inject]
     pool: sqlx::SqlitePool,
@@ -158,6 +161,7 @@ impl TestSearchController {
 // ─── Nested Params test controller ───
 
 #[controller(path = "/nested")]
+#[allow(dead_code)]
 pub struct NestedParamsController {
     #[inject]
     pool: sqlx::SqlitePool,
@@ -200,6 +204,7 @@ impl NestedParamsController {
 // ─── Main test controller ───
 
 #[controller]
+#[allow(dead_code)]
 pub struct TestUserController {
     #[inject]
     user_service: UserService,

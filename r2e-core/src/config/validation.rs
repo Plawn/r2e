@@ -265,8 +265,8 @@ pub fn validate_section<C: ConfigProperties>(
     // TypeMismatch and Validation errors. This is also the only reporting
     // path for manual `ConfigProperties` impls that keep the default (empty)
     // `properties_metadata` — the `NotFound` arm below stays live for them.
-    if errors.is_empty() {
-        if let Err(e) = C::from_config(config, prefix) {
+    if errors.is_empty()
+        && let Err(e) = C::from_config(config, prefix) {
             match e {
                 ConfigError::TypeMismatch { key, expected } => {
                     errors.push(MissingKeyError {
@@ -317,7 +317,6 @@ pub fn validate_section<C: ConfigProperties>(
                 }
             }
         }
-    }
 
     errors
 }

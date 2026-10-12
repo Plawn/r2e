@@ -3,8 +3,8 @@
 //! `override_config`.
 
 use r2e_core::config::{ConfigValue, R2eConfig};
-use r2e_core::type_list::BeanAccess;
 use r2e_core::prelude::ProvideBundle;
+use r2e_core::type_list::BeanAccess;
 use r2e_core::AppBuilder;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +82,9 @@ async fn r2e_config_field_acts_as_override_config() {
         .await;
 
     let loaded = state.state().get::<R2eConfig>();
-    assert_eq!(loaded.try_get::<String>("app.name").as_deref(), Some("bundled"));
+    assert_eq!(
+        loaded.try_get::<String>("app.name").as_deref(),
+        Some("bundled")
+    );
     assert_eq!(state.state().get::<Pool>(), Pool("p"));
 }

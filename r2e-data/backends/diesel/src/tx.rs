@@ -12,6 +12,9 @@ use r2e_core::{
 
 use crate::{DataSourceTag, DbPool, DefaultDataSource};
 
+/// What [`TxSource::acquire_pool`] hands back: the pool plus its metadata.
+type PoolAndMeta<Conn, Meta> = (Pool<ConnectionManager<Conn>>, Meta);
+
 /// Where a managed transaction gets its pool from.
 ///
 /// Selecting the source is the only thing that differs between a transaction on
@@ -56,9 +59,7 @@ where
     /// need nothing from the await simply never yield.
     fn acquire_pool<S>(
         context: &ManagedContext<'_, S>,
-    ) -> impl Future<
-        Output = Result<(Pool<ConnectionManager<Conn>>, Self::Meta), ManagedErr<HttpError>>,
-    > + Send
+    ) -> impl Future<Output = Result<PoolAndMeta<Conn, Self::Meta>, ManagedErr<HttpError>>> + Send
     where
         S: BeanLookup + Send + Sync;
 }
@@ -160,7 +161,7 @@ where
     type Target = Conn;
 
     fn deref(&self) -> &Self::Target {
-        &*self
+        self
             .connection
             .as_ref()
             .expect("managed Diesel transaction has already been finalized")

@@ -284,13 +284,16 @@ impl futures_core::Stream for SseSubscription {
 pub struct SseTopic<E> {
     broadcaster: SseBroadcaster,
     event_name: Arc<str>,
-    serializer: Arc<dyn Fn(&E) -> Result<String, SseSerializeError> + Send + Sync>,
+    serializer: SseSerializer<E>,
 }
 
 /// Error returned by an [`SseTopic`] serializer (boxed so custom
 /// [`with_serializer`](SseTopic::with_serializer) formats are not forced
 /// into the JSON façade's [`JsonError`](crate::json::JsonError)).
 pub type SseSerializeError = Box<dyn std::error::Error + Send + Sync>;
+
+/// The shared payload serializer held by an [`SseTopic`].
+type SseSerializer<E> = Arc<dyn Fn(&E) -> Result<String, SseSerializeError> + Send + Sync>;
 
 // Manual impl: `derive(Clone)` would needlessly require `E: Clone`.
 impl<E> Clone for SseTopic<E> {

@@ -72,7 +72,11 @@ struct ExplicitQuery {
 }
 
 async fn explicit(q: ExplicitQuery) -> String {
-    format!("{}|{}", q.tenant_id, q.trace_id.unwrap_or_else(|| "-".into()))
+    format!(
+        "{}|{}",
+        q.tenant_id,
+        q.trace_id.unwrap_or_else(|| "-".into())
+    )
 }
 
 /// Path parameters take their name from the same rename pipeline.

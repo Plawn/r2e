@@ -28,6 +28,7 @@ pub struct TenantRegistry;
 /// `AuthenticatedUser`: R2E's `*Via` traits only, witness parked in
 /// `ViaBean`, no axum impls.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct TenantId(pub String);
 
 impl<S, I> FromRequestPartsVia<S, ViaBean<I>> for TenantId

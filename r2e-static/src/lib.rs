@@ -145,10 +145,10 @@ fn accepts_encoding(accept: &str, encoding: &str) -> bool {
         }
         for param in iter {
             let param = param.trim();
-            if let Some(q) = param.strip_prefix("q=") {
-                if let Ok(val) = q.trim().parse::<f32>() {
-                    return val > 0.0;
-                }
+            if let Some(q) = param.strip_prefix("q=")
+                && let Ok(val) = q.trim().parse::<f32>()
+            {
+                return val > 0.0;
             }
         }
         true
@@ -353,14 +353,14 @@ impl StaticFileHandler {
             }
         }
 
-        if self.config.spa_fallback {
-            if let Some(resp) = self.try_serve_file(
+        if self.config.spa_fallback
+            && let Some(resp) = self.try_serve_file(
                 &self.config.fallback_file,
                 req_headers,
                 Some(&self.config.fallback_cache_control),
-            ) {
-                return resp;
-            }
+            )
+        {
+            return resp;
         }
 
         not_found()
@@ -371,21 +371,20 @@ impl StaticFileHandler {
         path: &str,
         req_headers: &HeaderMap,
     ) -> Option<(EmbeddedFileData, Option<&'static str>)> {
-        if self.config.compression {
-            if let Some(accept) = req_headers.get(ACCEPT_ENCODING) {
-                if let Ok(accept_str) = accept.to_str() {
-                    if accepts_encoding(accept_str, "br") {
-                        let br_path = format!("{}.br", path);
-                        if let Some(file) = self.file_server.get_file(&br_path) {
-                            return Some((file, Some("br")));
-                        }
-                    }
-                    if accepts_encoding(accept_str, "gzip") {
-                        let gz_path = format!("{}.gz", path);
-                        if let Some(file) = self.file_server.get_file(&gz_path) {
-                            return Some((file, Some("gzip")));
-                        }
-                    }
+        if self.config.compression
+            && let Some(accept) = req_headers.get(ACCEPT_ENCODING)
+            && let Ok(accept_str) = accept.to_str()
+        {
+            if accepts_encoding(accept_str, "br") {
+                let br_path = format!("{}.br", path);
+                if let Some(file) = self.file_server.get_file(&br_path) {
+                    return Some((file, Some("br")));
+                }
+            }
+            if accepts_encoding(accept_str, "gzip") {
+                let gz_path = format!("{}.gz", path);
+                if let Some(file) = self.file_server.get_file(&gz_path) {
+                    return Some((file, Some("gzip")));
                 }
             }
         }
@@ -420,57 +419,54 @@ impl StaticFileHandler {
         let etag = file.hash.as_ref().map(|h| format!("\"{}\"", h));
 
         // 304 Not Modified
-        if let Some(ref etag_val) = etag {
-            if let Some(inm) = req_headers.get(IF_NONE_MATCH) {
-                if let Ok(inm_str) = inm.to_str() {
-                    if inm_str == "*" || etag_matches(inm_str, etag_val) {
-                        let mut builder = Response::builder()
-                            .status(StatusCode::NOT_MODIFIED)
-                            .header(ETAG, etag_val.as_str())
-                            .header(CACHE_CONTROL, cache_control);
-                        if self.config.compression {
-                            builder = builder.header(VARY, "Accept-Encoding");
-                        }
-                        return Some(builder.body(Body::empty()).unwrap().into_response());
-                    }
-                }
+        if let Some(ref etag_val) = etag
+            && let Some(inm) = req_headers.get(IF_NONE_MATCH)
+            && let Ok(inm_str) = inm.to_str()
+            && (inm_str == "*" || etag_matches(inm_str, etag_val))
+        {
+            let mut builder = Response::builder()
+                .status(StatusCode::NOT_MODIFIED)
+                .header(ETAG, etag_val.as_str())
+                .header(CACHE_CONTROL, cache_control);
+            if self.config.compression {
+                builder = builder.header(VARY, "Accept-Encoding");
             }
+            return Some(builder.body(Body::empty()).unwrap().into_response());
         }
 
         let data_len = file.data.len() as u64;
 
         // Range requests (skip for compressed responses)
-        if encoding.is_none() {
-            if let Some(range_hdr) = req_headers.get(RANGE) {
-                if let Ok(range_str) = range_hdr.to_str() {
-                    return Some(match parse_byte_range(range_str, data_len) {
-                        Some(range) => {
-                            let start = range.start as usize;
-                            let end = range.end_inclusive as usize;
-                            let slice = file.data[start..=end].to_vec();
-                            let content_range = format!(
-                                "bytes {}-{}/{}",
-                                range.start, range.end_inclusive, data_len,
-                            );
-                            let mut builder = Response::builder()
-                                .status(StatusCode::PARTIAL_CONTENT)
-                                .header(CONTENT_TYPE, &mime)
-                                .header(CONTENT_LENGTH, slice.len().to_string())
-                                .header(CONTENT_RANGE, content_range)
-                                .header(ACCEPT_RANGES, "bytes")
-                                .header(CACHE_CONTROL, cache_control);
-                            if let Some(ref etag_val) = etag {
-                                builder = builder.header(ETAG, etag_val.as_str());
-                            }
-                            if self.config.compression {
-                                builder = builder.header(VARY, "Accept-Encoding");
-                            }
-                            builder.body(Body::from(slice)).unwrap().into_response()
-                        }
-                        None => range_not_satisfiable(data_len),
-                    });
+        if encoding.is_none()
+            && let Some(range_hdr) = req_headers.get(RANGE)
+            && let Ok(range_str) = range_hdr.to_str()
+        {
+            return Some(match parse_byte_range(range_str, data_len) {
+                Some(range) => {
+                    let start = range.start as usize;
+                    let end = range.end_inclusive as usize;
+                    let slice = file.data[start..=end].to_vec();
+                    let content_range = format!(
+                        "bytes {}-{}/{}",
+                        range.start, range.end_inclusive, data_len,
+                    );
+                    let mut builder = Response::builder()
+                        .status(StatusCode::PARTIAL_CONTENT)
+                        .header(CONTENT_TYPE, &mime)
+                        .header(CONTENT_LENGTH, slice.len().to_string())
+                        .header(CONTENT_RANGE, content_range)
+                        .header(ACCEPT_RANGES, "bytes")
+                        .header(CACHE_CONTROL, cache_control);
+                    if let Some(ref etag_val) = etag {
+                        builder = builder.header(ETAG, etag_val.as_str());
+                    }
+                    if self.config.compression {
+                        builder = builder.header(VARY, "Accept-Encoding");
+                    }
+                    builder.body(Body::from(slice)).unwrap().into_response()
                 }
-            }
+                None => range_not_satisfiable(data_len),
+            });
         }
 
         // Full 200 response
@@ -570,14 +566,8 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
 
                     let effective_path = if let Some(ref base) = handler.config.base_path {
                         match path.strip_prefix(base.as_str()) {
-                            Some(rest) => {
-                                if rest.is_empty() || rest.starts_with('/') {
-                                    rest
-                                } else {
-                                    return not_found();
-                                }
-                            }
-                            None => return not_found(),
+                            Some(rest) if rest.is_empty() || rest.starts_with('/') => rest,
+                            _ => return not_found(),
                         }
                     } else {
                         &path

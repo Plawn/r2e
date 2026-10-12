@@ -5,7 +5,8 @@
 //!
 //! Run: `cargo bench -p r2e-http --bench json`
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use std::hint::black_box;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -23,7 +24,7 @@ fn user(i: u64) -> User {
         id: i,
         name: format!("user-{i}"),
         email: format!("user{i}@example.com"),
-        active: i % 2 == 0,
+        active: i.is_multiple_of(2),
         score: i as f64 * 1.5,
         tags: vec!["alpha".into(), "beta".into(), "gamma".into()],
     }

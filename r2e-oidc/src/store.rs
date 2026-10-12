@@ -146,14 +146,13 @@ impl InMemoryUserStore {
         validate_user_input(&username, password, &user)?;
         let password_hash = hash_secret(password)?;
 
-        if let Some(existing_username) = self.sub_index.get(&user.sub) {
-            if existing_username.value() != &username {
+        if let Some(existing_username) = self.sub_index.get(&user.sub)
+            && existing_username.value() != &username {
                 return Err(UserStoreError::new(format!(
                     "subject '{}' is already assigned to another user",
                     user.sub
                 )));
             }
-        }
 
         if let Some(old_entry) = self.users.get(&username) {
             let old_sub = old_entry.value().0.sub.clone();

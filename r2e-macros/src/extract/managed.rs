@@ -42,10 +42,9 @@ pub fn extract_managed_params(method: &mut syn::ImplItemFn) -> syn::Result<Vec<M
 
 /// Extracts the inner type from a `&mut T` reference type.
 fn extract_mut_ref_inner(ty: &syn::Type) -> Option<syn::Type> {
-    if let syn::Type::Reference(ref_ty) = ty {
-        if ref_ty.mutability.is_some() {
+    if let syn::Type::Reference(ref_ty) = ty
+        && ref_ty.mutability.is_some() {
             return Some((*ref_ty.elem).clone());
         }
-    }
     None
 }

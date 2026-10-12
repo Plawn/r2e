@@ -45,16 +45,11 @@ pub struct QuotaGuard {
 }
 
 impl<I: Identity> Guard<I> for QuotaGuard {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async move {
-            if self.counter.hits.fetch_add(1, Ordering::SeqCst) >= self.max {
-                Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "quota exhausted").into())
-            } else {
-                Ok(())
-            }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        if self.counter.hits.fetch_add(1, Ordering::SeqCst) >= self.max {
+            Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "quota exhausted").into())
+        } else {
+            Ok(())
         }
     }
 }
@@ -106,16 +101,11 @@ pub struct RequireHeader(&'static str);
 impl SelfBuilt for RequireHeader {}
 
 impl<I: Identity> Guard<I> for RequireHeader {
-    fn check(
-        &self,
-        ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async move {
-            if ctx.headers.contains_key(self.0) {
-                Ok(())
-            } else {
-                Err(GuardError::forbidden(format!("missing header {}", self.0)).into())
-            }
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        if ctx.headers.contains_key(self.0) {
+            Ok(())
+        } else {
+            Err(GuardError::forbidden(format!("missing header {}", self.0)).into())
         }
     }
 }

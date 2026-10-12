@@ -194,14 +194,13 @@ fn parse_variant(variant: &Variant) -> syn::Result<ApiErrorVariant> {
     }
 
     // Validate: rejection requires exactly one field
-    if let ErrorAttr::Rejection = &error_attr {
-        if field_count != 1 {
+    if let ErrorAttr::Rejection = &error_attr
+        && field_count != 1 {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
                 "#[error(rejection)] requires exactly one field, of type `Rejection`",
             ));
         }
-    }
 
     // Validate: at most one #[from] per variant
     let from_count = match &fields {
@@ -252,15 +251,14 @@ fn parse_error_attr(attrs: &[Attribute], variant_ident: &Ident) -> syn::Result<E
     }
     if is_rejection {
         for meta in &nested {
-            if let Meta::NameValue(nv) = meta {
-                if nv.path.is_ident("status") || nv.path.is_ident("message") {
+            if let Meta::NameValue(nv) = meta
+                && (nv.path.is_ident("status") || nv.path.is_ident("message")) {
                     return Err(syn::Error::new_spanned(
                         nv,
                         "#[error(rejection)] takes no `status`/`message`: both come from the \
                          carried `Rejection` (remap statuses via `ErrorSchema::status_of`)",
                     ));
                 }
-            }
         }
         return Ok(ErrorAttr::Rejection);
     }
@@ -861,11 +859,10 @@ fn single_field_type(fields: &VariantFields) -> Option<&Type> {
 }
 
 fn type_last_segment_is(ty: &Type, name: &str) -> bool {
-    if let Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
+    if let Type::Path(tp) = ty
+        && let Some(seg) = tp.path.segments.last() {
             return seg.ident == name;
         }
-    }
     false
 }
 
@@ -903,11 +900,10 @@ fn humanize_ident(ident: &Ident) -> String {
 }
 
 fn is_string_type(ty: &Type) -> bool {
-    if let Type::Path(tp) = ty {
-        if let Some(seg) = tp.path.segments.last() {
+    if let Type::Path(tp) = ty
+        && let Some(seg) = tp.path.segments.last() {
             return seg.ident == "String";
         }
-    }
     false
 }
 

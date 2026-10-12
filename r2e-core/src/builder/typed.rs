@@ -703,8 +703,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .get_or_empty::<crate::di::meta::RouteInfo>()
             .len();
         C::register_meta(&mut self.meta_registry);
-        if let Some(prefix) = prefix {
-            if let Some(routes) = self
+        if let Some(prefix) = prefix
+            && let Some(routes) = self
                 .meta_registry
                 .get_mut::<crate::di::meta::RouteInfo>()
                 .filter(|r| r.len() > meta_before)
@@ -713,7 +713,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                     info.path = crate::di::module::join_path_prefix(prefix, &info.path);
                 }
             }
-        }
 
         // Auto-validate config keys and sections declared on this controller
         if let Some(config) = &self.shared.config {
@@ -808,10 +807,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// `TaskRegistryHandle` is in the plugin data.
     pub(crate) fn collect_bean_scheduled_tasks(
         self,
-        sources: Vec<(
-            &'static str,
-            Box<dyn FnOnce(&crate::beans::BeanContext) -> Vec<Box<dyn Any + Send>> + Send>,
-        )>,
+        sources: Vec<(&'static str, crate::beans::ScheduledSourceHook)>,
     ) -> Self {
         if sources.is_empty() {
             return self;
@@ -862,16 +858,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Called by `build_state()` right after the typed builder exists.
     pub(crate) fn collect_bean_subscribers(
         mut self,
-        subscribers: Vec<(
-            &'static str,
-            Box<
-                dyn FnOnce(
-                        &crate::beans::BeanContext,
-                    )
-                        -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
-                    + Send,
-            >,
-        )>,
+        subscribers: Vec<(&'static str, crate::beans::EventSubscriberHook)>,
     ) -> Self {
         for (_, hook) in subscribers {
             let ctx = Arc::clone(&self.bean_context);

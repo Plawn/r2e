@@ -351,11 +351,10 @@ impl WsStream {
             if matches!(msg, Message::Close(_)) {
                 break;
             }
-            if let Some(reply) = handler(msg).await {
-                if self.send(reply).await.is_err() {
+            if let Some(reply) = handler(msg).await
+                && self.send(reply).await.is_err() {
                     break;
                 }
-            }
         }
     }
 

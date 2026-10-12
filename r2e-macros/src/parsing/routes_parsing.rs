@@ -96,8 +96,8 @@ fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Resu
     }
 
     for arg in sig.inputs.iter() {
-        if let syn::FnArg::Typed(pt) = arg {
-            if ty_mentions_self(&pt.ty) {
+        if let syn::FnArg::Typed(pt) = arg
+            && ty_mentions_self(&pt.ty) {
                 return Err(syn::Error::new_spanned(
                     &pt.ty,
                     format!(
@@ -108,10 +108,9 @@ fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Resu
                     ),
                 ));
             }
-        }
     }
-    if let syn::ReturnType::Type(_, ty) = &sig.output {
-        if ty_mentions_self(ty) {
+    if let syn::ReturnType::Type(_, ty) = &sig.output
+        && ty_mentions_self(ty) {
             return Err(syn::Error::new_spanned(
                 ty,
                 format!(
@@ -122,7 +121,6 @@ fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Resu
                 ),
             ));
         }
-    }
     Ok(())
 }
 
@@ -427,11 +425,10 @@ fn reject_non_inert_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
             if TOOLS.iter().any(|t| first == t) {
                 continue;
             }
-        } else if let Some(ident) = path.get_ident() {
-            if INERT.iter().any(|n| ident == n) {
+        } else if let Some(ident) = path.get_ident()
+            && INERT.iter().any(|n| ident == n) {
                 continue;
             }
-        }
         let name = quote::ToTokens::to_token_stream(path).to_string();
         return Err(syn::Error::new_spanned(
             attr,
@@ -826,8 +823,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // a #[fallback] route goes through `Router::fallback`, which takes no
     // per-route layers. Reject the combination rather than silently exempt the
     // fallback from a guard the impl block promises for ALL routes.
-    if !controller_decorators.pre_auth_guard_fns.is_empty() {
-        if let Some(rm) = route_methods.iter().find(|m| m.is_fallback) {
+    if !controller_decorators.pre_auth_guard_fns.is_empty()
+        && let Some(rm) = route_methods.iter().find(|m| m.is_fallback) {
             return Err(syn::Error::new(
                 rm.fn_item.sig.ident.span(),
                 "controller-level #[pre_guard] cannot be combined with a #[fallback] route — \
@@ -836,7 +833,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                  individual routes, or guard the fallback's work with #[guard] / in its body.",
             ));
         }
-    }
 
     // A controller-level guard with nothing to apply to is exactly the silent
     // no-op this family of attributes is meant to eliminate — fail loud.

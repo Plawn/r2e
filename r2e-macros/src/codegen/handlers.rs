@@ -201,12 +201,11 @@ impl<'a> RequestParams<'a> {
 
 /// Check if a type is a known Axum wrapper (Json, Query, Path, Form).
 fn is_wrapper_type(ty: &syn::Type) -> bool {
-    if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
+    if let syn::Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last() {
             let ident = segment.ident.to_string();
             return matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form");
         }
-    }
     false
 }
 
@@ -218,7 +217,7 @@ pub(super) enum Projection {
     /// envelope `E` projects through `E`; anything else falls back to the
     /// application projection. Resolved by autoref specialization at
     /// compile time, so the fallback costs nothing where it applies.
-    Probe(syn::Type),
+    Probe(Box<syn::Type>),
     /// The application projection (`ErrorProjector` bean, else `HttpError`).
     /// Used when the error type cannot be named as a type argument (`impl
     /// Trait` outside a `Result`'s success type), for SSE/WS endpoints, and
@@ -240,9 +239,9 @@ impl Projection {
             syn::ReturnType::Default => Self::Default,
             syn::ReturnType::Type(_, ty) => {
                 if !contains_impl_trait(ty) {
-                    Self::Probe((**ty).clone())
+                    Self::Probe(ty.clone())
                 } else if let Some(err) = result_error_type(ty).filter(|e| !contains_impl_trait(e)) {
-                    Self::Probe(syn::parse_quote! { ::core::result::Result<(), #err> })
+                    Self::Probe(Box::new(syn::parse_quote! { ::core::result::Result<(), #err> }))
                 } else {
                     Self::Default
                 }
@@ -611,11 +610,10 @@ fn collect_pat_idents(pat: &syn::Pat, out: &mut Vec<String>) {
         syn::Pat::Ident(ident) => {
             let mut name = ident.ident.to_string();
             if name != "_" {
-                if let Some(stripped) = name.strip_prefix('_') {
-                    if !stripped.is_empty() {
+                if let Some(stripped) = name.strip_prefix('_')
+                    && !stripped.is_empty() {
                         name = stripped.to_string();
                     }
-                }
                 out.push(name);
             }
         }

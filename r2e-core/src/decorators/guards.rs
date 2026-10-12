@@ -226,11 +226,10 @@ pub fn parse_forwarded_ip(value: &str) -> Option<IpAddr> {
         return Some(addr.ip());
     }
     // Bracketed IPv6 without a port: `[::1]`.
-    if let Some(inner) = raw.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-        if let Ok(ip) = inner.parse::<IpAddr>() {
+    if let Some(inner) = raw.strip_prefix('[').and_then(|r| r.strip_suffix(']'))
+        && let Ok(ip) = inner.parse::<IpAddr>() {
             return Some(ip);
         }
-    }
     None
 }
 

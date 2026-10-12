@@ -125,6 +125,7 @@ struct AllDefaultsSection {
 }
 
 #[derive(r2e_macros::ConfigProperties, Clone, Debug)]
+#[allow(dead_code)]
 struct RequiredFieldSection {
     url: String,
     #[config(default = 5)]

@@ -857,8 +857,8 @@ use crate::util::type_utils::{is_option_type, unwrap_option_type};
 /// Map a Rust type to an OpenAPI type string.
 fn rust_type_to_openapi_str(ty: &Type) -> &'static str {
     let inner = unwrap_option_type(ty).unwrap_or(ty);
-    if let Type::Path(type_path) = inner {
-        if let Some(segment) = type_path.path.segments.last() {
+    if let Type::Path(type_path) = inner
+        && let Some(segment) = type_path.path.segments.last() {
             return match segment.ident.to_string().as_str() {
                 "String" | "str" => "string",
                 "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => {
@@ -869,7 +869,6 @@ fn rust_type_to_openapi_str(ty: &Type) -> &'static str {
                 _ => "string",
             };
         }
-    }
     "string"
 }
 

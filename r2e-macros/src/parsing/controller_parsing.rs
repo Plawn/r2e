@@ -207,8 +207,8 @@ pub fn parse(args: ControllerArgs, item: &syn::ItemStruct) -> syn::Result<Contro
         // `#[inject(identity)]` / `#[inject(request)]` field mixes two scopes on
         // one slot. Checked before the shared exclusivity rule so the message
         // names the request scope.
-        if let (Some(live), Some(inject)) = (live_config_attr, inject_attr) {
-            if has_identity_qualifier(inject) || has_request_qualifier(inject) {
+        if let (Some(live), Some(inject)) = (live_config_attr, inject_attr)
+            && (has_identity_qualifier(inject) || has_request_qualifier(inject)) {
                 return Err(syn::Error::new_spanned(
                     live,
                     "#[live_config] is app-scoped and cannot be combined with a request-scoped \
@@ -216,7 +216,6 @@ pub fn parse(args: ControllerArgs, item: &syn::ItemStruct) -> syn::Result<Contro
                      \n  hint: declare the LiveConfig<T> handle on its own field",
                 ));
             }
-        }
         crate::model::field_resolver::check_live_config_exclusive(&field.attrs)?;
 
         if let Some(attr) = live_config_attr {

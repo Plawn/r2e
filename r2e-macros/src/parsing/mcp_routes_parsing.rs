@@ -443,8 +443,8 @@ fn full_doc_text(attrs: &[syn::Attribute]) -> Option<String> {
             if !attr.path().is_ident("doc") {
                 return None;
             }
-            if let syn::Meta::NameValue(nv) = &attr.meta {
-                if let syn::Expr::Lit(syn::ExprLit {
+            if let syn::Meta::NameValue(nv) = &attr.meta
+                && let syn::Expr::Lit(syn::ExprLit {
                     lit: syn::Lit::Str(lit_str),
                     ..
                 }) = &nv.value
@@ -452,7 +452,6 @@ fn full_doc_text(attrs: &[syn::Attribute]) -> Option<String> {
                     let raw = lit_str.value();
                     return Some(raw.strip_prefix(' ').unwrap_or(&raw).to_string());
                 }
-            }
             None
         })
         .collect();

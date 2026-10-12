@@ -10,37 +10,35 @@ pub struct TenantGuard;
 impl r2e::SelfBuilt for TenantGuard {}
 
 impl Guard<TenantUser> for TenantGuard {
-    fn check(
+    async fn check(
         &self,
         ctx: &GuardContext<'_, TenantUser>,
-    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
-        async move {
-            let identity = ctx
-                .identity
-                .ok_or_else(|| GuardError::unauthorized("Authentication required"))?;
+    ) -> Result<(), Rejection> {
+        let identity = ctx
+            .identity
+            .ok_or_else(|| GuardError::unauthorized("Authentication required"))?;
 
-            // Super-admins can access any tenant
-            if identity.is_super_admin() {
-                return Ok(());
-            }
+        // Super-admins can access any tenant
+        if identity.is_super_admin() {
+            return Ok(());
+        }
 
-            // Extract tenant_id from the path: /tenants/{tenant_id}/...
-            let path_tenant = ctx
-                .uri
-                .path()
-                .split('/')
-                .nth(2) // ["", "tenants", "{tenant_id}", ...]
-                .unwrap_or_default();
+        // Extract tenant_id from the path: /tenants/{tenant_id}/...
+        let path_tenant = ctx
+            .uri
+            .path()
+            .split('/')
+            .nth(2) // ["", "tenants", "{tenant_id}", ...]
+            .unwrap_or_default();
 
-            if path_tenant == identity.tenant_id {
-                Ok(())
-            } else {
-                Err(GuardError::forbidden(format!(
-                    "You don't have access to tenant '{}'",
-                    path_tenant
-                ))
-                .into())
-            }
+        if path_tenant == identity.tenant_id {
+            Ok(())
+        } else {
+            Err(GuardError::forbidden(format!(
+                "You don't have access to tenant '{}'",
+                path_tenant
+            ))
+            .into())
         }
     }
 }

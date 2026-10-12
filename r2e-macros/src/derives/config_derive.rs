@@ -51,16 +51,14 @@ fn extract_doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
     let docs: Vec<String> = attrs
         .iter()
         .filter_map(|attr| {
-            if attr.path().is_ident("doc") {
-                if let Meta::NameValue(nv) = &attr.meta {
-                    if let syn::Expr::Lit(syn::ExprLit {
+            if attr.path().is_ident("doc")
+                && let Meta::NameValue(nv) = &attr.meta
+                    && let syn::Expr::Lit(syn::ExprLit {
                         lit: Lit::Str(s), ..
                     }) = &nv.value
                     {
                         return Some(s.value().trim().to_string());
                     }
-                }
-            }
             None
         })
         .collect();
@@ -1244,25 +1242,20 @@ fn generate_enum(input: &DeriveInput, data: &syn::DataEnum) -> syn::Result<Token
 
 /// Get a simple type name string for metadata.
 fn type_name_str(ty: &syn::Type) -> String {
-    if let syn::Type::Path(syn::TypePath { path, .. }) = ty {
-        if let Some(seg) = path.segments.last() {
+    if let syn::Type::Path(syn::TypePath { path, .. }) = ty
+        && let Some(seg) = path.segments.last() {
             let name = seg.ident.to_string();
-            if name == "Option" {
-                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+            if name == "Option"
+                && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                         return format!("Option<{}>", type_name_str(inner));
                     }
-                }
-            }
-            if name == "Vec" {
-                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+            if name == "Vec"
+                && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
+                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
                         return format!("Vec<{}>", type_name_str(inner));
                     }
-                }
-            }
             return name;
         }
-    }
     quote!(#ty).to_string()
 }

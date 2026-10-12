@@ -184,10 +184,7 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
     fn post_construct(
         _core: std::sync::Arc<Self>,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>
-                + Send,
-        >,
+        Box<dyn std::future::Future<Output = Result<(), crate::beans::BootError>> + Send>,
     > {
         Box::pin(async { Ok(()) })
     }

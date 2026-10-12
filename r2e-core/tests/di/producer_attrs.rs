@@ -14,6 +14,9 @@
 //! Most cases below are *compile-time* assertions: a `deny` turns a dropped
 //! attribute into a build failure of this test target.
 
+// `cfg(all())` is the always-true cfg these tests feed through the macros.
+#![allow(clippy::non_minimal_cfg)]
+
 use r2e_core::prelude::*;
 
 // ── 1. `#[allow(...)]` reaches the emitted function ────────────────────────

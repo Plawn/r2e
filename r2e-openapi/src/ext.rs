@@ -50,11 +50,10 @@ impl Plugin for OpenApiPlugin {
             // The application's envelope (`AppBuilder::error_projection::<E>()`)
             // documents every route without an envelope of its own. An explicit
             // `with_error_schema` on the config wins.
-            if config.error_schema.is_none() {
-                if let Some(projector) = routes.bean_context().try_get::<ErrorProjector>() {
+            if config.error_schema.is_none()
+                && let Some(projector) = routes.bean_context().try_get::<ErrorProjector>() {
                     config.error_schema = Some(*projector.schema());
                 }
-            }
             let router = openapi_routes::<()>(config, routes.routes());
             routes.register_routes(router);
         });

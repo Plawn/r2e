@@ -8,6 +8,9 @@
 //! the two cases where **no pool must be opened at all** (an unknown tenant, a
 //! rejected guard).
 
+// diesel's `QueryableByName` derive expands to `field: field` with our spans.
+#![allow(clippy::redundant_field_names)]
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -182,17 +185,12 @@ struct SeeTenant {
 }
 
 impl<I: Identity> Guard<I> for SeeTenant {
-    fn check(
-        &self,
-        ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async move {
-            self.router
-                .resolve(&ctx.head())
-                .await
-                .map(|_| ())
-                .map_err(Rejection::from)
-        }
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        self.router
+            .resolve(&ctx.head())
+            .await
+            .map(|_| ())
+            .map_err(Rejection::from)
     }
 }
 

@@ -90,16 +90,11 @@ impl DecoratorSpec for RateLimitCfg {
 }
 
 impl<I: Identity> Guard<I> for SpikeRateLimitGuard {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
-        async move {
-            if self.registry.hits.fetch_add(1, Ordering::SeqCst) >= self.max {
-                Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "rate limited").into())
-            } else {
-                Ok(())
-            }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        if self.registry.hits.fetch_add(1, Ordering::SeqCst) >= self.max {
+            Err(GuardError::new(StatusCode::TOO_MANY_REQUESTS, "rate limited").into())
+        } else {
+            Ok(())
         }
     }
 }
@@ -132,29 +127,27 @@ impl DecoratorSpec for AuditCfg {
 }
 
 impl<R: Send> Interceptor<R> for AuditInterceptor {
-    fn around<F, Fut>(
+    async fn around<F, Fut>(
         &self,
         ctx: InterceptorContext,
         next: F,
-    ) -> impl std::future::Future<Output = R> + Send
+    ) -> R
     where
         F: FnOnce() -> Fut + Send,
         Fut: std::future::Future<Output = R> + Send,
     {
-        async move {
-            self.log
-                .0
-                .lock()
-                .unwrap()
-                .push(format!("{}:enter {}", self.channel, ctx.method_name));
-            let out = next().await;
-            self.log
-                .0
-                .lock()
-                .unwrap()
-                .push(format!("{}:exit {}", self.channel, ctx.method_name));
-            out
-        }
+        self.log
+            .0
+            .lock()
+            .unwrap()
+            .push(format!("{}:enter {}", self.channel, ctx.method_name));
+        let out = next().await;
+        self.log
+            .0
+            .lock()
+            .unwrap()
+            .push(format!("{}:exit {}", self.channel, ctx.method_name));
+        out
     }
 }
 
@@ -165,16 +158,11 @@ struct RequireHeader(&'static str);
 impl SelfBuilt for RequireHeader {}
 
 impl<I: Identity> Guard<I> for RequireHeader {
-    fn check(
-        &self,
-        ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
-        async move {
-            if ctx.headers.contains_key(self.0) {
-                Ok(())
-            } else {
-                Err(GuardError::forbidden(format!("missing header {}", self.0)).into())
-            }
+    async fn check(&self, ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        if ctx.headers.contains_key(self.0) {
+            Ok(())
+        } else {
+            Err(GuardError::forbidden(format!("missing header {}", self.0)).into())
         }
     }
 }

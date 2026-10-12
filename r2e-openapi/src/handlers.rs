@@ -26,7 +26,7 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     config: OpenApiConfig,
     routes: &[RouteInfo],
 ) -> Router<T> {
-    let spec = build_spec(&config, &routes);
+    let spec = build_spec(&config, routes);
     let spec_json = Bytes::from(
         serde_json::to_vec_pretty(&spec)
             .expect("OpenAPI spec is a serde_json::Value and serializes infallibly"),

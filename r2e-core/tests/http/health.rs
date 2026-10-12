@@ -26,8 +26,8 @@ impl HealthIndicator for AlwaysUp {
     fn name(&self) -> &str {
         "up-check"
     }
-    fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
-        async { HealthStatus::Up }
+    async fn check(&self) -> HealthStatus {
+        HealthStatus::Up
     }
 }
 
@@ -36,8 +36,8 @@ impl HealthIndicator for AlwaysDown {
     fn name(&self) -> &str {
         "down-check"
     }
-    fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
-        async { HealthStatus::Down("broken".into()) }
+    async fn check(&self) -> HealthStatus {
+        HealthStatus::Down("broken".into())
     }
 }
 
@@ -120,8 +120,8 @@ impl HealthIndicator for LivenessOnly {
     fn name(&self) -> &str {
         "liveness-only"
     }
-    fn check(&self) -> impl std::future::Future<Output = HealthStatus> + Send {
-        async { HealthStatus::Down("down but liveness-only".into()) }
+    async fn check(&self) -> HealthStatus {
+        HealthStatus::Down("down but liveness-only".into())
     }
     fn affects_readiness(&self) -> bool {
         false

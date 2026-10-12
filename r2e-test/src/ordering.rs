@@ -239,8 +239,8 @@ fn turn_inner(group: &'static str, order: u32, test: &'static str, timeout: Dura
         // Fail-fast: a lower order already failed → skip this test. The panic
         // must not fire while holding the lock (it would poison the mutex and
         // turn later diagnostics into opaque PoisonErrors).
-        if let Some((porder, ptest)) = st.poisoned {
-            if porder < order {
+        if let Some((porder, ptest)) = st.poisoned
+            && porder < order {
                 drop(st);
                 panic!(
                     "ordered test '{}' (group '{}', order {}) skipped: its ordered \
@@ -248,7 +248,6 @@ fn turn_inner(group: &'static str, order: u32, test: &'static str, timeout: Dura
                     test, group, order, ptest, porder
                 );
             }
-        }
 
         // Our turn iff every registered lower order has completed.
         if lower.iter().all(|(o, _)| st.completed.contains(o)) {

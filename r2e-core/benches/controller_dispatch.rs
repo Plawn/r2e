@@ -61,6 +61,7 @@ impl<S: Send + Sync> FromRequestParts<S> for StubIdentity {
 // ── Shared application state ─────────────────────────────────────────────────
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct BenchState {
     label: &'static str,
 }

@@ -95,8 +95,8 @@ pub async fn bind_listener(
     } = crate::rt::spawn_blocking(move || get_or_bind_listener(owner, &addr))
         .await
         .map_err(|e| format!("listener bind task failed: {e}"))??;
-    if let Some(previous) = previous_released {
-        if crate::rt::timeout(HANDOVER_ACK_TIMEOUT, previous.cancelled())
+    if let Some(previous) = previous_released
+        && crate::rt::timeout(HANDOVER_ACK_TIMEOUT, previous.cancelled())
             .await
             .is_err()
         {
@@ -107,7 +107,6 @@ pub async fn bind_listener(
                  connections with stale routes)"
             );
         }
-    }
     Ok(bound)
 }
 
@@ -220,8 +219,8 @@ pub fn get_or_bind_listener(
     addr: &str,
 ) -> Result<DevBind, crate::beans::BootError> {
     // Guard: prevent binding to the Dioxus devserver port.
-    if let Some(port) = parse_port(addr) {
-        if port == DIOXUS_DEVSERVER_PORT {
+    if let Some(port) = parse_port(addr)
+        && port == DIOXUS_DEVSERVER_PORT {
             return Err(format!(
                 "Cannot bind to port {port} in dev-reload mode: \
                  the Dioxus devserver (`dx serve`) uses this port. \
@@ -230,7 +229,6 @@ pub fn get_or_bind_listener(
             )
             .into());
         }
-    }
 
     let store = LISTENER_STORE.get_or_init(|| Mutex::new(HashMap::new()));
     // A cycle that panicked while holding the lock must not brick every
@@ -521,24 +519,21 @@ pub fn has_staged_dev_cycle() -> bool {
 /// need the change to take effect without a full process restart.
 #[cfg(feature = "dev-reload")]
 pub fn invalidate_state_cache() {
-    if let Some(store) = STATE_CACHE.get() {
-        if let Ok(mut guard) = store.lock() {
+    if let Some(store) = STATE_CACHE.get()
+        && let Ok(mut guard) = store.lock() {
             *guard = None;
         }
-    }
-    if let Some(store) = CTX_CACHE.get() {
-        if let Ok(mut guard) = store.lock() {
+    if let Some(store) = CTX_CACHE.get()
+        && let Ok(mut guard) = store.lock() {
             *guard = None;
         }
-    }
     // The carried registry is part of the cache group: "force a cold rebuild"
     // must be cold for live config too, or the next cycle would keep pushing
     // into slots seeded by a session that no longer exists.
-    if let Some(store) = LIVE_CONFIG_REGISTRY.get() {
-        if let Ok(mut guard) = store.lock() {
+    if let Some(store) = LIVE_CONFIG_REGISTRY.get()
+        && let Ok(mut guard) = store.lock() {
             *guard = None;
         }
-    }
     invalidate_graph_fingerprint();
     // A staged-but-uncommitted cycle is part of the cache group too: "force a
     // cold rebuild" must not leave one behind to be committed later.
@@ -552,11 +547,10 @@ pub fn invalidate_state_cache() {
 /// Clear the graph fingerprint cache (used by `invalidate_state_cache`).
 #[cfg(feature = "dev-reload")]
 fn invalidate_graph_fingerprint() {
-    if let Some(store) = GRAPH_FINGERPRINT.get() {
-        if let Ok(mut guard) = store.lock() {
+    if let Some(store) = GRAPH_FINGERPRINT.get()
+        && let Ok(mut guard) = store.lock() {
             *guard = None;
         }
-    }
 }
 
 // ── Graph fingerprint cache ─────────────────────────────────────────────────

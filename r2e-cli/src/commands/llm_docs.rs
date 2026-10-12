@@ -150,13 +150,11 @@ fn routing_order() -> Vec<&'static Topic> {
             .find(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
             .unwrap_or(after.len());
         let slug = &after[..len];
-        if after[len..].starts_with(".md") {
-            if let Some(t) = topic(slug) {
-                if !ordered.iter().any(|o| o.slug == t.slug) {
+        if after[len..].starts_with(".md")
+            && let Some(t) = topic(slug)
+                && !ordered.iter().any(|o| o.slug == t.slug) {
                     ordered.push(t);
                 }
-            }
-        }
         rest = &after[len..];
     }
     for t in TOPICS {

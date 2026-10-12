@@ -21,8 +21,7 @@ fn alloc_records_one_event_of_the_requested_size() {
 /// A grow is charged the whole new block, not the delta.
 #[test]
 fn realloc_growth_is_charged_the_full_new_size() {
-    let mut v: Vec<u8> = Vec::with_capacity(1024);
-    v.resize(1024, 0);
+    let mut v: Vec<u8> = vec![0; 1024];
 
     let ((), cost) = measure(|| v.reserve_exact(1024));
 
@@ -51,8 +50,7 @@ fn realloc_shrink_is_charged_the_full_new_size() {
 /// absolute canary in `layers::composed_stack_budget` leans on.
 #[test]
 fn repeated_growth_accumulates_every_request() {
-    let mut v: Vec<u8> = Vec::with_capacity(1024);
-    v.resize(1024, 0);
+    let mut v: Vec<u8> = vec![0; 1024];
 
     let ((), cost) = measure(|| {
         v.reserve_exact(1024); // -> 2048

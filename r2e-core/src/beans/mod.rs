@@ -36,7 +36,9 @@ pub use traits::{
     AsyncBean, Bean, OnStart, OnStartHook, PostConstruct, PreDestroy, Producer, Registrable,
 };
 
-pub(crate) use registry::{OnStartSourceHook, ServiceSourceHook};
+pub(crate) use registry::{
+    EventSubscriberHook, OnStartSourceHook, ScheduledSourceHook, ServiceSourceHook,
+};
 
 use registry::{
     BeanRegistration, Factory, LazyBeanRegistration, PostConstructFn, RegMeta, ServiceConfigDecl,

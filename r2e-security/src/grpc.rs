@@ -34,17 +34,13 @@ use crate::identity::AuthenticatedUser;
 use crate::jwt::JwtClaimsValidator;
 
 impl JwtClaimsValidatorLike for JwtClaimsValidator {
-    fn validate(
+    async fn validate(
         &self,
         token: &str,
-    ) -> impl std::future::Future<
-        Output = Result<StandardClaims, Box<dyn std::error::Error + Send + Sync>>,
-    > + Send {
-        async move {
-            JwtClaimsValidator::validate(self, token)
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-        }
+    ) -> Result<StandardClaims, Box<dyn std::error::Error + Send + Sync>> {
+        JwtClaimsValidator::validate(self, token)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
     }
 }
 
@@ -69,19 +65,17 @@ impl GrpcIdentity for AuthenticatedUser {
         JwtIdentitySpec
     }
 
-    fn extract(
+    async fn extract(
         validator: &Arc<JwtClaimsValidator>,
         metadata: &MetadataMap,
-    ) -> impl std::future::Future<Output = Result<Self, Rejection>> + Send {
-        async move {
-            let token = bearer_token(metadata)?;
-            let claims = JwtClaimsValidator::validate(validator, token)
-                .await
-                .map_err(|e| {
-                    tracing::warn!(error = %e, "gRPC JWT validation failed");
-                    Rejection::from(e)
-                })?;
-            Ok(AuthenticatedUser::from_claims(claims))
-        }
+    ) -> Result<Self, Rejection> {
+        let token = bearer_token(metadata)?;
+        let claims = JwtClaimsValidator::validate(validator, token)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "gRPC JWT validation failed");
+                Rejection::from(e)
+            })?;
+        Ok(AuthenticatedUser::from_claims(claims))
     }
 }

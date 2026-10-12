@@ -103,7 +103,7 @@ impl UserController {
 
     #[get("/greet")]
     async fn greet(&self) -> String {
-        return self.greeting.clone();
+        self.greeting.clone()
     }
 
     #[get("/{id}")]

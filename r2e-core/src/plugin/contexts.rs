@@ -18,6 +18,10 @@ pub type RoutesEffect = Box<dyn FnOnce(&mut RoutesContext) + Send>;
 #[doc(hidden)]
 pub type RouterWrap = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
 
+/// A bean-registry lifecycle registrar, buffered by [`PluginSetupContext`]
+/// and applied to the registry at `.plugin()` time.
+type RegistryOp = Box<dyn FnOnce(&mut crate::beans::BeanRegistry) + Send>;
+
 /// Context passed to [`Plugin::setup`] — the **rare** pre-graph
 /// escape hatch that runs at `.plugin()` time, before the bean graph exists.
 ///
@@ -51,10 +55,10 @@ pub struct PluginSetupContext {
     /// Buffered [`store_data`](Self::store_data) calls. Flushed as ONE
     /// [`DeferredAction`] by the blanket `PluginInstall` impl — see
     /// [`flush`](Self::flush).
-    sugar: Vec<Box<dyn FnOnce(&mut DeferredContext) + Send>>,
+    sugar: Vec<GraphEffect>,
     /// Lifecycle-hook registrars applied to the bean registry at `.plugin()`
     /// time. Backs [`run_pre_destroy`](Self::run_pre_destroy).
-    registry_ops: Vec<Box<dyn FnOnce(&mut crate::beans::BeanRegistry) + Send>>,
+    registry_ops: Vec<RegistryOp>,
 }
 
 impl PluginSetupContext {
@@ -78,9 +82,7 @@ impl PluginSetupContext {
     }
 
     /// Drain the buffered bean-registry lifecycle registrars (internal).
-    pub(crate) fn take_registry_ops(
-        &mut self,
-    ) -> Vec<Box<dyn FnOnce(&mut crate::beans::BeanRegistry) + Send>> {
+    pub(crate) fn take_registry_ops(&mut self) -> Vec<RegistryOp> {
         std::mem::take(&mut self.registry_ops)
     }
 

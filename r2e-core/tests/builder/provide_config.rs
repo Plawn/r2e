@@ -104,7 +104,9 @@ async fn provide_config_registers_grandchildren() {
         .provide_config(RootSettings {
             broker: BrokerSettings {
                 host: "kafka:9092".into(),
-                tls: TlsSettings { ca: "ca.pem".into() },
+                tls: TlsSettings {
+                    ca: "ca.pem".into(),
+                },
             },
         })
         .build_state()

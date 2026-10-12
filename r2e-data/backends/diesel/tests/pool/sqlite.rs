@@ -1,3 +1,6 @@
+// diesel's `QueryableByName` derive expands to `field: field` with our spans.
+#![allow(clippy::redundant_field_names)]
+
 use std::time::Duration;
 
 use diesel::r2d2::{ConnectionManager, Pool};

@@ -97,11 +97,9 @@ impl BeanRegistry {
                 if plan.unchanged.contains(&reg.type_id)
                     && !forced_rebuild.contains(&reg.type_id)
                     && !reg.volatile
-                {
-                    if let Some(inst) = (reg.reuse_clone)(&plan.old_ctx) {
+                    && let Some(inst) = (reg.reuse_clone)(&plan.old_ctx) {
                         reused_instances.insert(reg.type_id, inst);
                     }
-                }
             }
             // Pin provided values from the previous cycle so reused and
             // rebuilt beans keep sharing one instance (no split-brain).
@@ -115,12 +113,11 @@ impl BeanRegistry {
                 if self.config_derived.contains(tid) || forced_rebuild.contains(tid) {
                     continue;
                 }
-                if let Some(clone_fn) = self.provided_reuse_clones.get(tid) {
-                    if let Some(old) = clone_fn(&plan.old_ctx) {
+                if let Some(clone_fn) = self.provided_reuse_clones.get(tid)
+                    && let Some(old) = clone_fn(&plan.old_ctx) {
                         *value = old;
                         pinned_provided.insert(*tid);
                     }
-                }
             }
             tracing::debug!(
                 reused_beans = reused_instances.len(),
@@ -277,19 +274,16 @@ impl BeanRegistry {
                 // Dev-reload partial rebuild: an unchanged lazy bean keeps
                 // its previous slot `Arc` — including any already-resolved
                 // value inside it — instead of getting a fresh slot.
-                if let Some(plan) = &reuse {
-                    if plan.unchanged.contains(&lazy_reg.type_id)
+                if let Some(plan) = &reuse
+                    && plan.unchanged.contains(&lazy_reg.type_id)
                         && !forced_rebuild.contains(&lazy_reg.type_id)
-                    {
-                        if let Some(slot) = plan.old_ctx.lazy_slot(lazy_reg.type_id) {
+                        && let Some(slot) = plan.old_ctx.lazy_slot(lazy_reg.type_id) {
                             lazy_slots
                                 .write()
                                 .expect("Lazy slots lock poisoned")
                                 .insert(lazy_reg.type_id, slot);
                             continue;
                         }
-                    }
-                }
                 let snapshot = ctx.clone();
                 let slot = (lazy_reg.slot_factory)(snapshot);
                 lazy_slots

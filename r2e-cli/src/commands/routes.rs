@@ -39,7 +39,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     for entry in fs::read_dir(controllers_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "rs")
+        if path.extension().is_some_and(|ext| ext == "rs")
             && path.file_name() != Some("mod.rs".as_ref())
         {
             parse_routes_from_file_with_prefixes(&path, &mut routes, &prefixes)?;
@@ -131,8 +131,8 @@ pub fn parse_routes_from_file_with_prefixes(
         // Detect route macros
         for method in &["get", "post", "put", "delete", "patch", "any", "sse", "ws"] {
             let pattern = format!("#[{}(", method);
-            if trimmed.starts_with(&pattern) {
-                if let Some(route_path) = extract_string_arg(trimmed, method) {
+            if trimmed.starts_with(&pattern)
+                && let Some(route_path) = extract_string_arg(trimmed, method) {
                     let handler = find_next_fn_name(&content, line_num);
 
                     let full_path = if base_path.is_empty() {
@@ -152,7 +152,6 @@ pub fn parse_routes_from_file_with_prefixes(
                         roles: current_roles.take(),
                     });
                 }
-            }
         }
 
         // Detect #[fallback] — no path argument; it catches every unmatched request.
@@ -185,8 +184,8 @@ pub fn parse_routes_from_file_with_prefixes(
 pub fn extract_controller_path(content: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
-        if trimmed.contains("controller(") && trimmed.contains("path") {
-            if let Some(start) = trimmed.find("path") {
+        if trimmed.contains("controller(") && trimmed.contains("path")
+            && let Some(start) = trimmed.find("path") {
                 let rest = &trimmed[start..];
                 if let Some(quote_start) = rest.find('"') {
                     let after_quote = &rest[quote_start + 1..];
@@ -195,7 +194,6 @@ pub fn extract_controller_path(content: &str) -> Option<String> {
                     }
                 }
             }
-        }
     }
     None
 }
@@ -251,11 +249,10 @@ fn collect_module_prefixes_into(dir: &Path, out: &mut HashMap<String, String>) {
         let path = entry.path();
         if path.is_dir() {
             collect_module_prefixes_into(&path, out);
-        } else if path.extension().map_or(false, |ext| ext == "rs") {
-            if let Ok(content) = fs::read_to_string(&path) {
+        } else if path.extension().is_some_and(|ext| ext == "rs")
+            && let Ok(content) = fs::read_to_string(&path) {
                 parse_module_prefixes(&content, out);
             }
-        }
     }
 }
 

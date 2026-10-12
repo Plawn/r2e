@@ -12,11 +12,10 @@ use crate::schema::SchemaRegistry;
 fn sanitize_schema(value: &mut Value) {
     match value {
         Value::Object(obj) => {
-            if let Some(Value::String(ref_str)) = obj.get_mut("$ref") {
-                if ref_str.starts_with("#/$defs/") {
+            if let Some(Value::String(ref_str)) = obj.get_mut("$ref")
+                && ref_str.starts_with("#/$defs/") {
                     *ref_str = ref_str.replace("#/$defs/", "#/components/schemas/");
                 }
-            }
 
             for (_, v) in obj.iter_mut() {
                 sanitize_schema(v);
@@ -489,7 +488,6 @@ pub fn build_spec_with_warnings(
     let mut paths: Map<String, Value> = Map::new();
 
     for (route, errors) in routes.iter().zip(&route_errors) {
-        let axum_path = route.path.replace('{', "{").replace('}', "}");
         let method_lower = route.method.to_lowercase();
 
         let mut operation: Map<String, Value> = Map::new();
@@ -607,7 +605,7 @@ pub fn build_spec_with_warnings(
             operation.insert("security".into(), json!([{ "bearerAuth": route.roles }]));
         }
 
-        let path_entry = paths.entry(axum_path).or_insert_with(|| json!({}));
+        let path_entry = paths.entry(route.path.clone()).or_insert_with(|| json!({}));
 
         if let Some(obj) = path_entry.as_object_mut() {
             obj.insert(method_lower, Value::Object(operation));

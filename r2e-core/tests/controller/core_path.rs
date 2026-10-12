@@ -85,11 +85,8 @@ async fn assert_no_controller_extension(
 struct AllowAll;
 impl r2e_core::SelfBuilt for AllowAll {}
 impl<I: Identity> Guard<I> for AllowAll {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async { Ok(()) }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        Ok(())
     }
 }
 
@@ -115,12 +112,12 @@ struct PassThrough;
 impl r2e_core::SelfBuilt for PassThrough {}
 
 impl<R: Send> r2e_core::Interceptor<R> for PassThrough {
-    fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> impl Future<Output = R> + Send
+    async fn around<F, Fut>(&self, _ctx: InterceptorContext, next: F) -> R
     where
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = R> + Send,
     {
-        async move { next().await }
+        next().await
     }
 }
 
@@ -212,11 +209,8 @@ impl SseController {
 struct AllowAllPre;
 impl r2e_core::SelfBuilt for AllowAllPre {}
 impl PreAuthGuard for AllowAllPre {
-    fn check(
-        &self,
-        _ctx: &PreAuthGuardContext<'_>,
-    ) -> impl Future<Output = Result<(), Rejection>> + Send {
-        async { Ok(()) }
+    async fn check(&self, _ctx: &PreAuthGuardContext<'_>) -> Result<(), Rejection> {
+        Ok(())
     }
 }
 
