@@ -15,6 +15,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Depends on `r2e-macros` 0.7.0 so a registry build resolves a single macro
+  crate version next to `r2e-core` 0.7.1. No API change (#1092).
+
 ## [0.7.0] - 2026-10-12
 
 ### Changed

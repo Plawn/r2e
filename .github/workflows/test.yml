@@ -25,7 +25,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # The tags: check-versions.sh refuses a release PR that leaves a crate
+      # behind (moved since the tag that released it, not bumped — #1092),
+      # which needs every `<crate>-vX.Y.Z` / `vX.Y.Z` tag and the commits
+      # they point at. A shallow clone is refused by the check, not read as
+      # "everything is stale".
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       # A full-workspace test build (every backend, every example) does not fit
       # next to the preinstalled SDKs on the stock runner image.

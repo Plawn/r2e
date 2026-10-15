@@ -32,6 +32,19 @@ no longer free:
   `scripts/bump-version.sh <crate> <patch|breaking>` (computes the propagation, rewrites
   manifests, pins and changelogs); CI publishes only the crates whose version changed.
   `scripts/check-versions.sh` enforces the invariants on every PR.
+- **A release leaves nothing behind.** crates.io is immutable: a crate whose source moved
+  since the tag that released it but which the release does not bump keeps serving the old
+  bytes under a version the repo believes it fixed (#1092: `r2e-macros` 0.6.0 next to
+  `r2e-core` 0.7.0 broke every registry build of `r2e` 0.7/0.8 while the workspace, built
+  from source, stayed green). `versions.py` refuses such a plan and fails
+  `check-versions.sh` while a release is in flight; `scripts/smoke-registry.sh` builds a
+  throwaway app against the registry alone after every release (and `--patch` against the
+  tree before one).
+- `r2e-macros` is the exception to propagation: its breaking bumps change the codegen
+  contract with `r2e-core`, not the macro syntax, so they are cut with `--no-propagate`
+  and the direct consumers (`r2e-core`, `r2e-executor`, `r2e-openapi`, `r2e`) take a patch
+  bump to re-pin it. A change to the macro *syntax* is a breaking change of the facade and
+  propagates as usual.
 - Prefer a **compile-time migration path** (the old API fails to build with an error naming
   the migration page) over silent behaviour changes; no runtime feature flags or shims.
 - Don't break for taste. A rename or reshuffle with no user-facing gain is not worth a

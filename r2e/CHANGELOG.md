@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Depends on `r2e-core` 0.7.1 and `r2e-macros` 0.7.0: `r2e` 0.8.0 taken from
+  crates.io without a `[patch]` failed to compile every `#[routes]` handler
+  with validation and every `#[mcp_routes]` impl, because the published
+  `r2e-macros` 0.6.0 predates the codegen those crates expect. The facade's
+  own `r2e::r2e_macros` re-export now resolves to the same macro version as
+  the prelude. No API change (#1092).
+
 ## [0.8.0] - 2026-10-12
 
 ### Changed

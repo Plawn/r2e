@@ -14,3 +14,9 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../../CHANGELOG.md).
 
 ## [Unreleased]
+
+### Changed
+
+- No functional change: clippy's let-chain rewrites (`207f9d6b`) landed after
+  0.6.0 was published, so the crates.io source no longer matched the tag.
+  Re-released so the registry carries what the repository ships (#1092).

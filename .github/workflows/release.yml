@@ -169,3 +169,17 @@ jobs:
                 --title "$name v$version" \
                 --notes-file "$RUNNER_TEMP/notes/$name.md"
             done
+
+      # The release is complete; now build what a user builds. A throwaway app
+      # depending on the facade from crates.io alone — no `[patch]`, no path
+      # dependency — with a validated `#[routes]` handler and an
+      # `#[mcp_routes]` tool must compile on stable. The workspace is always
+      # built from source, so a crate a release left behind on crates.io is
+      # invisible to every other job (#1092: r2e 0.7/0.8 failed every registry
+      # build while `cargo test --workspace` stayed green). A failure here is
+      # red on a finished release: cut a fix release, nothing is rolled back.
+      - name: Smoke-build against crates.io
+        if: steps.decide.outputs.release == 'true'
+        env:
+          SMOKE_TOOLCHAIN: stable
+        run: scripts/smoke-registry.sh
