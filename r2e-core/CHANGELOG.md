@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-15
+
+### Fixed
+
+- Requires `r2e-macros` 0.7.0, the first published macro crate whose
+  `#[routes]` codegen matches the unboxed `__maybe_validate` of 0.7.0: 0.7.0
+  resolved against `r2e-macros` 0.6.0 from crates.io, and every handler with
+  validation failed to compile (`E0614`). No API change (#1092).
+
 ## [0.7.0] - 2026-10-12
 
 ### Breaking

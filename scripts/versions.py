@@ -18,7 +18,14 @@ Rules (also in CLAUDE.md § Project Status):
     ends up in that set. A patch bump propagates nothing (caret requirements);
   * `r2e-cli` FOLLOWS `r2e` version for version (it scaffolds against, and
     embeds the agent reference of, that facade version);
-  * a feature PR never bumps; the `release: …` PR made by bump-version.sh does.
+  * a feature PR never bumps; the `release: …` PR made by bump-version.sh does;
+  * a release leaves NOTHING BEHIND: every releasable crate whose directory
+    moved since the tag that released it (CHANGELOG.md and the manifest's
+    version line aside) is in the plan. `plan`/`bump` refuse otherwise, and
+    `check` fails on it while a release is in flight (#1092);
+  * `r2e-macros` is the one crate whose breaking bump is cut with
+    `--no-propagate`: it breaks its codegen contract with r2e-core, not the
+    macro syntax, and its direct consumers re-pin it with a patch bump.
 
 Subcommands:
   check                           verify every invariant (CI + bump-version.sh)
@@ -27,6 +34,7 @@ Subcommands:
   decide [--base REF]             what this commit releases, as JSON (release.yml)
   uploaded                        crates already on crates.io at their version
   held-back                       crates kept off crates.io by policy
+  left-behind                     released crates that moved since their tag
   notes CRATE [VERSION]           a crate's changelog section (release notes)
   version CRATE                   print a crate's version
 
@@ -260,10 +268,18 @@ def tag_of(name, version):
     return f"{name}-v{fmt(version)}"
 
 
+def release_tag(tags, name, version):
+    """The tag that released (name, version): its own, else the legacy lockstep
+    `vX.Y.Z` that covered every crate up to 0.6.0; None when unreleased."""
+    own = tag_of(name, version)
+    if own in tags:
+        return own
+    legacy = f"v{fmt(version)}"
+    return legacy if legacy in tags else None
+
+
 def released(tags, name, version):
-    """Is (name, version) released? Its own tag, or the legacy lockstep tag
-    `vX.Y.Z` that covered every crate up to 0.6.0."""
-    return tag_of(name, version) in tags or f"v{fmt(version)}" in tags
+    return release_tag(tags, name, version) is not None
 
 
 def on_crates_io(name, version):
@@ -279,6 +295,81 @@ def on_crates_io(name, version):
             return False
         raise
     return any(v["num"] == fmt(version) for v in data.get("versions", []))
+
+
+# ---------------------------------------------------------------------------
+# Left behind: released crates whose source moved since their tag
+# ---------------------------------------------------------------------------
+#
+# A published (name, version) is immutable, so a crate that changed since the
+# tag that released it is stale on crates.io until it is bumped. A feature PR
+# may leave crates in that state — that is what "a feature PR never bumps"
+# means — but a release may not: the release that cut r2e-core 0.7.0 left
+# r2e-macros at 0.6.0 although its codegen had moved with core, and every
+# registry build of r2e 0.7/0.8 failed while the workspace, built from source,
+# stayed green (#1092). Hence the rule `plan`/`bump` enforce, and `check`
+# enforces while a release is in flight: NOTHING IS LEFT BEHIND — every crate
+# that moved since its tag is in the plan.
+
+# Files a feature PR edits without changing what the crate ships.
+UNSHIPPED_FILES = {"CHANGELOG.md"}
+
+# The one manifest line a release itself rewrites (and the `version.workspace`
+# spelling it replaced when the lockstep ended).
+VERSION_LINE_RE = re.compile(r"(?m)^version(\.workspace)?\s*=.*$")
+
+
+def nested_members(ws, crate):
+    """Directories of the other workspace members that live under `crate`'s
+    directory (`r2e-openfga/model`): cargo excludes them from its package."""
+    prefix = crate.dir + os.sep
+    return [c.dir for c in ws.values() if c is not crate and c.dir.startswith(prefix)]
+
+
+def moved_since(ws, crate, tag):
+    """Paths under the crate (relative to it) that differ between `tag` and the
+    working tree, ignoring nested members, UNSHIPPED_FILES and a manifest whose
+    only change is its version line."""
+    out = sh("git", "diff", "--name-only", tag, "--", crate.dir, cwd=ROOT)
+    nested = nested_members(ws, crate)
+    moved = []
+    for path in out.split():
+        if any(path.startswith(d + os.sep) for d in nested):
+            continue
+        rel = os.path.relpath(path, crate.dir)
+        if rel in UNSHIPPED_FILES:
+            continue
+        if rel == "Cargo.toml":
+            before = VERSION_LINE_RE.sub("", git_show(tag, path) or "")
+            now = read(path) if os.path.isfile(os.path.join(ROOT, path)) else ""
+            if before == VERSION_LINE_RE.sub("", now):
+                continue
+        moved.append(rel)
+    return moved
+
+
+def left_behind(ws, tags):
+    """[(crate, tag, moved)] for every releasable crate that is released at its
+    current version and has moved since."""
+    out = []
+    for c in sorted(releasable(ws), key=lambda c: c.name):
+        tag = release_tag(tags, c.name, c.version)
+        if tag is not None:
+            moved = moved_since(ws, c, tag)
+            if moved:
+                out.append((c, tag, moved))
+    return out
+
+
+def in_flight(ws, tags):
+    """Releasable crates whose current version has no tag yet: a release is
+    being cut, or one did not finish."""
+    return [c for c in releasable(ws) if release_tag(tags, c.name, c.version) is None]
+
+
+def describe_moved(moved, limit=4):
+    more = f", … ({len(moved)} files)" if len(moved) > limit else ""
+    return ", ".join(moved[:limit]) + more
 
 
 # ---------------------------------------------------------------------------
@@ -383,12 +474,34 @@ def cmd_check(_args):
     if f"R2E v{fmt(facade)} " not in first:
         errors.append(f"{LLM_FULL}: not stamped with r2e {fmt(facade)} — run scripts/check-llm-docs.sh --update")
 
+    # Nothing left behind — binding only while a release is in flight (some
+    # crate's current version is untagged): a feature PR leaves crates stale
+    # by design, a release PR may not. Needs the tags: CI checks out with
+    # fetch-tags, a shallow clone is refused rather than read as "all stale".
+    tags = local_tags()
+    stale = []
+    if not any(released(tags, c.name, c.version) for c in releasable(ws)):
+        errors.append("no release tag found for any crate — shallow clone? `git fetch --tags` before checking")
+    else:
+        stale = left_behind(ws, tags)
+        flight = in_flight(ws, tags)
+        if stale and flight:
+            cutting = ", ".join(f"{c.name} {fmt(c.version)}" for c in flight)
+            for c, tag, moved in stale:
+                errors.append(
+                    f"{c.name} {fmt(c.version)} moved since {tag} ({describe_moved(moved)}) but the release in "
+                    f"flight ({cutting}) does not bump it — crates.io would keep serving the old {fmt(c.version)}. "
+                    f"Add `{c.name} patch` to the plan (or `git fetch --tags` if that release already completed)"
+                )
+
     if errors:
         for e in errors:
             print(f"  {e}", file=sys.stderr)
         die(f"{len(errors)} versioning problem(s)")
     n = len(publishable(ws))
     print(f"ok — {n} publishable crates, pins and changelogs consistent, r2e at {fmt(facade)}")
+    for c, tag, moved in stale:
+        print(f"  note: {c.name} {fmt(c.version)} moved since {tag} ({describe_moved(moved)}) — the next release must bump it")
 
 
 # ---------------------------------------------------------------------------
@@ -497,10 +610,21 @@ def validate_plan(ws, bumps, tags):
             errors.append(f"{changelog_path(c)}: no `{UNRELEASED}` section")
         elif b.requested and section_is_empty(text, UNRELEASED):
             errors.append(f"{changelog_path(c)}: nothing under `{UNRELEASED}` — write the entries before cutting {fmt(b.new)}")
+    errors += left_behind_by(ws, bumps, tags)
     if errors:
         for e in errors:
             print(f"  {e}", file=sys.stderr)
         die("the plan cannot be applied")
+
+
+def left_behind_by(ws, bumps, tags):
+    """One message per crate the plan leaves behind (moved since its tag, not bumped)."""
+    return [
+        f"{c.name} {fmt(c.version)} moved since {tag} ({describe_moved(moved)}) and is not in the plan — "
+        f"nothing is left behind at a release: add `{c.name} patch` (or `breaking`)"
+        for c, tag, moved in left_behind(ws, tags)
+        if c.name not in bumps
+    ]
 
 
 REPO_URL = "https://github.com/Plawn/r2e"
@@ -578,6 +702,8 @@ def cmd_plan(args):
     propagate, specs = parse_specs(ws, args)
     bumps = make_plan(ws, specs, propagate)
     print_plan(ws, bumps)
+    for e in left_behind_by(ws, bumps, local_tags()):
+        print(f"warning: {e} — `bump` will refuse this plan", file=sys.stderr)
     print(title_of(bumps))
 
 
@@ -633,6 +759,12 @@ def cmd_held_back(_args):
         print(n)
 
 
+def cmd_left_behind(_args):
+    ws = workspace()
+    for c, tag, moved in left_behind(ws, local_tags()):
+        print(f"{c.name}\t{fmt(c.version)}\t{tag}\t{' '.join(moved)}")
+
+
 def cmd_notes(args):
     if not args or len(args) > 2:
         die("usage: notes CRATE [VERSION]")
@@ -661,6 +793,7 @@ COMMANDS = {
     "decide": cmd_decide,
     "uploaded": cmd_uploaded,
     "held-back": cmd_held_back,
+    "left-behind": cmd_left_behind,
     "notes": cmd_notes,
     "version": cmd_version,
 }
