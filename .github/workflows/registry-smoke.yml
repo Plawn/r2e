@@ -1,0 +1,38 @@
+name: Registry smoke
+
+# Builds what a user builds: a throwaway app depending on `r2e` from crates.io
+# alone (scripts/smoke-registry.sh). release.yml runs the same script after
+# every release; this workflow reruns it on demand — after a release whose
+# smoke step failed for a reason unrelated to the registry (re-running the
+# Release job would skip it: every crate is already tagged), or to check an
+# older version. Nothing here publishes or tags.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "r2e version on crates.io (default: the facade version of the checked-out tree)"
+        required: false
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  smoke:
+    name: cargo check against crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The published crates must build on stable, not on the nightly that
+      # rust-toolchain.toml pins for the workspace.
+      - name: Install stable
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Smoke-build against crates.io
+        env:
+          SMOKE_TOOLCHAIN: stable
+        run: scripts/smoke-registry.sh ${{ inputs.version }}

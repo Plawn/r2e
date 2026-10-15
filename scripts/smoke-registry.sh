@@ -66,7 +66,8 @@ GARDE_REQ=$(dep_req garde)
 
 keep_dir=1
 if [[ -z "${SMOKE_DIR:-}" ]]; then
-    SMOKE_DIR=$(mktemp -d -t r2e-smoke)
+    # An explicit template: GNU mktemp rejects `-t prefix` (BSD/macOS only).
+    SMOKE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/r2e-smoke.XXXXXX")
     keep_dir=0
 fi
 mkdir -p "$SMOKE_DIR/src"
