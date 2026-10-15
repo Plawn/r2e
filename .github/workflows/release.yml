@@ -178,6 +178,8 @@ jobs:
       # invisible to every other job (#1092: r2e 0.7/0.8 failed every registry
       # build while `cargo test --workspace` stayed green). A failure here is
       # red on a finished release: cut a fix release, nothing is rolled back.
+      # To rerun only this step (re-running the job skips it: every crate is
+      # tagged by then), dispatch the "Registry smoke" workflow.
       - name: Smoke-build against crates.io
         if: steps.decide.outputs.release == 'true'
         env:
