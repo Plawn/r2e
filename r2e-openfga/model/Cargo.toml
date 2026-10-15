@@ -1,6 +1,6 @@
 [package]
 name = "r2e-openfga-model"
-version = "0.6.0"
+version = "0.6.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-15
+
 ### Breaking
 
 - The generated code targets `r2e-core` ≥ 0.7.1 and `r2e-mcp` ≥ 0.7.0 (#1092):

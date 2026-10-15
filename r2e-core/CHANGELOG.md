@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-15
+
 ### Fixed
 
 - Requires `r2e-macros` 0.7.0, the first published macro crate whose

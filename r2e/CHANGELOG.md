@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-15
+
 ### Fixed
 
 - Depends on `r2e-core` 0.7.1 and `r2e-macros` 0.7.0: `r2e` 0.8.0 taken from
