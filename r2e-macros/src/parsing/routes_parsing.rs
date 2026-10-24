@@ -340,14 +340,13 @@ fn classify_lifecycle_hook(
 
 /// Reject route-family attributes that have no controller-level meaning on a
 /// `#[routes]` impl block. Anything not in the supported set (`#[intercept]`,
-/// `#[guard]`, `#[pre_guard]`, `#[roles]`, `#[all_roles]`) must be a targeted
+/// `#[guard]`, `#[pre_guard]`, `#[roles]`, `#[all_roles]`, `#[middleware]`,
+/// `#[layer]`) must be a targeted
 /// compile error, never a silent no-op (same policy as the bean-side
 /// `reject_stray_intercepts`).
 fn reject_unsupported_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     const UNSUPPORTED: &[&str] = &[
         "anonymous",
-        "middleware",
-        "layer",
         "status",
         "returns",
         "consumer",
@@ -376,8 +375,9 @@ fn reject_unsupported_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
                 attr,
                 format!(
                     "#[{name}] is not supported on a #[routes] impl block — controller-level \
-                     decorators are #[intercept], #[guard], #[pre_guard], #[roles], and \
-                     #[all_roles]; place #[{name}] on individual methods instead"
+                     decorators are #[intercept], #[guard], #[pre_guard], #[roles], \
+                     #[all_roles], #[middleware], and #[layer]; place #[{name}] on individual \
+                     methods instead"
                 ),
             ));
         }
@@ -466,8 +466,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         }
     };
 
-    // Controller-level decorators on the impl block. Only the guard family and
-    // #[intercept] are supported there — anything else from the route family is
+    // Controller-level decorators on the impl block. Only the guard family,
+    // #[intercept], #[middleware] and #[layer] are supported there — anything else from the route family is
     // rejected up front so it can never silently no-op. The scan runs first, so
     // the parsed struct's unsupported families are empty by construction.
     reject_unsupported_impl_attrs(&item.attrs)?;
@@ -847,6 +847,24 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             "controller-level #[guard]/#[roles]/#[all_roles] would apply to no route — it \
              targets the non-#[anonymous] route/#[sse]/#[ws] methods of this impl block, and \
              there are none",
+        ));
+    }
+    // Controller-level #[middleware]/#[layer] wrap every `.route(...)`
+    // registration (routes, #[sse], #[ws]); a #[fallback] is registered via
+    // `Router::fallback`, which takes no per-route layers, so it is skipped.
+    // With no other route they would apply to nothing.
+    let has_layerable_http = route_methods.iter().any(|m| !m.is_fallback)
+        || !sse_methods.is_empty()
+        || !ws_methods.is_empty();
+    if (!controller_decorators.middleware_fns.is_empty()
+        || !controller_decorators.layer_exprs.is_empty())
+        && !has_layerable_http
+    {
+        return Err(syn::Error::new(
+            controller_name.span(),
+            "controller-level #[middleware]/#[layer] would apply to no route — they wrap the \
+             route/#[sse]/#[ws] methods of this impl block, a #[fallback] route is skipped \
+             (`Router::fallback` takes no per-route layers), and there are no other routes",
         ));
     }
     if !controller_decorators.pre_auth_guard_fns.is_empty() && !has_http_methods {

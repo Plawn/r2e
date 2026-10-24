@@ -159,8 +159,8 @@ pub struct MethodDecorators {
     pub intercept_fns: Vec<syn::Expr>,
     pub guard_fns: Vec<syn::Expr>,
     pub pre_auth_guard_fns: Vec<syn::Expr>,
-    pub middleware_fns: Vec<syn::Path>,
-    pub layer_exprs: Vec<syn::Expr>,
+    pub middleware_fns: Vec<MiddlewareFn>,
+    pub layer_exprs: Vec<LayerExpr>,
     pub status_override: Option<u16>,
     pub returns_type: Option<syn::Type>,
     pub deprecated: bool,
@@ -168,6 +168,24 @@ pub struct MethodDecorators {
     /// identity: no extraction runs and the method is emitted on the core
     /// (reading the identity field is a compile error).
     pub anonymous: bool,
+}
+
+/// One `#[middleware(..)]` entry.
+pub struct MiddlewareFn {
+    /// The middleware function.
+    pub path: syn::Path,
+    /// `#[middleware(fn, state)]`: registered with `from_fn_with_state`,
+    /// handing the function the controller core as `State<Arc<Self>>`.
+    pub with_state: bool,
+}
+
+/// One `#[layer(..)]` entry.
+pub enum LayerExpr {
+    /// Any expression evaluating to a tower `Layer` — today's form.
+    Const(syn::Expr),
+    /// `#[layer(|this: &Self| expr)]`: a closure over the controller core,
+    /// called once at route registration (never per request).
+    FromSelf(syn::ExprClosure),
 }
 
 pub struct IdentityParam {

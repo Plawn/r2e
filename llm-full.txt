@@ -2437,7 +2437,7 @@ Alongside `&self`:
 
 - Routing markers: `#[get/post/put/delete/patch("/path")]`, `#[any("/path")]` (all methods, `{*path}` wildcards), `#[fallback]` (no path argument), `#[sse("/path")]`, `#[ws("/path")]`.
 - Auth markers: `#[anonymous]` per route; `#[roles]`/`#[all_roles]`/`#[guard]`/`#[pre_guard]` on a method or on the impl — only `#[pre_guard]` also covers `#[anonymous]` routes.
-- Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]`, `#[managed]` (on a parameter), `#[async_exec]`.
+- Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]` (all three on a method or on the impl), `#[managed]` (on a parameter), `#[async_exec]`.
 - Off-request and documentation markers: `#[consumer]`, `#[scheduled]`, `#[request_helper]`, `#[status(N)]` / `#[returns(T)]`.
 
 | Attribute | Level | Purpose |
@@ -2454,8 +2454,8 @@ Alongside `&self`:
 | `#[pre_guard(Expr)]` | method or impl | Pre-auth guard (before JWT); impl = every route incl. `#[anonymous]` |
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
-| `#[layer(expr)]` | method | Per-route Tower layer |
-| `#[middleware(fn)]` | method | Per-route middleware fn |
+| `#[layer(expr)]` / `#[layer(\|this: &Self\| expr)]` | method or impl | Tower layer; closure form builds it from the controller core once at registration; impl = every route except `#[fallback]`, outside method layers |
+| `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn (`from_fn`); `state` passes the core as `State<Arc<Self>>`; impl = every route except `#[fallback]` |
 | `#[consumer(bus = "field")]` | method | Event consumer |
 | `#[scheduled(every = "5m")]` | method | Scheduled task |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
@@ -3394,11 +3394,66 @@ Semantics:
 - Placement matters: decorators go **below** `#[routes]` (or `#[bean]`).
   Placing one **above** the transforming macro is a compile error (it would
   otherwise be silently dropped — attribute macros expand top-down). Any other
-  route-family attribute on the impl block (`#[anonymous]`, `#[middleware]`,
-  …) is also a targeted compile error, and a controller-level guard whose impl
-  block has no eligible route is rejected as dead configuration.
+  route-family attribute on the impl block (`#[anonymous]`, `#[status]`, …) is
+  also a targeted compile error, and a controller-level guard (or
+  `#[middleware]`/`#[layer]`) whose impl block has no eligible route is
+  rejected as dead configuration.
 - gRPC: `#[grpc_routes]` impl blocks accept `#[intercept]` only; the guard
-  family there is a compile error.
+  family there is a compile error. `#[middleware]`/`#[layer]` are rejected on
+  `#[grpc_routes]` and `#[mcp_routes]` (method and impl level).
+
+### Tower layers: `#[middleware]` / `#[layer]`
+
+Both work on a route method **and** on the `#[routes]` impl block (below
+`#[routes]`). On the impl they wrap **every** route, `#[sse]` and `#[ws]`
+method of the controller — a `#[fallback]` route is skipped
+(`Router::fallback` takes no per-route layers).
+
+- `#[middleware(my_fn)]` — `from_fn`: `async fn(Request, Next) -> Response`.
+- `#[middleware(my_fn, state)]` — `from_fn_with_state` with the controller
+  core: the function takes `State<Arc<Ctrl>>` (the controller struct, its
+  `#[inject]` beans and `#[config]` values resolved; no request-scoped fields).
+- `#[layer(expr)]` — any tower `Layer`, evaluated at registration.
+- `#[layer(|this: &Self| expr)]` — the closure receives the controller core and
+  returns the layer; called **once** at route registration, never per request
+  (at impl level: once per controller, cloned onto each route).
+- Ordering: the last `.layer()` applied is the outermost. Per route the macro
+  applies method `#[middleware]`s, method `#[layer]`s, controller
+  `#[middleware]`s, controller `#[layer]`s, each in declaration order — so the
+  controller's layers wrap the method's, and a later-declared attribute wraps
+  an earlier one. All of them run **outside** the handler (and so before
+  guards/interceptors).
+- A body limit is enforced by the body extractor inside the handler, so an
+  oversized `Json<T>` still answers 413 through the route's error envelope.
+
+```rust
+use std::sync::Arc;
+use r2e::prelude::*;
+use r2e::http::extract::State;
+use r2e::http::middleware::Next;
+use r2e::http::response::Response;
+use r2e::http::{DefaultBodyLimit, Request};
+
+async fn audit(State(ctrl): State<Arc<ProxyController>>, req: Request, next: Next) -> Response {
+    let _limit = ctrl.body_limit; // the core: beans + config, no request-scoped fields
+    next.run(req).await
+}
+
+#[controller(path = "/proxy")]
+pub struct ProxyController {
+    #[config("proxy.request-body-limit-bytes")]
+    body_limit: usize,
+}
+
+#[routes]
+#[middleware(audit, state)]
+#[layer(|this: &Self| DefaultBodyLimit::max(this.body_limit))]
+impl ProxyController {
+    #[post("/forward")]
+    async fn forward(&self, body: String) -> String { body }
+}
+# fn main() {}
+```
 
 ### Custom interceptor
 

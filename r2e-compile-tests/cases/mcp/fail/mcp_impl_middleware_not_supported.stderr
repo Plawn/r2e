@@ -1,0 +1,5 @@
+error: #[middleware] is not supported on a #[mcp_routes] impl block — MCP controller-level decorators support #[intercept], #[guard], #[roles] and #[all_roles] only
+  --> cases/mcp/fail/mcp_impl_middleware_not_supported.rs:16:1
+   |
+16 | #[middleware(noop_mw)]
+   | ^^^^^^^^^^^^^^^^^^^^^^

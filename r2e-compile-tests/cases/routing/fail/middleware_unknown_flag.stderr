@@ -1,0 +1,5 @@
+error: unknown #[middleware] flag — expected `state` (`#[middleware(my_fn, state)]` hands `my_fn` the controller core as `State<Arc<Self>>`)
+  --> cases/routing/fail/middleware_unknown_flag.rs:18:27
+   |
+18 |     #[middleware(noop_mw, stateful)]
+   |                           ^^^^^^^^

@@ -15,8 +15,26 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- Controller-level `#[middleware]` / `#[layer]` (#1074): placed on the
+  `#[routes]` impl block (below `#[routes]`), they wrap every route, `#[sse]`
+  and `#[ws]` method of the controller, outside the method-level layers.
+  `#[fallback]` routes are skipped (`Router::fallback` takes no per-route
+  layers); an impl block with no other route is a dead-configuration compile
+  error. `#[grpc_routes]` / `#[mcp_routes]` still reject both attributes.
+- `#[middleware(fn, state)]` (method and impl level) emits
+  `from_fn_with_state` with the controller core, so `fn` takes
+  `State<Arc<Self>>`.
+- `#[layer(|this: &Self| expr)]` (method and impl level) builds the layer from
+  the controller core, once at route registration.
+
 ### Fixed
 
+- Stacking two error-passthrough layers on one route (e.g. two
+  `DefaultBodyLimit`s) no longer fails with E0284: every generated `.layer`
+  call pins its error type to `Infallible`, which `Router::route` already
+  required.
 - A `#[derive(Params)]` struct as the last handler argument is no longer taken
   for an unmapped request body (#1170): `#[routes]` gates
   `request_body_unmapped` on an autoref probe for `ParamsMetadata`, so GET and

@@ -373,7 +373,7 @@ SSE endpoints support the same decorators as regular routes:
 
 - **Guards:** `#[guard(MyGuard)]` to restrict access.
 - **Roles:** `#[roles("ADMIN")]` for role-based access control.
-- **Middleware:** `#[middleware(my_middleware)]` for custom Axum middleware.
+- **Middleware:** `#[middleware(my_middleware)]` for custom Axum middleware — on the method, or on the `#[routes]` impl block to wrap every route of the controller.
 - **Interceptors:** `#[intercept(Logged::info())]` at the impl level.
 
 ```rust

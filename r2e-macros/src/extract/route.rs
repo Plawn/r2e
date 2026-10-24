@@ -3,6 +3,7 @@
 use quote::quote;
 
 use crate::model::route::{HttpMethod, RoutePath};
+use crate::model::types::{LayerExpr, MiddlewareFn};
 use crate::util::crate_path::r2e_security_path;
 
 pub fn is_route_attr(attr: &syn::Attribute) -> bool {
@@ -191,12 +192,66 @@ pub fn extract_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>
     extract_attrs_by_name!(attrs, "guard")
 }
 
-pub fn extract_middleware_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Path>> {
-    extract_attrs_by_name!(attrs, "middleware")
+/// `#[middleware(path)]` or `#[middleware(path, state)]`.
+pub fn extract_middleware_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<MiddlewareFn>> {
+    attrs
+        .iter()
+        .filter(|a| a.path().is_ident("middleware"))
+        .map(|a| {
+            a.parse_args_with(|input: syn::parse::ParseStream| {
+                let path: syn::Path = input.parse()?;
+                let mut with_state = false;
+                if input.parse::<Option<syn::Token![,]>>()?.is_some() && !input.is_empty() {
+                    let flag: syn::Ident = input.parse()?;
+                    if flag != "state" {
+                        return Err(syn::Error::new_spanned(
+                            &flag,
+                            "unknown #[middleware] flag — expected `state` \
+                             (`#[middleware(my_fn, state)]` hands `my_fn` the controller core \
+                             as `State<Arc<Self>>`)",
+                        ));
+                    }
+                    with_state = true;
+                    let _ = input.parse::<Option<syn::Token![,]>>()?;
+                }
+                if !input.is_empty() {
+                    return Err(input.error(
+                        "expected `#[middleware(my_fn)]` or `#[middleware(my_fn, state)]`",
+                    ));
+                }
+                Ok(MiddlewareFn { path, with_state })
+            })
+        })
+        .collect()
 }
 
-pub fn extract_layer_exprs(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {
-    extract_attrs_by_name!(attrs, "layer")
+/// `#[layer(expr)]` (constant layer) or `#[layer(|this: &Self| expr)]`
+/// (layer built from the controller core at registration).
+pub fn extract_layer_exprs(attrs: &[syn::Attribute]) -> syn::Result<Vec<LayerExpr>> {
+    attrs
+        .iter()
+        .filter(|a| a.path().is_ident("layer"))
+        .map(|a| match a.parse_args::<syn::Expr>()? {
+            syn::Expr::Closure(closure) => {
+                if closure.inputs.len() != 1 {
+                    return Err(syn::Error::new_spanned(
+                        &closure.inputs,
+                        "the #[layer] closure form takes exactly one argument, the controller \
+                         core: `#[layer(|this: &Self| ..)]`",
+                    ));
+                }
+                if closure.asyncness.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        closure.asyncness,
+                        "the #[layer] closure runs once at route registration and must return \
+                         the layer synchronously — drop `async`",
+                    ));
+                }
+                Ok(LayerExpr::FromSelf(closure))
+            }
+            expr => Ok(LayerExpr::Const(expr)),
+        })
+        .collect()
 }
 
 pub fn extract_pre_guard_fns(attrs: &[syn::Attribute]) -> syn::Result<Vec<syn::Expr>> {

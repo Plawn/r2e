@@ -1,0 +1,5 @@
+error: #[layer] is not supported on a #[grpc_routes] impl block — gRPC controller-level decorators support #[intercept], #[guard], #[roles] and #[all_roles] only
+  --> cases/grpc/fail/grpc_impl_layer_not_supported.rs:15:1
+   |
+15 | #[layer(r2e::http::DefaultBodyLimit::max(1024))]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

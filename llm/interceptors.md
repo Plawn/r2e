@@ -1,7 +1,7 @@
 ---
 topic: interceptors
 features: utils
-tokens: ~1300
+tokens: ~1900
 requires: guards
 ---
 
@@ -86,11 +86,66 @@ Semantics:
 - Placement matters: decorators go **below** `#[routes]` (or `#[bean]`).
   Placing one **above** the transforming macro is a compile error (it would
   otherwise be silently dropped — attribute macros expand top-down). Any other
-  route-family attribute on the impl block (`#[anonymous]`, `#[middleware]`,
-  …) is also a targeted compile error, and a controller-level guard whose impl
-  block has no eligible route is rejected as dead configuration.
+  route-family attribute on the impl block (`#[anonymous]`, `#[status]`, …) is
+  also a targeted compile error, and a controller-level guard (or
+  `#[middleware]`/`#[layer]`) whose impl block has no eligible route is
+  rejected as dead configuration.
 - gRPC: `#[grpc_routes]` impl blocks accept `#[intercept]` only; the guard
-  family there is a compile error.
+  family there is a compile error. `#[middleware]`/`#[layer]` are rejected on
+  `#[grpc_routes]` and `#[mcp_routes]` (method and impl level).
+
+### Tower layers: `#[middleware]` / `#[layer]`
+
+Both work on a route method **and** on the `#[routes]` impl block (below
+`#[routes]`). On the impl they wrap **every** route, `#[sse]` and `#[ws]`
+method of the controller — a `#[fallback]` route is skipped
+(`Router::fallback` takes no per-route layers).
+
+- `#[middleware(my_fn)]` — `from_fn`: `async fn(Request, Next) -> Response`.
+- `#[middleware(my_fn, state)]` — `from_fn_with_state` with the controller
+  core: the function takes `State<Arc<Ctrl>>` (the controller struct, its
+  `#[inject]` beans and `#[config]` values resolved; no request-scoped fields).
+- `#[layer(expr)]` — any tower `Layer`, evaluated at registration.
+- `#[layer(|this: &Self| expr)]` — the closure receives the controller core and
+  returns the layer; called **once** at route registration, never per request
+  (at impl level: once per controller, cloned onto each route).
+- Ordering: the last `.layer()` applied is the outermost. Per route the macro
+  applies method `#[middleware]`s, method `#[layer]`s, controller
+  `#[middleware]`s, controller `#[layer]`s, each in declaration order — so the
+  controller's layers wrap the method's, and a later-declared attribute wraps
+  an earlier one. All of them run **outside** the handler (and so before
+  guards/interceptors).
+- A body limit is enforced by the body extractor inside the handler, so an
+  oversized `Json<T>` still answers 413 through the route's error envelope.
+
+```rust
+use std::sync::Arc;
+use r2e::prelude::*;
+use r2e::http::extract::State;
+use r2e::http::middleware::Next;
+use r2e::http::response::Response;
+use r2e::http::{DefaultBodyLimit, Request};
+
+async fn audit(State(ctrl): State<Arc<ProxyController>>, req: Request, next: Next) -> Response {
+    let _limit = ctrl.body_limit; // the core: beans + config, no request-scoped fields
+    next.run(req).await
+}
+
+#[controller(path = "/proxy")]
+pub struct ProxyController {
+    #[config("proxy.request-body-limit-bytes")]
+    body_limit: usize,
+}
+
+#[routes]
+#[middleware(audit, state)]
+#[layer(|this: &Self| DefaultBodyLimit::max(this.body_limit))]
+impl ProxyController {
+    #[post("/forward")]
+    async fn forward(&self, body: String) -> String { body }
+}
+# fn main() {}
+```
 
 ### Custom interceptor
 
