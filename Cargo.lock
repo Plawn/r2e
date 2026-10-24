@@ -5865,7 +5865,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-core"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6110,7 +6110,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-macros"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "cron",
  "proc-macro-crate",
@@ -6193,7 +6193,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-openapi"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "http",
  "http-body-util",
@@ -6281,7 +6281,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-rt"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "tokio",
  "tokio-stream",

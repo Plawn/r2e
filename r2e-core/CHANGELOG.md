@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-24
+
 ### Changed
 
 - No library change. The `controller` test target gains coverage for the
