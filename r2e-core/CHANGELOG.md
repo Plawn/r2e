@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-24
+
+### Changed
+
+- No library change. The `controller` test target gains coverage for the
+  `#[derive(Params)]` last-argument metadata (#1170) and for controller-level
+  `#[middleware]` / `#[layer]` (#1074); the crate is re-cut so the published
+  source matches the tagged tree (a release leaves nothing behind).
+
 ## [0.7.1] - 2026-10-15
 
 ### Fixed

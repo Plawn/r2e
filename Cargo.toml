@@ -76,9 +76,9 @@ categories = ["web-programming::http-server", "asynchronous"]
 [workspace.dependencies]
 # Internal crates
 r2e = { path = "r2e", version = "0.8.1" }
-r2e-rt = { path = "r2e-rt", version = "0.6.0" }
-r2e-core = { path = "r2e-core", version = "0.7.1" }
-r2e-macros = { path = "r2e-macros", version = "0.7.0" }
+r2e-rt = { path = "r2e-rt", version = "0.6.1" }
+r2e-core = { path = "r2e-core", version = "0.7.2" }
+r2e-macros = { path = "r2e-macros", version = "0.7.1" }
 r2e-security = { path = "r2e-security", version = "0.7.0" }
 r2e-data-sqlx = { path = "r2e-data/backends/sqlx", version = "0.7.0" }
 r2e-data-diesel = { path = "r2e-data/backends/diesel", version = "0.7.0" }
@@ -92,7 +92,7 @@ r2e-executor = { path = "r2e-executor", version = "0.7.1" }
 r2e-cache = { path = "r2e-cache", version = "0.6.0" }
 r2e-rate-limit = { path = "r2e-rate-limit", version = "0.7.0" }
 r2e-utils = { path = "r2e-utils", version = "0.7.0" }
-r2e-openapi = { path = "r2e-openapi", version = "0.7.1" }
+r2e-openapi = { path = "r2e-openapi", version = "0.7.2" }
 r2e-prometheus = { path = "r2e-prometheus", version = "0.7.0" }
 r2e-observability = { path = "r2e-observability", version = "0.7.0" }
 r2e-openfga = { path = "r2e-openfga", version = "0.7.0" }

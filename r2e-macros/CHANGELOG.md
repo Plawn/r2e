@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-24
+
 ### Added
 
 - Controller-level `#[middleware]` / `#[layer]` (#1074): placed on the
