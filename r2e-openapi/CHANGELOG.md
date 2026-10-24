@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- No library change. The test suite gains the end-to-end check that a
+  `#[derive(Params)]` last argument raises no `MissingRequestBody` warning
+  (#1170); the crate is re-cut so the published source matches the tagged tree
+  (a release leaves nothing behind).
+
 ## [0.7.1] - 2026-10-15
 
 ### Fixed
