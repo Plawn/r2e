@@ -850,11 +850,36 @@ impl BodyInfo {
 
     /// `Some("<readable type>")` token when a body-position parameter exists,
     /// reported as `request_body_unmapped` if its probe yields `None`.
+    ///
+    /// A `#[derive(Params)]` struct sits in body position whenever it is the
+    /// last extracted parameter, but it is a `FromRequestParts` extractor
+    /// (path + query) that never reads the body, and its fields are already
+    /// published as parameters. The type name cannot tell it apart, so the
+    /// token is gated by an autoref probe for `ParamsMetadata` (which the
+    /// derive implements): `None` for a Params struct (#1170).
     fn unmapped_token(&self) -> TokenStream {
         match &self.ty {
             Some(ty) => {
                 let name = readable_type(ty);
-                quote! { Some(#name.to_string()) }
+                let krate = r2e_core_path();
+                quote! {
+                    {
+                        struct __ParamsProbe<T>(::core::marker::PhantomData<T>);
+                        trait __NotParams {
+                            fn __is_params(&self) -> bool { false }
+                        }
+                        impl<T> __NotParams for &__ParamsProbe<T> {}
+                        impl<T: #krate::web::params::ParamsMetadata> __ParamsProbe<T> {
+                            fn __is_params(&self) -> bool { true }
+                        }
+                        use __NotParams as _;
+                        if (&__ParamsProbe::<#ty>(::core::marker::PhantomData)).__is_params() {
+                            None
+                        } else {
+                            Some(#name.to_string())
+                        }
+                    }
+                }
             }
             None => quote! { None },
         }
