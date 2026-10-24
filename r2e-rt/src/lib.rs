@@ -29,6 +29,7 @@
 //!   `watch`, `Mutex`, `RwLock`, `Notify`, `Semaphore`, `OnceCell`)
 //! - Async control flow: [`select!`](select), [`pin!`](pin), [`join!`](join),
 //!   [`JoinSet`]
+//! - Task-local storage: [`task_local!`](task_local)
 //! - Streams: the [`stream`] re-export of `tokio-stream`
 //! - Runtime construction: [`RuntimeBuilder`], [`Runtime`], [`RuntimeHandle`],
 //!   [`RuntimeId`], [`block_on`], [`block_in_place`]
@@ -43,8 +44,9 @@
 //!   API without adding `tokio-util` to its own `Cargo.toml`, and a runtime
 //!   swap must not force every app to change.
 //! - **Re-exported** (identity stays tokio's): the [`sync`] primitives, the
-//!   [`select!`](select)/[`pin!`](pin)/[`join!`](join) macros, [`Instant`],
-//!   [`Interval`], [`MissedTickBehavior`], [`JoinSet`], [`stream`]. Their *shape* is
+//!   [`select!`](select)/[`pin!`](pin)/[`join!`](join)/[`task_local!`](task_local)
+//!   macros, [`Instant`], [`Interval`], [`MissedTickBehavior`], [`JoinSet`],
+//!   [`stream`]. Their *shape* is
 //!   runtime-neutral; re-exporting removes the `tokio::` name from dozens of
 //!   files at zero cost, and is what makes the boundary check mechanical.
 //!
@@ -495,7 +497,11 @@ pub async fn shutdown_signal() {
 // Re-exported, not wrapped: these are macros over `Future`, so they keep
 // working over r2e futures whatever drives them.  Re-exporting removes the
 // `tokio::` name from ~20 files at zero cost.
-pub use tokio::{join, pin, select};
+//
+// `task_local!` follows the same rule: it declares a `tokio::task::LocalKey`
+// whose `scope(..)` future works under any executor that polls it, and it is
+// what a request-context value reachable from any frame needs (#1030).
+pub use tokio::{join, pin, select, task_local};
 
 // ── Task grouping ────────────────────────────────────────────────────────────
 
