@@ -72,7 +72,8 @@ Framework impls: `Json<T>` (`application/json`, schema from `T: JsonSchema`),
 `#[derive(FromMultipart)]`'s schema). `Option<..>` around the extractor makes
 the body optional (`required: false`). A custom extractor implements the trait;
 a body-position type without it has no request body in the spec and is warned
-about at boot (`SchemaGap::MissingRequestBody`).
+about at boot (`SchemaGap::MissingRequestBody`). A `#[derive(Params)]` struct
+last is recognised as non-body (path + query only): no request body, no warning.
 
 **Response body.** The return type is probed for
 `r2e::di::meta::ResponseBodySchema`, through `Result<T, E>` (→ `T`, so every

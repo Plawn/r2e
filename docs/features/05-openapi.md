@@ -88,7 +88,7 @@ pub struct RouteInfo {
 ```
 
 - Path parameters (e.g.: `Path(id): Path<u64>`) are automatically detected.
-- The request body is the last parameter when it reads the body (`FromRequest`), documented through its `RequestBodySchema` impl; `Option<..>` makes it optional.
+- The request body is the last parameter when it reads the body (`FromRequest`), documented through its `RequestBodySchema` impl; `Option<..>` makes it optional. A `#[derive(Params)]` struct last is recognised as non-body (it reads path + query only) and is never warned about.
 - The response body comes from the return type's `ResponseBodySchema` impl, probed through `Result<T, E>` and `(StatusCode, T)` tuples; `#[returns(T)]` declares it for `impl Trait` returns.
 - Both probes use autoref specialization — a type without the trait is documented without a body and warned about once at boot.
 - Doc comments: first `///` line → `summary`, remaining → `description`.

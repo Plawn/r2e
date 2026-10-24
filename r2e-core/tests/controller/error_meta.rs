@@ -228,6 +228,12 @@ impl OpenController {
         "ok"
     }
 
+    /// A `#[derive(Params)]` struct last on a body-capable verb (#1170).
+    #[post("/params-post")]
+    async fn params_post(&self, _f: Filter) -> &'static str {
+        "ok"
+    }
+
     #[get("/required")]
     async fn required(&self, #[inject(identity)] _user: Subject) -> &'static str {
         "ok"
@@ -741,6 +747,24 @@ fn body_type_without_request_body_schema_is_undocumented() {
     assert!(route!(OpenController, "/open/bare")
         .request_body_unmapped
         .is_none());
+}
+
+#[test]
+fn derive_params_last_is_not_a_request_body() {
+    // #1170: a `#[derive(Params)]` struct in body position is a
+    // `FromRequestParts` extractor — never a body, never "unmapped".
+    for path in ["/open/params", "/open/params-post"] {
+        let r = route!(OpenController, path);
+        assert!(r.request_body.is_none(), "{path}");
+        assert!(r.request_body_unmapped.is_none(), "{path}");
+        let names: Vec<&str> = r.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["q"], "{path}");
+        assert_eq!(
+            sorted(r.rejection_kinds),
+            sorted(vec![RejectionKind::InvalidQuery, RejectionKind::Internal]),
+            "{path}"
+        );
+    }
 }
 
 // ── Custom response types ──────────────────────────────────────────────────
