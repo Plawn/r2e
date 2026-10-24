@@ -324,7 +324,9 @@ impl ErrorSchema for Wire {
     }
 }
 
-#[derive(Deserialize)]
+// `JsonSchema` so `Json<Payload>: RequestBodySchema` under the `openapi`
+// feature too (a schemaless `Json<T>` is an undocumented body there).
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct Payload {
     text: String,
 }
