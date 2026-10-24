@@ -1,7 +1,7 @@
 ---
 topic: method-attribute-quick-reference
 features: core
-tokens: ~500
+tokens: ~600
 requires: core-concepts
 ---
 
@@ -11,7 +11,7 @@ requires: core-concepts
 
 - Routing markers: `#[get/post/put/delete/patch("/path")]`, `#[any("/path")]` (all methods, `{*path}` wildcards), `#[fallback]` (no path argument), `#[sse("/path")]`, `#[ws("/path")]`.
 - Auth markers: `#[anonymous]` per route; `#[roles]`/`#[all_roles]`/`#[guard]`/`#[pre_guard]` on a method or on the impl — only `#[pre_guard]` also covers `#[anonymous]` routes.
-- Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]`, `#[managed]` (on a parameter), `#[async_exec]`.
+- Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]` (all three on a method or on the impl), `#[managed]` (on a parameter), `#[async_exec]`.
 - Off-request and documentation markers: `#[consumer]`, `#[scheduled]`, `#[request_helper]`, `#[status(N)]` / `#[returns(T)]`.
 
 | Attribute | Level | Purpose |
@@ -28,8 +28,8 @@ requires: core-concepts
 | `#[pre_guard(Expr)]` | method or impl | Pre-auth guard (before JWT); impl = every route incl. `#[anonymous]` |
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
-| `#[layer(expr)]` | method | Per-route Tower layer |
-| `#[middleware(fn)]` | method | Per-route middleware fn |
+| `#[layer(expr)]` / `#[layer(\|this: &Self\| expr)]` | method or impl | Tower layer; closure form builds it from the controller core once at registration; impl = every route except `#[fallback]`, outside method layers |
+| `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn (`from_fn`); `state` passes the core as `State<Arc<Self>>`; impl = every route except `#[fallback]` |
 | `#[consumer(bus = "field")]` | method | Event consumer |
 | `#[scheduled(every = "5m")]` | method | Scheduled task |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |

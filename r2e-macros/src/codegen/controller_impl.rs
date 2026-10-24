@@ -5,6 +5,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use crate::codegen::transverse::{self, ConsumerMethodDef, DecoFieldDef, ScheduledSourceMethod};
+use crate::model::types::{LayerExpr, MethodDecorators, MiddlewareFn};
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
 use crate::util::type_utils::{type_last_segment_is, unwrap_option_type, unwrap_result_type};
@@ -113,9 +114,11 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // Application-scoped router body. The controller Arc is captured once at
     // router build time and reused per request; route decorator sets are
     // built here from the resolved bean context, once per route.
+    let layer_setup = generate_layer_setup(def);
     let application_router_body = quote! {
         |__ctrl: ::std::sync::Arc<#name>, __ctx: &#krate::beans::BeanContext| {
             #ctrl_router_setup
+            #layer_setup
             let __inner = #krate::http::Router::new()
                 #(#route_registrations)*
                 #(#sse_route_registrations)*
@@ -1437,32 +1440,22 @@ fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
             let path = &rm.path;
             let method_fn = format_ident!("{}", rm.method.as_routing_fn());
             let closure = super::handlers::generate_route_closure(def, rm);
-            let middleware_layers: Vec<_> = rm
-                .decorators
-                .middleware_fns
-                .iter()
-                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-                .collect();
-            let direct_layers: Vec<_> = rm
-                .decorators
-                .layer_exprs
-                .iter()
-                .map(|expr| quote! { .layer(#expr) })
-                .collect();
             if rm.is_fallback {
                 // #[fallback]: handles everything no other route matched.
-                // #[middleware]/#[layer]/#[pre_guard] are rejected at parse
-                // time, so the closure is registered bare.
+                // Method-level #[middleware]/#[layer]/#[pre_guard] are
+                // rejected at parse time and controller-level
+                // #[middleware]/#[layer] skip it (`Router::fallback` takes no
+                // per-route layers), so the closure is registered bare.
                 quote! {
                     .fallback(#closure)
                 }
             } else {
+                let layers = route_layer_chain(def, &rm.decorators);
                 quote! {
                     .route(
                         #path,
                         #krate::http::routing::#method_fn(#closure)
-                            #(#middleware_layers)*
-                            #(#direct_layers)*
+                            #layers
                     )
                 }
             }
@@ -1477,24 +1470,12 @@ fn generate_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
         .map(|sm| {
             let path = &sm.path;
             let closure = super::handlers::generate_sse_closure(def, sm);
-            let middleware_layers: Vec<_> = sm
-                .decorators
-                .middleware_fns
-                .iter()
-                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-                .collect();
-            let direct_layers: Vec<_> = sm
-                .decorators
-                .layer_exprs
-                .iter()
-                .map(|expr| quote! { .layer(#expr) })
-                .collect();
+            let layers = route_layer_chain(def, &sm.decorators);
             quote! {
                 .route(
                     #path,
                     #krate::http::routing::get(#closure)
-                        #(#middleware_layers)*
-                        #(#direct_layers)*
+                        #layers
                 )
             }
         })
@@ -1508,26 +1489,136 @@ fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
         .map(|wm| {
             let path = &wm.path;
             let closure = super::handlers::generate_ws_closure(def, wm);
-            let middleware_layers: Vec<_> = wm
-                .decorators
-                .middleware_fns
-                .iter()
-                .map(|mw_fn| quote! { .layer(#krate::http::middleware::from_fn(#mw_fn)) })
-                .collect();
-            let direct_layers: Vec<_> = wm
-                .decorators
-                .layer_exprs
-                .iter()
-                .map(|expr| quote! { .layer(#expr) })
-                .collect();
+            let layers = route_layer_chain(def, &wm.decorators);
             quote! {
                 .route(
                     #path,
                     #krate::http::routing::get(#closure)
-                        #(#middleware_layers)*
-                        #(#direct_layers)*
+                        #layers
                 )
             }
         })
         .collect()
+}
+
+// ── Tower layers (#[middleware] / #[layer]) ───────────────────────────────
+//
+// Emitted inside the application router body, where the controller core is
+// bound as `__ctrl: Arc<Controller>`. Per route, method-level layers come
+// first and controller-level ones last: the last `.layer()` call is the
+// outermost, so the controller's layers wrap the method's. Within one level,
+// `#[middleware]`s are applied before `#[layer]`s, each in declaration order.
+//
+// Every `.layer` call pins its output error to `Infallible`
+// (`MethodRouter::layer::<_, Infallible>`): `NewError` is only constrained by
+// `Service::Error: Into<NewError>`, so between two error-passthrough layers
+// (`DefaultBodyLimit`, `SetResponseHeaderLayer`, …) it is ambiguous — and
+// `Router::route` needs `MethodRouter<S, Infallible>` at the end anyway.
+
+/// Name of the binding holding the `i`-th controller-level `#[layer]`, built
+/// once per controller and cloned onto each route.
+fn ctrl_layer_ident(i: usize) -> syn::Ident {
+    format_ident!("__r2e_ctrl_layer_{}", i)
+}
+
+/// `.layer(from_fn(..))` / `.layer(from_fn_with_state(core, ..))`.
+fn middleware_layer(mw: &MiddlewareFn) -> TokenStream {
+    let krate = r2e_core_path();
+    let path = &mw.path;
+    if mw.with_state {
+        quote! {
+            .layer::<_, ::std::convert::Infallible>(
+                #krate::http::middleware::from_fn_with_state(
+                    ::std::clone::Clone::clone(&__ctrl),
+                    #path,
+                )
+            )
+        }
+    } else {
+        quote! {
+            .layer::<_, ::std::convert::Infallible>(#krate::http::middleware::from_fn(#path))
+        }
+    }
+}
+
+/// The expression building one `#[layer]` value. The closure form goes
+/// through a generic helper so `|this| ..` infers `this: &Controller`.
+fn layer_value(def: &RoutesImplDef, layer: &LayerExpr) -> TokenStream {
+    let name = &def.controller_name;
+    match layer {
+        LayerExpr::Const(expr) => quote! { #expr },
+        LayerExpr::FromSelf(closure) => quote! {
+            __r2e_layer_from_core::<#name, _>(&*__ctrl, #closure)
+        },
+    }
+}
+
+/// Whether any `#[layer]` (method or controller level) uses the closure form,
+/// i.e. whether the router body needs `__r2e_layer_from_core`.
+fn uses_layer_closure(def: &RoutesImplDef) -> bool {
+    let is_closure = |d: &MethodDecorators| {
+        d.layer_exprs
+            .iter()
+            .any(|l| matches!(l, LayerExpr::FromSelf(_)))
+    };
+    is_closure(&def.controller_decorators)
+        || def
+            .route_methods
+            .iter()
+            .filter(|m| !m.is_fallback)
+            .any(|m| is_closure(&m.decorators))
+        || def.sse_methods.iter().any(|m| is_closure(&m.decorators))
+        || def.ws_methods.iter().any(|m| is_closure(&m.decorators))
+}
+
+/// Router-body prelude for the layer chains: the closure helper (when used)
+/// and one binding per controller-level `#[layer]`, evaluated once.
+fn generate_layer_setup(def: &RoutesImplDef) -> TokenStream {
+    let helper = uses_layer_closure(def).then(|| {
+        quote! {
+            #[inline(always)]
+            fn __r2e_layer_from_core<__C: ?::std::marker::Sized, __L>(
+                core: &__C,
+                build: impl ::std::ops::FnOnce(&__C) -> __L,
+            ) -> __L {
+                build(core)
+            }
+        }
+    });
+    let ctrl_layers = def
+        .controller_decorators
+        .layer_exprs
+        .iter()
+        .enumerate()
+        .map(|(i, layer)| {
+            let ident = ctrl_layer_ident(i);
+            let value = layer_value(def, layer);
+            quote! { let #ident = #value; }
+        });
+    quote! {
+        #helper
+        #(#ctrl_layers)*
+    }
+}
+
+/// The `.layer(..)` chain of one non-fallback route: method-level layers
+/// (inner), then controller-level layers (outer).
+fn route_layer_chain(def: &RoutesImplDef, method: &MethodDecorators) -> TokenStream {
+    let method_mw = method.middleware_fns.iter().map(middleware_layer);
+    let method_layers = method.layer_exprs.iter().map(|layer| {
+        let value = layer_value(def, layer);
+        quote! { .layer::<_, ::std::convert::Infallible>(#value) }
+    });
+    let ctrl = &def.controller_decorators;
+    let ctrl_mw = ctrl.middleware_fns.iter().map(middleware_layer);
+    let ctrl_layers = (0..ctrl.layer_exprs.len()).map(|i| {
+        let ident = ctrl_layer_ident(i);
+        quote! { .layer::<_, ::std::convert::Infallible>(::std::clone::Clone::clone(&#ident)) }
+    });
+    quote! {
+        #(#method_mw)*
+        #(#method_layers)*
+        #(#ctrl_mw)*
+        #(#ctrl_layers)*
+    }
 }

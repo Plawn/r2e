@@ -55,15 +55,47 @@ The generated code calls `.layer(r2e::http::middleware::from_fn(require_api_key)
 
 ### Multiple middleware
 
-You can stack multiple `#[middleware]` attributes. They are applied in the order declared (outermost first):
+You can stack multiple `#[middleware]` attributes. Each one becomes a `.layer()` call in declaration order, and the last layer applied is the outermost — so the **last-declared** middleware runs first:
 
 ```rust
 #[get("/data")]
-#[middleware(log_request)]
 #[middleware(require_api_key)]
+#[middleware(log_request)]
 async fn protected_data(&self) -> Json<Vec<Item>> {
     // log_request runs first, then require_api_key, then the handler
     Json(self.service.list().await)
+}
+```
+
+### Middleware with the controller core: `state`
+
+`#[middleware(my_fn, state)]` passes the controller to the function as `State<Arc<Self>>` (via `from_fn_with_state`). The controller's `#[inject]` beans and `#[config]` values are available; request-scoped fields (identity, `#[inject(request)]`) are not:
+
+```rust
+use std::sync::Arc;
+use r2e::http::extract::State;
+
+async fn tag_response(
+    State(ctrl): State<Arc<ApiController>>,
+    req: r2e::http::Request,
+    next: r2e::http::middleware::Next,
+) -> r2e::http::response::Response {
+    let mut res = next.run(req).await;
+    res.headers_mut().insert("x-api-tag", ctrl.tag.parse().unwrap());
+    res
+}
+
+#[controller(path = "/api")]
+pub struct ApiController {
+    #[config("app.tag")]
+    tag: String,
+}
+
+#[routes]
+impl ApiController {
+    #[get("/ping")]
+    #[middleware(tag_response, state)]
+    async fn ping(&self) -> &'static str { "pong" }
 }
 ```
 
@@ -118,6 +150,25 @@ async fn guarded_with_timeout(&self) -> Json<Data> {
 }
 ```
 
+### Building a layer from the controller: `|this: &Self|`
+
+A closure taking the controller core builds the layer from its beans or config. It is called **once**, when the route is registered — never per request:
+
+```rust
+#[controller(path = "/upload")]
+pub struct UploadController {
+    #[config("upload.max-bytes")]
+    max_bytes: usize,
+}
+
+#[routes]
+impl UploadController {
+    #[post("/")]
+    #[layer(|this: &Self| DefaultBodyLimit::max(this.max_bytes))]
+    async fn upload(&self, body: Bytes) -> StatusCode { StatusCode::CREATED }
+}
+```
+
 ### Common layers
 
 Here are some frequently used Tower layers:
@@ -129,6 +180,38 @@ Here are some frequently used Tower layers:
 | `CorsLayer` | `tower-http` | CORS configuration |
 | `CompressionLayer` | `tower-http` | Response compression |
 | `ConcurrencyLimitLayer` | `tower` | Limit concurrent requests |
+
+---
+
+## Controller-level `#[middleware]` / `#[layer]`
+
+Place `#[middleware]` or `#[layer]` on the impl block, **below** `#[routes]`, to wrap every route of the controller — regular routes, `#[sse]` and `#[ws]` methods alike. All the forms above work (`state`, the `|this: &Self|` closure); an impl-level layer is built once per controller and cloned onto each route.
+
+```rust
+#[controller(path = "/proxy")]
+pub struct ProxyController {
+    #[config("proxy.request-body-limit-bytes")]
+    body_limit: usize,
+}
+
+#[routes]
+#[middleware(audit, state)]
+#[layer(|this: &Self| DefaultBodyLimit::max(this.body_limit))]
+impl ProxyController {
+    #[post("/forward")]
+    async fn forward(&self, body: String) -> String { body }
+
+    #[put("/forward")]
+    async fn replace(&self, body: String) -> String { body }
+}
+```
+
+Rules:
+
+- **Order** — per route, the method's `#[middleware]`s and `#[layer]`s are applied first, then the controller's: controller layers are the **outer** ones. Within a level, a later-declared attribute wraps an earlier one, and `#[layer]`s wrap `#[middleware]`s.
+- **`#[fallback]` is skipped** — `Router::fallback` takes no per-route layers. If the impl block has no other route, the impl-level attribute is a compile error (it would apply to nothing).
+- **Body limits keep the envelope** — the limit is enforced by the body extractor inside the handler, so an oversized body answers `413` through the route's error type, like any other extraction rejection.
+- `#[grpc_routes]` and `#[mcp_routes]` do not accept `#[middleware]`/`#[layer]`.
 
 ---
 

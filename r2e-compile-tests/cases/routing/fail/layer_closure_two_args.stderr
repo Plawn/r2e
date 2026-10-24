@@ -1,0 +1,5 @@
+error: the #[layer] closure form takes exactly one argument, the controller core: `#[layer(|this: &Self| ..)]`
+  --> cases/routing/fail/layer_closure_two_args.rs:12:14
+   |
+12 |     #[layer(|this: &Self, n: usize| r2e::http::DefaultBodyLimit::max(n))]
+   |              ^^^^^^^^^^^^^^^^^^^^^

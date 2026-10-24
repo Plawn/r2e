@@ -12,6 +12,7 @@ mod core_path;
 mod error_meta;
 mod facade;
 mod fixtures;
+mod layers;
 mod lifecycle;
 mod live_config;
 mod proxy_routes;

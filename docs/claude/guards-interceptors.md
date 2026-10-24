@@ -326,9 +326,11 @@ macro), not just `#[intercept]`. Semantics (locked in task #906):
   always-`None` (no struct identity AND no non-anonymous route with an
   identity param).
 - **No silent drops.** Any other route-family attribute on the impl block
-  (`#[anonymous]`, `#[middleware]`, …) is a targeted compile error; a
+  (`#[anonymous]`, `#[status]`, …) is a targeted compile error; a
   controller guard whose impl block has no eligible (non-anonymous) route is
-  rejected as dead configuration; a decorator placed ABOVE `#[routes]`/
+  rejected as dead configuration, and so is an impl-level `#[middleware]`/
+  `#[layer]` whose impl block has no route/`#[sse]`/`#[ws]` method other than
+  a `#[fallback]`; a decorator placed ABOVE `#[routes]`/
   `#[bean]`/`#[grpc_routes]` errors via `deny_decorator_above_impl` in
   `r2e-macros/src/lib.rs` (attribute macros expand top-down, so the
   transformer would never see it). `#[grpc_routes]` impl blocks accept
@@ -472,8 +474,10 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 #[intercept(CacheInvalidate::group("users"))] // invalidate cache group
 #[intercept(Counted::new("metric_name"))]    // count invocations
 #[intercept(MetricTimed::new("metric_name"))] // record duration as named metric
-#[middleware(my_middleware_fn)]               // Tower middleware via from_fn
-#[layer(TimeoutLayer::new(Duration::from_secs(5)))] // arbitrary Tower Layer
+#[middleware(my_middleware_fn)]               // Tower middleware via from_fn (method or impl)
+#[middleware(my_fn, state)]                   // from_fn_with_state(core): fn takes State<Arc<Self>>
+#[layer(TimeoutLayer::new(Duration::from_secs(5)))] // arbitrary Tower Layer (method or impl)
+#[layer(|this: &Self| DefaultBodyLimit::max(this.limit))] // layer built from the core, once
 #[status(200)]                               // override OpenAPI status code
 #[returns(MyType)]                           // explicit OpenAPI response type
 #[raw]                                       // marker for raw Axum extractors (no-op)
@@ -499,13 +503,55 @@ Applies a Tower middleware function to a specific route via
 async fn protected_data(&self) -> Json<Vec<Item>> { /* ... */ }
 ```
 
-Multiple `#[middleware]` attributes stack, outermost-first in declaration
-order. Generated code calls `.layer(r2e::http::middleware::from_fn(name))`.
+Generated code calls `.layer::<_, Infallible>(r2e::http::middleware::from_fn(name))`
+on the route's `MethodRouter`. `#[middleware(name, state)]` emits
+`from_fn_with_state(core.clone(), name)` instead: the function takes
+`State<Arc<Ctrl>>` — the controller core (`#[inject]` beans and `#[config]`
+values resolved, no request-scoped fields).
 
 ### `#[layer]` — Arbitrary Tower layers
 
 Accepts any expression evaluating to a Tower `Layer` (e.g. `tower-http`
-layers). Can be combined with `#[middleware]` on the same route.
+layers). Can be combined with `#[middleware]` on the same route. The closure
+form `#[layer(|this: &Self| expr)]` (exactly one argument, not async) is
+called with the controller core **once**, at route registration — never per
+request.
+
+### Controller level (#1074)
+
+Both attributes are accepted on the `#[routes]` impl block (below `#[routes]`)
+and apply to every route, `#[sse]` and `#[ws]` method. A `#[fallback]` route
+is skipped — `Router::fallback` takes no per-route layers. Impl-level layer
+values are evaluated once per controller in the router body
+(`let __r2e_ctrl_layer_i = ..;`) and cloned onto each route; only per-route
+`MethodRouter::layer` is used, never `Router::layer`/`route_layer`.
+`#[grpc_routes]` and `#[mcp_routes]` still reject both attributes.
+
+### Ordering
+
+The last `.layer()` applied is the **outermost**. Per route the macro applies,
+in this order: method `#[middleware]`s, method `#[layer]`s, controller
+`#[middleware]`s, controller `#[layer]`s — each in declaration order. So:
+
+- controller layers wrap method layers;
+- within a level, a later-declared attribute wraps an earlier one (it runs
+  first on the request), and `#[layer]`s wrap `#[middleware]`s;
+- all of them run outside the generated handler, i.e. before pre-guards,
+  identity extraction, guards and interceptors.
+
+(Earlier revisions of this page said "outermost-first in declaration order";
+that was never the behaviour — the runtime order above is pinned by
+`r2e-core/tests/controller/layers.rs`.)
+
+Every generated `.layer` call pins `NewError = Infallible`: two stacked
+error-passthrough layers (e.g. two `DefaultBodyLimit`s) otherwise leave the
+error type ambiguous (E0284). `Router::route` already required `Infallible`,
+so no working code changes.
+
+A body limit (`DefaultBodyLimit`) is enforced by the body extractor inside the
+handler, so an oversized body still answers 413 `PayloadTooLarge` through the
+route's error envelope; the route metadata already lists `PayloadTooLarge` for
+body-reading routes, the layer adds nothing there.
 
 Common layers: `TimeoutLayer`, `SetResponseHeaderLayer`, `CorsLayer`,
 `CompressionLayer`, `ConcurrencyLimitLayer`.

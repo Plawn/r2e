@@ -1,0 +1,5 @@
+error: controller-level #[middleware]/#[layer] would apply to no route — they wrap the route/#[sse]/#[ws] methods of this impl block, a #[fallback] route is skipped (`Router::fallback` takes no per-route layers), and there are no other routes
+  --> cases/routing/fail/controller_middleware_only_fallback.rs:19:6
+   |
+19 | impl MyController {
+   |      ^^^^^^^^^^^^
