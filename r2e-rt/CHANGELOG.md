@@ -14,3 +14,9 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
+
+### Added
+
+- `task_local!` is re-exported (identity unchanged, like `select!`/`pin!`/`join!`),
+  so an app can declare a request-context task-local as `r2e::rt::task_local!`
+  without a direct `tokio` dependency (#1030).

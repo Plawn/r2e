@@ -5100,7 +5100,7 @@ dev session — restart the process when iterating on a service body.
 - Serve-time work goes through `ServeContext::track`, never a bare `rt::spawn` — see llm/app-builder.md.
 - Timers and IO come from the facade too: `rt::sleep`, `rt::timeout` (`rt::Elapsed`), `rt::interval`, `rt::sleep_until`, `rt::bind_tcp`, `rt::shutdown_signal`, and `rt::in_runtime()` as a non-panicking probe.
 - Cancellation is `rt::CancelToken` (`cancelled().await` is cancellation-safe, plus `child_token()` and `drop_guard()`) — an app never needs `tokio-util` in its own `Cargo.toml`.
-- `rt::sync::*`, `rt::{select!, pin!, join!}`, `rt::JoinSet`, `rt::stream`, `rt::io`, `rt::{TcpListener, TcpStream, UdpSocket}` are re-exports with unchanged identity.
+- `rt::sync::*`, `rt::{select!, pin!, join!, task_local!}`, `rt::JoinSet`, `rt::stream`, `rt::io`, `rt::{TcpListener, TcpStream, UdpSocket}` are re-exports with unchanged identity.
 - `#[r2e::main]` / `#[r2e::test]` / `#[r2e::test_suite]` build their runtime through `rt::RuntimeBuilder`, so a generated project needs no `tokio` entry; `start_paused = true` needs `r2e/test-util`.
 - Shard-local `!Send` state: `AppBuilder::per_worker_service(factory)` runs the factory once inside every worker runtime and keeps the returned `WorkerService` alive; it requires `server.workers` and errors under `run_with_listener` or `dev-reload` rather than falling back.
 - Inside a worker use `WorkerContext` (`id`, `workers`, `shutdown`, `spawn_local`, `adopt_udp`) — it is `!Send + !Sync`; `WorkerInfo` is the `Copy` identity readable anywhere, including as a handler parameter.
@@ -5146,7 +5146,7 @@ a dropped future. `From` converts both ways with
 
 Also re-exported, identity unchanged, so the `tokio::` name disappears at zero
 cost: `rt::sync::{mpsc, oneshot, broadcast, watch, Mutex, RwLock, Notify,
-Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!}`, `rt::JoinSet`,
+Semaphore, OnceCell, …}`, `rt::{select!, pin!, join!, task_local!}`, `rt::JoinSet`,
 `rt::stream` (`tokio-stream`), `rt::{TcpListener, TcpStream, UdpSocket}`, `rt::io`
 (`AsyncRead`/`AsyncWrite` + the `…Ext` traits), `rt::{LocalSet, spawn_local}`
 (only meaningful inside a per-worker service — prefer
@@ -5621,7 +5621,8 @@ Framework impls: `Json<T>` (`application/json`, schema from `T: JsonSchema`),
 `#[derive(FromMultipart)]`'s schema). `Option<..>` around the extractor makes
 the body optional (`required: false`). A custom extractor implements the trait;
 a body-position type without it has no request body in the spec and is warned
-about at boot (`SchemaGap::MissingRequestBody`).
+about at boot (`SchemaGap::MissingRequestBody`). A `#[derive(Params)]` struct
+last is recognised as non-body (path + query only): no request body, no warning.
 
 **Response body.** The return type is probed for
 `r2e::di::meta::ResponseBodySchema`, through `Result<T, E>` (→ `T`, so every

@@ -35,6 +35,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `DefaultBodyLimit`s) no longer fails with E0284: every generated `.layer`
   call pins its error type to `Infallible`, which `Router::route` already
   required.
+- A `#[derive(Params)]` struct as the last handler argument is no longer taken
+  for an unmapped request body (#1170): `#[routes]` gates
+  `request_body_unmapped` on an autoref probe for `ParamsMetadata`, so GET and
+  POST routes ending in a Params struct stop logging the boot-time
+  `MissingRequestBody` OpenAPI warning. A real body extractor without
+  `RequestBodySchema` is still flagged.
 
 ## [0.7.0] - 2026-10-15
 
