@@ -7,8 +7,11 @@
 # dependencies of kind "normal" — dev-dependencies and build-dependencies are
 # exempt, a test harness may legitimately pull tokio in. Two check groups:
 #
-#   tokio : tokio, tokio-util, tokio-stream
-#   axum  : axum
+#   tokio      : tokio, tokio-util, tokio-stream
+#   axum       : axum
+#   tower-http : tower-http — confined to r2e-http (`r2e_http::layers`) and the
+#                grpc-web arm of r2e-grpc (plans/axum-containment-roadmap.md,
+#                phase B). `tower` itself is neutral and NOT checked (D1).
 #
 # The resulting crate set is compared against the checked-in allowlists in
 # scripts/boundaries/. A crate that gains such a dependency without being
@@ -133,6 +136,7 @@ check_group() {
 
 check_group "tokio" '^(tokio|tokio-util|tokio-stream)$' "$BOUNDARY_DIR/dep-allowlist-tokio.txt"
 check_group "axum" '^axum$' "$BOUNDARY_DIR/dep-allowlist-axum.txt"
+check_group "tower-http" '^tower-http$' "$BOUNDARY_DIR/dep-allowlist-tower-http.txt"
 
 if [ "$FAILED" -ne 0 ]; then
     echo "dependency boundary check FAILED — see plans/runtime-http-dependency-containment.md" >&2

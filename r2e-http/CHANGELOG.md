@@ -17,6 +17,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `r2e_http::layers` — the tower-http layers R2E uses, re-exported with their
+  identity intact (`cors`, `timeout`, `set_header`, `normalize_path`), plus
+  `default_cors()` (permissive) and `normalize_path_router()` (the pre-routing
+  trailing-slash wrap), both moved here from `r2e-core`. tower-http is now a
+  dependency of this crate; `tower` became unconditional (was `quic`-only).
+  `plans/axum-containment-roadmap.md`, phase B.
 - `r2e_http::server::{serve, ServeOptions}` — the one serve path. It takes the
   runtime facade's `TcpListener`, a `Router`, a shutdown future and the options,
   always installs `ConnectInfo<SocketAddr>`, applies `TCP_NODELAY` per accepted

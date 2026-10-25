@@ -234,7 +234,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// # Example
     ///
     /// ```ignore
-    /// use tower_http::timeout::TimeoutLayer;
+    /// use r2e::http::layers::timeout::TimeoutLayer;
     /// use std::time::Duration;
     ///
     /// AppBuilder::new()
@@ -290,7 +290,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// ```ignore
     /// use tower::ServiceBuilder;
-    /// use tower_http::timeout::TimeoutLayer;
+    /// use r2e::http::layers::timeout::TimeoutLayer;
     ///
     /// AppBuilder::new()
     ///     .with_service_builder(|router| {

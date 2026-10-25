@@ -5769,13 +5769,13 @@ answers `415 Unsupported Media Type` (+ a boot warning). Enable real grpc-web
 (feature `grpc-web` on `r2e`, `web` on `r2e-grpc`) with:
 
 ```rust
-use tower_http::cors::CorsLayer;
+use r2e::http::layers::cors::CorsLayer;
 
 # fn __doc(b: AppBuilder) -> impl Sized {
 b.plugin(GrpcServer::multiplexed().with_grpc_web())                  // default CORS: any origin, POST/OPTIONS, grpc-status/-message exposed
 # }
 # fn __doc2(b: AppBuilder) -> impl Sized {
-b.plugin(GrpcServer::multiplexed().with_grpc_web_cors(CorsLayer::new().allow_methods([Method::POST, Method::OPTIONS])))  // your own tower-http CorsLayer
+b.plugin(GrpcServer::multiplexed().with_grpc_web_cors(CorsLayer::new().allow_methods([Method::POST, Method::OPTIONS])))  // your own CorsLayer (tower-http's type, re-exported)
 # }
 ```
 

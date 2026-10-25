@@ -511,8 +511,8 @@ values resolved, no request-scoped fields).
 
 ### `#[layer]` — Arbitrary Tower layers
 
-Accepts any expression evaluating to a Tower `Layer` (e.g. `tower-http`
-layers). Can be combined with `#[middleware]` on the same route. The closure
+Accepts any expression evaluating to a Tower `Layer` (e.g. the `tower-http`
+layers re-exported under `r2e::http::layers`). Can be combined with `#[middleware]` on the same route. The closure
 form `#[layer(|this: &Self| expr)]` (exactly one argument, not async) is
 called with the controller core **once**, at route registration — never per
 request.

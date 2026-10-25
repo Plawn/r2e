@@ -1,6 +1,6 @@
 # Roadmap — Contain axum further, without swapping the HTTP backend
 
-Status: **IN PROGRESS** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (branch `feat/axum-containment-a-serve`); B and C open. Follow-up to
+Status: **IN PROGRESS** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (PR #109); Phase B shipped 2026-10-25 (branch `feat/axum-containment-b-layers`, stacked on A); C open. Follow-up to
 `plans/runtime-http-dependency-containment.md` (phases 0–7 shipped 2026-08-24).
 That plan ended with two written decisions: §5.3d option A ("the public promise is
 R2E **types**", raw axum only through `axum_compat`) and §5.3c **DEFERRED** (no
@@ -189,3 +189,17 @@ have to move is already in `r2e-http`.
   recorded in the baseline header). Deferred from A to its own PR: driving
   hyper through `hyper_util` `auto::Builder` for `server.http.*` tuning — the
   serve path is now in one place, so that change is contained to `server.rs`.
+
+- **2026-10-25 — Phase B shipped.** `r2e_http::layers` re-exports tower-http's
+  `cors` / `timeout` / `set_header` / `normalize_path` (identity preserved) and
+  now owns `default_cors()` and `normalize_path_router()`; `r2e-core` keeps the
+  old paths as re-exports. Migrated: `builtins` (`Cors`, `SecureHeaders`),
+  `r2e-mcp`'s endpoint CORS, `example-app`, `llm/grpc.md`, the book, the
+  `#[layer]` doc examples. `tower-http` dropped from `r2e-core`, `r2e-mcp`,
+  `example-app`, `llm-doctests` (and its unused `catch-panic` feature with it).
+  Boundary: dep group `tower-http` (allowlist `r2e-http`, `r2e-grpc`) and source
+  group `tower_http` (baseline = `layers.rs` + the grpc-web arm). D1 written
+  into `docs/claude/architecture.md`. **Deviation from the plan:** `GraphKeepAlive`
+  and `catch_panic_layer_with` stay in `r2e-core` — they name only `tower` /
+  `http-body` (neutral, D1) and depend on `BeanContext` / `ErrorProjector`;
+  moving them would be a reshuffle with no containment gain.

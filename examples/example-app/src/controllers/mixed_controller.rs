@@ -38,7 +38,7 @@ impl MixedController {
 
     /// Endpoint with a per-route Tower layer (2-second timeout).
     #[get("/slow")]
-    #[layer(tower_http::timeout::TimeoutLayer::with_status_code(
+    #[layer(r2e::http::layers::timeout::TimeoutLayer::with_status_code(
         r2e::http::StatusCode::REQUEST_TIMEOUT,
         std::time::Duration::from_secs(2)
     ))]

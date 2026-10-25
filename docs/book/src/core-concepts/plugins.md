@@ -171,7 +171,7 @@ For Tower middleware that doesn't need the full plugin API, use `.with_layer()`
 on the built app:
 
 ```rust
-use tower_http::timeout::TimeoutLayer;
+use r2e::http::layers::timeout::TimeoutLayer;
 
 AppBuilder::new()
     .build_state()

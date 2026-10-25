@@ -728,7 +728,7 @@ pub fn middleware(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// and calls `.layer(expr)` on the route handler.
 ///
 /// ```ignore
-/// use tower_http::timeout::TimeoutLayer;
+/// use r2e::http::layers::timeout::TimeoutLayer;
 /// use std::time::Duration;
 ///
 /// #[get("/slow")]

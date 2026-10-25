@@ -12,6 +12,10 @@
 #                with_graceful_shutdown() plus the ListenerExt name —
 #                r2e_http::server::serve is the only caller
 #                (plans/axum-containment-roadmap.md, phase A).
+#   tower_http : tower_http:: — r2e-http/src/layers.rs is the destination
+#                (plans/axum-containment-roadmap.md, phase B); r2e-grpc's
+#                grpc-web arm is the one by-design exception (it fronts tonic,
+#                not the HTTP router). `tower::` is neutral and NOT counted (D1).
 #   serde_json : serde_json::{to_vec,to_string,to_string_pretty,to_writer,
 #                from_slice,from_str,from_reader} — the CODEC calls only.
 #                `serde_json::Value` / `json!` / `to_value` / `from_value` are
@@ -145,6 +149,13 @@ write_baseline() {
             echo "# reach through the \`http::serve\` re-export. Nothing else may appear"
             echo "# here without the same kind of written decision in a plan."
         fi
+        if [ "$group" = "tower_http" ]; then
+            echo "#"
+            echo "# r2e-http/src/layers.rs is the destination, not debt. r2e-grpc's"
+            echo "# grpc-web arm (feature \`web\`) is the one by-design exception: it fronts"
+            echo "# tonic's routes with tower-http's CORS, not the HTTP router"
+            echo "# (plans/axum-containment-roadmap.md, phase B / decision D2)."
+        fi
         if [ "$group" = "axum-serve" ]; then
             echo "#"
             echo "# r2e-http/src/server.rs is the destination, not debt. The remaining"
@@ -240,6 +251,9 @@ check_group "axum" '\baxum::' "$BOUNDARY_DIR/src-baseline-axum.txt" "$AXUM_EXCLU
 # re-exports of `ListenerExt` are tracked here until the routing phase removes
 # them.
 check_group "axum-serve" '\b(into_make_service(_with_connect_info)?|with_graceful_shutdown|tap_io)\(|\bListenerExt\b' "$BOUNDARY_DIR/src-baseline-axum-serve.txt" ""
+# tower-http is confined to r2e-http (`layers`) and r2e-grpc's grpc-web arm
+# (plans/axum-containment-roadmap.md, phase B). `tower::` is neutral (D1).
+check_group "tower_http" '\btower_http::' "$BOUNDARY_DIR/src-baseline-tower_http.txt" ""
 check_group "serde_json" '\bserde_json::(to_vec|to_string|to_string_pretty|to_writer|from_slice|from_str|from_reader)\b' "$BOUNDARY_DIR/src-baseline-serde_json.txt" "$SERDE_JSON_EXCLUDE"
 
 if [ "$FAILED" -ne 0 ]; then

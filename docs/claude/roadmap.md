@@ -70,10 +70,10 @@ promise.
 
 ## W11 — Carried from the root `todo` file — remainder
 
-- **HTTP backend containment** — `plans/axum-containment-roadmap.md`: phase A
-  (one serve path, `r2e_http::server::serve`) shipped 2026-10-25; phases B
-  (tower-http behind `r2e_http::layers`) and C (`Routes<S>` replaces `Router`,
-  breaking) open. A backend swap (ntex/tako/xitca) is explicitly NOT on the
+- **HTTP backend containment** — `plans/axum-containment-roadmap.md`: phases A
+  (one serve path, `r2e_http::server::serve`) and B (tower-http behind
+  `r2e_http::layers`) shipped 2026-10-25; phase C (`Routes<S>` replaces
+  `Router`, breaking) open. A backend swap (ntex/tako/xitca) is explicitly NOT on the
   roadmap; its trigger is written in that file (§3 phase D).
 - **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
   half was absorbed by W10; what remains is a pass over which concern lives in

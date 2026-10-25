@@ -83,7 +83,7 @@ mark public exceptions with `#[anonymous]` (fail-closed, @PermitAll-style).
 | `AdvancedHealth` | JSON health with liveness/readiness probes |
 | `Cors::permissive()` | Permissive CORS headers |
 | `Cors::custom(layer)` | Custom CORS configuration |
-| `Tracing` | Request tracing via `tracing` + `tower-http` |
+| `Tracing` | Installs the global `tracing` subscriber (per-request spans are `HttpTrace`'s job) |
 | `NormalizePath` | Trailing-slash normalization |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
 | `RequestIdPlugin` | X-Request-Id propagation (UUID v4) |

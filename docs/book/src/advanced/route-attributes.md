@@ -103,12 +103,12 @@ impl ApiController {
 
 ## `#[layer]` — Arbitrary Tower layers
 
-While `#[middleware]` wraps a function via `from_fn`, `#[layer]` accepts any expression that evaluates to a Tower `Layer`. This lets you use layers from `tower-http` and other Tower-compatible crates directly.
+While `#[middleware]` wraps a function via `from_fn`, `#[layer]` accepts any expression that evaluates to a Tower `Layer`. This lets you use the `tower-http` layers R2E re-exports under `r2e::http::layers` and any other Tower-compatible crate directly.
 
 ### Basic usage
 
 ```rust
-use tower_http::timeout::TimeoutLayer;
+use r2e::http::layers::timeout::TimeoutLayer;
 use std::time::Duration;
 
 #[routes]
@@ -128,7 +128,7 @@ The `TimeoutLayer` from `tower-http` supports a custom status code variant:
 
 ```rust
 #[get("/slow")]
-#[layer(tower_http::timeout::TimeoutLayer::with_status_code(
+#[layer(r2e::http::layers::timeout::TimeoutLayer::with_status_code(
     r2e::http::StatusCode::REQUEST_TIMEOUT,
     std::time::Duration::from_secs(2),
 ))]
@@ -175,10 +175,10 @@ Here are some frequently used Tower layers:
 
 | Layer | Crate | Purpose |
 |-------|-------|---------|
-| `TimeoutLayer` | `tower-http` | Request timeout |
-| `SetResponseHeaderLayer` | `tower-http` | Add response headers |
-| `CorsLayer` | `tower-http` | CORS configuration |
-| `CompressionLayer` | `tower-http` | Response compression |
+| `TimeoutLayer` | `r2e::http::layers::timeout` | Request timeout |
+| `SetResponseHeaderLayer` | `r2e::http::layers::set_header` | Add response headers |
+| `CorsLayer` | `r2e::http::layers::cors` | CORS configuration |
+| `CompressionLayer` | `tower-http` (not re-exported — depend on it yourself) | Response compression |
 | `ConcurrencyLimitLayer` | `tower` | Limit concurrent requests |
 
 ---

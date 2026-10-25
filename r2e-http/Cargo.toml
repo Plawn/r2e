@@ -19,7 +19,7 @@ default = []
 json-sonic = ["dep:sonic-rs"]
 ws = ["axum/ws"]
 multipart = ["axum/multipart"]
-quic = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:rustls", "dep:rustls-pemfile", "dep:http-body", "dep:http-body-util", "dep:tower"]
+quic = ["dep:quinn", "dep:h3", "dep:h3-quinn", "dep:rustls", "dep:rustls-pemfile", "dep:http-body", "dep:http-body-util"]
 
 [dependencies]
 axum = {workspace = true}
@@ -38,7 +38,11 @@ rustls = {workspace = true, optional = true}
 rustls-pemfile = {workspace = true, optional = true}
 http-body = {workspace = true, optional = true}
 http-body-util = {workspace = true, optional = true}
-tower = {workspace = true, optional = true}
+# `layers::normalize_path_router` and the QUIC bridge need `tower::Layer`.
+tower = {workspace = true}
+# Confined here (+ r2e-grpc's grpc-web arm): the rest of the workspace reaches
+# these through `layers` (plans/axum-containment-roadmap.md, phase B).
+tower-http = {workspace = true, features = ["cors", "normalize-path", "set-header", "timeout"]}
 tracing = {workspace = true}
 # The runtime facade — r2e-rt is at the bottom of the graph, so r2e-http can
 # reach it (see plans/runtime-http-dependency-containment.md §3). Required:

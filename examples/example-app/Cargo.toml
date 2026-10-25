@@ -13,7 +13,6 @@ r2e = {workspace = true, features = ["full", "sqlx-sqlite"]}
 # `r2e-openfga` directly, not via the facade's `openfga` feature: that feature
 # is held back from the crates.io release (see `r2e/Cargo.toml`).
 r2e-openfga = {workspace = true}
-tower-http = {workspace = true, features = ["timeout"]}
 serde = {workspace = true}
 serde_json = {workspace = true}
 jsonwebtoken = {workspace = true}

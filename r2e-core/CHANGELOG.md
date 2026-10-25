@@ -17,6 +17,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Changed
 
+- `r2e-core` no longer depends on `tower-http`: `Cors`, `SecureHeaders` and
+  `NormalizePath` reach it through `r2e_http::layers`, re-exported as
+  `r2e_core::http::layers`. `runtime::layers::default_cors` /
+  `normalize_path_router` (and the crate-root `default_cors`) are now
+  re-exports of the `r2e-http` functions — same paths, same types. Apps that
+  used `tower_http::timeout::TimeoutLayer` in `#[layer(..)]` /
+  `.with_layer(..)` can drop their own `tower-http` dependency and write
+  `r2e::http::layers::timeout::TimeoutLayer` (`plans/axum-containment-roadmap.md`,
+  phase B).
 - The single-listener `run()`, each sharded worker and `Running::serve_tracked`
   serve through `r2e_http::server::serve` instead of each assembling
   `into_make_service_with_connect_info` + `ListenerExt::tap_io` + `axum::serve`

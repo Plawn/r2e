@@ -70,7 +70,7 @@ impl Plugin for SecureHeaders {
         let headers = self.headers;
         ctx.add_layer(move |mut router| {
             for (name, value) in headers {
-                router = router.layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+                router = router.layer(crate::http::layers::set_header::SetResponseHeaderLayer::overriding(
                     name, value,
                 ));
             }

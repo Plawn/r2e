@@ -25,6 +25,11 @@
 //!   place that (de)serializes typed values; the codec is a Cargo feature
 //!   (`json-sonic`). See `plans/json-codec-containment.md`.
 //!
+//! - [`layers`] — the tower-http layers R2E uses (`cors`, `timeout`,
+//!   `set_header`, `normalize_path`), re-exported with their identity intact.
+//!   tower-http is confined to this crate; `tower` itself is neutral and
+//!   stays public (plans/axum-containment-roadmap.md, D1/D2).
+//!
 //! [`axum_compat`] is the explicit escape hatch for the rest of axum
 //! (§5.3d, decision A).
 
@@ -34,6 +39,7 @@ pub mod extract;
 pub mod header;
 pub mod json;
 pub mod labels;
+pub mod layers;
 pub mod middleware;
 #[cfg(feature = "multipart")]
 pub mod multipart;

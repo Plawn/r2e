@@ -561,10 +561,10 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
 /// (browser MCP clients need it either way), OUTERMOST so even a 401
 /// carries CORS headers and `expose_headers` lets the browser read the
 /// `WWW-Authenticate` challenge and the session id.
-pub(crate) fn cors_layer(origins: Vec<String>) -> tower_http::cors::CorsLayer {
+pub(crate) fn cors_layer(origins: Vec<String>) -> r2e_core::http::layers::cors::CorsLayer {
     use r2e_core::http::header::{HeaderName, AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
     use r2e_core::http::Method;
-    use tower_http::cors::{AllowOrigin, CorsLayer};
+    use r2e_core::http::layers::cors::{AllowOrigin, CorsLayer};
 
     let session_id = HeaderName::from_static("mcp-session-id");
     CorsLayer::new()

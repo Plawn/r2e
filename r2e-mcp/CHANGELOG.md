@@ -15,6 +15,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The MCP endpoint's CORS layer is built from `r2e_core::http::layers::cors`;
+  this crate no longer depends on `tower-http` directly. No behaviour change.
+
 ## [0.8.0] - 2026-10-12
 
 ### Changed

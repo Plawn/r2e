@@ -21,7 +21,7 @@ pub mod request_id;
 pub mod secure_headers;
 
 use crate::plugin::{Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext};
-use tower_http::cors::CorsLayer;
+use crate::http::layers::cors::CorsLayer;
 
 pub use http_trace::{HttpTrace, HttpTraceBuilder, HttpTraceConfig};
 

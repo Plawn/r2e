@@ -33,7 +33,6 @@ url = { workspace = true }
 # percent-decoded before reaching `ResourceCall::variables`.
 percent-encoding = { workspace = true }
 tower = { workspace = true }
-tower-http = { workspace = true, features = ["cors"] }
 # `default-features = false`: rmcp's default `macros` feature is deliberately
 # unused — R2E dispatches tools itself (#[mcp_routes]), rmcp is the wire only.
 rmcp = { workspace = true }

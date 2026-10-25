@@ -185,7 +185,7 @@ impl App for ExampleApp {
                 "30s".parse().expect("valid schedule"),
                 || async { tracing::debug!("dynamic heartbeat tick") },
             ))
-            .with_layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            .with_layer(r2e::http::layers::timeout::TimeoutLayer::with_status_code(
                 r2e::http::StatusCode::REQUEST_TIMEOUT,
                 Duration::from_secs(30),
             ))
