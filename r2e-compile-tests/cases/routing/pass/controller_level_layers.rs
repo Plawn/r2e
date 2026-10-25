@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use r2e::http::extract::{Request, State};
+use r2e::http::extract::Request;
 use r2e::http::middleware::Next;
 use r2e::http::response::Response;
 use r2e::http::DefaultBodyLimit;
@@ -14,7 +14,7 @@ async fn plain_mw(req: Request, next: Next) -> Response {
 }
 
 async fn stateful_mw(
-    State(ctrl): State<Arc<ProxyController>>,
+    ctrl: Arc<ProxyController>,
     req: Request,
     next: Next,
 ) -> Response {

@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use r2e_core::beans::{BeanContext, BeanRegistry};
 use r2e_core::decorators::guards::{GuardContext, GuardError, PathParams};
 use r2e_core::http::response::IntoResponse;
-use r2e_core::http::{HeaderMap, Router, StatusCode, Uri};
+use r2e_core::http::{HeaderMap, Routes, StatusCode, Uri};
 use r2e_core::prelude::*;
 use r2e_core::type_list::{TAppend, TCons, TNil};
 use r2e_core::{AppBuilder, Controller, DecoratorSpec, Identity, NoIdentity, SelfBuilt};
@@ -229,19 +229,21 @@ where
         <Self as ContextConstruct>::from_context(ctx)
     }
 
-    fn routes(_state: &S, core: Arc<Self>, ctx: &BeanContext) -> Router<S> {
+    fn routes(_state: &S, core: Arc<Self>, ctx: &BeanContext) -> Routes<S> {
         // Decorators built HERE, once, from the resolved graph — then one
         // Arc of the route's site set moved into the closure. Axum requires
         // handler closures to be Clone — Arc satisfies it; the per-request
         // cost is the Arc clone (replaces today's per-request spec
         // evaluation + BeanLookup TypeId chain).
         let deco = Arc::new(SpikeDecorators::build(ctx));
-        Router::new().route(
+        Routes::new().route(
             "/spike",
-            r2e_core::http::routing::get(move |headers: HeaderMap, uri: Uri| {
+            r2e_core::http::routing::get(move |_: S, req: r2e_core::http::Request| {
                 let deco = deco.clone();
                 let core = core.clone();
                 async move {
+                    let (parts, _) = req.into_parts();
+                    let (headers, uri): (HeaderMap, Uri) = (parts.headers, parts.uri);
                     let guard_ctx = GuardContext::<NoIdentity> {
                         method_name: "list",
                         controller_name: "SpikeController",

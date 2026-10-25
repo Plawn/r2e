@@ -45,7 +45,7 @@ async fn serve_h3_round_trip() {
     let server_config = quic::build_server_config(&cert_pem, &key_pem).unwrap();
 
     let router =
-        r2e_http::Router::new().route("/ping", r2e_http::routing::get(|| async { "pong" }));
+        r2e_http::Routes::new().route("/ping", r2e_http::routing::get(|_: (), _| async { "pong" }));
 
     let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
     let server_addr = endpoint.local_addr().unwrap();
@@ -104,9 +104,12 @@ async fn serve_h3_post_body_streaming() {
     let (cert_pem, key_pem) = generate_test_certs();
     let server_config = quic::build_server_config(&cert_pem, &key_pem).unwrap();
 
-    let router = r2e_http::Router::new().route(
+    let router = r2e_http::Routes::new().route(
         "/echo",
-        r2e_http::routing::post(|body: r2e_http::Bytes| async move { body }),
+        r2e_http::routing::post(|_: (), req: r2e_http::Request| async move {
+            use http_body_util::BodyExt as _;
+            req.into_body().collect().await.unwrap().to_bytes()
+        }),
     );
 
     let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
@@ -171,9 +174,12 @@ async fn serve_h3_payload_too_large() {
     let (cert_pem, key_pem) = generate_test_certs();
     let server_config = quic::build_server_config(&cert_pem, &key_pem).unwrap();
 
-    let router = r2e_http::Router::new().route(
+    let router = r2e_http::Routes::new().route(
         "/upload",
-        r2e_http::routing::post(|body: r2e_http::Bytes| async move { body }),
+        r2e_http::routing::post(|_: (), req: r2e_http::Request| async move {
+            use http_body_util::BodyExt as _;
+            req.into_body().collect().await.unwrap().to_bytes()
+        }),
     );
 
     let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();

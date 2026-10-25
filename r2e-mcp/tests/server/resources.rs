@@ -5,7 +5,7 @@
 
 use http_body_util::BodyExt;
 use r2e_core::http::{Body, Request};
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, McpResourceUpdates, McpServer, ResourceCall};
@@ -15,7 +15,7 @@ use tower::ServiceExt;
 use crate::fixtures::fixture_app;
 use crate::support;
 
-async fn initialize_result(router: &Router) -> Value {
+async fn initialize_result(router: &Routes) -> Value {
     let response = support::post(router, "/mcp", None, &support::initialize_body()).await;
     assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
     response.result().clone()
@@ -137,7 +137,7 @@ impl TemplateResources {
     }
 }
 
-async fn template_app() -> Router {
+async fn template_app() -> Routes {
     AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()
@@ -195,7 +195,7 @@ impl NestedTemplateResources {
     }
 }
 
-async fn nested_template_app() -> Router {
+async fn nested_template_app() -> Routes {
     AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()

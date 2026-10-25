@@ -364,7 +364,7 @@ responses go through it too:
 | Situation | Kind | Default body |
 |-----------|------|--------------|
 | Panicking handler | `Internal` (500) | `{"error":"Internal server error"}` |
-| Unknown route (unless the app installed its own fallback: a controller `#[fallback]`, a merged `Router::fallback`, the static SPA fallback) | `NotFound` (404) | `{"error":"Not found"}` |
+| Unknown route (unless the app installed its own fallback: a controller `#[fallback]`, a merged `Routes::fallback`, the static SPA fallback) | `NotFound` (404) | `{"error":"Not found"}` |
 | Known path, wrong method (`Allow` header kept) | `MethodNotAllowed` (405) | `{"error":"Method not allowed"}` |
 | Oversized body | `PayloadTooLarge` (413) | `{"error": <body-limit message>}` |
 

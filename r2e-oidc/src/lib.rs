@@ -69,7 +69,7 @@ mod state;
 use std::sync::Arc;
 
 use r2e_core::http::routing::{get, post};
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
 use r2e_core::Plugin;
 use r2e_security::{JwtClaimsValidator, SecurityConfig};
@@ -336,8 +336,8 @@ impl Plugin for OidcServer {
 }
 
 /// Build the OIDC Axum router.
-fn oidc_routes(state: Arc<state::OidcState>, base_path: &str) -> Router {
-    let router = Router::new()
+fn oidc_routes(state: Arc<state::OidcState>, base_path: &str) -> Routes {
+    let router = Routes::new()
         .route("/oauth/token", post(handlers::token_handler))
         .route(
             "/oauth/authorize",
@@ -357,7 +357,7 @@ fn oidc_routes(state: Arc<state::OidcState>, base_path: &str) -> Router {
     if base_path.is_empty() {
         router
     } else {
-        Router::new().nest(base_path, router)
+        Routes::new().nest(base_path, router)
     }
 }
 

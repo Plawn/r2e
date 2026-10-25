@@ -3,7 +3,7 @@
 //! members' `with_completion`, the 100-value cap, the `completions`
 //! capability, and the unknown/hidden-reference error.
 
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{
@@ -164,7 +164,7 @@ impl SecretPrompts {
     }
 }
 
-async fn app() -> Router {
+async fn app() -> Routes {
     AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()
@@ -173,7 +173,7 @@ async fn app() -> Router {
         .build()
 }
 
-async fn app_with_secret() -> Router {
+async fn app_with_secret() -> Routes {
     AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()
@@ -184,7 +184,7 @@ async fn app_with_secret() -> Router {
 }
 
 /// `completion/complete` → the full JSON-RPC message.
-async fn complete(router: &Router, session: &str, reference: Value, argument: Value) -> Value {
+async fn complete(router: &Routes, session: &str, reference: Value, argument: Value) -> Value {
     complete_with(
         router,
         session,
@@ -193,7 +193,7 @@ async fn complete(router: &Router, session: &str, reference: Value, argument: Va
     .await
 }
 
-async fn complete_with(router: &Router, session: &str, params: Value) -> Value {
+async fn complete_with(router: &Routes, session: &str, params: Value) -> Value {
     let response = support::post(
         router,
         "/mcp",
@@ -217,7 +217,7 @@ fn arg(name: &str, value: &str) -> Value {
     json!({ "name": name, "value": value })
 }
 
-async fn capabilities(router: &Router) -> Value {
+async fn capabilities(router: &Routes) -> Value {
     let response = support::post(router, "/mcp", None, &support::initialize_body()).await;
     response.result()["capabilities"].clone()
 }

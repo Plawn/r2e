@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-async fn get(router: r2e_core::http::Router, path: &str, user: Option<&str>) -> String {
+async fn get(router: r2e_core::http::Routes, path: &str, user: Option<&str>) -> String {
     let mut request = Request::builder().uri(path);
     if let Some(user) = user {
         request = request.header("x-test-user", user);
@@ -264,7 +264,7 @@ impl BeanBackedExtractorController {
     }
 }
 
-async fn get_tenant(router: r2e_core::http::Router, tenant: &str) -> String {
+async fn get_tenant(router: r2e_core::http::Routes, tenant: &str) -> String {
     let request = Request::builder()
         .uri("/resolved-tenant")
         .header("x-tenant", tenant)

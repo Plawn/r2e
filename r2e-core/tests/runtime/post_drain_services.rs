@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use r2e_core::builder::{AppBuilder, SpawnService};
 use r2e_core::http::routing::get;
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::rt::sync::mpsc;
 use r2e_core::rt::CancelToken;
 use r2e_core::runtime::service::ServiceComponent;
@@ -123,10 +123,10 @@ impl ServiceComponent for EarlyProbe {
 
 /// A handler that is still running when shutdown starts and hands its result
 /// to the sink just before returning — the write-behind shape of the ticket.
-fn write_behind_router() -> Router {
-    Router::new().route(
+fn write_behind_router() -> Routes {
+    Routes::new().route(
         "/slow-write",
-        get(|| async {
+        get(|_, _| async {
             r2e_core::rt::sleep(Duration::from_millis(500)).await;
             let tx = SINK_TX.lock().unwrap().clone().expect("sink sender");
             tx.send(1)

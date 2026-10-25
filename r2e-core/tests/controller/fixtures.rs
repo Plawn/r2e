@@ -93,7 +93,7 @@ pub async fn body_string(resp: Response) -> String {
 
 /// GET with optional `x-user` / `x-tenant` headers.
 pub async fn req(
-    router: r2e_core::http::Router,
+    router: r2e_core::http::Routes,
     path: &str,
     user: Option<&str>,
     tenant: Option<&str>,

@@ -1,5 +1,4 @@
 use crate::runtime::tracing_config::{LogFormat, TracingConfig};
-use tower_http::cors::{Any, CorsLayer};
 use tracing_subscriber::EnvFilter;
 
 /// The configuration the process-global subscriber was actually installed
@@ -208,16 +207,10 @@ pub fn try_init_tracing_with_config(
     }
 }
 
-/// Returns a permissive CORS layer that allows any origin, method, and headers.
-///
-/// Suitable for development or internal services. For production, prefer
-/// `AppBuilder::with_cors_config` with a stricter `CorsLayer`.
-pub fn default_cors() -> CorsLayer {
-    CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any)
-}
+// The tower-http-backed pieces live in `r2e_http::layers` (the one crate
+// allowed to name tower-http); re-exported here so `runtime::layers::*` and
+// the crate-root `default_cors` keep their paths.
+pub use crate::http::layers::{default_cors, normalize_path_router};
 
 /// Returns the layer that converts panics into 500 responses in the
 /// application's error envelope (`projector`), logs one structured `error`
@@ -237,7 +230,7 @@ pub fn catch_panic_layer_with(
 /// router, both answering through the application's error envelope.
 ///
 /// - **404** — only when nothing else claimed the router fallback
-///   ([`has_custom_fallback`](crate::http::routing::has_custom_fallback)):
+///   ([`Routes::has_custom_fallback`](crate::http::Routes::has_custom_fallback)):
 ///   a controller `#[fallback]`, a router merged with its own `.fallback(..)`,
 ///   or a plugin such as the SPA fallback keep winning. Without one, axum
 ///   would answer an empty-bodied 404; R2E answers `Rejection::not_found`
@@ -252,21 +245,21 @@ pub fn catch_panic_layer_with(
 /// router has been merged: routes added later would miss the 405 responder,
 /// and a fallback merged later would panic against the one installed here.
 pub fn framework_fallbacks(
-    app: crate::http::Router,
+    app: crate::http::Routes,
     projector: &crate::error::ErrorProjector,
-) -> crate::http::Router {
+) -> crate::http::Routes {
     use crate::error::{Rejection, RejectionKind};
 
     let mut app = app;
-    if !crate::http::routing::has_custom_fallback(&app) {
+    if !app.has_custom_fallback() {
         let projector = projector.clone();
-        app = app.fallback(move || {
+        app = app.fallback(move |_: (), _: crate::http::Request| {
             let projector = projector.clone();
             async move { projector.project(Rejection::not_found("Not found")) }
         });
     }
     let projector = projector.clone();
-    app.method_not_allowed_fallback(move || {
+    app.method_not_allowed_fallback(move |_: (), _: crate::http::Request| {
         let projector = projector.clone();
         async move {
             projector.project(Rejection::new(
@@ -275,26 +268,6 @@ pub fn framework_fallbacks(
             ))
         }
     })
-}
-
-/// Wrap a fully-built router in pre-routing trailing-slash normalization.
-///
-/// A middleware added via `Router::layer` runs after routing and cannot
-/// change which route matches, so the rewrite must wrap the router itself:
-/// the whole router goes inside tower-http's `NormalizePath` service, and
-/// the wrapped service is re-embedded as the fallback of a fresh routerless
-/// `Router` so callers keep receiving a plain `Router`. The outer router is
-/// a trivial extra dispatch hop — the meaningful routing (and `MatchedPath`
-/// insertion) happens once, in the wrapped inner router. Anything applied
-/// OUTSIDE this wrap (e.g. `router_wraps`) therefore never sees
-/// `MatchedPath`.
-///
-/// tower-http's `trim_trailing_slash` also collapses a leading run of
-/// slashes (`//admin` → `/admin`); see the `NormalizePath` plugin docs.
-pub fn normalize_path_router(router: crate::http::Router) -> crate::http::Router {
-    use tower::Layer as _;
-    let svc = tower_http::normalize_path::NormalizePathLayer::trim_trailing_slash().layer(router);
-    crate::http::Router::new().fallback_service(svc)
 }
 
 /// A pass-through middleware whose only job is to **own** the resolved bean

@@ -10,17 +10,17 @@ This enforces a clean dependency boundary: if Axum's API changes, only this crat
 
 ## Re-exports
 
-Core Axum types. Frequently used items are also flattened at the crate root, so both `r2e_http::Router` and `r2e_http::routing::get` resolve:
+HTTP types. Frequently used items are also flattened at the crate root, so both `r2e_http::Routes` and `r2e_http::routing::get` resolve:
 
 | Module | Types |
 |--------|-------|
-| crate root | `Router`, `Json`, `Extension`, `Error`, `Uri`, `Bytes`, plus flattened `extract`/`header`/`response`/`body` items |
+| crate root | `Routes`, `MethodRoutes`, `Json`, `Extension`, `Error`, `Uri`, `Bytes`, plus flattened `extract`/`header`/`response`/`body` items |
 | `extract` | `Path`, `Query`, `Form`, `State`, `Request`, `FromRequestParts`, `OptionalFromRequestParts`, `ConnectInfo`, `MatchedPath`, `DefaultBodyLimit`, ... |
 | `header` | `HeaderMap`, `HeaderName`, `HeaderValue`, `StatusCode`, `Method`, `Parts`, all `http::header` constants |
 | `response` | `Response`, `IntoResponse`, `Html`, `Redirect`, `Sse`, `SseEvent`, `SseKeepAlive` |
-| `routing` | `MethodRouter`, `Route`, `get`, `post`, `put`, `patch`, `delete`, `any` |
+| `routing` | `Routes<S>` / `MethodRoutes<S>` (R2E-owned newtypes over axum's router), `Route`, `Handler`, `RouteLayer`, `LeafService`, `Methods`, `on`, `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, `trace`, `any` |
 | `body` | `Body`, `to_bytes` |
-| `middleware` | `from_fn`, `from_fn_with_state`, `Next` |
+| `middleware` | `Next` (function middleware attaches via `Routes::middleware_fn` / `MethodRoutes::middleware_fn[_with_state]`) |
 
 The `labels` module (always compiled) provides bounded telemetry label helpers (`method_label`, `UNMATCHED_PATH_LABEL`, ...) shared by `r2e-prometheus` and `r2e-observability`.
 

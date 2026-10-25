@@ -356,7 +356,7 @@ AppBuilder::new()
     .plugin(GrpcServer::multiplexed().with_grpc_web())
 ```
 
-The grpc-web arm is `tonic-web` around the same registered routes (interceptors, guards, and reflection included), fronted by a CORS layer. The default policy allows any origin, `POST`/`OPTIONS`, mirrors the requested headers, exposes `grpc-status` / `grpc-message` / `grpc-status-details-bin`, and caches preflights for 24h. Bring your own with `with_grpc_web_cors(CorsLayer)` (a `tower_http::cors::CorsLayer`). grpc-web preflights — `OPTIONS` whose `access-control-request-headers` names `x-grpc-web` — are routed to that layer, so the app needs no `Cors` plugin for browser gRPC; other preflights keep going to the HTTP router.
+The grpc-web arm is `tonic-web` around the same registered routes (interceptors, guards, and reflection included), fronted by a CORS layer. The default policy allows any origin, `POST`/`OPTIONS`, mirrors the requested headers, exposes `grpc-status` / `grpc-message` / `grpc-status-details-bin`, and caches preflights for 24h. Bring your own with `with_grpc_web_cors(CorsLayer)` (`r2e::http::layers::cors::CorsLayer`, tower-http's type). grpc-web preflights — `OPTIONS` whose `access-control-request-headers` names `x-grpc-web` — are routed to that layer, so the app needs no `Cors` plugin for browser gRPC; other preflights keep going to the HTTP router.
 
 `with_grpc_web()` is only honoured by the multiplexed transport; on `on_port` it is ignored with a boot warning. With the feature off nothing changes (no `tonic-web` dependency, 415 as before).
 

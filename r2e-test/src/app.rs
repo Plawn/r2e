@@ -5,7 +5,7 @@ use http::header::{
 use http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use r2e_core::http::body::Body;
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
@@ -296,7 +296,7 @@ macro_rules! impl_request_builders {
 
 // ─── TestApp ───
 
-/// In-process HTTP test client wrapping an Axum `Router`.
+/// In-process HTTP test client wrapping an Axum `Routes`.
 ///
 /// Uses `tower::ServiceExt::oneshot` to dispatch requests without binding
 /// to a TCP port.
@@ -307,7 +307,7 @@ macro_rules! impl_request_builders {
 /// [`boot_with`](Self::boot_with)), which additionally retains the resolved
 /// bean graph, the loaded config, and an auto-wired [`TestJwt`].
 pub struct TestApp {
-    pub(crate) router: Router,
+    pub(crate) router: Routes,
     pub(crate) bean_context: Option<std::sync::Arc<r2e_core::beans::BeanContext>>,
     pub(crate) config: Option<r2e_core::config::R2eConfig>,
     pub(crate) jwt: Option<crate::TestJwt>,
@@ -321,8 +321,8 @@ pub struct TestApp {
 }
 
 impl TestApp {
-    /// Create a `TestApp` from an assembled `r2e::http::Router`.
-    pub fn new(router: Router) -> Self {
+    /// Create a `TestApp` from an assembled `r2e::http::Routes`.
+    pub fn new(router: Routes) -> Self {
         Self {
             router,
             bean_context: None,
@@ -633,7 +633,7 @@ pub(crate) fn build_uri(path: &str, queries: &[(String, String)]) -> String {
 /// Execute an HTTP request against a router and return a `TestResponse`.
 ///
 /// This is used by both `TestRequest::send()` and `SessionRequest::send()`.
-pub(crate) async fn execute_request(router: &Router, request: Request<Body>) -> TestResponse {
+pub(crate) async fn execute_request(router: &Routes, request: Request<Body>) -> TestResponse {
     let response = router
         .clone()
         .oneshot(request)

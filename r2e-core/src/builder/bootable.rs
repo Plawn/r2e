@@ -43,10 +43,10 @@ pub trait BootableApp: Sized {
     /// The loaded [`R2eConfig`](crate::config::R2eConfig), if any.
     fn r2e_config(&self) -> Option<crate::config::R2eConfig>;
 
-    /// Assemble the final router without starting event consumers.
-    fn into_router(self) -> crate::http::Router;
+    /// Assemble the final routes without starting event consumers.
+    fn into_routes(self) -> crate::http::Routes;
 
-    /// Assemble the final router and run the consumer registrations that
+    /// Assemble the final routes and run the consumer registrations that
     /// `serve()` would run at startup (`#[consumer]` methods, subscriber
     /// beans, EventBus bridges) plus the controller `#[post_construct]` and
     /// `#[on_start]` hooks. The router-only in-process entry point: it starts
@@ -58,9 +58,9 @@ pub trait BootableApp: Sized {
     /// Fallible: a startup hook that returns `Err` aborts the boot here, which
     /// is what lets `TestApp::try_boot*` return it instead of panicking
     /// underneath the harness.
-    fn into_router_with_consumers(
+    fn into_routes_with_consumers(
         self,
-    ) -> impl Future<Output = Result<crate::http::Router, crate::beans::BootError>>;
+    ) -> impl Future<Output = Result<crate::http::Routes, crate::beans::BootError>>;
 
     /// Start the app **in process**, running the production startup phase
     /// (controller `#[post_construct]`, consumer registrations, `#[on_start]`,
@@ -93,13 +93,13 @@ impl<T: Clone + Send + Sync + 'static> BootableApp for AppBuilder<T> {
         self.shared.config.clone()
     }
 
-    fn into_router(self) -> crate::http::Router {
+    fn into_routes(self) -> crate::http::Routes {
         self.build()
     }
 
-    fn into_router_with_consumers(
+    fn into_routes_with_consumers(
         self,
-    ) -> impl Future<Output = Result<crate::http::Router, crate::beans::BootError>> {
+    ) -> impl Future<Output = Result<crate::http::Routes, crate::beans::BootError>> {
         self.try_build_with_consumers()
     }
 

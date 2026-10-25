@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use r2e_core::http::server::{serve, ServeOptions};
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use tokio::net::TcpListener;
 
 /// A test server running on a random local port.
@@ -41,11 +41,11 @@ impl TestServer {
         }
     }
 
-    /// Spawn a test server from a `Router`, binding to a random local port.
+    /// Spawn a test server from a `Routes`, binding to a random local port.
     ///
     /// Detached from any app lifecycle — see [`attached`](Self::attached) for
     /// the booted-app form `TestApp::serve` uses.
-    pub async fn new(router: Router) -> Self {
+    pub async fn new(router: Routes) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("failed to bind test server");

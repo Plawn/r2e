@@ -13,7 +13,7 @@ use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use r2e_core::http::labels::{OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router};
+use r2e_core::http::{Body, Request, Routes};
 use r2e_core::{HttpTraceLayer, HttpTraceSettings};
 use r2e_observability::{inject_current_context, OtelRequestSpan};
 use std::collections::HashMap;
@@ -71,8 +71,8 @@ async fn request_span_fields(method: &str, path: &str) -> HashMap<String, String
     let subscriber = Registry::default().with(capture.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    let router = Router::new()
-        .route("/users/{id}", get(|| async { "user" }))
+    let router = Routes::new()
+        .route("/users/{id}", get(|_, _| async { "user" }))
         .layer(otel_layer());
     let req = Request::builder()
         .method(method)
@@ -122,10 +122,10 @@ async fn incoming_traceparent_is_used_for_downstream_propagation() {
     let subscriber = Registry::default().with(tracing_opentelemetry::layer().with_tracer(tracer));
     let subscriber_guard = tracing::subscriber::set_default(subscriber);
 
-    let router = Router::new()
+    let router = Routes::new()
         .route(
             "/propagate",
-            get(|| async {
+            get(|_, _| async {
                 let mut headers = http::HeaderMap::new();
                 inject_current_context(&mut headers);
                 headers["traceparent"].to_str().unwrap().to_string()

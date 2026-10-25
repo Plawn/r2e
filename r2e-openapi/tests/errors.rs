@@ -336,7 +336,7 @@ mod plugin {
         name: String,
     }
 
-    async fn spec(router: r2e_core::http::Router) -> Value {
+    async fn spec(router: r2e_core::http::Routes) -> Value {
         let resp = router
             .oneshot(
                 Request::builder()

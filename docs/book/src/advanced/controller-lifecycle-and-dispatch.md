@@ -147,7 +147,7 @@ Conceptually, the expanded code is:
 // Built once at registration, from the resolved bean graph (by type).
 let core: Arc<AccountController> = Arc::new(AccountController::from_context(&ctx));
 
-Router::new().route(
+Routes::new().route(
     "/me",
     get({
         let core = core.clone(); // once per registered route

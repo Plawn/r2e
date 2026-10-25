@@ -118,9 +118,7 @@ where
         // which never runs a tenancy extractor and only ever sees a read-only
         // `RequestHead`. Build effects are dropped when `tenancy.enabled` is
         // false, which is exactly right: a disabled router resolves nothing.
-        ctx.add_layer(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(install_tenant_memo))
-        });
+        ctx.add_layer(|routes| routes.middleware_fn(install_tenant_memo));
 
         let mut config = config.unwrap_or_default();
         if let Some(policy) = self.policy_override {

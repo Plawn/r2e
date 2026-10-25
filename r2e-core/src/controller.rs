@@ -122,7 +122,7 @@ pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 's
         state: &T,
         core: std::sync::Arc<Self>,
         ctx: &crate::beans::BeanContext,
-    ) -> crate::http::Router<T>;
+    ) -> crate::http::Routes<T>;
 
     /// Push metadata about this controller's routes into the registry.
     ///

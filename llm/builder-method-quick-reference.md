@@ -41,7 +41,7 @@ requires: app-builder, dev-experience
 | `.shutdown_grace_period(d)` | app | Bound the tracked-handle join, PER handle (`spawn_service`, `ServeContext::track`, `#[ws]` sessions). Default: unbounded |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
 | `.worker_local(f)` | pre-state | `.provide(WorkerLocal<T>)` + install as per-worker service: exactly one `T` per worker (`T` may be `!Send`) |
-| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
+| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get `Routes` (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 
 Launching: `main.rs` is normally just `r2e::app_main!(MyApp);` — the entry point
 performs `AppBuilder::new()` … `serve_auto()` around your `App::build`, so

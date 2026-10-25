@@ -99,12 +99,13 @@ Semantics:
 Both work on a route method **and** on the `#[routes]` impl block (below
 `#[routes]`). On the impl they wrap **every** route, `#[sse]` and `#[ws]`
 method of the controller — a `#[fallback]` route is skipped
-(`Router::fallback` takes no per-route layers).
+(`Routes::fallback` takes no per-route layers).
 
-- `#[middleware(my_fn)]` — `from_fn`: `async fn(Request, Next) -> Response`.
-- `#[middleware(my_fn, state)]` — `from_fn_with_state` with the controller
-  core: the function takes `State<Arc<Ctrl>>` (the controller struct, its
-  `#[inject]` beans and `#[config]` values resolved; no request-scoped fields).
+- `#[middleware(my_fn)]` — `async fn(Request, Next) -> Response`.
+- `#[middleware(my_fn, state)]` — the controller core is passed as the first
+  argument: `async fn(Arc<Ctrl>, Request, Next) -> Response` (the controller
+  struct, its `#[inject]` beans and `#[config]` values resolved; no
+  request-scoped fields).
 - `#[layer(expr)]` — any tower `Layer`, evaluated at registration.
 - `#[layer(|this: &Self| expr)]` — the closure receives the controller core and
   returns the layer; called **once** at route registration, never per request
@@ -121,12 +122,11 @@ method of the controller — a `#[fallback]` route is skipped
 ```rust
 use std::sync::Arc;
 use r2e::prelude::*;
-use r2e::http::extract::State;
 use r2e::http::middleware::Next;
 use r2e::http::response::Response;
 use r2e::http::{DefaultBodyLimit, Request};
 
-async fn audit(State(ctrl): State<Arc<ProxyController>>, req: Request, next: Next) -> Response {
+async fn audit(ctrl: Arc<ProxyController>, req: Request, next: Next) -> Response {
     let _limit = ctrl.body_limit; // the core: beans + config, no request-scoped fields
     next.run(req).await
 }

@@ -256,7 +256,7 @@ impl AnonController {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 async fn get(
-    router: &r2e_core::http::Router,
+    router: &r2e_core::http::Routes,
     path: &str,
     headers: &[(&str, &str)],
 ) -> (StatusCode, String) {

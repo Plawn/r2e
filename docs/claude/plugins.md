@@ -79,7 +79,7 @@ A plugin never touches the router directly; it registers **effects** on the
 |---|---|---|
 | **Graph** | `add_layer`, `after_build`, `on_serve`, `on_serve_each_cycle`, `store_data` | inside `build_state()`, right after the graph resolves |
 | **Routes** | `after_routes(FnOnce(&mut RoutesContext))` | in `build()`, after **every** controller (app, module, plugin) is registered |
-| **Finalize** | `wrap_router(FnOnce(Router) -> Router)` | in `build()`, outermost — after every HTTP layer |
+| **Finalize** | `wrap_router(FnOnce(Routes) -> Routes)` | in `build()`, outermost — after every HTTP layer |
 
 Two orders coexist (documented, deliberate):
 
@@ -124,7 +124,7 @@ Which stage do I want?
   mounted from route metadata. `after_routes` hands you a `RoutesContext`; see
   below.
 
-**`add_layer` wraps, it never mounts.** `Router::layer` only wraps the routes
+**`add_layer` wraps, it never mounts.** `Routes::layer` only wraps the routes
 (and fallback) that exist when it is called, so a `.route(..)` / `.merge(..)` /
 `.fallback(..)` done inside an `add_layer` closure lands *above* the inner
 catch-panic slot and above every layer installed before that plugin: no
@@ -229,7 +229,7 @@ a missing bean is a compile error naming the plugin
 
 This is the preferred way for a plugin to expose HTTP: guards, `#[roles]`,
 OpenAPI metadata and request extraction all work as usual, instead of
-hand-assembling a `Router` inside `build`.
+hand-assembling a `Routes` inside `build`.
 
 ### Lifecycle
 
@@ -737,7 +737,7 @@ In-tree contributor: `DataSourceHealth<DB, Tag>` in `r2e-data-sqlx` /
 ## Testing plugins
 
 - Unit: `AppBuilder::new().plugin(X).build_state().await`, assert beans via
-  `state.get::<T>()` / `app.bean_context()`. Router surface: `.build()` on the
+  `state.get::<T>()` / `app.bean_context()`. Routes surface: `.build()` on the
   typed app (NOT `with_state(())` — see above).
 - Mocking: `override_bean` each `Provided` type **before** `.plugin()` — the
   pins win, and `build` still runs (with its effects) unless the plugin sets

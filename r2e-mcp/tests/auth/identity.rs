@@ -19,8 +19,8 @@
 
 use std::sync::Arc;
 
-use r2e_core::http::middleware::{from_fn, Next};
-use r2e_core::http::{Body, Parts, Request, Router};
+use r2e_core::http::middleware::Next;
+use r2e_core::http::{Body, Parts, Request, Routes};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, McpPrincipal, McpServer, PromptCall, ResourceCall, ToolCall};
@@ -129,7 +129,7 @@ impl IdentityTools {
 // ── Boot helpers ───────────────────────────────────────────────────────────
 
 /// The authenticated app: the MCP auth layer deposits `Arc<AuthenticatedUser>`.
-async fn app() -> Router {
+async fn app() -> Routes {
     AppBuilder::new()
         .plugin(
             McpServer::new()
@@ -143,7 +143,7 @@ async fn app() -> Router {
 }
 
 /// The same service with NO MCP auth — nothing deposits an identity.
-async fn open_app() -> Router {
+async fn open_app() -> Routes {
     AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()
@@ -166,17 +166,17 @@ async fn user(sub: &str) -> AuthenticatedUser {
 
 /// A router layer depositing `plain` as a bare `AuthenticatedUser` extension —
 /// what any identity layer that is not MCP's own would do.
-fn depositing_plain(router: Router, plain: AuthenticatedUser) -> Router {
-    router.layer(from_fn(move |mut req: Request, next: Next| {
+fn depositing_plain(router: Routes, plain: AuthenticatedUser) -> Routes {
+    router.middleware_fn(move |mut req: Request, next: Next| {
         let plain = plain.clone();
         async move {
             req.extensions_mut().insert(plain);
             next.run(req).await
         }
-    }))
+    })
 }
 
-async fn call(router: &Router, session: &str, token: &str, name: &str) -> String {
+async fn call(router: &Routes, session: &str, token: &str, name: &str) -> String {
     let result = tools_call_auth(router, "/mcp", session, token, name, json!({})).await;
     assert_eq!(result["result"]["isError"], false, "{result}");
     result["result"]["content"][0]["text"]
@@ -380,7 +380,7 @@ fn prompt_text(message: &Value) -> &str {
         .unwrap_or_else(|| panic!("no prompt text in {message}"))
 }
 
-async fn read(router: &Router, session: &str, token: &str, uri: &str) -> Value {
+async fn read(router: &Routes, session: &str, token: &str, uri: &str) -> Value {
     rpc_auth(
         router,
         "/mcp",
@@ -392,7 +392,7 @@ async fn read(router: &Router, session: &str, token: &str, uri: &str) -> Value {
     .await
 }
 
-async fn get(router: &Router, session: &str, token: &str, name: &str) -> Value {
+async fn get(router: &Routes, session: &str, token: &str, name: &str) -> Value {
     rpc_auth(
         router,
         "/mcp",

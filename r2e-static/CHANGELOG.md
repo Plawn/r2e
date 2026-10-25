@@ -15,6 +15,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `EmbeddedFrontend::into_router()` → `into_routes()`, returning
+  `r2e_core::http::Routes` (see `docs/migration/routes-newtype.md`).
+
 ## [0.7.0] - 2026-10-12
 
 ### Changed

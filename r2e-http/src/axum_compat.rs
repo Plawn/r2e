@@ -33,3 +33,39 @@
 pub use axum;
 
 pub use axum::*;
+
+/// The backend router behind R2E's [`Routes`](crate::Routes).
+///
+/// For merging a hand-built or third-party `axum::Router` into an R2E app
+/// (`AppBuilder::merge_router(from_router(..))`) or handing R2E's routes to
+/// something spelled in axum types. The usual caveat applies: this couples
+/// the call site to the backend.
+pub fn into_router<S>(routes: crate::Routes<S>) -> axum::Router<S> {
+    routes.into_inner()
+}
+
+/// R2E [`Routes`](crate::Routes) over a backend router. See [`into_router`].
+pub fn from_router<S>(router: axum::Router<S>) -> crate::Routes<S> {
+    crate::Routes::from_inner(router)
+}
+
+/// The backend method router behind R2E's [`MethodRoutes`](crate::MethodRoutes).
+pub fn into_method_router<S>(
+    routes: crate::MethodRoutes<S>,
+) -> axum::routing::MethodRouter<S, std::convert::Infallible>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    routes.into_inner()
+}
+
+/// R2E [`MethodRoutes`](crate::MethodRoutes) over a backend method router —
+/// the way to mount a handler written against axum's extractor tuple.
+pub fn from_method_router<S>(
+    router: axum::routing::MethodRouter<S, std::convert::Infallible>,
+) -> crate::MethodRoutes<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    crate::MethodRoutes::from_inner(router)
+}

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use http_body_util::BodyExt;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, ElicitError, Elicited, McpClient, McpError, McpServer, ToolCall};
@@ -107,7 +107,7 @@ impl AskTools {
     }
 }
 
-async fn app(plugin: McpServer) -> Router {
+async fn app(plugin: McpServer) -> Routes {
     AppBuilder::new()
         .plugin(plugin)
         .build_state()
@@ -117,7 +117,7 @@ async fn app(plugin: McpServer) -> Router {
 }
 
 /// Session handshake advertising `capabilities`.
-async fn initialize(router: &Router, capabilities: Value) -> String {
+async fn initialize(router: &Routes, capabilities: Value) -> String {
     let mut body = support::initialize_body();
     body["params"]["capabilities"] = capabilities;
     let response = support::post(router, "/mcp", None, &body).await;
@@ -143,7 +143,7 @@ struct Stream {
 }
 
 impl Stream {
-    async fn open(router: &Router, session: Option<&str>, body: &Value) -> Stream {
+    async fn open(router: &Routes, session: Option<&str>, body: &Value) -> Stream {
         let mut builder = Request::builder()
             .method("POST")
             .uri("/mcp")
@@ -213,7 +213,7 @@ fn tool(name: &str) -> Value {
     call("tools/call", json!({ "name": name, "arguments": {} }))
 }
 
-async fn answer(router: &Router, session: &str, request: &Value, result: Value) {
+async fn answer(router: &Routes, session: &str, request: &Value, result: Value) {
     let posted = support::post(
         router,
         "/mcp",

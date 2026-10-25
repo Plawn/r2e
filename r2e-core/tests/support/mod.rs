@@ -14,10 +14,10 @@
 #![allow(dead_code)]
 
 use http_body_util::BodyExt;
-use r2e_core::http::{Body, Request, Response, Router, StatusCode};
+use r2e_core::http::{Body, Request, Response, Routes, StatusCode};
 use tower::ServiceExt;
 
-// ── Router driving (`tower::oneshot`) ──────────────────────────────────────
+// ── Routes driving (`tower::oneshot`) ──────────────────────────────────────
 
 /// Collect a response body into a `String` (lossy — test bodies are UTF-8).
 pub async fn body_string(resp: Response) -> String {
@@ -27,7 +27,7 @@ pub async fn body_string(resp: Response) -> String {
 
 /// Drive one request through the router and return the raw response.
 pub async fn raw(
-    router: Router,
+    router: Routes,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
@@ -42,7 +42,7 @@ pub async fn raw(
 
 /// Drive one request through the router and return `(status, body)`.
 pub async fn send(
-    router: Router,
+    router: Routes,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
@@ -54,13 +54,13 @@ pub async fn send(
 }
 
 /// `GET path` → `(status, body)`.
-pub async fn send_get(router: Router, path: &str) -> (StatusCode, String) {
+pub async fn send_get(router: Routes, path: &str) -> (StatusCode, String) {
     send(router, "GET", path, &[], Body::empty()).await
 }
 
 /// `GET path` with headers → `(status, body)`.
 pub async fn send_get_with(
-    router: Router,
+    router: Routes,
     path: &str,
     headers: &[(&str, &str)],
 ) -> (StatusCode, String) {
@@ -68,7 +68,7 @@ pub async fn send_get_with(
 }
 
 /// `GET path` with headers → raw response (for header/extension assertions).
-pub async fn raw_get_with(router: Router, path: &str, headers: &[(&str, &str)]) -> Response {
+pub async fn raw_get_with(router: Routes, path: &str, headers: &[(&str, &str)]) -> Response {
     raw(router, "GET", path, headers, Body::empty()).await
 }
 

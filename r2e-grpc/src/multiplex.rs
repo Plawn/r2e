@@ -24,7 +24,7 @@ use tower::Service;
 /// app has no `Cors` plugin.
 ///
 /// All inner services must be infallible (`Error = Infallible`) — which
-/// `tonic::service::Routes`, `r2e_core::http::Router` and a `tower-http`
+/// `tonic::service::Routes`, `r2e_core::http::Routes` and a `tower-http`
 /// `Cors`-wrapped `tonic_web::GrpcWebService` all are — so the multiplexer is
 /// itself infallible and can be mounted directly on an axum router (the
 /// `GrpcServer::multiplexed()` transport mounts it as the app's fallback

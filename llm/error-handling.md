@@ -250,7 +250,7 @@ let _resp = projector.project(Rejection::not_found("gone"));
 `Rejection` with the app's envelope. The framework's own responses go through
 it too: a panicking handler (500, kind `Internal`), an unknown route (404,
 `NotFound` — unless the app installed a fallback of its own: a controller
-`#[fallback]`, a merged `Router::fallback(..)`, the static SPA fallback), a
+`#[fallback]`, a merged `Routes::fallback(..)`, the static SPA fallback), a
 known path with the wrong method (405, `MethodNotAllowed`, `Allow` kept) and
 an oversized body (413, `PayloadTooLarge`). With the default envelope these
 are `{"error":"Not found"}`, `{"error":"Method not allowed"}`, and so on.

@@ -747,7 +747,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
                     // #[middleware]/#[layer]/#[pre_guard] attach to a
                     // `.route(path, method_router)` registration; a fallback is
-                    // registered via `Router::fallback(handler)`, which takes
+                    // registered via `Routes::fallback(handler)`, which takes
                     // no layers. #[guard] and #[intercept] run inside the
                     // generated handler and work as usual.
                     if route_kind.is_fallback
@@ -811,7 +811,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         }
     }
 
-    // At most one #[fallback] per controller — a Router has a single fallback slot.
+    // At most one #[fallback] per controller — a `Routes` has a single fallback slot.
     if let Some(rm) = route_methods.iter().filter(|m| m.is_fallback).nth(1) {
         return Err(syn::Error::new(
             rm.fn_item.sig.ident.span(),
@@ -820,7 +820,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     }
 
     // Controller-level #[pre_guard] attaches to every `.route(...)` registration;
-    // a #[fallback] route goes through `Router::fallback`, which takes no
+    // a #[fallback] route goes through `Routes::fallback`, which takes no
     // per-route layers. Reject the combination rather than silently exempt the
     // fallback from a guard the impl block promises for ALL routes.
     if !controller_decorators.pre_auth_guard_fns.is_empty()
@@ -828,7 +828,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             return Err(syn::Error::new(
                 rm.fn_item.sig.ident.span(),
                 "controller-level #[pre_guard] cannot be combined with a #[fallback] route — \
-                 the fallback is registered via `Router::fallback`, which takes no per-route \
+                 the fallback is registered via `Routes::fallback`, which takes no per-route \
                  layers, so the pre-guard could not apply to it. Move the #[pre_guard] to the \
                  individual routes, or guard the fallback's work with #[guard] / in its body.",
             ));
@@ -851,7 +851,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     }
     // Controller-level #[middleware]/#[layer] wrap every `.route(...)`
     // registration (routes, #[sse], #[ws]); a #[fallback] is registered via
-    // `Router::fallback`, which takes no per-route layers, so it is skipped.
+    // `Routes::fallback`, which takes no per-route layers, so it is skipped.
     // With no other route they would apply to nothing.
     let has_layerable_http = route_methods.iter().any(|m| !m.is_fallback)
         || !sse_methods.is_empty()
@@ -864,7 +864,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
             controller_name.span(),
             "controller-level #[middleware]/#[layer] would apply to no route — they wrap the \
              route/#[sse]/#[ws] methods of this impl block, a #[fallback] route is skipped \
-             (`Router::fallback` takes no per-route layers), and there are no other routes",
+             (`Routes::fallback` takes no per-route layers), and there are no other routes",
         ));
     }
     if !controller_decorators.pre_auth_guard_fns.is_empty() && !has_http_methods {

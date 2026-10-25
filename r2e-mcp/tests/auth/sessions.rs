@@ -2,7 +2,7 @@
 //! that opened it, private `Dynamic*` members keep their scope/role gates,
 //! and `session_init` / `McpSessions` see the authenticated identity.
 
-use r2e_core::http::{Body, Router, StatusCode};
+use r2e_core::http::{Body, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{
@@ -66,7 +66,7 @@ impl McpSessionInit for RoleToolsets {
     }
 }
 
-async fn app_with(plugin: McpServer) -> (Router, McpSessions) {
+async fn app_with(plugin: McpServer) -> (Routes, McpSessions) {
     let app = AppBuilder::new()
         .provide(RoleToolsets)
         .plugin(

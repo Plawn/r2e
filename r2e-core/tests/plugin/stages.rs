@@ -128,20 +128,18 @@ impl Plugin for RoutesAndFinalize {
         ctx: &mut PluginBuildContext,
     ) -> Result<(), PluginBuildError> {
         ctx.after_routes(|routes| {
-            routes.register_routes(r2e_core::http::Router::new().route(
+            routes.register_routes(r2e_core::http::Routes::new().route(
                 "/from-routes",
-                r2e_core::http::routing::get(|| async { "routes-ok" }),
+                r2e_core::http::routing::get(|_, _| async { "routes-ok" }),
             ));
         });
         ctx.wrap_router(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(
-                |req, next: r2e_core::http::middleware::Next| async move {
-                    let mut resp = next.run(req).await;
-                    resp.headers_mut()
-                        .insert("x-finalize", "applied".parse().unwrap());
-                    resp
-                },
-            ))
+            router.middleware_fn(|req, next: r2e_core::http::middleware::Next| async move {
+                let mut resp = next.run(req).await;
+                resp.headers_mut()
+                    .insert("x-finalize", "applied".parse().unwrap());
+                resp
+            })
         });
         Ok(())
     }

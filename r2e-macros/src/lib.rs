@@ -337,7 +337,7 @@ pub fn any(_args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Register a **controller-scoped catch-all**: handles every request no other
-/// route matched, for any HTTP method (`r2e::http::Router::fallback`).
+/// route matched, for any HTTP method (`r2e::http::Routes::fallback`).
 ///
 /// ```ignore
 /// #[fallback]
@@ -707,12 +707,20 @@ pub fn async_exec(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Apply a custom Tower middleware function to a route.
+/// Apply a middleware function to a route.
+///
+/// The function is `async fn(Request, Next) -> impl IntoResponse`; with the
+/// `state` flag it receives the controller first:
+/// `async fn(Arc<Self>, Request, Next) -> impl IntoResponse`.
 ///
 /// ```ignore
 /// #[middleware(my_middleware_fn)]
 /// #[get("/protected")]
 /// async fn protected(&self) -> Json<Data> { ... }
+///
+/// #[middleware(check_tenant, state)]
+/// #[get("/tenant")]
+/// async fn tenant(&self) -> Json<Data> { ... }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
@@ -723,12 +731,12 @@ pub fn middleware(_args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Apply a Tower layer directly to a single route.
 ///
-/// Unlike [`middleware`] (which wraps a function via `r2e::http::middleware::from_fn`),
+/// Unlike [`middleware`] (which takes an `async fn(Request, Next)`),
 /// `#[layer]` takes an arbitrary expression that evaluates to a Tower `Layer`
 /// and calls `.layer(expr)` on the route handler.
 ///
 /// ```ignore
-/// use tower_http::timeout::TimeoutLayer;
+/// use r2e::http::layers::timeout::TimeoutLayer;
 /// use std::time::Duration;
 ///
 /// #[get("/slow")]

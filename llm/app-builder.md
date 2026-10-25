@@ -17,7 +17,7 @@ requires: di-beans
   to each other does not matter.
 - App phase, after `build_state().await`: `on_start` / `on_start_once` / `on_stop`,
   `register_controller(s)`, then `serve_auto()` (host/port from config),
-  `serve(addr)` or `build()` → `Router`.
+  `serve(addr)` or `build()` → `Routes`.
 - Bean `#[consumer]` subscribers are auto-collected at `build_state()` — there is
   no explicit registration call.
 - `serve()` runs startup hooks, registers consumers, starts scheduled tasks, listens
@@ -69,7 +69,7 @@ AppBuilder::new()
     // bean #[consumer] subscribers auto-collected at build_state() — no explicit call
     .serve_auto().await                         // server.host/server.port from config
     // or .serve("0.0.0.0:3000").await
-    // or .build() → Router
+    // or .build() → Routes
     .unwrap();
 # }
 ```

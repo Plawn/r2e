@@ -23,7 +23,7 @@ mod state;
 pub use error::{McpMemberError, McpSessionError};
 pub use handle::McpSession;
 pub use id::SessionId;
-pub(crate) use id::{track_session_id, SessionBindings, SessionLink, SESSION_ID_HEADER};
+pub(crate) use id::{SessionBindings, SessionLink, TrackSessionId, SESSION_ID_HEADER};
 pub(crate) use init::{erase_init, SessionInitFn};
 pub use init::{McpSessionInit, SessionInit, SessionToolset};
 pub use sessions::McpSessions;

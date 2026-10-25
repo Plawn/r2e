@@ -9,9 +9,9 @@
 //! them through the same [`report_caught_panic`] seam — one hook, one
 //! [`PANIC_TARGET`] line per panic, whatever the origin.
 //!
-//! # Why R2E owns this instead of `tower_http::catch_panic`
+//! # Why R2E owns this instead of tower-http's `catch_panic`
 //!
-//! `tower_http`'s handler only ever receives the unwind payload, so a response
+//! tower-http's handler only ever receives the unwind payload, so a response
 //! is all it can produce: no log line, no route, no hook. This layer keeps the
 //! same response contract and adds the two things a service actually needs
 //! when a handler panics — one structured `tracing::error!` and one optional

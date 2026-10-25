@@ -4,7 +4,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, Guard, GuardContext, Identity};
 use r2e_mcp::{AppBuilderMcpExt, McpError, McpServer, Params, ToolCall};
@@ -236,7 +236,7 @@ impl FixtureTools {
 
 /// Boot the fixture app with a configured plugin; returns the router and the
 /// `CallLog` bean instance shared with the graph.
-pub async fn fixture_app_with(plugin: McpServer) -> (Router, CallLog) {
+pub async fn fixture_app_with(plugin: McpServer) -> (Routes, CallLog) {
     let log = CallLog::default();
     let router = AppBuilder::new()
         .plugin(plugin)
@@ -250,6 +250,6 @@ pub async fn fixture_app_with(plugin: McpServer) -> (Router, CallLog) {
 }
 
 /// Boot the fixture app with plugin defaults (endpoint `/mcp`).
-pub async fn fixture_app() -> (Router, CallLog) {
+pub async fn fixture_app() -> (Routes, CallLog) {
     fixture_app_with(McpServer::new()).await
 }

@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Generated code builds `Routes` / `MethodRoutes` and attaches
+  `#[middleware]` through `MethodRoutes::middleware_fn[_with_state]`; a
+  `#[middleware(f, state)]` function now receives `Arc<Self>` as its first
+  argument instead of `State<Arc<Self>>`. Handler registration closures take
+  `(state, Request)` explicitly — no backend routing type is named in the
+  expansion. Migration: `docs/migration/routes-newtype.md`.
+
 ## [0.7.1] - 2026-10-24
 
 ### Added

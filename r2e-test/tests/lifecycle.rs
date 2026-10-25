@@ -294,8 +294,8 @@ impl App for SlowApp {
             .await
             .drain_timeout(Duration::from_millis(300))
             .register_routes(
-                r2e_core::http::Router::new()
-                    .route("/slow", r2e_core::http::routing::get(slow_handler)),
+                r2e_core::http::Routes::new()
+                    .route("/slow", r2e_core::http::routing::get(|_, _| slow_handler())),
             )
             .on_stop(move |_state| async move {
                 on_stop.lock().unwrap().push("on_stop");
@@ -566,8 +566,8 @@ impl App for SlowBareApp {
             .await
             .drain_timeout(Duration::from_millis(300))
             .register_routes(
-                r2e_core::http::Router::new()
-                    .route("/slow", r2e_core::http::routing::get(slow_handler)),
+                r2e_core::http::Routes::new()
+                    .route("/slow", r2e_core::http::routing::get(|_, _| slow_handler())),
             ))
     }
 }

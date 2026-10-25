@@ -15,8 +15,39 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- The HTTP surface is `r2e_core::http::Routes<S>` (R2E's newtype) instead of
+  `axum::Router<S>`: `AppBuilder::build()`, `Controller::routes`,
+  `merge_router` / `register_routes` / `with_layer_fn`, plugin `add_layer` /
+  `wrap_router` / `RoutesContext::register_routes`, `PreparedApp::routes()` /
+  `routes_mut()` (were `router[_mut]`), `RunningApp::routes()`,
+  `BootableApp::into_routes[_with_consumers]()` (were `into_router…`). The
+  prelude exports `Routes` and `middleware::Next`, no longer `Router` /
+  `from_fn`. `#[middleware(f, state)]` functions take the controller core as a
+  plain leading `Arc<Self>` argument instead of `State<Arc<Self>>`. Built-in
+  handlers (`/health`, request-id) use the new handler shape. Migration:
+  `docs/migration/routes-newtype.md` (`plans/axum-containment-roadmap.md`,
+  phase C).
+
+### Fixed
+
+- `dev-reload`: the dev headers middleware no longer rewrites `Connection` to
+  `close` on a `101 Switching Protocols` response, which broke every `#[ws]`
+  upgrade under `r2e dev` (the `ws` + `dev-reload` combination was not covered
+  by CI; `cargo test -p r2e-core --all-features --test runtime` now exercises it).
+
 ### Changed
 
+- `r2e-core` no longer depends on `tower-http`: `Cors`, `SecureHeaders` and
+  `NormalizePath` reach it through `r2e_http::layers`, re-exported as
+  `r2e_core::http::layers`. `runtime::layers::default_cors` /
+  `normalize_path_router` (and the crate-root `default_cors`) are now
+  re-exports of the `r2e-http` functions — same paths, same types. Apps that
+  used `tower_http::timeout::TimeoutLayer` in `#[layer(..)]` /
+  `.with_layer(..)` can drop their own `tower-http` dependency and write
+  `r2e::http::layers::timeout::TimeoutLayer` (`plans/axum-containment-roadmap.md`,
+  phase B).
 - The single-listener `run()`, each sharded worker and `Running::serve_tracked`
   serve through `r2e_http::server::serve` instead of each assembling
   `into_make_service_with_connect_info` + `ListenerExt::tap_io` + `axum::serve`

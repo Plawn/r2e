@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use r2e_core::http::{Body, Request, Response, Router, StatusCode};
+use r2e_core::http::{Body, Request, Response, Routes, StatusCode};
 use r2e_tenant::{BoxError, BoxFuture, TenantContext, TenantId, TenantSource, Tenanted};
 use tower::ServiceExt;
 
@@ -339,11 +339,11 @@ pub async fn wait_for(what: &str, mut condition: impl FnMut() -> bool) {
     panic!("timed out waiting for {what}");
 }
 
-// ── Router driving ─────────────────────────────────────────────────────────
+// ── Routes driving ─────────────────────────────────────────────────────────
 
 /// Drive one request through a router and return `(status, body)`.
 pub async fn send(
-    router: Router,
+    router: Routes,
     path: &str,
     headers: &[(&str, &str)],
 ) -> (StatusCode, String) {
@@ -353,7 +353,7 @@ pub async fn send(
 }
 
 /// Drive one request through a router and return the raw response.
-pub async fn raw(router: Router, path: &str, headers: &[(&str, &str)]) -> Response {
+pub async fn raw(router: Routes, path: &str, headers: &[(&str, &str)]) -> Response {
     let mut request = Request::builder().uri(path);
     for (name, value) in headers {
         request = request.header(*name, *value);

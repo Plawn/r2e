@@ -1,6 +1,6 @@
 # Roadmap — Contain axum further, without swapping the HTTP backend
 
-Status: **IN PROGRESS** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (branch `feat/axum-containment-a-serve`); B and C open. Follow-up to
+Status: **IN PROGRESS** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (PR #109); Phase B shipped 2026-10-25 (branch `feat/axum-containment-b-layers`, stacked on A); Phase C implemented 2026-10-25 (branch `feat/axum-containment-c-routes`, stacked on B; breaking, ships with the next r2e-core minor). Follow-up to
 `plans/runtime-http-dependency-containment.md` (phases 0–7 shipped 2026-08-24).
 That plan ended with two written decisions: §5.3d option A ("the public promise is
 R2E **types**", raw axum only through `axum_compat`) and §5.3c **DEFERRED** (no
@@ -189,3 +189,46 @@ have to move is already in `r2e-http`.
   recorded in the baseline header). Deferred from A to its own PR: driving
   hyper through `hyper_util` `auto::Builder` for `server.http.*` tuning — the
   serve path is now in one place, so that change is contained to `server.rs`.
+
+- **2026-10-25 — Phase B shipped.** `r2e_http::layers` re-exports tower-http's
+  `cors` / `timeout` / `set_header` / `normalize_path` (identity preserved) and
+  now owns `default_cors()` and `normalize_path_router()`; `r2e-core` keeps the
+  old paths as re-exports. Migrated: `builtins` (`Cors`, `SecureHeaders`),
+  `r2e-mcp`'s endpoint CORS, `example-app`, `llm/grpc.md`, the book, the
+  `#[layer]` doc examples. `tower-http` dropped from `r2e-core`, `r2e-mcp`,
+  `example-app`, `llm-doctests` (and its unused `catch-panic` feature with it).
+  Boundary: dep group `tower-http` (allowlist `r2e-http`, `r2e-grpc`) and source
+  group `tower_http` (baseline = `layers.rs` + the grpc-web arm). D1 written
+  into `docs/claude/architecture.md`. **Deviation from the plan:** `GraphKeepAlive`
+  and `catch_panic_layer_with` stay in `r2e-core` — they name only `tower` /
+  `http-body` (neutral, D1) and depend on `BeanContext` / `ErrorProjector`;
+  moving them would be a reshuffle with no containment gain.
+
+- **2026-10-25 — Phase C implemented** (`feat/axum-containment-c-routes`,
+  stacked on B). C1: `r2e_http::routing::{Routes<S>, MethodRoutes<S>, Route,
+  Methods, Handler, RouteLayer, RouteService, LeafService}` + `middleware::Next`;
+  handlers are `FnOnce(S, Request) -> Fut` (the shape the codegen already
+  emitted), function middleware is `Routes::middleware_fn[_with_state]`.
+  `axum_compat` gained `into_router` / `from_router` / `into_method_router` /
+  `from_method_router`. C2: codegen emits `Routes::new().route(..)`,
+  `.middleware_fn[_with_state]`, `.layer`; `#[middleware(f, state)]` user fns
+  take `Arc<Self>` plainly instead of `State<Arc<Self>>`. C3: every `Router`
+  signature in `r2e-core` (builder, plugin contexts, builtins, runtime) and the
+  consumers (`r2e-static`, `r2e-test`, `r2e-tenant`, `r2e-prometheus`,
+  `r2e-openapi`, `r2e-oidc`, `r2e-grpc`, `r2e-mcp`, `r2e-cli` templates,
+  `example-app`); `into_router` → `into_routes`, `router()` → `routes()`.
+  C4: `Router`, `MethodRouter`, `routing::<method>`, `middleware::from_fn*`,
+  `ListenerExt` no longer re-exported from `r2e_core::http` / the prelude; new
+  source group `axum-shape` (`Router<|Router::|MethodRouter|middleware::from_fn`,
+  baseline = `routing.rs`, `axum_compat.rs`, `labels.rs`; the CLI's
+  coming-from-axum template table is excluded as prose); `axum-serve` baseline
+  shrinks to `server.rs`. **Deviations:** the `axum` baseline *grows inside
+  `r2e-http`* (`routing.rs` 1 → 26, `axum_compat.rs` 2 → 7) — the shape moved
+  there, which is the point; `Routes` has no `into_make_service*` (phase A's
+  `serve` takes `Routes<()>` and unwraps internally); `MethodRoutes::route_layer`
+  was dropped (no caller, axum's own is deprecated-shaped). Found and fixed on
+  the way: the dev-reload headers middleware rewrote `Connection: close` onto
+  `101 Switching Protocols`, breaking every `#[ws]` route under `r2e dev`
+  (`ws` + `dev-reload` was never combined in CI). Migration guide:
+  `docs/migration/routes-newtype.md`; `Breaking` entries in r2e-http, r2e-core,
+  r2e-macros, r2e-static, r2e-test; `Changed` in the re-pinning crates.

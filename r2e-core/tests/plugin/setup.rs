@@ -42,8 +42,8 @@ impl Plugin for SugarSetupPlugin {
         ctx: &mut PluginBuildContext,
     ) -> Result<(SugarMarker,), PluginBuildError> {
         ctx.store_data(StoredData(7));
-        ctx.add_layer(|router| router.route("/sugar", get(|| async { "sugar-ok" })));
-        ctx.wrap_router(|router| router.route("/wrapped", get(|| async { "wrapped-ok" })));
+        ctx.add_layer(|router| router.route("/sugar", get(|_, _| async { "sugar-ok" })));
+        ctx.wrap_router(|router| router.route("/wrapped", get(|_, _| async { "wrapped-ok" })));
         Ok((SugarMarker,))
     }
 }

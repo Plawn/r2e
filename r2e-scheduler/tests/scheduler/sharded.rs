@@ -104,7 +104,7 @@ async fn scheduled_task_ticks_while_sharded_and_shuts_down_clean() {
     )]);
 
     let app = app
-        .register_routes(r2e_core::http::Router::new().route("/ping", get(|| async { "pong" })))
+        .register_routes(r2e_core::http::Routes::new().route("/ping", get(|_, _| async { "pong" })))
         .prepare(&addr);
 
     assert_eq!(app.workers().unwrap(), Some(2));

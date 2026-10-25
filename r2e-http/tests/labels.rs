@@ -2,11 +2,11 @@
 //! (`r2e-prometheus`, `r2e-observability`).
 
 use http_body_util::BodyExt;
-use r2e_http::extract::MatchedPath;
+use r2e_http::extract::{FromRequestParts as _, MatchedPath};
 use r2e_http::header::Method;
 use r2e_http::labels::{method_label, route_label, OTHER_METHOD_LABEL, UNMATCHED_PATH_LABEL};
 use r2e_http::routing::get;
-use r2e_http::{Body, Request, Router};
+use r2e_http::{Body, Request, Routes};
 use tower::ServiceExt;
 
 #[test]
@@ -34,9 +34,15 @@ fn no_matched_path_yields_the_sentinel() {
 
 #[tokio::test]
 async fn matched_path_yields_the_route_template() {
-    let router = Router::new().route(
+    let router = Routes::new().route(
         "/users/{id}",
-        get(|matched: MatchedPath| async move { route_label(Some(&matched)).to_owned() }),
+        get(|_: (), req: Request| async move {
+            let (mut parts, _) = req.into_parts();
+            let matched = MatchedPath::from_request_parts(&mut parts, &())
+                .await
+                .unwrap();
+            route_label(Some(&matched)).to_owned()
+        }),
     );
 
     let req = Request::builder()

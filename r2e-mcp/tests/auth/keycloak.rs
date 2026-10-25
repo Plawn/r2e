@@ -9,7 +9,7 @@
 //! cargo test -p r2e-mcp --test auth keycloak:: -- --ignored
 //! ```
 
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Routes, StatusCode};
 use r2e_devservices::DevKeycloak;
 use r2e_mcp::auth::McpAuthConfig;
 use r2e_mcp::McpServer;
@@ -21,7 +21,7 @@ use crate::fixtures::{
 /// Boot against the container's issuer with the REAL discovery + JWKS path —
 /// no pinned validator. The resource is pinned to the URI the bundled realm's
 /// audience mapper stamps into every token.
-async fn keycloak_app(kc: &DevKeycloak) -> Router {
+async fn keycloak_app(kc: &DevKeycloak) -> Routes {
     secured_plugin_app(McpServer::new().with_auth(McpAuthConfig {
         issuer: kc.issuer(),
         resource: Some(fixtures::RESOURCE.to_string()),

@@ -4,7 +4,7 @@
 //! `list_changed` capability/notifications.
 
 use http_body_util::BodyExt;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{
@@ -141,7 +141,7 @@ impl AdminTools {
     }
 }
 
-async fn dynamic_app_with(plugin: McpServer) -> (Router, McpSessions) {
+async fn dynamic_app_with(plugin: McpServer) -> (Routes, McpSessions) {
     let app = AppBuilder::new()
         .plugin(plugin)
         .build_state()
@@ -156,7 +156,7 @@ async fn dynamic_app_with(plugin: McpServer) -> (Router, McpSessions) {
     (app.build(), sessions)
 }
 
-async fn dynamic_app() -> (Router, McpSessions) {
+async fn dynamic_app() -> (Routes, McpSessions) {
     dynamic_app_with(McpServer::new()).await
 }
 

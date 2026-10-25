@@ -29,7 +29,7 @@ requires: core-concepts
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
 | `#[layer(expr)]` / `#[layer(\|this: &Self\| expr)]` | method or impl | Tower layer; closure form builds it from the controller core once at registration; impl = every route except `#[fallback]`, outside method layers |
-| `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn (`from_fn`); `state` passes the core as `State<Arc<Self>>`; impl = every route except `#[fallback]` |
+| `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn `async fn(Request, Next) -> Response`; `state` passes the core as a leading `Arc<Self>` argument; impl = every route except `#[fallback]` |
 | `#[consumer(bus = "field")]` | method | Event consumer |
 | `#[scheduled(every = "5m")]` | method | Scheduled task |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |

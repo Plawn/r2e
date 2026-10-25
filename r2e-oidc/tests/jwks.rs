@@ -1,9 +1,9 @@
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::{Body, Request, Response, Router, StatusCode};
+use r2e_core::http::{Body, Request, Response, Routes, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-async fn build_app() -> Router {
+async fn build_app() -> Routes {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "pass",

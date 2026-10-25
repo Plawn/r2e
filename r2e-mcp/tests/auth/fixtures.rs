@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use r2e_core::http::{Body, HeaderMap, Request, Router, StatusCode};
+use r2e_core::http::{Body, HeaderMap, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::auth::{DiscoveryMode, McpAuthConfig, ScopePolicy};
@@ -138,13 +138,13 @@ pub fn pinned(jwt: &TestJwt) -> McpTokenValidator {
 }
 
 /// Boot the secured fixture app: [`offline_auth`] + pinned validator.
-pub async fn secured_app() -> Router {
+pub async fn secured_app() -> Routes {
     secured_app_with(offline_auth()).await
 }
 
 /// Boot with a custom auth section (validator still pinned to
 /// [`test_jwt`]).
-pub async fn secured_app_with(auth: McpAuthConfig) -> Router {
+pub async fn secured_app_with(auth: McpAuthConfig) -> Routes {
     secured_plugin_app(
         McpServer::new()
             .with_auth(auth)
@@ -154,7 +154,7 @@ pub async fn secured_app_with(auth: McpAuthConfig) -> Router {
 }
 
 /// Boot with a fully custom plugin (e.g. no pinned validator, or no auth).
-pub async fn secured_plugin_app(plugin: McpServer) -> Router {
+pub async fn secured_plugin_app(plugin: McpServer) -> Routes {
     AppBuilder::new()
         .plugin(plugin)
         .build_state()
@@ -167,7 +167,7 @@ pub async fn secured_plugin_app(plugin: McpServer) -> Router {
 
 /// Plain GET (well-known documents, shim metadata).
 pub async fn get(
-    router: &Router,
+    router: &Routes,
     path: &str,
     headers: &[(&str, &str)],
 ) -> (StatusCode, HeaderMap, String) {
@@ -176,7 +176,7 @@ pub async fn get(
 
 /// Send an arbitrary request and collect the response.
 pub async fn send(
-    router: &Router,
+    router: &Routes,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
@@ -206,7 +206,7 @@ pub async fn send(
 
 /// POST a JSON-RPC body with a bearer token.
 pub async fn post_auth(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: Option<&str>,
     token: &str,
@@ -225,7 +225,7 @@ pub async fn post_auth(
 
 /// Authenticated session handshake (initialize → session id →
 /// `notifications/initialized`).
-pub async fn initialize_auth(router: &Router, path: &str, token: &str) -> String {
+pub async fn initialize_auth(router: &Routes, path: &str, token: &str) -> String {
     let response = post_auth(router, path, None, token, &support::initialize_body()).await;
     assert_eq!(
         response.status,
@@ -247,7 +247,7 @@ pub async fn initialize_auth(router: &Router, path: &str, token: &str) -> String
 }
 
 /// Authenticated `tools/list`; returns the `result` object.
-pub async fn tools_list_auth(router: &Router, path: &str, session: &str, token: &str) -> Value {
+pub async fn tools_list_auth(router: &Routes, path: &str, session: &str, token: &str) -> Value {
     let response = post_auth(
         router,
         path,
@@ -262,7 +262,7 @@ pub async fn tools_list_auth(router: &Router, path: &str, session: &str, token: 
 
 /// Authenticated `tools/call`; returns the full JSON-RPC message.
 pub async fn tools_call_auth(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: &str,
     token: &str,
@@ -289,7 +289,7 @@ pub async fn tools_call_auth(
 /// Authenticated JSON-RPC request with arbitrary method/params; returns the
 /// full JSON-RPC message.
 pub async fn rpc_auth(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: &str,
     token: &str,

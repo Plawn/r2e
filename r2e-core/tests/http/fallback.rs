@@ -8,7 +8,7 @@ use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
 use r2e_core::http::header::HeaderValue;
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Json, Response, Router, StatusCode, CONTENT_TYPE};
+use r2e_core::http::{Body, Json, Response, Routes, StatusCode, CONTENT_TYPE};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 
@@ -81,11 +81,11 @@ impl ItemsController {
 }
 
 /// `GET /ok`: a raw route, the 405 probe.
-fn routes<S: Clone + Send + Sync + 'static>() -> Router<S> {
-    Router::new().route("/ok", get(|| async { "ok" }))
+fn routes<S: Clone + Send + Sync + 'static>() -> Routes<S> {
+    Routes::new().route("/ok", get(|_, _| async { "ok" }))
 }
 
-async fn default_app() -> Router {
+async fn default_app() -> Routes {
     AppBuilder::new()
         .build_state()
         .await
@@ -94,7 +94,7 @@ async fn default_app() -> Router {
         .build()
 }
 
-async fn wire_app() -> Router {
+async fn wire_app() -> Routes {
     AppBuilder::new()
         .error_projection::<Wire>()
         .build_state()
@@ -243,7 +243,7 @@ async fn a_merged_custom_fallback_is_not_overridden() {
         .build_state()
         .await
         .merge_router(routes())
-        .merge_router(Router::new().fallback(|| async { (StatusCode::IM_A_TEAPOT, "mine") }))
+        .merge_router(Routes::new().fallback(|_, _| async { (StatusCode::IM_A_TEAPOT, "mine") }))
         .build();
 
     let resp = raw(app, "GET", "/missing", &[], Body::empty()).await;
@@ -256,7 +256,7 @@ async fn a_merged_custom_fallback_is_not_overridden() {
         .build_state()
         .await
         .merge_router(routes())
-        .merge_router(Router::new().fallback(|| async { (StatusCode::IM_A_TEAPOT, "mine") }))
+        .merge_router(Routes::new().fallback(|_, _| async { (StatusCode::IM_A_TEAPOT, "mine") }))
         .build();
     let resp = raw(app, "DELETE", "/ok", &[], Body::empty()).await;
     assert_eq!(header(&resp, "x-envelope"), Some("wire"));
@@ -268,9 +268,9 @@ async fn a_route_level_method_fallback_is_not_overridden() {
         .error_projection::<Wire>()
         .build_state()
         .await
-        .merge_router(Router::new().route(
+        .merge_router(Routes::new().route(
             "/own",
-            get(|| async { "own" }).fallback(|| async { (StatusCode::IM_A_TEAPOT, "mine") }),
+            get(|_, _| async { "own" }).fallback(|_, _| async { (StatusCode::IM_A_TEAPOT, "mine") }),
         ))
         .build();
 

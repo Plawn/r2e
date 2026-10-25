@@ -560,7 +560,7 @@ const AUTH_AUDIENCE: &str = "http://localhost:3000/mcp";
 const AUTH_REDIRECT: &str = "http://127.0.0.1:49152/callback";
 const AUTH_VERIFIER: &str = "0123456789abcdefghijklmnopqrstuvwxyz-._~ABCDE";
 
-async fn authorize_app() -> r2e_core::http::Router {
+async fn authorize_app() -> r2e_core::http::Routes {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "password123",
@@ -712,7 +712,7 @@ async fn authorize_never_redirects_to_an_unvalidated_client() {
 }
 
 /// GET the login page and return `(csrf_token, query)` for the POST that follows.
-async fn login_page(app: &r2e_core::http::Router, query: &str) -> String {
+async fn login_page(app: &r2e_core::http::Routes, query: &str) -> String {
     let resp = app
         .clone()
         .oneshot(
@@ -726,7 +726,7 @@ async fn login_page(app: &r2e_core::http::Router, query: &str) -> String {
     csrf_token(&body_text(resp).await)
 }
 
-async fn post_login(app: &r2e_core::http::Router, body: String) -> Response {
+async fn post_login(app: &r2e_core::http::Routes, body: String) -> Response {
     app.clone()
         .oneshot(
             Request::post("/oauth/authorize")

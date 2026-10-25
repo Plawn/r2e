@@ -6,17 +6,17 @@
 use r2e_prometheus::{init_metrics, metrics, MetricsConfig, PrometheusLayer};
 
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router};
+use r2e_core::http::{Body, Request, Routes};
 use std::time::Duration;
 use tower::ServiceExt;
 
 #[tokio::test]
 async fn dropped_request_future_decrements_in_flight() {
     init_metrics(&MetricsConfig::default());
-    let router = Router::new()
+    let router = Routes::new()
         .route(
             "/hang",
-            get(|| async {
+            get(|_, _| async {
                 std::future::pending::<()>().await;
                 "unreachable"
             }),

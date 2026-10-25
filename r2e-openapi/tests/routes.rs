@@ -1,7 +1,7 @@
 use http::Request;
 use http_body_util::BodyExt;
 use r2e_core::http::body::Body;
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::di::meta::RouteInfo;
 use r2e_openapi::{openapi_routes, OpenApiConfig};
 use serde_json::Value;
@@ -38,7 +38,7 @@ fn config_without_ui() -> OpenApiConfig {
     OpenApiConfig::new("Test API", "1.0.0").with_docs_ui(false)
 }
 
-async fn get_response(router: Router, path: &str) -> (http::StatusCode, String, http::HeaderMap) {
+async fn get_response(router: Routes, path: &str) -> (http::StatusCode, String, http::HeaderMap) {
     let req = Request::builder().uri(path).body(Body::empty()).unwrap();
 
     let response = router.oneshot(req).await.unwrap();

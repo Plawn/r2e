@@ -16,7 +16,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::auth::{DiscoveryMode, McpAuthConfig, McpAuthError, ScopePolicy, TokenValidatorBackend};
@@ -76,7 +76,7 @@ async fn principal_with(claims: usize, size: usize) -> McpPrincipal {
         .expect("fixture token validates")
 }
 
-async fn app(principal: McpPrincipal) -> Router {
+async fn app(principal: McpPrincipal) -> Routes {
     let auth = McpAuthConfig {
         issuer: ISSUER.to_string(),
         resource: Some(RESOURCE.to_string()),

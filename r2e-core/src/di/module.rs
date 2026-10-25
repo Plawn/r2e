@@ -719,7 +719,7 @@ pub trait ModuleControllers<T: Clone + Send + Sync + 'static, W> {
     ) -> Result<AppBuilder<T>, crate::beans::BeanError>;
 }
 
-/// Mount a controller path under a module prefix, the way `Router::nest`
+/// Mount a controller path under a module prefix, the way `Routes::nest`
 /// composes them.
 ///
 /// `("/api/v1", "/users")` → `/api/v1/users`; a bare `"/"` child keeps the

@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll};
 
-use r2e_core::http::middleware::Next;
 use r2e_core::http::{Request, Response};
+use tower::{Layer, Service};
 
 use super::state::SessionState;
 
@@ -111,28 +114,66 @@ pub(crate) const SESSION_ID_HEADER: &str = "mcp-session-id";
 /// [`McpSessions::get`](super::McpSessions::get) and [`McpSession::id`](super::McpSession::id) work from the moment the
 /// `initialize` response is on its way, not only from the client's next
 /// request. Reuses the [`SessionLink`] the auth layer deposited, if any.
-pub(crate) async fn track_session_id(mut req: Request, next: Next) -> Response {
-    if req.headers().contains_key(SESSION_ID_HEADER) {
-        return next.run(req).await;
+///
+/// A hand-written tower layer (not a `Routes` middleware) because it sits in
+/// the `ServiceBuilder` stack around rmcp's transport service, between the
+/// auth layer and the service itself.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct TrackSessionId;
+
+impl<S> Layer<S> for TrackSessionId {
+    type Service = TrackSessionIdService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        TrackSessionIdService { inner }
     }
-    let link = match req.extensions().get::<SessionLink>() {
-        Some(link) => link.clone(),
-        None => {
-            let link = SessionLink::default();
-            req.extensions_mut().insert(link.clone());
-            link
+}
+
+/// The service [`TrackSessionId`] wraps the MCP transport in.
+#[derive(Clone)]
+pub(crate) struct TrackSessionIdService<S> {
+    inner: S,
+}
+
+impl<S> Service<Request> for TrackSessionIdService<S>
+where
+    S: Service<Request, Response = Response>,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, S::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: Request) -> Self::Future {
+        if req.headers().contains_key(SESSION_ID_HEADER) {
+            return Box::pin(self.inner.call(req));
         }
-    };
-    let response = next.run(req).await;
-    if let Some(id) = response
-        .headers()
-        .get(SESSION_ID_HEADER)
-        .and_then(|v| v.to_str().ok())
-        && let Some(state) = link.peek()
-    {
-        state.set_id(id);
+        let link = match req.extensions().get::<SessionLink>() {
+            Some(link) => link.clone(),
+            None => {
+                let link = SessionLink::default();
+                req.extensions_mut().insert(link.clone());
+                link
+            }
+        };
+        let fut = self.inner.call(req);
+        Box::pin(async move {
+            let response = fut.await?;
+            if let Some(id) = response
+                .headers()
+                .get(SESSION_ID_HEADER)
+                .and_then(|v| v.to_str().ok())
+                && let Some(state) = link.peek()
+            {
+                state.set_id(id);
+            }
+            Ok(response)
+        })
     }
-    response
 }
 
 /// `Mcp-Session-Id` → session, for the auth layer's session ↔ principal

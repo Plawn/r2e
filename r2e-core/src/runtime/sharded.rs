@@ -258,7 +258,7 @@ mod imp {
     // them into a struct would only move the same seven values one level down.
     #[allow(clippy::too_many_arguments)]
     pub fn serve_sharded(
-        router: crate::http::Router,
+        router: crate::http::Routes,
         addrs: &[SocketAddr],
         workers: usize,
         tcp_nodelay: bool,

@@ -284,7 +284,7 @@ fn boot_turns_a_failure_into_an_attributable_test_failure() {
 
 // ── Fallible startup hooks ────────────────────────────────────────────────
 //
-// `TestApp` boots through `into_router_with_consumers`, which also runs the
+// `TestApp` boots through `into_routes_with_consumers`, which also runs the
 // controller `#[post_construct]` and `#[on_start]` hooks. A hook that fails is
 // a boot failure like any other: it must reach `try_boot` as an `Err` and be
 // rendered by `boot` with the app name — not panic underneath the harness.

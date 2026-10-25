@@ -20,7 +20,7 @@ use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{sql_query, QueryableByName, RunQueryDsl, SqliteConnection};
 use http_body_util::BodyExt;
 use r2e_core::http::extract::FromRequestParts;
-use r2e_core::http::{Body, Method, Parts, Request, Router, StatusCode};
+use r2e_core::http::{Body, Method, Parts, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::web::request_head::RequestHead;
 use r2e_core::{AppBuilder, GuardContext, Identity};
@@ -381,7 +381,7 @@ impl SyncTenantResolver for Alternating {
 /// installs the per-request resolve-once cell), a per-tenant pool map over the
 /// directory, and every controller. The map is returned too, so tests can ask
 /// which tenants actually got a pool.
-async fn app_with<R>(directory: &Directory, resolver: R) -> (Router, TenantPools<SqliteConnection>)
+async fn app_with<R>(directory: &Directory, resolver: R) -> (Routes, TenantPools<SqliteConnection>)
 where
     R: TenantResolver + Clone + Send + Sync + 'static,
 {
@@ -409,13 +409,13 @@ where
 }
 
 /// The common case: `x-tenant-id`, requests without a tenant rejected.
-async fn app(directory: &Directory) -> (Router, TenantPools<SqliteConnection>) {
+async fn app(directory: &Directory) -> (Routes, TenantPools<SqliteConnection>) {
     app_with(directory, HeaderTenantResolver::default()).await
 }
 
 /// Drive one request, optionally naming a tenant.
 async fn send(
-    router: &Router,
+    router: &Routes,
     method: Method,
     path: &str,
     tenant: Option<&str>,
@@ -434,11 +434,11 @@ async fn send(
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
-async fn post(router: &Router, path: &str, tenant: &str) -> (StatusCode, String) {
+async fn post(router: &Routes, path: &str, tenant: &str) -> (StatusCode, String) {
     send(router, Method::POST, path, Some(tenant)).await
 }
 
-async fn get(router: &Router, path: &str, tenant: &str) -> (StatusCode, String) {
+async fn get(router: &Routes, path: &str, tenant: &str) -> (StatusCode, String) {
     send(router, Method::GET, path, Some(tenant)).await
 }
 
@@ -646,7 +646,7 @@ async fn a_guard_that_resolves_first_settles_the_tenant() {
 }
 
 /// Drive a request with a fake bearer token instead of a tenant header.
-async fn get_as(router: &Router, path: &str, token: &str) -> (StatusCode, String) {
+async fn get_as(router: &Routes, path: &str, token: &str) -> (StatusCode, String) {
     let request = Request::builder()
         .method(Method::GET)
         .uri(path)

@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-HTTP/3 over QUIC running alongside the TCP server, plus raw QUIC stream access. Enable the `quic` feature — deliberately **not** in `full` (heavy crypto deps: quinn, rustls, h3). Configured under `server.quic` in `application.yaml`; the server runs TCP and QUIC/UDP endpoints sharing the same axum `Router` (guards, interceptors, middleware, error handling identical), streams HTTP/3 bodies with backpressure, and auto-injects an `Alt-Svc` header advertising h3. `QuicEndpoint` / `QuicConnection` expose raw streams for custom protocols.
+HTTP/3 over QUIC running alongside the TCP server, plus raw QUIC stream access. Enable the `quic` feature — deliberately **not** in `full` (heavy crypto deps: quinn, rustls, h3). Configured under `server.quic` in `application.yaml`; the server runs TCP and QUIC/UDP endpoints sharing the same `Routes` (guards, interceptors, middleware, error handling identical), streams HTTP/3 bodies with backpressure, and auto-injects an `Alt-Svc` header advertising h3. `QuicEndpoint` / `QuicConnection` expose raw streams for custom protocols.
 
 
 ## Objective
@@ -24,7 +24,7 @@ QUIC is intentionally **not** in the `full` feature set — it pulls heavy crypt
 
 When QUIC is configured, the server runs **two endpoints simultaneously**:
 - **TCP** — standard HTTP/1.1 and HTTP/2 via axum
-- **QUIC/UDP** — HTTP/3 via h3 + h3-quinn, bridged into the same axum `Router`
+- **QUIC/UDP** — HTTP/3 via h3 + h3-quinn, bridged into the same `Routes`
 
 Both endpoints share the same controller pipeline: guards, interceptors, middleware, and error handling all work identically.
 
@@ -93,7 +93,7 @@ For programmatic control (e.g., tests):
 use r2e::http::quic;
 
 let config = quic::build_server_config(&cert_pem, &key_pem)?;
-let router = r2e::http::Router::new().route("/ping", get(|| async { "pong" }));
+let router = r2e::http::Routes::new().route("/ping", get(|_: (), _| async { "pong" }));
 
 quic::serve_h3(router, "0.0.0.0:4433".parse()?, config, shutdown_signal()).await?;
 ```

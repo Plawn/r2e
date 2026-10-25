@@ -93,9 +93,9 @@ async fn builds_run_in_topo_order_effects_apply_in_install_order() {
 
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(
-    layers: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>>,
+    layers: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Routes) -> r2e_core::http::Routes + Send>>,
     router_wraps: &'a mut Vec<
-        Box<dyn FnOnce(r2e_core::http::Router) -> r2e_core::http::Router + Send>,
+        Box<dyn FnOnce(r2e_core::http::Routes) -> r2e_core::http::Routes + Send>,
     >,
     plugin_data: &'a mut HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
     serve_hooks: &'a mut Vec<ServeHook>,
@@ -270,7 +270,7 @@ impl Plugin for BypassedPlugin {
         ctx.add_layer(|router| {
             router.route(
                 "/bypassed",
-                r2e_core::http::routing::get(|| async { "never-mounted" }),
+                r2e_core::http::routing::get(|_, _| async { "never-mounted" }),
             )
         });
         Ok((Alpha(1),))

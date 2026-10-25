@@ -205,7 +205,7 @@ async fn controller_post_construct_runs_before_consumer_traffic() {
 #[should_panic(expected = "post_construct")]
 async fn controller_post_construct_error_fails_startup() {
     let marker = Arc::new(AtomicUsize::new(0));
-    // build_with_consumers returns a Router, so a failing post_construct panics.
+    // build_with_consumers returns a Routes, so a failing post_construct panics.
     let _router = AppBuilder::new()
         .provide(marker.clone())
         .build_state()

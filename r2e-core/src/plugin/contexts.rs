@@ -16,7 +16,7 @@ pub type RoutesEffect = Box<dyn FnOnce(&mut RoutesContext) + Send>;
 /// A **Finalize**-stage effect: an outermost router transform applied in
 /// `build()` after the whole HTTP stack is assembled.
 #[doc(hidden)]
-pub type RouterWrap = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
+pub type RouterWrap = Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>;
 
 /// A bean-registry lifecycle registrar, buffered by [`PluginSetupContext`]
 /// and applied to the registry at `.plugin()` time.
@@ -199,7 +199,7 @@ impl EffectsSlot {
 /// plugin is disabled via `<prefix>.enabled = false`.
 pub struct RoutesContext<'a> {
     routes: &'a [crate::di::meta::RouteInfo],
-    collected: Vec<crate::http::Router>,
+    collected: Vec<crate::http::Routes>,
     plugin_data: &'a mut std::collections::HashMap<std::any::TypeId, Box<dyn Any + Send + Sync>>,
     bean_context: &'a std::sync::Arc<crate::beans::BeanContext>,
     config: Option<&'a crate::config::R2eConfig>,
@@ -233,7 +233,7 @@ impl<'a> RoutesContext<'a> {
 
     /// Mount a router. It is merged into the assembled application **inside**
     /// the layer stack, so plugin routes see the same middleware app routes do.
-    pub fn register_routes(&mut self, router: crate::http::Router) {
+    pub fn register_routes(&mut self, router: crate::http::Routes) {
         self.collected.push(router);
     }
 
@@ -256,7 +256,7 @@ impl<'a> RoutesContext<'a> {
             .map(|b| *b)
     }
 
-    pub(crate) fn into_routers(self) -> Vec<crate::http::Router> {
+    pub(crate) fn into_routers(self) -> Vec<crate::http::Routes> {
         self.collected
     }
 }
@@ -389,7 +389,7 @@ impl PluginBuildContext {
     /// resolution; dropped when the plugin is disabled.
     pub fn add_layer<F>(&mut self, layer: F)
     where
-        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
+        F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
     {
         self.effects
             .surface
@@ -404,7 +404,7 @@ impl PluginBuildContext {
     /// Dropped when the plugin is disabled.
     pub fn wrap_router<F>(&mut self, wrap: F)
     where
-        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
+        F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
     {
         self.effects.finalize.push(Box::new(wrap));
     }

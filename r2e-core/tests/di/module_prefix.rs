@@ -82,7 +82,7 @@ struct ApiModules;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-async fn get(router: &r2e_core::http::Router, path: &str) -> (r2e_core::http::StatusCode, String) {
+async fn get(router: &r2e_core::http::Routes, path: &str) -> (r2e_core::http::StatusCode, String) {
     let req = r2e_core::http::Request::builder()
         .uri(path)
         .body(r2e_core::http::Body::empty())
@@ -156,7 +156,7 @@ async fn collected_route_metadata_carries_the_mounted_path() {
         .await
         .with_meta_consumer::<RouteInfo, _>(move |items| {
             *sink.lock().unwrap() = items.iter().map(|i| i.path.clone()).collect();
-            r2e_core::http::Router::new()
+            r2e_core::http::Routes::new()
         })
         .build();
 

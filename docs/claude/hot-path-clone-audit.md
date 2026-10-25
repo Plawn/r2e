@@ -43,7 +43,7 @@ radius by construction.
 
 ## Method
 
-- Enumerated every `tower::Layer`/`Service` impl, `middleware::from_fn`
+- Enumerated every `tower::Layer`/`Service` impl, `middleware_fn`
   closure, router fallback closure, `FromRequestParts` impl and generated
   handler body in scope.
 - Scanned those files for `.clone()` / `.to_string()` / `.to_owned()` /

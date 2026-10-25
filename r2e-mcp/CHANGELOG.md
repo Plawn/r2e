@@ -15,6 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Built against the `Routes` newtype of `r2e-core` / `r2e-http` (breaking
+  there: `docs/migration/routes-newtype.md`); this crate's own API is
+  unchanged.
+
+### Changed
+
+- The MCP endpoint's CORS layer is built from `r2e_core::http::layers::cors`;
+  this crate no longer depends on `tower-http` directly. No behaviour change.
+
 ## [0.8.0] - 2026-10-12
 
 ### Changed

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::routing::get;
-use r2e_core::http::{header, Bytes, HeaderValue, Response, Router, StatusCode};
+use r2e_core::http::{header, Bytes, HeaderValue, Request, Response, Routes, StatusCode};
 use serde_json::json;
 
 /// Build the pre-serialised PRM document.
@@ -91,7 +91,7 @@ pub(crate) fn put_public_headers(response: &mut Response) {
 }
 
 /// A `204` preflight response with the public CORS headers.
-pub(crate) async fn preflight() -> Response {
+pub(crate) async fn preflight(_: (), _: Request) -> Response {
     let mut response = Response::new(Default::default());
     *response.status_mut() = StatusCode::NO_CONTENT;
     put_public_headers(&mut response);
@@ -99,17 +99,17 @@ pub(crate) async fn preflight() -> Response {
 }
 
 /// The PRM router: both well-known paths, GET + preflight.
-pub(crate) fn prm_routes(prm: Arc<str>, mcp_path: &str) -> Router {
+pub(crate) fn prm_routes(prm: Arc<str>, mcp_path: &str) -> Routes {
     // Encoded once at router build time; the per-request clone is a refcount
     // bump on an immutable document rather than a fresh `String` copy.
     let prm = Bytes::from(prm.as_bytes().to_vec());
-    let serve = move || {
+    let serve = move |_: (), _: Request| {
         let prm = prm.clone();
         async move { public_json_response(prm).into_response() }
     };
     let root = "/.well-known/oauth-protected-resource".to_string();
     let suffixed = format!("{root}{mcp_path}");
-    Router::new()
+    Routes::new()
         .route(&root, get(serve.clone()).options(preflight))
         .route(&suffixed, get(serve).options(preflight))
 }

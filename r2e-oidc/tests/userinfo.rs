@@ -1,9 +1,9 @@
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::{Body, Request, Response, Router, StatusCode};
+use r2e_core::http::{Body, Request, Response, Routes, StatusCode};
 use r2e_oidc::{InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
-async fn build_app() -> Router {
+async fn build_app() -> Routes {
     let users = InMemoryUserStore::new().add_user(
         "alice",
         "password123",
@@ -33,7 +33,7 @@ async fn body_json(resp: Response) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-async fn get_token(app: &Router) -> String {
+async fn get_token(app: &Routes) -> String {
     let req = Request::builder()
         .method("POST")
         .uri("/oauth/token")

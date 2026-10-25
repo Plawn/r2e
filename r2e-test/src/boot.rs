@@ -255,7 +255,7 @@ impl TestApp {
         // phase named, rendered by `unwrap_boot` for `boot*`.
         let running = built.start_in_process().await?;
         Ok(Self {
-            router: running.router().clone(),
+            router: running.routes().clone(),
             bean_context: Some(bean_context),
             config,
             jwt,

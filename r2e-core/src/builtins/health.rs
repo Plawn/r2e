@@ -433,7 +433,8 @@ impl HealthState {
 
 /// Handler: GET /health — aggregated status.
 pub(crate) async fn health_handler(
-    state: crate::http::extract::State<Arc<HealthState>>,
+    state: Arc<HealthState>,
+    _req: crate::http::Request,
 ) -> impl IntoResponse {
     let response = state.aggregate().await;
     let status_code = if matches!(response.status, HealthCheckStatus::Up) {
@@ -445,13 +446,17 @@ pub(crate) async fn health_handler(
 }
 
 /// Handler: GET /health/live — always 200.
-pub(crate) async fn liveness_handler() -> impl IntoResponse {
+pub(crate) async fn liveness_handler(
+    _state: Arc<HealthState>,
+    _req: crate::http::Request,
+) -> impl IntoResponse {
     (crate::http::StatusCode::OK, "OK")
 }
 
 /// Handler: GET /health/ready — 200 if all readiness-affecting checks pass.
 pub(crate) async fn readiness_handler(
-    state: crate::http::extract::State<Arc<HealthState>>,
+    state: Arc<HealthState>,
+    _req: crate::http::Request,
 ) -> impl IntoResponse {
     let response = state.aggregate_readiness().await;
     let status_code = if matches!(response.status, HealthCheckStatus::Up) {

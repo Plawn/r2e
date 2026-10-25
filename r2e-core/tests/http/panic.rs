@@ -13,7 +13,7 @@ use r2e_core::builder::AppBuilder;
 use r2e_core::builtins::http_trace::HttpTrace;
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
-use r2e_core::http::{Response, Router, StatusCode};
+use r2e_core::http::{Response, Routes, StatusCode};
 use r2e_core::{PanicHook, PanicOrigin};
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
@@ -28,11 +28,11 @@ const NO_CONFIG: &str = "server:\n  port: 0\n";
 /// not a silent break of every log pipeline filtering on it.
 const PANIC_TARGET: &str = "r2e::panic";
 
-fn routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
-    Router::new()
+fn routes<T: Clone + Send + Sync + 'static>() -> Routes<T> {
+    Routes::new()
         .route(
             "/panic/{id}",
-            get(|| async {
+            get(|_, _| async {
                 panic!("boom");
                 #[allow(unreachable_code)]
                 ""
@@ -40,13 +40,13 @@ fn routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
         )
         .route(
             "/panic-string",
-            get(|| async {
+            get(|_, _| async {
                 panic!("{}", String::from("owned boom"));
                 #[allow(unreachable_code)]
                 ""
             }),
         )
-        .route("/ok", get(|| async { "ok" }))
+        .route("/ok", get(|_, _| async { "ok" }))
 }
 
 /// `(message, route)` of every hook invocation, in order.

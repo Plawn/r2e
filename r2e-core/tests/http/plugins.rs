@@ -129,7 +129,7 @@ async fn normalize_path_preserves_matched_path_for_outer_layers() {
     // added via `with_layer_fn` see the `MatchedPath` route template —
     // not the "unmatched" sentinel a fallback re-dispatch would leave.
     use r2e_core::http::extract::MatchedPath;
-    use r2e_core::http::middleware::{from_fn, Next};
+    use r2e_core::http::middleware::Next;
     use r2e_core::http::routing::get;
 
     let router = AppBuilder::new()
@@ -137,10 +137,10 @@ async fn normalize_path_preserves_matched_path_for_outer_layers() {
         .build_state()
         .await
         .register_routes(
-            r2e_core::http::Router::new().route("/users/{id}", get(|| async { "user" })),
+            r2e_core::http::Routes::new().route("/users/{id}", get(|_, _| async { "user" })),
         )
         .with_layer_fn(|router| {
-            router.layer(from_fn(|req: Request<Body>, next: Next| async move {
+            router.middleware_fn(|req: Request<Body>, next: Next| async move {
                 let label = req
                     .extensions()
                     .get::<MatchedPath>()
@@ -150,7 +150,7 @@ async fn normalize_path_preserves_matched_path_for_outer_layers() {
                 resp.headers_mut()
                     .insert("x-matched-path", label.parse().unwrap());
                 resp
-            }))
+            })
         })
         .build();
 

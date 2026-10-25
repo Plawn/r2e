@@ -2,7 +2,7 @@
 //! walk, the last page without `nextCursor`, invalid/stale cursors (-32602),
 //! and the unpaginated default.
 
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, McpError, McpServer, McpSession, ResourceCall};
@@ -109,7 +109,7 @@ impl Extra {
     }
 }
 
-async fn app(plugin: McpServer) -> Router {
+async fn app(plugin: McpServer) -> Routes {
     AppBuilder::new()
         .plugin(plugin)
         .build_state()
@@ -120,7 +120,7 @@ async fn app(plugin: McpServer) -> Router {
         .build()
 }
 
-async fn list(router: &Router, session: Option<&str>, method: &str, cursor: Option<&str>) -> Value {
+async fn list(router: &Routes, session: Option<&str>, method: &str, cursor: Option<&str>) -> Value {
     let params = match cursor {
         Some(cursor) => json!({ "cursor": cursor }),
         None => json!({}),
@@ -138,7 +138,7 @@ async fn list(router: &Router, session: Option<&str>, method: &str, cursor: Opti
 
 /// Follow `nextCursor` to the end: the keys of each page.
 async fn walk(
-    router: &Router,
+    router: &Routes,
     session: Option<&str>,
     method: &str,
     family: &str,

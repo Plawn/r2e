@@ -54,7 +54,7 @@ app.plugin(EmbeddedFrontend::builder::<DocsAssets>()
 - Pre-compressed variants (`.br`/`.gz`) served based on `Accept-Encoding` (default: on)
 - Range requests (`206 Partial Content`) for byte-range requests
 - Base path mounting for sub-path serving
-- Installs as an Axum fallback handler via the R2E plugin system, or nest under a sub-path with `into_router()`
+- Installs as an Axum fallback handler via the R2E plugin system, or nest under a sub-path with `into_routes()`
 
 ## License
 

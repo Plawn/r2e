@@ -68,7 +68,7 @@ orders are independent. Nothing needs to be installed "last" any more: whatever
 used to need the complete route table registers a Routes effect, and whatever
 used to need to be outermost registers a Finalize effect.
 
-Note that layers added via `Router::layer` run *after* routing — they cannot
+Note that layers added via `Routes::layer` run *after* routing — they cannot
 rewrite the request URI in a way that changes which route matches. R2E's
 built-in `NormalizePath` plugin is instead applied at build time as a
 pre-routing rewrite wrapping the whole router, which is why it has no
@@ -299,12 +299,12 @@ impl Plugin for MyPlugin {
 | `enabled` | `(&self) -> bool` | The `<prefix>.enabled` config gate (default `true`) |
 | `graph` | `(&self) -> GraphHandle` | Cloneable **weak** handle on the **final** resolved graph (fills at the end of a successful `build_state()`; reads `Some` for the app's whole life *and* for any tracked task that outlives it, since the router, every tracked task and the serving scope each hold the graph independently — it reads `None` only once the last of those owners is gone) |
 | `config_raw` | `(&self) -> Option<&R2eConfig>` | The loaded raw config, if any |
-| `add_layer` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | **Graph** — add a Tower layer to the router |
+| `add_layer` | `<F: FnOnce(Routes) -> Routes + Send + 'static>(&mut self, F)` | **Graph** — add a Tower layer to the router |
 | `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | **Graph** — store a value keyed by type for later retrieval |
 | `on_serve` | `<F: FnOnce(ServeContext) + Send + 'static>(&mut self, F)` | **Graph** — run when the server starts listening |
 | `after_build` | `<F: FnOnce(&mut DeferredContext) + Send + 'static>(&mut self, F)` | **Graph** — boot-time escape hatch with full-graph access |
 | `after_routes` | `<F: FnOnce(&mut RoutesContext) + Send + 'static>(&mut self, F)` | **Routes** — runs after every controller is registered |
-| `wrap_router` | `<F: FnOnce(Router) -> Router + Send + 'static>(&mut self, F)` | **Finalize** — outermost transport-level router transform |
+| `wrap_router` | `<F: FnOnce(Routes) -> Routes + Send + 'static>(&mut self, F)` | **Finalize** — outermost transport-level router transform |
 | `on_shutdown` | `<F: FnOnce() + Send + 'static>(&mut self, F)` | cleanup — run during graceful shutdown |
 | `on_shutdown_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | cleanup — run (and await) during graceful shutdown |
 
@@ -429,7 +429,7 @@ effect, no beans.
 
 ```rust
 use r2e::{Plugin, PluginBuildContext, PluginBuildError};
-use r2e::prelude::*; // Request, Next, Response, middleware
+use r2e::prelude::*; // Request, Next, Response
 use r2e::http::header::HeaderValue;
 use uuid::Uuid;
 
@@ -447,7 +447,7 @@ impl Plugin for RequestId {
         _config: Option<()>,
         ctx: &mut PluginBuildContext,
     ) -> Result<(), PluginBuildError> {
-        ctx.add_layer(|router| router.layer(middleware::from_fn(request_id_middleware)));
+        ctx.add_layer(|routes| routes.middleware_fn(request_id_middleware));
         Ok(())
     }
 }
@@ -479,7 +479,7 @@ AppBuilder::new()
 
 ## Shipping controllers from a plugin
 
-Instead of hand-assembling a `Router`, a plugin can declare `#[controller]`
+Instead of hand-assembling a `Routes`, a plugin can declare `#[controller]`
 types in `Controllers`. They are written exactly like application controllers —
 guards, `#[roles]`, extractors and OpenAPI metadata all work — and they may
 `#[inject]` the plugin's own provided beans as well as any application bean:
@@ -621,7 +621,7 @@ than by receiving the builder:
 
 ```rust
 use r2e::{Plugin, PluginBuildContext, PluginBuildError};
-use r2e::http::{routing::get, Router};
+use r2e::http::{routing::get, Routes};
 
 pub struct MetricsPlugin {
     endpoint: String,
@@ -648,7 +648,7 @@ impl Plugin for MetricsPlugin {
         let endpoint = self.endpoint;
         ctx.after_routes(move |routes| {
             routes.register_routes(
-                Router::new().route(&endpoint, get(|| async { "metrics data" })),
+                Routes::new().route(&endpoint, get(|_, _| async { "metrics data" })),
             );
         });
         Ok(())

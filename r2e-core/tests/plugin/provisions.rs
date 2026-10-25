@@ -74,7 +74,7 @@ impl Plugin for DualProvider {
     ) -> Result<(Alpha, Beta), PluginBuildError> {
         self.probe.mark();
         ctx.store_data(StoredData(5));
-        ctx.add_layer(|router| router.route("/dual", get(|| async { "dual-ok" })));
+        ctx.add_layer(|router| router.route("/dual", get(|_, _| async { "dual-ok" })));
         Ok((Alpha(1), Beta("two".into())))
     }
 }

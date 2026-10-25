@@ -1,6 +1,6 @@
 use r2e_core::http::response::{Html, IntoResponse};
 use r2e_core::http::routing::get;
-use r2e_core::http::{Bytes, Router};
+use r2e_core::http::{Bytes, Routes};
 use r2e_core::di::meta::RouteInfo;
 use std::sync::Arc;
 
@@ -19,13 +19,13 @@ struct OpenApiState {
     spec_json: Bytes,
 }
 
-/// Build an `r2e::http::Router` that serves `/openapi.json` and optionally `/docs`.
+/// Build an `r2e::http::Routes` that serves `/openapi.json` and optionally `/docs`.
 ///
 /// The returned router can be passed to `AppBuilder::register_routes()`.
 pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     config: OpenApiConfig,
     routes: &[RouteInfo],
-) -> Router<T> {
+) -> Routes<T> {
     let spec = build_spec(&config, routes);
     let spec_json = Bytes::from(
         serde_json::to_vec_pretty(&spec)
@@ -36,9 +36,9 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
     let state = Arc::new(OpenApiState { spec_json });
 
     let state_clone = state.clone();
-    let mut router = Router::<T>::new().route(
+    let mut router = Routes::<T>::new().route(
         "/openapi.json",
-        get(move || {
+        get(move |_, _| {
             let json = state_clone.spec_json.clone();
             async move { ([("content-type", "application/json")], json).into_response() }
         }),
@@ -49,18 +49,18 @@ pub fn openapi_routes<T: Clone + Send + Sync + 'static>(
         router = router
             .route(
                 "/docs",
-                get(move || {
+                get(move |_, _| {
                     let _ = &state_for_ui;
                     async move { Html(WTI_HTML).into_response() }
                 }),
             )
             .route(
                 "/docs/wti-element.css",
-                get(|| async { ([("content-type", "text/css")], WTI_CSS).into_response() }),
+                get(|_, _| async { ([("content-type", "text/css")], WTI_CSS).into_response() }),
             )
             .route(
                 "/docs/wti-element.js",
-                get(|| async {
+                get(|_, _| async {
                     ([("content-type", "application/javascript")], WTI_JS).into_response()
                 }),
             );

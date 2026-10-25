@@ -204,7 +204,7 @@ is rejected outright (a bean has no façade). The façade type
 (`__R2eRequest_<Name>`) is always generated, so a controller whose only methods
 are request helpers still compiles.
 
-### 6. Router construction
+### 6. Routes construction
 
 The runtime trait (`r2e-core/src/controller.rs`) has a single registration path:
 
@@ -212,7 +212,7 @@ The runtime trait (`r2e-core/src/controller.rs`) has a single registration path:
 pub trait Controller<T: Clone + Send + Sync + 'static, W = ()>: Send + Sync + 'static {
     type Deps;
     fn construct(state: &T, ctx: &BeanContext) -> Self;
-    fn routes(state: &T, core: Arc<Self>, ctx: &BeanContext) -> Router<T>;
+    fn routes(state: &T, core: Arc<Self>, ctx: &BeanContext) -> Routes<T>;
     // register_meta / register_consumers / scheduled_tasks_boxed / fill_decos /
     // post_construct / pre_destroy …
 }
@@ -224,7 +224,7 @@ extraction markers (E0207). User code never names it — `register_controller()`
 infer it. Route registration:
 
 ```rust,ignore
-Router::new().route(
+Routes::new().route(
     "/me",
     get({
         let core = core.clone(); // once per registered route

@@ -1,5 +1,5 @@
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::{Body, HeaderMap, Request, Router, StatusCode};
+use r2e_core::http::{Body, HeaderMap, Request, Routes, StatusCode};
 use r2e_static::{rust_embed, EmbeddedFrontend};
 use tower::ServiceExt;
 
@@ -7,12 +7,12 @@ use tower::ServiceExt;
 #[folder = "tests/fixtures"]
 struct TestAssets;
 
-async fn get(app: Router, path: &str) -> (StatusCode, HeaderMap, String) {
+async fn get(app: Routes, path: &str) -> (StatusCode, HeaderMap, String) {
     get_with_headers(app, path, &[]).await
 }
 
 async fn get_with_headers(
-    app: Router,
+    app: Routes,
     path: &str,
     headers: &[(&str, &str)],
 ) -> (StatusCode, HeaderMap, String) {
@@ -28,7 +28,7 @@ async fn get_with_headers(
     (status, headers, String::from_utf8_lossy(&body).into_owned())
 }
 
-async fn make_app(frontend: EmbeddedFrontend) -> Router {
+async fn make_app(frontend: EmbeddedFrontend) -> Routes {
     r2e_core::AppBuilder::new()
         .plugin(frontend)
         .build_state()

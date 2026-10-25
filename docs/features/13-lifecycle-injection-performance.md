@@ -50,7 +50,7 @@ list into an **HList state** — the state type is *inferred* from the `.provide
 
 The `build_inner()` method produces a `BuiltApp<T>` struct bundling the router, the collected hook lists (startup / drain / shutdown / async-shutdown / plugin-shutdown / serve), consumer and post-construct registrations, plugin data, the resolved state, and the shutdown grace period:
 
-1. **Axum Router creation** — an empty `Router<T>`
+1. **Routes creation** — an empty `Routes<T>` (R2E's newtype over the axum router)
 2. **Route merging** — each controller receives its shared core via `Controller::routes(&state, core, ctx)`
 3. **OpenAPI** (if enabled) — invocation of the OpenAPI builder with collected metadata, adding `/openapi.json` and `/docs` routes
 4. **System routes** — `/health` and `/__r2e_dev/*` if enabled
@@ -81,7 +81,7 @@ Incoming HTTP request
 ```
 serve(addr)
     |
-    |-- 1. build_inner() → Router + Hooks + ConsumerRegs + State
+    |-- 1. build_inner() → Routes + Hooks + ConsumerRegs + State
     |
     |-- 2. Event consumer registration
     |       For each controller with #[consumer]:

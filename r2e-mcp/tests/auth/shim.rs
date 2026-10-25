@@ -16,7 +16,7 @@ fn shim_auth() -> McpAuthConfig {
     }
 }
 
-async fn post_register(router: &r2e_core::http::Router, path: &str, body: &str) -> (StatusCode, Value) {
+async fn post_register(router: &r2e_core::http::Routes, path: &str, body: &str) -> (StatusCode, Value) {
     let (status, _, raw) = send(
         router,
         "POST",
