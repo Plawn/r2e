@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
 ### Breaking
 
 - Generated code builds `Routes` / `MethodRoutes` and attaches

@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-25
+
 ### Breaking
 
 - `Routes<S>` and `MethodRoutes<S>` (module `routing`, flattened at the crate
