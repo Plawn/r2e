@@ -41,6 +41,7 @@ pub mod multipart;
 pub mod quic;
 pub mod response;
 pub mod routing;
+pub mod server;
 #[cfg(feature = "ws")]
 pub mod ws;
 
@@ -60,6 +61,9 @@ pub use self::response::{
     Html, IntoHttpResponse, IntoResponse, Redirect, Response, Sse, SseEvent, SseKeepAlive,
 };
 // `http` crate types, re-sourced per plan §5 step 3a — see `header` for why.
+// `serve` and the listener extension trait are raw backend serve surface, kept only until the
+// routing phase of plans/axum-containment-roadmap.md removes them; R2E code
+// serves through [`server::serve`].
 pub use axum::serve::ListenerExt;
 pub use axum::{serve, Error, Extension, Router};
 pub use bytes::Bytes;

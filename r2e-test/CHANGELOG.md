@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `TestServer::new` serves through `r2e_http::server::serve` like the booted-app
+  form already did via `Running::serve_tracked`. Same `ConnectInfo<SocketAddr>`
+  behaviour; no API change.
+
 ## [0.7.0] - 2026-10-12
 
 ### Changed

@@ -15,6 +15,22 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `r2e_http::server::{serve, ServeOptions}` — the one serve path. It takes the
+  runtime facade's `TcpListener`, a `Router`, a shutdown future and the options,
+  always installs `ConnectInfo<SocketAddr>`, applies `TCP_NODELAY` per accepted
+  connection when asked, and returns the graceful-shutdown future. Every serve
+  path in the workspace (single listener, sharded workers, `TestServer`) now
+  goes through it, so the backend's serve API is named in this module only
+  (`plans/axum-containment-roadmap.md`, phase A).
+
+### Changed
+
+- `r2e-rt` and `tracing` are now unconditional dependencies (they were only
+  pulled in by the `quic` feature): `server::serve` needs the facade's listener
+  type and logs a failed `TCP_NODELAY`.
+
 ## [0.6.1] - 2026-10-15
 
 ### Changed
