@@ -460,24 +460,24 @@ async fn plugin_ordering_layers_respected() {
         .build_state()
         .await
         .with_layer_fn(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(
+            router.middleware_fn(
                 |req, next: r2e_core::http::middleware::Next| async move {
                     let mut resp = next.run(req).await;
                     resp.headers_mut()
                         .insert("x-plugin-a", HeaderValue::from_static("a"));
                     resp
                 },
-            ))
+            )
         })
         .with_layer_fn(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(
+            router.middleware_fn(
                 |req, next: r2e_core::http::middleware::Next| async move {
                     let mut resp = next.run(req).await;
                     resp.headers_mut()
                         .insert("x-plugin-b", HeaderValue::from_static("b"));
                     resp
                 },
-            ))
+            )
         })
         .build();
 
@@ -502,14 +502,14 @@ async fn with_layer_fn_applied() {
         .build_state()
         .await
         .with_layer_fn(|router| {
-            router.layer(r2e_core::http::middleware::from_fn(
+            router.middleware_fn(
                 |req, next: r2e_core::http::middleware::Next| async move {
                     let mut resp = next.run(req).await;
                     resp.headers_mut()
                         .insert("x-custom-layer", HeaderValue::from_static("applied"));
                     resp
                 },
-            ))
+            )
         })
         .build();
 
@@ -534,7 +534,7 @@ async fn with_state_bypasses_bean_graph() {
 
     let router = AppBuilder::new()
         .with_state(())
-        .register_routes(r2e_core::http::Router::new().route("/health", get(|| async { "OK" })))
+        .register_routes(r2e_core::http::Routes::new().route("/health", get(|_, _| async { "OK" })))
         .build();
     let (status, body) = send_get(router, "/health").await;
     assert_eq!(status, StatusCode::OK);
@@ -548,7 +548,7 @@ async fn register_routes_adds_handler() {
     use r2e_core::http::routing::get;
 
     let router = build_app()
-        .register_routes(r2e_core::http::Router::new().route("/test", get(|| async { "ok" })))
+        .register_routes(r2e_core::http::Routes::new().route("/test", get(|_, _| async { "ok" })))
         .build();
     let (status, body) = send_get(router, "/test").await;
     assert_eq!(status, StatusCode::OK);
@@ -560,8 +560,8 @@ async fn multiple_route_registrations_merge() {
     use r2e_core::http::routing::get;
 
     let router = build_app()
-        .register_routes(r2e_core::http::Router::new().route("/a", get(|| async { "alpha" })))
-        .register_routes(r2e_core::http::Router::new().route("/b", get(|| async { "beta" })))
+        .register_routes(r2e_core::http::Routes::new().route("/a", get(|_, _| async { "alpha" })))
+        .register_routes(r2e_core::http::Routes::new().route("/b", get(|_, _| async { "beta" })))
         .build();
 
     let (status_a, body_a) = send_get(router.clone(), "/a").await;
@@ -576,7 +576,6 @@ async fn multiple_route_registrations_merge() {
 #[r2e_core::test]
 async fn register_routes_with_state_access() {
     use r2e_core::http::routing::get;
-    use r2e_core::http::State;
 
     #[derive(Clone)]
     struct AppState {
@@ -588,9 +587,9 @@ async fn register_routes_with_state_access() {
     };
     let router = AppBuilder::new()
         .with_state(state)
-        .register_routes(r2e_core::http::Router::new().route(
+        .register_routes(r2e_core::http::Routes::new().route(
             "/greet",
-            get(|State(s): State<AppState>| async move { s.greeting }),
+            get(|s: AppState, _| async move { s.greeting }),
         ))
         .build();
 

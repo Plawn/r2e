@@ -282,7 +282,7 @@ impl Plugin for GrpcServer {
                                 crate::multiplex::web::grpc_web_arm(routes.clone().prepare(), cors);
                             let mux =
                                 MultiplexService::new(routes.prepare(), router).with_grpc_web(web);
-                            return r2e_core::http::Router::new().fallback_service(mux);
+                            return r2e_core::http::Routes::new().fallback_service(mux);
                         }
                         // Said once at boot so it is not a surprise at the
                         // first browser call: without a grpc-web arm,
@@ -297,7 +297,7 @@ impl Plugin for GrpcServer {
                             crate::multiplex::GRPC_WEB_UNSUPPORTED
                         );
                         let mux = MultiplexService::new(routes.prepare(), router);
-                        r2e_core::http::Router::new().fallback_service(mux)
+                        r2e_core::http::Routes::new().fallback_service(mux)
                     }
                     None => {
                         tracing::warn!(

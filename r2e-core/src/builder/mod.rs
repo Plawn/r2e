@@ -151,11 +151,11 @@ type PostConstructReg = std::pin::Pin<
 /// sequence at startup, before the builder's [`StartupHook`] closures.
 type OnStartReg = (i32, crate::beans::OnStartHook);
 
-type LayerFn = Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>;
+type LayerFn = Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>;
 
 /// A meta consumer that drains typed metadata from the registry and returns
 /// a router fragment to be merged into the application.
-type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Router<T> + Send>;
+type MetaConsumer<T> = Box<dyn FnOnce(&MetaRegistry) -> crate::http::Routes<T> + Send>;
 
 /// A serve hook, called when the server starts. Receives a [`ServeContext`]
 /// tying the hook into the app's shutdown sequence.
@@ -853,7 +853,7 @@ impl BuilderConfig {
 /// Builder for assembling a R2E application.
 ///
 /// Collects state, controller routes, and Tower layers, then produces an
-/// `r2e::http::Router` (or starts serving directly) with everything wired together.
+/// `r2e::http::Routes` (or starts serving directly) with everything wired together.
 ///
 /// # Two-phase builder
 ///
@@ -882,7 +882,7 @@ pub struct AppBuilder<
     /// `ctx.get::<T>()`. An empty placeholder before `build_state()` and on the
     /// `with_state` path.
     bean_context: Arc<crate::beans::BeanContext>,
-    routes: Vec<crate::http::Router<T>>,
+    routes: Vec<crate::http::Routes<T>>,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
     drain_hooks: Vec<DrainHook<T>>,

@@ -73,8 +73,9 @@ promise.
 - **HTTP backend containment** — `plans/axum-containment-roadmap.md`: phases A
   (one serve path, `r2e_http::server::serve`) and B (tower-http behind
   `r2e_http::layers`) shipped 2026-10-25; phase C (`Routes<S>` replaces
-  `Router`, breaking) open. A backend swap (ntex/tako/xitca) is explicitly NOT on the
-  roadmap; its trigger is written in that file (§3 phase D).
+  `Router`, breaking — next r2e-core minor) implemented 2026-10-25 on
+  `feat/axum-containment-c-routes`. A backend swap (ntex/tako/xitca) is explicitly
+  NOT on the roadmap; its trigger is written in that file (§3 phase D).
 - **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
   half was absorbed by W10; what remains is a pass over which concern lives in
   which crate/macro (core vs http vs macros vs integrations).

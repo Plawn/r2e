@@ -41,7 +41,7 @@ fn config_with_banner() -> R2eConfig {
     config
 }
 
-async fn get_banner(router: &r2e_core::http::Router) -> String {
+async fn get_banner(router: &r2e_core::http::Routes) -> String {
     let (status, body) = send_get(router.clone(), "/live").await;
     assert_eq!(status, StatusCode::OK);
     body

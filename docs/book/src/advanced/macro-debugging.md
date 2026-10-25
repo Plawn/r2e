@@ -303,14 +303,14 @@ where
         state: &S,
         core: std::sync::Arc<Self>,
         ctx: &r2e::beans::BeanContext,   // resolved graph — guards/interceptors are built here
-    ) -> axum::Router<S> {
+    ) -> r2e::http::Routes<S> {
         // Guards and interceptors are built ONCE from `ctx` via
         // `build_decorator::<_, Spec>(expr, ctx)`, then captured by the
         // route closures (see the guarded-handler shape above).
-        axum::Router::new()
+        r2e::http::Routes::new()
             // Each generated closure captures core.clone() (and any built decorators).
-            .route("/users/", axum::routing::get(/* generated closure */))
-            .route("/users/{id}", axum::routing::get(/* generated closure */))
+            .route("/users/", r2e::http::routing::get(/* generated closure */))
+            .route("/users/{id}", r2e::http::routing::get(/* generated closure */))
     }
 
     fn register_meta(registry: &mut r2e::MetaRegistry) { /* ... */ }

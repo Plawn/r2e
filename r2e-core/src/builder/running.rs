@@ -66,7 +66,7 @@ use crate::plugin::AsyncShutdownHook;
 /// still pending ([`has_shutdown_work`](Self::has_shutdown_work)) logs a
 /// warning saying so.
 pub struct RunningApp {
-    pub(super) router: crate::http::Router,
+    pub(super) routes: crate::http::Routes,
     /// Strong reference to the resolved graph for the whole in-process
     /// lifetime — the counterpart of `PreparedApp::graph`.
     pub(super) graph: Arc<crate::beans::BeanContext>,
@@ -98,10 +98,10 @@ pub struct RunningApp {
 }
 
 impl RunningApp {
-    /// The assembled router (`Clone` — this is what an in-process HTTP client
+    /// The assembled routes (`Clone` — this is what an in-process HTTP client
     /// dispatches against).
-    pub fn router(&self) -> &crate::http::Router {
-        &self.router
+    pub fn routes(&self) -> &crate::http::Routes {
+        &self.routes
     }
 
     /// The resolved bean graph.
@@ -204,7 +204,7 @@ impl RunningApp {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        let router = self.router.clone();
+        let router = self.routes.clone();
         let app_cancel = self.cancel.clone();
         // This server's OWN stop token. `bounded_http_drain` starts the
         // `drain_timeout` clock when the token it is given fires, so handing

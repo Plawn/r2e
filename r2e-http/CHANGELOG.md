@@ -15,6 +15,21 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Routes<S>` and `MethodRoutes<S>` (module `routing`, flattened at the crate
+  root) replace the re-exported `axum::Router` / `MethodRouter`. They are
+  newtypes with the same builder vocabulary and R2E-owned bounds (`Handler<S>`
+  = `FnOnce(S, Request) -> Fut`, `RouteLayer`, `LeafService`); function
+  middleware attaches through `middleware_fn` / `middleware_fn_with_state`
+  instead of `middleware::from_fn[_with_state]`, which are no longer
+  re-exported. `routing::Route` is R2E's own `tower::Service` newtype;
+  `has_custom_fallback` became `Routes::has_custom_fallback(&self)`. axum's
+  `serve` / `ListenerExt` are no longer re-exported (use `server::serve`).
+  `axum_compat` gains `into_router` / `from_router` / `into_method_router` /
+  `from_method_router`. Migration: `docs/migration/routes-newtype.md`
+  (`plans/axum-containment-roadmap.md`, phase C).
+
 ### Added
 
 - `r2e_http::layers` — the tower-http layers R2E uses, re-exported with their

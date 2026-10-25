@@ -139,7 +139,7 @@ fn resolve_expose_endpoint_precedence() {
     assert!(resolve_expose_endpoint(None, None));
 }
 
-async fn status_of(router: r2e_core::http::Router, path: &str) -> StatusCode {
+async fn status_of(router: r2e_core::http::Routes, path: &str) -> StatusCode {
     let req = Request::builder()
         .method("GET")
         .uri(path)

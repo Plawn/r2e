@@ -2,7 +2,7 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use r2e_core::http::{Body, HeaderMap, Router, StatusCode};
+use r2e_core::http::{Body, HeaderMap, Routes, StatusCode};
 use r2e_mcp::auth::{McpAuthConfig, McpBasicAuthConfig};
 use r2e_mcp::McpServer;
 use serde_json::{json, Value};
@@ -32,7 +32,7 @@ fn basic(user: &str, password: &str) -> String {
 }
 
 /// Basic only: no issuer, no pinned validator, nothing OAuth.
-async fn basic_only_app(auth: McpAuthConfig) -> Router {
+async fn basic_only_app(auth: McpAuthConfig) -> Routes {
     secured_plugin_app(McpServer::new().with_auth(auth)).await
 }
 
@@ -66,7 +66,7 @@ fn error_body(raw: &str) -> (String, String) {
 /// POST `initialize` with the given `Authorization` header (or none);
 /// returns status, headers and body.
 async fn initialize_with(
-    router: &Router,
+    router: &Routes,
     authorization: Option<&str>,
 ) -> (StatusCode, HeaderMap, String) {
     let mut headers = vec![
@@ -87,11 +87,11 @@ async fn initialize_with(
 }
 
 /// Full handshake with Basic credentials; returns the session id.
-async fn initialize_basic(router: &Router, authorization: &str) -> String {
+async fn initialize_basic(router: &Routes, authorization: &str) -> String {
     support::initialize_with_headers(router, "/mcp", &[("authorization", authorization)]).await
 }
 
-async fn call(router: &Router, session: &str, authorization: &str, tool: &str) -> Value {
+async fn call(router: &Routes, session: &str, authorization: &str, tool: &str) -> Value {
     support::tools_call_with_headers(
         router,
         "/mcp",

@@ -14,7 +14,7 @@ use super::*;
 /// the hot-patched closure with [`AppBuilder::prepare()`], then call
 /// [`.run()`](Self::run) to start serving.
 pub struct PreparedApp<T: Clone + Send + Sync + 'static> {
-    pub(super) router: crate::http::Router,
+    pub(super) routes: crate::http::Routes,
     pub(super) state: T,
     /// A strong reference to the resolved bean graph, held for the WHOLE
     /// serving lifecycle — see [`run_inner`](Self::run_inner).
@@ -151,14 +151,14 @@ struct StartedLifecycle {
 }
 
 impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
-    /// Access the assembled router for inspection or testing.
-    pub fn router(&self) -> &crate::http::Router {
-        &self.router
+    /// Access the assembled routes for inspection or testing.
+    pub fn routes(&self) -> &crate::http::Routes {
+        &self.routes
     }
 
-    /// Mutable access to the router (e.g., for adding test-only routes).
-    pub fn router_mut(&mut self) -> &mut crate::http::Router {
-        &mut self.router
+    /// Mutable access to the routes (e.g., for adding test-only routes).
+    pub fn routes_mut(&mut self) -> &mut crate::http::Routes {
+        &mut self.routes
     }
 
     /// The application state.
@@ -430,7 +430,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             };
 
         Ok(RunningApp {
-            router: self.router,
+            routes: self.routes,
             graph,
             cancel,
             _cancel_guard: guard,
@@ -824,7 +824,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             .quic_server_config
             .take()
             .and_then(|(addr, server_config)| {
-                let router = self.router.clone();
+                let router = self.routes.clone();
                 let token = cancel_token.clone();
 
                 #[cfg(feature = "dev-reload")]
@@ -918,7 +918,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 let cancel_for_drain = cancel_token.clone();
                 let serve = crate::http::server::serve(
                     listener,
-                    self.router,
+                    self.routes,
                     shutdown_future,
                     crate::http::server::ServeOptions::default().tcp_nodelay(self.tcp_nodelay),
                 );
@@ -937,7 +937,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
                 // cancellation as its graceful-shutdown signal.
                 let shutdown_handle = crate::rt::spawn(shutdown_future);
 
-                let router = self.router.clone();
+                let router = self.routes.clone();
                 let tcp_nodelay = self.tcp_nodelay;
                 let drain_bound = self.drain_timeout;
                 let cancel_for_workers = cancel_token.clone();

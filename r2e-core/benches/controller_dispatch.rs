@@ -28,7 +28,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::response::Response;
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::Identity;
 use tower::ServiceExt;
@@ -125,19 +125,19 @@ impl StructIdentityController {
     }
 }
 
-// ── Router construction (outside the timed loop) ─────────────────────────────
+// ── Routes construction (outside the timed loop) ─────────────────────────────
 
 fn state() -> BenchState {
     BenchState { label: "ok" }
 }
 
-fn plain_axum_routes() -> Router<BenchState> {
+fn plain_axum_routes() -> Routes<BenchState> {
     let core = Arc::new(PlainCore { label: "ok" });
-    Router::new().route(
+    Routes::new().route(
         "/dispatch",
         get({
             let core = core.clone();
-            move || async move {
+            move |_: BenchState, _| async move {
                 black_box(core.label);
                 StatusCode::NO_CONTENT
             }
@@ -145,33 +145,35 @@ fn plain_axum_routes() -> Router<BenchState> {
     )
 }
 
-fn plain_axum_identity_routes() -> Router<BenchState> {
+fn plain_axum_identity_routes() -> Routes<BenchState> {
     let core = Arc::new(PlainCore { label: "ok" });
-    Router::new().route(
+    Routes::new().route(
         "/dispatch",
         get({
             let core = core.clone();
-            move |user: StubIdentity| async move {
+            move |_: BenchState, req: Request<Body>| async move {
+                let (mut parts, _) = req.into_parts();
+                let user = StubIdentity::from_request_parts(&mut parts, &()).await?;
                 black_box(core.label);
                 black_box(user.0);
-                StatusCode::NO_CONTENT
+                Ok::<_, Response>(StatusCode::NO_CONTENT)
             }
         }),
     )
 }
 
-fn bare_axum_router() -> Router {
+fn bare_axum_router() -> Routes {
     plain_axum_routes().with_state(state())
 }
 
-fn axum_app_stack_router() -> Router {
+fn axum_app_stack_router() -> Routes {
     r2e_core::AppBuilder::new()
         .with_state(state())
         .register_routes(plain_axum_routes())
         .build()
 }
 
-fn axum_app_stack_identity_router() -> Router {
+fn axum_app_stack_identity_router() -> Routes {
     r2e_core::AppBuilder::new()
         .with_state(state())
         .register_routes(plain_axum_identity_routes())
@@ -180,7 +182,7 @@ fn axum_app_stack_identity_router() -> Router {
 
 // R2E controllers construct from the bean graph: provide the injected
 // `&'static str` bean and materialize the HList state (async → block_on).
-fn no_request_scope_router(rt: &tokio::runtime::Runtime) -> Router {
+fn no_request_scope_router(rt: &tokio::runtime::Runtime) -> Routes {
     rt.block_on(async {
         r2e_core::AppBuilder::new()
             .provide("ok")
@@ -191,7 +193,7 @@ fn no_request_scope_router(rt: &tokio::runtime::Runtime) -> Router {
     })
 }
 
-fn param_identity_router(rt: &tokio::runtime::Runtime) -> Router {
+fn param_identity_router(rt: &tokio::runtime::Runtime) -> Routes {
     rt.block_on(async {
         r2e_core::AppBuilder::new()
             .provide("ok")
@@ -202,7 +204,7 @@ fn param_identity_router(rt: &tokio::runtime::Runtime) -> Router {
     })
 }
 
-fn struct_identity_router(rt: &tokio::runtime::Runtime) -> Router {
+fn struct_identity_router(rt: &tokio::runtime::Runtime) -> Routes {
     rt.block_on(async {
         r2e_core::AppBuilder::new()
             .provide("ok")
@@ -225,7 +227,7 @@ fn request() -> Request<Body> {
 /// Time a single in-process dispatch: clone the router, drive one request to
 /// completion, and assert it succeeded (outside criterion's reported timing the
 /// assert is negligible, but keeps the bench honest).
-fn dispatch(rt: &tokio::runtime::Runtime, router: &Router) {
+fn dispatch(rt: &tokio::runtime::Runtime, router: &Routes) {
     let resp = rt.block_on(router.clone().oneshot(request())).unwrap();
     debug_assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     black_box(resp);

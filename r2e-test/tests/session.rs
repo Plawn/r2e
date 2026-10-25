@@ -2,12 +2,12 @@
 // public API surface. Integration tests that exercise actual HTTP flows
 // would need an Axum router with cookie-setting endpoints.
 
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_test::TestApp;
 
 fn make_app() -> TestApp {
     // Minimal router with no routes — just to construct a TestApp
-    TestApp::new(Router::new())
+    TestApp::new(Routes::new())
 }
 
 #[test]

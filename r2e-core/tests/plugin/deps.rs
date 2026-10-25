@@ -214,7 +214,7 @@ impl Plugin for EffectfulEcho {
         let v = alpha.0;
         ctx.store_data(StoredData(v));
         ctx.add_layer(move |router| {
-            router.route("/late", get(move || async move { format!("late-{v}") }))
+            router.route("/late", get(move |_, _| async move { format!("late-{v}") }))
         });
         Ok(())
     }

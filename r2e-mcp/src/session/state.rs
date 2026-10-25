@@ -25,7 +25,7 @@ pub(crate) struct SessionState {
     /// The endpoint-wide dynamic members, served behind the session's own.
     registry: McpRegistry,
     view: RwLock<Arc<SessionView>>,
-    /// The transport session id, attached by [`track_session_id`](super::track_session_id) when the
+    /// The transport session id, attached by [`TrackSessionId`](super::TrackSessionId) when the
     /// `initialize` response leaves (or by the handler from the request
     /// header, whichever runs first). Never set for a sessionless request.
     id: OnceLock<SessionId>,

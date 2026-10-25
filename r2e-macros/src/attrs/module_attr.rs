@@ -192,7 +192,7 @@ fn reject_repeats(types: &[Type], key: &str) -> syn::Result<()> {
 
 /// Check a `prefix = "…"` value and return it.
 ///
-/// Kept strict on purpose: the prefix ends up in `Router::nest` and in every
+/// Kept strict on purpose: the prefix ends up in `Routes::nest` and in every
 /// published OpenAPI path, where a stray trailing slash or a path parameter
 /// would produce routes nobody declared.
 fn validate_prefix(lit: &syn::LitStr) -> syn::Result<String> {

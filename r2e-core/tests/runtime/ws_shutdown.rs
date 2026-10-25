@@ -271,7 +271,7 @@ fn unserved_app_leaves_sessions_untracked_and_working() {
     reset();
 
     current_thread_rt().block_on(async {
-        // The `TestApp` / `build_with_consumers` shape: a Router, never run().
+        // The `TestApp` / `build_with_consumers` shape: a Routes, never run().
         let app = AppBuilder::new()
             .build_state()
             .await
@@ -290,7 +290,14 @@ fn unserved_app_leaves_sessions_untracked_and_working() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         r2e_core::rt::spawn(async move {
-            r2e_core::http::serve(listener, router).await.unwrap();
+            r2e_core::http::server::serve(
+                listener,
+                router,
+                std::future::pending::<()>(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
         });
 
         let (mut client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/polite"))

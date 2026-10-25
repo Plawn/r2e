@@ -20,7 +20,7 @@
 //! async fn slow(&self) -> Json<&'static str> { Json("done") }
 //! ```
 
-use crate::Router;
+use crate::Routes;
 
 pub use tower_http::cors;
 pub use tower_http::normalize_path;
@@ -38,21 +38,21 @@ pub fn default_cors() -> cors::CorsLayer {
         .allow_headers(cors::Any)
 }
 
-/// Wrap a fully-built router in pre-routing trailing-slash normalization.
+/// Wrap fully-built routes in pre-routing trailing-slash normalization.
 ///
-/// A middleware added via `Router::layer` runs after routing and cannot
-/// change which route matches, so the rewrite must wrap the router itself:
-/// the whole router goes inside tower-http's `NormalizePath` service, and
-/// the wrapped service is re-embedded as the fallback of a fresh routerless
-/// `Router` so callers keep receiving a plain `Router`. The outer router is
+/// A middleware added via `Routes::layer` runs after routing and cannot
+/// change which route matches, so the rewrite must wrap the routes
+/// themselves: the whole tree goes inside tower-http's `NormalizePath`
+/// service, and the wrapped service is re-embedded as the fallback of a fresh
+/// empty `Routes` so callers keep receiving plain `Routes`. The outer tree is
 /// a trivial extra dispatch hop — the meaningful routing (and `MatchedPath`
-/// insertion) happens once, in the wrapped inner router. Anything applied
+/// insertion) happens once, in the wrapped inner tree. Anything applied
 /// OUTSIDE this wrap therefore never sees `MatchedPath`.
 ///
 /// tower-http's `trim_trailing_slash` also collapses a leading run of
 /// slashes (`//admin` → `/admin`).
-pub fn normalize_path_router(router: Router) -> Router {
+pub fn normalize_path_router(routes: Routes) -> Routes {
     use tower::Layer as _;
-    let svc = normalize_path::NormalizePathLayer::trim_trailing_slash().layer(router);
-    Router::new().fallback_service(svc)
+    let svc = normalize_path::NormalizePathLayer::trim_trailing_slash().layer(routes);
+    Routes::new().fallback_service(svc)
 }

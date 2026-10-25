@@ -174,8 +174,9 @@ pub struct MethodDecorators {
 pub struct MiddlewareFn {
     /// The middleware function.
     pub path: syn::Path,
-    /// `#[middleware(fn, state)]`: registered with `from_fn_with_state`,
-    /// handing the function the controller core as `State<Arc<Self>>`.
+    /// `#[middleware(fn, state)]`: registered with
+    /// `MethodRoutes::middleware_fn_with_state`, handing the function the
+    /// controller core as a leading `Arc<Self>` argument.
     pub with_state: bool,
 }
 
@@ -209,7 +210,7 @@ pub struct RouteMethod {
     pub identity_param: Option<IdentityParam>,
     pub managed_params: Vec<ManagedParam>,
     pub fn_item: syn::ImplItemFn,
-    /// `#[fallback]` route: registered via `Router::fallback` instead of
+    /// `#[fallback]` route: registered via `Routes::fallback` instead of
     /// `.route(path, ...)`. `method`/`path` are placeholders (`Any` / `""`).
     pub is_fallback: bool,
 }

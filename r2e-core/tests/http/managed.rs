@@ -228,7 +228,7 @@ impl AnonHeadController {
     }
 }
 
-async fn head_router() -> r2e_core::http::Router {
+async fn head_router() -> r2e_core::http::Routes {
     r2e_core::AppBuilder::new()
         .build_state()
         .await

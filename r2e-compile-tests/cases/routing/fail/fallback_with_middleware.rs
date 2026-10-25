@@ -1,6 +1,6 @@
 //! `#[middleware]`, `#[layer]`, and `#[pre_guard]` attach to a
 //! `.route(path, method_router)` registration; a fallback is registered via
-//! `Router::fallback(handler)`, which takes no layers.
+//! `Routes::fallback(handler)`, which takes no layers.
 
 use r2e::prelude::*;
 

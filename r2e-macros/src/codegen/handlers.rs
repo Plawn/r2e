@@ -1,7 +1,7 @@
 //! Entry-function generation for route / SSE / WS methods.
 //!
 //! Every endpoint gets ONE generated entry function, registered through a
-//! `(State<S>, Request)` closure. The entry function owns the whole request
+//! `(state, Request)` closure — R2E's handler shape (`r2e_http::routing::Handler`). The entry function owns the whole request
 //! pipeline in a fixed order — pre-auth guards, request-scoped data (identity +
 //! `#[inject(request)]`), the param-level identity, guards, the remaining
 //! extractors (body last), garde validation, `#[managed]` acquisition, the
@@ -77,7 +77,7 @@ pub(super) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
 }
 
 /// Bounds placed on the generic state by every generated item that touches it:
-/// axum's `Router` requirements plus `BeanLookup`, the fixed vocabulary through
+/// the `Routes<S>` state requirements plus `BeanLookup`, the fixed vocabulary through
 /// which guards, interceptors, managed resources and the error projection pull
 /// beans from the state.
 pub(super) fn state_bounds(krate: &TokenStream) -> TokenStream {
@@ -1698,10 +1698,11 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
 
 // ── Registration closures ────────────────────────────────────────────────
 //
-// Each endpoint registers a `move |State(state), req| async move { entry(..) }`
+// Each endpoint registers a `move |state, req| async move { entry(..) }`
 // closure. The closure captures the controller core `Arc` and the prebuilt
-// decorator sets once at registration; axum clones it per request (one `Arc`
-// increment each), and the body moves those clones into the entry function.
+// decorator sets once at registration; the router clones it per request (one
+// `Arc` increment each), and the body moves those clones into the entry
+// function.
 
 /// The shared closure shape. `extra_setup` runs at registration time (after
 /// the decorator captures), `extra_args` are forwarded after `__core`.
@@ -1724,8 +1725,7 @@ fn registration_closure(
             let __core_capture = __ctrl.clone();
             #capture_setup
             #extra_setup
-            move |#krate::http::extract::State(__state): #krate::http::extract::State<#state>,
-                  __req: #krate::http::extract::Request| {
+            move |__state: #state, __req: #krate::http::extract::Request| {
                 async move {
                     #invocation #turbofish(
                         __state,

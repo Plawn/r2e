@@ -1,5 +1,5 @@
 //! Controller-level `#[middleware]`/`#[layer]` wrap every `.route(...)`
-//! registration; a `#[fallback]` is skipped (`Router::fallback` takes no
+//! registration; a `#[fallback]` is skipped (`Routes::fallback` takes no
 //! per-route layers). With only a fallback, they would apply to nothing.
 
 use r2e::prelude::*;

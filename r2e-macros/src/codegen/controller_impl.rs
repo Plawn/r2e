@@ -119,13 +119,13 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         |__ctrl: ::std::sync::Arc<#name>, __ctx: &#krate::beans::BeanContext| {
             #ctrl_router_setup
             #layer_setup
-            let __inner = #krate::http::Router::new()
+            let __inner = #krate::http::Routes::new()
                 #(#route_registrations)*
                 #(#sse_route_registrations)*
                 #(#ws_route_registrations)*;
             match #meta_mod::PATH_PREFIX {
                 Some("/") | None => __inner,
-                Some(__prefix) => #krate::http::Router::new().nest(__prefix, __inner),
+                Some(__prefix) => #krate::http::Routes::new().nest(__prefix, __inner),
             }
         }
     };
@@ -233,7 +233,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                 __state: &#state_ident,
                 __core: ::std::sync::Arc<Self>,
                 __ctx: &#krate::beans::BeanContext,
-            ) -> #krate::http::Router<#state_ident> {
+            ) -> #krate::http::Routes<#state_ident> {
                 (#application_router_body)(__core, __ctx)
             }
 
@@ -1469,7 +1469,7 @@ fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
                 // #[fallback]: handles everything no other route matched.
                 // Method-level #[middleware]/#[layer]/#[pre_guard] are
                 // rejected at parse time and controller-level
-                // #[middleware]/#[layer] skip it (`Router::fallback` takes no
+                // #[middleware]/#[layer] skip it (`Routes::fallback` takes no
                 // per-route layers), so the closure is registered bare.
                 quote! {
                     .fallback(#closure)
@@ -1534,11 +1534,11 @@ fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
 // outermost, so the controller's layers wrap the method's. Within one level,
 // `#[middleware]`s are applied before `#[layer]`s, each in declaration order.
 //
-// Every `.layer` call pins its output error to `Infallible`
-// (`MethodRouter::layer::<_, Infallible>`): `NewError` is only constrained by
-// `Service::Error: Into<NewError>`, so between two error-passthrough layers
-// (`DefaultBodyLimit`, `SetResponseHeaderLayer`, …) it is ambiguous — and
-// `Router::route` needs `MethodRouter<S, Infallible>` at the end anyway.
+// `MethodRoutes::layer` is R2E's (`r2e_http::routing`): it pins the error
+// type to `Infallible` itself, so the chain needs no turbofish, and
+// `#[middleware]` goes through `MethodRoutes::middleware_fn[_with_state]`
+// rather than a raw `from_fn` layer — the generated code never names a
+// backend routing type.
 
 /// Name of the binding holding the `i`-th controller-level `#[layer]`, built
 /// once per controller and cloned onto each route.
@@ -1546,22 +1546,16 @@ fn ctrl_layer_ident(i: usize) -> syn::Ident {
     format_ident!("__r2e_ctrl_layer_{}", i)
 }
 
-/// `.layer(from_fn(..))` / `.layer(from_fn_with_state(core, ..))`.
+/// `.middleware_fn(f)` / `.middleware_fn_with_state(core, f)`.
 fn middleware_layer(mw: &MiddlewareFn) -> TokenStream {
-    let krate = r2e_core_path();
     let path = &mw.path;
     if mw.with_state {
         quote! {
-            .layer::<_, ::std::convert::Infallible>(
-                #krate::http::middleware::from_fn_with_state(
-                    ::std::clone::Clone::clone(&__ctrl),
-                    #path,
-                )
-            )
+            .middleware_fn_with_state(::std::clone::Clone::clone(&__ctrl), #path)
         }
     } else {
         quote! {
-            .layer::<_, ::std::convert::Infallible>(#krate::http::middleware::from_fn(#path))
+            .middleware_fn(#path)
         }
     }
 }
@@ -1632,13 +1626,13 @@ fn route_layer_chain(def: &RoutesImplDef, method: &MethodDecorators) -> TokenStr
     let method_mw = method.middleware_fns.iter().map(middleware_layer);
     let method_layers = method.layer_exprs.iter().map(|layer| {
         let value = layer_value(def, layer);
-        quote! { .layer::<_, ::std::convert::Infallible>(#value) }
+        quote! { .layer(#value) }
     });
     let ctrl = &def.controller_decorators;
     let ctrl_mw = ctrl.middleware_fns.iter().map(middleware_layer);
     let ctrl_layers = (0..ctrl.layer_exprs.len()).map(|i| {
         let ident = ctrl_layer_ident(i);
-        quote! { .layer::<_, ::std::convert::Infallible>(::std::clone::Clone::clone(&#ident)) }
+        quote! { .layer(::std::clone::Clone::clone(&#ident)) }
     });
     quote! {
         #(#method_mw)*

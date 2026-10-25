@@ -3,7 +3,7 @@
 //! sent a `progressToken`, strictly increasing — and survives
 //! `mcp.json-response` (rmcp falls back to SSE).
 
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, McpServer, Progress, ResourceCall, ToolCall};
@@ -54,7 +54,7 @@ impl ProgressTools {
     }
 }
 
-async fn app(plugin: McpServer) -> Router {
+async fn app(plugin: McpServer) -> Routes {
     AppBuilder::new()
         .plugin(plugin)
         .build_state()

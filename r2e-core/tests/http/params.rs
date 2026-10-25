@@ -9,8 +9,10 @@
 //! `Rejection` projected through the route's error envelope — the default
 //! `HttpError` JSON shape is pinned here.
 
+use r2e_core::http::extract::FromRequestParts;
 use r2e_core::http::routing::get;
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Request, Routes, StatusCode};
+use r2e_core::web::params::ParamError;
 use r2e_macros::Params;
 use serde::Deserialize;
 
@@ -48,8 +50,9 @@ fn default_limit() -> u32 {
     50
 }
 
-async fn search(q: SearchQuery) -> String {
-    format!(
+async fn search(_: (), req: Request) -> Result<String, ParamError> {
+    let q = extract::<SearchQuery>(req).await?;
+    Ok(format!(
         "{}|{}|{}|{}|{}|{}",
         q.page_size,
         q.search_term,
@@ -57,7 +60,7 @@ async fn search(q: SearchQuery) -> String {
         q.include_archived,
         q.max_results,
         q.computed.len()
-    )
+    ))
 }
 
 /// An explicit r2e name is the most specific spelling and outranks serde's.
@@ -71,12 +74,13 @@ struct ExplicitQuery {
     trace_id: Option<String>,
 }
 
-async fn explicit(q: ExplicitQuery) -> String {
-    format!(
+async fn explicit(_: (), req: Request) -> Result<String, ParamError> {
+    let q = extract::<ExplicitQuery>(req).await?;
+    Ok(format!(
         "{}|{}",
         q.tenant_id,
         q.trace_id.unwrap_or_else(|| "-".into())
-    )
+    ))
 }
 
 /// Path parameters take their name from the same rename pipeline.
@@ -88,8 +92,9 @@ struct PathQuery {
     detail_level: Option<u8>,
 }
 
-async fn order(p: PathQuery) -> String {
-    format!("{}|{}", p.order_id, p.detail_level.unwrap_or(0))
+async fn order(_: (), req: Request) -> Result<String, ParamError> {
+    let p = extract::<PathQuery>(req).await?;
+    Ok(format!("{}|{}", p.order_id, p.detail_level.unwrap_or(0)))
 }
 
 /// `#[serde(flatten)]` means what a bare `#[params]` means: the nested
@@ -112,17 +117,27 @@ struct ListQuery {
     filter_by: Option<String>,
 }
 
-async fn list(q: ListQuery) -> String {
-    format!(
+async fn list(_: (), req: Request) -> Result<String, ParamError> {
+    let q = extract::<ListQuery>(req).await?;
+    Ok(format!(
         "{}|{}|{}",
         q.page.page_index,
         q.page.page_size,
         q.filter_by.unwrap_or_else(|| "-".into())
-    )
+    ))
 }
 
-fn router() -> Router {
-    Router::new()
+/// Run a `Params` extractor by hand: handlers on `Routes` take the raw
+/// request, so the test drives `FromRequestParts` itself.
+async fn extract<P: FromRequestParts<(), Rejection = ParamError>>(
+    req: Request,
+) -> Result<P, ParamError> {
+    let (mut parts, _) = req.into_parts();
+    P::from_request_parts(&mut parts, &()).await
+}
+
+fn router() -> Routes {
+    Routes::new()
         .route("/search", get(search))
         .route("/explicit", get(explicit))
         .route("/list", get(list))

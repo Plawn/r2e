@@ -13,7 +13,7 @@
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::plugin::PluginBuildError;
 use r2e_security::{Algorithm, SecurityConfig};
 
@@ -63,7 +63,7 @@ pub(crate) struct AuthArtifacts {
     pub slot: Arc<OnceLock<McpTokenValidator>>,
     /// PRM + (optionally) shim routes, merged NEXT TO the MCP service —
     /// never behind the auth layer.
-    pub extra_routes: Router,
+    pub extra_routes: Routes,
 }
 
 /// Canonicalise a resource URI (RFC 8707): `url::Url` lowercases the
@@ -173,7 +173,7 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         layer,
         validator: McpTokenValidator::disabled(),
         slot,
-        extra_routes: Router::new(),
+        extra_routes: Routes::new(),
     }
 }
 

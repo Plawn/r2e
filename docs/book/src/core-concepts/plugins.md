@@ -304,7 +304,7 @@ beans exist and whatever they hold still has to be released; check
 ### Shipping controllers from a plugin
 
 A plugin can declare `#[controller]` types instead of hand-assembling a
-`Router`, which gets it guards, `#[roles]`, OpenAPI metadata and extractors for
+`Routes`, which gets it guards, `#[roles]`, OpenAPI metadata and extractors for
 free:
 
 ```rust

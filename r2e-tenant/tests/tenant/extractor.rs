@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use r2e_core::http::{Router, StatusCode};
+use r2e_core::http::{Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_tenant::{
     HeaderTenantResolver, MissingTenantPolicy, Tenant, TenantId, TenantRouter, TenantStatuses,
@@ -92,7 +92,7 @@ async fn app(
     source: ScriptedSource,
     policy: MissingTenantPolicy,
     statuses: TenantStatuses,
-) -> Router {
+) -> Routes {
     let map = Tenanted::new(
         Arc::new(source),
         r2e_core::plugin::GraphHandle::default(),
@@ -121,7 +121,7 @@ async fn app(
 }
 
 /// The common case: reject requests that carry no tenant, default statuses.
-async fn strict_app(source: ScriptedSource) -> Router {
+async fn strict_app(source: ScriptedSource) -> Routes {
     app(source, MissingTenantPolicy::Reject, TenantStatuses::default()).await
 }
 

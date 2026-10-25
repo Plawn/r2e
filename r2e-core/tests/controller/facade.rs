@@ -765,7 +765,7 @@ impl WsIdentityController {
 }
 
 #[cfg(feature = "ws")]
-async fn ws_upgrade(router: r2e_core::http::Router, user: Option<&str>) -> StatusCode {
+async fn ws_upgrade(router: r2e_core::http::Routes, user: Option<&str>) -> StatusCode {
     use tower::ServiceExt;
 
     let mut b = Request::builder()

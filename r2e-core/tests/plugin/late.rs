@@ -143,7 +143,7 @@ impl Plugin for GraphProbePlugin {
             router
                 .route(
                     "/after-yield",
-                    r2e_core::http::routing::get(move || {
+                    r2e_core::http::routing::get(move |_, _| {
                         let handle = after_yield.clone();
                         async move {
                             // Yield first: with `oneshot`, the service (and any
@@ -156,7 +156,7 @@ impl Plugin for GraphProbePlugin {
                 )
                 .route(
                     "/streamed",
-                    r2e_core::http::routing::get(move || {
+                    r2e_core::http::routing::get(move |_, _| {
                         let handle = streamed.clone();
                         async move {
                             let stream = futures_util::stream::unfold(0u8, move |step| {

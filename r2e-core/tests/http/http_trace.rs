@@ -14,7 +14,8 @@ use r2e_core::builtins::http_trace::{resolve_settings, HttpTrace, HttpTraceConfi
 use r2e_core::builtins::request_id::RequestIdPlugin;
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
-use r2e_core::http::{Response, Router, StatusCode};
+use r2e_core::http::extract::FromRequestParts;
+use r2e_core::http::{Request, Response, Routes, StatusCode};
 use tracing::Level;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
@@ -24,19 +25,19 @@ use crate::support::raw_get_with;
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
 
-fn routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
-    Router::new()
-        .route("/users/{id}", get(|| async { "user" }))
-        .route("/health", get(|| async { "ok" }))
+fn routes<T: Clone + Send + Sync + 'static>() -> Routes<T> {
+    Routes::new()
+        .route("/users/{id}", get(|_, _| async { "user" }))
+        .route("/health", get(|_, _| async { "ok" }))
         .route(
             "/boom",
-            get(|| async { (StatusCode::SERVICE_UNAVAILABLE, "down") }),
+            get(|_, _| async { (StatusCode::SERVICE_UNAVAILABLE, "down") }),
         )
 }
 
 /// Build the app router with `HttpTrace` configured by `yaml` (the whole
 /// application config, so `trace:` lives at the top level).
-async fn app(plugin: HttpTrace, yaml: &str) -> Router {
+async fn app(plugin: HttpTrace, yaml: &str) -> Routes {
     AppBuilder::new()
         .override_config(R2eConfig::from_yaml_str(yaml).expect("valid yaml"))
         .load_config::<()>()
@@ -48,7 +49,7 @@ async fn app(plugin: HttpTrace, yaml: &str) -> Router {
 }
 
 /// Drive one request under a fresh capture and return it with the response.
-async fn drive(router: Router, path: &str, headers: &[(&str, &str)]) -> (Capture, Response) {
+async fn drive(router: Routes, path: &str, headers: &[(&str, &str)]) -> (Capture, Response) {
     let capture = Capture::default();
     let subscriber = Registry::default().with(capture.clone());
     let _guard = tracing::subscriber::set_default(subscriber);
@@ -232,7 +233,6 @@ async fn record_path_puts_the_path_on_the_event_only() {
 
 // ── Enrichment channel ─────────────────────────────────────────────────────
 
-use r2e_core::http::Extension;
 use r2e_core::web::request_head::RequestHead;
 use r2e_core::{MakeRequestSpan, RequestOutcome, RequestSpan, SpanState};
 
@@ -285,45 +285,48 @@ impl MakeRequestSpan for EnrichedSpan {
     }
 }
 
-fn enrichment_routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
-    Router::new()
+fn enrichment_routes<T: Clone + Send + Sync + 'static>() -> Routes<T> {
+    Routes::new()
         .route(
             "/session",
-            get(
-                |span: RequestSpan, Extension(state): Extension<SpanState>| async move {
-                    span.record("session_id", "sess-42");
-                    if let Some(facts) = state.get::<Facts>() {
-                        *facts.0.lock().unwrap() = Some("sess-42".into());
-                    }
-                    "ok"
-                },
-            ),
+            get(|_: T, req: Request| async move {
+                let (mut parts, _) = req.into_parts();
+                let span = request_span(&mut parts).await;
+                let state = parts
+                    .extensions
+                    .get::<SpanState>()
+                    .cloned()
+                    .expect("SpanState extension");
+                span.record("session_id", "sess-42");
+                if let Some(facts) = state.get::<Facts>() {
+                    *facts.0.lock().unwrap() = Some("sess-42".into());
+                }
+                "ok"
+            }),
         )
         // Reports whether the request carried a live `RequestSpan` extension —
         // the extractor is infallible and falls back to `Span::none()`.
-        .route(
-            "/probe",
-            get(|span: RequestSpan| async move {
-                if span.span().is_none() {
-                    "no-span"
-                } else {
-                    "span"
-                }
-            }),
-        )
-        .route(
-            "/health",
-            get(|span: RequestSpan| async move {
-                if span.span().is_none() {
-                    "no-span"
-                } else {
-                    "span"
-                }
-            }),
-        )
+        .route("/probe", get(|_: T, req: Request| probe(req)))
+        .route("/health", get(|_: T, req: Request| probe(req)))
 }
 
-async fn enrichment_app(plugin: HttpTrace) -> Router {
+/// Drive the infallible `RequestSpan` extractor by hand.
+async fn request_span(parts: &mut r2e_core::http::header::Parts) -> RequestSpan {
+    match RequestSpan::from_request_parts(parts, &()).await {
+        Ok(span) => span,
+    }
+}
+
+async fn probe(req: Request) -> &'static str {
+    let (mut parts, _) = req.into_parts();
+    if request_span(&mut parts).await.span().is_none() {
+        "no-span"
+    } else {
+        "span"
+    }
+}
+
+async fn enrichment_app(plugin: HttpTrace) -> Routes {
     AppBuilder::new()
         .override_config(R2eConfig::from_yaml_str(NO_CONFIG).expect("valid yaml"))
         .load_config::<()>()

@@ -35,7 +35,7 @@ AppBuilder::new()
 
 `build_state()` is **async** and takes **no type arguments** — it resolves the bean dependency graph with topological sorting and materializes the state as an inferred HList of every provided/registered bean (you never hand-write a state struct). Use `try_build_state()` for the non-panicking `Result` variant. Apps with more than ~127 provisions need `#![recursion_limit = "512"]` at the crate root.
 
-`build()` returns a `Router` (from `r2e-http`). `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, listens, waits for shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
+`build()` returns a `Routes` (from `r2e-http`). `serve(addr)` builds, runs startup hooks, registers event consumers, starts scheduled tasks, listens, waits for shutdown (Ctrl-C / SIGTERM), then runs shutdown hooks.
 
 ## Dependency injection
 

@@ -42,7 +42,7 @@ impl Plugin for GatedPlugin {
         // Effects are registered unconditionally — the framework drops them
         // when the plugin is disabled.
         ctx.store_data(StoredData(1));
-        ctx.add_layer(|router| router.route("/gated", get(|| async { "gated-ok" })));
+        ctx.add_layer(|router| router.route("/gated", get(|_, _| async { "gated-ok" })));
         Ok((GatedService {
             enabled: ctx.enabled(),
         },))
@@ -131,7 +131,7 @@ impl Plugin for SetupAndBuildPlugin {
         ctx: &mut PluginBuildContext,
     ) -> Result<(GatedService,), PluginBuildError> {
         ctx.store_data(StoredData(1));
-        ctx.add_layer(|router| router.route("/gated", get(|| async { "gated-ok" })));
+        ctx.add_layer(|router| router.route("/gated", get(|_, _| async { "gated-ok" })));
         // Cleanup for the resource this build constructed — registered
         // unconditionally, and NOT dropped by the enabled gate.
         let disposed = self.disposed.clone();

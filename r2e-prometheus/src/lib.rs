@@ -67,7 +67,7 @@
 //!
 //! Label cardinality is bounded: the `path` label is the matched route
 //! template (e.g. `/users/{id}`), capped by the number of registered routes;
-//! requests that no route matched (404s, `Router::fallback`) are all recorded
+//! requests that no route matched (404s, `Routes::fallback`) are all recorded
 //! under the single sentinel value [`UNMATCHED_PATH_LABEL`]. The `method`
 //! label is capped to the nine standard HTTP methods; non-standard extension
 //! methods are recorded under [`OTHER_METHOD_LABEL`].
@@ -377,7 +377,7 @@ impl Plugin for Prometheus {
         if expose_endpoint {
             ctx.after_routes(move |routes| {
                 routes.register_routes(
-                    r2e_core::http::Router::new().route(&endpoint, get(metrics_handler)),
+                    r2e_core::http::Routes::new().route(&endpoint, get(|_, _| metrics_handler())),
                 );
             });
         }

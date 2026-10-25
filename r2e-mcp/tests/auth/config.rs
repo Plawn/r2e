@@ -198,7 +198,7 @@ async fn eager_discovery_failure_is_a_boot_error() {
 
 // ── Resource resolution ────────────────────────────────────────────────────
 
-async fn prm_resource(router: &r2e_core::http::Router) -> Value {
+async fn prm_resource(router: &r2e_core::http::Routes) -> Value {
     let (status, _, body) =
         fixtures::get(router, "/.well-known/oauth-protected-resource", &[]).await;
     assert_eq!(status, StatusCode::OK, "{body}");

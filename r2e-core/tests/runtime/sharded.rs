@@ -161,7 +161,7 @@ mod integration {
             .override_config(config)
             .load_config::<()>()
             .with_state(())
-            .register_routes(r2e_core::http::Router::new().route("/ping", get(|| async { "pong" })))
+            .register_routes(r2e_core::http::Routes::new().route("/ping", get(|_, _| async { "pong" })))
             .prepare(&addr);
 
         // Sanity: the workers config parsed to Some(2).
@@ -233,7 +233,7 @@ mod integration {
         let cp_handle = cp_rt.handle();
         let handle = std::thread::spawn(move || {
             r2e_core::runtime::sharded::serve_sharded(
-                r2e_core::http::Router::new().with_state(()),
+                r2e_core::http::Routes::new().with_state(()),
                 &["127.0.0.1:0".parse().unwrap()],
                 2,
                 true,

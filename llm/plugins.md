@@ -99,7 +99,7 @@ builds themselves run in dependency order):
 | Finalize | `wrap_router` | last, outermost (transport-level wrappers) |
 
 `RoutesContext` gives `routes() -> &[RouteInfo]` (the collected route registry —
-what `OpenApiPlugin` reads), `register_routes(Router)`, `bean_context()`,
+what `OpenApiPlugin` reads), `register_routes(Routes)`, `bean_context()`,
 `config()`, `take_data::<D>()`. Nothing has to be "installed last" any more.
 
 Disabling drops all three **surface** stages (`add_layer`, `after_routes`,

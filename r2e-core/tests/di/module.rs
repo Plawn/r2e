@@ -212,7 +212,7 @@ trait SameTy<B> {}
 impl<A> SameTy<A> for A {}
 fn assert_same<A: SameTy<B>, B>() {}
 
-async fn get(router: &r2e_core::http::Router, path: &str) -> (r2e_core::http::StatusCode, String) {
+async fn get(router: &r2e_core::http::Routes, path: &str) -> (r2e_core::http::StatusCode, String) {
     let req = r2e_core::http::Request::builder()
         .uri(path)
         .body(r2e_core::http::Body::empty())

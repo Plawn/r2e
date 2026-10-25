@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use r2e_core::builder::{AppBuilder, SpawnService};
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::rt::CancelToken;
 use r2e_core::runtime::drain::DEFAULT_DRAIN_TIMEOUT;
 use r2e_core::runtime::service::ServiceComponent;
@@ -87,12 +87,12 @@ pub(crate) fn current_thread_rt() -> r2e_core::rt::Runtime {
         .unwrap()
 }
 
-/// Router with a handler that never finishes within a test's lifetime, so the
+/// Routes with a handler that never finishes within a test's lifetime, so the
 /// HTTP drain has something to wait on.
-fn slow_router() -> Router {
-    Router::new().route(
+fn slow_router() -> Routes {
+    Routes::new().route(
         "/slow",
-        get(|| async {
+        get(|_, _| async {
             r2e_core::rt::sleep(Duration::from_secs(60)).await;
             "late"
         }),
@@ -396,7 +396,7 @@ fn cooperative_shutdown_emits_no_budget_warnings() {
 
             let app = AppBuilder::new()
                 .with_state(())
-                .register_routes(Router::new().route("/ping", get(|| async { "pong" })))
+                .register_routes(Routes::new().route("/ping", get(|_, _| async { "pong" })))
                 .spawn_service::<CooperativeService>()
                 // Configured but generous: neither budget should be reached.
                 .drain_timeout(Duration::from_secs(30))

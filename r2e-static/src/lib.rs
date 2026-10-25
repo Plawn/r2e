@@ -509,23 +509,23 @@ fn range_not_satisfiable(file_size: u64) -> Response {
         .into_response()
 }
 
-// ── Nestable Router ────────────────────────────────────────────────────────
+// ── Nestable Routes ────────────────────────────────────────────────────────
 
 impl EmbeddedFrontend {
-    /// Produce a standalone [`Router`](r2e_core::http::Router) that can be
-    /// nested under a sub-path via `Router::nest("/ui", frontend.into_router())`.
+    /// Produce a standalone [`Routes`](r2e_core::http::Routes) that can be
+    /// nested under a sub-path via `Routes::nest("/ui", frontend.into_routes())`.
     ///
     /// SPA fallback, ETag, cache headers, and MIME detection all work in nested
     /// mode. The `base_path` config is ignored — path stripping is handled by
     /// Axum's `nest`.
-    pub fn into_router(self) -> r2e_core::http::Router {
+    pub fn into_routes(self) -> r2e_core::http::Routes {
         let handler = Arc::new(StaticFileHandler {
             file_server: self.file_server,
             config: self.config,
         });
 
-        r2e_core::http::Router::new().fallback(
-            move |req: r2e_core::http::extract::Request| async move {
+        r2e_core::http::Routes::new().fallback(
+            move |_: (), req: r2e_core::http::Request| async move {
                 let path = req.uri().path().to_string();
                 handler.serve(&path, req.headers())
             },
@@ -560,8 +560,8 @@ impl r2e_core::plugin::Plugin for EmbeddedFrontend {
         });
 
         ctx.after_routes(move |routes| {
-            let fallback = r2e_core::http::Router::new().fallback(
-                move |req: r2e_core::http::extract::Request| async move {
+            let fallback = r2e_core::http::Routes::new().fallback(
+                move |_, req: r2e_core::http::Request| async move {
                     let path = req.uri().path().to_string();
 
                     let effective_path = if let Some(ref base) = handler.config.base_path {

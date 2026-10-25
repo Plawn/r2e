@@ -19,7 +19,7 @@ use crate::http::response::IntoResponse;
 use crate::http::routing::get;
 use crate::http::Request;
 use crate::http::Response;
-use crate::http::Router;
+use crate::http::Routes;
 use std::sync::OnceLock;
 use std::time::SystemTime;
 
@@ -610,10 +610,10 @@ fn boot_time() -> u64 {
 ///
 /// Intended to be merged into the main application via the
 /// [`DevReload`](crate::builtins::DevReload) plugin.
-pub fn dev_routes<T: Clone + Send + Sync + 'static>() -> Router<T> {
-    Router::new()
-        .route("/__r2e_dev/status", get(status_handler))
-        .route("/__r2e_dev/ping", get(ping_handler))
+pub fn dev_routes<T: Clone + Send + Sync + 'static>() -> Routes<T> {
+    Routes::new()
+        .route("/__r2e_dev/status", get(|_: T, _: Request| status_handler()))
+        .route("/__r2e_dev/ping", get(|_: T, _: Request| ping_handler()))
 }
 
 async fn status_handler() -> impl IntoResponse {
@@ -635,8 +635,15 @@ async fn ping_handler() -> impl IntoResponse {
 ///   hot-patches, it drops the old server and starts a new one, but the old
 ///   connection handler tasks (spawned by the HTTP server) keep running.
 ///   The browser's keep-alive connection stays routed to stale handlers.
+///
+/// A `101 Switching Protocols` response (WebSocket upgrade) is left untouched:
+/// the client handshake requires `Connection: upgrade`, and rewriting it to
+/// `close` makes every `#[ws]` route fail under dev-reload.
 pub async fn dev_headers_middleware(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
+    if response.status() == crate::http::header::StatusCode::SWITCHING_PROTOCOLS {
+        return response;
+    }
     let headers = response.headers_mut();
     headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(CONNECTION, HeaderValue::from_static("close"));

@@ -71,12 +71,12 @@ pub type AsyncShutdownHook =
 pub struct DeferredContext<'a> {
     /// Layers to apply to the router.
     #[doc(hidden)]
-    pub layers: &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
+    pub layers: &'a mut Vec<Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>>,
     /// Transport-level router transforms, applied outermost (after layers and
     /// the catch-panic layer). See [`DeferredContext::wrap_router`].
     #[doc(hidden)]
     pub router_wraps:
-        &'a mut Vec<Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>>,
+        &'a mut Vec<Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>>,
     /// Plugin data storage.
     #[doc(hidden)]
     pub plugin_data:
@@ -155,7 +155,7 @@ impl DeferredContext<'_> {
     /// Add a layer to the router.
     pub fn add_layer(
         &mut self,
-        layer: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>,
+        layer: Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>,
     ) {
         self.layers.push(layer);
     }
@@ -173,7 +173,7 @@ impl DeferredContext<'_> {
     /// installed by another plugin.
     pub fn wrap_router(
         &mut self,
-        wrap: Box<dyn FnOnce(crate::http::Router) -> crate::http::Router + Send>,
+        wrap: Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>,
     ) {
         self.router_wraps.push(wrap);
     }

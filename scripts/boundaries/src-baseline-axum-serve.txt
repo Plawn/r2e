@@ -13,10 +13,8 @@
 #
 # Regenerate with: scripts/check-source-boundary.sh --update
 #
-# r2e-http/src/server.rs is the destination, not debt. The remaining
-# entries are the `ListenerExt` / `serve` re-exports kept for API
-# stability until the routing phase of the roadmap removes them.
+# r2e-http/src/server.rs is the destination, not debt. The `ListenerExt`
+# / `serve` re-exports it used to share this list with were removed by
+# the routing phase (phase C) of plans/axum-containment-roadmap.md.
 
-r2e-core/src/http/mod.rs:1
-r2e-http/src/lib.rs:1
 r2e-http/src/server.rs:4

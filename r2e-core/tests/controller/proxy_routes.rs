@@ -1,6 +1,6 @@
 //! Proxy-shaped routing: `#[any]` (all-methods routes, wildcard paths, raw
 //! `Request` access, streaming responses) and `#[fallback]` (controller-scoped
-//! catch-all registered as the app-wide `Router::fallback`).
+//! catch-all registered as the app-wide `Routes::fallback`).
 //!
 //! These are the first-class replacements for the raw-axum escape hatch that
 //! proxy apps (registry proxies, gateways) previously needed: the handlers
@@ -27,7 +27,7 @@ async fn body_string(resp: Response) -> String {
 }
 
 async fn send(
-    router: r2e_core::http::Router,
+    router: r2e_core::http::Routes,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
@@ -171,7 +171,7 @@ impl FallbackController {
     }
 }
 
-async fn fallback_router() -> r2e_core::http::Router {
+async fn fallback_router() -> r2e_core::http::Routes {
     r2e_core::AppBuilder::new()
         .provide(Greeting("sorry".to_string()))
         .build_state()

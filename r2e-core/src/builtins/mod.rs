@@ -236,7 +236,7 @@ impl Plugin for Health {
     ) -> Result<Self::Provided, PluginBuildError> {
         ctx.after_routes(|routes| {
             routes.register_routes(
-                crate::http::Router::new()
+                crate::http::Routes::new()
                     .route("/health", crate::http::routing::get(simple_health_handler)),
             );
         });
@@ -244,7 +244,7 @@ impl Plugin for Health {
     }
 }
 
-async fn simple_health_handler() -> &'static str {
+async fn simple_health_handler(_: (), _: crate::http::Request) -> &'static str {
     "OK"
 }
 
@@ -295,13 +295,11 @@ impl Plugin for AdvancedHealth {
         ctx.after_routes(move |routes| {
             use std::sync::Arc;
             let state = Arc::new(for_routes.into_state());
-            let s1 = Arc::clone(&state);
             routes.register_routes(
-                crate::http::Router::new()
+                crate::http::Routes::<Arc<crate::builtins::health::HealthState>>::new()
                     .route(
                         "/health",
-                        crate::http::routing::get(crate::builtins::health::health_handler)
-                            .with_state(state),
+                        crate::http::routing::get(crate::builtins::health::health_handler),
                     )
                     .route(
                         "/health/live",
@@ -309,9 +307,9 @@ impl Plugin for AdvancedHealth {
                     )
                     .route(
                         "/health/ready",
-                        crate::http::routing::get(crate::builtins::health::readiness_handler)
-                            .with_state(s1),
-                    ),
+                        crate::http::routing::get(crate::builtins::health::readiness_handler),
+                    )
+                    .with_state(state),
             );
         });
 
@@ -348,10 +346,8 @@ impl Plugin for DevReload {
             if !dctx.mark_dev_reload_applied() {
                 return;
             }
-            dctx.add_layer(Box::new(|router: crate::http::Router| {
-                router.layer(crate::http::middleware::from_fn(
-                    crate::runtime::dev::dev_headers_middleware,
-                ))
+            dctx.add_layer(Box::new(|routes: crate::http::Routes| {
+                routes.middleware_fn(crate::runtime::dev::dev_headers_middleware)
             }));
             dctx.after_routes(|routes| {
                 routes.register_routes(crate::runtime::dev::dev_routes());

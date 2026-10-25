@@ -20,7 +20,7 @@ use r2e_core::http::extract::{FromRequestParts, Path};
 use r2e_core::http::header::{HeaderValue, Parts, RETRY_AFTER};
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
 use r2e_core::http::Bytes;
-use r2e_core::http::{Body, Json, Response, Router, StatusCode};
+use r2e_core::http::{Body, Json, Response, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::web::managed::ManagedErr;
 use r2e_core::BeanAccess;
@@ -280,7 +280,7 @@ impl ProjController {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-async fn router() -> Router {
+async fn router() -> Routes {
     r2e_core::AppBuilder::new()
         .build_state()
         .await
@@ -288,7 +288,7 @@ async fn router() -> Router {
         .build()
 }
 
-async fn router_with_app_envelope() -> Router {
+async fn router_with_app_envelope() -> Routes {
     r2e_core::AppBuilder::new()
         .error_projection::<AppWire>()
         .build_state()

@@ -25,7 +25,7 @@ compile-time checking and framework integration.
 **What R2E promises.** The public surface is **R2E types**, under `r2e::http`
 and `r2e::prelude` — that is what R2E commits to keeping working. `Json<T>` is
 R2E's own type (extractor + response, `JsonRejection` on failure); many others
-are axum's today (`Path`, `Router`, …), but you should reach them all through
+are axum's today (`Path`, `Query`, …); `Routes` is R2E's own newtype, but you should reach them all through
 `r2e::…` names, and implement R2E's own contracts rather than axum's:
 `IntoHttpResponse` for response conversion (+ the one-line
 `r2e::http::impl_into_response!` bridge), and `FromRequestPartsVia` for
@@ -51,7 +51,7 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 | Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` (struct- or param-level); custom identities via `FromValidatedJwtClaims` |
 | Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
 | Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
-| A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
+| A catch-all / proxy handler | `Router::fallback(handler)` (axum) | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
 | One error body for every failure, extractor rejections included | `IntoResponse` per error type + middleware rewriting 4xx bodies, or never-rejecting extractors | `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` with an `#[error(rejection)]` variant); app-wide: `AppBuilder::error_projection::<E>()` |
 | Custom 404 / 405 / panic bodies | `Router::fallback` + `method_not_allowed_fallback` + a catch-panic layer | `AppBuilder::error_projection::<E>()` — the framework's 404/405/413/500 render through the same envelope |
 | Endpoints grouped by resource | A `Router` of free functions | A `#[controller(path = "...")]` + `#[routes]` impl |
@@ -68,5 +68,5 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 Escape-hatch ladder when you genuinely need raw axum (each rung trades
 integration for control): 1. `#[any]`/`#[fallback]` controller routes →
 2. `merge_router(router)` (raw fragment, shares state + global plugins, no DI) →
-3. `with_layer_fn(|router| ...)` (transform the final `Router`) →
+3. `with_layer_fn(|routes| ...)` (transform the final `Routes`) →
 4. `r2e::http::axum_compat` (the raw axum API, off the supported surface).

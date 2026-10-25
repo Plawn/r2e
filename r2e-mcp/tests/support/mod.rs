@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 
 use http_body_util::BodyExt;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -54,7 +54,7 @@ impl McpResponse {
 
 /// POST a JSON-RPC body to the MCP endpoint with extra request headers.
 pub async fn post_with_headers(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: Option<&str>,
     headers: &[(&str, &str)],
@@ -122,7 +122,7 @@ pub async fn post_with_headers(
 
 /// POST a JSON-RPC body to the MCP endpoint.
 pub async fn post(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: Option<&str>,
     body: &Value,
@@ -145,13 +145,13 @@ pub fn initialize_body() -> Value {
 
 /// Full session handshake: initialize → capture `Mcp-Session-Id` →
 /// `notifications/initialized`. Returns the session id.
-pub async fn initialize(router: &Router, path: &str) -> String {
+pub async fn initialize(router: &Routes, path: &str) -> String {
     initialize_with_headers(router, path, &[]).await
 }
 
 /// [`initialize`], sending `headers` on both handshake requests.
 pub async fn initialize_with_headers(
-    router: &Router,
+    router: &Routes,
     path: &str,
     headers: &[(&str, &str)],
 ) -> String {
@@ -202,7 +202,7 @@ pub fn tool_names(list: &Value) -> Vec<String> {
 }
 
 /// `tools/list` on an initialized session; returns the `result` object.
-pub async fn tools_list(router: &Router, path: &str, session: &str) -> Value {
+pub async fn tools_list(router: &Routes, path: &str, session: &str) -> Value {
     let response = post(
         router,
         path,
@@ -217,7 +217,7 @@ pub async fn tools_list(router: &Router, path: &str, session: &str) -> Value {
 /// `tools/call` on an initialized session; returns the full JSON-RPC message
 /// (so callers can assert on either `result` or `error`).
 pub async fn tools_call(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: &str,
     name: &str,
@@ -229,7 +229,7 @@ pub async fn tools_call(
 /// `tools/call` with extra HTTP headers on the carrying request (guards see
 /// the real transport headers).
 pub async fn tools_call_with_headers(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: &str,
     headers: &[(&str, &str)],
@@ -264,7 +264,7 @@ pub fn tool<'a>(list_result: &'a Value, name: &str) -> &'a Value {
 }
 
 /// `resources/list` on an initialized session; returns the `result` object.
-pub async fn resources_list(router: &Router, path: &str, session: &str) -> Value {
+pub async fn resources_list(router: &Routes, path: &str, session: &str) -> Value {
     let response = post(
         router,
         path,
@@ -278,7 +278,7 @@ pub async fn resources_list(router: &Router, path: &str, session: &str) -> Value
 
 /// `resources/read` on an initialized session; returns the full JSON-RPC
 /// message (so callers can assert on either `result` or `error`).
-pub async fn resources_read(router: &Router, path: &str, session: &str, uri: &str) -> Value {
+pub async fn resources_read(router: &Routes, path: &str, session: &str, uri: &str) -> Value {
     let response = post(
         router,
         path,
@@ -296,7 +296,7 @@ pub async fn resources_read(router: &Router, path: &str, session: &str, uri: &st
 }
 
 /// `prompts/list` on an initialized session; returns the `result` object.
-pub async fn prompts_list(router: &Router, path: &str, session: &str) -> Value {
+pub async fn prompts_list(router: &Routes, path: &str, session: &str) -> Value {
     let response = post(
         router,
         path,
@@ -311,7 +311,7 @@ pub async fn prompts_list(router: &Router, path: &str, session: &str) -> Value {
 /// `prompts/get` on an initialized session; returns the full JSON-RPC
 /// message (so callers can assert on either `result` or `error`).
 pub async fn prompts_get(
-    router: &Router,
+    router: &Routes,
     path: &str,
     session: &str,
     name: &str,

@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::routing::{get, post};
-use r2e_core::http::{body::to_bytes, header, HeaderValue, Request, Response, Router, StatusCode};
+use r2e_core::http::{body::to_bytes, header, HeaderValue, Request, Response, Routes, StatusCode};
 use serde_json::{json, Value};
 use url::Url;
 
@@ -322,28 +322,28 @@ pub(crate) fn shim_routes(
     state: Arc<ShimState>,
     mcp_path: &str,
     registration_path: &str,
-) -> Router {
+) -> Routes {
     let meta = {
         let state = state.clone();
-        move || {
+        move |_: (), _: Request| {
             let state = state.clone();
             async move { serve_metadata(state).await.into_response() }
         }
     };
     let reg = {
         let state = state.clone();
-        move |req: Request| {
+        move |_: (), req: Request| {
             let state = state.clone();
             async move { register(state, req).await.into_response() }
         }
     };
     let authorize_on = state.authorize.is_some();
-    let auth_handler = move |req: Request| {
+    let auth_handler = move |_: (), req: Request| {
         let state = state.clone();
         async move { authorize(state, req).await.into_response() }
     };
 
-    let mut router = Router::new()
+    let mut router = Routes::new()
         .route(
             "/.well-known/oauth-authorization-server",
             get(meta.clone()).options(preflight),

@@ -85,6 +85,7 @@ git ls-files \
 # Per-group by-design exclusions (see the header). Empty = nothing excluded.
 TOKIO_EXCLUDE='^(r2e-rt|r2e-test|r2e-devservices)/'
 AXUM_EXCLUDE=''
+AXUM_SHAPE_EXCLUDE='^r2e-cli/src/commands/templates/'
 SERDE_JSON_EXCLUDE='^r2e-http/src/json\.rs$'
 
 # ── scan: emit `path:count` for every file with >= 1 occurrence of $1 ──────
@@ -247,13 +248,17 @@ check_group "tokio" '\btokio(_util|_stream)?::' "$BOUNDARY_DIR/src-baseline-toki
 check_group "axum" '\baxum::' "$BOUNDARY_DIR/src-baseline-axum.txt" "$AXUM_EXCLUDE"
 # The backend's *serve* API. r2e_http::server::serve is the one caller;
 # everything else — production paths, sharded workers, TestServer — goes
-# through it (plans/axum-containment-roadmap.md, phase A). The two surviving
-# re-exports of `ListenerExt` are tracked here until the routing phase removes
-# them.
+# through it (plans/axum-containment-roadmap.md, phase A). Phase C removed the
+# `ListenerExt` re-exports; `r2e-http/src/server.rs` is the only caller left.
 check_group "axum-serve" '\b(into_make_service(_with_connect_info)?|with_graceful_shutdown|tap_io)\(|\bListenerExt\b' "$BOUNDARY_DIR/src-baseline-axum-serve.txt" ""
 # tower-http is confined to r2e-http (`layers`) and r2e-grpc's grpc-web arm
 # (plans/axum-containment-roadmap.md, phase B). `tower::` is neutral (D1).
 check_group "tower_http" '\btower_http::' "$BOUNDARY_DIR/src-baseline-tower_http.txt" ""
+# The backend's routing *shapes*: `Router`, `MethodRouter`, `middleware::from_fn`.
+# Everything outside r2e-http builds on R2E's `Routes` / `MethodRoutes` /
+# `middleware_fn` (plans/axum-containment-roadmap.md, phase C); the bridge is
+# `r2e_http::axum_compat`. The CLI's "coming from axum" template table is prose.
+check_group "axum-shape" '\bRouter\s*(<|::)|\bMethodRouter\b|\bmiddleware::from_fn(_with_state)?\b' "$BOUNDARY_DIR/src-baseline-axum-shape.txt" "$AXUM_SHAPE_EXCLUDE"
 check_group "serde_json" '\bserde_json::(to_vec|to_string|to_string_pretty|to_writer|from_slice|from_str|from_reader)\b' "$BOUNDARY_DIR/src-baseline-serde_json.txt" "$SERDE_JSON_EXCLUDE"
 
 if [ "$FAILED" -ne 0 ]; then

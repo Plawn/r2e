@@ -30,7 +30,7 @@
 //!
 //! Each property is asserted twice, over two different states:
 //!
-//! - against a hand-assembled `BeanState` + bare `Router::with_state`, which
+//! - against a hand-assembled `BeanState` + bare `Routes::with_state`, which
 //!   isolates the wrapper's own cost from everything the builder does;
 //! - against the router `AppBuilder::build_state().build()` actually produces,
 //!   which is the integration guard — it fails if the builder or `build_inner`
@@ -49,7 +49,7 @@ use std::cell::Cell;
 use std::sync::Arc;
 
 use r2e::http::routing::get;
-use r2e::http::{Body, Request, Router, StatusCode};
+use r2e::http::{Body, Request, Routes, StatusCode};
 use r2e::type_list::{BeanState, HCons, HNil};
 use tower::ServiceExt;
 
@@ -181,13 +181,13 @@ fn request() -> Request<Body> {
 
 /// A route that declares no `State<S>` at all — the backend clones the state
 /// for it regardless, which is exactly why the state's `Clone` is a hot path.
-fn router<S: Clone + Send + Sync + 'static>(state: S) -> Router {
-    Router::new()
-        .route("/plain", get(|| async { "ok" }))
+fn router<S: Clone + Send + Sync + 'static>(state: S) -> Routes {
+    Routes::new()
+        .route("/plain", get(|_, _| async { "ok" }))
         .with_state(state)
 }
 
-fn drive(rt: &r2e::rt::Runtime, router: &Router) {
+fn drive(rt: &r2e::rt::Runtime, router: &Routes) {
     let response = rt
         .block_on(router.clone().oneshot(request()))
         .expect("infallible router");
@@ -283,7 +283,7 @@ fn owning_beans_are_not_deep_copied_per_request() {
 // but not the integration: nothing there would notice if `build_state()` or
 // `build_inner()` started handing the router a bare HList again. These two
 // guards close that hole by measuring the router `AppBuilder::build_state()`
-// actually produces — provisions in, `Router` out, no `BeanState` named by the
+// actually produces — provisions in, `Routes` out, no `BeanState` named by the
 // test at all.
 
 /// Chain one `.provide()` per bean onto a builder.
@@ -297,16 +297,16 @@ macro_rules! provide_beans {
 /// A route registered *before* the state is applied, so the backend clones the
 /// builder's state for it — the whole point. It declares no `State<S>`, like
 /// the majority of real handlers.
-fn plain_route<S: Clone + Send + Sync + 'static>() -> Router<S> {
-    Router::new().route("/plain", get(|| async { "ok" }))
+fn plain_route<S: Clone + Send + Sync + 'static>() -> Routes<S> {
+    Routes::new().route("/plain", get(|_, _| async { "ok" }))
 }
 
-/// Define `fn <name>() -> Router` building a router through the real builder
+/// Define `fn <name>() -> Routes` building a router through the real builder
 /// over a state of the given width.
 macro_rules! define_built_routers {
     ($($name:ident, $bean:ident, [$($n:literal),+ $(,)?];)+) => {
         $(
-            fn $name(rt: &r2e::rt::Runtime) -> Router {
+            fn $name(rt: &r2e::rt::Runtime) -> Routes {
                 rt.block_on(async {
                     provide_beans!(r2e::AppBuilder::new(); $bean; $($n),+)
                         .build_state()
@@ -340,7 +340,7 @@ define_built_routers! {
 /// request either.
 ///
 /// This is the integration guard for the whole path — `.provide()` →
-/// `build_state()` → `AppBuilder::build()` → `Router::with_state`. Unwrapping
+/// `build_state()` → `AppBuilder::build()` → `Routes::with_state`. Unwrapping
 /// the `BeanState` anywhere along it (installing `(*state).clone()`, returning
 /// the bare `<P as BuildHList>::Output` from `build_state()`, …) puts the
 /// element-wise `HCons` clone back on the request path and fails here, even

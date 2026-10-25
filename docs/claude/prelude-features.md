@@ -11,11 +11,11 @@
 - **Executor** (feature `executor`): `Executor` plugin, `PoolExecutor`, `RejectedError`, `ExecutorMetrics`, `ExecutorConfig` — managed task pool exposed as `r2e::r2e_executor::*`. See `executor.md`.
 - **Plugins:** `Cors`, `Tracing`, `ConfiguredTracing`, `Health`, `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`
 - **Tracing config:** `TracingConfig`, `LogFormat`, `SpanEvents`
-- **HTTP core:** `Json`, `Router`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`
+- **HTTP core:** `Json`, `Routes`, `StatusCode`, `HeaderMap`, `Uri`, `Extension`, `Body`, `Bytes`
 - **Extractors:** `Path`, `Query`, `Form`, `State`, `Request`, `FromRef`, `FromRequest`, `FromRequestParts`, `ConnectInfo`, `DefaultBodyLimit`, `MatchedPath`, `OriginalUri`
 - **Headers:** `HeaderName`, `HeaderValue`, `Method`, plus constants: `ACCEPT`, `AUTHORIZATION`, `CACHE_CONTROL`, `CONTENT_LENGTH`, `CONTENT_TYPE`, `COOKIE`, `HOST_HEADER`, `LOCATION`, `ORIGIN`, `REFERER`, `SET_COOKIE`, `USER_AGENT`
 - **Response:** `IntoHttpResponse` (R2E's contract — pair it with `r2e::http::impl_into_response!`), `IntoResponse`, `Response`, `Redirect`, `Html`, `Sse`, `SseEvent`, `SseKeepAlive`, `SseBroadcaster`
-- **Middleware:** `from_fn`, `Next`
+- **Middleware:** `Next` (attach functions with `Routes::middleware_fn` / `middleware_fn_with_state`)
 - **Type aliases:** `ApiResult`, `JsonResult`, `StatusResult`
 - **Data** (features `data-sqlx` / `data-diesel`): with exactly **one** backend enabled, its prelude joins (`DbPool`, `DbTx`, `Tx`, `DataSourceHealth`, `SqlxDataSource`+`SqlxTx` or `DieselDataSource`+`DieselTx`, plus `TenantPools`/`TenantTx` with `tenant-*`). With **both** backends enabled the mirrored names are deliberately absent (they would trip the deny-by-default `ambiguous_glob_imports` lint at every use site) — only the backend-unique names remain, and the mirrored ones are imported explicitly from `r2e::r2e_data_sqlx` / `r2e::r2e_data_diesel`. Note cargo feature unification: a workspace member enabling both backends puts every sibling app in the dual-backend case, so examples/tests import the mirrored names explicitly (an explicit import shadows the prelude glob, so it is stable under both modes).
 - **Multipart** (feature `multipart`): `Multipart`, `TypedMultipart`, `UploadedFile`, `FromMultipart`

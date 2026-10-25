@@ -4,7 +4,7 @@
 //! fan-out; an endpoint with no service at all.
 
 use http_body_util::BodyExt;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{
@@ -62,7 +62,7 @@ impl Hidden {
 }
 
 struct App {
-    router: Router,
+    router: Routes,
     registry: McpRegistry,
     sessions: McpSessions,
 }
@@ -105,7 +105,7 @@ fn echo_builder(name: &str, reply: &'static str) -> DynamicTool {
     DynamicTool::new(name.to_owned()).description(reply)
 }
 
-async fn list(router: &Router, session: &str, method: &str, params: Value) -> Value {
+async fn list(router: &Routes, session: &str, method: &str, params: Value) -> Value {
     support::post(
         router,
         "/mcp",
@@ -118,7 +118,7 @@ async fn list(router: &Router, session: &str, method: &str, params: Value) -> Va
 }
 
 /// Open the session's SSE stream (GET) and collect frames until `done`.
-async fn sse_until(router: &Router, session: &str, done: impl Fn(&str) -> bool) -> Body {
+async fn sse_until(router: &Routes, session: &str, done: impl Fn(&str) -> bool) -> Body {
     let stream = router
         .clone()
         .oneshot(

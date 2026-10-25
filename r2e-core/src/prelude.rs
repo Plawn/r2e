@@ -139,7 +139,7 @@ pub use crate::types::{ApiResult, JsonResult, StatusResult};
 // ── HTTP re-exports ────────────────────────────────────────────────────────
 
 // Core types
-pub use crate::http::{Body, Bytes, Extension, HeaderMap, Json, Router, StatusCode, Uri};
+pub use crate::http::{Body, Bytes, Extension, HeaderMap, Json, Routes, StatusCode, Uri};
 
 // Extractors
 pub use crate::http::extract::{
@@ -159,7 +159,7 @@ pub use crate::http::response::{
 };
 
 // Middleware
-pub use crate::http::middleware::{from_fn, Next};
+pub use crate::http::middleware::Next;
 
 pub use crate::web::validation::Validate;
 pub use r2e_macros::Params;

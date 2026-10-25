@@ -21,7 +21,7 @@ use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
 use crate::resource_updates::McpResourceUpdates;
-use crate::session::{erase_init, track_session_id, McpSessionInit, McpSessions, SessionInitFn};
+use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, TrackSessionId};
 
 /// Resolves the `session_init` hook bean from the built graph (`None` = no
 /// such bean).
@@ -540,7 +540,7 @@ impl Plugin for McpServer {
             let service = tower::ServiceBuilder::new()
                 .layer(cors)
                 .option_layer(auth_layer)
-                .layer(r2e_core::http::middleware::from_fn(track_session_id))
+                .layer(TrackSessionId)
                 .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);
             let router = router.route_service(&path, service);

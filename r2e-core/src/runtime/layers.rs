@@ -230,7 +230,7 @@ pub fn catch_panic_layer_with(
 /// router, both answering through the application's error envelope.
 ///
 /// - **404** — only when nothing else claimed the router fallback
-///   ([`has_custom_fallback`](crate::http::routing::has_custom_fallback)):
+///   ([`Routes::has_custom_fallback`](crate::http::Routes::has_custom_fallback)):
 ///   a controller `#[fallback]`, a router merged with its own `.fallback(..)`,
 ///   or a plugin such as the SPA fallback keep winning. Without one, axum
 ///   would answer an empty-bodied 404; R2E answers `Rejection::not_found`
@@ -245,21 +245,21 @@ pub fn catch_panic_layer_with(
 /// router has been merged: routes added later would miss the 405 responder,
 /// and a fallback merged later would panic against the one installed here.
 pub fn framework_fallbacks(
-    app: crate::http::Router,
+    app: crate::http::Routes,
     projector: &crate::error::ErrorProjector,
-) -> crate::http::Router {
+) -> crate::http::Routes {
     use crate::error::{Rejection, RejectionKind};
 
     let mut app = app;
-    if !crate::http::routing::has_custom_fallback(&app) {
+    if !app.has_custom_fallback() {
         let projector = projector.clone();
-        app = app.fallback(move || {
+        app = app.fallback(move |_: (), _: crate::http::Request| {
             let projector = projector.clone();
             async move { projector.project(Rejection::not_found("Not found")) }
         });
     }
     let projector = projector.clone();
-    app.method_not_allowed_fallback(move || {
+    app.method_not_allowed_fallback(move |_: (), _: crate::http::Request| {
         let projector = projector.clone();
         async move {
             projector.project(Rejection::new(

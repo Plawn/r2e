@@ -12,7 +12,7 @@ use r2e::prelude::*; // middleware, layer, status, returns, raw
 
 ## `#[middleware]` — Tower middleware functions
 
-The `#[middleware]` attribute applies a Tower middleware function to a specific route. It wraps the handler using `r2e::http::middleware::from_fn`, so the function must follow the standard middleware signature.
+The `#[middleware]` attribute applies a Tower middleware function to a specific route. It wraps the handler with `MethodRoutes::middleware_fn`, so the function must follow the standard middleware signature.
 
 ### Middleware function signature
 
@@ -51,7 +51,7 @@ impl ApiController {
 }
 ```
 
-The generated code calls `.layer(r2e::http::middleware::from_fn(require_api_key))` on that route's handler.
+The generated code calls `.middleware_fn(require_api_key)` on that route's `MethodRoutes`.
 
 ### Multiple middleware
 
@@ -69,14 +69,13 @@ async fn protected_data(&self) -> Json<Vec<Item>> {
 
 ### Middleware with the controller core: `state`
 
-`#[middleware(my_fn, state)]` passes the controller to the function as `State<Arc<Self>>` (via `from_fn_with_state`). The controller's `#[inject]` beans and `#[config]` values are available; request-scoped fields (identity, `#[inject(request)]`) are not:
+`#[middleware(my_fn, state)]` passes the controller core to the function as its first argument, `Arc<Self>` (via `MethodRoutes::middleware_fn_with_state`). The controller's `#[inject]` beans and `#[config]` values are available; request-scoped fields (identity, `#[inject(request)]`) are not:
 
 ```rust
 use std::sync::Arc;
-use r2e::http::extract::State;
 
 async fn tag_response(
-    State(ctrl): State<Arc<ApiController>>,
+    ctrl: Arc<ApiController>,
     req: r2e::http::Request,
     next: r2e::http::middleware::Next,
 ) -> r2e::http::response::Response {
@@ -103,7 +102,7 @@ impl ApiController {
 
 ## `#[layer]` — Arbitrary Tower layers
 
-While `#[middleware]` wraps a function via `from_fn`, `#[layer]` accepts any expression that evaluates to a Tower `Layer`. This lets you use the `tower-http` layers R2E re-exports under `r2e::http::layers` and any other Tower-compatible crate directly.
+While `#[middleware]` wraps a plain function, `#[layer]` accepts any expression that evaluates to a Tower `Layer`. This lets you use the `tower-http` layers R2E re-exports under `r2e::http::layers` and any other Tower-compatible crate directly.
 
 ### Basic usage
 
@@ -209,7 +208,7 @@ impl ProxyController {
 Rules:
 
 - **Order** — per route, the method's `#[middleware]`s and `#[layer]`s are applied first, then the controller's: controller layers are the **outer** ones. Within a level, a later-declared attribute wraps an earlier one, and `#[layer]`s wrap `#[middleware]`s.
-- **`#[fallback]` is skipped** — `Router::fallback` takes no per-route layers. If the impl block has no other route, the impl-level attribute is a compile error (it would apply to nothing).
+- **`#[fallback]` is skipped** — `Routes::fallback` takes no per-route layers. If the impl block has no other route, the impl-level attribute is a compile error (it would apply to nothing).
 - **Body limits keep the envelope** — the limit is enforced by the body extractor inside the handler, so an oversized body answers `413` through the route's error type, like any other extraction rejection.
 - `#[grpc_routes]` and `#[mcp_routes]` do not accept `#[middleware]`/`#[layer]`.
 

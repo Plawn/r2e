@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `TestApp` wraps `r2e_core::http::Routes` instead of `axum::Router`
+  (`TestApp::new(routes)`, `TestServer`); hand-assembled apps pass a `Routes`
+  (see `docs/migration/routes-newtype.md`).
+
 ### Changed
 
 - `TestServer::new` serves through `r2e_http::server::serve` like the booted-app

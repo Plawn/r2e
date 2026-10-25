@@ -1,11 +1,11 @@
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::{Body, Request, Response, Router, StatusCode};
+use r2e_core::http::{Body, Request, Response, Routes, StatusCode};
 use r2e_oidc::{ClientRegistry, InMemoryUserStore, OidcServer, OidcUser};
 use tower::ServiceExt;
 
 const AUDIENCE: &str = "http://localhost:3000/mcp";
 
-async fn build_app() -> Router {
+async fn build_app() -> Routes {
     let users = InMemoryUserStore::new()
         .add_user(
             "alice",
@@ -379,7 +379,7 @@ async fn password_grant_scopes_can_be_narrowed() {
     assert_eq!(body_json(resp).await["error"], "invalid_scope");
 }
 
-async fn client_credentials_app(clients: ClientRegistry) -> Router {
+async fn client_credentials_app(clients: ClientRegistry) -> Routes {
     r2e_core::AppBuilder::new()
         .plugin(
             OidcServer::new()

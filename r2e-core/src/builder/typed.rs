@@ -217,11 +217,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }
         self.shared.dev_reload_applied = true;
         self.register_routes(crate::runtime::dev::dev_routes())
-            .with_layer_fn(|router| {
-                router.layer(crate::http::middleware::from_fn(
-                    crate::runtime::dev::dev_headers_middleware,
-                ))
-            })
+            .with_layer_fn(|routes| routes.middleware_fn(crate::runtime::dev::dev_headers_middleware))
     }
 
     // ── Layer primitives ────────────────────────────────────────────────
@@ -229,7 +225,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Apply a Tower layer to the entire application.
     ///
     /// The layer is applied during `build()`. Multiple calls are applied in
-    /// order. The layer must satisfy the same bounds as `Router::layer`.
+    /// order. The layer must satisfy the same bounds as
+    /// [`Routes::layer`](crate::http::Routes::layer) — see
+    /// [`RouteLayer`](crate::http::routing::RouteLayer).
     ///
     /// # Example
     ///
@@ -242,42 +240,31 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// ```
     pub fn with_layer<L>(mut self, layer: L) -> Self
     where
-        L: tower::Layer<crate::http::routing::Route> + Clone + Send + Sync + 'static,
-        L::Service: Clone
-            + tower::Service<crate::http::header::HttpRequest<crate::http::body::Body>>
-            + Send
-            + Sync
-            + 'static,
-        <L::Service as tower::Service<crate::http::header::HttpRequest<crate::http::body::Body>>>::Response:
-            crate::http::response::IntoResponse + 'static,
-        <L::Service as tower::Service<crate::http::header::HttpRequest<crate::http::body::Body>>>::Error:
-            Into<std::convert::Infallible> + 'static,
-        <L::Service as tower::Service<crate::http::header::HttpRequest<crate::http::body::Body>>>::Future:
-            Send + 'static,
-{
+        L: crate::http::routing::RouteLayer,
+    {
         self.shared
             .custom_layers
-            .push(Box::new(move |router| router.layer(layer)));
+            .push(Box::new(move |routes| routes.layer(layer)));
         self
     }
 
-    /// Apply a custom transformation to the router.
+    /// Apply a custom transformation to the assembled routes.
     ///
     /// This is an escape hatch for cases where `with_layer` is too
-    /// restrictive. The closure receives the `r2e::http::Router` and must
+    /// restrictive. The closure receives the `r2e::http::Routes` and must
     /// return a new one.
     ///
     /// # Example
     ///
     /// ```ignore
     /// AppBuilder::new()
-    ///     .with_layer_fn(|router| {
-    ///         router.layer(some_complex_layer)
+    ///     .with_layer_fn(|routes| {
+    ///         routes.layer(some_complex_layer)
     ///     })
     /// ```
     pub fn with_layer_fn<F>(mut self, f: F) -> Self
     where
-        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
+        F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
     {
         self.shared.custom_layers.push(Box::new(f));
         self
@@ -293,8 +280,8 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// use r2e::http::layers::timeout::TimeoutLayer;
     ///
     /// AppBuilder::new()
-    ///     .with_service_builder(|router| {
-    ///         router.layer(
+    ///     .with_service_builder(|routes| {
+    ///         routes.layer(
     ///             ServiceBuilder::new()
     ///                 .layer(TimeoutLayer::new(Duration::from_secs(30)))
     ///         )
@@ -302,7 +289,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// ```
     pub fn with_service_builder<F>(self, f: F) -> Self
     where
-        F: FnOnce(crate::http::Router) -> crate::http::Router + Send + 'static,
+        F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
     {
         self.with_layer_fn(f)
     }
@@ -520,20 +507,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Register a raw `r2e::http::Router` fragment to be merged into the application.
-    pub fn register_routes(mut self, router: crate::http::Router<T>) -> Self {
-        self.routes.push(router);
+    /// Register a hand-written [`Routes`](crate::http::Routes) fragment to be
+    /// merged into the application.
+    pub fn register_routes(mut self, routes: crate::http::Routes<T>) -> Self {
+        self.routes.push(routes);
         self
     }
 
-    /// Escape hatch: merge a raw Axum router alongside controllers.
+    /// Escape hatch: merge hand-written routes alongside controllers.
     ///
     /// Raw routes benefit from global plugins (HttpTrace, CORS) and panic capture,
-    /// but do NOT get controller-level DI, interceptors, or guards.
+    /// but do NOT get controller-level DI, interceptors, or guards. To mount a
+    /// pre-existing backend router, bridge it first with
+    /// `r2e::http::axum_compat::from_router`.
     ///
     /// This is a convenience alias for [`register_routes`](Self::register_routes).
-    pub fn merge_router(self, router: crate::http::Router<T>) -> Self {
-        self.register_routes(router)
+    pub fn merge_router(self, routes: crate::http::Routes<T>) -> Self {
+        self.register_routes(routes)
     }
 
     /// Backend of the spawn path, without the dependency witness. The public
@@ -735,10 +725,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // intercepted `#[scheduled]`/`#[consumer]` methods.
         C::fill_decos(&core, &self.bean_context);
 
-        let router = C::routes(state, Arc::clone(&core), &self.bean_context);
+        let routes = C::routes(state, Arc::clone(&core), &self.bean_context);
         self.routes.push(match prefix {
-            Some(prefix) => crate::http::Router::new().nest(prefix, router),
-            None => router,
+            Some(prefix) => crate::http::Routes::new().nest(prefix, routes),
+            None => routes,
         });
 
         // Queue this core's `#[post_construct]` hooks — awaited at startup
@@ -890,7 +880,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// Register a typed metadata consumer.
     ///
     /// At `build()` time, the consumer receives a shared slice of all `M` items
-    /// from the [`MetaRegistry`] and returns a `Router<T>` to merge into the app.
+    /// from the [`MetaRegistry`] and returns a `Routes<T>` to merge into the app.
     /// Multiple consumers for the same type can coexist (non-draining).
     ///
     /// # Example
@@ -903,7 +893,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub fn with_meta_consumer<M, F>(mut self, f: F) -> Self
     where
         M: Any + Send + Sync,
-        F: FnOnce(&[M]) -> crate::http::Router<T> + Send + 'static,
+        F: FnOnce(&[M]) -> crate::http::Routes<T> + Send + 'static,
     {
         self.meta_consumers.push(Box::new(move |registry| {
             let items = registry.get_or_empty::<M>();
@@ -912,14 +902,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self
     }
 
-    /// Assemble the final `r2e::http::Router` from all registered routes and layers.
+    /// Assemble the final `r2e::http::Routes` from all registered routes and layers.
     ///
     /// Startup lifecycle work is NOT run here: consumer registrations AND
     /// controller `#[post_construct]` hooks are dropped. Use
     /// [`build_with_consumers`](Self::build_with_consumers) (or `serve`) when
     /// the app relies on either.
-    pub fn build(self) -> crate::http::Router {
-        self.build_inner().router
+    pub fn build(self) -> crate::http::Routes {
+        self.build_inner().routes
     }
 
     /// Like [`build`](Self::build), but also runs the consumer registrations
@@ -933,7 +923,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// and every shutdown hook are skipped. For a real startup with a matching
     /// shutdown — what `TestApp::boot` runs — use
     /// [`BootableApp::start_in_process`](crate::BootableApp::start_in_process).
-    pub async fn build_with_consumers(self) -> crate::http::Router {
+    pub async fn build_with_consumers(self) -> crate::http::Routes {
         self.try_build_with_consumers()
             .await
             .unwrap_or_else(|e| panic!("{e}"))
@@ -948,7 +938,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// app-naming formatter every other boot failure uses.
     pub async fn try_build_with_consumers(
         self,
-    ) -> Result<crate::http::Router, crate::beans::BootError> {
+    ) -> Result<crate::http::Routes, crate::beans::BootError> {
         let built = self.build_inner();
         // Controller `#[post_construct]` runs before consumers (mirroring bean
         // post_construct at `build_state`, which runs before subscribers).
@@ -975,28 +965,28 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // the `#[on_start]` hooks — including `#[on_start(once)]` ones — so the
         // once-flag is consumed here too.
         crate::runtime::dev::mark_once_start_consumed();
-        Ok(built.router)
+        Ok(built.routes)
     }
 
     fn build_inner(mut self) -> BuiltApp<T> {
         let state = self.state;
 
-        let mut router = crate::http::Router::new();
+        let mut routes = crate::http::Routes::new();
 
         // Merge all controller / manual routes.
         for r in self.routes {
-            router = router.merge(r);
+            routes = routes.merge(r);
         }
 
         // Invoke meta consumers (e.g. OpenAPI spec builder).
         let meta_registry = self.meta_registry;
         for consumer in self.meta_consumers {
-            let consumer_router = consumer(&meta_registry);
-            router = router.merge(consumer_router);
+            let consumer_routes = consumer(&meta_registry);
+            routes = routes.merge(consumer_routes);
         }
 
         // Apply the application state.
-        let mut app = router.with_state(state.clone());
+        let mut app = routes.with_state(state.clone());
 
         // ── Routes stage ────────────────────────────────────────────────
         // Every controller (app, module and plugin) has registered by now, so
@@ -1052,7 +1042,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         ));
 
         // Apply layers (in registration order). Layers added via
-        // `Router::layer` run after routing, so they observe `MatchedPath`
+        // `Routes::layer` run after routing, so they observe `MatchedPath`
         // (and any controller `#[fallback]`) on the routed request.
         for layer_fn in self.shared.custom_layers {
             app = layer_fn(app);
@@ -1118,7 +1108,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         async_shutdown_hooks.extend(self.bean_disposers);
 
         BuiltApp {
-            router: app,
+            routes: app,
             startup_hooks: self.startup_hooks,
             shutdown_hooks: self.shutdown_hooks,
             drain_hooks: self.drain_hooks,
@@ -1236,7 +1226,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         let graph = Arc::clone(&this.bean_context);
 
         let BuiltApp {
-            router,
+            routes,
             startup_hooks,
             shutdown_hooks,
             drain_hooks,
@@ -1254,14 +1244,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         } = this.build_inner();
 
         #[cfg(feature = "quic")]
-        let router = if let Some((ref quic_addr, _)) = quic_server_config {
-            crate::http::quic::apply_alt_svc(router, quic_addr.port(), quic_alt_svc_max_age)
+        let routes = if let Some((ref quic_addr, _)) = quic_server_config {
+            crate::http::quic::apply_alt_svc(routes, quic_addr.port(), quic_alt_svc_max_age)
         } else {
-            router
+            routes
         };
 
         PreparedApp {
-            router,
+            routes,
             state,
             graph,
             addr: addr.to_string(),
@@ -1322,7 +1312,7 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 /// Internal — `build()` keeps only the router, `prepare()` lifts the rest into
 /// a [`PreparedApp`] together with the address and server tuning options.
 struct BuiltApp<T: Clone + Send + Sync + 'static> {
-    router: crate::http::Router,
+    routes: crate::http::Routes,
     startup_hooks: Vec<StartupHook<T>>,
     shutdown_hooks: Vec<ShutdownHook<T>>,
     drain_hooks: Vec<DrainHook<T>>,

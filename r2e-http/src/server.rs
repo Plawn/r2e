@@ -1,4 +1,4 @@
-//! The one serve path: a bound listener + a [`Router`] → a running HTTP server.
+//! The one serve path: a bound listener + [`Routes`] → a running HTTP server.
 //!
 //! Every serve path in the workspace goes through [`serve`]: the
 //! single-listener `run()`, each sharded worker, and the in-process
@@ -30,7 +30,7 @@ use std::future::{Future, IntoFuture as _};
 use std::io;
 use std::net::SocketAddr;
 
-use crate::Router;
+use crate::Routes;
 
 /// Per-server knobs for [`serve`].
 ///
@@ -61,7 +61,7 @@ impl ServeOptions {
     }
 }
 
-/// Serve `router` on `listener` until `shutdown` resolves, then drain.
+/// Serve `routes` on `listener` until `shutdown` resolves, then drain.
 ///
 /// Returns the server future; nothing runs until it is polled. The future
 /// resolves `Ok(())` once every connection accepted before `shutdown` fired has
@@ -71,17 +71,17 @@ impl ServeOptions {
 /// # Example
 ///
 /// ```rust,no_run
-/// # async fn demo(router: r2e_http::Router) -> std::io::Result<()> {
+/// # async fn demo(routes: r2e_http::Routes) -> std::io::Result<()> {
 /// use r2e_http::server::{serve, ServeOptions};
 ///
 /// let listener = r2e_rt::bind_tcp("127.0.0.1:3000").await?;
 /// let shutdown = r2e_rt::shutdown_signal();
-/// serve(listener, router, shutdown, ServeOptions::default().tcp_nodelay(true)).await
+/// serve(listener, routes, shutdown, ServeOptions::default().tcp_nodelay(true)).await
 /// # }
 /// ```
 pub fn serve<S>(
     listener: r2e_rt::TcpListener,
-    router: Router,
+    routes: Routes,
     shutdown: S,
     options: ServeOptions,
 ) -> impl Future<Output = io::Result<()>> + Send + 'static
@@ -99,7 +99,9 @@ where
             tracing::warn!(error = %e, "failed to set TCP_NODELAY on accepted connection");
         }
     });
-    let svc = router.into_make_service_with_connect_info::<SocketAddr>();
+    let svc = routes
+        .into_inner()
+        .into_make_service_with_connect_info::<SocketAddr>();
     axum::serve(listener, svc)
         .with_graceful_shutdown(shutdown)
         .into_future()

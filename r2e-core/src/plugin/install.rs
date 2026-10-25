@@ -189,7 +189,7 @@ pub trait Plugin: Send + Sized + 'static {
     /// [`Deps`](Self::Deps).
     ///
     /// This is how a plugin ships endpoints written the normal way (`#[get]`,
-    /// guards, OpenAPI metadata) instead of hand-assembling a `Router` in
+    /// guards, OpenAPI metadata) instead of hand-assembling a `Routes` in
     /// [`build`](Self::build). Routes registered this way are visible to every
     /// [`after_routes`](PluginBuildContext::after_routes) effect, whatever the
     /// install order.

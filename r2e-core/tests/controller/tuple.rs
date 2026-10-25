@@ -46,7 +46,7 @@ async fn body_string(resp: Response) -> String {
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
-async fn get(router: r2e_core::http::Router, path: &str) -> (StatusCode, String) {
+async fn get(router: r2e_core::http::Routes, path: &str) -> (StatusCode, String) {
     let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     let resp = router.oneshot(req).await.unwrap();
     let status = resp.status();

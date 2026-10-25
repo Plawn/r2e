@@ -474,8 +474,8 @@ async fn admin_list(&self) -> Json<Vec<User>> { /* ... */ }
 #[intercept(CacheInvalidate::group("users"))] // invalidate cache group
 #[intercept(Counted::new("metric_name"))]    // count invocations
 #[intercept(MetricTimed::new("metric_name"))] // record duration as named metric
-#[middleware(my_middleware_fn)]               // Tower middleware via from_fn (method or impl)
-#[middleware(my_fn, state)]                   // from_fn_with_state(core): fn takes State<Arc<Self>>
+#[middleware(my_middleware_fn)]               // function middleware (method or impl)
+#[middleware(my_fn, state)]                   // middleware_fn_with_state(core): fn takes Arc<Self> first
 #[layer(TimeoutLayer::new(Duration::from_secs(5)))] // arbitrary Tower Layer (method or impl)
 #[layer(|this: &Self| DefaultBodyLimit::max(this.limit))] // layer built from the core, once
 #[status(200)]                               // override OpenAPI status code
@@ -494,8 +494,8 @@ async fn show(&self, Path(id): Path<ProjectId>) { ... }
 
 ### `#[middleware]` — Tower middleware functions
 
-Applies a Tower middleware function to a specific route via
-`r2e::http::middleware::from_fn`. Signature: `async fn(Request, Next) -> Response`.
+Applies a middleware function to a specific route via
+`MethodRoutes::middleware_fn`. Signature: `async fn(Request, Next) -> Response`.
 
 ```rust
 #[get("/data")]
@@ -503,10 +503,9 @@ Applies a Tower middleware function to a specific route via
 async fn protected_data(&self) -> Json<Vec<Item>> { /* ... */ }
 ```
 
-Generated code calls `.layer::<_, Infallible>(r2e::http::middleware::from_fn(name))`
-on the route's `MethodRouter`. `#[middleware(name, state)]` emits
-`from_fn_with_state(core.clone(), name)` instead: the function takes
-`State<Arc<Ctrl>>` — the controller core (`#[inject]` beans and `#[config]`
+Generated code calls `.middleware_fn(name)` on the route's `MethodRoutes`.
+`#[middleware(name, state)]` emits `.middleware_fn_with_state(core.clone(), name)`
+instead: the function takes `Arc<Ctrl>` as its first argument — the controller core (`#[inject]` beans and `#[config]`
 values resolved, no request-scoped fields).
 
 ### `#[layer]` — Arbitrary Tower layers
@@ -521,10 +520,10 @@ request.
 
 Both attributes are accepted on the `#[routes]` impl block (below `#[routes]`)
 and apply to every route, `#[sse]` and `#[ws]` method. A `#[fallback]` route
-is skipped — `Router::fallback` takes no per-route layers. Impl-level layer
+is skipped — `Routes::fallback` takes no per-route layers. Impl-level layer
 values are evaluated once per controller in the router body
 (`let __r2e_ctrl_layer_i = ..;`) and cloned onto each route; only per-route
-`MethodRouter::layer` is used, never `Router::layer`/`route_layer`.
+`MethodRoutes::layer` is used, never `Routes::layer`/`route_layer`.
 `#[grpc_routes]` and `#[mcp_routes]` still reject both attributes.
 
 ### Ordering
@@ -543,10 +542,10 @@ in this order: method `#[middleware]`s, method `#[layer]`s, controller
 that was never the behaviour — the runtime order above is pinned by
 `r2e-core/tests/controller/layers.rs`.)
 
-Every generated `.layer` call pins `NewError = Infallible`: two stacked
-error-passthrough layers (e.g. two `DefaultBodyLimit`s) otherwise leave the
-error type ambiguous (E0284). `Router::route` already required `Infallible`,
-so no working code changes.
+`MethodRoutes::layer` takes a `RouteLayer` (error type pinned to `Infallible`):
+two stacked error-passthrough layers (e.g. two `DefaultBodyLimit`s) would
+otherwise leave the error type ambiguous (E0284). `Routes::route` already
+required `Infallible`, so no working code changes.
 
 A body limit (`DefaultBodyLimit`) is enforced by the body extractor inside the
 handler, so an oversized body still answers 413 `PayloadTooLarge` through the

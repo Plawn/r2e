@@ -279,7 +279,7 @@ segment: the controller's own path is appended to it. `#[module(prefix =
 controller's own declaration or codegen changes, so the same controller can be
 mounted app-globally in one app and under a module prefix in another. A
 `#[fallback]` inside a prefixed module becomes **prefix-scoped** (it answers
-`/api/v1/*`, not `/*`) — that is `Router::nest`'s semantics and the intended
+`/api/v1/*`, not `/*`) — that is `Routes::nest`'s semantics and the intended
 one for a versioned module.
 
 **Aggregates take no prefix.** An aggregate owns no controllers; each member

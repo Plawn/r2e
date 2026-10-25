@@ -106,7 +106,7 @@ async fn drain_sequence_finishes_in_flight_requests_and_orders_hooks() {
     let log_for_stop = log.clone();
     let log_for_handler = log.clone();
 
-    let slow_route = get(move || {
+    let slow_route = get(move |_, _| {
         let log = log_for_handler.clone();
         async move {
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -118,7 +118,7 @@ async fn drain_sequence_finishes_in_flight_requests_and_orders_hooks() {
     let app = AppBuilder::new()
         .build_state()
         .await
-        .merge_router(r2e_core::http::Router::new().route("/slow", slow_route))
+        .merge_router(r2e_core::http::Routes::new().route("/slow", slow_route))
         .on_drain(|_state| async move {
             log_for_drain.push("drain");
         })

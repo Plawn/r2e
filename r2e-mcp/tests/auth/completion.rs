@@ -2,7 +2,7 @@
 //! referenced member's scopes gets the unknown-reference error (no
 //! existence leak), a caller holding them gets the suggestions.
 
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{AppBuilderMcpExt, Completion, McpServer, Params, ResourceCall};
@@ -45,7 +45,7 @@ impl GatedCompletions {
     }
 }
 
-async fn app() -> Router {
+async fn app() -> Routes {
     AppBuilder::new()
         .plugin(
             McpServer::new()
@@ -58,7 +58,7 @@ async fn app() -> Router {
         .build()
 }
 
-async fn complete(router: &Router, token: &str, reference: Value, argument: &str) -> Value {
+async fn complete(router: &Routes, token: &str, reference: Value, argument: &str) -> Value {
     let session = initialize_auth(router, "/mcp", token).await;
     rpc_auth(
         router,

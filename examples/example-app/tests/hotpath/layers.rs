@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use r2e::http::routing::get;
-use r2e::http::{Body, HeaderName, Request, Router, StatusCode};
+use r2e::http::{Body, HeaderName, Request, Routes, StatusCode};
 use r2e::r2e_core::{HttpTraceLayer, HttpTraceSettings};
 use r2e::r2e_observability::OtelRequestSpan;
 use r2e::r2e_prometheus::{MetricsConfig, PrometheusLayer};
@@ -30,14 +30,14 @@ fn request() -> Request<Body> {
 /// One route behind the layer stack under test. `.layer()` on the router puts
 /// the layers inside the per-route boxed service, which is what the backend
 /// clones per request.
-fn router(prometheus: MetricsConfig, capture_headers: Vec<HeaderName>) -> Router {
+fn router(prometheus: MetricsConfig, capture_headers: Vec<HeaderName>) -> Routes {
     let capture_headers: Arc<[HeaderName]> = Arc::from(capture_headers);
     let settings = HttpTraceSettings {
         capture_headers: Arc::clone(&capture_headers),
         ..HttpTraceSettings::default()
     };
-    Router::new()
-        .route("/plain", get(|| async { "ok" }))
+    Routes::new()
+        .route("/plain", get(|_, _| async { "ok" }))
         .layer(HttpTraceLayer::with_make_span(
             settings,
             OtelRequestSpan::new(capture_headers),
@@ -55,7 +55,7 @@ fn many_headers(n: usize) -> Vec<HeaderName> {
         .collect()
 }
 
-fn drive(rt: &r2e::rt::Runtime, router: &Router) -> Alloc {
+fn drive(rt: &r2e::rt::Runtime, router: &Routes) -> Alloc {
     steady_state(ITERATIONS, || {
         let response = rt
             .block_on(router.clone().oneshot(request()))

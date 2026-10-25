@@ -36,7 +36,7 @@
 //! Run on **c8da199** (`Merge pull request #55`, this branch's merge base) all
 //! four files came out byte-identical to the ones committed here.
 
-use r2e_core::http::Router;
+use r2e_core::http::Routes;
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::{meta, AppBuilderMcpExt, McpError, McpServer, Params, ResourceCall};
@@ -143,7 +143,7 @@ impl GoldenService {
     }
 }
 
-async fn golden_app() -> Router {
+async fn golden_app() -> Routes {
     AppBuilder::new()
         .plugin(McpServer::new())
         .build_state()
@@ -186,7 +186,7 @@ fn assert_golden(name: &str, actual: &Value) {
     );
 }
 
-async fn list(router: &Router, session: &str, id: i64, method: &str) -> Value {
+async fn list(router: &Routes, session: &str, id: i64, method: &str) -> Value {
     let response = support::post(
         router,
         "/mcp",

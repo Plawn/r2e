@@ -7,8 +7,9 @@
 //! well-formed JSON of the wrong shape, `Option<Json<T>>` → `None` when the
 //! body is absent, and `application/json` on the response.
 
+use r2e_core::http::extract::{FromRequest, OptionalFromRequest};
 use r2e_core::http::routing::post;
-use r2e_core::http::{Body, Json, Router, StatusCode};
+use r2e_core::http::{Body, Json, JsonRejection, Request, Routes, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::support::{raw, send};
@@ -19,19 +20,21 @@ struct Payload {
     count: u32,
 }
 
-async fn echo(Json(p): Json<Payload>) -> Json<Payload> {
-    Json(p)
+async fn echo(_: (), req: Request) -> Result<Json<Payload>, JsonRejection> {
+    let Json(p) = <Json<Payload> as FromRequest<()>>::from_request(req, &()).await?;
+    Ok(Json(p))
 }
 
-async fn optional(body: Option<Json<Payload>>) -> String {
-    match body {
+async fn optional(_: (), req: Request) -> Result<String, JsonRejection> {
+    let body = <Json<Payload> as OptionalFromRequest<()>>::from_request(req, &()).await?;
+    Ok(match body {
         Some(Json(p)) => p.name,
         None => "none".to_string(),
-    }
+    })
 }
 
-fn router() -> Router {
-    Router::new()
+fn router() -> Routes {
+    Routes::new()
         .route("/echo", post(echo))
         .route("/optional", post(optional))
 }

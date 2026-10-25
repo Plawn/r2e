@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::AppBuilder;
 use r2e_prometheus::MetricsFacade;
 use tower::ServiceExt;
@@ -68,9 +68,9 @@ async fn facade_plugin_records_http_metrics_into_the_apps_recorder() {
         .build_state()
         .await
         .register_routes(
-            Router::new()
-                .route("/users/{id}", get(|| async { "user" }))
-                .route("/health", get(|| async { "ok" })),
+            Routes::new()
+                .route("/users/{id}", get(|_, _| async { "user" }))
+                .route("/health", get(|_, _| async { "ok" })),
         );
 
     let router = app.build();

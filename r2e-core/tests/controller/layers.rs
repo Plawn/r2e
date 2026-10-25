@@ -12,7 +12,6 @@ use r2e_core::config::{ConfigValue, R2eConfig};
 use r2e_core::controller::Controller;
 use r2e_core::di::meta::{MetaRegistry, RouteInfo};
 use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
-use r2e_core::http::extract::State;
 use r2e_core::http::header::HeaderValue;
 use r2e_core::http::middleware::Next;
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse, Response};
@@ -57,7 +56,7 @@ async fn mw_b(req: Request, next: Next) -> Response {
     trace(next.run(req).await, "b")
 }
 
-async fn send(router: r2e_core::http::Router, req: Request) -> Response {
+async fn send(router: r2e_core::http::Routes, req: Request) -> Response {
     router.oneshot(req).await.unwrap()
 }
 
@@ -117,7 +116,7 @@ impl LayeredController {
     }
 }
 
-async fn layered_router() -> r2e_core::http::Router {
+async fn layered_router() -> r2e_core::http::Routes {
     AppBuilder::new()
         .build_state()
         .await
@@ -170,7 +169,7 @@ pub struct StatefulController {
 }
 
 async fn core_mw(
-    State(ctrl): State<Arc<StatefulController>>,
+    ctrl: Arc<StatefulController>,
     req: Request,
     next: Next,
 ) -> Response {
@@ -183,7 +182,7 @@ async fn core_mw(
 }
 
 async fn method_core_mw(
-    State(ctrl): State<Arc<StatefulController>>,
+    ctrl: Arc<StatefulController>,
     req: Request,
     next: Next,
 ) -> Response {

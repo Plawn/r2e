@@ -194,10 +194,10 @@ mod lifecycle {
         panic!("server at {addr} did not become ready");
     }
 
-    fn router() -> r2e_core::http::Router {
+    fn router() -> r2e_core::http::Routes {
         use r2e_core::http::routing::get;
-        r2e_core::http::Router::new()
-            .route("/ping", get(|| async { "pong" }))
+        r2e_core::http::Routes::new()
+            .route("/ping", get(|_, _| async { "pong" }))
             .with_state(())
     }
 
@@ -536,8 +536,8 @@ mod lifecycle {
             .load_config::<()>()
             .with_state(())
             .register_routes(
-                r2e_core::http::Router::new()
-                    .route("/ping", r2e_core::http::routing::get(|| async { "pong" })),
+                r2e_core::http::Routes::new()
+                    .route("/ping", r2e_core::http::routing::get(|_, _| async { "pong" })),
             )
             .per_worker_service({
                 let started = started.clone();

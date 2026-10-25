@@ -10,7 +10,7 @@ use crate::fixtures::{get, offline_auth, secured_app, secured_app_with, ISSUER, 
 const PRM_ROOT: &str = "/.well-known/oauth-protected-resource";
 const PRM_SUFFIXED: &str = "/.well-known/oauth-protected-resource/mcp";
 
-async fn prm(router: &r2e_core::http::Router, path: &str) -> Value {
+async fn prm(router: &r2e_core::http::Routes, path: &str) -> Value {
     let (status, _, body) = get(router, path, &[]).await;
     assert_eq!(status, StatusCode::OK, "{path}: {body}");
     serde_json::from_str(&body).unwrap()

@@ -158,7 +158,7 @@ pub const DEFAULT_MAX_BODY_SIZE: usize = 2 * 1024 * 1024;
 /// memory usage for typical request bodies.
 const BODY_CHANNEL_CAPACITY: usize = 4;
 
-/// Run an HTTP/3 server that bridges requests into the given axum [`Router`](crate::Router).
+/// Run an HTTP/3 server that bridges requests into the given [`Routes`](crate::Routes).
 ///
 /// Binds a QUIC endpoint on `bind_addr` using `server_config`, then accepts
 /// HTTP/3 connections and forwards each request through the router — the same
@@ -170,7 +170,7 @@ const BODY_CHANNEL_CAPACITY: usize = 4;
 /// Returns when `shutdown` resolves or the endpoint is closed.
 /// Closes and drains the endpoint before returning.
 pub async fn serve_h3(
-    router: crate::Router,
+    router: crate::Routes,
     bind_addr: SocketAddr,
     server_config: quinn::ServerConfig,
     shutdown: impl std::future::Future<Output = ()> + Send,
@@ -193,7 +193,7 @@ pub async fn serve_h3(
 /// caller manages endpoint lifecycle. Use [`serve_h3`] for full lifecycle
 /// management.
 pub async fn serve_h3_with_endpoint(
-    router: crate::Router,
+    router: crate::Routes,
     endpoint: quinn::Endpoint,
     shutdown: impl std::future::Future<Output = ()> + Send,
 ) -> Result<(), QuicError> {
@@ -228,7 +228,7 @@ pub async fn serve_h3_with_endpoint(
 
 async fn handle_h3_connection(
     incoming: quinn::Incoming,
-    router: crate::Router,
+    router: crate::Routes,
 ) -> Result<(), QuicError> {
     let connection = incoming.await?;
     let remote_addr = connection.remote_address();
@@ -272,7 +272,7 @@ async fn handle_h3_connection(
 async fn handle_h3_request<S>(
     req: http::Request<()>,
     mut stream: h3::server::RequestStream<S, Bytes>,
-    router: crate::Router,
+    router: crate::Routes,
     remote_addr: SocketAddr,
 ) -> Result<(), QuicError>
 where
@@ -384,27 +384,25 @@ where
 
 // ── Alt-Svc middleware ─────────────────────────────────────────────────────
 
-/// Wrap a router with a middleware that adds an `Alt-Svc` header to every
+/// Wrap routes with a middleware that adds an `Alt-Svc` header to every
 /// TCP/HTTP response, advertising HTTP/3 availability on the given QUIC port.
 ///
 /// Browsers that see `Alt-Svc: h3=":443"; ma=3600` will attempt an HTTP/3
 /// upgrade on subsequent requests.
-pub fn apply_alt_svc(router: crate::Router, port: u16, max_age: u32) -> crate::Router {
+pub fn apply_alt_svc(router: crate::Routes, port: u16, max_age: u32) -> crate::Routes {
     let header_value = format!("h3=\":{port}\"; ma={max_age}");
     let header_value =
         http::HeaderValue::from_str(&header_value).expect("valid Alt-Svc header value");
-    router.layer(axum::middleware::from_fn(
-        move |req: crate::Request, next: axum::middleware::Next| {
-            let hv = header_value.clone();
-            async move {
-                let mut response = next.run(req).await;
-                response
-                    .headers_mut()
-                    .insert(http::header::HeaderName::from_static("alt-svc"), hv);
-                response
-            }
-        },
-    ))
+    router.middleware_fn(move |req: crate::Request, next: crate::middleware::Next| {
+        let hv = header_value.clone();
+        async move {
+            let mut response = next.run(req).await;
+            response
+                .headers_mut()
+                .insert(http::header::HeaderName::from_static("alt-svc"), hv);
+            response
+        }
+    })
 }
 
 // ── Raw QUIC endpoint ──────────────────────────────────────────────────────

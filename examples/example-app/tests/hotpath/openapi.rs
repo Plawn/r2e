@@ -5,7 +5,7 @@
 //! and a `String` clone memcpy'd all of it on every hit.
 
 use r2e::di::meta::RouteInfo;
-use r2e::http::{Body, Request, Router, StatusCode};
+use r2e::http::{Body, Request, Routes, StatusCode};
 use r2e::r2e_openapi::{openapi_routes, OpenApiConfig};
 use tower::ServiceExt;
 
@@ -36,7 +36,7 @@ fn route(i: usize) -> RouteInfo {
     }
 }
 
-fn spec_router(routes: usize) -> Router {
+fn spec_router(routes: usize) -> Routes {
     let routes: Vec<RouteInfo> = (0..routes).map(route).collect();
     openapi_routes::<()>(
         OpenApiConfig::new("hot-path guard", "0.0.0").with_docs_ui(false),
@@ -44,7 +44,7 @@ fn spec_router(routes: usize) -> Router {
     )
 }
 
-fn drive(rt: &r2e::rt::Runtime, router: &Router) -> Alloc {
+fn drive(rt: &r2e::rt::Runtime, router: &Routes) -> Alloc {
     steady_state(ITERATIONS, || {
         let response = rt
             .block_on(

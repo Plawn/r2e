@@ -87,7 +87,7 @@ mod batching {
 
     use futures_util::{SinkExt, StreamExt};
     use r2e_core::http::ws::{Message, WebSocketUpgrade};
-    use r2e_core::http::Router;
+    use r2e_core::http::Routes;
     use r2e_core::web::ws::{WsError, WsStream};
     use tokio_tungstenite::tungstenite::Message as ClientMessage;
 
@@ -109,25 +109,39 @@ mod batching {
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let tx = std::sync::Arc::new(std::sync::Mutex::new(Some(tx)));
-        let router = Router::new().route(
+        let router = Routes::new().route(
             "/ws",
-            r2e_core::http::routing::get(move |upgrade: WebSocketUpgrade| {
+            r2e_core::http::routing::get(move |_: (), req: r2e_core::http::Request| {
                 let f = f.clone();
                 let tx = tx.clone();
                 async move {
-                    upgrade.on_upgrade(move |socket| async move {
-                        let result = f(WsStream::new(socket)).await;
-                        if let Some(tx) = tx.lock().unwrap().take() {
-                            let _ = tx.send(result);
-                        }
-                    })
+                    use r2e_core::http::extract::FromRequestParts;
+                    let (mut parts, _) = req.into_parts();
+                    let upgrade = WebSocketUpgrade::from_request_parts(&mut parts, &())
+                        .await
+                        .map_err(r2e_core::http::response::IntoResponse::into_response)?;
+                    Ok::<_, r2e_core::http::Response>(upgrade.on_upgrade(
+                        move |socket| async move {
+                            let result = f(WsStream::new(socket)).await;
+                            if let Some(tx) = tx.lock().unwrap().take() {
+                                let _ = tx.send(result);
+                            }
+                        },
+                    ))
                 }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         r2e_core::rt::spawn(async move {
-            r2e_core::http::serve(listener, router).await.unwrap();
+            r2e_core::http::server::serve(
+                listener,
+                router,
+                std::future::pending::<()>(),
+                Default::default(),
+            )
+            .await
+            .unwrap();
         });
         let (client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
             .await

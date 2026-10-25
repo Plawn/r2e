@@ -11,23 +11,23 @@ use r2e_prometheus::{
 };
 
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use std::collections::HashSet;
 use tower::ServiceExt;
 
 // NOTE: All tests in this binary share the process-level metrics singleton,
 // so assertions are scoped to the label values each test uniquely produces.
 
-fn test_router(config: MetricsConfig) -> Router {
+fn test_router(config: MetricsConfig) -> Routes {
     init_metrics(&MetricsConfig::default());
-    Router::new()
-        .route("/users/{id}", get(|| async { "user" }))
-        .route("/orders/{id}", get(|| async { "order" }))
-        .route("/health", get(|| async { "ok" }))
+    Routes::new()
+        .route("/users/{id}", get(|_, _| async { "user" }))
+        .route("/orders/{id}", get(|_, _| async { "order" }))
+        .route("/health", get(|_, _| async { "ok" }))
         .layer(PrometheusLayer::new(config))
 }
 
-async fn send(router: &Router, path: &str) -> StatusCode {
+async fn send(router: &Routes, path: &str) -> StatusCode {
     let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     router.clone().oneshot(req).await.unwrap().status()
 }

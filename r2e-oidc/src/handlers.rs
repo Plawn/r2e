@@ -2,11 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
-use r2e_core::http::extract::Query;
-use r2e_core::http::extract::State;
+use r2e_core::http::extract::{FromRequest, FromRequestParts, Query};
 use r2e_core::http::header;
 use r2e_core::http::response::{Html, IntoResponse, Redirect, Response};
-use r2e_core::http::Form;
+use r2e_core::http::{Form, FormRejection, QueryRejection, Request};
 use r2e_core::http::HeaderMap;
 use r2e_core::http::Json;
 use serde::{Deserialize, Serialize};
@@ -73,10 +72,13 @@ pub(crate) struct TokenResponse {
 
 /// POST /oauth/token
 pub(crate) async fn token_handler(
-    State(state): State<Arc<OidcState>>,
-    headers: HeaderMap,
-    Form(req): Form<TokenRequest>,
+    state: Arc<OidcState>,
+    request: Request,
 ) -> Result<impl IntoResponse, OidcError> {
+    let headers = request.headers().clone();
+    let Form(req) = Form::<TokenRequest>::from_request(request, &())
+        .await
+        .map_err(invalid_form)?;
     let grant_type = req
         .grant_type
         .as_deref()
@@ -278,9 +280,13 @@ fn authorize_error_redirect(target: &RedirectTarget, error: &OidcError) -> Respo
 
 /// GET /oauth/authorize — a deliberately small local login/consent page.
 pub(crate) async fn authorize_form_handler(
-    State(state): State<Arc<OidcState>>,
-    Query(request): Query<AuthorizeRequest>,
+    state: Arc<OidcState>,
+    req: Request,
 ) -> Result<Response, OidcError> {
+    let (mut parts, _) = req.into_parts();
+    let Query(request) = Query::<AuthorizeRequest>::from_request_parts(&mut parts, &())
+        .await
+        .map_err(invalid_query)?;
     let target = resolve_redirect_target(&state, &request)?;
     let validated = match validate_authorize(&state, &request, &target) {
         Ok(validated) => validated,
@@ -325,9 +331,12 @@ pub(crate) async fn authorize_form_handler(
 
 /// POST /oauth/authorize — authenticate, mint a one-time code, redirect.
 pub(crate) async fn authorize_handler(
-    State(state): State<Arc<OidcState>>,
-    Form(form): Form<AuthorizeForm>,
+    state: Arc<OidcState>,
+    req: Request,
 ) -> Result<Response, OidcError> {
+    let Form(form) = Form::<AuthorizeForm>::from_request(req, &())
+        .await
+        .map_err(invalid_form)?;
     let AuthorizeForm {
         request,
         csrf_token,
@@ -527,7 +536,7 @@ async fn handle_client_credentials_grant(
 }
 
 /// GET /.well-known/openid-configuration
-pub(crate) async fn discovery_handler(State(state): State<Arc<OidcState>>) -> impl IntoResponse {
+pub(crate) async fn discovery_handler(state: Arc<OidcState>, _: Request) -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "application/json"),
@@ -538,7 +547,7 @@ pub(crate) async fn discovery_handler(State(state): State<Arc<OidcState>>) -> im
 }
 
 /// GET /.well-known/jwks.json
-pub(crate) async fn jwks_handler(State(state): State<Arc<OidcState>>) -> impl IntoResponse {
+pub(crate) async fn jwks_handler(state: Arc<OidcState>, _: Request) -> impl IntoResponse {
     (
         [
             (header::CONTENT_TYPE, "application/json"),
@@ -562,10 +571,10 @@ pub(crate) struct UserinfoResponse {
 
 /// GET /userinfo
 pub(crate) async fn userinfo_handler(
-    State(state): State<Arc<OidcState>>,
-    headers: HeaderMap,
+    state: Arc<OidcState>,
+    req: Request,
 ) -> Result<Json<UserinfoResponse>, OidcError> {
-    let token = extract_bearer_token(&headers)?;
+    let token = extract_bearer_token(req.headers())?;
 
     let claims = state
         .claims_validator
@@ -604,6 +613,16 @@ pub(crate) async fn userinfo_handler(
         roles: user.roles,
         extra: crate::token::filter_extra_claims(&user.extra_claims),
     }))
+}
+
+/// A malformed form body is an OAuth `invalid_request`, in the error
+/// envelope every other endpoint error uses.
+fn invalid_form(rejection: FormRejection) -> OidcError {
+    OidcError::InvalidRequest(rejection.body_text())
+}
+
+fn invalid_query(rejection: QueryRejection) -> OidcError {
+    OidcError::InvalidRequest(rejection.body_text())
 }
 
 fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, OidcError> {

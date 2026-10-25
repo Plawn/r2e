@@ -8,12 +8,12 @@
 
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::AppBuilder;
 use r2e_prometheus::{encode_metrics, Prometheus};
 use tower::ServiceExt;
 
-async fn status_of(router: Router, path: &str) -> StatusCode {
+async fn status_of(router: Routes, path: &str) -> StatusCode {
     let req = Request::builder().uri(path).body(Body::empty()).unwrap();
     router.oneshot(req).await.unwrap().status()
 }
@@ -24,7 +24,7 @@ async fn layer_only_tracks_requests_but_mounts_no_endpoint() {
         .plugin(Prometheus::layer_only())
         .build_state()
         .await
-        .register_routes(Router::new().route("/only-layer", get(|| async { "ok" })));
+        .register_routes(Routes::new().route("/only-layer", get(|_, _| async { "ok" })));
 
     let router = app.build();
 
@@ -56,7 +56,7 @@ async fn expose_endpoint_false_in_config_is_the_same_switch() {
         .plugin(Prometheus::new("/metrics"))
         .build_state()
         .await
-        .register_routes(Router::new().route("/from-config", get(|| async { "ok" })));
+        .register_routes(Routes::new().route("/from-config", get(|_, _| async { "ok" })));
 
     let router = app.build();
 

@@ -7,7 +7,7 @@
 use metrics_util::debugging::DebuggingRecorder;
 use r2e_core::config::R2eConfig;
 use r2e_core::http::routing::get;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::AppBuilder;
 use r2e_prometheus::MetricsFacade;
 use tower::ServiceExt;
@@ -25,7 +25,7 @@ async fn disabled_facade_plugin_installs_no_tracking_layer() {
         .plugin(MetricsFacade::new())
         .build_state()
         .await
-        .register_routes(Router::new().route("/ping", get(|| async { "ok" })));
+        .register_routes(Routes::new().route("/ping", get(|_, _| async { "ok" })));
 
     let router = app.build();
     let req = Request::builder().uri("/ping").body(Body::empty()).unwrap();

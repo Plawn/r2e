@@ -1,7 +1,7 @@
 use http_body_util::BodyExt;
 use r2e_core::builtins::Health;
 use r2e_core::serde_json;
-use r2e_core::http::{Body, Request, Router, StatusCode};
+use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::{AppBuilder, R2eConfig};
 use r2e_data_sqlx::{DataSourceHealth, SqlxDataSource};
 use sqlx::Sqlite;
@@ -21,7 +21,7 @@ fn config(url: &str) -> R2eConfig {
 }
 
 /// `GET path` → `(status, body)`.
-async fn get(router: Router, path: &str) -> (StatusCode, String) {
+async fn get(router: Routes, path: &str) -> (StatusCode, String) {
     let resp = router
         .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
         .await

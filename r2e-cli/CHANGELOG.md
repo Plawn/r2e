@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Built against the `Routes` newtype of `r2e-core` / `r2e-http` (breaking
+  there: `docs/migration/routes-newtype.md`); this crate's own API is
+  unchanged.
+
 ## [0.8.1] - 2026-10-15
 
 ### Changed

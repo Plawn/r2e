@@ -30,6 +30,11 @@
 //!   tower-http is confined to this crate; `tower` itself is neutral and
 //!   stays public (plans/axum-containment-roadmap.md, D1/D2).
 //!
+//! - [`routing`] — R2E's own [`Routes`] / [`MethodRoutes`] and the handler
+//!   shape they take (`async fn(S, Request)`); [`middleware::Next`] for
+//!   function middleware. Nothing above this crate names the backend's
+//!   router (plans/axum-containment-roadmap.md, phase C / D3).
+//!
 //! [`axum_compat`] is the explicit escape hatch for the rest of axum
 //! (§5.3d, decision A).
 
@@ -66,11 +71,8 @@ pub use self::json::{Json, JsonError, JsonRejection};
 pub use self::response::{
     Html, IntoHttpResponse, IntoResponse, Redirect, Response, Sse, SseEvent, SseKeepAlive,
 };
+pub use self::routing::{MethodRoutes, Routes};
 // `http` crate types, re-sourced per plan §5 step 3a — see `header` for why.
-// `serve` and the listener extension trait are raw backend serve surface, kept only until the
-// routing phase of plans/axum-containment-roadmap.md removes them; R2E code
-// serves through [`server::serve`].
-pub use axum::serve::ListenerExt;
-pub use axum::{serve, Error, Extension, Router};
+pub use axum::{Error, Extension};
 pub use bytes::Bytes;
 pub use http::{Extensions, Uri};

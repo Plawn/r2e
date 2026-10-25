@@ -36,7 +36,7 @@ Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP ver
 `ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
 `RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
-(`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
+(`Json`, `Routes`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
 `IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,
 `SseBroadcaster`, `SseTopic`),
 type aliases (`JsonResult`, `ApiResult`, `StatusResult`), events (`EventBus`,

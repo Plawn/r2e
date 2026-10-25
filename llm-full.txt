@@ -329,7 +329,7 @@ compile-time checking and framework integration.
 **What R2E promises.** The public surface is **R2E types**, under `r2e::http`
 and `r2e::prelude` — that is what R2E commits to keeping working. `Json<T>` is
 R2E's own type (extractor + response, `JsonRejection` on failure); many others
-are axum's today (`Path`, `Router`, …), but you should reach them all through
+are axum's today (`Path`, `Query`, …); `Routes` is R2E's own newtype, but you should reach them all through
 `r2e::…` names, and implement R2E's own contracts rather than axum's:
 `IntoHttpResponse` for response conversion (+ the one-line
 `r2e::http::impl_into_response!` bridge), and `FromRequestPartsVia` for
@@ -355,7 +355,7 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 | Auth on a route | A custom `FromRequestParts` extractor | `#[inject(identity)] user: AuthenticatedUser` (struct- or param-level); custom identities via `FromValidatedJwtClaims` |
 | Authorization / permission check | Middleware or in-handler `if` | A `Guard` (`#[guard(MyGuard)]`) or `#[roles("admin")]` |
 | Public routes on a protected controller | Splitting the controller or optional extractors | `#[anonymous]` on the route (struct identity stays fail-closed) |
-| A catch-all / proxy handler | `Router::fallback(handler)` | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
+| A catch-all / proxy handler | `Router::fallback(handler)` (axum) | `#[fallback]` or `#[any("/prefix/{*path}")]` route on a controller |
 | One error body for every failure, extractor rejections included | `IntoResponse` per error type + middleware rewriting 4xx bodies, or never-rejecting extractors | `Result<T, E>` with `E: From<Rejection> + IntoHttpResponse + ErrorSchema` (`#[derive(ApiError)]` with an `#[error(rejection)]` variant); app-wide: `AppBuilder::error_projection::<E>()` |
 | Custom 404 / 405 / panic bodies | `Router::fallback` + `method_not_allowed_fallback` + a catch-panic layer | `AppBuilder::error_projection::<E>()` — the framework's 404/405/413/500 render through the same envelope |
 | Endpoints grouped by resource | A `Router` of free functions | A `#[controller(path = "...")]` + `#[routes]` impl |
@@ -372,7 +372,7 @@ backend and steps outside the promise above. Prefer asking for a re-export from
 Escape-hatch ladder when you genuinely need raw axum (each rung trades
 integration for control): 1. `#[any]`/`#[fallback]` controller routes →
 2. `merge_router(router)` (raw fragment, shares state + global plugins, no DI) →
-3. `with_layer_fn(|router| ...)` (transform the final `Router`) →
+3. `with_layer_fn(|routes| ...)` (transform the final `Routes`) →
 4. `r2e::http::axum_compat` (the raw axum API, off the supported surface).
 
 ---
@@ -408,7 +408,7 @@ Highlights: macros (`controller` is used via `#[controller]`, `routes`, HTTP ver
 `ManagedResource`, `ContextConstruct`), DI (`RegisterController`, `RegisterControllers`,
 `RegisterModule`, `RegisterModules`, `BeanLookup`), plugins (`Cors`, `HttpTrace`, `Tracing`, `Health`,
 `DevReload`, `NormalizePath`, `SecureHeaders`, `RequestIdPlugin`), HTTP types
-(`Json`, `Router`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
+(`Json`, `Routes`, `StatusCode`, `HeaderMap`, `Path`, `Query`, `Form`, `State`,
 `IntoHttpResponse`, `IntoResponse`, `Response`, `Redirect`, `Sse`, `SseEvent`,
 `SseBroadcaster`, `SseTopic`),
 type aliases (`JsonResult`, `ApiResult`, `StatusResult`), events (`EventBus`,
@@ -824,7 +824,7 @@ let _resp = projector.project(Rejection::not_found("gone"));
 `Rejection` with the app's envelope. The framework's own responses go through
 it too: a panicking handler (500, kind `Internal`), an unknown route (404,
 `NotFound` — unless the app installed a fallback of its own: a controller
-`#[fallback]`, a merged `Router::fallback(..)`, the static SPA fallback), a
+`#[fallback]`, a merged `Routes::fallback(..)`, the static SPA fallback), a
 known path with the wrong method (405, `MethodNotAllowed`, `Allow` kept) and
 an oversized body (413, `PayloadTooLarge`). With the default envelope these
 are `{"error":"Not found"}`, `{"error":"Method not allowed"}`, and so on.
@@ -1340,7 +1340,7 @@ builds themselves run in dependency order):
 | Finalize | `wrap_router` | last, outermost (transport-level wrappers) |
 
 `RoutesContext` gives `routes() -> &[RouteInfo]` (the collected route registry —
-what `OpenApiPlugin` reads), `register_routes(Router)`, `bean_context()`,
+what `OpenApiPlugin` reads), `register_routes(Routes)`, `bean_context()`,
 `config()`, `take_data::<D>()`. Nothing has to be "installed last" any more.
 
 Disabling drops all three **surface** stages (`add_layer`, `after_routes`,
@@ -1813,7 +1813,7 @@ b.plugin(GrpcServer::on_port("0.0.0.0:50051"))
   to each other does not matter.
 - App phase, after `build_state().await`: `on_start` / `on_start_once` / `on_stop`,
   `register_controller(s)`, then `serve_auto()` (host/port from config),
-  `serve(addr)` or `build()` → `Router`.
+  `serve(addr)` or `build()` → `Routes`.
 - Bean `#[consumer]` subscribers are auto-collected at `build_state()` — there is
   no explicit registration call.
 - `serve()` runs startup hooks, registers consumers, starts scheduled tasks, listens
@@ -1865,7 +1865,7 @@ AppBuilder::new()
     // bean #[consumer] subscribers auto-collected at build_state() — no explicit call
     .serve_auto().await                         // server.host/server.port from config
     // or .serve("0.0.0.0:3000").await
-    // or .build() → Router
+    // or .build() → Routes
     .unwrap();
 # }
 ```
@@ -2455,7 +2455,7 @@ Alongside `&self`:
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
 | `#[layer(expr)]` / `#[layer(\|this: &Self\| expr)]` | method or impl | Tower layer; closure form builds it from the controller core once at registration; impl = every route except `#[fallback]`, outside method layers |
-| `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn (`from_fn`); `state` passes the core as `State<Arc<Self>>`; impl = every route except `#[fallback]` |
+| `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn `async fn(Request, Next) -> Response`; `state` passes the core as a leading `Arc<Self>` argument; impl = every route except `#[fallback]` |
 | `#[consumer(bus = "field")]` | method | Event consumer |
 | `#[scheduled(every = "5m")]` | method | Scheduled task |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
@@ -2500,7 +2500,7 @@ Alongside `&self`:
 | `.shutdown_grace_period(d)` | app | Bound the tracked-handle join, PER handle (`spawn_service`, `ServeContext::track`, `#[ws]` sessions). Default: unbounded |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
 | `.worker_local(f)` | pre-state | `.provide(WorkerLocal<T>)` + install as per-worker service: exactly one `T` per worker (`T` may be `!Send`) |
-| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get Router (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
+| `.serve(addr)` / `.serve_auto()` / `.build()` | terminal | Listen / get `Routes` (usually not called by hand — `r2e::launch!` calls `serve_auto`) |
 
 Launching: `main.rs` is normally just `r2e::app_main!(MyApp);` — the entry point
 performs `AppBuilder::new()` … `serve_auto()` around your `App::build`, so
@@ -3407,12 +3407,13 @@ Semantics:
 Both work on a route method **and** on the `#[routes]` impl block (below
 `#[routes]`). On the impl they wrap **every** route, `#[sse]` and `#[ws]`
 method of the controller — a `#[fallback]` route is skipped
-(`Router::fallback` takes no per-route layers).
+(`Routes::fallback` takes no per-route layers).
 
-- `#[middleware(my_fn)]` — `from_fn`: `async fn(Request, Next) -> Response`.
-- `#[middleware(my_fn, state)]` — `from_fn_with_state` with the controller
-  core: the function takes `State<Arc<Ctrl>>` (the controller struct, its
-  `#[inject]` beans and `#[config]` values resolved; no request-scoped fields).
+- `#[middleware(my_fn)]` — `async fn(Request, Next) -> Response`.
+- `#[middleware(my_fn, state)]` — the controller core is passed as the first
+  argument: `async fn(Arc<Ctrl>, Request, Next) -> Response` (the controller
+  struct, its `#[inject]` beans and `#[config]` values resolved; no
+  request-scoped fields).
 - `#[layer(expr)]` — any tower `Layer`, evaluated at registration.
 - `#[layer(|this: &Self| expr)]` — the closure receives the controller core and
   returns the layer; called **once** at route registration, never per request
@@ -3429,12 +3430,11 @@ method of the controller — a `#[fallback]` route is skipped
 ```rust
 use std::sync::Arc;
 use r2e::prelude::*;
-use r2e::http::extract::State;
 use r2e::http::middleware::Next;
 use r2e::http::response::Response;
 use r2e::http::{DefaultBodyLimit, Request};
 
-async fn audit(State(ctrl): State<Arc<ProxyController>>, req: Request, next: Next) -> Response {
+async fn audit(ctrl: Arc<ProxyController>, req: Request, next: Next) -> Response {
     let _limit = ctrl.body_limit; // the core: beans + config, no request-scoped fields
     next.run(req).await
 }
@@ -5523,7 +5523,7 @@ Raw `Multipart` extractor also available.
 - Requires feature `static`; install with `.plugin(EmbeddedFrontend::new::<Assets>())` over a `rust_embed` asset type.
 - Defaults are already on: SPA fallback, `api/` excluded, `assets/` immutable, ETag/304, range requests, `.br`/`.gz` negotiation.
 - Install it AFTER the other router plugins — its SPA fallback is a Graph-stage effect applied in install order, so a later fallback would shadow it.
-- Use `EmbeddedFrontend::builder::<Assets>()` to change prefixes, cache-control, or `base_path`; `.into_router()` is the escape hatch.
+- Use `EmbeddedFrontend::builder::<Assets>()` to change prefixes, cache-control, or `base_path`; `.into_routes()` is the escape hatch.
 
 Requires feature: `static`. Serves `rust_embed` assets with SPA fallback,
 ETag/304 conditional requests, range requests, and pre-compressed (`.br`/`.gz`)
@@ -5549,7 +5549,7 @@ EmbeddedFrontend::builder::<Assets>()
     .fallback_cache_control("no-cache")            // cache-control for the SPA fallback file
     .build()
 # }
-// escape hatch: EmbeddedFrontend::...build().into_router() -> r2e_core::http::Router
+// escape hatch: EmbeddedFrontend::...build().into_routes() -> r2e_core::http::Routes
 ```
 
 ---
