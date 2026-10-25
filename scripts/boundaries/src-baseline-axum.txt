@@ -13,12 +13,16 @@
 #
 # Regenerate with: scripts/check-source-boundary.sh --update
 #
-# ONE reviewed exception to "only ever shrinks":
+# TWO reviewed exceptions to "only ever shrinks":
 # r2e-http/src/axum_compat.rs was ADDED at phase 7 (plan §5.3d,
 # decision A, 2026-08-24). That module IS the explicit escape hatch —
 # naming axum is its entire job — so it is boundary surface by design,
-# not debt to shrink. Nothing else may appear here without the same
-# kind of written decision in the plan.
+# not debt to shrink.
+# r2e-http/src/server.rs was ADDED by plans/axum-containment-roadmap.md
+# phase A (2026-10-24): it is the one serve path, and the occurrences it
+# carries are the ones r2e-core, sharded workers and r2e-test used to
+# reach through the `http::serve` re-export. Nothing else may appear
+# here without the same kind of written decision in a plan.
 
 r2e-http/src/axum_compat.rs:2
 r2e-http/src/body.rs:1
@@ -30,4 +34,5 @@ r2e-http/src/multipart.rs:1
 r2e-http/src/quic.rs:3
 r2e-http/src/response.rs:2
 r2e-http/src/routing.rs:1
+r2e-http/src/server.rs:3
 r2e-http/src/ws.rs:1

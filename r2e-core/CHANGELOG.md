@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The single-listener `run()`, each sharded worker and `Running::serve_tracked`
+  serve through `r2e_http::server::serve` instead of each assembling
+  `into_make_service_with_connect_info` + `ListenerExt::tap_io` + `axum::serve`
+  by hand. No behaviour change; `r2e_core::http::server` re-exports the module
+  (`plans/axum-containment-roadmap.md`, phase A).
+
 ## [0.7.2] - 2026-10-24
 
 ### Changed

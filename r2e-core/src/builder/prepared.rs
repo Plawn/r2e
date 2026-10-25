@@ -779,7 +779,7 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
             .start_lifecycle(&serve_scope_graph, LifecycleMode::Serving)
             .await?;
 
-        // Compose the shutdown future handed to `with_graceful_shutdown`.
+        // Compose the shutdown future handed to `http::server::serve`.
         // The full phase order, with the budget that bounds each phase:
         // 1. user drain hooks are awaited — the server is still accepting and
         //    serving normally (readiness flips, LB deregistration waits).
@@ -907,48 +907,24 @@ impl<T: Clone + Send + Sync + 'static> PreparedApp<T> {
         let serve_result: Result<(), Box<dyn std::error::Error + Send + Sync>> = match strategy {
             ServeStrategy::Single(listener) => {
                 info!(addr = %self.addr, "R2E server listening");
-                let svc = self
-                    .router
-                    .into_make_service_with_connect_info::<std::net::SocketAddr>();
-                // `bounded_http_drain` wraps both branches identically: the
-                // drain budget starts when `cancel_token` fires (i.e. when the
-                // shutdown future resolves and the listener stops accepting),
-                // and on overflow the serve future is dropped, abandoning the
+                // `bounded_http_drain` wraps the serve future: the drain budget
+                // starts when `cancel_token` fires (i.e. when the shutdown
+                // future resolves and the listener stops accepting), and on
+                // overflow the serve future is dropped, abandoning the
                 // connections still open. `drain_timeout: None` (only reachable
                 // through `drain_timeout_unbounded`) keeps the future
-                // unbounded, exactly like plain axum.
-                use std::future::IntoFuture as _;
+                // unbounded, exactly like the bare backend.
                 let drain_bound = self.drain_timeout;
                 let cancel_for_drain = cancel_token.clone();
-                if self.tcp_nodelay {
-                    use crate::http::ListenerExt as _;
-                    crate::runtime::drain::bounded_http_drain(
-                        crate::http::serve(
-                            listener.tap_io(|stream| {
-                                if let Err(e) = stream.set_nodelay(true) {
-                                    tracing::warn!(error = %e, "failed to set TCP_NODELAY on accepted connection");
-                                }
-                            }),
-                            svc,
-                        )
-                        .with_graceful_shutdown(shutdown_future)
-                        .into_future(),
-                        cancel_for_drain,
-                        drain_bound,
-                    )
+                let serve = crate::http::server::serve(
+                    listener,
+                    self.router,
+                    shutdown_future,
+                    crate::http::server::ServeOptions::default().tcp_nodelay(self.tcp_nodelay),
+                );
+                crate::runtime::drain::bounded_http_drain(serve, cancel_for_drain, drain_bound)
                     .await
                     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
-                } else {
-                    crate::runtime::drain::bounded_http_drain(
-                        crate::http::serve(listener, svc)
-                            .with_graceful_shutdown(shutdown_future)
-                            .into_future(),
-                        cancel_for_drain,
-                        drain_bound,
-                    )
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
-                }
             }
             #[cfg(all(
                 unix,

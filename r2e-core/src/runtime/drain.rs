@@ -1,6 +1,6 @@
 //! Bounding the HTTP drain phase of graceful shutdown.
 //!
-//! `with_graceful_shutdown` waits for every in-flight connection to finish and
+//! The server's graceful shutdown waits for every in-flight connection to finish and
 //! offers no deadline of its own: one client holding a request (or an SSE
 //! stream) open keeps the process alive forever. R2E puts a ceiling on that
 //! wait — [`DEFAULT_DRAIN_TIMEOUT`] (30s) unless the app says otherwise via
@@ -98,7 +98,7 @@ async fn drain_deadline(cancel: CancelToken, drain_timeout: Option<Duration>) {
     }
 }
 
-/// Await `serve` (an axum `with_graceful_shutdown` future), giving the drain at
+/// Await `serve` (an `http::server::serve` future), giving the drain at
 /// most `drain_timeout` once `cancel` has fired.
 ///
 /// On overflow this **drops** `serve` rather than spawning-and-aborting it.

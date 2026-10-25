@@ -204,11 +204,7 @@ impl RunningApp {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        use std::future::IntoFuture as _;
-        let svc = self
-            .router
-            .clone()
-            .into_make_service_with_connect_info::<std::net::SocketAddr>();
+        let router = self.router.clone();
         let app_cancel = self.cancel.clone();
         // This server's OWN stop token. `bounded_http_drain` starts the
         // `drain_timeout` clock when the token it is given fires, so handing
@@ -222,15 +218,21 @@ impl RunningApp {
         let arm_deadline = serve_stop.clone();
         let drain_bound = self.drain_timeout;
         self.track_named("in-process http server", async move {
-            let serve = crate::http::serve(listener, svc)
-                .with_graceful_shutdown(async move {
+            let serve = crate::http::server::serve(
+                listener,
+                router,
+                async move {
                     crate::rt::select! {
                         _ = app_cancel.cancelled() => {}
                         _ = stop_early => {}
                     }
                     arm_deadline.cancel();
-                })
-                .into_future();
+                },
+                // No `TCP_NODELAY`: an in-process test server keeps the
+                // behaviour it always had; production paths read
+                // `server.tcp_nodelay` in `prepare()`.
+                crate::http::server::ServeOptions::default(),
+            );
             if let Err(e) =
                 crate::runtime::drain::bounded_http_drain(serve, serve_stop, drain_bound).await
             {

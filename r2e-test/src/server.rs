@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
-use r2e_core::http::{serve, Router};
+use r2e_core::http::server::{serve, ServeOptions};
+use r2e_core::http::Router;
 use tokio::net::TcpListener;
 
 /// A test server running on a random local port.
@@ -53,18 +54,19 @@ impl TestServer {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
         r2e_core::rt::spawn(async move {
-            // Match the production serve paths: install `ConnectInfo<SocketAddr>`
-            // so guards that key on the peer address (per-IP rate limiting) see
-            // a client address in live-TCP tests.
+            // The shared serve path installs `ConnectInfo<SocketAddr>` like
+            // production does, so guards that key on the peer address (per-IP
+            // rate limiting) see a client address in live-TCP tests.
             serve(
                 listener,
-                router.into_make_service_with_connect_info::<SocketAddr>(),
-            )
-                .with_graceful_shutdown(async {
+                router,
+                async {
                     let _ = shutdown_rx.await;
-                })
-                .await
-                .expect("test server failed");
+                },
+                ServeOptions::default(),
+            )
+            .await
+            .expect("test server failed");
         });
 
         Self {

@@ -8,6 +8,10 @@
 #
 #   tokio      : tokio::, tokio_util::, tokio_stream::   (#[tokio::main] included)
 #   axum       : axum::
+#   axum-serve : CALLS of the backend's serve API (into_make_service*(, tap_io(,
+#                with_graceful_shutdown() plus the ListenerExt name —
+#                r2e_http::server::serve is the only caller
+#                (plans/axum-containment-roadmap.md, phase A).
 #   serde_json : serde_json::{to_vec,to_string,to_string_pretty,to_writer,
 #                from_slice,from_str,from_reader} — the CODEC calls only.
 #                `serde_json::Value` / `json!` / `to_value` / `from_value` are
@@ -130,12 +134,22 @@ write_baseline() {
         fi
         if [ "$group" = "axum" ]; then
             echo "#"
-            echo "# ONE reviewed exception to \"only ever shrinks\":"
+            echo "# TWO reviewed exceptions to \"only ever shrinks\":"
             echo "# r2e-http/src/axum_compat.rs was ADDED at phase 7 (plan §5.3d,"
             echo "# decision A, 2026-08-24). That module IS the explicit escape hatch —"
             echo "# naming axum is its entire job — so it is boundary surface by design,"
-            echo "# not debt to shrink. Nothing else may appear here without the same"
-            echo "# kind of written decision in the plan."
+            echo "# not debt to shrink."
+            echo "# r2e-http/src/server.rs was ADDED by plans/axum-containment-roadmap.md"
+            echo "# phase A (2026-10-24): it is the one serve path, and the occurrences it"
+            echo "# carries are the ones r2e-core, sharded workers and r2e-test used to"
+            echo "# reach through the \`http::serve\` re-export. Nothing else may appear"
+            echo "# here without the same kind of written decision in a plan."
+        fi
+        if [ "$group" = "axum-serve" ]; then
+            echo "#"
+            echo "# r2e-http/src/server.rs is the destination, not debt. The remaining"
+            echo "# entries are the \`ListenerExt\` / \`serve\` re-exports kept for API"
+            echo "# stability until the routing phase of the roadmap removes them."
         fi
         echo
         cat "$current"
@@ -220,6 +234,12 @@ check_group() {
 
 check_group "tokio" '\btokio(_util|_stream)?::' "$BOUNDARY_DIR/src-baseline-tokio.txt" "$TOKIO_EXCLUDE"
 check_group "axum" '\baxum::' "$BOUNDARY_DIR/src-baseline-axum.txt" "$AXUM_EXCLUDE"
+# The backend's *serve* API. r2e_http::server::serve is the one caller;
+# everything else — production paths, sharded workers, TestServer — goes
+# through it (plans/axum-containment-roadmap.md, phase A). The two surviving
+# re-exports of `ListenerExt` are tracked here until the routing phase removes
+# them.
+check_group "axum-serve" '\b(into_make_service(_with_connect_info)?|with_graceful_shutdown|tap_io)\(|\bListenerExt\b' "$BOUNDARY_DIR/src-baseline-axum-serve.txt" ""
 check_group "serde_json" '\bserde_json::(to_vec|to_string|to_string_pretty|to_writer|from_slice|from_str|from_reader)\b' "$BOUNDARY_DIR/src-baseline-serde_json.txt" "$SERDE_JSON_EXCLUDE"
 
 if [ "$FAILED" -ne 0 ]; then

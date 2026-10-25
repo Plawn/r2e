@@ -55,9 +55,9 @@ before this feature existed: a single listener bound on the caller's runtime.
    `std::net::TcpListener`, and set non-blocking (mandatory for
    `tokio::net::TcpListener::from_std`). A thread named `r2e-worker-{i}` builds a
    `current_thread` runtime and serves its listener with graceful shutdown.
-5. `TCP_NODELAY` (`server.tcp_nodelay`, default `true`) is re-applied per worker
-   listener using the same `ListenerExt::tap_io` + `set_nodelay(true)` pattern as
-   the single-listener path.
+5. `TCP_NODELAY` (`server.tcp_nodelay`, default `true`) is applied per accepted
+   connection by `r2e_http::server::serve` (`ServeOptions::tcp_nodelay`), the one
+   serve path shared with the single-listener strategy.
 6. Shutdown stays on the main runtime: on signal, plugin shutdown hooks fire,
    then a shared `CancellationToken` is cancelled. Each worker's graceful
    shutdown future is a `child_token().cancelled()`. The main thread then joins

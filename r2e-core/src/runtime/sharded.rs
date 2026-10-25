@@ -406,39 +406,19 @@ mod imp {
                         // instant its graceful shutdown begins — and on
                         // overflow the serve future is dropped, abandoning
                         // whatever connections this worker still holds.
-                        let svc = router.into_make_service_with_connect_info::<SocketAddr>();
                         let shutdown = child_token.clone().cancelled_owned();
-                        use std::future::IntoFuture as _;
-                        let serve_result = if tcp_nodelay {
-                            use crate::http::ListenerExt as _;
-                            crate::runtime::drain::bounded_http_drain(
-                                crate::http::serve(
-                                    listener.tap_io(|stream| {
-                                        if let Err(e) = stream.set_nodelay(true) {
-                                            tracing::warn!(
-                                                error = %e,
-                                                "failed to set TCP_NODELAY on accepted connection"
-                                            );
-                                        }
-                                    }),
-                                    svc,
-                                )
-                                .with_graceful_shutdown(shutdown)
-                                .into_future(),
-                                child_token.clone(),
-                                drain_timeout,
-                            )
-                            .await
-                        } else {
-                            crate::runtime::drain::bounded_http_drain(
-                                crate::http::serve(listener, svc)
-                                    .with_graceful_shutdown(shutdown)
-                                    .into_future(),
-                                child_token.clone(),
-                                drain_timeout,
-                            )
-                            .await
-                        };
+                        let serve = crate::http::server::serve(
+                            listener,
+                            router,
+                            shutdown,
+                            crate::http::server::ServeOptions::default().tcp_nodelay(tcp_nodelay),
+                        );
+                        let serve_result = crate::runtime::drain::bounded_http_drain(
+                            serve,
+                            child_token.clone(),
+                            drain_timeout,
+                        )
+                        .await;
 
                         // ── Shutdown: HTTP drained, now the services ─────
                         // Make sure local tasks see cancellation even when the

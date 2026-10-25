@@ -1,6 +1,6 @@
 # Roadmap — Contain axum further, without swapping the HTTP backend
 
-Status: **PROPOSAL (2026-10-24), not started.** Follow-up to
+Status: **IN PROGRESS** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (branch `feat/axum-containment-a-serve`); B and C open. Follow-up to
 `plans/runtime-http-dependency-containment.md` (phases 0–7 shipped 2026-08-24).
 That plan ended with two written decisions: §5.3d option A ("the public promise is
 R2E **types**", raw axum only through `axum_compat`) and §5.3c **DEFERRED** (no
@@ -175,3 +175,17 @@ have to move is already in `r2e-http`.
 - `llm.txt` / `llm/*.md`: no snippet names `Router`, `routing::`, `tower_http`.
 - `docs/claude/roadmap.md` W11 "Zero-copy exploration (xitca-web)" bullet is
   replaced by a pointer to this file and to phase D's trigger.
+
+## 6. Execution log
+
+- **2026-10-25 — Phase A shipped.** `r2e_http::server::{serve, ServeOptions}`;
+  `running.rs`, `prepared.rs` (single listener), `runtime/sharded.rs` and
+  `r2e-test`'s `TestServer::new` rewritten on it. `r2e-rt` + `tracing` became
+  unconditional deps of `r2e-http`. Boundary: new source group `axum-serve`
+  (`into_make_service*|with_graceful_shutdown|tap_io|ListenerExt`); its
+  baseline is `server.rs` itself plus the two `ListenerExt` re-exports
+  (`r2e-http/src/lib.rs`, `r2e-core/src/http/mod.rs`) that phase C4 removes.
+  The `axum` baseline gains `r2e-http/src/server.rs` (reviewed exception,
+  recorded in the baseline header). Deferred from A to its own PR: driving
+  hyper through `hyper_util` `auto::Builder` for `server.http.*` tuning — the
+  serve path is now in one place, so that change is contained to `server.rs`.
