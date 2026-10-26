@@ -40,9 +40,12 @@ pub struct WhoAmI {
 //
 // A unit controller: no beans, no config fields. `#[inject(identity)]` on a
 // tool parameter reads the `McpPrincipal` the MCP auth layer validated (the
-// caller is `principal.user`, the granted scopes `principal.scopes`). Being
-// REQUIRED (not `Option<_>`), an unauthenticated call is a JSON-RPC
-// `unauthorized` error — the whole point of this smoke test.
+// caller is `principal.user`, the granted scopes `principal.scopes`). A
+// missing or invalid bearer never reaches the tool: the `mcp.auth` layer
+// answers HTTP 401 with a challenge first. Being REQUIRED (not `Option<_>`),
+// the tool itself only fails (JSON-RPC `unauthorized`) when no principal is
+// on the request, i.e. `mcp.auth` is off — the whole point of this smoke test
+// is that the token path round-trips.
 
 #[controller]
 pub struct IdentityTools;

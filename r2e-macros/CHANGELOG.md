@@ -15,6 +15,16 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `#[mcp_routes]` codegen targets the state-generic `McpService<S, W>` of
+  `r2e-mcp` (`routes(state, ctx)`): it emits one `FromRequestPartsVia<S, M>`
+  bound per member with an `#[inject(identity)]` parameter, folds the
+  markers into the witness `W`, and runs the extractor on the call's request
+  parts, mapping its `Rejection` into `McpError`. Codegen contract change
+  with `r2e-mcp` only (the macro syntax is unchanged) — released with
+  `--no-propagate`. Migration: `docs/migration/mcp-identity.md` (#1175).
+
 ## [0.8.0] - 2026-10-25
 
 ### Breaking

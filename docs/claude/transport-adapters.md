@@ -60,13 +60,27 @@ references.
    ```
 
    Call sites stay `.register_xyz_service::<MyService>()` — never name the
-   witnesses. Do NOT ship an unchecked registration path.
+   witnesses. Do NOT ship an unchecked registration path. (MCP adds a
+   third witness, `AppBuilderMcpExt<T, W, DepIdx>` with
+   `S: McpService<T, W>`: the identity-extractor witness of point 6.)
 
 6. **Wire-specific pieces, kept wire-specific** (do not abstract these —
    deliberate decision):
-   - identity extraction (HTTP: `FromRequestParts`; gRPC: `GrpcIdentity`
-     over metadata — a `DecoratorSpec`-backed extractor, so the validator
-     bean is a compile-time dep of the service),
+   - identity extraction — wire-specific only where the wire has no HTTP
+     request head. gRPC: `GrpcIdentity` over metadata (a
+     `DecoratorSpec`-backed extractor, so the validator bean is a
+     compile-time dep of the service). MCP rides HTTP, so it reuses the
+     **HTTP contract** (#1175): `McpService<T, W>` is state-generic like
+     `Controller<T, W>`, `#[mcp_routes]` emits one
+     `FromRequestPartsVia<S, M>` bound per member with an
+     `#[inject(identity)]` parameter and folds the markers into the witness
+     `W`, which `AppBuilderMcpExt<T, W, DepIdx>` infers at
+     `.register_mcp_service::<Svc>()` (missing bean = compile error there).
+     `McpService::routes(state, ctx)` hands the state to every member's
+     extractor, run on an owned copy of the transport request's parts. The
+     `mcp.auth` principal is just another extractor (`McpPrincipal`, marker
+     `ViaMcpAuth`, `r2e-mcp/src/auth/extract.rs`) — no MCP-only identity
+     path,
    - the `GuardContext` builder and the `Rejection` → wire-error projection
      (HTTP: the route envelope; gRPC: `guard_context` +
      `rejection_to_status`; MCP: `member_guard_context` +

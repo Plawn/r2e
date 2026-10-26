@@ -76,7 +76,7 @@ bad `#[config]` key is caught at `register_mcp_service` — a missing
 | `McpSession` | The caller's session handle: change what this session sees (see Dynamic members). At most one. |
 | `Progress` | Reports `notifications/progress` for this call (see Progress). Also on `ToolCall::progress`. |
 | `McpClient<'_>` | Asks the user for input mid-call (see Elicitation). Also `ToolCall::client()`. |
-| `#[inject(identity)] user: I` / `Option<I>` | The authenticated caller (wired by the MCP auth layer — see the Auth section). |
+| `#[inject(identity)] user: I` / `Option<I>` | The caller, extracted exactly like an HTTP route's identity (`McpPrincipal` under `mcp.auth`, or any app identity type — see Identity in the Auth section). |
 
 Anything else is a targeted compile error — beans and config go on the
 struct, not on methods.
@@ -629,6 +629,31 @@ transport-level request rejection list (empty disables that check), while
 to `https://claude.ai` and `https://claude.com`, plus localhost origins under
 the `dev` profile.
 
+**Mounting and app middleware.** `McpServer` mounts the endpoint (and, with
+`mcp.auth`, the public well-known routes) in the **Routes** stage, like a
+controller route. Every app layer installed through `add_layer` — `HttpTrace`,
+metrics, an app CORS layer, app-wide auth or rate-limit layers — therefore
+wraps `/mcp` as it wraps the rest of the router: MCP requests (including the
+long-lived SSE `GET`) get a trace span, a request summary line and metrics, and
+an app-wide auth layer gates `/mcp` and the well-known routes too. Exempt those
+paths in such a layer when the MCP endpoint is meant to be reached with
+`mcp.auth` alone. The MCP service keeps its own CORS layer around its auth
+layer, so a `401` challenge stays readable by browser clients.
+
+**Double CORS.** An app CORS layer installed with `add_layer` sits *outside*
+the MCP one and answers preflights (`OPTIONS /mcp`) before the MCP layer sees
+them, so `mcp.cors.allowed-origins` no longer decides those. When the app has
+its own CORS layer, configure it for MCP browser clients:
+
+- allowed origins: the MCP client origins (`https://claude.ai`,
+  `https://claude.com`, the Inspector's localhost origin…);
+- allowed request headers: `authorization`, `content-type`,
+  `mcp-protocol-version`, `mcp-session-id`, `last-event-id`;
+- exposed response headers: `mcp-session-id`, `www-authenticate`.
+
+Missing any of these, a browser client cannot open or resume a session or
+read the auth challenge.
+
 **Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
 `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`
 return at most that many entries plus a `nextCursor`. The cursor is bound to
@@ -693,7 +718,9 @@ What you get, with zero additional code:
   flow from this header.
 - **Protected-resource metadata** at
   `/.well-known/oauth-protected-resource[{mcp.path}]` (public, CORS-open,
-  cached).
+  cached). "Public" means `mcp.auth` does not gate it: an app-wide auth layer
+  installed with `add_layer` wraps it like any route (see "Mounting and app
+  middleware" above), so exempt it there.
 - **Static DCR shim** (when `public-client-id` is set): the server mirrors
   the IdP's authorization-server metadata and serves a
   `POST {mcp.path}/oauth/register` endpoint that hands every client the same
@@ -773,8 +800,8 @@ impl AdminTools {
 
     #[tool]
     #[roles("admin")]                                 // same guard as HTTP routes
-    async fn admin_only(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("admin:{}", user.sub)
+    async fn admin_only(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("admin:{}", principal.user.sub)
     }
 }
 ```
@@ -790,20 +817,64 @@ impl AdminTools {
 - `tools/list` is filtered by the caller's scopes/roles by default
   (`mcp.auth.filter-members: false` lists everything; invocation checks still
   apply).
-- `#[inject(identity)] user: AuthenticatedUser` (or `Option<…>`) on a tool
-  parameter reads the authenticated principal; a required identity with no
-  authenticated caller is a JSON-RPC `unauthorized` error.
+- `#[inject(identity)]` reads the caller — see **Identity** below.
+
+### Identity
+
+An `#[inject(identity)]` parameter on a `#[tool]`, `#[resource]`, `#[prompt]`
+or `#[completion]` member is extracted **exactly like an HTTP route's
+identity**: through `FromRequestPartsVia` against the application state, on
+the transport request's parts. Whatever works on a `#[routes]` handler works
+here:
+
+| identity type | where it comes from |
+|---|---|
+| `McpPrincipal` | the principal the `mcp.auth` layer validated: `principal.user` (the caller, an `Arc<AuthenticatedUser>`), `principal.scopes`, `principal.token_hash`. **The identity to use under `mcp.auth`.** |
+| `AuthenticatedUser` | its HTTP extractor: validates the `Authorization` bearer itself and needs the `Arc<JwtClaimsValidator>` bean — the HTTP JWT path, independent of `mcp.auth`. |
+| any app type implementing `FromRequestParts` | the app's own extractor (a header, an extension an app layer inserted — app `add_layer` layers wrap `/mcp`). |
+| `Option<T>` | the type's optional extractor: `None` when the caller is absent (e.g. no principal on the request, no `Authorization` header); a present but invalid credential is still the extractor's rejection. |
+
+```rust
+#[mcp_routes]
+impl AccountTools {
+    /// Who is calling?
+    #[tool]
+    async fn whoami(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("{} ({} scopes)", principal.user.sub, principal.scopes.len())
+    }
+}
+```
+
+- **Compile-time check.** A bean-backed identity whose bean is missing
+  (`AuthenticatedUser` without `JwtClaimsValidator`) is a compile error at
+  `.register_mcp_service::<Svc>()` (``bean `Arc<JwtClaimsValidator>` is not
+  present in the application state``), not a failure at the first call.
+- **Rejections.** The extractor's `Rejection` becomes an `McpError` by kind:
+  `401` → JSON-RPC `unauthorized`, `403` → `forbidden`. A required
+  `McpPrincipal` with no principal on the request (no `mcp.auth` configured)
+  is `unauthorized` with a message saying so.
+- **Order** per call: `#[tool(scopes/any_scopes)]` check → identity → guards
+  (`#[roles]`, `#[guard]`) → params → the method.
+- **`#[roles]` / guards on `McpPrincipal`.** It implements `Identity` and
+  `RoleBasedIdentity` by delegating to `principal.user`, so the shared
+  `RolesGuard` and custom guards work unchanged.
+- **Under `mcp.auth`, declare `McpPrincipal`, not `AuthenticatedUser`.**
+  `AuthenticatedUser` keeps its HTTP extractor (it does not read the `mcp.auth`
+  principal), so it compiles only with the `JwtClaimsValidator` bean and
+  never sees an opaque-token or Basic caller. Migration:
+  `docs/migration/mcp-identity.md`.
 - **No request holds two copies of its caller**: `McpPrincipal.user` is an
   `Arc<AuthenticatedUser>` and the layer deposits that same handle as the
   identity extension. The JWT path builds one `AuthenticatedUser` per request;
   on the opaque-token path (`introspection`/`userinfo`) a cache hit builds none
-  and reuses the one cached for that token. Reads are unchanged
-  (`principal.user.sub` goes through
-  `Deref`); an owned copy is `(*principal.user).clone()`, and
-  `#[inject(identity)] user: AuthenticatedUser` still hands the member an
-  owned value — materialized only for members that ask for one. A member that
-  declares `ToolCall` can take the shared handle instead, with
-  `call.extension::<Arc<AuthenticatedUser>>()`.
+  and reuses the one cached for that token. Extracting an `McpPrincipal` is a
+  refcount bump; reads go through `Deref` (`principal.user.sub`), an owned copy
+  is `(*principal.user).clone()`.
+- **Hand-built calls.** A member that takes the raw `ToolCall` (or
+  `ResourceCall`/`PromptCall`) can still look the caller up from the request
+  extensions with `call.identity::<T>()` (the shared `Arc<T>` first, then a
+  plain `T`) or `call.extension::<McpPrincipal>()`; `#[inject(identity)]` does
+  not go through these.
 
 ### Configuration reference
 
