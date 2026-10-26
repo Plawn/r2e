@@ -70,8 +70,12 @@ Cargo target per subsystem** (`tests/<name>/main.rs` + plain `mod`s) — do NOT 
 top-level `tests/*.rs` files to a crate that already uses this layout; add a `mod` to the
 matching target. Use external imports (`use <crate_name>::...`), keep helpers in the test
 file, and expose internals via `pub` + `#[doc(hidden)]` (never `#[cfg(test)] pub(crate)`).
-Env-mutating tests take `crate::support::env_lock()`. `r2e-core/tests/` is the reference
-layout — full target map and conventions: `docs/claude/testing-conventions.md`.
+Env-mutating tests take `crate::support::env_lock()`. **Async tests use
+`#[r2e_core::test]`** (`#[r2e::test]` where the crate depends on the facade) — never
+`#[tokio::test]`; CI (`scripts/check-source-boundary.sh`, group `tokio-test`) fails on any
+new occurrence, and only the crates below `r2e-core` (`r2e-rt`, `r2e-http`, `r2e-macros`)
+plus `r2e-devservices` are exempt. `r2e-core/tests/` is the reference layout — full target
+map and conventions: `docs/claude/testing-conventions.md`.
 
 ```bash
 cargo test -p r2e-core --test config              # one subsystem target

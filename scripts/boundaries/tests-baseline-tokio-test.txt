@@ -1,0 +1,97 @@
+# tokio-test — source-occurrence baseline (path:count)
+#
+# Enforced by scripts/check-source-boundary.sh over git-tracked .rs files
+# under any tests/ directory (examples included; vendor/ and .claude/
+# excluded). Crates below r2e-core (r2e-rt, r2e-http, r2e-macros) and
+# r2e-devservices are allowlisted: they cannot reach `r2e_core::test`.
+#
+# This baseline ONLY EVER SHRINKS: async tests use `#[r2e_core::test]`
+# (`#[r2e::test]` on the facade) — docs/claude/testing-conventions.md,
+# "Async test attribute". A count that grows, or a new file appearing
+# here, fails CI. A count that drops is reported as a note — shrink the
+# line in the same PR so the boundary stays honest.
+#
+# Regenerate with: scripts/check-source-boundary.sh --update
+
+r2e-core/tests/builder/app.rs:1
+r2e-core/tests/builder/on_start_once.rs:2
+r2e-core/tests/builder/prepared.rs:5
+r2e-core/tests/builder/provide_bundle.rs:3
+r2e-core/tests/builder/provide_config.rs:3
+r2e-core/tests/builder/service_start.rs:14
+r2e-core/tests/builder/shutdown_token.rs:2
+r2e-core/tests/builder/type_list.rs:3
+r2e-core/tests/config/live_config.rs:2
+r2e-core/tests/config/provider.rs:12
+r2e-core/tests/config/validation.rs:3
+r2e-core/tests/controller/lifecycle.rs:1
+r2e-core/tests/dev_reload/once_start.rs:1
+r2e-core/tests/dev_reload/serve_hooks.rs:5
+r2e-core/tests/plugin/enabled.rs:2
+r2e-core/tests/plugin/late.rs:3
+r2e-core/tests/plugin/lifecycle.rs:1
+r2e-core/tests/plugin/setup.rs:1
+r2e-core/tests/runtime/post_drain_services.rs:3
+r2e-core/tests/runtime/rt.rs:8
+r2e-core/tests/runtime/sharded.rs:2
+r2e-core/tests/runtime/shutdown_budget.rs:1
+r2e-core/tests/runtime/worker_scopes.rs:12
+r2e-core/tests/runtime/worker_services.rs:4
+r2e-data/backends/diesel/tests/datasource/sqlite.rs:6
+r2e-data/backends/diesel/tests/pool/sqlite.rs:2
+r2e-data/backends/diesel/tests/tx/sqlite.rs:2
+r2e-data/backends/diesel/tests/tx/tenant.rs:11
+r2e-data/backends/sqlx/tests/datasource/module.rs:1
+r2e-data/backends/sqlx/tests/datasource/sqlite.rs:6
+r2e-data/backends/sqlx/tests/health/sqlite.rs:2
+r2e-data/backends/sqlx/tests/pool/sqlite.rs:3
+r2e-data/backends/sqlx/tests/tx/sqlite.rs:3
+r2e-data/backends/sqlx/tests/tx/tenant.rs:11
+r2e-edition2024-tests/tests/precise_capture.rs:1
+r2e-events/backends/iggy/tests/iggy_event_bus.rs:1
+r2e-events/backends/kafka/tests/kafka_event_bus.rs:5
+r2e-events/backends/pulsar/tests/pulsar_event_bus.rs:2
+r2e-events/backends/rabbitmq/tests/rabbitmq_event_bus.rs:9
+r2e-events/tests/backend_state.rs:20
+r2e-events/tests/pending.rs:13
+r2e-events/tests/reconnect.rs:3
+r2e-executor/tests/async_exec.rs:3
+r2e-executor/tests/bg_service.rs:1
+r2e-executor/tests/executor.rs:8
+r2e-executor/tests/panic.rs:6
+r2e-executor/tests/shutdown_phase.rs:1
+r2e-featureless-tests/tests/service_gate.rs:2
+r2e-grpc/tests/guard.rs:1
+r2e-mcp/tests/auth/backends.rs:24
+r2e-mcp/tests/auth/basic.rs:11
+r2e-mcp/tests/auth/config.rs:19
+r2e-mcp/tests/auth/discovery.rs:7
+r2e-mcp/tests/auth/identity.rs:8
+r2e-mcp/tests/auth/keycloak.rs:2
+r2e-mcp/tests/auth/layer.rs:11
+r2e-mcp/tests/auth/pin.rs:1
+r2e-mcp/tests/auth/scopes.rs:8
+r2e-mcp/tests/auth/shim.rs:13
+r2e-mcp/tests/auth/tools.rs:11
+r2e-mcp/tests/auth/wellknown.rs:7
+r2e-mcp/tests/server/lifecycle.rs:1
+r2e-observability/tests/observability/client.rs:2
+r2e-observability/tests/observability/span.rs:4
+r2e-openapi/tests/errors.rs:1
+r2e-openfga/tests/client.rs:5
+r2e-openfga/tests/guard.rs:4
+r2e-prometheus/tests/layer_in_flight.rs:1
+r2e-prometheus/tests/layer.rs:4
+r2e-scheduler/tests/scheduler/handle.rs:5
+r2e-scheduler/tests/scheduler/serve_lifecycle.rs:1
+r2e-scheduler/tests/scheduler/sharded.rs:1
+r2e-scheduler/tests/scheduler/skip_if.rs:2
+r2e-tenant/tests/tenant/cascade.rs:8
+r2e-tenant/tests/tenant/extractor.rs:12
+r2e-tenant/tests/tenant/map.rs:51
+r2e-tenant/tests/tenant/plugin.rs:20
+r2e-tenant/tests/tenant/resolver.rs:22
+r2e-test/tests/boot.rs:15
+r2e-test/tests/lifecycle.rs:12
+r2e-test/tests/shared_env.rs:4
+r2e-test/tests/tenant.rs:3

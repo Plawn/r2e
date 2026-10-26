@@ -56,3 +56,38 @@ cargo test -p r2e-core                    # single crate
 cargo test -p r2e-core --test config      # one subsystem target
 cargo test -p r2e-core --test config sections::   # one module within it
 ```
+
+## Async test attribute
+
+**Async tests use `#[r2e_core::test]`** — `#[r2e::test]` in crates that depend on the
+facade (examples, `r2e-edition2024-tests`, `r2e-featureless-tests`). Never `#[tokio::test]`.
+
+The R2E attribute is the test-side twin of `#[r2e::main]`: a multi-thread Tokio runtime,
+`init_tracing_from_config()` called before the body, and the app-test extensions
+(`app = MyApp` boots a `TestApp`, `#[inject]` parameters pull beans, `with = |b| …` pins
+mocks, `jwt = false` skips `TestJwt`). A test written with `#[tokio::test]` opts out of all
+of that and reads as foreign code in a workspace whose own rule is "the runtime is reached
+through the facade" (`r2e_core::rt`, `scripts/check-source-boundary.sh`).
+
+| `#[tokio::test…]` | `#[r2e_core::test…]` |
+|---|---|
+| `#[tokio::test]` | `#[r2e_core::test]` (already multi-thread) |
+| `#[tokio::test(flavor = "multi_thread")]` | `#[r2e_core::test]` |
+| `#[tokio::test(flavor = "multi_thread", worker_threads = 2)]` | `#[r2e_core::test(worker_threads = 2)]` |
+| `#[tokio::test(flavor = "current_thread")]` | `#[r2e_core::test(flavor = "current_thread")]` |
+| `#[tokio::test(start_paused = true)]` | `#[r2e_core::test(flavor = "current_thread", start_paused = true)]` |
+| a test that installs its own subscriber or asserts on log output | add `tracing = false` |
+
+Exempt, because they sit below `r2e-core` in the dependency graph and cannot name the
+macro: `r2e-rt`, `r2e-http`, `r2e-macros`. Also exempt: `r2e-devservices` (dev-only
+testcontainers harness, deliberately without an `r2e-core` dependency). Everything else —
+including `r2e-core`'s own tests, `r2e-test` and the data/events backends — uses the R2E
+attribute.
+
+**Enforced by CI.** `scripts/check-source-boundary.sh` has a `tokio-test` group that counts
+`#[tokio::test` per git-tracked file under any `tests/` directory against
+`scripts/boundaries/tests-baseline-tokio-test.txt`. The baseline is the pre-rule debt and
+**only ever shrinks**: a new occurrence, or a file that was clean gaining one, fails the
+check; when a PR converts tests, run `scripts/check-source-boundary.sh --update` in the same
+PR so the baseline follows. Converting the backlog is welcome crate by crate — check each
+test still passes with tracing initialised, and add `tracing = false` where it does not.

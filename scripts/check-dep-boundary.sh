@@ -40,7 +40,7 @@ command -v jq >/dev/null 2>&1 || {
     exit 2
 }
 
-TMPDIR_BOUNDARY=$(mktemp -d)
+TMPDIR_BOUNDARY=$(mktemp -d "${TMPDIR:-/tmp}/r2e-boundary.XXXXXX")
 trap 'rm -rf "$TMPDIR_BOUNDARY"' EXIT
 
 METADATA="$TMPDIR_BOUNDARY/metadata.json"

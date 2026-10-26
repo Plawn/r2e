@@ -27,6 +27,17 @@
 # NOT part of the boundary (test harnesses and user-facing examples may name
 # the runtime freely).
 #
+# One group looks at the OTHER side of that line — git-tracked .rs files under
+# any tests/ directory (examples included):
+#
+#   tokio-test : `#[tokio::test]`. Async tests use `#[r2e_core::test]`
+#                (`#[r2e::test]` where the crate depends on the facade): same
+#                multi-thread runtime, tracing initialised, `app = …` boot and
+#                bean injection (docs/claude/testing-conventions.md, "Async test
+#                attribute"). Crates BELOW r2e-core in the graph cannot reach the
+#                macro and are allowlisted: r2e-rt, r2e-http, r2e-macros; so is
+#                r2e-devservices (dev-only harness without a core dependency).
+#
 # Also excluded BY DESIGN from the *tokio* group (see
 # plans/runtime-http-dependency-containment.md §4 — the permanent allowlist):
 #
@@ -71,7 +82,7 @@ elif [ -n "${1:-}" ]; then
     exit 2
 fi
 
-TMPDIR_BOUNDARY=$(mktemp -d)
+TMPDIR_BOUNDARY=$(mktemp -d "${TMPDIR:-/tmp}/r2e-boundary.XXXXXX")
 trap 'rm -rf "$TMPDIR_BOUNDARY"' EXIT
 
 FILELIST="$TMPDIR_BOUNDARY/files.txt"
@@ -82,19 +93,31 @@ git ls-files \
     | grep -vE '(^|/)tests/' \
     | sort >"$FILELIST"
 
+# The tests/ side: every git-tracked .rs under a tests/ directory, examples
+# included (they are the user-facing model and must show `#[r2e::test]`).
+TESTLIST="$TMPDIR_BOUNDARY/test-files.txt"
+git ls-files \
+    | grep -E '\.rs$' \
+    | grep -E '(^|/)tests/' \
+    | grep -vE '^(vendor|\.claude)/' \
+    | sort >"$TESTLIST"
+
 # Per-group by-design exclusions (see the header). Empty = nothing excluded.
 TOKIO_EXCLUDE='^(r2e-rt|r2e-test|r2e-devservices)/'
 AXUM_EXCLUDE=''
 AXUM_SHAPE_EXCLUDE='^r2e-cli/src/commands/templates/'
 SERDE_JSON_EXCLUDE='^r2e-http/src/json\.rs$'
+# Below r2e-core in the graph (no path to `r2e_core::test`), plus the dev-only
+# testcontainers harness that deliberately has no r2e-core dependency.
+TOKIO_TEST_EXCLUDE='^(r2e-rt|r2e-http|r2e-macros|r2e-devservices)/'
 
 # ── scan: emit `path:count` for every file with >= 1 occurrence of $1 ──────
 scan_group() {
-    local pattern="$1" exclude="${2:-}"
-    local list="$FILELIST"
+    local pattern="$1" exclude="${2:-}" list="${3:-$FILELIST}"
     if [ -n "$exclude" ]; then
+        local source="$list"
         list="$TMPDIR_BOUNDARY/files-filtered.txt"
-        grep -vE "$exclude" "$FILELIST" >"$list" || true
+        grep -vE "$exclude" "$source" >"$list" || true
     fi
     # `-H` keeps the filename prefix even when xargs hands grep a single file.
     tr '\n' '\0' <"$list" \
@@ -118,16 +141,29 @@ write_baseline() {
     {
         echo "# ${group} — source-occurrence baseline (path:count)"
         echo "#"
-        echo "# Enforced by scripts/check-source-boundary.sh over git-tracked files"
-        echo "# under a crate src/ directory — .rs only (vendor/, examples/, docs/, tests/,"
-        echo "# excluded)."
-        echo "#"
-        echo "# This baseline ONLY EVER SHRINKS: each migration PR of"
-        echo "# plans/runtime-http-dependency-containment.md (tokio, axum) or"
-        echo "# plans/json-codec-containment.md (serde_json) deletes lines from it or"
-        echo "# lowers counts. A count that grows, or a new file appearing here, fails"
-        echo "# CI. A count that drops is reported as a note — shrink the line in the"
-        echo "# same PR so the boundary stays honest."
+        if [ "$group" = "tokio-test" ]; then
+            echo "# Enforced by scripts/check-source-boundary.sh over git-tracked .rs files"
+            echo "# under any tests/ directory (examples included; vendor/ and .claude/"
+            echo "# excluded). Crates below r2e-core (r2e-rt, r2e-http, r2e-macros) and"
+            echo "# r2e-devservices are allowlisted: they cannot reach \`r2e_core::test\`."
+            echo "#"
+            echo "# This baseline ONLY EVER SHRINKS: async tests use \`#[r2e_core::test]\`"
+            echo "# (\`#[r2e::test]\` on the facade) — docs/claude/testing-conventions.md,"
+            echo "# \"Async test attribute\". A count that grows, or a new file appearing"
+            echo "# here, fails CI. A count that drops is reported as a note — shrink the"
+            echo "# line in the same PR so the boundary stays honest."
+        else
+            echo "# Enforced by scripts/check-source-boundary.sh over git-tracked files"
+            echo "# under a crate src/ directory — .rs only (vendor/, examples/, docs/, tests/,"
+            echo "# excluded)."
+            echo "#"
+            echo "# This baseline ONLY EVER SHRINKS: each migration PR of"
+            echo "# plans/runtime-http-dependency-containment.md (tokio, axum) or"
+            echo "# plans/json-codec-containment.md (serde_json) deletes lines from it or"
+            echo "# lowers counts. A count that grows, or a new file appearing here, fails"
+            echo "# CI. A count that drops is reported as a note — shrink the line in the"
+            echo "# same PR so the boundary stays honest."
+        fi
         echo "#"
         echo "# Regenerate with: scripts/check-source-boundary.sh --update"
         if [ "$group" = "serde_json" ]; then
@@ -159,9 +195,9 @@ write_baseline() {
         fi
         if [ "$group" = "axum-serve" ]; then
             echo "#"
-            echo "# r2e-http/src/server.rs is the destination, not debt. The remaining"
-            echo "# entries are the \`ListenerExt\` / \`serve\` re-exports kept for API"
-            echo "# stability until the routing phase of the roadmap removes them."
+            echo "# r2e-http/src/server.rs is the destination, not debt. The \`ListenerExt\`"
+            echo "# / \`serve\` re-exports it used to share this list with were removed by"
+            echo "# the routing phase (phase C) of plans/axum-containment-roadmap.md."
         fi
         echo
         cat "$current"
@@ -171,10 +207,10 @@ write_baseline() {
 FAILED=0
 
 check_group() {
-    local group="$1" pattern="$2" baseline="$3" exclude="${4:-}"
+    local group="$1" pattern="$2" baseline="$3" exclude="${4:-}" list="${5:-$FILELIST}"
 
     local current="$TMPDIR_BOUNDARY/current-$group.txt"
-    scan_group "$pattern" "$exclude" >"$current"
+    scan_group "$pattern" "$exclude" "$list" >"$current"
 
     if [ "$MODE" = "update" ]; then
         write_baseline "$baseline" "$group" "$current"
@@ -224,8 +260,14 @@ check_group() {
         FAILED=1
         echo "FAIL [$group] source occurrences grew beyond $baseline:"
         cat "$grew"
-        echo "  → Go through the r2e-rt / r2e-http facade instead of naming the"
-        echo "    dependency directly. The baseline only ever shrinks."
+        if [ "$group" = "tokio-test" ]; then
+            echo "  → Use #[r2e_core::test] (#[r2e::test] on the facade) instead of"
+            echo "    #[tokio::test]: docs/claude/testing-conventions.md, \"Async test"
+            echo "    attribute\". The baseline only ever shrinks."
+        else
+            echo "  → Go through the r2e-rt / r2e-http facade instead of naming the"
+            echo "    dependency directly. The baseline only ever shrinks."
+        fi
         echo
     fi
 
@@ -260,9 +302,12 @@ check_group "tower_http" '\btower_http::' "$BOUNDARY_DIR/src-baseline-tower_http
 # `r2e_http::axum_compat`. The CLI's "coming from axum" template table is prose.
 check_group "axum-shape" '\bRouter\s*(<|::)|\bMethodRouter\b|\bmiddleware::from_fn(_with_state)?\b' "$BOUNDARY_DIR/src-baseline-axum-shape.txt" "$AXUM_SHAPE_EXCLUDE"
 check_group "serde_json" '\bserde_json::(to_vec|to_string|to_string_pretty|to_writer|from_slice|from_str|from_reader)\b' "$BOUNDARY_DIR/src-baseline-serde_json.txt" "$SERDE_JSON_EXCLUDE"
+# The tests/ side: the async test attribute is `#[r2e_core::test]`
+# (docs/claude/testing-conventions.md, "Async test attribute").
+check_group "tokio-test" '#\[tokio::test\b' "$BOUNDARY_DIR/tests-baseline-tokio-test.txt" "$TOKIO_TEST_EXCLUDE" "$TESTLIST"
 
 if [ "$FAILED" -ne 0 ]; then
-    echo "source boundary check FAILED — see plans/runtime-http-dependency-containment.md (tokio/axum) or plans/json-codec-containment.md (serde_json)" >&2
+    echo "source boundary check FAILED — see plans/runtime-http-dependency-containment.md (tokio/axum), plans/json-codec-containment.md (serde_json) or docs/claude/testing-conventions.md (tokio-test)" >&2
     exit 1
 fi
 
