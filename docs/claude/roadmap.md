@@ -555,8 +555,10 @@ that re-wrapped it become deletable. `#[inject(identity)]` on MCP members
 goes through `FromRequestPartsVia` on a state-generic `McpService<T, W>`
 (witness fold like `Controller<T, W>`; missing bean = compile error at
 `register_mcp_service`); `McpPrincipal` extractor under marker `ViaMcpAuth`
-+ `Identity`/`RoleBasedIdentity`. Breaking `r2e-mcp` (propagates) and
-`r2e-macros` codegen (`--no-propagate`) — `docs/migration/mcp-identity.md`.
++ `Identity`/`RoleBasedIdentity`. Breaking `r2e-mcp` and `r2e-macros`
+codegen; the macros bump **propagates** (the expansion reaches apps through
+the `r2e-core` prelude, a patch re-pin would break apps still on `r2e-mcp`
+0.9) — `docs/migration/mcp-identity.md`.
 
 ## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
 

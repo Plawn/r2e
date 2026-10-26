@@ -63,23 +63,65 @@ fn principal_of(context: &RequestContext<RoleServer>) -> Option<&McpPrincipal> {
     principal_in(context.extensions.get::<Parts>())
 }
 
-/// The immutable member catalog built once when the router is assembled.
-pub(crate) struct Catalog {
-    pub(crate) info: ServerInfo,
+/// What a dynamic member is validated against: the catalog's keys, group
+/// names and the two serving flags — nothing that dispatches.
+///
+/// Shared (`Arc`) between the [`Catalog`] and the global `McpRegistry`. The
+/// registry is a bean of the application state, and the catalog's dispatch
+/// closures hold that state (an `#[inject(identity)]` extractor runs
+/// against it): holding the catalog itself from the registry would be a
+/// reference cycle keeping every bean alive after the endpoint is dropped.
+/// The keys never change for the catalog's lifetime, so they are all the
+/// registry needs.
+pub(crate) struct CatalogKeys {
+    /// `mcp.auth.filter-members` (and auth on): per-caller list filtering.
     filter: bool,
-    /// MCP sessions exist — a mutation can outlive its request.
-    pub(crate) stateful: bool,
     /// `mcp.auth` is on: session-private members may declare scopes.
     pub(crate) auth_enabled: bool,
-    groups: Vec<GroupDef>,
     group_index: HashMap<Cow<'static, str>, usize>,
-    members: Members,
     /// Every catalog key, hidden groups included: a session-private member
     /// may not reuse one (it would shadow a member another session sees).
     tool_keys: HashSet<String>,
     resource_keys: HashSet<String>,
     template_shapes: HashSet<String>,
     prompt_keys: HashSet<String>,
+}
+
+impl CatalogKeys {
+    pub(crate) fn group(&self, name: &str) -> Option<usize> {
+        self.group_index.get(name).copied()
+    }
+
+    /// `mcp.auth.filter-members` (and auth on): per-caller list filtering.
+    pub(crate) fn filter(&self) -> bool {
+        self.filter
+    }
+
+    pub(crate) fn has_tool_key(&self, name: &str) -> bool {
+        self.tool_keys.contains(name)
+    }
+
+    pub(crate) fn has_resource_key(&self, uri: &str) -> bool {
+        self.resource_keys.contains(uri)
+    }
+
+    pub(crate) fn has_template_shape(&self, shape: &str) -> bool {
+        self.template_shapes.contains(shape)
+    }
+
+    pub(crate) fn has_prompt_key(&self, name: &str) -> bool {
+        self.prompt_keys.contains(name)
+    }
+}
+
+/// The immutable member catalog built once when the router is assembled.
+pub(crate) struct Catalog {
+    pub(crate) info: ServerInfo,
+    /// MCP sessions exist — a mutation can outlive its request.
+    pub(crate) stateful: bool,
+    groups: Vec<GroupDef>,
+    members: Members,
+    keys: Arc<CatalogKeys>,
     /// Tool descriptors of every catalog tool, for [`Catalog::tool_wire`].
     all_tools: Family<ToolRoute, Tool>,
     pub(crate) default_view: Arc<SessionView>,
@@ -283,16 +325,18 @@ impl Catalog {
             .expect("catalog members were validated above");
         Catalog {
             info,
-            filter: options.filter_members,
             stateful: options.stateful,
-            auth_enabled: options.auth_enabled,
-            tool_keys,
-            resource_keys,
-            template_shapes,
-            prompt_keys,
             groups,
-            group_index,
             members,
+            keys: Arc::new(CatalogKeys {
+                filter: options.filter_members,
+                auth_enabled: options.auth_enabled,
+                group_index,
+                tool_keys,
+                resource_keys,
+                template_shapes,
+                prompt_keys,
+            }),
             all_tools,
             default_view: Arc::new(default_view),
         }
@@ -306,16 +350,21 @@ impl Catalog {
         enabled: Box<[bool]>,
         private: PrivateMembers,
     ) -> Result<SessionView, String> {
-        self.members.view(self.filter, enabled, private)
+        self.members.view(self.keys.filter, enabled, private)
+    }
+
+    /// The validation index dynamic members are checked against.
+    pub(crate) fn keys(&self) -> &Arc<CatalogKeys> {
+        &self.keys
     }
 
     pub(crate) fn group(&self, name: &str) -> Option<usize> {
-        self.group_index.get(name).copied()
+        self.keys.group(name)
     }
 
     /// `mcp.auth.filter-members` (and auth on): per-caller list filtering.
     pub(crate) fn filter(&self) -> bool {
-        self.filter
+        self.keys.filter
     }
 
     /// The descriptor of any catalog tool, hidden groups included.
@@ -326,22 +375,6 @@ impl Catalog {
     /// enforced by `tools/call` itself.
     pub(crate) fn tool_wire(&self, name: &str) -> Option<Tool> {
         self.all_tools.wire(name)
-    }
-
-    pub(crate) fn has_tool_key(&self, name: &str) -> bool {
-        self.tool_keys.contains(name)
-    }
-
-    pub(crate) fn has_resource_key(&self, uri: &str) -> bool {
-        self.resource_keys.contains(uri)
-    }
-
-    pub(crate) fn has_template_shape(&self, shape: &str) -> bool {
-        self.template_shapes.contains(shape)
-    }
-
-    pub(crate) fn has_prompt_key(&self, name: &str) -> bool {
-        self.prompt_keys.contains(name)
     }
 
     pub(crate) fn tool_names(&self) -> Vec<&str> {

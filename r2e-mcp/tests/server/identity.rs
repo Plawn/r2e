@@ -108,7 +108,7 @@ fn text(message: &Value) -> &str {
         .unwrap_or_else(|| panic!("no text content in {message}"))
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn an_app_identity_reaches_a_tool() {
     let router = app_identity_app().await;
     let session = support::initialize(&router, "/mcp").await;
@@ -120,7 +120,7 @@ async fn an_app_identity_reaches_a_tool() {
     assert_eq!(text(&message), "hello alice", "{message}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn an_app_identity_reaches_a_resource() {
     let router = app_identity_app().await;
     let session = support::initialize(&router, "/mcp").await;
@@ -150,7 +150,7 @@ async fn an_app_identity_reaches_a_resource() {
     assert_eq!(message["error"]["message"], MISSING_USER, "{message}");
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn an_absent_app_identity_is_none_or_the_extractors_rejection() {
     let router = app_identity_app().await;
     let session = support::initialize(&router, "/mcp").await;
@@ -184,7 +184,7 @@ impl JwtIdentityTools {
     }
 }
 
-#[tokio::test]
+#[r2e_core::test]
 async fn authenticated_user_is_validated_by_the_jwt_bean() {
     let jwt = TestJwt::new();
     let router = AppBuilder::new()
@@ -228,4 +228,59 @@ async fn authenticated_user_is_validated_by_the_jwt_bean() {
         support::tools_call_with_headers(&router, "/mcp", &session, &forged, "whoami", json!({}))
             .await;
     assert_eq!(message["error"]["data"], "unauthorized", "{message}");
+}
+
+// ── Ownership ──────────────────────────────────────────────────────────────
+
+/// A bean whose only job is to be observed from outside the state.
+struct Sentinel;
+
+/// The identity closures hold the application state, and the state holds
+/// `McpRegistry`, which validates against the catalog those closures live
+/// in. The registry holds the catalog's key index, not the catalog, so
+/// dropping the endpoint releases the state — otherwise every
+/// `TestApp::boot` / dev-reload cycle would leak the whole bean graph.
+#[r2e_core::test]
+async fn dropping_the_endpoint_releases_the_state() {
+    let sentinel = Arc::new(Sentinel);
+    let observed = Arc::downgrade(&sentinel);
+    // Stateless: a session would be owned by the transport's session task,
+    // which only the serve-time shutdown token ends — not what is measured
+    // here.
+    let router = AppBuilder::new()
+        .plugin(McpServer::new().stateless(true))
+        .provide(sentinel)
+        .build_state()
+        .await
+        .register_mcp_service::<AppIdentityTools>()
+        .build();
+    assert!(observed.upgrade().is_some(), "the state owns the sentinel");
+
+    // One call through an identity member: the closure really ran against
+    // the captured state.
+    let response = support::post_with_headers(
+        &router,
+        "/mcp",
+        None,
+        &[("x-user", "alice")],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "hello", "arguments": {} }
+        }),
+    )
+    .await;
+    assert_eq!(
+        text(response.message()),
+        "hello alice",
+        "{}",
+        response.raw_body
+    );
+
+    drop(router);
+    assert!(
+        observed.upgrade().is_none(),
+        "the state must be released with the endpoint (McpRegistry ↔ catalog cycle)"
+    );
 }

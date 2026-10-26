@@ -26,7 +26,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use crate::catalog::{Catalog, PrivateMembers, SessionView};
+use crate::catalog::{Catalog, CatalogKeys, PrivateMembers, SessionView};
 use crate::route::{PromptRoute, ResourceRoute, ToolRoute};
 use crate::session::{remove_by, Draft, McpMemberError, McpSessions};
 
@@ -75,8 +75,11 @@ struct RegistryInner {
     view: RwLock<Arc<SessionView>>,
     /// Serializes edits (the view swap itself is a single write).
     write: Mutex<()>,
-    /// Set when the endpoint is mounted ([`attach`](McpRegistry::attach)).
-    catalog: OnceLock<Arc<Catalog>>,
+    /// Set when the endpoint is mounted ([`attach`](McpRegistry::attach)):
+    /// the catalog's validation index, never the catalog itself (its
+    /// dispatch closures hold the application state this registry is a
+    /// bean of — see [`CatalogKeys`]).
+    catalog: OnceLock<Arc<CatalogKeys>>,
     sessions: OnceLock<McpSessions>,
 }
 
@@ -120,13 +123,13 @@ impl McpRegistry {
             .write
             .lock()
             .expect("MCP registry write lock poisoned");
-        if self.inner.catalog.set(Arc::clone(&catalog)).is_err() {
+        if self.inner.catalog.set(Arc::clone(catalog.keys())).is_err() {
             panic!("McpRegistry is already bound to an MCP endpoint");
         }
         let _ = self.inner.sessions.set(sessions);
         let current = self.view();
         let mut draft = Draft {
-            catalog: Some(&catalog),
+            catalog: Some(catalog.keys()),
             enabled: Vec::new(),
             private: PrivateMembers::default(),
         };
@@ -185,7 +188,7 @@ impl McpRegistry {
         if edit.draft.private.same_as(&current.private) {
             return Ok(out);
         }
-        let filter = catalog.is_some_and(Catalog::filter);
+        let filter = catalog.is_some_and(CatalogKeys::filter);
         let next = SessionView::standalone(LABEL, filter, edit.draft.private).map_err(|key| {
             McpMemberError::Duplicate {
                 kind: "member",

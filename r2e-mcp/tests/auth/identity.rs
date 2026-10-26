@@ -501,7 +501,7 @@ async fn optional_identity_on_resources_and_prompts_is_none_when_unauthenticated
 
 /// `#[roles("admin")]` on a tool taking an `McpPrincipal` identity: the
 /// shared `RolesGuard` reads the principal's roles.
-#[tokio::test]
+#[r2e_core::test]
 async fn roles_gate_a_tool_on_the_principal() {
     let jwt = test_jwt();
     let router = app().await;

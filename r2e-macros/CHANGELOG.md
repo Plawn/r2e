@@ -21,9 +21,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `r2e-mcp` (`routes(state, ctx)`): it emits one `FromRequestPartsVia<S, M>`
   bound per member with an `#[inject(identity)]` parameter, folds the
   markers into the witness `W`, and runs the extractor on the call's request
-  parts, mapping its `Rejection` into `McpError`. Codegen contract change
-  with `r2e-mcp` only (the macro syntax is unchanged) — released with
-  `--no-propagate`. Migration: `docs/migration/mcp-identity.md` (#1175).
+  parts, mapping its `Rejection` into `McpError`. The macro syntax is
+  unchanged, but this bump **propagates** (unlike a pure `r2e-core` codegen
+  change): `#[mcp_routes]` reaches apps through the `r2e-core` prelude, so a
+  patch re-pin of `r2e-core` would hand the new expansion to an app still on
+  `r2e-mcp` 0.9 after a plain `cargo update` and break its build (#1092's
+  shape). Migration: `docs/migration/mcp-identity.md` (#1175).
 
 ## [0.8.0] - 2026-10-25
 

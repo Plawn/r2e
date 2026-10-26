@@ -1,9 +1,11 @@
 # Migration: MCP mount stage and identity contract (r2e-mcp 0.9 → 0.10)
 
-Released as the next minor of `r2e-mcp` and of the `r2e` facade (which
-re-exports it); `r2e-macros` takes a codegen-contract bump cut with
-`--no-propagate`. A `cargo update` after bumping `r2e` is the whole
-dependency change.
+Released as the next minor of `r2e-mcp`, of `r2e-macros` (new `#[mcp_routes]`
+expansion) and, by propagation, of `r2e-core` and every crate above it, the
+`r2e` facade included. Bump `r2e` and run `cargo update`: that is the whole
+dependency change. (The macro bump propagates on purpose: `#[mcp_routes]` is
+re-exported by the `r2e-core` prelude, so a patch re-pin would hand the new
+expansion to an app still on `r2e-mcp` 0.9.)
 
 Task #1175 makes the MCP endpoint an ordinary citizen of the HTTP app: it is
 mounted like a controller route, so the app's middleware wraps it, and an
@@ -109,12 +111,38 @@ note: required for `WhoAmITools` to implement `McpService<BeanState<…>, (ViaBe
 Read that error as "switch this parameter to `McpPrincipal`" when the app
 authenticates MCP through `mcp.auth`.
 
-### App identity types work as is
+### App identity types: give them an extractor
 
 Any type implementing `FromRequestParts` (or a bean-backed
-`FromRequestPartsVia`) is accepted, exactly as on an HTTP route. Since app
-layers now wrap `/mcp` (section 1), an identity that reads an extension an
-app layer inserted works on MCP members too.
+`FromRequestPartsVia`) is accepted, exactly as on an HTTP route. A type that
+only *lived in the request extensions* — deposited by an app layer behind a
+gateway plugin and read back by the old `ToolCall::identity::<T>()` — no
+longer compiles as an identity: it needs the extractor every HTTP route
+already requires. Since app layers now wrap `/mcp` (section 1), the layer
+that inserts it keeps working; add the read:
+
+```rust,ignore
+// Before: the layer inserts `SurveyUser` into the extensions, the member
+// finds it there — only behind a gateway plugin re-wrapping `/mcp`.
+#[tool]
+async fn my_surveys(&self, #[inject(identity)] user: SurveyUser) -> Vec<Survey> { … }
+
+// After: same member, same layer; `SurveyUser` reads itself from the parts.
+impl<S: Send + Sync> FromRequestParts<S> for SurveyUser {
+    type Rejection = Rejection;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<SurveyUser>()
+            .cloned()
+            .ok_or_else(|| Rejection::new(RejectionKind::Unauthenticated, "not signed in"))
+    }
+}
+```
+
+The same impl serves the type on `#[routes]` handlers; `Option<SurveyUser>`
+needs the `OptionalFromRequestParts` twin (`Ok(parts.extensions.get().cloned())`).
 
 ### `Option<_>`
 
