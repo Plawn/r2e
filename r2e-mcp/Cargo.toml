@@ -50,5 +50,7 @@ r2e-test = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tower = { workspace = true, features = ["util"] }
 http-body-util = { workspace = true }
+# Thread-local capture of the `HttpTrace` summary line (tests/server/mount.rs).
+tracing-subscriber = { workspace = true }
 # End-to-end auth against a real Keycloak (Docker-gated `#[ignore]` tests).
 r2e-devservices = { workspace = true, features = ["keycloak"] }

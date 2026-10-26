@@ -14,6 +14,7 @@ mod elicitation;
 mod global;
 mod interceptors;
 mod lifecycle;
+mod mount;
 mod pagination;
 mod plugin;
 mod progress;

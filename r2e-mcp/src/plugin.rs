@@ -5,7 +5,8 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use r2e_core::beans::BeanContext;
-use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext};
+use r2e_core::http::Routes;
+use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext};
 use r2e_core::rt::CancelToken;
 use r2e_core::Plugin;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -45,8 +46,26 @@ type ResolveInit = fn(&BeanContext) -> Option<SessionInitFn>;
 ///
 /// The plugin stores an [`McpServiceRegistry`] (ungated, from `setup()`) that
 /// `register_mcp_service` fills with built tool routes, and drains it once
-/// when the router is assembled: the accumulated tools are served by one
-/// rmcp streamable-HTTP service mounted at `mcp.path` (default `/mcp`).
+/// when the router is assembled (`build()`, Routes stage): the accumulated
+/// tools are served by one rmcp streamable-HTTP service mounted at
+/// `mcp.path` (default `/mcp`).
+///
+/// # Middleware
+///
+/// The endpoint (and, with `mcp.auth`, the public well-known routes) is
+/// mounted in the **Routes** stage, like a controller route: every Graph
+/// `add_layer` — `HttpTrace`, metrics, the app's own CORS/auth layers — and
+/// the catch-panic slot wrap `/mcp`. The MCP service carries its own CORS
+/// layer around the auth layer, so a 401 challenge stays readable by browser
+/// clients.
+///
+/// **Double CORS.** When the app also installs a CORS layer through
+/// `add_layer`, that outer layer answers preflights (`OPTIONS /mcp`) before
+/// the MCP one ever sees them. It must then allow the request headers
+/// `authorization, content-type, mcp-protocol-version, mcp-session-id,
+/// last-event-id` and expose `mcp-session-id, www-authenticate`, or MCP
+/// browser clients cannot open or resume a session nor read the auth
+/// challenge.
 ///
 /// # Sharded serving
 ///
@@ -406,7 +425,8 @@ impl Plugin for McpServer {
             });
         }
         // Session-shaping beans, resolved (not captured) from the bean
-        // context — the Graph stage runs before `wrap_router` reads them.
+        // context — the Graph stage runs before the Routes-stage mount reads
+        // them.
         let sessions = McpSessions::default();
         let members = McpRegistry::default();
         let sessions_slot: Arc<OnceLock<McpSessions>> = Arc::new(OnceLock::new());
@@ -460,15 +480,29 @@ impl Plugin for McpServer {
         let on_stop = mcp_cancel.clone();
         ctx.on_shutdown(move || on_stop.cancel());
 
-        // Drain point: `wrap_router` runs once at build time, after every
+        // Drain point: the Routes-stage closure below runs once, inside
+        // `build()` (`AppBuilder::build_inner`), after every
         // `register_mcp_service` call filled the registry, and BEFORE the
         // sharded server clones the router per worker — so the session
         // manager, dispatch table and token below are shared by all workers.
+        // The `after_build` effects above are Graph-stage: they run inside
+        // `build_state()` (`AppBuilder::from_pre`), strictly before any
+        // Routes-stage effect, so the slots are always filled when this
+        // closure reads them.
+        //
+        // Mounted in the Routes stage (not Finalize), `/mcp` and the
+        // well-known routes land INSIDE the app layer stack: every Graph
+        // `add_layer` (HttpTrace, metrics, app CORS/auth layers) and the
+        // catch-panic slot wrap them like a controller route. The MCP CORS
+        // layer below is therefore the INNERMOST CORS when the app installs
+        // its own (see the `McpServer` docs for the header lists that app
+        // layer must allow), and it still decorates the auth layer's 401
+        // because the auth layer sits inside it.
         let registry = self.registry;
         let resource_updates = self.resource_updates.clone();
         let sessions_fallback = sessions.clone();
         let members_fallback = members.clone();
-        ctx.wrap_router(move |router| {
+        ctx.after_routes(move |routes: &mut RoutesContext| {
             // No service registered is a valid deployment: every member then
             // comes from the global registry (or a session), after boot.
             let services = registry.take().unwrap_or_default();
@@ -543,11 +577,11 @@ impl Plugin for McpServer {
                 .layer(TrackSessionId)
                 .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);
-            let router = router.route_service(&path, service);
-            match auth_routes {
-                Some(extra) => router.merge(extra),
-                None => router,
-            }
+            let mounted = Routes::new().route_service(&path, service);
+            routes.register_routes(match auth_routes {
+                Some(extra) => mounted.merge(extra),
+                None => mounted,
+            });
         });
 
         Ok((provided_validator, self.resource_updates, sessions, members))

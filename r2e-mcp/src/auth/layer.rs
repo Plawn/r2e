@@ -8,8 +8,8 @@
 //! request path — the box is irrelevant there.
 //!
 //! Mounted only around the MCP service itself (inside the plugin's
-//! `wrap_router` closure); the well-known routes are merged NEXT TO the
-//! service and never pass through here.
+//! Routes-stage `after_routes` closure); the well-known routes are merged
+//! NEXT TO the service and never pass through here.
 //!
 //! It also owns the session ↔ principal binding: an `initialize` that opens
 //! a session records it under the `Mcp-Session-Id` of the response, and any
