@@ -279,6 +279,14 @@ async fn dropping_the_endpoint_releases_the_state() {
     );
 
     drop(router);
+    // rmcp serves a stateless request on a spawned task that holds a clone of
+    // the service until it finishes winding down, which can land on another
+    // worker after the response body is read. Give it a bounded grace
+    // period: a real cycle never releases, so the assertion keeps its teeth.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while observed.upgrade().is_some() && std::time::Instant::now() < deadline {
+        r2e_core::rt::sleep(std::time::Duration::from_millis(5)).await;
+    }
     assert!(
         observed.upgrade().is_none(),
         "the state must be released with the endpoint (McpRegistry ↔ catalog cycle)"
