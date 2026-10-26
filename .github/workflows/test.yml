@@ -20,20 +20,47 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test:
-    name: cargo test
+  changes:
+    name: Select affected crates
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    outputs:
+      plan: ${{ steps.select.outputs.plan }}
+      run: ${{ steps.select.outputs.run }}
     steps:
-      # The tags: check-versions.sh refuses a release PR that leaves a crate
-      # behind (moved since the tag that released it, not bumped — #1092),
-      # which needs every `<crate>-vX.Y.Z` / `vX.Y.Z` tag and the commits
-      # they point at. A shallow clone is refused by the check, not read as
-      # "everything is stale".
+      # Version validation needs the release tags and their full history.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
+
+      - name: Test CI selection policy
+        run: python3 -m unittest discover -s scripts/tests -p 'test_ci_affected.py'
+
+      # Keep version/release validation unconditional, including prose-only PRs.
+      - name: scripts/check-versions.sh
+        run: scripts/check-versions.sh
+
+      - name: Select changed crates and their consumers
+        id: select
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/ci_affected.py plan --base "$BASE_SHA" --github-output "$GITHUB_OUTPUT"
+
+  test:
+    name: cargo test
+    needs: changes
+    # A failed planner must fail the existing required check, not skip it.
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI_PLAN: ${{ needs.changes.outputs.plan }}
+    steps:
+      - name: Require successful change analysis
+        if: needs.changes.result != 'success'
+        run: exit 1
+
+      - uses: actions/checkout@v4
 
       # A full-workspace test build (every backend, every example) does not fit
       # next to the preinstalled SDKs on the stock runner image.
@@ -75,31 +102,31 @@ jobs:
 
       # trybuild runs in its own step below (so a `.stderr` drift is named in
       # the job summary); excluding it here keeps it from running twice.
-      # Per-crate versions, pins, changelogs and derived stamps stay consistent
-      # (scripts/versions.py). Cheap: cargo metadata only.
-      - name: scripts/check-versions.sh
-        run: scripts/check-versions.sh
-
-      - name: cargo test --workspace
-        run: cargo test --workspace --exclude r2e-compile-tests
+      # PRs select affected packages; master/manual runs keep --workspace.
+      - name: cargo test (affected crates or full workspace)
+        run: python3 scripts/ci_affected.py run test
 
       # `dev-reload` is off by default and changes `run()`'s serving path
       # (single cached listener, sharding refused); `mark_hot_reload_loop()`
       # is process-global, hence its own target. A green default-feature run
       # says nothing about these.
       - name: cargo check -p r2e-core --features dev-reload --all-targets
+        if: fromJSON(env.CI_PLAN).dev_reload
         run: cargo check -p r2e-core --features dev-reload --all-targets
 
       - name: cargo test -p r2e-core --features dev-reload --test runtime
+        if: fromJSON(env.CI_PLAN).dev_reload
         run: cargo test -p r2e-core --features dev-reload --test runtime
 
       - name: cargo test -p r2e-core --features dev-reload --test dev_reload
+        if: fromJSON(env.CI_PLAN).dev_reload
         run: cargo test -p r2e-core --features dev-reload --test dev_reload
 
       # Excluded from `--workspace` above; its own leg so a trybuild
       # `.stderr` drift is named in the job summary rather than buried.
       - name: compile-tests (trybuild)
-        run: cargo test -p r2e-compile-tests
+        if: fromJSON(env.CI_PLAN).compile_tests
+        run: python3 scripts/ci_affected.py run compile-tests
 
   # A declared MSRV that nothing builds against is a guess. This job reads
   # `rust-version` from [workspace.package] and checks the workspace on exactly
@@ -107,9 +134,17 @@ jobs:
   # something a `cargo update` does behind our back.
   msrv:
     name: cargo check on the declared MSRV
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.run == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      CI_PLAN: ${{ needs.changes.outputs.plan }}
     steps:
+      - name: Require successful change analysis
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - uses: actions/checkout@v4
 
       - name: Free disk space
@@ -145,5 +180,7 @@ jobs:
 
       # The explicit `+<toolchain>` overrides `rust-toolchain.toml`, which pins
       # the nightly the trybuild `.stderr` expectations are blessed on.
-      - name: cargo +${{ steps.msrv.outputs.version }} check --workspace --all-targets
-        run: cargo "+${{ steps.msrv.outputs.version }}" check --workspace --all-targets
+      - name: cargo check on MSRV (affected crates or full workspace)
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+        run: python3 scripts/ci_affected.py run msrv --toolchain "$MSRV"
