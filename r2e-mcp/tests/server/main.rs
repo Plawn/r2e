@@ -12,6 +12,7 @@ mod dispatch;
 mod dynamic;
 mod elicitation;
 mod global;
+mod identity;
 mod interceptors;
 mod lifecycle;
 mod mount;

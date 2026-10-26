@@ -1,8 +1,8 @@
 //! Task #993 — one `AuthenticatedUser` per authenticated request.
 //!
 //! The auth layer deposits the caller's identity twice: once as the
-//! `McpPrincipal` (scopes + token hash) and once as the identity extension the
-//! `#[inject(identity)]` extractor reads. Both now point at the same
+//! `McpPrincipal` (scopes + token hash) and once as the `Arc<AuthenticatedUser>`
+//! extension `ToolCall::identity::<T>()` reads. Both now point at the same
 //! `Arc<AuthenticatedUser>`, so the second deposit is a refcount bump instead
 //! of a second copy of the claims tree.
 //!

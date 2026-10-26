@@ -4,10 +4,15 @@ error[E0277]: the trait bound `r2e::NoIdentity: RoleBasedIdentity` is not satisf
 12 | #[grpc_routes(ping::ping_server::Ping)]
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `RoleBasedIdentity` is not implemented for `r2e::NoIdentity`
    |
-help: the trait `RoleBasedIdentity` is implemented for `AuthenticatedUser`
+help: the following other types implement trait `RoleBasedIdentity`
   --> $WORKSPACE/r2e-security/src/identity.rs
    |
    | impl crate::guards::RoleBasedIdentity for AuthenticatedUser {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AuthenticatedUser`
+   |
+  ::: $WORKSPACE/r2e-mcp/src/auth/extract.rs
+   |
+   | impl r2e_security::RoleBasedIdentity for McpPrincipal {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `McpPrincipal`
    = note: required for `RolesGuard` to implement `Guard<r2e::NoIdentity>`
    = note: this error originates in the attribute macro `grpc_routes` (in Nightly builds, run with -Z macro-backtrace for more info)

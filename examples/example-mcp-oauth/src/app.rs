@@ -39,7 +39,8 @@ pub struct WhoAmI {
 // ── The one tool ───────────────────────────────────────────────────────
 //
 // A unit controller: no beans, no config fields. `#[inject(identity)]` on a
-// tool parameter reads the principal the MCP auth layer validated. Being
+// tool parameter reads the `McpPrincipal` the MCP auth layer validated (the
+// caller is `principal.user`, the granted scopes `principal.scopes`). Being
 // REQUIRED (not `Option<_>`), an unauthenticated call is a JSON-RPC
 // `unauthorized` error — the whole point of this smoke test.
 
@@ -53,7 +54,8 @@ impl IdentityTools {
     /// Returns the subject, username, email, roles and scopes carried by the
     /// OAuth access token the MCP client presented.
     #[tool(read_only, idempotent)]
-    async fn whoami(&self, #[inject(identity)] user: AuthenticatedUser) -> Json<WhoAmI> {
+    async fn whoami(&self, #[inject(identity)] principal: McpPrincipal) -> Json<WhoAmI> {
+        let user = &principal.user;
         Json(WhoAmI {
             sub: user.sub.clone(),
             username: user.claims.preferred_username.clone(),
