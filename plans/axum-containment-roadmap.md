@@ -1,6 +1,6 @@
 # Roadmap — Contain axum further, without swapping the HTTP backend
 
-Status: **IN PROGRESS** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (PR #109); Phase B shipped 2026-10-25 (branch `feat/axum-containment-b-layers`, stacked on A); Phase C implemented 2026-10-25 (branch `feat/axum-containment-c-routes`, stacked on B; breaking, ships with the next r2e-core minor). Follow-up to
+Status: **SHIPPED** — proposed 2026-10-24, acknowledged by the user the same day (D1–D3). Phase A shipped 2026-10-25 (PR #109); phases B + C merged 2026-10-25 (PR #112) and released 2026-10-25 (PR #113: r2e 0.9.0, r2e-core 0.8.0, r2e-http 0.7.0, r2e-macros 0.8.0 + 23 propagated crates). Phase D stays deferred. Follow-up to
 `plans/runtime-http-dependency-containment.md` (phases 0–7 shipped 2026-08-24).
 That plan ended with two written decisions: §5.3d option A ("the public promise is
 R2E **types**", raw axum only through `axum_compat`) and §5.3c **DEFERRED** (no
@@ -232,3 +232,12 @@ have to move is already in `r2e-http`.
   (`ws` + `dev-reload` was never combined in CI). Migration guide:
   `docs/migration/routes-newtype.md`; `Breaking` entries in r2e-http, r2e-core,
   r2e-macros, r2e-static, r2e-test; `Changed` in the re-pinning crates.
+
+- **2026-10-25 — Released.** Phases B + C reached master through PR #112
+  (the stacked PRs #110/#111 had merged into their bases, not master).
+  Release PR #113 (`scripts/bump-version.sh` with r2e-http, r2e-core,
+  r2e-macros, r2e-static, r2e-test breaking): r2e / r2e-cli 0.9.0, r2e-core
+  0.8.0, r2e-http 0.7.0, r2e-macros 0.8.0, r2e-mcp 0.9.0, 23 other crates
+  re-pinned. Published by `release.yml`, per-crate tags created, and
+  `scripts/smoke-registry.sh` built against crates.io. Open follow-up (not part
+  of this roadmap): `hyper_util` `auto::Builder` tuning in `r2e-http/src/server.rs`.
