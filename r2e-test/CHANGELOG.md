@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
 ### Breaking
 
 - `TestApp` wraps `r2e_core::http::Routes` instead of `axum::Router`
@@ -26,6 +28,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 - `TestServer::new` serves through `r2e_http::server::serve` like the booted-app
   form already did via `Running::serve_tracked`. Same `ConnectInfo<SocketAddr>`
   behaviour; no API change.
+
+- Built against `r2e-core` 0.8.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.8.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-security` 0.8.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.8.0/r2e-security/CHANGELOG.md)).
 
 ## [0.7.0] - 2026-10-12
 

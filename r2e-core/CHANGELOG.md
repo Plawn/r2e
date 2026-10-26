@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
 ### Breaking
 
 - The HTTP surface is `r2e_core::http::Routes<S>` (R2E's newtype) instead of
@@ -53,6 +55,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `into_make_service_with_connect_info` + `ListenerExt::tap_io` + `axum::serve`
   by hand. No behaviour change; `r2e_core::http::server` re-exports the module
   (`plans/axum-containment-roadmap.md`, phase A).
+
+- Built against `r2e-http` 0.7.0 — its breaking changes surface through this crate's re-exports (see [`r2e-http/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-http-v0.7.0/r2e-http/CHANGELOG.md)).
+- Built against `r2e-macros` 0.8.0 — its breaking changes surface through this crate's re-exports (see [`r2e-macros/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-macros-v0.8.0/r2e-macros/CHANGELOG.md)).
 
 ## [0.7.2] - 2026-10-24
 

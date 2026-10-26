@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../../../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-25
+
+### Changed
+
+- Built against `r2e-core` 0.8.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.8.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-events` 0.8.0 — its breaking changes surface through this crate's re-exports (see [`r2e-events/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-events-v0.8.0/r2e-events/CHANGELOG.md)).
+
 ## [0.7.0] - 2026-10-12
 
 ### Changed
