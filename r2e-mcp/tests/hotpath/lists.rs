@@ -140,9 +140,10 @@ fn context(rt: &r2e_core::rt::Runtime) -> Arc<BeanContext> {
 }
 
 /// The `Vec<Tool>` the handler builds once at boot and clones per
-/// `tools/list`.
-fn wire_list<S: McpService>(ctx: &Arc<BeanContext>) -> Vec<Tool> {
-    let routes = S::routes(ctx);
+/// `tools/list`. No member declares an identity, so any state type
+/// satisfies the service — `()` stands in for the app state.
+fn wire_list<S: McpService<()>>(ctx: &Arc<BeanContext>) -> Vec<Tool> {
+    let routes = S::routes(&(), ctx);
     assert_eq!(routes.tools.len(), TOOLS);
     routes.tools.iter().map(|t| t.to_rmcp_tool()).collect()
 }

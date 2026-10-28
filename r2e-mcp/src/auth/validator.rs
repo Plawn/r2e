@@ -14,9 +14,11 @@ use super::error::McpAuthError;
 
 /// The authenticated caller of an MCP request.
 ///
-/// Inserted into the request extensions by the auth layer; tools read it
-/// through `#[inject(identity)] user: AuthenticatedUser` (the `user` field)
-/// or `ToolCall::extension::<McpPrincipal>()` (scopes included).
+/// Inserted into the request extensions by the auth layer; members read it
+/// through `#[inject(identity)] principal: McpPrincipal` (or
+/// `Option<McpPrincipal>`; the caller is `principal.user`) or
+/// `ToolCall::extension::<McpPrincipal>()`. It implements `Identity` and
+/// `RoleBasedIdentity`, so `#[roles]` gates on it.
 #[derive(Clone, Debug)]
 pub struct McpPrincipal {
     /// The caller's identity (subject, email, roles) — the same type HTTP

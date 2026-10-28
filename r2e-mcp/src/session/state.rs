@@ -11,8 +11,8 @@ use super::error::McpMemberError;
 use super::id::SessionId;
 use super::init::{SessionInit, SessionInitFn, SessionToolset};
 use crate::catalog::{
-    prompt_completions_valid, resource_completions_valid, scopes_allowed, Catalog, Changed,
-    PrivateMembers, SessionView,
+    prompt_completions_valid, resource_completions_valid, scopes_allowed, Catalog, CatalogKeys,
+    Changed, PrivateMembers, SessionView,
 };
 use crate::error::McpError;
 use crate::global::McpRegistry;
@@ -271,7 +271,7 @@ impl SessionState {
         let _guard = self.write.lock().expect("MCP session write lock poisoned");
         let current = self.view();
         let mut draft = Draft {
-            catalog: Some(&self.catalog),
+            catalog: Some(self.catalog.keys()),
             enabled: current.enabled.to_vec(),
             private: current.private.clone(),
         };
@@ -323,7 +323,7 @@ impl SessionState {
 /// (members only; `catalog` is `None` until the endpoint is mounted, and the
 /// catalog checks run then).
 pub(crate) struct Draft<'a> {
-    pub(crate) catalog: Option<&'a Catalog>,
+    pub(crate) catalog: Option<&'a CatalogKeys>,
     pub(crate) enabled: Vec<bool>,
     pub(crate) private: PrivateMembers,
 }

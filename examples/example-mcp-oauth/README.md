@@ -137,4 +137,4 @@ curl -s $BASE/.well-known/oauth-authorization-server
 | 401 `invalid audience` | `audience: resource` without the IdP audience mapper — see above |
 | Client can't register | The redirect URI it sent isn't in `mcp.auth.redirect-uri-allowlist` **and/or** isn't configured on the public client at the IdP |
 | Server boots unauthenticated on `:3000` | Launched from the workspace root: the repo's own `application.yaml` won |
-| `whoami` returns `unauthorized` | The identity parameter is required by design — the token didn't validate |
+| `whoami` returns a JSON-RPC `unauthorized` error | The `McpPrincipal` identity parameter is required by design and there is no principal on the request: `mcp.auth` is not configured (or disabled) for this run. A token that fails validation never reaches the tool — it is an HTTP 401 with a `WWW-Authenticate` challenge |

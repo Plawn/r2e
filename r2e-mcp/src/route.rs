@@ -76,7 +76,8 @@ pub struct ToolCall {
     /// provide them (e.g. hand-built calls in tests).
     ///
     /// Auth layers insert the caller's identity into `parts.extensions`;
-    /// `#[inject(identity)]` tool parameters are resolved from there.
+    /// `#[inject(identity)]` member parameters are extracted from (a clone of)
+    /// these parts through `FromRequestPartsVia`, like an HTTP route's.
     pub parts: Option<Arc<Parts>>,
     /// The JSON-RPC request id, stringified (for logging/correlation).
     pub request_id: String,
@@ -138,16 +139,18 @@ impl ToolCall {
     /// Resolve a request-scoped **identity** of type `T` from the HTTP
     /// request extensions.
     ///
-    /// What an `#[inject(identity)]` member parameter compiles to. Unlike
-    /// [`extension`](Self::extension) it looks for an `Arc<T>` first: the MCP
-    /// auth layer deposits the caller as `Arc<AuthenticatedUser>` so that
-    /// `McpPrincipal` and the identity extension share ONE allocation, and
-    /// the owned `T` is materialized here — once, and only for a member that
-    /// actually asks for it. A plain `T` extension (any other layer that
+    /// A manual lookup for members that take the raw call. (An
+    /// `#[inject(identity)]` parameter does NOT go through here: it runs the
+    /// type's `FromRequestPartsVia` extractor, like an HTTP route — e.g.
+    /// `McpPrincipal` under `mcp.auth`.) Unlike [`extension`](Self::extension)
+    /// it looks for an `Arc<T>` first: the MCP auth layer deposits the caller
+    /// as `Arc<AuthenticatedUser>` so that `McpPrincipal` and the identity
+    /// extension share ONE allocation, and the owned `T` is materialized here
+    /// only when asked for. A plain `T` extension (any other layer that
     /// inserts an identity by value) is the fallback.
     ///
-    /// Declaring the parameter as `Arc<AuthenticatedUser>` skips the copy
-    /// entirely: that lookup hits the fallback and finds the shared `Arc`.
+    /// Asking for `Arc<AuthenticatedUser>` skips the copy entirely: that
+    /// lookup hits the fallback and finds the shared `Arc`.
     pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         identity_in(self.parts.as_deref())
     }

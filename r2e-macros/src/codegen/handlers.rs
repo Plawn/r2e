@@ -56,7 +56,7 @@ fn ws_session_ident_for(controller: &syn::Ident, method: &syn::Ident) -> syn::Id
 /// The generic state ident shared by all state-generic generated items. Free
 /// generated fns declare it themselves; items inside the `Controller` impl use
 /// the impl's parameter of the same name.
-pub(super) fn state_generic() -> syn::Ident {
+pub(crate) fn state_generic() -> syn::Ident {
     format_ident!("__R2eS")
 }
 
@@ -69,7 +69,7 @@ pub(super) fn data_marker() -> syn::Ident {
 /// The extraction marker for a route's param-level `#[inject(identity)]`.
 /// Pascal-cased so the generated type parameter doesn't trip
 /// `non_camel_case_types` in user crates.
-pub(super) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
+pub(crate) fn identity_marker_for(method: &syn::Ident) -> syn::Ident {
     format_ident!(
         "__R2eMp{}",
         crate::util::type_utils::to_pascal_case(&method.to_string())

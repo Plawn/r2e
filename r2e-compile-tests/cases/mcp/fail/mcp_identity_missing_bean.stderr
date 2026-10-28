@@ -1,0 +1,45 @@
+error[E0277]: bean `Arc<JwtClaimsValidator>` is not present in the application state
+  --> cases/mcp/fail/mcp_identity_missing_bean.rs:27:37
+   |
+27 |             .register_mcp_service::<WhoAmITools>()
+   |              --------------------   ^^^^^^^^^^^ `Arc<JwtClaimsValidator>` was never provided or registered on the AppBuilder
+   |              |
+   |              required by a bound introduced by this call
+   |
+   = help: the trait `HasBean<Arc<JwtClaimsValidator>, _>` is not implemented for `HNil`
+   = note: add `.provide(value)` or `.register::<Arc<JwtClaimsValidator>>()` before `build_state()` so the bean is part of the provision list
+help: the following other types implement trait `HasBean<T, Idx>`
+  --> $WORKSPACE/r2e-core/src/type_list.rs
+   |
+   |   impl<H: Clone, Tail> HasBean<H, Here> for HCons<H, Tail> {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, Tail>` implements `HasBean<H, Here>`
+...
+   | / impl<H, Tail, T, I> HasBean<T, There<I>> for HCons<H, Tail>
+   | | where
+   | |     Tail: HasBean<T, I>,
+   | |________________________^ `HCons<H, Tail>` implements `HasBean<T, There<I>>`
+...
+   | / impl<L, T, Idx> HasBean<T, Idx> for BeanState<L>
+   | | where
+   | |     L: HasBean<T, Idx>,
+   | |_______________________^ `BeanState<L>` implements `HasBean<T, Idx>`
+   = note: required for `HCons<ShutdownToken, HNil>` to implement `HasBean<Arc<JwtClaimsValidator>, There<_>>`
+   = note: 1 redundant requirement hidden
+   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `HasBean<Arc<JwtClaimsValidator>, There<_>>`
+   = note: required for `r2e::prelude::AuthenticatedUser` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaBean<There<_>>>`
+note: required for `WhoAmITools` to implement `McpService<BeanState<HCons<ShutdownToken, HNil>>, (ViaBean<There<_>>,)>`
+  --> cases/mcp/fail/mcp_identity_missing_bean.rs:13:1
+   |
+13 | #[mcp_routes]
+   | ^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+14 | impl WhoAmITools {
+   |      ^^^^^^^^^^^
+note: required by a bound in `register_mcp_service`
+  --> $WORKSPACE/r2e-mcp/src/lib.rs
+   |
+   |     fn register_mcp_service<S>(self) -> Self
+   |        -------------------- required by a bound in this associated function
+   |     where
+   |         S: McpService<T, W> + EndpointDeps,
+   |            ^^^^^^^^^^^^^^^^ required by this bound in `AppBuilderMcpExt::register_mcp_service`
+   = note: this error originates in the attribute macro `mcp_routes` (in Nightly builds, run with -Z macro-backtrace for more info)

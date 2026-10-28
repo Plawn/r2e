@@ -8,8 +8,8 @@
 //! request path — the box is irrelevant there.
 //!
 //! Mounted only around the MCP service itself (inside the plugin's
-//! `wrap_router` closure); the well-known routes are merged NEXT TO the
-//! service and never pass through here.
+//! Routes-stage `after_routes` closure); the well-known routes are merged
+//! NEXT TO the service and never pass through here.
 //!
 //! It also owns the session ↔ principal binding: an `initialize` that opens
 //! a session records it under the `Mcp-Session-Id` of the response, and any
@@ -218,14 +218,15 @@ where
 
                     // rmcp copies `http::request::Parts` extensions into each
                     // JSON-RPC message's `RequestContext.extensions`, so tools
-                    // read these via `ToolCall.parts` / identity params.
+                    // read these via `ToolCall.parts` / identity params
+                    // (`#[inject(identity)] McpPrincipal`, marker `ViaMcpAuth`).
                     //
                     // Two extensions, ONE `AuthenticatedUser`: the identity is
                     // deposited as `Arc<AuthenticatedUser>` — a refcount bump,
                     // not a second copy of the claims tree — and the principal
-                    // holds the same `Arc`. `ToolCall::identity::<T>()`
-                    // materializes an owned `T` only for a member that
-                    // actually declares `#[inject(identity)]`.
+                    // holds the same `Arc`. Extracting the principal clones
+                    // `Arc`s; `ToolCall::identity::<T>()` materializes an owned
+                    // `T` only when a member asks for one by hand.
                     req.extensions_mut().insert(Arc::clone(&principal.user));
                     req.extensions_mut().insert(principal);
                     let response = inner.call(req).await?.into_response();

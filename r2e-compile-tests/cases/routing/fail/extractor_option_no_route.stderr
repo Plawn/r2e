@@ -30,6 +30,11 @@ help: the following other types implement trait `OptionalFromRequestPartsVia<S, 
    | |     I: Send + Sync,
    | |___________________^ `TenantId` implements `OptionalFromRequestPartsVia<S, ViaBean<I>>`
    |
+  ::: $WORKSPACE/r2e-mcp/src/auth/extract.rs
+   |
+   |   impl<S: Sync> OptionalFromRequestPartsVia<S, ViaMcpAuth> for McpPrincipal {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `McpPrincipal` implements `OptionalFromRequestPartsVia<S, ViaMcpAuth>`
+   |
   ::: $WORKSPACE/r2e-security/src/extractor.rs
    |
    | / impl<S, I> OptionalFromRequestPartsVia<S, ViaBean<I>> for AuthenticatedUser
@@ -92,6 +97,11 @@ help: the following other types implement trait `OptionalFromRequestPartsVia<S, 
    | |     S: HasBean<TenantRouter, I> + Send + Sync,
    | |     I: Send + Sync,
    | |___________________^ `TenantId` implements `OptionalFromRequestPartsVia<S, ViaBean<I>>`
+   |
+  ::: $WORKSPACE/r2e-mcp/src/auth/extract.rs
+   |
+   |   impl<S: Sync> OptionalFromRequestPartsVia<S, ViaMcpAuth> for McpPrincipal {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `McpPrincipal` implements `OptionalFromRequestPartsVia<S, ViaMcpAuth>`
    |
   ::: $WORKSPACE/r2e-security/src/extractor.rs
    |

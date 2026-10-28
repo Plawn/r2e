@@ -1,10 +1,12 @@
-//! Task #993 — the authenticated identity is built once and shared.
+//! Task #993 — the authenticated identity is built once and shared — and the
+//! `#[inject(identity)]` contract under `mcp.auth`.
 //!
 //! The auth layer deposits the caller twice: as the `McpPrincipal` and as the
-//! identity extension `#[inject(identity)]` reads. Both point at the same
-//! `Arc<AuthenticatedUser>`; a member only materializes an owned copy when it
-//! actually declares an identity parameter. These are the observable
-//! consequences (the allocation guard itself lives in `tests/hotpath`).
+//! `Arc<AuthenticatedUser>` extension `*Call::identity::<T>()` reads. Both
+//! point at the same `Arc<AuthenticatedUser>`; extracting an `McpPrincipal`
+//! identity is a refcount bump, never a copy of the claims. These are the
+//! observable consequences (the allocation guard itself lives in
+//! `tests/hotpath`).
 //!
 //! Three layers of coverage:
 //!
@@ -13,9 +15,10 @@
 //! * the same end to end, through a real dispatch — including a layer that
 //!   deposits a plain `AuthenticatedUser` (the fallback arm) and one that
 //!   deposits both (the shared `Arc` must win);
-//! * identity parameters on `#[resource]` and `#[prompt]` members, not just
-//!   `#[tool]` — the three families share one codegen path, and what they
-//!   share is `identity::<T>()`.
+//! * `#[inject(identity)] McpPrincipal` (and `Option<McpPrincipal>`) on
+//!   `#[tool]`, `#[resource]` and `#[prompt]` members, extracted through
+//!   `FromRequestPartsVia` exactly like an HTTP route's identity, with
+//!   `#[roles]` gating on the principal.
 
 use std::sync::Arc;
 
@@ -59,11 +62,21 @@ impl IdentityTools {
         }
     }
 
-    /// The identity extractor still yields an owned `AuthenticatedUser`: the
-    /// sharing is an internal representation change, not an API change.
+    /// The `mcp.auth` identity: the principal, whose `user` is the shared
+    /// `Arc<AuthenticatedUser>`.
     #[tool]
-    async fn owned(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("{}:{}", user.sub, user.roles.len())
+    async fn owned(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("{}:{}", principal.user.sub, principal.user.roles.len())
+    }
+
+    /// The extension ladder read by hand, for layers that deposit an
+    /// `AuthenticatedUser` without going through `mcp.auth`.
+    #[tool]
+    async fn ladder(&self, call: ToolCall) -> String {
+        match call.identity::<AuthenticatedUser>() {
+            Some(user) => format!("{}:{}", user.sub, user.roles.len()),
+            None => "no-identity".to_string(),
+        }
     }
 
     /// A member may take the shared handle directly and skip the copy.
@@ -77,52 +90,59 @@ impl IdentityTools {
 
     /// An optional identity: `None` when nothing authenticated the request.
     #[tool]
-    async fn maybe_owned(&self, #[inject(identity)] user: Option<AuthenticatedUser>) -> String {
-        user.map_or_else(|| "anonymous".to_string(), |u| u.sub)
+    async fn maybe_owned(&self, #[inject(identity)] principal: Option<McpPrincipal>) -> String {
+        principal.map_or_else(|| "anonymous".to_string(), |p| p.user.sub.clone())
+    }
+
+    /// `#[roles]` on a tool gates on the `McpPrincipal` identity.
+    #[tool]
+    #[roles("admin")]
+    async fn admin_tool(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("admin-tool:{}", principal.user.sub)
     }
 
     // ── the same, on the other two member families ─────────────────────────
 
     /// A resource reading a REQUIRED identity.
     #[resource(uri = "r2e://identity/me")]
-    async fn me(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("{}:{}", user.sub, user.roles.len())
+    async fn me(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("{}:{}", principal.user.sub, principal.user.roles.len())
     }
 
     /// A resource reading an OPTIONAL identity.
     #[resource(uri = "r2e://identity/maybe")]
-    async fn maybe_me(&self, #[inject(identity)] user: Option<AuthenticatedUser>) -> String {
-        user.map_or_else(|| "anonymous".to_string(), |u| u.sub)
+    async fn maybe_me(&self, #[inject(identity)] principal: Option<McpPrincipal>) -> String {
+        principal.map_or_else(|| "anonymous".to_string(), |p| p.user.sub.clone())
     }
 
     /// A resource behind the shared `#[roles]` guard, reading the identity
     /// the guard gates on.
     #[resource(uri = "r2e://identity/admin")]
     #[roles("admin")]
-    async fn admin_resource(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("admin-resource:{}", user.sub)
+    async fn admin_resource(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("admin-resource:{}", principal.user.sub)
     }
 
     /// A prompt reading a REQUIRED identity.
     #[prompt(name = "greet")]
-    async fn greet(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("Hello {}.", user.sub)
+    async fn greet(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("Hello {}.", principal.user.sub)
     }
 
     /// A prompt reading an OPTIONAL identity.
     #[prompt(name = "maybe_greet")]
-    async fn maybe_greet(&self, #[inject(identity)] user: Option<AuthenticatedUser>) -> String {
+    async fn maybe_greet(&self, #[inject(identity)] principal: Option<McpPrincipal>) -> String {
         format!(
             "Hello {}.",
-            user.map_or_else(|| "anonymous".to_string(), |u| u.sub)
+            principal.map_or_else(|| "anonymous".to_string(), |p| p.user.sub.clone())
         )
     }
 
     /// A prompt behind the shared `#[roles]` guard.
     #[prompt(name = "admin_brief")]
     #[roles("admin")]
-    async fn admin_brief(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("admin-prompt:{}", user.sub)
+    async fn admin_brief(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("admin-prompt:{}", principal.user.sub)
     }
 }
 
@@ -319,14 +339,14 @@ async fn the_principal_and_the_identity_extension_share_one_user() {
     assert_eq!(call(&router, &session, &token, "borrowed").await, "alice");
 }
 
-/// A layer depositing a plain `AuthenticatedUser` (no `Arc`) still feeds
-/// `#[inject(identity)]`, through the fallback arm.
+/// A layer depositing a plain `AuthenticatedUser` (no `Arc`) still reaches
+/// `ToolCall::identity::<T>()`, through the fallback arm.
 #[tokio::test]
-async fn a_plain_identity_extension_still_reaches_an_identity_parameter() {
+async fn a_plain_identity_extension_still_reaches_the_identity_ladder() {
     let router = depositing_plain(open_app().await, user("layer-user").await);
     let session = support::initialize(&router, "/mcp").await;
 
-    let message = support::tools_call(&router, "/mcp", &session, "owned", json!({})).await;
+    let message = support::tools_call(&router, "/mcp", &session, "ladder", json!({})).await;
     assert_eq!(
         message["result"]["content"][0]["text"], "layer-user:1",
         "the plain-T fallback did not reach the identity parameter: {message}",
@@ -343,10 +363,11 @@ async fn the_shared_arc_wins_over_a_plain_extension_carrying_another_caller() {
     let session = initialize_auth(&router, "/mcp", &token).await;
 
     assert_eq!(
-        call(&router, &session, &token, "owned").await,
+        call(&router, &session, &token, "ladder").await,
         "alice:1",
         "a plain AuthenticatedUser extension shadowed the validated principal",
     );
+    assert_eq!(call(&router, &session, &token, "owned").await, "alice:1");
 }
 
 /// Nothing deposits an identity: a required one is a JSON-RPC `unauthorized`
@@ -476,4 +497,24 @@ async fn optional_identity_on_resources_and_prompts_is_none_when_unauthenticated
 
     let message = support::prompts_get(&router, "/mcp", &session, "maybe_greet", json!({})).await;
     assert_eq!(prompt_text(&message), "Hello anonymous.");
+}
+
+/// `#[roles("admin")]` on a tool taking an `McpPrincipal` identity: the
+/// shared `RolesGuard` reads the principal's roles.
+#[r2e_core::test]
+async fn roles_gate_a_tool_on_the_principal() {
+    let jwt = test_jwt();
+    let router = app().await;
+
+    let admin = jwt.token_builder("alice").roles(&["admin"]).build();
+    let session = initialize_auth(&router, "/mcp", &admin).await;
+    assert_eq!(
+        call(&router, &session, &admin, "admin_tool").await,
+        "admin-tool:alice"
+    );
+
+    let user = jwt.token_builder("bob").roles(&["user"]).build();
+    let session = initialize_auth(&router, "/mcp", &user).await;
+    let denied = tools_call_auth(&router, "/mcp", &session, &user, "admin_tool", json!({})).await;
+    assert_eq!(denied["error"]["data"], "forbidden", "{denied}");
 }

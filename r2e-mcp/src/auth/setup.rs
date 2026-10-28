@@ -558,8 +558,8 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
 }
 
 /// The CORS layer for the MCP endpoint — applied whether auth is on or off
-/// (browser MCP clients need it either way), OUTERMOST so even a 401
-/// carries CORS headers and `expose_headers` lets the browser read the
+/// (browser MCP clients need it either way), outermost of the MCP service
+/// stack (app Graph layers still wrap it) so even a 401 carries CORS headers and `expose_headers` lets the browser read the
 /// `WWW-Authenticate` challenge and the session id.
 pub(crate) fn cors_layer(origins: Vec<String>) -> r2e_core::http::layers::cors::CorsLayer {
     use r2e_core::http::header::{HeaderName, AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};

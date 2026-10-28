@@ -65,6 +65,7 @@ use r2e_core::EndpointDeps;
 
 pub use auth::{
     McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements,
+    ViaMcpAuth,
 };
 pub use config::McpConfig;
 pub use dynamic::{
@@ -132,10 +133,15 @@ pub use schemars;
 /// state via `AllSatisfied`, so a missing bean is a compile error at this
 /// call site.
 ///
-/// `T` and `DepIdx` are inference-only witnesses (the same pattern as
+/// The members' `#[inject(identity)]` extractors are checked here too: each
+/// identity type must implement
+/// [`FromRequestPartsVia`](r2e_core::web::extract::FromRequestPartsVia)
+/// against the application state, exactly as on an HTTP route.
+///
+/// `T`, `W` and `DepIdx` are inference-only witnesses (the same pattern as
 /// [`RegisterController`](r2e_core::RegisterController)): call sites write
 /// `.register_mcp_service::<MathTools>()` and never name them.
-pub trait AppBuilderMcpExt<T, DepIdx>: Sized
+pub trait AppBuilderMcpExt<T, W, DepIdx>: Sized
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -152,7 +158,7 @@ where
     /// non-panicking alternative.
     fn register_mcp_service<S>(self) -> Self
     where
-        S: McpService + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>;
 
     /// Register an MCP service, returning config-validation errors instead
@@ -165,17 +171,17 @@ where
     /// returned and the builder is consumed.
     fn try_register_mcp_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: McpService + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>;
 }
 
-impl<T, DepIdx> AppBuilderMcpExt<T, DepIdx> for r2e_core::AppBuilder<T>
+impl<T, W, DepIdx> AppBuilderMcpExt<T, W, DepIdx> for r2e_core::AppBuilder<T>
 where
     T: Clone + Send + Sync + 'static,
 {
     fn register_mcp_service<S>(self) -> Self
     where
-        S: McpService + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         self.try_register_mcp_service::<S>().unwrap_or_else(|err| {
@@ -189,7 +195,7 @@ where
 
     fn try_register_mcp_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: McpService + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         // Aggregated config validation, before anything is built — the MCP
@@ -209,7 +215,10 @@ where
             )
             .clone();
 
-        registry.add_service(S::service_name(), S::routes(self.bean_context()));
+        registry.add_service(
+            S::service_name(),
+            S::routes(self.state(), self.bean_context()),
+        );
 
         tracing::debug!(service = S::service_name(), "Registered MCP service");
 
@@ -241,6 +250,21 @@ pub mod __macro_support {
     pub use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
     pub use serde_json::json;
 
+    /// The owned request parts an `#[inject(identity)]` extractor runs
+    /// against: a copy of the transport request's parts (headers, URI,
+    /// extensions — the `mcp.auth` deposits are `Arc`s, so a refcount bump),
+    /// or empty parts for a hand-built call that carries none.
+    pub fn call_parts(parts: Option<&r2e_core::http::Parts>) -> r2e_core::http::Parts {
+        match parts {
+            Some(parts) => parts.clone(),
+            None => {
+                r2e_core::http::Request::new(r2e_core::http::Body::empty())
+                    .into_parts()
+                    .0
+            }
+        }
+    }
+
     /// `meta!` support: the `json!({ … })` literal is an object by
     /// construction.
     pub fn meta_from_value(value: serde_json::Value) -> MetaObject {
@@ -253,7 +277,7 @@ pub mod __macro_support {
 
 pub mod prelude {
     //! Re-exports of the most commonly used MCP types.
-    pub use crate::auth::{McpAuthConfig, McpBasicAuthConfig, McpTokenValidator};
+    pub use crate::auth::{McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator};
     pub use crate::dynamic::{DynamicPrompt, DynamicResource, DynamicTool};
     pub use crate::elicitation::{ElicitError, Elicited, McpClient};
     pub use crate::error::McpError;

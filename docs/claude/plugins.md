@@ -130,7 +130,8 @@ Which stage do I want?
 catch-panic slot and above every layer installed before that plugin: no
 `request_id` on a panic there, no tracing or metrics from the earlier plugins.
 Mount with `after_routes` + `register_routes` (`Prometheus` `/metrics`,
-`OidcServer`, `EmbeddedFrontend`'s SPA fallback all do), and keep the
+`OidcServer`, `EmbeddedFrontend`'s SPA fallback, `McpServer`'s `/mcp` and
+well-known routes all do), and keep the
 `add_layer` closure to `router.layer(..)`.
 - **Finalize** — a transport-level wrap that must sit outside every HTTP layer:
   a gRPC/HTTP multiplexer, a protocol switch. A JSON 500 from `catch_panic` is

@@ -38,8 +38,10 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Tok
 
 /// One member's invocation method. Body order:
 /// scope check (`check_access`, only when the member declares scopes) →
-/// identity extraction (required identity absent → `Unauthorized`, before
-/// guards so `#[roles]` never sees a half-authenticated call) → guard checks
+/// identity extraction (`FromRequestPartsVia` against the state — generic
+/// over the state and the member's marker, both supplied by `routes()` —
+/// before guards so `#[roles]` never sees a half-authenticated call) → guard
+/// checks
 /// → params deserialization (tools/prompts) → method call
 /// (interceptor-wrapped, arguments in original positional order) → the
 /// family's result conversion (`IntoToolResult` / `IntoResourceResult` /
@@ -80,39 +82,53 @@ fn generate_invoke_method(
     };
 
     // --- identity extraction ---------------------------------------------
-    // `identity`, not `extension`: the MCP auth layer shares one
-    // `Arc<AuthenticatedUser>` between `McpPrincipal` and the identity
-    // extension, and this is where the owned value is materialized — only for
-    // a member that declares one (task #993).
+    // The HTTP identity contract: the declared type (`I` or `Option<I>`) is
+    // extracted through `FromRequestPartsVia<S, M>` against the application
+    // state, from an owned copy of the transport request's parts (an extractor
+    // takes `&mut Parts`; the call keeps sharing its `Arc<Parts>`). A failure
+    // is the extractor's own `Rejection`, mapped by kind into `McpError`
+    // (401 → `Unauthorized`). Runs before guards so `#[roles]` never sees a
+    // half-authenticated call. Only a member that declares an identity pays
+    // the copy — and the `mcp.auth` extensions in it are refcount bumps
+    // (task #993).
     let identity_param = tool.identity_param();
-    let identity_stmts = match identity_param {
-        Some(p) => {
-            let id_ty = &p.ty;
-            if p.is_optional {
+    let identity_site = super::identity_site(tool);
+    let (generics, state_arg, where_clause, identity_stmts) = match &identity_site {
+        Some(site) => {
+            let marker = &site.marker;
+            let declared_ty = &site.declared_ty;
+            (
+                quote! { <__R2eS, #marker> },
+                quote! { , __state: &__R2eS },
                 quote! {
-                    let __identity: ::core::option::Option<#id_ty> =
-                        __call.identity::<#id_ty>();
-                }
-            } else {
-                quote! {
-                    let __identity: #id_ty = match __call.identity::<#id_ty>() {
-                        ::core::option::Option::Some(__v) => __v,
-                        ::core::option::Option::None => {
-                            return ::core::result::Result::Err(
-                                #mcp::__macro_support::McpError::Unauthorized(
-                                    ::std::format!(
-                                        "{} `{}` requires an authenticated caller",
-                                        #kind_str,
-                                        #tool_name_str
+                    where
+                        __R2eS: ::core::marker::Send + ::core::marker::Sync,
+                        #declared_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>,
+                },
+                quote_spanned! {declared_ty.span()=>
+                    let __identity: #declared_ty = {
+                        let mut __parts =
+                            #mcp::__macro_support::call_parts(__call.parts.as_deref());
+                        match <#declared_ty as #krate::web::extract::FromRequestPartsVia<
+                            __R2eS,
+                            #marker,
+                        >>::from_request_parts_via(&mut __parts, __state)
+                        .await
+                        {
+                            ::core::result::Result::Ok(__v) => __v,
+                            ::core::result::Result::Err(__e) => {
+                                return ::core::result::Result::Err(
+                                    #mcp::__macro_support::McpError::from(
+                                        ::core::convert::Into::<#krate::Rejection>::into(__e),
                                     ),
-                                ),
-                            );
+                                );
+                            }
                         }
                     };
-                }
-            }
+                },
+            )
         }
-        None => quote! {},
+        None => (quote! {}, quote! {}, quote! {}, quote! {}),
     };
 
     // --- guard checks ------------------------------------------------------
@@ -376,10 +392,13 @@ fn generate_invoke_method(
 
     quote! {
         #[allow(non_snake_case)]
-        async fn #invoke_name(
+        async fn #invoke_name #generics(
             &self,
-            __call: #call_ty,
-        ) -> ::core::result::Result<#ok_ty, #mcp::__macro_support::McpError> {
+            __call: #call_ty
+            #state_arg
+        ) -> ::core::result::Result<#ok_ty, #mcp::__macro_support::McpError>
+        #where_clause
+        {
             #scope_check
             #identity_stmts
             #guard_stmts

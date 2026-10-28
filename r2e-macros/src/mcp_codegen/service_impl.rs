@@ -1,4 +1,4 @@
-//! Generate `impl McpService` and `impl EndpointDeps` for the controller.
+//! Generate `impl McpService<S, W>` and `impl EndpointDeps` for the controller.
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
@@ -45,7 +45,15 @@ pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate `impl McpService for ControllerName`.
+/// Generate the state-generic `impl McpService<__R2eS, W> for ControllerName`.
+///
+/// Mirrors the `Controller<S, W>` impl `#[routes]` emits: the impl is generic
+/// over the state `__R2eS` plus one opaque marker `__R2eMp<Fn>` per member
+/// that declares an `#[inject(identity)]` parameter, bound
+/// `<declared ty>: FromRequestPartsVia<__R2eS, __R2eMp<Fn>>`. The markers are
+/// folded into the witness `W` (E0207 forbids leaving them unconstrained on
+/// the impl), so `register_mcp_service::<Svc>()` infers them; a service
+/// without identity members implements `McpService<__R2eS, ()>`.
 pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
     let krate = r2e_core_path();
     let mcp = r2e_mcp_path();
@@ -68,6 +76,32 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     let uses_session = def
         .uses_session
         .then(|| quote! { __routes.uses_session = true; });
+    let sites: Vec<super::IdentitySite> = def
+        .members
+        .iter()
+        .filter_map(super::identity_site)
+        .collect();
+    let markers: Vec<&syn::Ident> = sites.iter().map(|s| &s.marker).collect();
+    let marker_bounds: Vec<TokenStream> = sites
+        .iter()
+        .map(|site| {
+            let marker = &site.marker;
+            let declared_ty = &site.declared_ty;
+            quote! {
+                #declared_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>
+            }
+        })
+        .collect();
+    // One shared copy of the state for every member that extracts an
+    // identity from it; each call clones the `Arc`, not the state.
+    let state_share = if sites.is_empty() {
+        quote! { let _ = __state; }
+    } else {
+        quote! {
+            let __r2e_state = ::std::sync::Arc::new(::core::clone::Clone::clone(__state));
+        }
+    };
+
     let member_pushes: Vec<TokenStream> = def
         .members
         .iter()
@@ -81,7 +115,16 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
         .collect();
 
     quote! {
-        impl #mcp::__macro_support::McpService for #controller_name {
+        impl<__R2eS, #(#markers),*>
+            #mcp::__macro_support::McpService<__R2eS, (#(#markers,)*)> for #controller_name
+        where
+            __R2eS: ::core::clone::Clone
+                + ::core::marker::Send
+                + ::core::marker::Sync
+                + 'static,
+            #(#markers: ::core::marker::Send + ::core::marker::Sync + 'static,)*
+            #(#marker_bounds,)*
+        {
             fn service_name() -> &'static str {
                 #controller_name_str
             }
@@ -96,8 +139,10 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
             }
 
             fn routes(
+                __state: &__R2eS,
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
             ) -> #mcp::__macro_support::McpRoutes {
+                #state_share
                 let __wrapper = ::std::sync::Arc::new(#wrapper_name {
                     core:
                         <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
@@ -109,6 +154,35 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
                 __routes
             }
         }
+    }
+}
+
+/// The dispatch pieces of one member's route closure: what to capture next
+/// to the wrapper clone (`outer`), what to clone per call (`inner`), and the
+/// invoke call itself. A member with an identity parameter also captures the
+/// shared state `Arc` and names its marker (not inferable from the call).
+pub(super) struct InvokeCall {
+    outer: TokenStream,
+    inner: TokenStream,
+    call: TokenStream,
+}
+
+pub(super) fn invoke_call(member: &McpTool) -> InvokeCall {
+    let invoke_name = super::invoke_ident(member.kind, &member.name);
+    match super::identity_site(member) {
+        Some(site) => {
+            let marker = &site.marker;
+            InvokeCall {
+                outer: quote! { let __s = ::std::sync::Arc::clone(&__r2e_state); },
+                inner: quote! { let __s = ::std::sync::Arc::clone(&__s); },
+                call: quote! { __w.#invoke_name::<__R2eS, #marker>(__call, &*__s).await },
+            }
+        }
+        None => InvokeCall {
+            outer: quote! {},
+            inner: quote! {},
+            call: quote! { __w.#invoke_name(__call).await },
+        },
     }
 }
 
@@ -126,7 +200,7 @@ fn meta_expr(member: &McpTool) -> TokenStream {
 
 /// One `__routes.tools.push(ToolRoute { ... })` statement for a tool.
 fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream) -> TokenStream {
-    let invoke_name = super::invoke_ident(McpMemberKind::Tool, &tool.name);
+    let InvokeCall { outer, inner, call } = invoke_call(tool);
     let tool_name_str = tool.tool_name();
 
     let title = opt_string(&tool.meta.title);
@@ -168,6 +242,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     quote! {
         {
             let __w = __wrapper.clone();
+            #outer
             __routes.tools.push(#mcp::__macro_support::ToolRoute {
                 name: #tool_name_str.into(),
                 title: #title,
@@ -188,9 +263,8 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
                     move |__call: #mcp::__macro_support::ToolCall|
                         -> #mcp::__macro_support::ToolFuture {
                         let __w = __w.clone();
-                        ::std::boxed::Box::pin(async move {
-                            __w.#invoke_name(__call).await
-                        })
+                        #inner
+                        ::std::boxed::Box::pin(async move { #call })
                     },
                 ),
             });
@@ -206,7 +280,7 @@ fn generate_resource_route(
     resource: &McpTool,
     mcp: &TokenStream,
 ) -> TokenStream {
-    let invoke_name = super::invoke_ident(McpMemberKind::Resource, &resource.name);
+    let InvokeCall { outer, inner, call } = invoke_call(resource);
     let uri = resource.meta.uri.as_deref().expect("parse() validated uri");
     let name_str = resource.tool_name();
     let title = opt_string(&resource.meta.title);
@@ -214,12 +288,13 @@ fn generate_resource_route(
     let mime_type = opt_string(&resource.meta.mime_type);
     let group = group_expr(resource, mcp);
     let requirements = super::requirements_expr(def, resource, mcp);
-    let completions = completions_expr(resource, mcp);
+    let completions = completions_expr(def, resource, mcp);
     let meta = meta_expr(resource);
 
     quote! {
         {
             let __w = __wrapper.clone();
+            #outer
             __routes.resources.push(#mcp::__macro_support::ResourceRoute {
                 uri: #uri.into(),
                 name: #name_str.into(),
@@ -234,9 +309,8 @@ fn generate_resource_route(
                     move |__call: #mcp::__macro_support::ResourceCall|
                         -> #mcp::__macro_support::ResourceFuture {
                         let __w = __w.clone();
-                        ::std::boxed::Box::pin(async move {
-                            __w.#invoke_name(__call).await
-                        })
+                        #inner
+                        ::std::boxed::Box::pin(async move { #call })
                     },
                 ),
             });
@@ -253,13 +327,13 @@ fn generate_prompt_route(
     prompt: &McpTool,
     mcp: &TokenStream,
 ) -> TokenStream {
-    let invoke_name = super::invoke_ident(McpMemberKind::Prompt, &prompt.name);
+    let InvokeCall { outer, inner, call } = invoke_call(prompt);
     let name_str = prompt.tool_name();
     let title = opt_string(&prompt.meta.title);
     let description = opt_string(&tool_description(prompt));
     let group = group_expr(prompt, mcp);
     let requirements = super::requirements_expr(def, prompt, mcp);
-    let completions = completions_expr(prompt, mcp);
+    let completions = completions_expr(def, prompt, mcp);
     let meta = meta_expr(prompt);
 
     let arguments = match prompt.params_type() {
@@ -274,6 +348,7 @@ fn generate_prompt_route(
     quote! {
         {
             let __w = __wrapper.clone();
+            #outer
             __routes.prompts.push(#mcp::__macro_support::PromptRoute {
                 name: #name_str.into(),
                 title: #title,
@@ -287,9 +362,8 @@ fn generate_prompt_route(
                     move |__call: #mcp::__macro_support::PromptCall|
                         -> #mcp::__macro_support::PromptFuture {
                         let __w = __w.clone();
-                        ::std::boxed::Box::pin(async move {
-                            __w.#invoke_name(__call).await
-                        })
+                        #inner
+                        ::std::boxed::Box::pin(async move { #call })
                     },
                 ),
             });
@@ -300,23 +374,28 @@ fn generate_prompt_route(
 /// The `completions: Vec<CompletionProvider>` field of a prompt/resource
 /// route: one provider per `complete(arg = "method")` entry, each calling the
 /// `#[completion]` method's invoke (parse() checked the method exists).
-fn completions_expr(member: &McpTool, mcp: &TokenStream) -> TokenStream {
+fn completions_expr(def: &McpRoutesImplDef, member: &McpTool, mcp: &TokenStream) -> TokenStream {
     let providers = member.meta.complete.iter().map(|(arg, provider)| {
         let arg = arg.to_string();
-        let provider = syn::Ident::new(&provider.value(), provider.span());
-        let invoke_name = super::invoke_ident(McpMemberKind::Completion, &provider);
+        let provider_name = provider.value();
+        let provider_member = def
+            .members
+            .iter()
+            .find(|m| m.kind == McpMemberKind::Completion && m.name == provider_name)
+            .expect("parse() checked the completion provider exists");
+        let InvokeCall { outer, inner, call } = invoke_call(provider_member);
         quote! {
             {
                 let __w = __wrapper.clone();
+                #outer
                 #mcp::__macro_support::CompletionProvider {
                     argument: ::std::borrow::Cow::Borrowed(#arg),
                     invoke: ::std::sync::Arc::new(
                         move |__call: #mcp::__macro_support::Completion|
                             -> #mcp::__macro_support::CompletionFuture {
                             let __w = __w.clone();
-                            ::std::boxed::Box::pin(async move {
-                                __w.#invoke_name(__call).await
-                            })
+                            #inner
+                            ::std::boxed::Box::pin(async move { #call })
                         },
                     ),
                 }

@@ -20,7 +20,8 @@ pub struct RegisteredMcpService {
 /// plugin data by the [`McpServer`](crate::McpServer) plugin's `setup()` —
 /// **ungated**, so `register_mcp_service` keeps working when `mcp.enabled =
 /// false` — populated by `register_mcp_service`, and drained once by the
-/// plugin's `wrap_router` closure when the router is assembled.
+/// plugin's Routes-stage (`after_routes`) closure when the router is
+/// assembled.
 #[derive(Clone, Default)]
 pub struct McpServiceRegistry {
     inner: Arc<Mutex<Vec<RegisteredMcpService>>>,

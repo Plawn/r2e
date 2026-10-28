@@ -8,8 +8,7 @@ use r2e_core::http::{Body, HeaderMap, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::auth::{DiscoveryMode, McpAuthConfig, ScopePolicy};
-use r2e_mcp::{AppBuilderMcpExt, McpServer, McpTokenValidator, ResourceCall};
-use r2e_security::AuthenticatedUser;
+use r2e_mcp::{AppBuilderMcpExt, McpPrincipal, McpServer, McpTokenValidator, ResourceCall};
 use r2e_test::TestJwt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -43,8 +42,8 @@ impl SecuredTools {
     /// Identity-reading tool (no scope requirements): proves the principal
     /// inserted by the auth layer reaches the tool.
     #[tool]
-    async fn whoami(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        user.sub
+    async fn whoami(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        principal.user.sub.clone()
     }
 
     /// Single required scope.
@@ -69,8 +68,8 @@ impl SecuredTools {
     /// `tools/list` filtering).
     #[tool]
     #[roles("admin")]
-    async fn admin_only(&self, #[inject(identity)] user: AuthenticatedUser) -> String {
-        format!("admin:{}", user.sub)
+    async fn admin_only(&self, #[inject(identity)] principal: McpPrincipal) -> String {
+        format!("admin:{}", principal.user.sub)
     }
 
     /// Open resource: visible/readable by anyone the layer lets through.

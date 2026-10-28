@@ -432,7 +432,8 @@ P3 (providers & dev) shipped on the same branch, in chunks:
 
 - SHIPPED 2026-08-27 (chunk 5): MCP **resources + prompts** — `#[resource]` /
   `#[prompt]` markers on `#[mcp_routes]` methods, `McpService::routes(ctx)
-  -> McpRoutes { tools, resources, prompts }` (breaking, replaces `tools()`;
+  -> McpRoutes { tools, resources, prompts }` (since #1175:
+  `McpService<T, W>::routes(state, ctx)`) (breaking, replaces `tools()`;
   `McpRoutes::from_tools` for hand-built services), one wrapper/deco-set
   build per service, duplicate resource URI / prompt name across services =
   boot panic. v1 = fixed URIs (no templates); resources take no `Params<T>`
@@ -544,6 +545,20 @@ mounted, every family always advertised, `Provided` 4-tuple,
 `McpSessionError` → `McpMemberError` (alias kept) —
 `docs/migration/mcp-registry.md`. Out of scope and still open: loopback
 in-memory session, idle timeout / SessionManager (#692).
+
+**MCP mount stage + identity contract (Tasker #1175, branch
+`feat/mcp-routes-stage-identity`, 2026-10-26) — DONE, unreleased:**
+`McpServer` mounts `/mcp` + the well-known routes in the Routes stage
+(`after_routes` + `register_routes`), so app Graph layers (HttpTrace,
+metrics, app CORS/auth/rate-limit) wrap the endpoint — app gateway plugins
+that re-wrapped it become deletable. `#[inject(identity)]` on MCP members
+goes through `FromRequestPartsVia` on a state-generic `McpService<T, W>`
+(witness fold like `Controller<T, W>`; missing bean = compile error at
+`register_mcp_service`); `McpPrincipal` extractor under marker `ViaMcpAuth`
++ `Identity`/`RoleBasedIdentity`. Breaking `r2e-mcp` and `r2e-macros`
+codegen; the macros bump **propagates** (the expansion reaches apps through
+the `r2e-core` prelude, a patch re-pin would break apps still on `r2e-mcp`
+0.9) — `docs/migration/mcp-identity.md`.
 
 ## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
 

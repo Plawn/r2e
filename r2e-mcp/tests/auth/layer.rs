@@ -235,6 +235,14 @@ async fn cors_preflight_bypasses_auth() {
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // The MCP CORS layer wraps the auth layer, so the 401 itself carries the
+    // allow-origin (a browser drops a CORS-less 401 unread).
+    assert_eq!(
+        headers
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap()),
+        Some("https://claude.ai")
+    );
     let exposed = headers
         .get("access-control-expose-headers")
         .map(|v| v.to_str().unwrap().to_ascii_lowercase())

@@ -15,6 +15,50 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `McpServer` mounts `/mcp` and the `mcp.auth` well-known routes in the
+  **Routes** stage (`after_routes` + `register_routes`) instead of wrapping
+  the finished router (Finalize). Every app Graph layer installed with
+  `add_layer` now wraps the endpoint: `HttpTrace` and metrics see MCP
+  requests, and app-wide auth / rate-limit layers now gate `/mcp` and the
+  well-known routes (exempt them there if they must stay reachable with
+  `mcp.auth` alone). An app CORS layer now answers MCP preflights before the
+  MCP one: it must allow the request headers `authorization, content-type,
+  mcp-protocol-version, mcp-session-id, last-event-id` and expose
+  `mcp-session-id, www-authenticate` (#1175).
+- `McpService` is state-generic: `McpService<T: Clone + Send + Sync +
+  'static, W = ()>` with `fn routes(state: &T, ctx: &Arc<BeanContext>) ->
+  McpRoutes` (was `routes(ctx)`). Hand-written impls take the state
+  argument; `#[mcp_routes]` impls are regenerated (#1175).
+- `AppBuilderMcpExt<T, DepIdx>` → `AppBuilderMcpExt<T, W, DepIdx>` (bound
+  `S: McpService<T, W>`). Call sites are unchanged
+  (`.register_mcp_service::<Svc>()`); only code naming the trait's generics
+  is affected (#1175).
+- `#[inject(identity)]` on `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`
+  members is extracted through `FromRequestPartsVia` against the app state —
+  the HTTP route contract — instead of being read from the request
+  extensions. Under `mcp.auth` an `AuthenticatedUser` identity no longer
+  reads the validated principal (it uses its HTTP extractor and needs the
+  `Arc<JwtClaimsValidator>` bean, a compile error at `register_mcp_service`
+  without it): declare `McpPrincipal` and read `principal.user`. Migration:
+  [`docs/migration/mcp-identity.md`](../docs/migration/mcp-identity.md)
+  (#1175).
+
+### Added
+
+- `McpPrincipal` and `Option<McpPrincipal>` extract as `#[inject(identity)]`
+  under the new `ViaMcpAuth` marker (re-exported at the crate root); a
+  required principal missing from the request is a JSON-RPC `unauthorized`
+  error naming `mcp.auth` (#1175).
+- `McpPrincipal` implements `Identity` and `RoleBasedIdentity` (delegating to
+  `principal.user`), so `#[roles]` and custom guards work on it (#1175).
+- `McpPrincipal` is in `r2e_mcp::prelude` (and the facade prelude) (#1175).
+- MCP members accept any identity an HTTP route accepts: app
+  `FromRequestParts` types (including ones reading extensions an app layer
+  inserted) and bean-backed extractors, checked at
+  `register_mcp_service` (#1175).
+
 ## [0.9.0] - 2026-10-25
 
 ### Changed

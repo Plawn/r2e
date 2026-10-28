@@ -8,8 +8,10 @@
 //!   (`__r2e_tool_<fn>` / `__r2e_resource_<fn>` / `__r2e_prompt_<fn>`):
 //!   scope check → identity extraction → guards → params → method call
 //!   (interceptor-wrapped) → family-specific result conversion
-//! - An impl of `McpService` for the controller (`routes()` bundling tool,
-//!   resource and prompt routes with schemas)
+//! - A state-generic impl of `McpService<S, W>` for the controller
+//!   (`routes()` bundling tool, resource and prompt routes with schemas); one
+//!   extraction marker per member `#[inject(identity)]` is folded into `W`,
+//!   exactly like `Controller<S, W>` for HTTP routes
 //! - An impl of `EndpointDeps` for the controller (compile-time bean check
 //!   at `register_mcp_service()`)
 
@@ -18,6 +20,7 @@ mod tool_impl;
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
+use syn::spanned::Spanned;
 
 use crate::codegen::decorators::{decorator_product_field, spec_type_of};
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
@@ -57,6 +60,31 @@ pub(crate) fn wrapper_ident(controller_name: &syn::Ident) -> syn::Ident {
 /// family so a method name can never collide across kinds.
 pub(crate) fn invoke_ident(kind: McpMemberKind, fn_name: &syn::Ident) -> syn::Ident {
     format_ident!("__r2e_{}_{}", kind.attr_name(), fn_name)
+}
+
+/// A member's `#[inject(identity)]` extraction site: the opaque marker
+/// generic (`__R2eMp<Fn>`, inferred at `register_mcp_service`) and the
+/// declared parameter type (`I` or `Option<I>`), extracted through
+/// `FromRequestPartsVia<S, marker>` — the same contract as an HTTP route's
+/// identity parameter.
+pub(crate) struct IdentitySite {
+    pub marker: syn::Ident,
+    pub declared_ty: TokenStream,
+}
+
+/// The identity extraction site of a member, if it declares one.
+pub(crate) fn identity_site(tool: &McpTool) -> Option<IdentitySite> {
+    let p = tool.identity_param()?;
+    let ty = &p.ty;
+    let declared_ty = if p.is_optional {
+        quote_spanned! {ty.span()=> ::core::option::Option<#ty> }
+    } else {
+        quote! { #ty }
+    };
+    Some(IdentitySite {
+        marker: crate::codegen::handlers::identity_marker_for(&tool.name),
+        declared_ty,
+    })
 }
 
 /// The `ToolRequirements` struct-literal expression for one member:

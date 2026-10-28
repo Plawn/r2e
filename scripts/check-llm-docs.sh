@@ -48,7 +48,7 @@ fail() { echo "error: $*" >&2; status=1; }
 VERSION=$(python3 scripts/versions.py version r2e)
 [ -n "$VERSION" ] || { echo "error: cannot read the r2e facade version" >&2; exit 2; }
 
-TMP=$(mktemp -d)
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/r2e-llm-docs.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 # ── manifest: spokes in order of first reference from the hub ─────────────
