@@ -2,6 +2,7 @@ mod loader;
 pub mod registry;
 mod runtime;
 pub mod secrets;
+mod tree;
 pub mod typed;
 pub mod validation;
 pub mod value;
@@ -501,6 +502,34 @@ impl R2eConfig {
         segments.sort();
         segments.dedup();
         segments
+    }
+
+    /// Rebuild the subtree under `prefix` (the whole config for `None`) as a
+    /// nested [`ConfigValue`] — `Map`s, `List`s and leaves — from the flat
+    /// keys. Third dynamic-shape primitive next to
+    /// [`has_prefix`](Self::has_prefix) and [`sub_keys`](Self::sub_keys); the
+    /// building block of serde-typed config sections.
+    ///
+    /// **Flat keys are the source of truth.** A YAML sequence is stored both
+    /// as a `List` under its parent key and element by element (`key.0`,
+    /// `key.1`, …); the `R2E_` env overlay and `override_config_value` only
+    /// write flat keys. The tree therefore always merges indexed keys over
+    /// the parent list:
+    ///
+    /// - a node without dotted children yields its leaf value (`None` if
+    ///   absent; `Some(Null)` for an empty YAML key such as `tls:`);
+    /// - a node with children yields a `Map`, unless it is a list: the exact
+    ///   key holds a `List` (YAML sequence — the list seeds length and element
+    ///   values, then `key.N[.rest]` entries override element by element), or
+    ///   every child segment is a decimal index forming `0..n` (env-only
+    ///   list). An empty YAML list (`[]`) stays `List([])`;
+    /// - a scalar at the exact key **and** children under it
+    ///   (`R2E_A=1` next to `a.b`): the children win and the scalar is
+    ///   dropped — the same reading as `has_prefix`.
+    ///
+    /// Returns `None` when nothing lives at or under the prefix.
+    pub fn tree(&self, prefix: Option<&str>) -> Option<ConfigValue> {
+        tree::build(&self.values, prefix)
     }
 
     /// Fingerprint of the **entire** config — every key and value,

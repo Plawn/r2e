@@ -15,5 +15,6 @@ mod provider;
 mod registry;
 mod secrets;
 mod sections;
+mod tree;
 mod validation;
 mod value;
