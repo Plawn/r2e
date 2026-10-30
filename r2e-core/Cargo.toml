@@ -39,6 +39,7 @@ r2e-macros = {workspace = true}
 garde = {workspace = true, features = ["email"]}
 form_urlencoded = {workspace = true}
 serde_yaml = {workspace = true}
+serde_path_to_error = {workspace = true}
 dotenvy = {workspace = true}
 uuid = {workspace = true}
 dashmap = {workspace = true}

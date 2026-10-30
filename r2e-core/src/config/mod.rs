@@ -2,6 +2,7 @@ mod loader;
 pub mod registry;
 mod runtime;
 pub mod secrets;
+mod serde_config;
 mod tree;
 pub mod typed;
 pub mod validation;
@@ -18,6 +19,7 @@ pub use runtime::{
     LiveConfigRegistry, LiveConfigSnapshot,
 };
 pub use secrets::{DefaultSecretResolver, SecretResolver};
+pub use serde_config::SerdeConfig;
 pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
 pub use validation::{
     validate_declared_keys, validate_declared_sections, validate_keys, validate_section,
@@ -508,7 +510,7 @@ impl R2eConfig {
     /// nested [`ConfigValue`] — `Map`s, `List`s and leaves — from the flat
     /// keys. Third dynamic-shape primitive next to
     /// [`has_prefix`](Self::has_prefix) and [`sub_keys`](Self::sub_keys); the
-    /// building block of serde-typed config sections.
+    /// building block of [`SerdeConfig`].
     ///
     /// **Flat keys are the source of truth.** A YAML sequence is stored both
     /// as a `List` under its parent key and element by element (`key.0`,

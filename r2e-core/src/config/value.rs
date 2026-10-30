@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use super::ConfigError;
 
 /// Convert a `ConfigValue` to a `serde_json::Value` for serde deserialization.
-fn to_json_value(cv: &ConfigValue) -> serde_json::Value {
+pub(crate) fn to_json_value(cv: &ConfigValue) -> serde_json::Value {
     match cv {
         ConfigValue::String(s) => serde_json::Value::String(s.clone()),
         ConfigValue::Integer(i) => serde_json::json!(i),
