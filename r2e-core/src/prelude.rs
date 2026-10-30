@@ -101,7 +101,7 @@ pub use crate::config::{
     ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
     ConfigValidationDetail, ConfigValue, ConfigWatchContext, FromConfigValue, LiveConfig,
     LiveConfigReceiver, LiveConfigRegistry, LiveConfigSnapshot, NoChildren, PluginConfig,
-    PropertyMeta, R2eConfig,
+    PropertyMeta, R2eConfig, SerdeConfig,
 };
 pub use crate::controller::ContextConstruct;
 pub use crate::controller::Controller as ControllerTrait;

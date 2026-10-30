@@ -58,6 +58,7 @@ On the builder: `.with_config_file("patina.yaml")` before `.load_config::<C>()`.
 | `contains_key("key")` | `bool` | Key existence |
 | `has_prefix("prefix")` | `bool` | Any key under the prefix (empty YAML key = absent). Section presence primitive. |
 | `sub_keys("prefix")` | `Vec<String>` | Distinct immediate child segments, sorted. Map-section primitive. |
+| `tree(Some("prefix"))` | `Option<ConfigValue>` | Nested `Map`/`List` subtree rebuilt from the flat keys (`None` = whole config). `None` when nothing lives under the prefix. Backs `SerdeConfig<T>`. |
 | `set("key", ConfigValue::...)` | `()` | Insert/overwrite |
 
 ---
@@ -90,7 +91,7 @@ pub enum AppMode {
 }
 ```
 
-The derive delegates to `deserialize_value()`, which converts `ConfigValue` → `serde_json::Value` → `T`. Works with any `Deserialize` type (enums, structs, etc.). Use standard serde attributes (`#[serde(rename_all)]`, etc.) for customization.
+The derive delegates to `deserialize_value()`, which deserializes `T` straight from the `ConfigValue` through R2E's own serde `Deserializer` (no `serde_json` round-trip). It **coerces strings on typed hints** with the same rules as `FromConfigValue` (`"8080"` → `u16`, `"yes"`/`"1"` → `bool`), so env overrides and resolved `${VAR}` placeholders — always stored as strings — bind to non-string fields. Works with any `Deserialize` type (enums, structs, etc.). Use standard serde attributes (`#[serde(rename_all)]`, etc.) for customization. Errors keep the caller's `key`.
 
 The `deserialize_value<T: DeserializeOwned>(value, key)` helper is also available for manual `FromConfigValue` impls.
 
@@ -511,6 +512,69 @@ sorted) are the supported primitives for dynamic shapes. Do not reach into
 
 **Optional sections are not `#[inject]`-able**: an `Option<T>` section is excluded from the compile-time `Children` list (it may be absent), so `#[inject] tls: TlsConfig` won't resolve — inject the parent config and read the `Option` field instead. Map-valued sections are likewise not registered as beans (all entries share one type).
 
+### Serde-only config types — `SerdeConfig<T>`
+
+For settings structs that live in a framework-free crate (or need serde shapes
+the derive cannot express: `untagged`, `default = "fn"`, enums inside
+`Vec<struct>`, …), wrap any `T: DeserializeOwned + Clone + Send + Sync + 'static`
+in `SerdeConfig<T>` — a ready-made `ConfigProperties` impl. No
+`#[derive(ConfigProperties)]` needed:
+
+```rust
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+    #[serde(default)]
+    pub engines: Vec<EngineConfig>,
+}
+
+AppBuilder::new()
+    .load_config::<SerdeConfig<AppConfig>>()   // root; or nest it as a section
+    // provides SerdeConfig<AppConfig> AND AppConfig — `#[inject] cfg: AppConfig` works
+```
+
+It works everywhere a `ConfigProperties` type does: `load_config`,
+`provide_config`, a plugin's `type Config`, and as a `#[config(section)]` field
+of a derived struct (a "serde island": `#[config(section)] pub app:
+SerdeConfig<AppConfig>`). `type Children = TCons<T, TNil>`, so the inner `T` is
+registered and injectable. `Deref` / `into_inner()` give access to `T`. Being a
+`ConfigProperties` type it gets the `config_derived_scope` dev-reload exemption
+like any derived section.
+
+**Flat keys are the source of truth.** The section is rebuilt with
+`R2eConfig::tree(prefix)` from the flat key map, so the `R2E_*` env overlay and
+`override_config_value` — which only ever write flat keys — are visible,
+including on indexed keys (`R2E_APP_ENGINES_0_KEY` / `app.engines.0.key`).
+`tree` rules: a parent `List` seed is merged element-wise with its indexed
+overrides (an index past the seed extends it; gaps become `Null`); dense
+`0..n` indices with no seed form a list; sparse or non-canonical indices
+(`01`) form a map; children win over a scalar at the same key. An absent or
+`null` section deserializes from an empty map (so all-`#[serde(default)]`
+structs load without any YAML).
+
+**Coercion.** Strings are coerced on typed hints (integers, floats, `bool`,
+`char`), scalars format into `String` fields, a single scalar is a
+one-element `Vec`, `Null` reads as `None` / empty map / empty seq. Coercion
+does **not** apply below `deserialize_any` — untagged and internally tagged
+enums, `#[serde(flatten)]`, `serde_json::Value` fields: serde buffers those
+values as stored, so `"8080"` stays a string there.
+
+**Errors.** A serde failure becomes `ConfigError::Deserialize { key, message }`
+whose `key` is the r2e key of the offending value
+(`cluster.pools.1.backends.0.weight`); a `missing field` error carries the
+parent path (`cluster.pools.1.backends.1`) and names the field in `message`.
+The path stops at a buffered (internally tagged / untagged) enum: an error
+inside one reports the enum's own key (`app.engines.1`). Through
+`load_config` it fails the boot in the usual missing-key report.
+
+**Trade-offs vs. the derive** (deliberate):
+
+- **No aggregated report** — serde stops at the first error, so a boot lists
+  one problem at a time instead of every missing key.
+- **No `PropertyMeta`** — `properties_metadata` is empty, so introspection
+  (`r2e doctor`, docs listing, env-var hints per field) cannot enumerate the
+  section's fields.
+
 ---
 
 ## Injection
@@ -815,4 +879,4 @@ Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `
 
 ### Prelude exports
 
-`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `NoChildren`, `PropertyMeta`, `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `ConfigProvider`, `ConfigProviderContext`, `ConfigWatchContext`, `ConfigUpdateSink`, `LiveConfig`, `LiveConfigRegistry`, `LiveConfigReceiver`, `LiveConfigSnapshot`, `TracingConfig`, `LogFormat`, `SpanEvents`.
+`R2eConfig`, `ConfigProperties`, `ConfigValue`, `ConfigError`, `ConfigValidationDetail`, `FromConfigValue`, `FromConfigValue` (derive macro), `NoChildren`, `PropertyMeta`, `SerdeConfig`, `deserialize_value`, `SecretResolver`, `DefaultSecretResolver`, `ConfigProvider`, `ConfigProviderContext`, `ConfigWatchContext`, `ConfigUpdateSink`, `LiveConfig`, `LiveConfigRegistry`, `LiveConfigReceiver`, `LiveConfigSnapshot`, `TracingConfig`, `LogFormat`, `SpanEvents`.

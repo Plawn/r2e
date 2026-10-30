@@ -190,6 +190,55 @@ async fn typed_config_bean_tracks_edits_across_cycles() {
     );
 }
 
+#[derive(serde::Deserialize, Clone, Debug)]
+struct SerdeDevSettings {
+    greeting: String,
+}
+
+/// Same staleness hole for `SerdeConfig<T>`: both the wrapper and the inner
+/// `T` (registered as its `Children`) go through the blanket
+/// `LoadableConfig for T: ConfigProperties`, so they are config-derived and
+/// rebuilt every cycle instead of being pinned.
+#[r2e_core::test]
+async fn serde_config_bean_tracks_edits_across_cycles() {
+    use r2e_core::config::SerdeConfig;
+
+    let _serial = dev_serial();
+    r2e_core::invalidate_state_cache();
+    r2e_core::runtime::dev::mark_hot_reload_loop();
+
+    let mut config1 = R2eConfig::empty();
+    config1.set("greeting", ConfigValue::String("hello".into()));
+    let app1 = AppBuilder::new()
+        .override_config(config1)
+        .load_config::<SerdeConfig<SerdeDevSettings>>()
+        .build_state()
+        .await
+        .commit_cycle();
+    assert_eq!(app1.state().get::<SerdeDevSettings>().greeting, "hello");
+
+    let mut config2 = R2eConfig::empty();
+    config2.set("greeting", ConfigValue::String("bonjour".into()));
+    let app2 = AppBuilder::new()
+        .override_config(config2)
+        .load_config::<SerdeConfig<SerdeDevSettings>>()
+        .build_state()
+        .await
+        .commit_cycle();
+    let state2 = app2.state().clone();
+
+    assert_eq!(
+        state2.get::<SerdeDevSettings>().greeting,
+        "bonjour",
+        "the inner serde type must be rebuilt, not pinned"
+    );
+    assert_eq!(
+        state2.get::<SerdeConfig<SerdeDevSettings>>().greeting,
+        "bonjour",
+        "the SerdeConfig wrapper must be rebuilt, not pinned"
+    );
+}
+
 /// Q4/Q5 — `override_config_value` called *after* `load_config` patches
 /// `shared.live_config`, which is now the same instance the beans hold on every
 /// cycle. So a late override reaches live readers, and its pin survives the

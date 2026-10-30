@@ -1961,6 +1961,9 @@ pub fn from_token(token: CancelToken) -> Self;            // for `.override_bean
 - Two `#[config(section)]` fields of the **same type** are a compile error —
   sections are provided by type and there are no bean qualifiers, so give the second
   its own type.
+- A plain `serde::Deserialize` struct needs no derive: `SerdeConfig<T>` is a
+  ready-made `ConfigProperties` (root, section, plugin config) that also
+  provides `T` itself as a bean.
 - `provide_config(value)` is the test/embedding counterpart of `load_config`: it
   also registers the nested sections, which a plain provide of the struct does not.
 - Values that rotate at runtime need `#[live_config("key")] x: LiveConfig<T>` read
@@ -2041,6 +2044,56 @@ AppBuilder::new()
 It is the test/embedding counterpart of `load_config` (same builder phase). The
 value is pinned like any `provide`d bean: nothing rebuilds it from `R2eConfig`
 on a dev-reload cycle.
+
+### `SerdeConfig<T>` — a plain serde struct as a config section
+
+A settings struct that only derives `serde::Deserialize` (e.g. it lives in a
+framework-free crate, or needs `untagged` / `default = "fn"` / enums in a
+`Vec`) needs no `ConfigProperties` derive: wrap it in `SerdeConfig<T>`. The
+inner `T` is registered as a bean too, so it is injected directly:
+
+```rust
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct WorkerSettings {
+    pub queue: String,
+    #[serde(default)]
+    pub concurrency: u16,                 // R2E_WORKER_CONCURRENCY=8 binds (strings coerce)
+    #[serde(default)]
+    pub backends: Vec<Backend>,
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend { Local, Remote { url: String } }
+
+#[derive(ConfigProperties, Clone, Debug)]
+pub struct Settings {
+    #[config(section)]
+    pub worker: SerdeConfig<WorkerSettings>,  // a serde island in a derived tree
+}
+
+#[derive(Clone)]
+pub struct Worker { settings: WorkerSettings }
+
+#[bean]
+impl Worker {
+    fn new(settings: WorkerSettings) -> Self { Self { settings } }  // inner T, by type
+}
+
+# fn __doc(b: AppBuilder) -> impl Sized {
+b.load_config::<Settings>()                 // or load_config::<SerdeConfig<WorkerSettings>>() at the root
+# }
+# fn main() {}
+```
+
+- The section is rebuilt from the flat keys, so `R2E_*` overrides and
+  `override_config_value` — including indexed keys like `worker.backends.0` —
+  are visible. An absent section deserializes from an empty map.
+- Strings coerce on typed fields (`"8080"` → `u16`, `"yes"` → `bool`) — but
+  not inside untagged / internally tagged enums or `#[serde(flatten)]`.
+- Errors name the r2e key (`worker.backends.1.remote.url`).
+- Trade-offs vs. the derive: serde stops at the first error (no every-key
+  report), and no `PropertyMeta` (field introspection is empty).
 
 ### Config providers and rotation
 
