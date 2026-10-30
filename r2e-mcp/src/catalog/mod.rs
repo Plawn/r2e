@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use r2e_core::http::Parts;
 use rmcp::model::{
-    Implementation, PromptsCapability, ResourcesCapability, ServerCapabilities, ServerInfo, Tool,
+    Implementation, PromptsCapability, ResourcesCapability, ServerCapabilities, ServerConfig, Tool,
     ToolsCapability,
 };
 use rmcp::service::{RequestContext, RoleServer};
@@ -116,7 +116,7 @@ impl CatalogKeys {
 
 /// The immutable member catalog built once when the router is assembled.
 pub(crate) struct Catalog {
-    pub(crate) info: ServerInfo,
+    pub(crate) info: ServerConfig,
     /// MCP sessions exist — a mutation can outlive its request.
     pub(crate) stateful: bool,
     groups: Vec<GroupDef>,
@@ -288,7 +288,7 @@ impl Catalog {
         // at any time, so all four capabilities are advertised with
         // `listChanged` from the start — a client that only reads
         // capabilities at `initialize` would otherwise never re-list.
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
         // The typestate builder cannot set `list_changed`; set the fields.
         let mut tools_capability = ToolsCapability::default();

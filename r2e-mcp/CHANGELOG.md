@@ -47,6 +47,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `mcp.max-protocol-version` / `McpServer::max_protocol_version(ProtocolVersion)`:
+  cap the MCP revisions the server speaks. `server/discover` lists only the
+  revisions up to the cap, `initialize` negotiates within it and a sessionless
+  request whose `_meta` names a newer revision fails with `-32022` and the
+  supported list. Unknown values fail at boot naming the known revisions.
+  `ProtocolVersion` is re-exported at the crate root (#1183).
 - `McpPrincipal` and `Option<McpPrincipal>` extract as `#[inject(identity)]`
   under the new `ViaMcpAuth` marker (re-exported at the crate root); a
   required principal missing from the request is a JSON-RPC `unauthorized`
@@ -58,6 +64,22 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `FromRequestParts` types (including ones reading extensions an app layer
   inserted) and bean-backed extractors, checked at
   `register_mcp_service` (#1175).
+
+### Changed
+
+- Minimum `rmcp` is 3.8 (was 3.1): `initialize` negotiation is delegated to
+  rmcp's `negotiate_initialize`, and `2026-07-28` (sessionless,
+  `server/discover`) is served by default (#1183).
+
+### Fixed
+
+- A stateless client disconnecting first (a `subscriptions/listen` SSE stream
+  closed after the client's idle period) no longer logs
+  `failed to send pending response during drain` at ERROR under R2E's tracing
+  subscriber: rmcp ≤ 3.8 reports the closed oneshot channel of the per-request
+  service at that level, and `r2e_core::UpstreamNoise` drops it. Nothing
+  leaks. A canary test pins the upstream behaviour so the filter entry is
+  removed with the rmcp fix (#1185).
 
 ## [0.9.0] - 2026-10-25
 

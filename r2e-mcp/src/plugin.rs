@@ -9,6 +9,7 @@ use r2e_core::http::Routes;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext};
 use r2e_core::rt::CancelToken;
 use r2e_core::Plugin;
+use rmcp::model::ProtocolVersion;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 
@@ -90,6 +91,7 @@ pub struct McpServer {
     sse_keep_alive_secs: Option<u64>,
     json_response: Option<bool>,
     stateless: Option<bool>,
+    max_protocol_version: Option<ProtocolVersion>,
     allowed_hosts: Option<Vec<String>>,
     allowed_origins: Option<Vec<String>>,
     max_request_body_bytes: Option<u64>,
@@ -147,6 +149,17 @@ impl McpServer {
     /// Serve statelessly (no MCP sessions).
     pub fn stateless(mut self, enabled: bool) -> Self {
         self.stateless = Some(enabled);
+        self
+    }
+
+    /// Cap the MCP protocol revisions this server advertises and accepts
+    /// (`mcp.max-protocol-version`): `server/discover` lists the known
+    /// revisions up to `version`, `initialize` negotiates within them and a
+    /// request whose `_meta` names a newer one is refused with `-32022`.
+    /// `version` must be one of [`ProtocolVersion::KNOWN_VERSIONS`]; boot
+    /// fails otherwise. Independent of [`stateless`](Self::stateless).
+    pub fn max_protocol_version(mut self, version: ProtocolVersion) -> Self {
+        self.max_protocol_version = Some(version);
         self
     }
 
@@ -243,6 +256,33 @@ impl McpServer {
 /// Validate the configured endpoint path: absolute, single segment target,
 /// no trailing slash, no route captures/wildcards (the MCP endpoint is one
 /// literal path serving POST/GET/DELETE).
+/// The revisions advertised and accepted: every one rmcp knows, or those up
+/// to `mcp.max-protocol-version`. The cap must itself be a known revision —
+/// a typo (or a `latest` alias) would otherwise silently cap at the newest
+/// known one below it.
+fn supported_protocol_versions(
+    max: Option<&str>,
+) -> Result<&'static [ProtocolVersion], PluginBuildError> {
+    let Some(max) = max else {
+        return Ok(ProtocolVersion::KNOWN_VERSIONS);
+    };
+    let Some(known) = ProtocolVersion::KNOWN_VERSIONS
+        .iter()
+        .find(|v| v.as_str() == max)
+    else {
+        let known: Vec<&str> = ProtocolVersion::KNOWN_VERSIONS
+            .iter()
+            .map(ProtocolVersion::as_str)
+            .collect();
+        return Err(format!(
+            "mcp.max-protocol-version must be a known MCP protocol revision ({}): got `{max}`",
+            known.join(", ")
+        )
+        .into());
+    };
+    Ok(ProtocolVersion::known_up_to(known))
+}
+
 fn validate_path(path: &str) -> Result<(), PluginBuildError> {
     if !path.starts_with('/') {
         return Err(format!("mcp.path must start with '/': got `{path}`").into());
@@ -328,6 +368,13 @@ impl Plugin for McpServer {
         };
         let json_response = self.json_response.or(cfg.json_response).unwrap_or(false);
         let stateless = self.stateless.or(cfg.stateless).unwrap_or(false);
+        let supported_versions = supported_protocol_versions(
+            self.max_protocol_version
+                .as_ref()
+                .map(|v| v.as_str().to_string())
+                .or(cfg.max_protocol_version)
+                .as_deref(),
+        )?;
         let allowed_hosts = self.allowed_hosts.or(cfg.allowed_hosts);
         let allowed_origins = self
             .allowed_origins
@@ -541,6 +588,7 @@ impl Plugin for McpServer {
                 shutdown: mcp_cancel.clone(),
                 elicitation_timeout,
                 page_size,
+                supported_versions,
             });
             let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite
