@@ -6,6 +6,7 @@
 mod support;
 
 mod core;
+mod de;
 mod env;
 mod errors;
 mod live_config;

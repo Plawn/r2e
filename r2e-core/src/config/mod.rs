@@ -1,3 +1,4 @@
+mod de;
 mod loader;
 pub mod registry;
 mod runtime;

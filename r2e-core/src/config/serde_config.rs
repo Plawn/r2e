@@ -5,6 +5,7 @@ use std::ops::Deref;
 
 use serde::de::DeserializeOwned;
 
+use super::de::ValueDeserializer;
 use super::typed::ConfigProperties;
 use super::value::ConfigValue;
 use super::{ConfigError, R2eConfig};
@@ -25,6 +26,13 @@ use crate::type_list::{TCons, TNil};
 /// such as `engines.0.key` are visible) and deserialized with serde, so every
 /// serde attribute works (`untagged`, `default = "fn"`, `rename_all`, enums in
 /// `Vec<struct>`, …). An absent section deserializes from an empty map.
+///
+/// Strings are coerced on typed fields with the same rules as
+/// [`FromConfigValue`](super::FromConfigValue) — `R2E_APP_PORT=8080` binds to
+/// a `u16`, `"yes"` to a `bool` — because every env override and resolved
+/// `${VAR}` is stored as a string. Coercion does not apply below
+/// `deserialize_any` (untagged / internally tagged enums, `#[serde(flatten)]`):
+/// serde buffers those values as stored.
 ///
 /// ```ignore
 /// #[derive(serde::Deserialize, Clone, Debug)]
@@ -90,10 +98,11 @@ fn deserialize_tree<T: DeserializeOwned>(
     tree: &ConfigValue,
     prefix: Option<&str>,
 ) -> Result<T, ConfigError> {
-    let json = super::value::to_json_value(tree);
-    serde_path_to_error::deserialize(json).map_err(|err| ConfigError::Deserialize {
-        key: error_key(err.path(), prefix),
-        message: err.into_inner().to_string(),
+    serde_path_to_error::deserialize(ValueDeserializer(tree)).map_err(|err| {
+        ConfigError::Deserialize {
+            key: error_key(err.path(), prefix),
+            message: err.into_inner().to_string(),
+        }
     })
 }
 
