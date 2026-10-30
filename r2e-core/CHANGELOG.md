@@ -15,6 +15,23 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `SerdeConfig<T>`: load any `T: serde::Deserialize + Clone` as a typed config
+  section without `#[derive(ConfigProperties)]` — root (`load_config`),
+  `provide_config`, plugin `type Config` or `#[config(section)]` field. `T` is
+  registered as a bean next to the wrapper. Serde errors name the r2e key of
+  the offending value (`app.engines.1.weight`). In exchange for full serde
+  shapes it has no aggregated missing-key report and no `PropertyMeta` (#1180).
+- `R2eConfig::tree(prefix)`: rebuild a nested `ConfigValue` subtree from the
+  flat keys, so `R2E_*` and `override_config_value` overrides of indexed keys
+  are visible (#1180).
+- `deserialize_value` (and so `#[derive(FromConfigValue)]`) now deserializes
+  straight from the `ConfigValue` instead of going through `serde_json`, and
+  coerces strings on typed hints with the `FromConfigValue` rules
+  (`"8080"` → `u16`, `"yes"` → `bool`). Env overrides now bind to non-string
+  fields of serde-backed config types (#1180).
+
 ## [0.8.0] - 2026-10-25
 
 ### Breaking
