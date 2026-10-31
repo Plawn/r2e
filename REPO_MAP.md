@@ -48,12 +48,19 @@ Owns the one-shot global `tracing` subscriber. No tokio, no `r2e-*` dependency; 
 
 ```
 src/
-  lib.rs                    Re-exports (TracingOptions, LogFormat, SpanEvents, try_install, installed, AlreadyInstalled, UpstreamNoise, tracing_subscriber)
+  lib.rs                    Re-exports (TracingOptions, LogFormat, SpanEvents, try_install, installed, AlreadyInstalled, noise/late/enrich items, tracing_subscriber)
   options.rs                TracingOptions + builders, LogFormat, SpanEvents (to_fmt_span)
-  install.rs                try_install (Registry + fmt + EnvFilter), installed(), AlreadyInstalled
-  noise.rs                  UpstreamNoise per-layer filter
+  install.rs                try_install (Registry + [console, late slot] + NoiseFilter + EnvFilter), installed(), AlreadyInstalled
+  console.rs                console fmt layer (text/JSON, TTY-aware ansi, enricher splice)
+  noise.rs                  noise rules (suppress, suppress_error, is_suppressed) + NoiseFilter (Layer + Filter)
+  late.rs                   late-layer slot: contribute_layer, late_layers/LateLayers, NotWired
+  enrich.rs                 FieldEnricher, EnrichContext, add_enricher, Enriched format wrapper
 tests/
   install/                  one-shot install sequence (own binary)
+  install_invalid_filter/   invalid filter falls back to info (own binary)
+  late_layers/              contribute_layer into the installed subscriber (own binary)
+  enrich/                   enrichers on text + JSON lines (own binary)
+  noise/                    noise rules + NoiseFilter as layer and filter
   options/                  pure-value tests (format, span_events)
 ```
 

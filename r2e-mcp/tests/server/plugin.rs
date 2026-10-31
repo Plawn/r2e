@@ -5,7 +5,7 @@ use r2e_core::http::StatusCode;
 use r2e_core::{AppBuilder, R2eConfig};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::json;
-use tracing_subscriber::layer::{Layer, SubscriberExt};
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
 
 use crate::fixtures::{fixture_app_with, Calc, CallLog, FixtureTools};
@@ -176,9 +176,9 @@ mod disconnect {
 
     use crate::fixtures::fixture_app_with;
 
-    /// Captures `rmcp*` events as `(level, message)`.
+    /// Captures `rmcp*` events as `(level, target, message)`.
     #[derive(Clone, Default)]
-    pub(super) struct Events(Arc<Mutex<Vec<(Level, String)>>>);
+    pub(super) struct Events(Arc<Mutex<Vec<(Level, String, String)>>>);
 
     struct Message(Option<String>);
 
@@ -197,15 +197,16 @@ mod disconnect {
             }
             let mut message = Message(None);
             event.record(&mut message);
-            self.0
-                .lock()
-                .unwrap()
-                .push((*event.metadata().level(), message.0.unwrap_or_default()));
+            self.0.lock().unwrap().push((
+                *event.metadata().level(),
+                event.metadata().target().to_string(),
+                message.0.unwrap_or_default(),
+            ));
         }
     }
 
     impl Events {
-        pub(super) fn take(&self) -> Vec<(Level, String)> {
+        pub(super) fn take(&self) -> Vec<(Level, String, String)> {
             std::mem::take(&mut *self.0.lock().unwrap())
         }
     }
@@ -222,7 +223,7 @@ mod disconnect {
     /// closed by the client after the first frame — the long-lived request a
     /// client drops after its idle period. Returns the rmcp events emitted
     /// after the disconnect.
-    pub(super) async fn listen_then_disconnect(events: &Events) -> Vec<(Level, String)> {
+    pub(super) async fn listen_then_disconnect(events: &Events) -> Vec<(Level, String, String)> {
         let (router, _log) =
             fixture_app_with(McpServer::new().stateless(true).json_response(true)).await;
         events.take();
@@ -268,17 +269,18 @@ mod disconnect {
         assert!(
             after
                 .iter()
-                .any(|(_, message)| message.contains("serve finished")),
+                .any(|(_, _, message)| message.contains("serve finished")),
             "the per-request service must end once the client is gone: {after:?}"
         );
         after
     }
 }
 
-/// Without `UpstreamNoise`, rmcp ≤ 3.8 logs the client's disconnect at
-/// ERROR (`failed to send pending response during drain`). This canary pins
-/// the upstream bug: when it fails after an rmcp bump, the bug is fixed —
-/// delete the entry from `UpstreamNoise`'s table and this test together.
+/// Without a noise rule, rmcp ≤ 3.8 logs the client's disconnect at ERROR
+/// (`failed to send pending response during drain`). This canary pins the
+/// upstream bug: the capturing layer has no `NoiseFilter`, so it sees what
+/// rmcp emits. When it fails after an rmcp bump, the bug is fixed — delete
+/// the entry from `r2e_mcp::RMCP_NOISE` and this test together.
 #[r2e_core::test(flavor = "current_thread")]
 async fn canary_rmcp_still_logs_stateless_disconnect_at_error() {
     let events = disconnect::Events::default();
@@ -288,25 +290,40 @@ async fn canary_rmcp_still_logs_stateless_disconnect_at_error() {
     assert!(
         after
             .iter()
-            .any(|(level, message)| *level == tracing::Level::ERROR
-                && r2e_core::UpstreamNoise::suppresses("rmcp::service", message)),
-        "rmcp no longer logs the drain at ERROR — remove the UpstreamNoise entry: {after:?}"
+            .any(|(level, target, message)| *level == tracing::Level::ERROR
+                && r2e_mcp::RMCP_NOISE
+                    .iter()
+                    .any(|(t, m)| t == target && m == message)),
+        "rmcp no longer logs the drain at ERROR — remove the RMCP_NOISE entry: {after:?}"
     );
 }
 
-/// Through the framework subscriber's filter, the same disconnect logs
-/// nothing at ERROR (#1185).
+/// `McpServer::setup` registers `RMCP_NOISE` as noise rules, so through a
+/// stack carrying `NoiseFilter` (as the framework subscriber does) the same
+/// disconnect logs nothing at ERROR (#1185).
+///
+/// The rules are process-wide: once a test in this binary has built an
+/// `McpServer`, every sibling test runs with them. Acceptable — they match
+/// only these two rmcp ERROR messages.
 #[r2e_core::test(flavor = "current_thread")]
 async fn stateless_client_disconnect_logs_no_error() {
     let events = disconnect::Events::default();
     let _guard = tracing::subscriber::set_default(
-        Registry::default().with(events.clone().with_filter(r2e_core::UpstreamNoise)),
+        Registry::default()
+            .with(events.clone())
+            .with(r2e_core::NoiseFilter),
     );
 
     let after = disconnect::listen_then_disconnect(&events).await;
+    for (target, message) in r2e_mcp::RMCP_NOISE {
+        assert!(
+            r2e_core::is_suppressed(&tracing::Level::ERROR, target, message),
+            "McpServer::setup must register {target}: {message}"
+        );
+    }
     let errors: Vec<_> = after
         .iter()
-        .filter(|(level, _)| *level == tracing::Level::ERROR)
+        .filter(|(level, _, _)| *level == tracing::Level::ERROR)
         .collect();
     assert!(
         errors.is_empty(),

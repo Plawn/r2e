@@ -29,6 +29,30 @@ use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, Tra
 /// such bean).
 type ResolveInit = fn(&BeanContext) -> Option<SessionInitFn>;
 
+/// `(target, message)` of the ERROR events rmcp emits for a benign condition;
+/// [`McpServer`]'s `setup` registers each as a noise rule
+/// ([`r2e_core::suppress_error`]), so the framework subscriber drops them.
+///
+/// - `rmcp::service` — `failed to send pending response during drain` and
+///   `fail to response message` (rmcp ≤ 3.8). In stateless streamable HTTP
+///   every request runs its own service over a oneshot channel; when the
+///   client disconnects first (a `subscriptions/listen` SSE stream the client
+///   closes after its idle period, a cancelled tool call) the service is
+///   cancelled, drains, and logs the closed channel at ERROR. Nothing leaks
+///   and nothing is lost: the response has no reader. Tracked as #1185.
+///
+/// An entry goes away once the rmcp release that fixes it becomes r2e-mcp's
+/// minimum (the canary test in `tests/server/plugin.rs` fails when rmcp stops
+/// emitting it).
+#[doc(hidden)]
+pub const RMCP_NOISE: &[(&str, &str)] = &[
+    (
+        "rmcp::service",
+        "failed to send pending response during drain",
+    ),
+    ("rmcp::service", "fail to response message"),
+];
+
 /// MCP server plugin for R2E.
 ///
 /// Install as a `Plugin` before `build_state()`, then register services after
@@ -328,6 +352,11 @@ impl Plugin for McpServer {
         // `mcp.enabled = false` — build-time surface effects are dropped when
         // disabled, so the datum is deposited here.
         ctx.store_data(self.registry.clone());
+        // Process-wide and idempotent: rmcp's known-benign drain errors
+        // (#1185) never reach the framework subscriber's output.
+        for (target, message) in RMCP_NOISE {
+            r2e_core::suppress_error(*target, *message);
+        }
     }
 
     async fn build(

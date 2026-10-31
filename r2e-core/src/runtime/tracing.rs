@@ -59,12 +59,10 @@ impl std::error::Error for SubscriberAlreadyInstalled {}
 /// [`TracingConfig`] default filter (`info`) when `RUST_LOG` is not set.
 ///
 /// This function is idempotent — calling it more than once is safe (subsequent
-/// calls are silently ignored). It is called automatically by the [`Tracing`]
-/// plugin, so you only need to call it manually if you want logs *before* the
-/// plugin is installed (e.g. during state construction).
+/// calls are silently ignored).
 ///
 /// It installs the **built-in defaults**, ignoring the application's
-/// `tracing:` section; an entry point that should honour that section calls
+/// `tracing:` section; R2E's entry points and the [`Tracing`] plugin call
 /// [`init_tracing_from_config`] instead.
 ///
 /// [`Tracing`]: crate::builtins::Tracing
@@ -94,6 +92,26 @@ pub fn init_tracing_from_config() {
     if let Some(problem) = problem {
         tracing::warn!("r2e: falling back to the built-in tracing defaults — {problem}");
     }
+}
+
+/// Make sure a subscriber is installed, and return the options R2E installed
+/// it with.
+///
+/// When R2E already installed one, its options are returned as is. Otherwise
+/// this installs it from the application's `tracing:` section, exactly like
+/// [`init_tracing_from_config`]. `None` means a subscriber R2E did not install
+/// (the application's, a test harness's) holds the global slot.
+///
+/// Meant for plugins that contribute to the subscriber at setup time
+/// ([`contribute_layer`](crate::contribute_layer),
+/// [`add_enricher`](crate::add_enricher)): calling it first lets them work
+/// under a hand-written `main` that never installed the subscriber.
+pub fn ensure_tracing_installed() -> Option<&'static r2e_tracing::TracingOptions> {
+    if let Some(installed) = r2e_tracing::installed() {
+        return Some(installed);
+    }
+    init_tracing_from_config();
+    r2e_tracing::installed()
 }
 
 /// The configuration [`init_tracing_from_config`] installs, plus the reason it

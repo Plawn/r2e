@@ -66,8 +66,9 @@ impl Plugin for Cors {
     }
 }
 
-/// Log **subscriber** plugin — installs the global `tracing` subscriber with
-/// R2E's built-in defaults.
+/// Log **subscriber** plugin — installs the global `tracing` subscriber from
+/// the application's `tracing:` section (the built-in defaults when there is
+/// none), like R2E's entry points do.
 ///
 /// It contributes **no HTTP layer**: per-request spans and the request summary
 /// line are [`HttpTrace`]'s job, and the two are installed independently.
@@ -80,7 +81,7 @@ impl Plugin for Cors {
 /// | Entry point | Subscriber comes from |
 /// |---|---|
 /// | `r2e::launch` / `#[r2e::main]` / `app_main!` / `#[r2e::test]` | the entry point, from the app's own `tracing:` section — **do not** add this plugin |
-/// | a hand-written `main` / an embedded `AppBuilder` | `.plugin(Tracing)` (built-in defaults) or [`Tracing::from_config`] (the `tracing:` section) |
+/// | a hand-written `main` / an embedded `AppBuilder` | `.plugin(Tracing)` (the `tracing:` section of `application.yaml`) or [`Tracing::configured`] / [`Tracing::from_config`] (an explicit configuration) |
 /// | `r2e_observability::Observability` | that plugin (fmt + `tracing-opentelemetry`) |
 ///
 /// # Who owns what
@@ -140,7 +141,7 @@ impl Plugin for Tracing {
     // means bean construction and every other plugin's `build` are already
     // instrumented.
     fn setup(&mut self, _ctx: &mut PluginSetupContext) {
-        crate::runtime::layers::init_tracing();
+        crate::runtime::layers::init_tracing_from_config();
     }
 
     // The subscriber is the whole plugin: no router effect at all. Per-request

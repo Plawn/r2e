@@ -1,11 +1,14 @@
 use std::sync::OnceLock;
 
+use tracing::Dispatch;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, EnvFilter, Registry};
+use tracing_subscriber::{EnvFilter, Registry};
 
-use crate::noise::UpstreamNoise;
-use crate::options::{LogFormat, TracingOptions};
+use crate::console::console_layer;
+use crate::late::{self, late_layers};
+use crate::noise::NoiseFilter;
+use crate::options::TracingOptions;
 
 /// The options the process-global subscriber was actually installed with,
 /// when R2E installed it.
@@ -66,56 +69,55 @@ impl std::error::Error for AlreadyInstalled {}
 
 /// Install the process-global `tracing` subscriber built from `opts`.
 ///
-/// The stack is `Registry` + a `fmt` layer (JSON when
-/// [`LogFormat::Json`]) carrying the per-layer [`UpstreamNoise`] filter, with
-/// an `EnvFilter` as the outer, global layer. `RUST_LOG` takes priority over
-/// `opts.filter`.
+/// The stack is
+///
+/// ```text
+/// Registry
+///   + [console layer, late-layer slot]   // fmt (JSON under LogFormat::Json) + contributed layers
+///   + NoiseFilter                        // registered noise rules, for every inner layer
+///   + EnvFilter                          // outer, global
+/// ```
+///
+/// `RUST_LOG`, when set and valid, takes priority over `opts.filter`. An
+/// invalid `opts.filter` does not fail the install: the subscriber falls back
+/// to `"info"` and logs an ERROR naming the directive. With `opts.ansi` unset,
+/// colours are on only when stdout is a terminal.
 ///
 /// `Err(AlreadyInstalled)` means a subscriber was already in place and these
 /// options had no effect at all. On success the options are recorded and
-/// [`installed`] returns them.
+/// [`installed`] returns them, and the [late-layer slot](crate::late_layers)
+/// accepts [contributions](crate::contribute_layer).
 pub fn try_install(opts: &TracingOptions) -> Result<(), AlreadyInstalled> {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| opts.filter.parse().unwrap());
+    let mut invalid_filter = None;
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::try_new(&opts.filter).unwrap_or_else(|e| {
+            invalid_filter = Some(e);
+            EnvFilter::new("info")
+        })
+    });
 
-    let span_events = opts.effective_span_events();
-    let target = opts.target.unwrap_or(true);
-    let thread_ids = opts.thread_ids.unwrap_or(false);
-    let thread_names = opts.thread_names.unwrap_or(false);
-    let file = opts.file.unwrap_or(false);
-    let line_number = opts.line_number.unwrap_or(false);
-    let level = opts.level.unwrap_or(true);
-    let ansi = opts.ansi.unwrap_or(true);
+    let stack = Registry::default()
+        .with(vec![console_layer(opts), late_layers().boxed()])
+        .with(NoiseFilter)
+        .with(env_filter);
 
-    // Same stack `tracing_subscriber::fmt().with_env_filter(..).try_init()`
-    // builds — `EnvFilter` as the outer, global layer — plus the framework's
-    // per-layer [`UpstreamNoise`] filter on the `fmt` layer.
-    let fmt_layer = fmt::layer()
-        .with_target(target)
-        .with_thread_ids(thread_ids)
-        .with_thread_names(thread_names)
-        .with_file(file)
-        .with_line_number(line_number)
-        .with_level(level)
-        .with_ansi(ansi)
-        .with_span_events(span_events);
-    let outcome = match opts.effective_format() {
-        LogFormat::Json => Registry::default()
-            .with(fmt_layer.json().with_filter(UpstreamNoise))
-            .with(env_filter)
-            .try_init(),
-        LogFormat::Pretty => Registry::default()
-            .with(fmt_layer.with_filter(UpstreamNoise))
-            .with(env_filter)
-            .try_init(),
-    };
-
-    match outcome {
+    // Registered by hand rather than through `try_init` on the stack: the
+    // `Vec` does not forward `on_register_dispatch`, and the late-layer slot
+    // must be wired to *this* dispatch only once it has won the install.
+    let dispatch = Dispatch::new(stack);
+    match dispatch.clone().try_init() {
         Ok(()) => {
+            late::wire(&dispatch);
             // Best-effort: the race this loses is another thread installing
             // at the same instant, and then it is that one's options that are
             // recorded — which is exactly what we want to remember.
             let _ = INSTALLED.set(opts.clone());
+            if let Some(e) = invalid_filter {
+                tracing::error!(
+                    "r2e: invalid tracing filter {:?} ({e}); falling back to \"info\"",
+                    opts.filter
+                );
+            }
             Ok(())
         }
         Err(_) => Err(AlreadyInstalled {

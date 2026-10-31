@@ -77,6 +77,8 @@ pub use error::McpError;
 pub use global::{McpRegistry, RegistryEdit};
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
+#[doc(hidden)]
+pub use plugin::RMCP_NOISE;
 pub use progress::Progress;
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use resource_updates::McpResourceUpdates;

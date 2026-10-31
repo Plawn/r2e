@@ -1,10 +1,10 @@
 // The tracing entry points moved to `runtime::tracing` (stack in the
 // `r2e-tracing` crate); re-exported here so `runtime::layers::*` keeps its paths.
 pub use crate::runtime::tracing::{
-    init_tracing, init_tracing_from_config, init_tracing_with_config, resolve_tracing_config,
-    try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
+    ensure_tracing_installed, init_tracing, init_tracing_from_config, init_tracing_with_config,
+    resolve_tracing_config, try_init_tracing_with_config, warn_if_output_differs,
+    SubscriberAlreadyInstalled,
 };
-pub use r2e_tracing::UpstreamNoise;
 
 // The tower-http-backed pieces live in `r2e_http::layers` (the one crate
 // allowed to name tower-http); re-exported here so `runtime::layers::*` and

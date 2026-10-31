@@ -80,7 +80,11 @@ pub use plugin::{
     PluginInstall, PluginSetupContext, RoutesContext,
 };
 pub use r2e_tracing;
-pub use r2e_tracing::{AlreadyInstalled, TracingOptions, UpstreamNoise};
+pub use r2e_tracing::{
+    add_enricher, contribute_layer, is_suppressed, late_layers, suppress, suppress_error,
+    AlreadyInstalled, BoxedLayer, EnrichContext, FieldEnricher, LateLayers, NoiseFilter, NoiseRule,
+    NotWired, TracingOptions,
+};
 pub use runtime::harness::WorkerHarness;
 pub use runtime::http_trace::{
     DefaultRequestSpan, HttpTraceLayer, HttpTraceSettings, MakeRequestSpan, RequestOutcome,
@@ -97,8 +101,8 @@ pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
 pub use runtime::panic::{PanicHook, PanicHookSlot, PanicOrigin, PanicReport, PANIC_TARGET};
 pub use runtime::service::{ServiceComponent, StopPhase};
 pub use runtime::tracing::{
-    init_tracing, init_tracing_from_config, init_tracing_with_config, try_init_tracing_with_config,
-    warn_if_output_differs, SubscriberAlreadyInstalled,
+    ensure_tracing_installed, init_tracing, init_tracing_from_config, init_tracing_with_config,
+    try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
 };
 pub use runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 pub use runtime::worker::{

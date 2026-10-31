@@ -672,12 +672,12 @@ capped list). The value must be a known revision: anything else (`2027-01-01`,
 rmcp service. When the client closes first — typically a `subscriptions/listen`
 SSE stream dropped after the client's idle period — rmcp ≤ 3.8 logs the drain
 at ERROR (`failed to send pending response during drain`). Nothing leaks: the
-response simply has no reader. R2E's tracing subscriber drops that line
-(`r2e_core::UpstreamNoise`, a per-layer filter next to the `EnvFilter`), and so
-does the subscriber `r2e-observability` installs (console and OpenTelemetry
-layers); an app installing its own subscriber can add the same filter — see
-`UpstreamNoise`'s docs. The entry goes away once the upstream fix is R2E's
-minimum rmcp.
+response simply has no reader. `McpServer` registers that event as a noise
+rule (`r2e_core::suppress_error`) at setup, and R2E's tracing subscriber drops
+it through `r2e_core::NoiseFilter` — so does the subscriber `r2e-observability`
+installs (console and OpenTelemetry layers); an app installing its own
+subscriber adds `.with(r2e_core::NoiseFilter)` (or `.with_filter(..)` on a
+layer). The rule goes away once the upstream fix is R2E's minimum rmcp.
 
 **Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
 `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`

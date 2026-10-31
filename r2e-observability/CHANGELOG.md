@@ -18,9 +18,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 ### Fixed
 
 - The subscriber the plugin installs (console + OpenTelemetry layers) now carries
-  `r2e_core::UpstreamNoise` on both layers, like the framework's default
-  subscriber: rmcp ≤ 3.8's drain ERROR after a stateless MCP client disconnect
-  no longer reaches the logs nor the exported spans (#1185).
+  `r2e_core::NoiseFilter` on both layers, like the framework's default
+  subscriber: the registered noise rules apply — with `McpServer`, rmcp ≤ 3.8's
+  drain ERROR after a stateless MCP client disconnect no longer reaches the
+  logs nor the exported spans (#1185).
 
 ## [0.8.0] - 2026-10-25
 

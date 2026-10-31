@@ -92,7 +92,7 @@ compile-time dependency injection, JWT/OIDC security, zero runtime reflection.
 ```
 r2e               → Facade crate; re-exports subcrates behind feature flags. Users depend on this.
 r2e-rt            → Async-runtime facade; the ONLY crate naming tokio; bottom of the graph; re-exported as r2e_core::rt.
-r2e-tracing       → Owns the process-global tracing subscriber: TracingOptions, LogFormat/SpanEvents, try_install/installed; no tokio; re-exported by r2e-core.
+r2e-tracing       → Owns the process-global tracing subscriber: TracingOptions, try_install/installed, noise rules, late-layer slot, field enrichers; no tokio; re-exported by r2e-core.
 r2e-macros        → Proc macros: #[controller] + #[routes] generate Axum handlers.
 r2e-http          → HTTP abstraction; sole owner of axum; IntoHttpResponse, axum_compat escape hatch, json codec façade, QUIC/HTTP3.
 r2e-core          → Runtime foundation: AppBuilder → HList state, Controller trait, guards/interceptors, R2eConfig, HttpError, lifecycle, ManagedResource, Page/Pageable. Re-exports r2e-http as `http`.

@@ -77,8 +77,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   closed after the client's idle period) no longer logs
   `failed to send pending response during drain` at ERROR under R2E's tracing
   subscriber: rmcp ≤ 3.8 reports the closed oneshot channel of the per-request
-  service at that level, and `r2e_core::UpstreamNoise` drops it. Nothing
-  leaks. A canary test pins the upstream behaviour so the filter entry is
+  service at that level. `McpServer` registers that event as a noise rule
+  (`r2e_core::suppress_error`), which the subscriber's `NoiseFilter` drops.
+  Nothing leaks. A canary test pins the upstream behaviour so the rule is
   removed with the rmcp fix (#1185).
 
 ## [0.9.0] - 2026-10-25

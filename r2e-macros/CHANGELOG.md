@@ -28,6 +28,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `r2e-mcp` 0.9 after a plain `cargo update` and break its build (#1092's
   shape). Migration: `docs/migration/mcp-identity.md` (#1175).
 
+### Changed
+
+- `#[r2e::test_suite]` installs the subscriber with `init_tracing_from_config()`
+  (the `tracing:` section of `application.yaml`, built-in defaults when there
+  is none) instead of `init_tracing()`, like `#[r2e::test]` and the entry
+  points. Identical for a project without a `tracing:` section.
+
 ## [0.8.0] - 2026-10-25
 
 ### Breaking

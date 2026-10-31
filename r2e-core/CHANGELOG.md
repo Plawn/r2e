@@ -18,22 +18,31 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 ### Changed
 
 - The tracing subscriber primitives moved to the new `r2e-tracing` crate:
-  `LogFormat`, `SpanEvents`, `UpstreamNoise` and the subscriber install
-  itself. They are re-exported at their previous `r2e_core` paths, and
+  `LogFormat`, `SpanEvents` and the subscriber install itself. They are re-exported at their previous `r2e_core` paths, and
   `init_tracing*` / `TracingConfig` / `SubscriberAlreadyInstalled` stay in
   `r2e-core` unchanged — no user action. New re-exports: `TracingOptions`,
   `AlreadyInstalled` and the crate itself as
   `r2e_core::r2e_tracing`. `r2e-core` no longer depends on
   `tracing-subscriber` directly.
+- The `Tracing` plugin installs the subscriber from the application's
+  `tracing:` section (`init_tracing_from_config`; built-in defaults when there
+  is none) instead of the built-in defaults, as `#[r2e::test_suite]` now does.
+- An invalid tracing filter (`tracing.filter`, `TracingConfig::filter`) no
+  longer panics the install: the subscriber is installed with `info` and the
+  parse error is logged at ERROR through it.
+- With `ansi` unset, console colours are on only when stdout is a terminal
+  (piped or collected logs no longer carry escape codes).
 
 ### Added
 
-- `UpstreamNoise`: a `tracing_subscriber` per-layer `Filter` the framework
-  subscriber installs on its `fmt` layer next to the `EnvFilter`, dropping the
-  ERROR events a dependency emits for conditions R2E knows to be benign (a
-  `(target, message)` table; today rmcp ≤ 3.8's drain errors after a stateless
-  MCP client disconnect, #1185). Only ERROR is matched. Apps installing their
-  own subscriber can add it with `.with_filter(r2e_core::UpstreamNoise)`.
+- Subscriber extension points, re-exported from `r2e-tracing` at the crate
+  root: noise rules (`suppress`, `suppress_error`, `is_suppressed`,
+  `NoiseRule`, `NoiseFilter`), the late-layer slot (`contribute_layer`,
+  `late_layers`, `LateLayers`, `BoxedLayer`, `NotWired`) and console field
+  enrichers (`add_enricher`, `FieldEnricher`, `EnrichContext`).
+- `ensure_tracing_installed()`: install the subscriber from the application's
+  `tracing:` section unless one is already installed, and return the options
+  the winning install used.
 - `SerdeConfig<T>`: load any `T: serde::Deserialize + Clone` as a typed config
   section without `#[derive(ConfigProperties)]` — root (`load_config`),
   `provide_config`, plugin `type Config` or `#[config(section)]` field. `T` is

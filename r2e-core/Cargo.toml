@@ -72,7 +72,7 @@ tower = {workspace = true, features = ["util"]}
 futures-util = {workspace = true}
 # Raw WebSocket client for the `WsStream` batching tests (tests/http/ws.rs).
 tokio-tungstenite = {workspace = true}
-# `upstream_noise` / `tracing_config` tests build their own subscribers.
+# Tests that build their own subscribers (`tracing_config`, `http_trace`, …).
 tracing-subscriber = {workspace = true}
 criterion = {version = "0.8", default-features = false, features = ["cargo_bench_support"]}
 

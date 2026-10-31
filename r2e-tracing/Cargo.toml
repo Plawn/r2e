@@ -15,3 +15,6 @@ description = "Process-global tracing subscriber for R2E - options, formats and 
 tracing = {workspace = true}
 tracing-subscriber = {workspace = true, features = ["env-filter", "json", "registry", "fmt", "std"]}
 serde = {workspace = true}
+
+[dev-dependencies]
+serde_json = {workspace = true}

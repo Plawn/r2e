@@ -12,7 +12,6 @@ mod sharded;
 mod shutdown_budget;
 mod tcp_nodelay;
 mod tracing_config;
-mod upstream_noise;
 mod worker_scopes;
 mod worker_services;
 #[cfg(feature = "ws")]
