@@ -6723,6 +6723,9 @@ portable. R2E's `prometheus` registry is never installed in this mode, and
   (OTLP switch); console settings go under `tracing:`. `with_log_format` /
   `with_tracing_config` no longer exist.
 - `from_env` with no endpoint exports nothing (no OTLP exporter).
+- `tracing.format: json` + `tracing.json.flatten: true` writes one flat JSON
+  object per event (fields at the top level, message under
+  `tracing.json.message-key`, `_msg` for VictoriaLogs) — no custom formatter.
 - Extend the installed subscriber with `suppress_error` (drop a benign
   upstream event), `add_enricher` (fields on every console line) and
   `contribute_layer` (a layer added after install) — never by re-installing it.
@@ -6841,6 +6844,36 @@ impl MakeRequestSpan for AppSpan {
 b.plugin(HttpTrace::builder().make_span(AppSpan).build())
 # }
 ```
+
+### JSON log lines (flat)
+
+`format: json` alone is `tracing-subscriber`'s nested shape (`"fields":
+{"message":..}`). Log stores that index top-level keys (VictoriaLogs, Loki)
+want the flat one:
+
+```yaml
+tracing:
+  format: json
+  json:
+    flatten: true          # default false (nested)
+    message-key: _msg      # default "message"; the target when the event has none
+    current-span: true     # default true  → "span": {"name":..,<fields>}
+    span-list: true        # default true  → "spans": [root, .., leaf]
+```
+
+```json
+{"_msg":"request completed","level":"INFO","target":"r2e::http","timestamp":"2026-10-31T09:12:03.123456Z","status":200,"latency_ms":3,"span":{"name":"request","method":"GET","route":"/users"},"spans":[{"name":"request","method":"GET","route":"/users"}]}
+```
+
+- Event fields keep their JSON type; enricher fields are added as strings.
+- Reserved keys win over a colliding event/enricher field: the message key,
+  `timestamp`, `level`, `target`, `thread_id`, `thread_name`, `file`, `line`,
+  `span`, `spans` (the optional ones follow `thread-ids`, `thread-names`,
+  `file`, `line-number`).
+- `log`-crate events get their real level/target; `log.*` fields are dropped.
+- Read by the YAML install path (`r2e::launch`, `#[r2e::main]`, `#[r2e::test]`,
+  the `Tracing` plugin). `R2E_TRACING_JSON_FLATTEN=true` works;
+  `message-key` is kebab-case, so set it in YAML (or `${VAR}`).
 
 ### Extending the subscriber
 

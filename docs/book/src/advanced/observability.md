@@ -252,6 +252,44 @@ tracing:
 | `ansi` | bool | `true` | Enable ANSI color codes |
 | `span-events` | `none` / `new` / `close` / `active` / `full` | `close` | Which span lifecycle events to record |
 
+### Flat JSON lines
+
+`format: json` writes `tracing-subscriber`'s nested shape, with the message and
+the event fields under `"fields"`. Log stores that index top-level keys
+(VictoriaLogs, Loki) want one flat object per event instead — set
+`tracing.json.flatten`:
+
+```yaml
+tracing:
+  format: json
+  json:
+    flatten: true        # default false: the nested shape
+    message-key: _msg    # default "message" (VictoriaLogs reads `_msg`)
+    current-span: true   # default true: "span": {"name": .., <fields>}
+    span-list: true      # default true: "spans": [root, .., leaf]
+```
+
+```json
+{"_msg":"request completed","level":"INFO","target":"r2e::http","timestamp":"2026-10-31T09:12:03.123456Z","status":200,"span":{"name":"request","route":"/users"},"spans":[{"name":"request","route":"/users"}]}
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `json.flatten` | bool | `false` | One flat object per event |
+| `json.message-key` | String | `"message"` | Key of the message; the event's target when it has none |
+| `json.current-span` | bool | `true` | Add the event's span as `span` |
+| `json.span-list` | bool | `true` | Add the span stack, root first, as `spans` |
+
+Event fields keep their JSON types; enricher fields (`r2e::add_enricher`)
+are strings. The formatter's own keys — the message key, `timestamp` (RFC 3339,
+UTC), `level`, `target`, `thread_id`, `thread_name`, `file`, `line`, `span`,
+`spans` — win over a field of the same name. Events from the `log` crate keep
+their real level and target, without the `log.*` bookkeeping fields.
+
+The section is read by the YAML-driven install (`r2e::launch`, `#[r2e::main]`,
+`#[r2e::test]`, the bare `Tracing` plugin); `Tracing::configured(..)` writes
+nested JSON. `R2E_TRACING_JSON_FLATTEN=true` toggles it from the environment.
+
 ### Programmatic usage
 
 ```rust

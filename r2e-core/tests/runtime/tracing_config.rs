@@ -1,5 +1,5 @@
 use r2e_core::config::{ConfigProperties, R2eConfig};
-use r2e_core::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
+use r2e_core::runtime::tracing_config::{JsonLogConfig, LogFormat, SpanEvents, TracingConfig};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 #[test]
@@ -163,4 +163,36 @@ fn converts_to_and_from_tracing_options() {
         r2e_core::TracingOptions::from(&TracingConfig::default()),
         r2e_core::TracingOptions::default()
     );
+}
+
+#[test]
+fn json_section_maps_onto_tracing_options() {
+    let yaml = r#"
+tracing:
+  format: json
+  json:
+    flatten: true
+    message-key: _msg
+    span-list: false
+"#;
+    let r2e_config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let (opts, problem) = r2e_core::runtime::tracing::tracing_options_of(&r2e_config);
+    assert!(problem.is_none(), "{problem:?}");
+    assert_eq!(opts.format, Some(LogFormat::Json));
+    assert!(opts.json.flatten);
+    assert_eq!(opts.json.message_key, "_msg");
+    assert!(opts.json.current_span);
+    assert!(!opts.json.span_list);
+
+    let json = JsonLogConfig::from_config(&r2e_config, Some(JsonLogConfig::PREFIX)).unwrap();
+    assert_eq!(r2e_core::JsonOptions::from(&json), opts.json);
+}
+
+#[test]
+fn json_section_defaults_to_nested() {
+    let r2e_config = R2eConfig::from_yaml_str("tracing:\n  format: json\n").unwrap();
+    let (opts, problem) = r2e_core::runtime::tracing::tracing_options_of(&r2e_config);
+    assert!(problem.is_none(), "{problem:?}");
+    assert_eq!(opts.json, r2e_core::JsonOptions::default());
+    assert_eq!(JsonLogConfig::default(), JsonLogConfig::from(&opts.json));
 }

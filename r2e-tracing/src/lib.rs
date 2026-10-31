@@ -20,6 +20,7 @@
 
 mod console;
 mod enrich;
+mod flat_json;
 mod install;
 mod late;
 mod noise;
@@ -31,7 +32,7 @@ pub use enrich::{add_enricher, EnrichContext, FieldEnricher};
 pub use install::{installed, try_install, AlreadyInstalled};
 pub use late::{contribute_layer, late_layers, BoxedLayer, LateLayers, NotWired};
 pub use noise::{is_suppressed, suppress, suppress_error, NoiseFilter, NoiseRule};
-pub use options::{LogFormat, SpanEvents, TracingOptions};
+pub use options::{JsonOptions, LogFormat, SpanEvents, TracingOptions};
 
 /// The `tracing-subscriber` version R2E builds its stack with — re-exported so
 /// [`TracingOptions::effective_span_events`]'s `FmtSpan` and custom stacks

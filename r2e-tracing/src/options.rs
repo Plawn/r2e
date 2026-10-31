@@ -34,12 +34,72 @@ impl SpanEvents {
     }
 }
 
+/// Shape of the [`LogFormat::Json`] lines.
+///
+/// With `flatten` unset (the default) the JSON format is `tracing-subscriber`'s
+/// own: the message and the event fields nested under `"fields"`. With
+/// `flatten` set, the console layer writes one flat object per event instead —
+/// event fields at the top level, the message under `message_key`, the
+/// current span under `"span"` and the span stack under `"spans"` — the shape
+/// log stores such as VictoriaLogs or Loki index without a parsing pipeline.
+///
+/// Bound to the YAML `tracing.json` section by `r2e-core` (`JsonLogConfig`).
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonOptions {
+    /// Write flat lines (event fields at the top level). Default `false`.
+    pub flatten: bool,
+    /// Key of the event message in a flat line. Default `"message"`
+    /// (VictoriaLogs expects `"_msg"`). An event without a message gets its
+    /// target there.
+    pub message_key: String,
+    /// Add the current span (`"span": {"name": .., <fields>}`) to flat lines.
+    /// Default `true`.
+    pub current_span: bool,
+    /// Add the span stack, root first (`"spans": [..]`), to flat lines.
+    /// Default `true`.
+    pub span_list: bool,
+}
+
+impl Default for JsonOptions {
+    fn default() -> Self {
+        Self {
+            flatten: false,
+            message_key: "message".to_owned(),
+            current_span: true,
+            span_list: true,
+        }
+    }
+}
+
+impl JsonOptions {
+    pub fn with_flatten(mut self, flatten: bool) -> Self {
+        self.flatten = flatten;
+        self
+    }
+
+    pub fn with_message_key(mut self, message_key: impl Into<String>) -> Self {
+        self.message_key = message_key.into();
+        self
+    }
+
+    pub fn with_current_span(mut self, current_span: bool) -> Self {
+        self.current_span = current_span;
+        self
+    }
+
+    pub fn with_span_list(mut self, span_list: bool) -> Self {
+        self.span_list = span_list;
+        self
+    }
+}
+
 /// The knobs of the subscriber [`try_install`](crate::try_install) builds.
 ///
-/// All fields except `filter` are `Option` — `None` means "use the subscriber
+/// All fields except `filter` and `json` are `Option` — `None` means "use the subscriber
 /// default". `filter` is an `EnvFilter` directive string; the `RUST_LOG`
 /// environment variable takes priority over it. [`Default`] gives the filter
-/// `"info"` and every other knob unset.
+/// `"info"`, nested JSON and every other knob unset.
 ///
 /// `r2e-core`'s `TracingConfig` is the YAML-bound twin of this struct
 /// (`tracing:` section) and converts both ways.
@@ -66,6 +126,8 @@ pub struct TracingOptions {
     pub ansi: Option<bool>,
     /// Which span lifecycle events to record.
     pub span_events: Option<SpanEvents>,
+    /// Shape of the JSON lines (flat or nested); ignored by `pretty`.
+    pub json: JsonOptions,
 }
 
 impl Default for TracingOptions {
@@ -88,6 +150,7 @@ impl TracingOptions {
             level: None,
             ansi: None,
             span_events: None,
+            json: JsonOptions::default(),
         }
     }
 
@@ -138,6 +201,11 @@ impl TracingOptions {
 
     pub fn with_span_events(mut self, span_events: SpanEvents) -> Self {
         self.span_events = Some(span_events);
+        self
+    }
+
+    pub fn with_json(mut self, json: JsonOptions) -> Self {
+        self.json = json;
         self
     }
 

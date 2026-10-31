@@ -78,7 +78,37 @@ tracing:
   line-number: true
   level: true
   span-events: full     # none | new | close | active | full
+  json:                 # JsonLogConfig (prefix tracing.json), only read under format: json
+    flatten: true       # default false = tracing-subscriber's nested `"fields":{..}` shape
+    message-key: _msg   # default "message"; target when the event has no message
+    current-span: true  # default true → "span": {"name":..,<fields>}
+    span-list: true     # default true → "spans": [root, .., leaf]
 ```
+
+**Flat JSON** (`tracing.json.flatten: true`, `r2e-tracing/src/flat_json.rs`,
+`FlatJson` + an internal `SpanFieldsLayer` that keeps each span's fields as a
+`serde_json::Map` in its extensions — built from the visitor, never parsed
+back). One object per event, everything at the top level:
+
+```json
+{"_msg":"listening","addr":"0.0.0.0:3000","level":"INFO","target":"r2e","timestamp":"2026-10-31T09:12:03.123456Z","span":{"name":"boot"},"spans":[{"name":"boot"}]}
+```
+
+Key precedence (lowest first): event fields → enricher fields → **reserved
+keys** `<message-key>`, `timestamp` (RFC 3339 UTC, µs), `level`, `target`,
+`thread_id`, `thread_name`, `file`, `line`, `span`, `spans` (each written only
+when its knob/option is on — `level`/`target` default on, the others follow
+`thread-ids`/`thread-names`/`file`/`line-number`). `log`-bridged events are
+normalized (`tracing_log::NormalizeEvent`: real level/target, `log.*` fields
+dropped). `JsonLogConfig` is read as a **sibling** of `TracingConfig` (both
+exhaustive-struct-safe): `resolve_tracing_options()` / `tracing_options_of(&R2eConfig)`
+combine `tracing` + `tracing.json` into `TracingOptions { json: JsonOptions, .. }`,
+which is what `init_tracing_from_config` (entry points, `Tracing`,
+`ensure_tracing_installed`) installs. `Tracing::configured(TracingConfig)` /
+`Tracing::from_config` carry no JSON shape (nested JSON); programmatic flat
+JSON goes through `r2e_tracing::try_install(&TracingOptions::default()
+.with_format(LogFormat::Json).with_json(JsonOptions::default().with_flatten(true)))`.
+Tests: `r2e-tracing/tests/format/`.
 
 **Programmatic API:**
 - `TracingConfig::default()` — filter `"info"`, all other fields `None`
@@ -130,7 +160,8 @@ tracing:
 
 ```
 Registry
-  └ vec![console layer, late-layer slot]   (console = fmt, `.json()` under format: json, wrapped by the enricher splice)
+  └ vec![console layer, late-layer slot]   (console = fmt, `.json()` under format: json, wrapped by the enricher splice;
+                                            json.flatten → SpanFieldsLayer + FlatJson, enrichers written into the object)
   └ NoiseFilter                            (global layer: vetoes matched events for everything below it)
   └ EnvFilter                              (outermost; RUST_LOG wins over `filter`)
 ```

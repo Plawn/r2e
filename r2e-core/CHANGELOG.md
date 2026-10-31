@@ -35,6 +35,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `tracing.json.*` keys (`JsonLogConfig`, prefix `tracing.json`):
+  `flatten`, `message-key`, `current-span`, `span-list` — with
+  `tracing.format: json` and `flatten: true` the console writes flat JSON
+  lines (VictoriaLogs: `message-key: _msg`). Read next to `TracingConfig`
+  (which is unchanged) by `init_tracing_from_config` and therefore the entry
+  points, `#[r2e::test]`, the `Tracing` plugin and `ensure_tracing_installed`;
+  `resolve_tracing_options()` / `tracing_options_of(&R2eConfig)` return the
+  combined `TracingOptions`. `JsonOptions` is re-exported at the crate root.
+
 - Subscriber extension points, re-exported from `r2e-tracing` at the crate
   root: noise rules (`suppress`, `suppress_error`, `is_suppressed`,
   `NoiseRule`, `NoiseFilter`), the late-layer slot (`contribute_layer`,
