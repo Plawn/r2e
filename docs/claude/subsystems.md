@@ -65,7 +65,7 @@ AppBuilder::new()
 
 The subscriber stack itself lives in the **`r2e-tracing`** crate (below `r2e-core`, no tokio): `TracingOptions` (the config-free mirror of `TracingConfig`, `#[non_exhaustive]` + builders), `LogFormat`, `SpanEvents`, `try_install` (returns `AlreadyInstalled` carrying the winner's options) and `installed()`. `r2e-core` keeps `TracingConfig`, the `FromConfigValue` impls and the `init_tracing*` entry points (`runtime/tracing.rs`), converting with `From<&TracingConfig> for TracingOptions` (and back); every moved type is re-exported at its old `r2e_core` path, plus `r2e_core::{TracingOptions, AlreadyInstalled, r2e_tracing, ensure_tracing_installed}` and the extension points below (`installed()` via `r2e_core::r2e_tracing::installed`).
 
-**YAML** (under a configurable prefix, e.g., `tracing.*` or `observability.tracing.*`):
+**YAML** (under a configurable prefix, normally `tracing.*`):
 ```yaml
 tracing:
   filter: "info,tower_http=debug"
@@ -138,9 +138,8 @@ Registry
 It is installed through an explicit `Dispatch` (`Dispatch::new(stack)` →
 `try_init()` → `late::wire(&dispatch)`): `Vec<L>` does not forward
 `on_register_dispatch`, so the slot is wired by `try_install` itself after the
-install wins. `r2e-observability`'s `tracing_setup.rs` still builds its own
-stack (console + OpenTelemetry) and puts `.with_filter(NoiseFilter)` on both
-layers.
+install wins. No crate builds a second stack: `r2e-observability` contributes
+its OpenTelemetry layer to the slot (see below).
 
 **Extension points** (all in `r2e-tracing`, re-exported at the `r2e_core`
 root; process-wide, append-only):
@@ -175,8 +174,17 @@ root; process-wide, append-only):
 Tests: `r2e-tracing/tests/{noise,late_layers,enrich,install_invalid_filter}/`
 (the last three are their own binaries — process-global state).
 
-**In ObservabilityConfig:**
-`ObservabilityConfig` embeds `tracing: TracingConfig`. The `from_r2e_config()` loader reads from `observability.tracing.*`. Convenience method: `.with_log_format(LogFormat)` delegates to the embedded `TracingConfig`.
+**Observability (r2e-observability) is the canonical contributor:** it builds no
+subscriber. `setup` calls `ensure_tracing_installed()`, then (OTLP on)
+`contribute_layer(tracing-opentelemetry layer)` — once per process; the layer's
+tracer (`SharedTracer`) follows the latest provider so later boots re-point it —
+and `add_enricher(OtelIds)` (`trace_id`/`span_id`). `NotWired` → one WARN.
+`ObservabilityConfig` has no `tracing` field (`#[non_exhaustive]`); only
+`observability.tracing.enabled` is read, other `observability.tracing.*` keys
+(found via `R2eConfig::sub_keys`) are ignored with one ERROR at boot;
+`with_log_format`/`with_tracing_config` are `on_unimplemented` compile errors
+naming `docs/migration/observability-tracing.md`. Tests:
+`r2e-observability/tests/{otel_contrib,otel_ids}/` (own binaries).
 
 ## HttpTrace (r2e-core)
 
@@ -230,19 +238,20 @@ each request logs.
 
 ## Observability (r2e-observability)
 
-`Observability` is the OpenTelemetry superset of `Tracing` **and** `HttpTrace`.
+`Observability` is the OpenTelemetry extension of `HttpTrace`, contributing to `Tracing`'s subscriber.
 It exports with OTLP/HTTP, installs W3C propagation, correlates logs with
 `trace_id`/`span_id`, and installs `r2e-core`'s `HttpTraceLayer` with the
 `OtelRequestSpan` shape (`src/span.rs`) — so there is exactly **one** span per
-request. Do not install it alongside `Tracing` (it owns the subscriber) or
-alongside `HttpTrace` (two layers = two spans); it reads the same `trace:`
+request. It builds no subscriber (it contributes to R2E's, see the
+extension-point section above), so `Tracing` next to it is fine; do not install
+it alongside `HttpTrace` (two layers = two spans); it reads the same `trace:`
 section either way, with its own `capture_headers` filling the preset slot.
 
 - `Observability::new(config)` — explicit OTLP configuration.
 - `Observability::from_config(&r2e_config, service_name)` — reads
   `observability.*`, including `otlp-protocol`.
 - `Observability::from_env(service_name)` — reads standard `OTEL_*` variables;
-  without an endpoint it installs standard tracing without an exporter.
+  without an endpoint it exports nothing (only the HTTP trace layer).
 - Honest OTLP defaults: HTTP/protobuf and
   `http://localhost:4318/v1/traces`; pathless HTTP(S) endpoints receive the
   standard traces path. A requested gRPC protocol warns and uses HTTP.

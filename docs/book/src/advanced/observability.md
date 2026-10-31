@@ -313,21 +313,24 @@ explaining the boot error that follows.
 
 **A subscriber is a one-shot process global: the first install wins.** Since
 the entrypoint installs before `App::build`, a `Tracing` / `ConfiguredTracing`
-/ `Observability` plugin declared in `build` *loses that race*. Losing is
-harmless when the plugin reads the same `tracing:` section — it is the same
-subscriber either way, and R2E stays quiet. It is not harmless when the plugin
-would have logged differently, or adds a layer of its own (OTLP!): R2E then
-warns, naming the format and filter it had to ignore.
+plugin declared in `build` *loses that race*. Losing is harmless when the
+plugin reads the same `tracing:` section — it is the same subscriber either
+way, and R2E stays quiet. It is not harmless when the plugin would have logged
+differently: R2E then warns, naming the format and filter it had to ignore.
+(`Observability` is not affected: it does not build a subscriber, it
+contributes to whichever R2E installed — see below.)
 
-So: to let a plugin own the subscriber, opt the entrypoint out.
+So: to install a subscriber of your own, opt the entrypoint out.
 
 ```rust
 r2e::app_main!(MyApp, tracing = false);   // R2E installs nothing at all
 ```
 
 `launch!(MyApp, tracing = false)` and `#[r2e::main(tracing = false)]` are the
-same knob for a custom `main`. Use it whenever you install `Observability`, or
-a `Tracing` plugin built from something other than the `tracing:` section.
+same knob for a custom `main`. Use it for a `Tracing` plugin built from
+something other than the `tracing:` section, or a hand-built subscriber — which
+should then put `r2e_core::late_layers()` first on its `Registry` so plugins
+that contribute layers (`Observability`) still work.
 
 ## OpenTelemetry observability
 
@@ -345,22 +348,20 @@ builder
 
 `from_env` reads the standard OTLP endpoint, service-name, protocol, and
 sampler variables. With no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
-`OTEL_EXPORTER_OTLP_ENDPOINT`, it installs ordinary R2E tracing without an
-exporter — the same plugin therefore works locally and deployed, without
+`OTEL_EXPORTER_OTLP_ENDPOINT`, it exports nothing and only installs the HTTP
+trace layer — the same plugin therefore works locally and deployed, without
 conditional subscriber initialization in your code.
 
-`Observability` installs its own subscriber (fmt **plus** the OpenTelemetry
-layer) from `App::build`, so it needs the entrypoint to stand down:
-
-```rust
-r2e::app_main!(MyApp, tracing = false);
-```
-
-Without that, the entrypoint's subscriber is already installed when the plugin
-runs, the OTel layer is skipped, and you get logs but **no exported spans**.
-R2E says so — "Observability tracing layer skipped" — rather than failing
-silently, but the fix is the `tracing = false` above. The same applies to a
-custom `#[r2e::main(tracing = false)]` entrypoint.
+`Observability` does **not** build a subscriber. It makes sure R2E's one
+subscriber is installed (from your `tracing:` section — usually the entrypoint
+already did), then contributes to it: the OpenTelemetry layer goes into the
+subscriber's late-layer slot, and a field enricher adds `trace_id`/`span_id` to
+console lines. A plain `r2e::app_main!(MyApp)` is all it needs; the console is
+configured by `tracing:` exactly as without the plugin, and R2E's noise rules
+apply to the exported spans too. Only `observability.tracing.enabled` (the OTLP
+switch) is read under `observability.tracing`; any other key there is ignored
+and reported by one `ERROR` at boot (see
+`docs/migration/observability-tracing.md`).
 
 R2E exports OTLP/HTTP to `http://localhost:4318/v1/traces` by default. A
 pathless HTTP(S) endpoint receives `/v1/traces` automatically; requesting gRPC
@@ -578,13 +579,12 @@ This produces structured log output with:
 
 ## `Tracing` vs `HttpTrace` vs `Observability`
 
-Three plugins, three jobs — mix them freely, except the two that own a
-subscriber:
+Three plugins, three jobs — mix them freely:
 
 | | `Tracing` / `ConfiguredTracing` | `HttpTrace` | `Observability` |
 |---|---|---|---|
 | Crate | `r2e-core` (always available) | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
-| Log subscriber | `tracing_subscriber::fmt` | — | `fmt` + `tracing-opentelemetry` |
+| Log subscriber | `tracing_subscriber::fmt` | — | contributes `tracing-opentelemetry` + `trace_id`/`span_id` fields to R2E's |
 | Per-request span | — | `request` (short field names) | `request` (OTel semconv names) |
 | Distributed tracing | No | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
 | Context propagation | No | No | Yes (W3C `traceparent`) |
@@ -595,8 +595,8 @@ subscriber, so it is usually the only one of the three you name. Switch to
 `Observability` when you need distributed tracing across microservices — it
 installs `HttpTrace`'s layer itself with an OpenTelemetry span shape, so there
 is still exactly **one** span per request; adding `HttpTrace` next to it would
-give you two. `Observability` also owns the subscriber, so do not pair it with
-`Tracing` either. It reads the same `trace:` section, so exclusions, request ids
+give you two. `Observability` does not own the subscriber, so pairing it with
+`Tracing` is fine. It reads the same `trace:` section, so exclusions, request ids
 and `record-path` are configured in one place either way.
 
-Both `ConfiguredTracing` and `Observability` use `TracingConfig` for subscriber formatting options (format, ansi, thread IDs, etc.). The `Observability` plugin embeds a `TracingConfig` in its `ObservabilityConfig`, so YAML keys live under `observability.tracing.*` instead of `tracing.*`.
+Subscriber formatting options (format, ansi, thread IDs, etc.) live in one place, `TracingConfig` — the top-level `tracing.*` section — with or without `Observability`. `ObservabilityConfig` only carries the OTLP side (`observability.*`, where `observability.tracing.enabled` is the export switch).

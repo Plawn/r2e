@@ -42,33 +42,44 @@ use r2e_core::{HttpTraceConfig, Plugin};
 /// Full-stack observability plugin — OpenTelemetry tracing, context
 /// propagation, and HTTP request logging.
 ///
-/// This plugin is a **superset** of [`Tracing`](r2e_core::builtins::Tracing).
-/// It replaces both `init_tracing()` and `.plugin(Tracing)` with a single call
-/// that additionally exports distributed traces via OTLP.
+/// The plugin does **not** build a `tracing` subscriber: the process has one,
+/// installed by R2E from the app's top-level `tracing:` section, and this
+/// plugin **contributes** to it.
 ///
 /// # What it does
 ///
-/// 1. Initialises a `tracing-subscriber` stack (fmt layer + OTel layer).
-/// 2. Installs a W3C `traceparent` propagator for cross-service context.
-/// 3. Installs `r2e-core`'s [`HttpTraceLayer`](r2e_core::HttpTraceLayer) with
+/// 1. Installs a W3C `traceparent` propagator for cross-service context.
+/// 2. Makes sure R2E's subscriber is installed
+///    ([`ensure_tracing_installed`](r2e_core::ensure_tracing_installed) —
+///    a no-op under `app_main!`/`#[r2e::main]`, which already did it).
+/// 3. Contributes the `tracing-opentelemetry` layer to it
+///    ([`contribute_layer`](r2e_core::contribute_layer)), so spans are
+///    exported over OTLP — noise rules and the `RUST_LOG`/`tracing.filter`
+///    filter apply to the export too.
+/// 4. Adds `trace_id` and `span_id` to log lines emitted inside traced spans
+///    ([`add_enricher`](r2e_core::add_enricher)).
+/// 5. Installs `r2e-core`'s [`HttpTraceLayer`](r2e_core::HttpTraceLayer) with
 ///    the [`OtelRequestSpan`] shape — **one** span per request, semconv field
 ///    names, parent context from the inbound `traceparent`.
-/// 4. Registers a shutdown hook that flushes pending traces on shutdown.
-/// 5. Adds `trace_id` and `span_id` to logs emitted inside traced spans.
+/// 6. Registers a shutdown hook that flushes pending traces on shutdown.
+///
+/// An application that installs its **own** subscriber must add
+/// [`r2e_core::late_layers()`](r2e_core::late_layers) first on its
+/// `Registry`, or nothing is exported (the plugin warns once).
 ///
 /// # Who owns what
 ///
 /// | | `Tracing` | `HttpTrace` | `Observability` |
 /// |---|---|---|---|
 /// | Crate | `r2e-core` | `r2e-core` | `r2e-observability` (feature `observability`) |
-/// | Log subscriber | `tracing_subscriber::fmt` | — | `fmt` + `tracing-opentelemetry` |
+/// | Log subscriber | R2E's (`tracing.*`) | — | contributes to R2E's (OTel layer + `trace_id`/`span_id` fields) |
 /// | Per-request span | — | `request` (short field names) | `request` (OTel semconv names) |
 /// | Distributed tracing | No | No | Yes (OTLP export to Jaeger, Tempo, …) |
 /// | Context propagation | No | No | Yes (W3C `traceparent`) |
-/// | Configuration | `tracing.*` | `trace.*` | `observability.*` (+ `trace.*` for the span) |
+/// | Configuration | `tracing.*` | `trace.*` | `observability.*` (+ `trace.*` for the span, `tracing.*` for the console) |
 ///
-/// **Do not** install `Tracing` alongside `Observability` — this plugin owns
-/// the subscriber too. `HttpTrace` is likewise redundant here: `Observability`
+/// `Tracing` and `Observability` can coexist (both use the one subscriber),
+/// but `Tracing` adds nothing here. `HttpTrace` is redundant: `Observability`
 /// installs that layer itself (installing both means two spans per request),
 /// but it *reads the same `trace:` section*, so exclusions, request-id and
 /// `record-path` are configured in exactly one place either way.
@@ -79,7 +90,7 @@ use r2e_core::{HttpTraceConfig, Plugin};
 /// use r2e_observability::{Observability, ObservabilityConfig};
 ///
 /// AppBuilder::new()
-///     // No init_tracing() call needed — the plugin handles it
+///     // The console output comes from the top-level `tracing:` section.
 ///     .plugin(Observability::new(
 ///         ObservabilityConfig::new("my-service")
 ///             .with_service_version("1.0.0")
@@ -93,7 +104,11 @@ use r2e_core::{HttpTraceConfig, Plugin};
 pub struct Observability {
     config: ObservabilityConfig,
     otlp_enabled: bool,
+    /// Test seam: replaces the OTLP exporter (see [`Self::with_span_exporter`]).
+    exporter: Option<ExporterOverride>,
 }
+
+type ExporterOverride = Box<dyn FnOnce(&ObservabilityConfig) -> OtelGuard + Send>;
 
 impl Observability {
     /// Create a new observability plugin with the given configuration.
@@ -101,6 +116,7 @@ impl Observability {
         Self {
             config,
             otlp_enabled: true,
+            exporter: None,
         }
     }
 
@@ -109,14 +125,16 @@ impl Observability {
         Self {
             config: ObservabilityConfig::from_r2e_config(r2e_config, service_name),
             otlp_enabled: true,
+            exporter: None,
         }
     }
 
     /// Configure observability from standard `OTEL_*` environment variables.
     ///
     /// When neither `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` nor
-    /// `OTEL_EXPORTER_OTLP_ENDPOINT` is present, this installs the standard
-    /// R2E tracing subscriber and HTTP trace layer without an OTLP exporter.
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` is present, the plugin only installs the
+    /// HTTP trace layer (and R2E's subscriber, if nothing installed it yet):
+    /// no OTLP export.
     pub fn from_env(service_name: &str) -> Self {
         let otlp_enabled = config::otlp_endpoint_from_env().is_some()
             && !matches!(
@@ -126,12 +144,27 @@ impl Observability {
         Self {
             config: ObservabilityConfig::from_env(service_name),
             otlp_enabled,
+            exporter: None,
         }
     }
 
     /// Whether this plugin instance will export traces over OTLP.
     pub fn is_otlp_enabled(&self) -> bool {
         self.otlp_enabled
+    }
+
+    /// Export through `exporter` (synchronously, one export per span end)
+    /// instead of OTLP — the seam tests use to read exported spans
+    /// (`opentelemetry_sdk::trace::InMemorySpanExporter`).
+    #[doc(hidden)]
+    pub fn with_span_exporter<E>(mut self, exporter: E) -> Self
+    where
+        E: opentelemetry_sdk::trace::SpanExporter + 'static,
+    {
+        self.exporter = Some(Box::new(move |config: &ObservabilityConfig| {
+            tracing_setup::init_tracing_with_exporter(config, exporter)
+        }));
+        self
     }
 }
 
@@ -141,20 +174,35 @@ impl Plugin for Observability {
     type Config = ();
     type Controllers = ();
 
-    /// The global propagator and the `tracing` subscriber are process-wide,
-    /// one-shot installs: they happen in `setup` (at `.plugin()` time) so bean
-    /// construction and every other plugin's `build` are already instrumented.
+    /// The global propagator and the contributions to the `tracing`
+    /// subscriber are process-wide: they happen in `setup` (at `.plugin()`
+    /// time) so bean construction and every other plugin's `build` are
+    /// already instrumented.
     fn setup(&mut self, ctx: &mut r2e_core::plugin::PluginSetupContext) {
         if self.otlp_enabled {
             propagation::install_propagator(&self.config);
         }
 
+        // The subscriber is the app's one, from the top-level `tracing:`
+        // section — installed here only if the entry point did not already.
+        r2e_core::ensure_tracing_installed();
+
+        if !self.config.leftover_tracing_keys.is_empty() {
+            tracing::error!(
+                keys = ?self.config.leftover_tracing_keys,
+                "r2e-observability: `observability.tracing.*` no longer configures the log \
+                 subscriber and these keys are ignored — move them to the top-level `tracing:` \
+                 section (see docs/migration/observability-tracing.md). Only \
+                 `observability.tracing.enabled` is still read."
+            );
+        }
+
         let guard = if self.config.tracing_enabled && self.otlp_enabled {
-            Some(tracing_setup::init_tracing(&self.config))
+            Some(match self.exporter.take() {
+                Some(init) => init(&self.config),
+                None => tracing_setup::init_tracing(&self.config),
+            })
         } else {
-            if self.config.tracing_enabled {
-                r2e_core::init_tracing_with_config(&self.config.tracing);
-            }
             None
         };
         // Park the guard where `build` can pick it up (it is not `Clone`, and

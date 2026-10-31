@@ -1,7 +1,7 @@
 ---
 topic: observability
 features: core, observability
-tokens: ~2900
+tokens: ~3200
 requires: plugins
 ---
 
@@ -32,9 +32,11 @@ requires: plugins
   `MakeRequestSpan::make_state` slot (`SpanState`) carries values written
   during the request to `on_response` for a custom summary line.
 - Enable feature `observability` and install
-  `Observability::new(ObservabilityConfig::new("my-service"))`; it is a superset
-  of `Tracing` **and** `HttpTrace` (it installs the same layer with an OTel span
-  shape) — never install those alongside it.
+  `Observability::new(ObservabilityConfig::new("my-service"))`; it replaces
+  `HttpTrace` (it installs the same layer with an OTel span shape) — never
+  install both. It builds **no** subscriber: it contributes its OTel layer and
+  the `trace_id`/`span_id` log fields to R2E's, so a plain `app_main!(MyApp)`
+  works and the console stays configured by the top-level `tracing:` section.
 - Alternatives to the code form: `Observability::from_config(&config, "my-service")`
   (YAML `observability.*`) or `Observability::from_env("my-service")` (`OTEL_*`).
 - Export is OTLP/HTTP: default `http://localhost:4318/v1/traces`, a pathless
@@ -49,8 +51,10 @@ requires: plugins
   `.with_extension(OtelPathNames::known_paths([...]))` or `OtelName(...)`.
 - `inject_current_context(request.headers_mut())` is the headers-only fallback:
   no client span, so no service-graph edge unless you open one yourself.
-- `from_env` with no endpoint installs the normal R2E tracing subscriber and no
-  OTLP exporter.
+- `observability.tracing.enabled` is the only `observability.tracing.*` key
+  (OTLP switch); console settings go under `tracing:`. `with_log_format` /
+  `with_tracing_config` no longer exist.
+- `from_env` with no endpoint exports nothing (no OTLP exporter).
 - Extend the installed subscriber with `suppress_error` (drop a benign
   upstream event), `add_enricher` (fields on every console line) and
   `contribute_layer` (a layer added after install) — never by re-installing it.
@@ -212,6 +216,11 @@ fn extend_tracing() {
 # fn main() {}
 ```
 
+`Observability` is the canonical example: its `setup` calls
+`contribute_layer` with the `tracing-opentelemetry` layer (exported spans,
+`Span::current().context()`) and `add_enricher` with a `trace_id`/`span_id`
+enricher — so R2E's noise rules gate the exported spans too.
+
 An app installing **its own** subscriber keeps both: add `late_layers()` first,
 directly on the `Registry`, and `NoiseFilter` above the layers it gates
 (`registry().with(late_layers()).with(fmt::layer()).with(NoiseFilter).with(env_filter)`).
@@ -219,8 +228,9 @@ directly on the `Registry`, and `NoiseFilter` above the layers it gates
 
 ### OpenTelemetry
 
-Requires feature: `observability`. **Superset of `Tracing` and `HttpTrace`** —
-do NOT install those alongside it. `Observability` installs the very same
+Requires feature: `observability`. **Replaces `HttpTrace`** — do NOT install
+both. It builds no subscriber, so `Tracing` alongside it is harmless (and
+usually unnecessary: the entry point installs one). `Observability` installs the very same
 `HttpTraceLayer` with an OpenTelemetry span shape (semconv
 `http.request.method` / `http.route` / `http.response.status_code`, `otel.kind =
 "server"`, parent context from the inbound `traceparent`), so there is exactly
@@ -247,6 +257,16 @@ OTLP/HTTP export (Jaeger, Tempo, …) + W3C `traceparent` propagation. The
 default endpoint is `http://localhost:4318/v1/traces`; pathless HTTP(S)
 endpoints receive `/v1/traces` automatically. Requesting gRPC logs a warning
 and uses HTTP. Logs inside traced spans include `trace_id` and `span_id`.
+The console format is the top-level `tracing:` section, as without the plugin:
+
+```yaml
+observability:
+  otlp-endpoint: "http://otel-collector:4318/v1/traces"
+  tracing:
+    enabled: true   # OTLP switch; any other observability.tracing.* key is ignored (ERROR at boot)
+tracing:
+  format: json
+```
 
 Outgoing reqwest instrumentation is opt-in once per client:
 
@@ -270,4 +290,4 @@ let http = traced_reqwest_client(reqwest::Client::new());
 `Observability::from_env` reads `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (preferred),
 `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`, protocol variables,
 `OTEL_TRACES_SAMPLER`, and `OTEL_TRACES_SAMPLER_ARG`. With no endpoint it
-installs the normal R2E tracing subscriber/layer and no OTLP exporter.
+installs the HTTP trace layer and no OTLP exporter.

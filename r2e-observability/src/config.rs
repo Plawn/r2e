@@ -1,7 +1,15 @@
-use r2e_core::TracingConfig;
-
 /// Configuration for the observability stack.
+///
+/// The console subscriber is **not** configured here: it is the app's one
+/// framework subscriber, configured by the top-level `tracing:` section (see
+/// `docs/migration/observability-tracing.md`). This struct only drives the
+/// OpenTelemetry side — exporter, sampler, resource, propagation.
+///
+/// `#[non_exhaustive]`: build it with [`new`](Self::new),
+/// [`from_env`](Self::from_env) or [`from_r2e_config`](Self::from_r2e_config)
+/// and the `with_*` methods.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ObservabilityConfig {
     /// Service name reported to the tracing backend.
     pub service_name: String,
@@ -21,9 +29,34 @@ pub struct ObservabilityConfig {
     pub resource_attributes: Vec<(String, String)>,
     /// Headers to forward as span attributes.
     pub capture_headers: Vec<String>,
-    /// Tracing subscriber configuration (format, filter, etc.).
-    pub tracing: TracingConfig,
+    /// `observability.tracing.*` keys other than `enabled` found by
+    /// [`from_r2e_config`](Self::from_r2e_config): the removed subscriber
+    /// knobs. Reported once by the plugin's `setup`.
+    pub(crate) leftover_tracing_keys: Vec<String>,
 }
+
+/// The former `observability.tracing.*` subscriber knobs, now read from the
+/// top-level `tracing:` section only.
+mod tracing_removed {
+    pub trait Sealed {}
+}
+
+/// Marker for the **removed** `ObservabilityConfig` subscriber knobs.
+///
+/// Nothing implements it (its supertrait is sealed and unimplemented), so the
+/// only thing it can do is turn a leftover
+/// [`with_tracing_config`](ObservabilityConfig::with_tracing_config) /
+/// [`with_log_format`](ObservabilityConfig::with_log_format) call into a
+/// compile error that names the migration. See
+/// `docs/migration/observability-tracing.md`.
+#[doc(hidden)]
+#[diagnostic::on_unimplemented(
+    message = "`ObservabilityConfig::with_tracing_config`/`with_log_format` were removed: the subscriber is configured by the app's top-level `tracing:` section (see docs/migration/observability-tracing.md)",
+    label = "the Observability plugin no longer builds a subscriber",
+    note = "delete the call and move the settings to the top-level `tracing:` section of application.yaml (`tracing.format: json`, `tracing.filter: ...`)",
+    note = "the plugin now contributes its OpenTelemetry layer and the `trace_id`/`span_id` log fields to R2E's one subscriber"
+)]
+pub trait ObservabilityTracingRemoved: tracing_removed::Sealed {}
 
 /// OTLP transport protocol.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,7 +88,7 @@ impl ObservabilityConfig {
             propagation_format: PropagationFormat::W3c,
             resource_attributes: Vec::new(),
             capture_headers: Vec::new(),
-            tracing: TracingConfig::default(),
+            leftover_tracing_keys: Vec::new(),
         }
     }
 
@@ -95,15 +128,28 @@ impl ObservabilityConfig {
         self
     }
 
-    /// Set the tracing subscriber configuration.
-    pub fn with_tracing_config(mut self, config: TracingConfig) -> Self {
-        self.tracing = config;
+    /// **Removed.** The plugin no longer builds a subscriber: the console
+    /// output is configured by the app's top-level `tracing:` section.
+    ///
+    /// This shim exists only so the leftover call fails at **compile time**
+    /// with a message that names the migration. Its bound,
+    /// [`ObservabilityTracingRemoved`], is implemented by nothing. See
+    /// `docs/migration/observability-tracing.md`.
+    #[doc(hidden)]
+    #[deprecated(
+        note = "`ObservabilityConfig::with_tracing_config` was removed: configure the subscriber with the app's top-level `tracing:` section — see docs/migration/observability-tracing.md"
+    )]
+    pub fn with_tracing_config<T: ObservabilityTracingRemoved>(self, _config: T) -> Self {
         self
     }
 
-    /// Convenience: set the log format on the embedded tracing config.
-    pub fn with_log_format(mut self, format: r2e_core::LogFormat) -> Self {
-        self.tracing = self.tracing.with_format(format);
+    /// **Removed.** See [`with_tracing_config`](Self::with_tracing_config):
+    /// set `tracing.format` in the app's top-level `tracing:` section instead.
+    #[doc(hidden)]
+    #[deprecated(
+        note = "`ObservabilityConfig::with_log_format` was removed: set `tracing.format` in the app's top-level `tracing:` section — see docs/migration/observability-tracing.md"
+    )]
+    pub fn with_log_format<T: ObservabilityTracingRemoved>(self, _format: T) -> Self {
         self
     }
 
@@ -155,31 +201,45 @@ impl ObservabilityConfig {
     /// - `observability.otlp-endpoint`
     /// - `observability.otlp-protocol`
     /// - `observability.sampling-ratio`
-    /// - `observability.tracing.enabled`
+    /// - `observability.tracing.enabled` (the OTLP export switch)
     ///
-    /// The embedded `TracingConfig` is loaded from `observability.tracing.*`.
+    /// The console subscriber is configured by the top-level `tracing:`
+    /// section, not here. Any other `observability.tracing.*` key (the removed
+    /// subscriber knobs — `format`, `filter`, …) is recorded and reported by
+    /// the plugin as one `ERROR` naming
+    /// `docs/migration/observability-tracing.md`; boot continues.
     pub fn from_r2e_config(config: &r2e_core::R2eConfig, service_name: &str) -> Self {
-        use r2e_core::ConfigProperties;
-
         let mut cfg = Self::new(service_name);
         if let Ok(endpoint) = config.get::<String>("observability.otlp-endpoint") {
             cfg.otlp_endpoint = endpoint;
         }
         if let Ok(protocol) = config.get::<String>("observability.otlp-protocol")
-            && let Some(protocol) = parse_otlp_protocol(&protocol) {
-                cfg.otlp_protocol = protocol;
-            }
+            && let Some(protocol) = parse_otlp_protocol(&protocol)
+        {
+            cfg.otlp_protocol = protocol;
+        }
         if let Ok(ratio) = config.get::<f64>("observability.sampling-ratio") {
             cfg.sampling_ratio = ratio.clamp(0.0, 1.0);
         }
         if let Ok(enabled) = config.get::<bool>("observability.tracing.enabled") {
             cfg.tracing_enabled = enabled;
         }
-        // Load the tracing subscriber config from observability.tracing.*
-        if let Ok(tracing) = TracingConfig::from_config(config, Some("observability.tracing")) {
-            cfg.tracing = tracing;
-        }
+        cfg.leftover_tracing_keys = config
+            .sub_keys("observability.tracing")
+            .into_iter()
+            .filter(|key| key != "enabled")
+            .map(|key| format!("observability.tracing.{key}"))
+            .collect();
         cfg
+    }
+}
+
+impl ObservabilityConfig {
+    /// The leftover `observability.tracing.*` keys (anything but `enabled`)
+    /// [`from_r2e_config`](Self::from_r2e_config) found — exposed for tests.
+    #[doc(hidden)]
+    pub fn leftover_tracing_keys(&self) -> &[String] {
+        &self.leftover_tracing_keys
     }
 }
 
