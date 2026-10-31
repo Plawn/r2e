@@ -873,18 +873,32 @@ nested reporting).
 
 ### Built-in ConfigProperties types
 
-`TracingConfig` (in `r2e-core::tracing_config`) — configurable tracing subscriber options (filter, format, ansi, thread IDs, etc.). Used by the `ConfiguredTracing` plugin and the entry point's install (`ensure_tracing_installed`). Read from YAML under a prefix (normally `tracing.*`). `ObservabilityConfig` no longer embeds it: the `Observability` plugin contributes to the one subscriber configured by `tracing.*`.
-
-`JsonLogConfig` (same module, prefix `tracing.json`, `#[non_exhaustive]`) — shape of the `format: json` lines, read next to `TracingConfig` by `init_tracing_from_config` (entry points, `Tracing` plugin, `ensure_tracing_installed`):
+`TracingConfig` (in `r2e-core::runtime::tracing_config`, re-exported at the root, `#[non_exhaustive]`, prefix `tracing`) — the process-global log subscriber. `build_state()` / `try_build_state()` / `with_state()` bind it from the loaded config (profile overlay and `R2E_*` env overlay included; defaults when the app loaded no config) and install the subscriber once, as their first step — there is no other install path (no plugin, no `init_tracing*`, no `tracing = …` macro argument; see `docs/migration/tracing-single-path.md`). `ObservabilityConfig` does not embed it: the `Observability` plugin contributes layers to the one subscriber configured here. `JsonLogConfig` (prefix `tracing.json`, `#[non_exhaustive]`) is its nested `json` field (`#[config(section, default)]`).
 
 | Key | Type | Default | Description |
 |---|---|---|---|
+| `tracing.enabled` | `bool` | `true` | `false`: R2E installs nothing, drops the boot-log buffer and ignores contributed layers (the app owns the subscriber, or wants none). `R2E_TRACING_ENABLED=false`. |
+| `tracing.console` | `bool` | `true` | `false`: no built-in console layer; layers contributed with `.tracing_layer(..)` still run (a custom console). `R2E_TRACING_CONSOLE=false`. |
+| `tracing.filter` | `String` | `"info"` | `EnvFilter` directives. `RUST_LOG`, when set and valid, wins. An invalid directive falls back to `info` with one ERROR. `R2E_TRACING_FILTER`. |
+| `tracing.format` | `pretty` \| `json` | `pretty` | Console line format. `R2E_TRACING_FORMAT=json`. |
+| `tracing.target` | `bool` | subscriber default (on) | Print the target. |
+| `tracing.level` | `bool` | subscriber default (on) | Print the level. |
+| `tracing.thread-ids` / `tracing.thread-names` | `bool` | off | Thread id / name. |
+| `tracing.file` / `tracing.line-number` | `bool` | off | Source file / line. |
+| `tracing.ansi` | `bool` | unset → on only when stdout is a terminal | ANSI colours. |
+| `tracing.span-events` | `none` \| `new` \| `close` \| `active` \| `full` | `close` | Span lifecycle events to log. |
 | `tracing.json.flatten` | `bool` | `false` | One flat object per event (fields at the top level, `span`/`spans`) instead of `tracing-subscriber`'s nested `"fields":{..}`. `R2E_TRACING_JSON_FLATTEN=true` works. |
-| `tracing.json.message-key` | `String` | `"message"` | Key of the message in a flat line (`_msg` for VictoriaLogs); the target when the event has none. Kebab key → not addressable via `R2E_`. |
+| `tracing.json.message-key` | `String` | `"message"` | Key of the message in a flat line (`_msg` for VictoriaLogs); the target when the event has none. |
 | `tracing.json.current-span` | `bool` | `true` | Add `"span": {"name":..,<fields>}` (the event's span). |
 | `tracing.json.span-list` | `bool` | `true` | Add `"spans": [..]`, root first. |
 
-Reserved keys (`<message-key>`, `timestamp`, `level`, `target`, `thread_id`, `thread_name`, `file`, `line`, `span`, `spans`) overwrite an event field or enricher field of the same name. An invalid `tracing.json` section falls back to nested JSON with a warning; the rest of `tracing:` still applies. Details: `docs/claude/subsystems.md` § TracingConfig.
+The `json.*` keys are only read under `format: json`. **Env overrides:** the `R2E_` overlay is strict (`_` → `.` only), so single-word keys bind (`R2E_TRACING_ENABLED`, `R2E_TRACING_CONSOLE`, `R2E_TRACING_FILTER`, `R2E_TRACING_FORMAT`, `R2E_TRACING_ANSI`, `R2E_TRACING_JSON_FLATTEN`) but kebab keys (`thread-ids`, `line-number`, `span-events`, `json.message-key`, `json.current-span`, `json.span-list`) cannot be set through it — use YAML, a profile file, or a `${VAR}` placeholder (`message-key: "${LOG_MESSAGE_KEY:message}"`).
+
+**Profiles:** the section is read from the loaded config like any other, so `application-<profile>.yaml` applies; `TestApp::boot*` forces the `test` profile, so `application-test.yaml` configures the test subscriber (`tracing: { enabled: false }` quiets a whole test binary).
+
+**Invalid section:** an invalid `tracing:` section (including `tracing.json`) does not abort the boot — the built-in defaults are installed and one ERROR names the problem.
+
+Reserved flat-JSON keys (`<message-key>`, `timestamp`, `level`, `target`, `thread_id`, `thread_name`, `file`, `line`, `span`, `spans`) overwrite an event field or `LogFields` entry of the same name. Install sequence, boot-log buffer and layers: `docs/claude/subsystems.md` § Tracing.
 
 Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `close` / `active` / `full`). Both derive `FromConfigValue` via serde.
 

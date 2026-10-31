@@ -1,7 +1,8 @@
 //! `#[r2e::main]` and `#[r2e::test]` attribute macros.
 //!
 //! These wrap the user's `async fn main()` / `async fn test_*()` in a Tokio
-//! runtime and optionally call `init_tracing_from_config()`.
+//! runtime. They install no `tracing` subscriber: `build_state()` does, from
+//! the `tracing:` section (see `docs/migration/tracing-single-path.md`).
 //!
 //! The canonical way to declare an app is `impl r2e::App` + a parameterless
 //! `#[r2e::main]` that calls [`r2e::launch`](r2e_core::launch):
@@ -22,12 +23,13 @@ use quote::quote;
 use syn::{parse_macro_input, FnArg, ItemFn};
 
 use crate::util::crate_path::r2e_core_path;
-use crate::util::runtime_args::{parse_bool, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs};
+use crate::util::runtime_args::{
+    parse_bool, tracing_removed, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs,
+};
 
 // ── Argument parsing ─────────────────────────────────────────────────────
 
 struct MainArgs {
-    tracing: bool,
     /// `#[r2e::test(app = ...)]`: the `App`-implementing type to boot into a
     /// `TestApp`.
     app_fn: Option<syn::Path>,
@@ -57,7 +59,6 @@ struct MainArgs {
 impl Default for MainArgs {
     fn default() -> Self {
         Self {
-            tracing: true,
             app_fn: None,
             with_expr: None,
             env_expr: None,
@@ -87,7 +88,7 @@ impl MainArgs {
 
             if meta.input.peek(syn::Token![=]) {
                 match key.as_str() {
-                    "tracing" => this.tracing = parse_bool(&meta)?,
+                    "tracing" => return Err(tracing_removed(&meta)),
                     "app" => this.app_fn = Some(meta.value()?.parse()?),
                     "with" => this.with_expr = Some(KeyedExpr::parse(&meta)?),
                     "env" => this.env_expr = Some(KeyedExpr::parse(&meta)?),
@@ -222,12 +223,6 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         None => None,
     };
 
-    let tracing_init = if args.tracing {
-        quote! { #krate::init_tracing_from_config(); }
-    } else {
-        quote! {}
-    };
-
     let runtime_builder = args.runtime.builder_tokens(&krate);
 
     let test_attr = if is_test {
@@ -257,7 +252,6 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
             args.jwt,
             ordering.as_ref(),
             &func,
-            &tracing_init,
             &runtime_builder,
         );
     }
@@ -311,7 +305,6 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
         #(#attrs)*
         #test_attr
         #vis fn #fn_name() #ret {
-            #tracing_init
             #runtime_builder
                 .block_on(async { #async_body })
         }
@@ -402,7 +395,6 @@ fn expand_boot_test(
     jwt: bool,
     ordering: Option<&OrderedHooks>,
     func: &ItemFn,
-    tracing_init: &TokenStream2,
     runtime_builder: &TokenStream2,
 ) -> TokenStream2 {
     let test_crate = crate::util::crate_path::r2e_test_path();
@@ -488,7 +480,6 @@ fn expand_boot_test(
         #(#attrs)*
         #[::core::prelude::v1::test]
         #vis fn #fn_name() #ret {
-            #tracing_init
             #runtime_builder
                 .block_on(async {
                     #turn

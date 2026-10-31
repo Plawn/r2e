@@ -49,37 +49,36 @@ use r2e_core::{HttpTraceConfig, Plugin};
 /// # What it does
 ///
 /// 1. Installs a W3C `traceparent` propagator for cross-service context.
-/// 2. Makes sure R2E's subscriber is installed
-///    ([`ensure_tracing_installed`](r2e_core::ensure_tracing_installed) —
-///    a no-op under `app_main!`/`#[r2e::main]`, which already did it).
-/// 3. Contributes the `tracing-opentelemetry` layer to it
-///    ([`contribute_layer`](r2e_core::contribute_layer)), so spans are
-///    exported over OTLP — noise rules and the `RUST_LOG`/`tracing.filter`
-///    filter apply to the export too.
-/// 4. Adds `trace_id` and `span_id` to log lines emitted inside traced spans
-///    ([`add_enricher`](r2e_core::add_enricher)).
-/// 5. Installs `r2e-core`'s [`HttpTraceLayer`](r2e_core::HttpTraceLayer) with
+/// 2. Contributes the `tracing-opentelemetry` layer to R2E's subscriber
+///    ([`PluginSetupContext::tracing_layer`](r2e_core::plugin::PluginSetupContext::tracing_layer)),
+///    so spans are exported over OTLP — `Suppress` rules and the
+///    `RUST_LOG`/`tracing.filter` filter apply to the export too.
+/// 3. Contributes [`OtelIds`](tracing_setup::OtelIds), which adds `trace_id`
+///    and `span_id` to log lines emitted inside traced spans
+///    ([`LogFields`](r2e_core::LogFields)).
+/// 4. Installs `r2e-core`'s [`HttpTraceLayer`](r2e_core::HttpTraceLayer) with
 ///    the [`OtelRequestSpan`] shape — **one** span per request, semconv field
 ///    names, parent context from the inbound `traceparent`.
-/// 6. Registers a shutdown hook that flushes pending traces on shutdown.
+/// 5. Registers a shutdown hook that flushes pending traces on shutdown.
 ///
-/// An application that installs its **own** subscriber must add
-/// [`r2e_core::late_layers()`](r2e_core::late_layers) first on its
-/// `Registry`, or nothing is exported (the plugin warns once).
+/// `build_state()` installs the subscriber with the contributed layers. When
+/// the application installed its **own** subscriber first (or set
+/// `tracing.enabled: false`), the layers are not part of it and nothing is
+/// exported — add [`otel_layer`](tracing_setup::otel_layer) and
+/// [`OtelIds`](tracing_setup::OtelIds) to that subscriber yourself.
 ///
 /// # Who owns what
 ///
-/// | | `Tracing` | `HttpTrace` | `Observability` |
+/// | | `build_state()` | `HttpTrace` | `Observability` |
 /// |---|---|---|---|
 /// | Crate | `r2e-core` | `r2e-core` | `r2e-observability` (feature `observability`) |
-/// | Log subscriber | R2E's (`tracing.*`) | — | contributes to R2E's (OTel layer + `trace_id`/`span_id` fields) |
+/// | Log subscriber | installs R2E's (`tracing.*`) | — | contributes to R2E's (OTel layer + `trace_id`/`span_id` fields) |
 /// | Per-request span | — | `request` (short field names) | `request` (OTel semconv names) |
 /// | Distributed tracing | No | No | Yes (OTLP export to Jaeger, Tempo, …) |
 /// | Context propagation | No | No | Yes (W3C `traceparent`) |
 /// | Configuration | `tracing.*` | `trace.*` | `observability.*` (+ `trace.*` for the span, `tracing.*` for the console) |
 ///
-/// `Tracing` and `Observability` can coexist (both use the one subscriber),
-/// but `Tracing` adds nothing here. `HttpTrace` is redundant: `Observability`
+/// `HttpTrace` is redundant: `Observability`
 /// installs that layer itself (installing both means two spans per request),
 /// but it *reads the same `trace:` section*, so exclusions, request-id and
 /// `record-path` are configured in exactly one place either way.
@@ -175,33 +174,34 @@ impl Plugin for Observability {
     type Controllers = ();
 
     /// The global propagator and the contributions to the `tracing`
-    /// subscriber are process-wide: they happen in `setup` (at `.plugin()`
-    /// time) so bean construction and every other plugin's `build` are
-    /// already instrumented.
+    /// subscriber happen in `setup` (at `.plugin()` time): the layers are
+    /// installed by `build_state()`, before bean construction and every
+    /// plugin's `build`, so those are already instrumented.
     fn setup(&mut self, ctx: &mut r2e_core::plugin::PluginSetupContext) {
         if self.otlp_enabled {
             propagation::install_propagator(&self.config);
         }
-
-        // The subscriber is the app's one, from the top-level `tracing:`
-        // section — installed here only if the entry point did not already.
-        r2e_core::ensure_tracing_installed();
 
         if !self.config.leftover_tracing_keys.is_empty() {
             tracing::error!(
                 keys = ?self.config.leftover_tracing_keys,
                 "r2e-observability: `observability.tracing.*` no longer configures the log \
                  subscriber and these keys are ignored — move them to the top-level `tracing:` \
-                 section (see docs/migration/observability-tracing.md). Only \
+                 section (see docs/migration/tracing-single-path.md). Only \
                  `observability.tracing.enabled` is still read."
             );
         }
 
         let guard = if self.config.tracing_enabled && self.otlp_enabled {
-            Some(match self.exporter.take() {
+            let guard = match self.exporter.take() {
                 Some(init) => init(&self.config),
                 None => tracing_setup::init_tracing(&self.config),
-            })
+            };
+            // The OpenTelemetry layer first: `OtelIds` reads the context it
+            // activates on span enter.
+            ctx.tracing_layer(tracing_setup::otel_layer());
+            ctx.tracing_layer(tracing_setup::OtelIds);
+            Some(guard)
         } else {
             None
         };

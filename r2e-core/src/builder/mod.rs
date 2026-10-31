@@ -837,6 +837,10 @@ struct BuilderConfig {
     /// constructed, so a bad config file reaches `app_main!`'s exit-1 contract
     /// and `TestApp::try_boot` instead of panicking.
     deferred_boot_error: Option<crate::beans::BeanError>,
+    /// `tracing` layers contributed with [`AppBuilder::tracing_layer`] and
+    /// [`PluginSetupContext::tracing_layer`](crate::plugin::PluginSetupContext::tracing_layer);
+    /// handed to the subscriber `build_state()` installs.
+    tracing_layers: Vec<r2e_tracing::BoxedLayer>,
 }
 
 impl BuilderConfig {
@@ -972,8 +976,8 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
     ///
     /// ```ignore
     /// let b = AppBuilder::new().load_config::<AppConfig>();
-    /// let tracing = Tracing::from_config(b.r2e_config().unwrap());
-    /// b.plugin(tracing).build_state().await
+    /// let cors = MyCors::from_config(b.r2e_config().unwrap());
+    /// b.plugin(cors).build_state().await
     /// ```
     pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
         self.shared.config.as_ref()

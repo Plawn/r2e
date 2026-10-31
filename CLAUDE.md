@@ -92,7 +92,7 @@ compile-time dependency injection, JWT/OIDC security, zero runtime reflection.
 ```
 r2e               → Facade crate; re-exports subcrates behind feature flags. Users depend on this.
 r2e-rt            → Async-runtime facade; the ONLY crate naming tokio; bottom of the graph; re-exported as r2e_core::rt.
-r2e-tracing       → Owns the process-global tracing subscriber: TracingOptions, try_install/installed, noise rules, late-layer slot, field enrichers; no tokio; re-exported by r2e-core.
+r2e-tracing       → Owns the process-global tracing subscriber: TracingOptions, one-shot install/installed, boot-log buffer (capture_boot_logs), Suppress, LogFields; no tokio; re-exported by r2e-core.
 r2e-macros        → Proc macros: #[controller] + #[routes] generate Axum handlers.
 r2e-http          → HTTP abstraction; sole owner of axum; IntoHttpResponse, axum_compat escape hatch, json codec façade, QUIC/HTTP3.
 r2e-core          → Runtime foundation: AppBuilder → HList state, Controller trait, guards/interceptors, R2eConfig, HttpError, lifecycle, ManagedResource, Page/Pageable. Re-exports r2e-http as `http`.
@@ -121,7 +121,7 @@ r2e-compile-tests → trybuild tests for macro error messages.
 example-app       → Demo app (App trait in lib.rs; main.rs + integration tests boot the same type).
 ```
 
-Dependency flow: `r2e-rt`, `r2e-tracing` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← integrations (`r2e-security`, `r2e-events`, `r2e-tenant`, data backends, …) ← `r2e` ← applications.
+Dependency flow: `r2e-rt`, `r2e-tracing` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← integrations (`r2e-security`, `r2e-events`, `r2e-tenant`, data backends, …) ← `r2e` ← applications. (`r2e-http` does not depend on `r2e-tracing`; `r2e-core` is its first consumer.)
 
 ### Containment Boundaries (CI-enforced — details: `docs/claude/architecture.md`)
 
@@ -177,9 +177,9 @@ impl UserController {
 | `HttpError`, `ApiError`, `#[derive(ApiError)]`, `map_error!`, validation, `garde`, `ManagedResource`, `#[managed]`, error responses | `docs/claude/error-handling.md` |
 | `Rejection` size/layout, `result_large_err`, `large_enum_variant`, `Extras` cold block, `details()`/`headers()` accessors, error-hub benchmarks, boxed/static/`Cow`-like rejection alternatives | `docs/claude/rejection-layout.md` |
 | `Bean`, `AsyncBean`, `Producer`, `#[bean]`, `#[producer]`, `#[inject]`, `#[post_construct]`, `BeanRegistry`, `BeanContext`, `build_state`, dependency injection, bean graph | `docs/claude/beans-di.md` |
-| `Plugin`, `PluginInstall`, `.plugin()`, `Provided`/`PluginProvisions`, `Deps`, `Controllers`, `configure`, plugin `Config`/`CONFIG_PREFIX`/`PluginConfig`, effect stages (Graph/Routes/Finalize), `after_routes`/`RoutesContext`, `HealthRegistry`, `DeferredAction`/`DeferredContext`, `store_data`/plugin data, writing a new plugin | `docs/claude/plugins.md` |
+| `Plugin`, `PluginInstall`, `.plugin()`, `Provided`/`PluginProvisions`, `Deps`, `Controllers`, `configure`, plugin `Config`/`CONFIG_PREFIX`/`PluginConfig`, effect stages (Graph/Routes/Finalize), `after_routes`/`RoutesContext`, `HealthRegistry`, `DeferredAction`/`DeferredContext`, `store_data`/plugin data, `PluginSetupContext::tracing_layer`, writing a new plugin | `docs/claude/plugins.md` |
 | `PoolExecutor`, `JobHandle`, `Executor` plugin, `ExecutorConfig`, `#[async_exec]`, `#[derive(BackgroundService)]`, `ServiceComponent`, `spawn_service`, managed task pool, background workers | `docs/claude/executor.md` |
-| `Cache`, `TtlCache`, `RateLimiter`, `RateLimitRegistry`, `AuthenticatedUser`, `JwksValidator`, `EventBus`, `#[consumer]`, `#[scheduled]`, `Scheduler`, managed SQLx/Diesel transactions, `Pageable`, `Page`, `OpenAPI`, `ContextConstruct`, `AppBuilder`, `TestApp`, `TestJwt`, `TracingConfig`, `LogFormat`, `SpanEvents`, `ConfiguredTracing`, `init_tracing_with_config`, tracing subscriber formatting, `HttpTrace`, `HttpTraceConfig`, `HttpTraceLayer`, `MakeRequestSpan`, `RequestOutcome`, `trace.*`, per-request span / request summary line | `docs/claude/subsystems.md` |
+| `Cache`, `TtlCache`, `RateLimiter`, `RateLimitRegistry`, `AuthenticatedUser`, `JwksValidator`, `EventBus`, `#[consumer]`, `#[scheduled]`, `Scheduler`, managed SQLx/Diesel transactions, `Pageable`, `Page`, `OpenAPI`, `ContextConstruct`, `AppBuilder`, `TestApp`, `TestJwt`, `TracingConfig`, `tracing.*`, `LogFormat`, `SpanEvents`, `tracing_layer`, `capture_boot_logs`, boot-log buffer, `Suppress`, `LogFields`, subscriber install / foreign subscriber, tracing subscriber formatting, `HttpTrace`, `HttpTraceConfig`, `HttpTraceLayer`, `MakeRequestSpan`, `RequestOutcome`, `trace.*`, per-request span / request summary line | `docs/claude/subsystems.md` |
 | `prelude`, `use r2e::prelude::*`, feature flags, `Params`, re-exports, what's available by default | `docs/claude/prelude-features.md` |
 | `r2e new`, `r2e dev`, `r2e generate`, `r2e add`, `r2e doctor`, `r2e routes`, CLI templates, scaffolding | `docs/claude/cli.md` |
 | `quic`, `quinn`, `h3`, HTTP/3, `serve_h3`, `QuicEndpoint`, `QuicConnection`, `Alt-Svc`, `build_server_config`, raw QUIC streams, `server.quic.*` | `docs/features/18-quic.md` |

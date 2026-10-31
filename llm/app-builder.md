@@ -51,7 +51,7 @@ AppBuilder::new()
     .plugin(Health)
     .plugin(Cors::permissive())
     .plugin(HttpTrace::new())                   // per-request span + summary line (`trace.*`)
-    // subscriber: the entry point installs it; `.plugin(Tracing)` only if you opted it out
+    .tracing_layer(r2e::Suppress::error("dep::conn", "reset")) // build_state() installs the subscriber from `tracing:`
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
     .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
     .provide(bean)                              // constructed values

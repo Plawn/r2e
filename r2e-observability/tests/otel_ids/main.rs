@@ -1,20 +1,20 @@
-//! The `trace_id`/`span_id` enricher `Observability` registers, on R2E's
-//! real console layer.
+//! The `trace_id`/`span_id` [`LogFields`](r2e_core::LogFields) layer
+//! `Observability` contributes, on R2E's real console layer.
 //!
-//! Own binary: enrichers are process-wide and append-only. The console layer
-//! writes into a buffer under a **scoped** subscriber (`with_default`) next to
-//! a `tracing-opentelemetry` layer, so the lines can be read back — the global
-//! subscriber `otel_contrib` exercises writes to stdout and cannot be
-//! captured. The contribution through the late-layer slot is covered there.
+//! The console layer writes into a buffer under a **scoped** subscriber
+//! (`with_default`) next to a `tracing-opentelemetry` layer, so the lines can
+//! be read back — the global subscriber `otel_contrib` exercises writes to
+//! stdout and cannot be captured. The contribution through
+//! `PluginSetupContext::tracing_layer` is covered there.
 
 use std::io;
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::trace::InMemorySpanExporter;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use r2e_core::r2e_tracing::console_layer_with_writer;
-use r2e_core::{add_enricher, LogFormat, TracingOptions};
+use r2e_core::{LogFormat, TracingOptions};
 use r2e_observability::tracing_setup::OtelIds;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -48,15 +48,9 @@ impl<'a> MakeWriter<'a> for Buffer {
     }
 }
 
-fn register_enricher() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| add_enricher(Box::new(OtelIds)));
-}
-
 /// Run `emit` under console layer (`opts`) + OpenTelemetry layer; return the
 /// written lines and the exported spans' `(trace_id, span_id)`.
 fn run(opts: &TracingOptions, emit: impl FnOnce()) -> (String, Vec<(String, String)>) {
-    register_enricher();
     let exporter = InMemorySpanExporter::default();
     let provider = SdkTracerProvider::builder()
         .with_simple_exporter(exporter.clone())
@@ -64,7 +58,10 @@ fn run(opts: &TracingOptions, emit: impl FnOnce()) -> (String, Vec<(String, Stri
     let buffer = Buffer::default();
     let subscriber = Registry::default()
         .with(console_layer_with_writer(opts, buffer.clone()))
-        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("otel-ids")));
+        // The OpenTelemetry layer first, as the plugin contributes them:
+        // `OtelIds` reads the context it activates on span enter.
+        .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("otel-ids")))
+        .with(OtelIds);
     tracing::subscriber::with_default(subscriber, emit);
     let spans = exporter
         .get_finished_spans()

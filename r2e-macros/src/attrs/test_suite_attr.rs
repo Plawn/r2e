@@ -10,10 +10,11 @@ use syn::{
 };
 
 use crate::util::crate_path::{r2e_core_path, r2e_test_path};
-use crate::util::runtime_args::{parse_bool, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs};
+use crate::util::runtime_args::{
+    parse_bool, tracing_removed, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs,
+};
 
 struct SuiteArgs {
-    tracing: bool,
     app_ty: Option<syn::Path>,
     with_expr: Option<KeyedExpr>,
     /// `#[r2e::test_suite(app = ..., env = expr)]`: boot `#[before_all]`'s
@@ -33,7 +34,6 @@ struct SuiteArgs {
 impl Default for SuiteArgs {
     fn default() -> Self {
         Self {
-            tracing: true,
             app_ty: None,
             with_expr: None,
             env_expr: None,
@@ -63,7 +63,7 @@ impl SuiteArgs {
             }
 
             match key.as_str() {
-                "tracing" => this.tracing = parse_bool(&meta)?,
+                "tracing" => return Err(tracing_removed(&meta)),
                 "app" => this.app_ty = Some(meta.value()?.parse()?),
                 "with" => this.with_expr = Some(KeyedExpr::parse(&meta)?),
                 "env" => this.env_expr = Some(KeyedExpr::parse(&meta)?),
@@ -438,9 +438,6 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
             def.suite_ident
         ),
     );
-    let tracing_init = args
-        .tracing
-        .then(|| quote! { #core_crate::init_tracing_from_config(); });
     let init_suite = init_suite_expr(args, def)?;
     let before_each: Vec<_> = def
         .before_each
@@ -463,7 +460,6 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
             &before_each,
             &after_each,
             after_all.as_ref(),
-            &tracing_init,
         )
     });
 
@@ -496,7 +492,6 @@ fn generate_case(
     before_each: &[TokenStream2],
     after_each: &[TokenStream2],
     after_all: Option<&TokenStream2>,
-    tracing_init: &Option<TokenStream2>,
 ) -> TokenStream2 {
     let test_crate = r2e_test_path();
     let method = &case.method;
@@ -573,7 +568,6 @@ fn generate_case(
         #(#generated_attrs)*
         #[::core::prelude::v1::test]
         fn #fn_name() {
-            #tracing_init
             #order_turn
             let __r2e_cell = __r2e_suite_cell();
             // Shared with every other case: see `SuiteCell`'s module docs. The

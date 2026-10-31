@@ -124,6 +124,7 @@ tower = "0.5"
 tower-http = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-core = "0.1.33"
 tracing-log = { version = "0.2", default-features = false, features = ["std"] }
 log = "0.4"
 http = "1"

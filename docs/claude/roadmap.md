@@ -626,7 +626,10 @@ L ≈ needs a design pass first.
   `#[inject]`-able; `#[sse]` streams terminate on it by default. NOT an
   ambient-bean exception: modules still list it in `imports(...)` exactly
   like the app's hand-rolled token today.
-- **F5 — `app_main!` has no `tracing` knob (S).** `#[r2e::main(tracing =
+- ~~**F5 — `app_main!` has no `tracing` knob (S).**~~ — SUPERSEDED 2026-10-31
+  by "Tracing — one path through the builder" below: the knob was added, then
+  removed with every other install path (`tracing.enabled: false` is the opt-out;
+  `App::setup` logs are buffered and replayed). Original finding kept for history: `#[r2e::main(tracing =
   false)]` exists but `app_main!` (`r2e/src/lib.rs:146-158`) does not, so an
   app owning its subscriber (dotenv + custom formatting in `AppEnv::
   bootstrap`) writes main by hand and `include!`s `app.rs` twice (the
@@ -740,6 +743,33 @@ data-catalog); if the r2e plugins cannot reproduce the app's current CORS
 or `TraceLayer` span/log shape, that delta comes back here as a framework
 finding.
 
+## Tracing — one path through the builder — SHIPPED 2026-10-31 (release pending)
+
+Branch `task/tracing-single-path` (after the extraction PRs #119–#122). The
+process-global subscriber now has exactly one install path: `build_state()` /
+`try_build_state()` / `with_state()` install it first thing from the loaded
+`tracing:` section (new keys `tracing.enabled`, `tracing.console`; `tracing.json.*`
+is a nested section of `TracingConfig`) plus the layers contributed with
+`AppBuilder::tracing_layer` / `PluginSetupContext::tracing_layer`. Entry points
+(`launch*`, `app_main!`/`launch!` incl. dev-reload, `TestApp::boot*`) call
+`capture_boot_logs()` before `App::setup` and the buffer is replayed at install
+(stderr if the boot dies first); `TestApp` thus honours `application-test.yaml`.
+`#[r2e::main]`/`#[r2e::test]`/`#[r2e::test_suite]` are runtime-only. Removed (all
+compile-time migration errors, `docs/migration/tracing-single-path.md`):
+`init_tracing*`, `ensure_tracing_installed`, the `Tracing`/`ConfiguredTracing`
+plugins, `LaunchOptions.tracing`, `tracing = …` macro arguments, and the
+never-published process-global registries of the extraction phases — the
+late-layer slot (`contribute_layer`/`late_layers`/`NotWired`), noise rules
+(`suppress_error`/`NoiseRule`), field enrichers (`add_enricher`), the console
+factory (`set_console_factory`, PR #122). Replacements: `Suppress` (a layer;
+`McpServer` contributes one per `RMCP_NOISE` entry, which closes the #1185
+`UpstreamNoise` / noise-registry design), `LogFields` (span extension;
+`Observability` writes `trace_id`/`span_id` with `OtelIds`), `tracing.console:
+false` + a contributed console layer. Release: r2e-core 0.9.0 (breaking) +
+r2e-macros 0.9.0 (syntax break, propagates) batched with r2e 0.10.0 /
+r2e-observability 0.9.0; new crate r2e-tracing 0.1.0. Record:
+`docs/claude/subsystems.md` § Tracing.
+
 ## Open items tracked in their own docs
 
 Kept where the context lives rather than duplicated here:
@@ -786,6 +816,12 @@ Kept where the context lives rather than duplicated here:
 - **Test overrides are pinned (first-wins)**, not last-wins: the harness
   pre-configures the builder before the blueprint runs, so overrides must
   beat later registrations.
+- **Tracing install: no `tracing_subscriber::reload`, no thread-local
+  `set_default` guard held across awaits** (rejected 2026-10-31). The
+  subscriber is installed once by `build_state()`; pre-install logs go through
+  the boot-log buffer (`capture_boot_logs`). No process-global extension
+  registries either (late layers, noise rules, enrichers, console factory):
+  everything is a layer contributed before the install.
 - **Dev-reload re-reads `application.yaml` per patch** (deliberate: config is
   not pinned across hot-patches, unlike `.provide()`-ed beans).
 - **One guard trait for every wire** (superseded 2026-10-09 by #1072 P3): the

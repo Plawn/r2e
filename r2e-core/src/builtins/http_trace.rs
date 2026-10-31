@@ -106,14 +106,13 @@ pub struct HttpTraceConfig {
 ///
 /// | Plugin | Owns |
 /// |---|---|
-/// | [`Tracing`](crate::builtins::Tracing) / [`ConfiguredTracing`](crate::builtins::ConfiguredTracing) | the **subscriber** (format, filter, ansi). No HTTP layer. |
+/// | `build_state()` (the `tracing:` section, [`TracingConfig`](crate::TracingConfig)) | the **subscriber** (format, filter, ansi). No HTTP layer. |
 /// | `HttpTrace` | the per-request **span**, summary event, request id, exclusions |
 /// | `r2e_observability::Observability` | OTLP export + propagation — installs *this* layer with an OpenTelemetry span shape, so there is still exactly one span per request |
 /// | [`RequestIdPlugin`](crate::builtins::request_id::RequestIdPlugin) | `x-request-id` only; `HttpTrace` already does it, and installing both in either order is harmless |
 ///
-/// Under `r2e::launch` / `#[r2e::main]` / `#[r2e::test]` the subscriber is
-/// installed by the entry point from the app's own `tracing:` section, so most
-/// applications install `HttpTrace` alone.
+/// The subscriber is installed by `build_state()` from the app's own
+/// `tracing:` section, so most applications install `HttpTrace` alone.
 ///
 /// # Configuration
 ///

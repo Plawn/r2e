@@ -29,9 +29,6 @@ AppBuilder::new()
 | `Cors::new(layer)` | Custom CORS configuration |
 | `HttpTrace::new()` | Per-request span + summary line, request ids, exclusions (`trace.*` keys) |
 | `HttpTrace::builder()…build()` | Same, configured in code (a builder knob beats the YAML) |
-| `Tracing` | Installs the log **subscriber** only — redundant under `r2e::launch` / `#[r2e::main]` |
-| `Tracing::configured(config)` | Configurable subscriber (format, ansi, thread IDs, etc.) |
-| `Tracing::from_config(&r2e_config)` | Subscriber configured from YAML (`tracing.*` keys) |
 | `NormalizePath` | Trailing-slash normalization |
 | `DevReload` | Dev-mode `/__r2e_dev/*` endpoints |
 | `RequestIdPlugin` | X-Request-Id propagation |
@@ -39,6 +36,10 @@ AppBuilder::new()
 | `OpenApiPlugin` | OpenAPI spec + docs UI |
 | `Prometheus` | Prometheus metrics at `/metrics` |
 | `EmbeddedFrontend` | Embedded static file serving with SPA fallback (feature `static`) |
+
+The log subscriber is not a plugin: `build_state()` installs it from the
+`tracing:` section (see [Configuration](./configuration.md#tracingconfig) and
+the [Observability](../advanced/observability.md) chapter).
 
 ### Plugins that provide beans
 
@@ -330,8 +331,24 @@ is a compile error naming the plugin.
 There is also a rare pre-graph hook, `fn setup(&mut self, &mut
 PluginSetupContext)` (default no-op), for the few things that must happen at
 `.plugin()` time — e.g. `store_data` that other subsystems read even when the
-plugin is disabled. It cannot register layers, routes or hooks: setup actions
-are ungated, so allowing them would let a disabled plugin serve traffic.
+plugin is disabled. It cannot register HTTP layers, routes or hooks: setup
+actions are ungated, so allowing them would let a disabled plugin serve traffic.
+
+`setup` is also where a plugin contributes to the **log subscriber**:
+`ctx.tracing_layer(layer)` queues a `tracing_subscriber` layer that
+`build_state()` installs together with the subscriber, once (the same verb as
+`AppBuilder::tracing_layer`). `McpServer` uses it to drop a known-benign rmcp
+error, `Observability` to add its OpenTelemetry layer:
+
+```rust,ignore
+fn setup(&mut self, ctx: &mut PluginSetupContext) {
+    ctx.tracing_layer(r2e::Suppress::error("noisy_lib", "harmless noise"));
+}
+```
+
+Layers contributed after the subscriber exists (a second boot in the same
+process, `tracing.enabled: false`, or a subscriber installed by the app
+itself) are ignored.
 
 The lower-level `PluginInstall` trait (`#[doc(hidden)]`, HList-based) still
 backs `.plugin()` via a blanket impl, but you only need to implement it directly

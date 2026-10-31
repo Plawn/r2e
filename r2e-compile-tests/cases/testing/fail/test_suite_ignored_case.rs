@@ -4,7 +4,7 @@
 #[derive(Default)]
 struct IgnoredCaseSuite;
 
-#[r2e::test_suite(tracing = false)]
+#[r2e::test_suite]
 impl IgnoredCaseSuite {
     #[case]
     fn runs(&mut self) {}

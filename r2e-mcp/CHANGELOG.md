@@ -70,6 +70,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 - Minimum `rmcp` is 3.8 (was 3.1): `initialize` negotiation is delegated to
   rmcp's `negotiate_initialize`, and `2026-07-28` (sessionless,
   `server/discover`) is served by default (#1183).
+- The rmcp noise rules are contributed as `Suppress` tracing layers through
+  `PluginSetupContext::tracing_layer` instead of the removed process-global
+  `r2e_core::suppress_error` (see `docs/migration/tracing-single-path.md`).
 
 ### Fixed
 
@@ -77,8 +80,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   closed after the client's idle period) no longer logs
   `failed to send pending response during drain` at ERROR under R2E's tracing
   subscriber: rmcp ≤ 3.8 reports the closed oneshot channel of the per-request
-  service at that level. `McpServer` registers that event as a noise rule
-  (`r2e_core::suppress_error`), which the subscriber's `NoiseFilter` drops.
+  service at that level. `McpServer::setup` contributes a
+  `Suppress::error` layer per `RMCP_NOISE` entry
+  (`PluginSetupContext::tracing_layer`), installed with the subscriber by
+  `build_state()`.
   Nothing leaks. A canary test pins the upstream behaviour so the rule is
   removed with the rmcp fix (#1185).
 

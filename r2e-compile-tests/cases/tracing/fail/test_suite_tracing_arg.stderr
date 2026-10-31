@@ -1,0 +1,5 @@
+error: `tracing = …` was removed: the subscriber is installed by `build_state()` from the `tracing:` section — see docs/migration/tracing-single-path.md
+ --> cases/tracing/fail/test_suite_tracing_arg.rs:7:19
+  |
+7 | #[r2e::test_suite(tracing = false)]
+  |                   ^^^^^^^

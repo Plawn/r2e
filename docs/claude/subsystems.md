@@ -57,32 +57,51 @@ AppBuilder::new()
 
 `.drain_timeout(Duration)` — maximum time for the HTTP drain itself (in-flight requests finishing after the listener stopped accepting), measured from cancellation. **Default 30s** (`runtime::drain::DEFAULT_DRAIN_TIMEOUT`); the `server.drain-timeout` config key sets it without code, and the builder call wins over the key. `.drain_timeout_unbounded()` is the only way back to the plain-axum unbounded drain. On overflow the remaining connections are abandoned with a `warn!` and shutdown continues to the tracked-handle join and the `on_stop` hooks. Applied per worker under sharded serving. See `docs/features/22-serve-lifecycle.md`.
 
-`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. Used by `Tracing::from_config()` to read tracing settings from YAML.
+`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. `build_state()` reads the `tracing:` section from it to install the subscriber.
 
-## TracingConfig (r2e-core)
+`.tracing_layer(layer)` — contributes a `tracing_subscriber::Layer<Registry>` to the subscriber `build_state()` installs (same verb as `PluginSetupContext::tracing_layer`; tower's `.add_layer` is unrelated). See the tracing section below.
 
-`TracingConfig` — `ConfigProperties` struct that configures the `tracing-subscriber` fmt layer. All fields except `filter` are `Option` — `None` means "use the subscriber default".
+## Tracing: one path through the builder (r2e-tracing + r2e-core)
 
-The subscriber stack itself lives in the **`r2e-tracing`** crate (below `r2e-core`, no tokio): `TracingOptions` (the config-free mirror of `TracingConfig`, `#[non_exhaustive]` + builders), `LogFormat`, `SpanEvents`, `try_install` (returns `AlreadyInstalled` carrying the winner's options) and `installed()`. `r2e-core` keeps `TracingConfig`, the `FromConfigValue` impls and the `init_tracing*` entry points (`runtime/tracing.rs`), converting with `From<&TracingConfig> for TracingOptions` (and back); every moved type is re-exported at its old `r2e_core` path, plus `r2e_core::{TracingOptions, AlreadyInstalled, r2e_tracing, ensure_tracing_installed}` and the extension points below (`installed()` via `r2e_core::r2e_tracing::installed`).
+The process-global `tracing` subscriber is installed **once**, by
+`build_state()` / `try_build_state()` / `with_state()`, as their first step.
+There is no other install path: no plugin, no entry-point macro argument, no
+`init_tracing*` (all removed; leftover uses are compile errors naming
+`docs/migration/tracing-single-path.md`).
 
-**YAML** (under a configurable prefix, normally `tracing.*`):
+**Three columns:**
+
+| | Owns | Surface |
+|---|---|---|
+| `r2e-tracing` (bottom of the graph, next to `r2e-rt`; deps: `tracing`, `tracing-core`, `tracing-subscriber`, `tracing-log` only; **not** a dependency of `r2e-http`) | the stack, the one-shot install, the boot-log buffer | `TracingOptions` (`#[non_exhaustive]` + `with_*`), `LogFormat`, `SpanEvents`, `JsonOptions`, `BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>`, `install(&TracingOptions, Vec<BoxedLayer>) -> Result<(), AlreadyInstalled>`, `installed() -> Option<&'static TracingOptions>`, `AlreadyInstalled { installed: Option<TracingOptions> }` (`None` = a foreign subscriber won), `capture_boot_logs() -> BootLogs`, `discard_boot_logs()`, `Suppress`, `LogFields`, `pub use tracing_subscriber` |
+| `r2e-core` | binding `tracing.*`, collecting layers, calling `install` | `TracingConfig` (+ nested `JsonLogConfig`), `From<&TracingConfig> for TracingOptions`, `AppBuilder::tracing_layer`, `PluginSetupContext::tracing_layer`, `runtime/tracing.rs::install_tracing` (crate-private), the entry points' `capture_boot_logs()` calls; re-exports `r2e_tracing` and `{capture_boot_logs, installed, AlreadyInstalled, BootLogs, BoxedLayer, JsonOptions, LogFields, Suppress, TracingOptions}` + `{JsonLogConfig, LogFormat, SpanEvents, TracingConfig}` at the root (the `r2e` facade re-exports the same) |
+| integrations | their own layers, contributed in `Plugin::setup` | `Observability` → `otel_layer()` + `OtelIds`; `McpServer` → one `Suppress::error` per `RMCP_NOISE` entry |
+
+### TracingConfig
+
+`TracingConfig` — `ConfigProperties`, prefix `tracing`, `#[non_exhaustive]`
+(build it with `TracingConfig::default()` + `with_*`, or bind it). Fields:
+`enabled` (default `true`; `false` ⇒ R2E installs nothing), `console` (default
+`true`; `false` ⇒ no built-in console layer, contributed layers still run),
+`filter` (default `"info"`, `RUST_LOG` wins when set and valid), `format`
+(`pretty` | `json`), `target`, `thread-ids`, `thread-names`, `file`,
+`line-number`, `level`, `ansi` (unset ⇒ on only when stdout is a terminal),
+`span-events` (`none` | `new` | `close` (default) | `active` | `full`), and the
+nested section `json: JsonLogConfig` (`tracing.json.*`: `flatten` default
+`false`, `message-key` default `"message"`, `current-span` default `true`,
+`span-list` default `true`; only read under `format: json`). Full key table
+in `configuration.md`. `effective_format()` / `effective_span_events()` resolve
+the defaults. The only conversion is `From<&TracingConfig> for TracingOptions`
+(`TracingOptions` → `TracingConfig` is gone).
+
 ```yaml
 tracing:
   filter: "info,tower_http=debug"
-  format: json          # pretty | json
-  ansi: false
-  target: true
-  thread-ids: true
-  thread-names: false
-  file: true
-  line-number: true
-  level: true
-  span-events: full     # none | new | close | active | full
-  json:                 # JsonLogConfig (prefix tracing.json), only read under format: json
-    flatten: true       # default false = tracing-subscriber's nested `"fields":{..}` shape
-    message-key: _msg   # default "message"; target when the event has no message
-    current-span: true  # default true → "span": {"name":..,<fields>}
-    span-list: true     # default true → "spans": [root, .., leaf]
+  format: json
+  span-events: full
+  json:
+    flatten: true       # one flat object per line (VictoriaLogs / Loki)
+    message-key: _msg
 ```
 
 **Flat JSON** (`tracing.json.flatten: true`, `r2e-tracing/src/flat_json.rs`,
@@ -94,146 +113,146 @@ back). One object per event, everything at the top level:
 {"_msg":"listening","addr":"0.0.0.0:3000","level":"INFO","target":"r2e","timestamp":"2026-10-31T09:12:03.123456Z","span":{"name":"boot"},"spans":[{"name":"boot"}]}
 ```
 
-Key precedence (lowest first): event fields → enricher fields → **reserved
+Key precedence (lowest first): event fields → `LogFields` → **reserved
 keys** `<message-key>`, `timestamp` (RFC 3339 UTC, µs), `level`, `target`,
 `thread_id`, `thread_name`, `file`, `line`, `span`, `spans` (each written only
 when its knob/option is on — `level`/`target` default on, the others follow
 `thread-ids`/`thread-names`/`file`/`line-number`). `log`-bridged events are
 normalized (`tracing_log::NormalizeEvent`: real level/target, `log.*` fields
-dropped). `JsonLogConfig` is read as a **sibling** of `TracingConfig` (both
-exhaustive-struct-safe): `resolve_tracing_options()` / `tracing_options_of(&R2eConfig)`
-combine `tracing` + `tracing.json` into `TracingOptions { json: JsonOptions, .. }`,
-which is what `init_tracing_from_config` (entry points, `Tracing`,
-`ensure_tracing_installed`) installs. `Tracing::configured(TracingConfig)` /
-`Tracing::from_config` carry no JSON shape (nested JSON); programmatic flat
-JSON goes through `r2e_tracing::try_install(&TracingOptions::default()
-.with_format(LogFormat::Json).with_json(JsonOptions::default().with_flatten(true)))`.
-Tests: `r2e-tracing/tests/format/`.
+dropped). Tests: `r2e-tracing/tests/format/`.
 
-**Programmatic API:**
-- `TracingConfig::default()` — filter `"info"`, all other fields `None`
-- Builder methods: `.with_format()`, `.with_filter()`, `.with_target()`, `.with_thread_ids()`, `.with_thread_names()`, `.with_file()`, `.with_line_number()`, `.with_level()`, `.with_ansi()`, `.with_span_events()`
-- `effective_format()` → `LogFormat` (defaults to `Pretty`)
-- `effective_span_events()` → `FmtSpan` (defaults to `CLOSE`)
-
-**Related types:**
-- `LogFormat` — `Pretty` (default) | `Json`. Derives `serde::Deserialize` + `FromConfigValue`.
-- `SpanEvents` — `None` | `New` | `Close` (default) | `Active` | `Full`. `.to_fmt_span()` converts to `tracing_subscriber::fmt::format::FmtSpan`.
-
-**Plugin integration** (subscriber only — the per-request span is `HttpTrace`):
-- `Tracing` (unit struct) — installs from the app's `tracing:` section (`init_tracing_from_config`; defaults when absent)
-- `Tracing::configured(TracingConfig)` → `ConfiguredTracing` — uses explicit config
-- `Tracing::from_config(&R2eConfig)` → `ConfiguredTracing` — reads `tracing.*` keys
-- `init_tracing_with_config(&TracingConfig)` — low-level function (idempotent)
-
-**Who installs the subscriber (a one-shot process global — first install wins):**
-- The **entry point** (`launch_with` when `LaunchOptions::tracing`, i.e.
-  `app_main!` / `launch!` / `#[r2e::main]`) calls `init_tracing_from_config()`
-  right after `App::setup`: it loads `application.yaml` itself and installs the
-  app's `tracing:` section. So `format: json` applies from the first log line
-  with no plugin involved; an unreadable file or section falls back to
-  `TracingConfig::default()` and warns through the subscriber it just installed.
-- A `Tracing` / `ConfiguredTracing` plugin installs in `Plugin::setup`, i.e.
-  inside `App::build` — **after** the entry point. It therefore loses the race
-  unless the app opts the entry point out with `app_main!(MyApp, tracing =
-  false)`. Losing is silent when both sides resolve to the same `TracingConfig`
-  (the usual case: both read `tracing.*`) and warns otherwise.
-- `init_tracing()` installs the **built-in defaults**, ignoring the app's
-  section, and stays silent when it loses. The bare `Tracing` plugin,
-  `#[r2e::test]`, `#[r2e::test_suite]` and `#[r2e::main]` all call
-  `init_tracing_from_config()`. `ensure_tracing_installed()` is the same install
-  returning the options that won (`None` when a foreign subscriber did).
-- An invalid filter never panics: `try_install` falls back to `info` and logs
-  the parse error at ERROR through the installed subscriber. With `ansi` unset
-  the console colours only when stdout is a terminal.
-- `try_init_tracing_with_config(&cfg) -> Result<(), SubscriberAlreadyInstalled>`
-  is the reporting form; `SubscriberAlreadyInstalled::changes_output(&cfg)` says
-  whether losing actually changed the output (an unknown winner always counts as
-  different), and `warn_if_output_differs(&lost, &cfg)` is the warning both the
-  entry point and `ConfiguredTracing` emit. The winning config is recorded in a
-  process-global `OnceLock` in `r2e-tracing` (`installed()`), which is what makes "same config, stay quiet"
-  possible.
-  Tests: `r2e-core/tests/tracing_install/` and `r2e-tracing/tests/install/` (own
-  targets — one-shot global).
-
-**Subscriber stack** (`r2e-tracing/src/install.rs`):
+### Subscriber stack (`r2e-tracing/src/install.rs`)
 
 ```
 Registry
-  └ vec![console layer, late-layer slot]   (console = fmt, `.json()` under format: json, wrapped by the enricher splice;
-                                            json.flatten → SpanFieldsLayer + FlatJson, enrichers written into the object;
-                                            or the whole layer from set_console_factory)
-  └ NoiseFilter                            (global layer: vetoes matched events for everything below it)
-  └ EnvFilter                              (outermost; RUST_LOG wins over `filter`)
+  └ Vec<BoxedLayer>: [contributed layers…, console]
+        contributed = .tracing_layer(..) on the builder, then each plugin's
+                      ctx.tracing_layer(..), in registration order
+        console     = fmt text / nested JSON / FlatJson, printing LogFields;
+                      left out under tracing.console: false
+  └ EnvFilter        (outermost, global; RUST_LOG wins over `filter`)
 ```
 
-It is installed through an explicit `Dispatch` (`Dispatch::new(stack)` →
-`try_init()` → `late::wire(&dispatch)`): `Vec<L>` does not forward
-`on_register_dispatch`, so the slot is wired by `try_install` itself after the
-install wins. No crate builds a second stack: `r2e-observability` contributes
-its OpenTelemetry layer to the slot (see below).
+One plain `Layered` value. `Vec<L>` forwards `event_enabled` conjunctively, so a
+`Suppress` among the contributed layers vetoes the event for the console and
+every sibling. An invalid `filter` never fails the install: it falls back to
+`info` and logs one ERROR naming the directive. An invalid `tracing:` section
+does not abort the boot either: the defaults are installed and one ERROR names
+the problem.
 
-**Extension points** (all in `r2e-tracing`, re-exported at the `r2e_core`
-root; process-wide, append-only):
-- **Noise rules** (`noise.rs`) — `suppress(NoiseRule)` / `suppress_error(target,
-  message)` register an exact (level, target, message) match; `is_suppressed`
-  queries the table; `NoiseFilter` is both a `Layer` (global veto in
-  `event_enabled`) and a `Filter` (per layer). Empty by default (one relaxed
-  atomic load per event); the message is a field value an `EnvFilter`
-  directive cannot see. Neither `r2e-tracing` nor `r2e-core` knows any rule:
-  the integration owning the dependency registers it — `McpServer::setup`
-  registers `r2e_mcp::RMCP_NOISE` (rmcp ≤ 3.8 `rmcp::service` drain ERRORs
-  after a stateless client disconnect, #1185). The canary
+- **`Suppress`** (`noise.rs`) — `Suppress::new(Level, target, message)` /
+  `Suppress::error(target, message)`: a `Layer` whose `event_enabled` returns
+  `false` on an exact (level, target, message) match — the matcher for a
+  known-benign upstream event (the message is a field value an `EnvFilter`
+  directive cannot see). No global registry: whoever owns the dependency
+  contributes the layer. `McpServer::setup` contributes one per
+  `r2e_mcp::RMCP_NOISE` entry (rmcp ≤ 3.8 `rmcp::service` drain ERRORs after a
+  stateless client disconnect, #1185); the canary
   `r2e-mcp/tests/server/plugin.rs::canary_rmcp_still_logs_stateless_disconnect_at_error`
-  fails the moment rmcp stops emitting it; then the rule goes.
-- **Late-layer slot** (`late.rs`) — `contribute_layer(BoxedLayer)` appends a
-  layer to the installed subscriber (`Err(NotWired)` before an install that
-  hosts the slot). Append-only linked list in a static (never dropped, so
-  `downcast_raw` pointers into children stay valid and `Dispatch::downcast_ref`
-  reaches them); appends take a mutex, readers none; each append replays
-  `on_register_dispatch` and calls `rebuild_interest_cache`. The slot's interest
-  is the max of its children's and never `never`; a child's own
-  `enabled`/`event_enabled` gate only that child. Limits: no per-layer filter on
-  a contributed layer (`on_layer` cannot be replayed on a built registry), and
-  spans opened before the contribution are invisible to it. A hand-built stack
-  hosts the slot by adding `late_layers()` directly on the `Registry`; `on_layer`
-  deliberately does not wire (it also runs for a stack that loses the install).
-- **Field enrichers** (`enrich.rs`) — `add_enricher(Box<dyn FieldEnricher>)`;
-  the console format calls them per event with an `EnrichContext` (metadata,
-  event, parent span) and splices ` k=v` before the newline (text) or
-  `,"k":"v"` before the final `}` (JSON). No enricher = pass-through.
-- **Console factory** (`console.rs`) — `set_console_factory(ConsoleFactory)`,
-  `ConsoleFactory = fn(&TracingOptions) -> BoxedLayer`: `try_install` calls it
-  instead of the built-in console layer; slot, `NoiseFilter` and `EnvFilter`
-  stay. A `fn`, not a boxed `FormatEvent` (tracing-subscriber cannot box one).
-  Must run before the install (`App::setup` runs before `launch` installs);
-  after it — or once any global subscriber is set — `Err(AlreadyInstalled)`
-  and nothing stored. Last call before the install wins. `try_install` holds
-  the factory mutex for the whole install, so `Ok` always means "the next
-  install uses it" (the factory must not call `set_console_factory` itself).
-  The factory owns the line: `TracingOptions` knobs are its to honour, and
-  enrichers are not applied (`enrich` is crate-private).
+  fails the moment rmcp stops emitting it, then the rule goes.
+- **`LogFields`** (`enrich.rs`) — a span extension (`LogFields::new()`,
+  `insert(&'static str, impl Display)`, `iter()`). A layer writes it in
+  `on_new_span` / `on_enter`; the console (text, nested and flat JSON) prints
+  the fields on every line inside the span, the **closest** span winning on a
+  key collision. Replaces the removed enricher registry.
+- **Custom console** — `tracing.console: false` + `.tracing_layer(my_fmt_layer)`
+  (replaces the removed console factory). The `EnvFilter` still applies.
 
-Tests: `r2e-tracing/tests/{noise,late_layers,enrich,install_invalid_filter,console_factory}/`
-(all but `noise` are their own binaries — process-global state).
+### Install sequence (`runtime/tracing.rs::install_tracing`)
+
+Called by `build_state()` / `try_build_state()` / `with_state()` before anything
+fallible, so a later boot error is logged through the real subscriber:
+
+1. Bind `tracing.*` from the loaded `R2eConfig` (profile overlay and `R2E_*` env
+   overlay included); built-in defaults when the app loaded no config, or when
+   the section is invalid (one ERROR after the install).
+2. `enabled: false` ⇒ `discard_boot_logs()` (buffer dropped, callsites
+   disabled) and nothing installed; contributed layers are ignored.
+3. Otherwise `r2e_tracing::install(&TracingOptions::from(&cfg), layers)`.
+   `Err(AlreadyInstalled { installed: Some(_) })` (R2E installed it already:
+   a second `TestApp::boot`, dev-reload cycle 2+) ⇒ one DEBUG line when layers
+   were contributed. `Err(AlreadyInstalled { installed: None })` (foreign
+   subscriber) ⇒ one WARN when layers were contributed: "N tracing layer(s)
+   ignored: a subscriber was installed before the builder; set
+   `tracing.enabled: false` to silence".
+
+### Boot sequence (entry points)
+
+`launch` / `launch_with` / `app_main!` / `launch!` (incl. the dev-reload arm)
+and `TestApp::boot*` (`r2e-test/src/boot.rs`) all run:
+
+```text
+let boot = capture_boot_logs();   // forwarder buffers INFO+ events
+A::setup().await?                 // buffered
+A::build(AppBuilder::new(), env)  // plugin setup()s contribute layers (buffered);
+                                  // build_state() installs + replays the buffer
+                                  // (then one WARN `dropped=N` if the bound was hit);
+                                  // plugin build / post_construct / bean graph log live
+drop(boot)                        // no-op on success
+serve_auto()
+```
+
+`capture_boot_logs()` installs a forwarding subscriber as the global default
+(and the `log` → `tracing` bridge). While buffering it renders INFO/WARN/ERROR
+events to strings (bound 1024, overflow counted); spans get ids from a reserved
+range and are swallowed after the install (so an `#[instrument]`ed
+`App::build` straddling the install does not panic the `Registry`). After
+`install`, every call forwards 1:1 to the real stack and the callsite interest
+cache is rebuilt. If the boot dies **before** the install, dropping the
+`BootLogs` handle writes the buffered lines to stderr in raw
+`LEVEL target: message k=v` form, ahead of the boot error report. A second
+`capture_boot_logs()` in the same process (tests, dev-reload cycle 2+) returns
+an inert handle; a pre-existing foreign subscriber also makes it inert.
+`install` captures itself when nobody did, so a hand-written `main` calling
+`build_state()` works — but logs emitted before it are lost unless it calls
+`let _boot = r2e::capture_boot_logs();` first.
+
+**Limits:** replayed events are timestamped at replay time (the gap is `setup`
++ plugin `setup`, milliseconds); only events INFO+ are buffered — DEBUG/TRACE
+before the install are lost, spans opened before the install are not replayed
+(a replayed event has no parent span, hence no `LogFields`); works from any
+thread. Rejected alternatives (do not re-propose): `tracing_subscriber::reload`,
+a thread-local `set_default` guard held across awaits.
+
+### Who installs what
+
+| Situation | Result |
+|---|---|
+| `launch` / `app_main!` / `TestApp::boot*` + `build_state()` | R2E installs from `tracing:` (profile-aware) + contributed layers; boot logs replayed |
+| `TestApp::boot*` | same, profile `test` (`application-test.yaml` honoured) |
+| `tracing.enabled: false` | nothing installed, buffer dropped, layers ignored; the app owns the subscriber (add `Suppress`, `otel_layer()` + `OtelIds`, … to its own `Registry`) |
+| foreign subscriber installed before the builder | it wins; contributed layers dropped (one WARN if any); `installed()` = `None` |
+| second `build_state()` in a process R2E already installed in | first subscriber kept; layers dropped (one DEBUG); the OTel layer still exports through the latest provider |
+| test without an app that wants logs | `let _ = r2e::r2e_tracing::install(&TracingOptions::default(), vec![]);` |
+| `#[r2e::main]` / `#[r2e::test]` / `#[r2e::test_suite]` | runtime only, install nothing (`tracing = …` is a compile error naming the migration page) |
+
+`LaunchOptions` has no field left (`#[non_exhaustive]`, `Default`).
+
+Tests: `r2e-tracing/tests/{boot,boot_bound,boot_disabled,boot_flush,boot_foreign,install,install_invalid_filter,format,options}/`
+(one binary each where process-global state is touched),
+`r2e-core/tests/tracing_install/`, `r2e-core/tests/runtime/tracing_config.rs`;
+the removed-API diagnostics are pinned in `r2e-compile-tests/cases/tracing/fail/`.
 
 **Observability (r2e-observability) is the canonical contributor:** it builds no
-subscriber. `setup` calls `ensure_tracing_installed()`, then (OTLP on)
-`contribute_layer(tracing-opentelemetry layer)` — once per process; the layer's
-tracer (`SharedTracer`) follows the latest provider so later boots re-point it —
-and `add_enricher(OtelIds)` (`trace_id`/`span_id`). `NotWired` → one WARN.
-`ObservabilityConfig` has no `tracing` field (`#[non_exhaustive]`); only
-`observability.tracing.enabled` is read, other `observability.tracing.*` keys
-(found via `R2eConfig::sub_keys`) are ignored with one ERROR at boot;
-`with_log_format`/`with_tracing_config` are `on_unimplemented` compile errors
-naming `docs/migration/observability-tracing.md`. Tests:
-`r2e-observability/tests/{otel_contrib,otel_ids}/` (own binaries).
+subscriber. When OTLP export is on, `setup` calls
+`ctx.tracing_layer(tracing_setup::otel_layer())` then
+`ctx.tracing_layer(tracing_setup::OtelIds)` (a layer writing `trace_id` /
+`span_id` into `LogFields` on span enter; it reads the context the OTel layer
+activates, hence the order). The OTel layer's tracer (`SharedTracer`) follows
+the latest provider, so later boots re-point it. `ObservabilityConfig` has no
+`tracing` field (`#[non_exhaustive]`); only `observability.tracing.enabled`
+(the OTLP switch) is read, any other `observability.tracing.*` key (found via
+`R2eConfig::sub_keys`) is reported by one ERROR naming the migration page and
+the boot continues. `ObservabilityConfig::with_log_format` /
+`with_tracing_config` and `tracing_setup::TraceIdFormat` were deleted outright
+(no shim; the migration table covers them).
+Tests: `r2e-observability/tests/{otel_contrib,otel_ids}/` (own binaries).
 
 ## HttpTrace (r2e-core)
 
 The per-request HTTP layer: **one** span + **one** summary event per request.
 Plugin/builder/config in `src/builtins/http_trace.rs`, layer in
-`src/runtime/http_trace.rs`. `Tracing` says where logs go; `HttpTrace` says what
+`src/runtime/http_trace.rs`. The `tracing:` section says where logs go; `HttpTrace` says what
 each request logs.
 
 - Span: `request`, INFO, target `r2e::http`, **entered for the whole handler
@@ -281,12 +300,12 @@ each request logs.
 
 ## Observability (r2e-observability)
 
-`Observability` is the OpenTelemetry extension of `HttpTrace`, contributing to `Tracing`'s subscriber.
+`Observability` is the OpenTelemetry extension of `HttpTrace`, contributing layers to the subscriber `build_state()` installs.
 It exports with OTLP/HTTP, installs W3C propagation, correlates logs with
 `trace_id`/`span_id`, and installs `r2e-core`'s `HttpTraceLayer` with the
 `OtelRequestSpan` shape (`src/span.rs`) — so there is exactly **one** span per
-request. It builds no subscriber (it contributes to R2E's, see the
-extension-point section above), so `Tracing` next to it is fine; do not install
+request. It builds no subscriber (it contributes layers with
+`ctx.tracing_layer(..)`, see the tracing section above); do not install
 it alongside `HttpTrace` (two layers = two spans); it reads the same `trace:`
 section either way, with its own `capture_headers` filling the preset slot.
 
@@ -894,6 +913,7 @@ Bucket keys are `<module::path::ControllerName>:<handler>:<kind>` (module-qualif
 
 - **App boot (the `@QuarkusTest` path)** — apps declare `impl App for MyApp` once in `app.rs`; `lib.rs` includes it for tests and `r2e::app_main!(MyApp)` includes it in the binary tip crate while generating `main`. `setup() -> Result<Env, BootError>` owns long-lived resources and `build(b, env) -> Result<impl BootableApp, BootError>` assembles the app; tests boot the real app **by type** instead of re-declaring controllers:
   - `TestApp::boot::<MyApp>().await` — forces the `test` profile (so `load_config()` overlays `application-test.yaml`) and pins a fresh `TestJwt`'s `Arc<JwtClaimsValidator>`/`Arc<JwtValidator>` over the app's own validator.
+  - **Tracing in tests** — every `boot*` variant (including the `*_env` ones) calls `capture_boot_logs()` before `setup`/`build` and lets `build_state()` install the subscriber from the **test** profile's `tracing:` section (`application-test.yaml`; `tracing: { enabled: false }` quiets a whole binary). The first boot in a test binary installs; later boots keep that subscriber (their contributed layers are dropped with one DEBUG line). `#[r2e::test]` / `#[r2e::test_suite]` are runtime-only and install nothing; a test without an app that wants logs calls `let _ = r2e::r2e_tracing::install(&r2e::TracingOptions::default(), vec![]);`, and a log-asserting test uses `tracing::subscriber::with_default` / `set_default` (thread-local, wins over the global forwarder).
   - `TestApp::boot_with::<MyApp>(|b| ...).await` — same, plus a builder hook to pin mocks (`b.override_bean(mock)`) and patch config (`b.override_config_value(key, value)`; or `b.override_config(cfg)` for a full in-memory config). Pinned overrides win over the app's later registrations (first-pin semantics: the harness pre-configures the builder *before* `build` runs, so test overrides must beat later registrations).
   - `TestApp::boot_plain::<MyApp>(|b| ...).await` — skips the TestJwt wiring.
   - **Reusing one `App::Env` (task #988)** — `TestApp::boot_env::<MyApp>(env)` / `boot_with_env::<MyApp>(env, |b| ...)` / `boot_plain_env::<MyApp>(env, |b| ...)` (+ `try_*`) skip `A::setup()` entirely and pass the given `Env` to `A::build`. `App::Env` is `Clone + Send + Sync + 'static`, so a test binary builds it once and boots every test off that one value instead of replaying pools + migrations per test; `#[before_all]` only amortises within one suite. **Memoise it with `r2e_test::SharedEnv<A>`, never a bare `OnceCell`/`LazyLock`** (`shared_env.rs`): `#[r2e::test]` builds one runtime per test and drops it at the end of the test, so a `OnceCell` initialised there binds the environment's reactor (listeners, keep-alive tasks, timers, anything `setup` spawned) to a runtime that dies — the value survives, the reactor does not, and later tests hang. `SharedEnv` is `const`-constructible (`new()` / `with(init)` for setup+seed), runs `setup` exactly once on a process-lifetime multi-thread runtime parked in a `OnceLock` (started from a short-lived `std::thread` calling `RuntimeHandle::block_on`, because `App::setup()`'s RPITIT future has no `Send` bound and cannot be `spawn`ed), publishes the result through a `watch` channel (single-flight for concurrent first callers, cancellation-safe), and remembers a failure instead of retrying it (`SharedEnvError` = app type name + rendered `caused by:` chain); `shared_env_runtime()` exposes the handle. Macro knob: `env = <expr>` on `#[r2e::test(app = ...)]` and `#[r2e::test_suite(app = ...)]` (evaluated in the async block, composes with `with = ...` / `jwt = false`, requires `app = ...`; expands to `boot_with_env` / `boot_plain_env`). All six methods funnel through one private `TestApp::assemble` (harness defaults → hook → `A::build` → `start_in_process`), which never calls `setup` — the plain `boot*` call it themselves. **Isolation is the caller's job**: a shared `Env` is shared state across concurrently-running tests. The harness never disposes the `Env` itself, but it cannot guarantee nothing does — `shutdown()` runs whatever `A::build` registered (disposers, `#[pre_destroy]`, `on_stop`), so an app that hands an `Env`-owned resource to a disposer invalidates it for later boots; documented as the app's contract rather than enforced. Macro diagnostics: `env`/`with`/`jwt` without `app` is an error spanned on the offending argument, and on a suite the same arguments require a `#[before_all]` that binds the booted app (otherwise the expression would never be evaluated). Tests: `r2e-test/tests/boot.rs`, `r2e-test/tests/shared_env.rs` (runtime-death regression, single flight, setup-count, `Env = ()`), `r2e-compile-tests/cases/testing/fail/test_env_without_app.rs` + `test_suite_env_without_before_all.rs` + `test_suite_env_without_app_binding.rs`.

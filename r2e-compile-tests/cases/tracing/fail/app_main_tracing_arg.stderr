@@ -1,0 +1,11 @@
+error: `tracing = …` was removed: the subscriber is installed by `build_state()` from the `tracing:` section — see docs/migration/tracing-single-path.md
+ --> cases/tracing/fail/app_main_tracing_arg.rs:5:13
+  |
+5 | #[r2e::main(tracing = false)]
+  |             ^^^^^^^
+
+error[E0601]: `main` function not found in crate `$CRATE`
+ --> cases/tracing/fail/app_main_tracing_arg.rs:6:19
+  |
+6 | async fn main() {}
+  |                   ^ consider adding a `main` function to `$DIR/cases/tracing/fail/app_main_tracing_arg.rs`

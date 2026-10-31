@@ -23,27 +23,53 @@ impl crate::config::FromConfigValue for SpanEvents {
     }
 }
 
-/// Configuration for the `tracing-subscriber` fmt layer, bound to the YAML
-/// `tracing:` section.
+/// The YAML `tracing:` section: the process-global subscriber
+/// `build_state()` installs.
 ///
-/// The YAML-bound twin of [`TracingOptions`] (`r2e-tracing`); the two convert
-/// both ways and the install goes through [`r2e_tracing::try_install`].
+/// The subscriber is installed **once**, by
+/// [`AppBuilder::build_state`](crate::AppBuilder::build_state), from this
+/// section of the loaded configuration (profile overlay and `R2E_*` env
+/// overlay included) plus the layers contributed with
+/// [`AppBuilder::tracing_layer`](crate::AppBuilder::tracing_layer) and
+/// [`PluginSetupContext::tracing_layer`](crate::plugin::PluginSetupContext::tracing_layer).
 ///
-/// All fields except `filter` are `Option` — `None` means "use the subscriber
-/// default". This lets users override only the knobs they care about.
+/// `enabled` and `console` are decisions the builder takes; the rest converts
+/// into the [`TracingOptions`] `r2e-tracing` builds the stack from
+/// (`From<&TracingConfig>`). The `Option` knobs mean "use the subscriber
+/// default" when unset.
+///
+/// Non-exhaustive: build one with [`Default`] and the `with_*` setters.
 ///
 /// # YAML example
 ///
 /// ```yaml
 /// tracing:
+///   enabled: true          # false: no subscriber at all, boot logs dropped
+///   console: true          # false: only the contributed layers write output
 ///   filter: "info,tower_http=debug,my_app=trace"
 ///   format: json
 ///   ansi: false
 ///   thread-ids: true
 ///   span-events: full
+///   json:
+///     flatten: true
+///     message-key: _msg
 /// ```
 #[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
+#[config(derive_default)]
+#[non_exhaustive]
 pub struct TracingConfig {
+    /// Install R2E's subscriber at all. `false` installs nothing and drops the
+    /// logs buffered during boot (the application owns the subscriber).
+    #[config(default = true)]
+    pub enabled: bool,
+
+    /// Add R2E's console layer (text, JSON or flat JSON on stdout). `false`
+    /// leaves the output to the contributed layers — a custom console added
+    /// with `.tracing_layer(..)`.
+    #[config(default = true)]
+    pub console: bool,
+
     /// `EnvFilter` directive string. `RUST_LOG` env var takes priority.
     #[config(default = "info")]
     pub filter: String,
@@ -78,26 +104,29 @@ pub struct TracingConfig {
     /// Which span lifecycle events to record.
     #[config(key = "span-events")]
     pub span_events: Option<SpanEvents>,
-}
 
-impl Default for TracingConfig {
-    fn default() -> Self {
-        Self {
-            filter: "info".to_string(),
-            format: None,
-            target: None,
-            thread_ids: None,
-            thread_names: None,
-            file: None,
-            line_number: None,
-            level: None,
-            ansi: None,
-            span_events: None,
-        }
-    }
+    /// Shape of the JSON lines (`tracing.json.*`); only read under
+    /// `format: json`.
+    #[config(section, default)]
+    pub json: JsonLogConfig,
 }
 
 impl TracingConfig {
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn with_console(mut self, console: bool) -> Self {
+        self.console = console;
+        self
+    }
+
+    pub fn with_json(mut self, json: JsonLogConfig) -> Self {
+        self.json = json;
+        self
+    }
+
     pub fn with_format(mut self, format: LogFormat) -> Self {
         self.format = Some(format);
         self
@@ -170,9 +199,7 @@ impl TracingConfig {
 /// `span` and the span stack (root first) under `spans`; the default keeps
 /// `tracing-subscriber`'s nested JSON (`"fields": {...}`) unchanged.
 ///
-/// Read next to [`TracingConfig`] (not one of its fields, which would grow
-/// that exhaustive struct): [`resolve_tracing_options`] and the R2E entry
-/// points combine the two.
+/// The [`json`](TracingConfig::json) field of [`TracingConfig`].
 ///
 /// ```yaml
 /// tracing:
@@ -183,8 +210,6 @@ impl TracingConfig {
 ///     current-span: true
 ///     span-list: false
 /// ```
-///
-/// [`resolve_tracing_options`]: crate::runtime::tracing::resolve_tracing_options
 #[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
 #[config(derive_default)]
 #[non_exhaustive]
@@ -222,17 +247,8 @@ impl From<&JsonLogConfig> for JsonOptions {
     }
 }
 
-impl From<&JsonOptions> for JsonLogConfig {
-    fn from(o: &JsonOptions) -> Self {
-        Self {
-            flatten: o.flatten,
-            message_key: o.message_key.clone(),
-            current_span: o.current_span,
-            span_list: o.span_list,
-        }
-    }
-}
-
+/// Every knob of the section except `enabled` (a decision `build_state()`
+/// takes before building anything).
 impl From<&TracingConfig> for TracingOptions {
     fn from(c: &TracingConfig) -> Self {
         let mut o = TracingOptions::new(c.filter.clone());
@@ -245,23 +261,8 @@ impl From<&TracingConfig> for TracingOptions {
         o.level = c.level;
         o.ansi = c.ansi;
         o.span_events = c.span_events.clone();
+        o.json = (&c.json).into();
+        o.console = c.console;
         o
-    }
-}
-
-impl From<&TracingOptions> for TracingConfig {
-    fn from(o: &TracingOptions) -> Self {
-        Self {
-            filter: o.filter.clone(),
-            format: o.format.clone(),
-            target: o.target,
-            thread_ids: o.thread_ids,
-            thread_names: o.thread_names,
-            file: o.file,
-            line_number: o.line_number,
-            level: o.level,
-            ansi: o.ansi,
-            span_events: o.span_events.clone(),
-        }
     }
 }

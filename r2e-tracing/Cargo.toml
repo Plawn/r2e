@@ -13,6 +13,9 @@ description = "Process-global tracing subscriber for R2E - options, formats and 
 
 [dependencies]
 tracing = {workspace = true}
+# `span::Current`, which `tracing` does not re-export (the boot forwarder
+# implements `Subscriber::current_span`). Already in every graph via `tracing`.
+tracing-core = {workspace = true}
 tracing-subscriber = {workspace = true, features = ["env-filter", "json", "registry", "fmt", "std"]}
 serde = {workspace = true}
 serde_json = {workspace = true}

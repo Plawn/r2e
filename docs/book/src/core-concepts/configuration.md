@@ -511,13 +511,20 @@ If keys are missing, defaults are used. This replaces `.serve("0.0.0.0:3000")` f
 
 ### TracingConfig
 
-R2E ships with `TracingConfig`, a `ConfigProperties` struct that configures the tracing subscriber. It is used by the `ConfiguredTracing` plugin and embedded in `ObservabilityConfig`.
+`TracingConfig` is the `ConfigProperties` struct behind the `tracing:` section.
+You never install it yourself: `build_state()` reads it from the loaded
+configuration (profiles and `R2E_*` overrides included) and installs the
+global log subscriber once, as its first step. `ObservabilityConfig` does not
+embed it — the `Observability` plugin contributes layers to this one
+subscriber.
 
 ```yaml
 tracing:
-  filter: "info,tower_http=debug,my_app=trace"
-  format: json
-  ansi: false
+  enabled: true        # false: R2E installs no subscriber (you own it)
+  console: true        # false: no built-in console; contributed layers still run
+  filter: "info,tower_http=debug,my_app=trace"   # RUST_LOG wins when set
+  format: json         # pretty | json
+  ansi: false          # unset: colours only when stdout is a terminal
   thread-ids: true
   span-events: full
   json:                # JsonLogConfig — shape of the json lines
@@ -525,18 +532,22 @@ tracing:
     message-key: _msg  # default "message"
 ```
 
+Single-word keys bind from the environment (`R2E_TRACING_ENABLED=false`,
+`R2E_TRACING_FORMAT=json`, `R2E_TRACING_JSON_FLATTEN=true`); kebab keys such as
+`message-key` or `span-events` cannot, so set them in YAML (or through a
+`${VAR:default}` placeholder). Under `TestApp::boot` the `test` profile
+applies, so `application-test.yaml` configures the test subscriber.
+
+Anything beyond these knobs is a layer added before `build_state()`:
+
 ```rust
 use r2e::prelude::*;
 
-// Load from R2eConfig
-let tracing = Tracing::from_config(&r2e_config);
-
-// Or build programmatically
-let tracing = Tracing::configured(
-    TracingConfig::default()
-        .with_format(LogFormat::Json)
-        .with_ansi(false)
-);
+AppBuilder::new()
+    .load_config::<()>()
+    .tracing_layer(r2e::Suppress::error("some_dep::conn", "connection reset during shutdown"))
+    .build_state()
+    .await;
 ```
 
 See the [Observability](../advanced/observability.md) chapter for the full reference.

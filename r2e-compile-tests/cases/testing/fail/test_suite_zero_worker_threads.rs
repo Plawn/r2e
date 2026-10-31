@@ -3,7 +3,7 @@
 #[derive(Default)]
 struct ZeroWorkerSuite;
 
-#[r2e::test_suite(tracing = false, worker_threads = 0)]
+#[r2e::test_suite(worker_threads = 0)]
 impl ZeroWorkerSuite {
     #[case]
     fn runs(&mut self) {}
