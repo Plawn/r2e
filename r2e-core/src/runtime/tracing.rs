@@ -5,7 +5,8 @@
 //! record of what won) lives in `r2e-tracing`; this module only binds
 //! configuration to it and keeps the historical `r2e_core` entry points.
 
-use crate::runtime::tracing_config::TracingConfig;
+use crate::runtime::tracing_config::{JsonLogConfig, TracingConfig};
+use r2e_tracing::TracingOptions;
 
 /// An init that lost the race to a subscriber installed earlier.
 ///
@@ -74,7 +75,8 @@ pub fn init_tracing() {
 /// configuration — this is what R2E's entry points call.
 ///
 /// Loads `application.yaml` (profile overlay and `R2E_*` env overlay
-/// included) and installs its `tracing:` section, so an app that declares
+/// included) and installs its `tracing:` section (`tracing.json` included —
+/// see [`resolve_tracing_options`]), so an app that declares
 /// `format: json` gets JSON from its very first log line, without having to
 /// install a subscriber itself.
 ///
@@ -84,10 +86,12 @@ pub fn init_tracing() {
 /// failing: a bad config file must never cost the app the log line that
 /// explains the boot error that follows.
 pub fn init_tracing_from_config() {
-    let (config, problem) = resolve_tracing_config();
+    let (options, problem) = resolve_tracing_options();
 
-    if let Err(lost) = try_init_tracing_with_config(&config) {
-        warn_if_output_differs(&lost, &config);
+    if let Err(lost) = r2e_tracing::try_install(&options)
+        && lost.changes_output(&options)
+    {
+        warn_ignored(&options, &lost);
     }
     if let Some(problem) = problem {
         tracing::warn!("r2e: falling back to the built-in tracing defaults — {problem}");
@@ -123,19 +127,54 @@ pub fn ensure_tracing_installed() -> Option<&'static r2e_tracing::TracingOptions
 #[doc(hidden)]
 pub fn resolve_tracing_config() -> (TracingConfig, Option<String>) {
     match crate::config::R2eConfig::load() {
-        Ok(loaded) => {
-            use crate::config::ConfigProperties;
-            match TracingConfig::from_config(&loaded, Some("tracing")) {
-                Ok(config) => (config, None),
-                Err(e) => (
-                    TracingConfig::default(),
-                    Some(format!("the `tracing:` section is invalid: {e}")),
-                ),
-            }
-        }
+        Ok(loaded) => tracing_config_of(&loaded),
         Err(e) => (
             TracingConfig::default(),
             Some(format!("the configuration could not be loaded: {e}")),
+        ),
+    }
+}
+
+/// The full [`TracingOptions`] [`init_tracing_from_config`] installs — the
+/// `tracing:` section ([`TracingConfig`]) plus its `tracing.json` sub-section
+/// ([`JsonLogConfig`]) — and the reason it fell back to the built-in defaults
+/// when it did.
+///
+/// An invalid `tracing.json` section falls back to nested JSON on its own;
+/// the rest of the `tracing:` section still applies.
+#[doc(hidden)]
+pub fn resolve_tracing_options() -> (TracingOptions, Option<String>) {
+    match crate::config::R2eConfig::load() {
+        Ok(loaded) => tracing_options_of(&loaded),
+        Err(e) => (
+            TracingOptions::from(&TracingConfig::default()),
+            Some(format!("the configuration could not be loaded: {e}")),
+        ),
+    }
+}
+
+/// [`resolve_tracing_options`] over an already loaded configuration.
+#[doc(hidden)]
+pub fn tracing_options_of(config: &crate::config::R2eConfig) -> (TracingOptions, Option<String>) {
+    use crate::config::ConfigProperties;
+    let (tracing, problem) = tracing_config_of(config);
+    let options = TracingOptions::from(&tracing);
+    match JsonLogConfig::from_config(config, Some(JsonLogConfig::PREFIX)) {
+        Ok(json) => (options.with_json((&json).into()), problem),
+        Err(e) => (
+            options,
+            problem.or_else(|| Some(format!("the `tracing.json` section is invalid: {e}"))),
+        ),
+    }
+}
+
+fn tracing_config_of(config: &crate::config::R2eConfig) -> (TracingConfig, Option<String>) {
+    use crate::config::ConfigProperties;
+    match TracingConfig::from_config(config, Some("tracing")) {
+        Ok(tracing) => (tracing, None),
+        Err(e) => (
+            TracingConfig::default(),
+            Some(format!("the `tracing:` section is invalid: {e}")),
         ),
     }
 }
@@ -147,14 +186,18 @@ pub fn resolve_tracing_config() -> (TracingConfig, Option<String>) {
 /// what makes the warning worth reading when it does appear.
 pub fn warn_if_output_differs(lost: &SubscriberAlreadyInstalled, requested: &TracingConfig) {
     if lost.changes_output(requested) {
-        tracing::warn!(
-            "r2e: this tracing configuration (format={:?}, filter={:?}) is ignored — {lost}. \
-             Install the subscriber before R2E does (in `App::setup`), or opt out of R2E's with \
-             `app_main!(MyApp, tracing = false)`.",
-            requested.effective_format(),
-            requested.filter,
-        );
+        warn_ignored(&TracingOptions::from(requested), lost);
     }
+}
+
+fn warn_ignored(requested: &TracingOptions, lost: &dyn std::fmt::Display) {
+    tracing::warn!(
+        "r2e: this tracing configuration (format={:?}, filter={:?}) is ignored — {lost}. \
+         Install the subscriber before R2E does (in `App::setup`), or opt out of R2E's with \
+         `app_main!(MyApp, tracing = false)`.",
+        requested.effective_format(),
+        requested.filter,
+    );
 }
 
 /// Initialise the global `tracing` subscriber from a [`TracingConfig`].

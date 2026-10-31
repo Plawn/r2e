@@ -6373,9 +6373,11 @@ dependencies = [
 name = "r2e-tracing"
 version = "0.1.0"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
  "tracing",
+ "tracing-log",
  "tracing-subscriber",
 ]
 

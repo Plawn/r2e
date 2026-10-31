@@ -520,6 +520,9 @@ tracing:
   ansi: false
   thread-ids: true
   span-events: full
+  json:                # JsonLogConfig — shape of the json lines
+    flatten: true      # flat objects (fields at the top level), default false
+    message-key: _msg  # default "message"
 ```
 
 ```rust

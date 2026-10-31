@@ -69,7 +69,7 @@ pub fn add_enricher(enricher: Box<dyn FieldEnricher>) {
     ANY_ENRICHER.store(true, Ordering::Release);
 }
 
-fn snapshot() -> Option<Enrichers> {
+pub(crate) fn snapshot() -> Option<Enrichers> {
     if !ANY_ENRICHER.load(Ordering::Relaxed) {
         return None;
     }

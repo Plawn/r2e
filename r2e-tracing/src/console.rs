@@ -4,6 +4,7 @@ use tracing_subscriber::fmt::{self, MakeWriter};
 use tracing_subscriber::layer::Layer;
 
 use crate::enrich::Enriched;
+use crate::flat_json::{FlatJson, SpanFieldsLayer};
 use crate::late::BoxedLayer;
 use crate::options::{LogFormat, TracingOptions};
 
@@ -14,7 +15,8 @@ pub(crate) fn console_layer(opts: &TracingOptions) -> BoxedLayer {
 }
 
 /// The console layer, writing to `make_writer` — `fmt` (JSON under
-/// [`LogFormat::Json`]) with the knobs of `opts` and the registered
+/// [`LogFormat::Json`], flat when
+/// [`JsonOptions::flatten`](crate::JsonOptions::flatten) is set) with the knobs of `opts` and the registered
 /// [enrichers](crate::add_enricher).
 ///
 /// Exposed so tests can capture the exact lines the installed subscriber
@@ -41,6 +43,10 @@ where
         .with_ansi(ansi)
         .with_span_events(opts.effective_span_events());
     match opts.effective_format() {
+        // Flat JSON writes enricher fields into its own map: no splicing.
+        LogFormat::Json if opts.json.flatten => SpanFieldsLayer
+            .and_then(layer.event_format(FlatJson::new(opts)))
+            .boxed(),
         LogFormat::Json => layer
             .fmt_fields(fmt::format::JsonFields::new())
             .event_format(Enriched::json(format.json()))

@@ -3,7 +3,7 @@ use r2e_tracing::tracing_subscriber::fmt::format::FmtSpan;
 // The value types live in `r2e-tracing`; the config binding (the
 // `FromConfigValue` impls below and `TracingConfig`) stays here because the
 // trait and the `ConfigProperties` derive are core's.
-pub use r2e_tracing::{LogFormat, SpanEvents, TracingOptions};
+pub use r2e_tracing::{JsonOptions, LogFormat, SpanEvents, TracingOptions};
 
 impl crate::config::FromConfigValue for LogFormat {
     fn from_config_value(
@@ -159,6 +159,77 @@ impl TracingConfig {
             .as_ref()
             .map(SpanEvents::to_fmt_span)
             .unwrap_or(FmtSpan::CLOSE)
+    }
+}
+
+/// Shape of the JSON log lines, bound to the YAML `tracing.json` section.
+///
+/// The YAML-bound twin of [`JsonOptions`]. Only read under `format: json`.
+/// With `flatten: true` every event is one flat object — event fields at the
+/// top level, the message under `message-key`, the current span under
+/// `span` and the span stack (root first) under `spans`; the default keeps
+/// `tracing-subscriber`'s nested JSON (`"fields": {...}`) unchanged.
+///
+/// Read next to [`TracingConfig`] (not one of its fields, which would grow
+/// that exhaustive struct): [`resolve_tracing_options`] and the R2E entry
+/// points combine the two.
+///
+/// ```yaml
+/// tracing:
+///   format: json
+///   json:
+///     flatten: true
+///     message-key: _msg     # VictoriaLogs' message field
+///     current-span: true
+///     span-list: false
+/// ```
+///
+/// [`resolve_tracing_options`]: crate::runtime::tracing::resolve_tracing_options
+#[derive(r2e_macros::ConfigProperties, Clone, Debug, PartialEq)]
+#[config(derive_default)]
+#[non_exhaustive]
+pub struct JsonLogConfig {
+    /// Write flat lines instead of the nested `fields` shape.
+    #[config(default = false)]
+    pub flatten: bool,
+
+    /// Key of the event message in a flat line (the target when the event
+    /// has no message).
+    #[config(default = "message", key = "message-key")]
+    pub message_key: String,
+
+    /// Add the current span (`"span": {"name": .., <fields>}`).
+    #[config(default = true, key = "current-span")]
+    pub current_span: bool,
+
+    /// Add the span stack, root first (`"spans": [..]`).
+    #[config(default = true, key = "span-list")]
+    pub span_list: bool,
+}
+
+impl JsonLogConfig {
+    /// The `tracing.json` prefix this section is read under.
+    pub const PREFIX: &'static str = "tracing.json";
+}
+
+impl From<&JsonLogConfig> for JsonOptions {
+    fn from(c: &JsonLogConfig) -> Self {
+        JsonOptions::default()
+            .with_flatten(c.flatten)
+            .with_message_key(c.message_key.clone())
+            .with_current_span(c.current_span)
+            .with_span_list(c.span_list)
+    }
+}
+
+impl From<&JsonOptions> for JsonLogConfig {
+    fn from(o: &JsonOptions) -> Self {
+        Self {
+            flatten: o.flatten,
+            message_key: o.message_key.clone(),
+            current_span: o.current_span,
+            span_list: o.span_list,
+        }
     }
 }
 

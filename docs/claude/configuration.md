@@ -875,6 +875,17 @@ nested reporting).
 
 `TracingConfig` (in `r2e-core::tracing_config`) — configurable tracing subscriber options (filter, format, ansi, thread IDs, etc.). Used by the `ConfiguredTracing` plugin and the entry point's install (`ensure_tracing_installed`). Read from YAML under a prefix (normally `tracing.*`). `ObservabilityConfig` no longer embeds it: the `Observability` plugin contributes to the one subscriber configured by `tracing.*`.
 
+`JsonLogConfig` (same module, prefix `tracing.json`, `#[non_exhaustive]`) — shape of the `format: json` lines, read next to `TracingConfig` by `init_tracing_from_config` (entry points, `Tracing` plugin, `ensure_tracing_installed`):
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `tracing.json.flatten` | `bool` | `false` | One flat object per event (fields at the top level, `span`/`spans`) instead of `tracing-subscriber`'s nested `"fields":{..}`. `R2E_TRACING_JSON_FLATTEN=true` works. |
+| `tracing.json.message-key` | `String` | `"message"` | Key of the message in a flat line (`_msg` for VictoriaLogs); the target when the event has none. Kebab key → not addressable via `R2E_`. |
+| `tracing.json.current-span` | `bool` | `true` | Add `"span": {"name":..,<fields>}` (the event's span). |
+| `tracing.json.span-list` | `bool` | `true` | Add `"spans": [..]`, root first. |
+
+Reserved keys (`<message-key>`, `timestamp`, `level`, `target`, `thread_id`, `thread_name`, `file`, `line`, `span`, `spans`) overwrite an event field or enricher field of the same name. An invalid `tracing.json` section falls back to nested JSON with a warning; the rest of `tracing:` still applies. Details: `docs/claude/subsystems.md` § TracingConfig.
+
 Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `close` / `active` / `full`). Both derive `FromConfigValue` via serde.
 
 ### Prelude exports

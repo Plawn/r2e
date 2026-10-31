@@ -37,6 +37,17 @@ and uses the section as the GitHub release notes.
   fields to every console line (` key=value` in text, string members in JSON),
   with `EnrichContext` describing the event.
 
+- Flat JSON log lines: with `LogFormat::Json` and `JsonOptions::flatten`
+  (`TracingOptions.json`, new `#[non_exhaustive]` `JsonOptions` with
+  builders), the console layer writes one flat object per event — event
+  fields at the top level, the message under `JsonOptions::message_key`
+  (default `"message"`; the target when the event has none), the current span
+  as `span` and the span stack (root first) as `spans`, RFC 3339 `timestamp`,
+  `level`, `target`, optional `thread_id`/`thread_name`/`file`/`line`, and the
+  registered enrichers' fields. The formatter's keys win over colliding event
+  and enricher fields; `log`-bridged events are normalized and their `log.*`
+  fields dropped. The nested JSON shape is unchanged when `flatten` is off.
+
 ### Changed
 
 - An invalid filter directive no longer panics `try_install`: the subscriber
