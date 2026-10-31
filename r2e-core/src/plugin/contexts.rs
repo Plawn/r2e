@@ -59,6 +59,9 @@ pub struct PluginSetupContext {
     /// Lifecycle-hook registrars applied to the bean registry at `.plugin()`
     /// time. Backs [`run_pre_destroy`](Self::run_pre_destroy).
     registry_ops: Vec<RegistryOp>,
+    /// Layers contributed to the `tracing` subscriber. Backs
+    /// [`tracing_layer`](Self::tracing_layer).
+    tracing_layers: Vec<r2e_tracing::BoxedLayer>,
 }
 
 impl PluginSetupContext {
@@ -68,7 +71,33 @@ impl PluginSetupContext {
             deferred: Vec::new(),
             sugar: Vec::new(),
             registry_ops: Vec::new(),
+            tracing_layers: Vec::new(),
         }
+    }
+
+    /// Contribute a [`Layer`](r2e_tracing::tracing_subscriber::Layer) to the
+    /// process-global `tracing` subscriber `build_state()` installs — an
+    /// OpenTelemetry layer, a [`Suppress`](crate::Suppress) rule for a
+    /// known-benign upstream event, a layer writing
+    /// [`LogFields`](crate::LogFields) the console prints on every line.
+    ///
+    /// Same verb, same semantics as
+    /// [`AppBuilder::tracing_layer`](crate::AppBuilder::tracing_layer).
+    /// **Unconditional**, like everything in `setup`: the subscriber is
+    /// installed before any plugin's `enabled` flag is read.
+    pub fn tracing_layer<L>(&mut self, layer: L)
+    where
+        L: r2e_tracing::tracing_subscriber::Layer<r2e_tracing::tracing_subscriber::Registry>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.tracing_layers.push(Box::new(layer));
+    }
+
+    /// Drain the contributed tracing layers (internal).
+    pub(crate) fn take_tracing_layers(&mut self) -> Vec<r2e_tracing::BoxedLayer> {
+        std::mem::take(&mut self.tracing_layers)
     }
 
     /// Register a [`PreDestroy`](crate::PreDestroy) disposal hook for one of

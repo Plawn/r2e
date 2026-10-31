@@ -1,0 +1,54 @@
+warning: use of deprecated unit struct `r2e::prelude::Tracing`: the `Tracing` plugin was removed: `build_state()` installs the subscriber from the `tracing:` section — see docs/migration/tracing-single-path.md
+ --> cases/tracing/fail/tracing_plugin.rs:8:38
+  |
+8 |     let _ = AppBuilder::new().plugin(Tracing).build_state().await;
+  |                                      ^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+error[E0277]: `r2e::prelude::Tracing` does not implement `Plugin`, the trait `.plugin()` installs
+ --> cases/tracing/fail/tracing_plugin.rs:8:38
+  |
+8 |     let _ = AppBuilder::new().plugin(Tracing).build_state().await;
+  |                               ------ ^^^^^^^ not a plugin
+  |                               |
+  |                               required by a bound introduced by this call
+  |
+  = help: the trait `r2e::PluginInstall` is not implemented for `r2e::prelude::Tracing`
+  = note: implement `r2e::Plugin` for `r2e::prelude::Tracing`: `type Provided`, `type Deps`, `type Config`, `type Controllers`, and an async `build(self, deps, config, ctx)`
+  = note: there is only one plugin kind — everything installs with `.plugin(r2e::prelude::Tracing)` BEFORE `build_state()`
+  = note: migrating an older plugin: the old `install(self, app)` method was renamed `build(self, deps, config, ctx)`; `AppBuilder::with(..)` was removed — see docs/migration/plugin-api.md
+help: the trait `r2e::PluginInstall` is conditionally implemented for `r2e::prelude::Tracing`
+ --> $WORKSPACE/r2e-core/src/builtins/mod.rs
+  |
+  | / impl<'a> crate::plugin::PluginInstall for Tracing
+  | | where
+  | |     &'a (): crate::runtime::tracing::TracingPluginRemoved,
+  | |_____________---------------------------------------------^
+  |               |
+  |               unsatisfied requirement introduced here: `&(): r2e::runtime::tracing::TracingPluginRemoved`
+note: required by a bound in `builder::nostate::<impl r2e::AppBuilder<NoState, P, R, Mods>>::plugin`
+ --> $WORKSPACE/r2e-core/src/builder/nostate.rs
+  |
+  |     pub fn plugin<Pl: PluginInstall>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
+  |                       ^^^^^^^^^^^^^ required by this bound in `builder::nostate::<impl AppBuilder<NoState, P, R, Mods>>::plugin`
+
+error[E0277]: `r2e::prelude::Tracing` does not implement `Plugin`, the trait `.plugin()` installs
+ --> cases/tracing/fail/tracing_plugin.rs:8:13
+  |
+8 |     let _ = AppBuilder::new().plugin(Tracing).build_state().await;
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a plugin
+  |
+  = help: the trait `r2e::PluginInstall` is not implemented for `r2e::prelude::Tracing`
+  = note: implement `r2e::Plugin` for `r2e::prelude::Tracing`: `type Provided`, `type Deps`, `type Config`, `type Controllers`, and an async `build(self, deps, config, ctx)`
+  = note: there is only one plugin kind — everything installs with `.plugin(r2e::prelude::Tracing)` BEFORE `build_state()`
+  = note: migrating an older plugin: the old `install(self, app)` method was renamed `build(self, deps, config, ctx)`; `AppBuilder::with(..)` was removed — see docs/migration/plugin-api.md
+help: the trait `r2e::PluginInstall` is conditionally implemented for `r2e::prelude::Tracing`
+ --> $WORKSPACE/r2e-core/src/builtins/mod.rs
+  |
+  | / impl<'a> crate::plugin::PluginInstall for Tracing
+  | | where
+  | |     &'a (): crate::runtime::tracing::TracingPluginRemoved,
+  | |_____________---------------------------------------------^
+  |               |
+  |               unsatisfied requirement introduced here: `&(): r2e::runtime::tracing::TracingPluginRemoved`

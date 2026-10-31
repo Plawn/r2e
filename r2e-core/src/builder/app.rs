@@ -148,54 +148,41 @@ pub async fn launch<A: App>() -> Result<(), BootError> {
 ///
 /// Constructed with `LaunchOptions::default()` and adjusted field by field;
 /// new options are added as fields, so a struct literal is deliberately not
-/// the supported spelling.
-#[derive(Debug, Clone, Copy)]
+/// the supported spelling. It has no field today: the `tracing` switch was
+/// removed (the subscriber is configured by the `tracing:` section — see
+/// `docs/migration/tracing-single-path.md`).
+#[derive(Debug, Clone, Copy, Default)]
 #[non_exhaustive]
-pub struct LaunchOptions {
-    /// Initialise the global `tracing` subscriber **after** [`App::setup`]
-    /// returns, from the application's own `tracing:` section (via
-    /// [`init_tracing_from_config`](crate::init_tracing_from_config)).
-    ///
-    /// Default `true`. Set it to `false` — `app_main!(MyApp, tracing = false)`
-    /// — when the application installs its own subscriber, either in `setup`
-    /// or through a plugin such as `Tracing::from_config(..)` in `build`.
-    pub tracing: bool,
-}
-
-impl Default for LaunchOptions {
-    fn default() -> Self {
-        Self { tracing: true }
-    }
-}
+pub struct LaunchOptions {}
 
 /// [`launch`] with explicit [`LaunchOptions`].
 ///
 /// # Tracing ordering
 ///
-/// The subscriber is installed **after** [`App::setup`], not before it, so an
-/// application whose `setup` builds its own subscriber (or reads the
-/// environment to decide on one) wins: the install is idempotent and does
-/// nothing once a global subscriber is set. The cost is that anything `setup`
-/// logs through `tracing` before installing a subscriber is dropped — `setup`
-/// should print (or install its subscriber first) if it has something to say.
+/// 1. [`r2e_tracing::capture_boot_logs`] first: from here on, everything
+///    logged through `tracing` (or `log`) is buffered — [`App::setup`],
+///    config loading, plugins' `setup`.
+/// 2. [`App::build`] → [`build_state()`](AppBuilder::build_state) installs the
+///    subscriber, **once**, from the app's `tracing:` section (the profile
+///    overlay and `R2E_*` env overlay included) plus every layer contributed
+///    with `.tracing_layer(..)`; the buffered lines are replayed through it,
+///    then plugins' `build`, the bean graph and `#[post_construct]` log live.
+/// 3. When the boot fails before step 2 installed anything (configuration
+///    unreadable, `setup` error), the buffered lines are written to stderr
+///    — before the boot error report `app_main!` prints.
 ///
-/// What R2E installs is the app's own `tracing:` section
-/// ([`init_tracing_from_config`](crate::init_tracing_from_config)), not the
-/// built-in defaults, so `format: json` in `application.yaml` applies from the
-/// first log line without any opt-in. It still happens **before**
-/// [`App::build`], so a `Tracing`/`ConfiguredTracing` plugin installed there
-/// loses the race — harmlessly when it reads the same section (it is the same
-/// configuration), with a warning when it would have logged differently.
-///
-/// With `tracing: false` R2E installs nothing at all, leaving the whole
-/// decision to the app; a `Tracing`/`ConfiguredTracing` plugin installed in
-/// `build` then takes effect instead of losing the race to the entry point.
-pub async fn launch_with<A: App>(options: LaunchOptions) -> Result<(), BootError> {
+/// `tracing.enabled: false` drops the buffer and installs nothing; a global
+/// subscriber the application set before calling `launch` wins (nothing is
+/// buffered, the contributed layers are ignored with one WARN).
+pub async fn launch_with<A: App>(_options: LaunchOptions) -> Result<(), BootError> {
+    let boot = r2e_tracing::capture_boot_logs();
     let env = A::setup().await?;
-    if options.tracing {
-        crate::init_tracing_from_config();
-    }
-    A::build(AppBuilder::new(), env).await?.serve_auto().await
+    let app = A::build(AppBuilder::new(), env).await?;
+    // Ok: the subscriber is installed, this is a no-op. On the `?` paths above
+    // the handle is dropped by scope exit while still buffering, which writes
+    // the buffered lines to stderr before the caller reports the error.
+    drop(boot);
+    app.serve_auto().await
 }
 
 /// Render a boot failure as R2E's single operational message: one `error:`

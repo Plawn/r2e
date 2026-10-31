@@ -30,8 +30,10 @@ use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, Tra
 type ResolveInit = fn(&BeanContext) -> Option<SessionInitFn>;
 
 /// `(target, message)` of the ERROR events rmcp emits for a benign condition;
-/// [`McpServer`]'s `setup` registers each as a noise rule
-/// ([`r2e_core::suppress_error`]), so the framework subscriber drops them.
+/// [`McpServer`]'s `setup` contributes each as a
+/// [`Suppress`](r2e_core::Suppress) layer
+/// (`PluginSetupContext::tracing_layer`), so the framework subscriber drops
+/// them.
 ///
 /// - `rmcp::service` — `failed to send pending response during drain` and
 ///   `fail to response message` (rmcp ≤ 3.8). In stateless streamable HTTP
@@ -352,10 +354,10 @@ impl Plugin for McpServer {
         // `mcp.enabled = false` — build-time surface effects are dropped when
         // disabled, so the datum is deposited here.
         ctx.store_data(self.registry.clone());
-        // Process-wide and idempotent: rmcp's known-benign drain errors
-        // (#1185) never reach the framework subscriber's output.
+        // rmcp's known-benign drain errors (#1185) never reach the framework
+        // subscriber's output: `build_state()` installs these with it.
         for (target, message) in RMCP_NOISE {
-            r2e_core::suppress_error(*target, *message);
+            ctx.tracing_layer(r2e_core::Suppress::error(*target, *message));
         }
     }
 

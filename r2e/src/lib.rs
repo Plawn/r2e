@@ -147,38 +147,30 @@ pub mod devtools {
 ///
 /// # Tracing
 ///
-/// By default the global `tracing` subscriber is installed **after**
-/// [`App::setup`](r2e_core::App::setup) returns, from the application's own
-/// `tracing:` section (`format: json` in `application.yaml` applies from the
-/// first log line), so an app that builds its own subscriber in `setup` still
-/// wins — the install is idempotent. Opt out entirely with the same spelling
-/// `#[r2e::main]` uses:
-///
-/// ```ignore
-/// r2e::app_main!(MyApp, tracing = false);
-/// ```
-///
-/// R2E then installs nothing, leaving the subscriber to the app — including to
-/// a `Tracing::from_config(..)` / `ConfiguredTracing` plugin installed in
-/// `build`, which would otherwise lose the race to the entry point.
+/// [`launch`](r2e_core::launch) captures the logs emitted before the
+/// subscriber exists (`App::setup`, config loading, plugin setup), and
+/// `build_state()` installs it from the application's own `tracing:` section
+/// plus the layers contributed with `.tracing_layer(..)`, replaying what was
+/// captured. `tracing.enabled: false` installs nothing (the app owns the
+/// subscriber). There is no `tracing = …` argument any more — see
+/// `docs/migration/tracing-single-path.md`.
 #[macro_export]
 macro_rules! app_main {
     ($app:ty) => {
-        $crate::app_main!($app, tracing = true);
-    };
-    ($app:ty, tracing = $tracing:expr) => {
         include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/app.rs"));
 
-        // `tracing = false` on the attribute always: the subscriber is
-        // installed by `launch!` *after* `App::setup`, not before the runtime
-        // starts, so the app has the first word on it.
-        #[$crate::main(tracing = false)]
+        #[$crate::main]
         async fn main() {
             // A boot failure is an operational error, not a bug: print one
             // line (plus the `source()` chain) and exit non-zero, rather than
             // the panic + backtrace + exit code 101 that `unwrap` would give.
-            $crate::exit_on_boot_error($crate::launch!($app, tracing = $tracing).await);
+            $crate::exit_on_boot_error($crate::launch!($app).await);
         }
+    };
+    ($app:ty, tracing = $tracing:expr) => {
+        ::core::compile_error!(
+            "`tracing = …` was removed: the subscriber is installed by `build_state()` from the `tracing:` section (`tracing.enabled: false` to install nothing) — see docs/migration/tracing-single-path.md"
+        );
     };
 }
 
@@ -218,30 +210,35 @@ macro_rules! app_main {
 ///
 /// # Tracing
 ///
-/// The global subscriber is installed **after** `App::setup` (and, under
-/// `dev-reload`, once — outside the patch loop), from the application's own
-/// `tracing:` section. `launch!(MyApp, tracing = false)` skips it entirely,
-/// leaving the subscriber to the app — including to a `Tracing` /
-/// `ConfiguredTracing` plugin installed in `build`, which otherwise loses the
-/// race to the entry point (silently when it reads the same section, with a
-/// warning when it would have logged differently). Calling `launch!` from a
-/// `#[r2e::main]` that already initialised tracing is harmless: the install is
-/// idempotent.
+/// Boot logs are captured before `App::setup` (under `dev-reload`, once,
+/// outside the patch loop) and `build_state()` installs the subscriber from
+/// the `tracing:` section, replaying them; a boot that fails before the
+/// install prints them to stderr ahead of the error. There is no
+/// `tracing = …` argument any more (`tracing.enabled: false` installs
+/// nothing) — see `docs/migration/tracing-single-path.md`.
 #[macro_export]
 macro_rules! launch {
-    ($app:ty) => {
-        $crate::launch!($app, tracing = true)
-    };
     ($app:ty, tracing = $tracing:expr) => {
+        ::core::compile_error!(
+            "`tracing = …` was removed: the subscriber is installed by `build_state()` from the `tracing:` section (`tracing.enabled: false` to install nothing) — see docs/migration/tracing-single-path.md"
+        )
+    };
+    ($app:ty) => {
         async {
             #[cfg(not(feature = "dev-reload"))]
             {
-                let mut __opts = $crate::LaunchOptions::default();
-                __opts.tracing = $tracing;
-                $crate::launch_with::<$app>(__opts).await
+                $crate::launch::<$app>().await
             }
             #[cfg(feature = "dev-reload")]
             {
+                // The boot-log handle of the first cycle: released once that
+                // cycle's build finished (its `build_state()` installed the
+                // subscriber and replayed the logs) or failed (dropping it
+                // then prints the buffered lines to stderr).
+                static __R2E_BOOT_LOGS: ::std::sync::Mutex<
+                    ::core::option::Option<$crate::r2e_tracing::BootLogs>,
+                > = ::std::sync::Mutex::new(::core::option::Option::None);
+
                 // Concrete, named function expanded into the *tip* crate.
                 // Subsecond can discover and remap it, so each hot-patch
                 // re-runs the rebuilt `App::build`. The closure handed to the
@@ -251,9 +248,15 @@ macro_rules! launch {
                     ::std::eprintln!("[r2e dev-reload] (re)building app");
                     // A failing `build` must not kill the loop: report it and
                     // wait for the next hot-patch to fix it.
-                    let __app = match <$app as $crate::App>::build($crate::AppBuilder::new(), __env)
-                        .await
-                    {
+                    let __built =
+                        <$app as $crate::App>::build($crate::AppBuilder::new(), __env).await;
+                    ::core::mem::drop(
+                        __R2E_BOOT_LOGS
+                            .lock()
+                            .unwrap_or_else(::std::sync::PoisonError::into_inner)
+                            .take(),
+                    );
+                    let __app = match __built {
                         ::core::result::Result::Ok(__a) => {
                             // The cycle assembled: promote the graph this
                             // cycle staged into the dev-reload caches, so the
@@ -279,18 +282,20 @@ macro_rules! launch {
                     }
                 }
 
+                // Same ordering as the non-dev arm: capture first, so
+                // `setup`'s logs reach the subscriber `build_state()` installs.
+                let __boot = $crate::r2e_tracing::capture_boot_logs();
                 // `setup` runs once, before the loop — a failure there is
-                // fatal and propagates out of `launch!` like the non-dev arm.
+                // fatal and propagates out of `launch!` like the non-dev arm
+                // (dropping `__boot` prints what it buffered).
                 let __env = match <$app as $crate::App>::setup().await {
                     ::core::result::Result::Ok(__e) => __e,
                     ::core::result::Result::Err(__e) => return ::core::result::Result::Err(__e),
                 };
-                // Same ordering as the non-dev arm: the subscriber goes in
-                // after `setup`, once, outside the hot-patch loop (it is a
-                // process-global, one-shot install).
-                if $tracing {
-                    $crate::init_tracing_from_config();
-                }
+                *__R2E_BOOT_LOGS
+                    .lock()
+                    .unwrap_or_else(::std::sync::PoisonError::into_inner) =
+                    ::core::option::Option::Some(__boot);
                 // Enable the process-global dev-reload caches (bean-graph
                 // fingerprinting, instance reuse, lifecycle skip): they must
                 // engage only under the actual hot-patch loop, never in a

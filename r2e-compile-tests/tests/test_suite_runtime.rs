@@ -13,7 +13,7 @@ struct LifecycleSuite {
     local_cases: usize,
 }
 
-#[r2e::test_suite(tracing = false)]
+#[r2e::test_suite]
 impl LifecycleSuite {
     #[before_all]
     async fn setup() -> Self {
@@ -81,7 +81,6 @@ struct AppBackedSuite {
 
 #[r2e::test_suite(
     app = SuiteApp,
-    tracing = false,
     with = |b| b.override_bean(SuiteGreeter("mock"))
 )]
 impl AppBackedSuite {

@@ -45,7 +45,10 @@ pub use builder::{
 pub use builtins::http_trace::{HttpTrace, HttpTraceBuilder, HttpTraceConfig};
 pub use builtins::request_id::{RequestId, RequestIdPlugin};
 pub use builtins::secure_headers::SecureHeaders;
-pub use builtins::{AdvancedHealth, ConfiguredTracing};
+pub use builtins::AdvancedHealth;
+#[doc(hidden)]
+#[allow(deprecated)]
+pub use builtins::ConfiguredTracing;
 pub use config::{
     deserialize_value, register_section, registered_sections, validate_declared_keys,
     validate_declared_sections, validate_keys, validate_section, ConfigError, ConfigProperties,
@@ -81,9 +84,8 @@ pub use plugin::{
 };
 pub use r2e_tracing;
 pub use r2e_tracing::{
-    add_enricher, contribute_layer, is_suppressed, late_layers, set_console_factory, suppress,
-    suppress_error, AlreadyInstalled, BoxedLayer, ConsoleFactory, EnrichContext, FieldEnricher,
-    JsonOptions, LateLayers, NoiseFilter, NoiseRule, NotWired, TracingOptions,
+    capture_boot_logs, installed, AlreadyInstalled, BootLogs, BoxedLayer, JsonOptions, LogFields,
+    Suppress, TracingOptions,
 };
 pub use runtime::harness::WorkerHarness;
 pub use runtime::http_trace::{
@@ -100,9 +102,13 @@ pub use runtime::lifecycle::{LifecycleController, StopHandle};
 pub use runtime::mailbox::{Mailbox, MailboxError, Mailboxes};
 pub use runtime::panic::{PanicHook, PanicHookSlot, PanicOrigin, PanicReport, PANIC_TARGET};
 pub use runtime::service::{ServiceComponent, StopPhase};
+// Removed entry points, kept only as compile-time migration shims
+// (docs/migration/tracing-single-path.md).
+#[doc(hidden)]
+#[allow(deprecated)]
 pub use runtime::tracing::{
     ensure_tracing_installed, init_tracing, init_tracing_from_config, init_tracing_with_config,
-    try_init_tracing_with_config, warn_if_output_differs, SubscriberAlreadyInstalled,
+    try_init_tracing_with_config,
 };
 pub use runtime::tracing_config::{JsonLogConfig, LogFormat, SpanEvents, TracingConfig};
 pub use runtime::worker::{

@@ -20,7 +20,7 @@ pub mod http_trace;
 pub mod request_id;
 pub mod secure_headers;
 
-use crate::plugin::{Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext};
+use crate::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use crate::http::layers::cors::CorsLayer;
 
 pub use http_trace::{HttpTrace, HttpTraceBuilder, HttpTraceConfig};
@@ -66,130 +66,73 @@ impl Plugin for Cors {
     }
 }
 
-/// Log **subscriber** plugin — installs the global `tracing` subscriber from
-/// the application's `tracing:` section (the built-in defaults when there is
-/// none), like R2E's entry points do.
-///
-/// It contributes **no HTTP layer**: per-request spans and the request summary
-/// line are [`HttpTrace`]'s job, and the two are installed independently.
-///
-/// The subscriber is a process-global, one-shot install, done from `setup`
-/// (before any bean is built, so boot logs are captured).
-///
-/// # Do I need it?
-///
-/// | Entry point | Subscriber comes from |
-/// |---|---|
-/// | `r2e::launch` / `#[r2e::main]` / `app_main!` / `#[r2e::test]` | the entry point, from the app's own `tracing:` section — **do not** add this plugin |
-/// | a hand-written `main` / an embedded `AppBuilder` | `.plugin(Tracing)` (the `tracing:` section of `application.yaml`) or [`Tracing::configured`] / [`Tracing::from_config`] (an explicit configuration) |
-/// | `r2e_observability::Observability` | still the entry point (or `.plugin(Tracing)`): `Observability` builds no subscriber, it contributes its `tracing-opentelemetry` layer and the `trace_id`/`span_id` fields to the one installed |
-///
-/// # Who owns what
-///
-/// | Plugin | Owns |
-/// |---|---|
-/// | `Tracing` / [`ConfiguredTracing`] | the subscriber: format, filter, ansi, span events |
-/// | [`HttpTrace`] | the per-request span, summary event, request id, exclusions |
-/// | `r2e_observability::Observability` | OTLP export/propagation, contributed to the subscriber above; installs the `HttpTrace` layer with an OpenTelemetry span shape |
-///
-/// `Observability` replaces `HttpTrace`, not `Tracing`: it contributes to the
-/// subscriber instead of owning it (see `docs/migration/observability-tracing.md`).
-///
-/// [`init_tracing()`]: crate::init_tracing
-///
-/// # Example
-///
-/// ```ignore
-/// AppBuilder::new()
-///     .plugin(Tracing)              // subscriber
-///     .plugin(HttpTrace::new())     // one span + one summary line per request
-///     .build_state()
-///     .await
-///     .serve("0.0.0.0:3000")
-///     .await;
-/// ```
+// ── Removed tracing plugins (migration diagnostics) ─────────────────────────
+
+/// **Removed.** The subscriber is installed by `build_state()` from the
+/// `tracing:` section; layers are contributed with `.tracing_layer(..)`. Kept
+/// only so `.plugin(Tracing)` fails to compile naming
+/// `docs/migration/tracing-single-path.md`.
+#[doc(hidden)]
+#[deprecated(
+    note = "the `Tracing` plugin was removed: `build_state()` installs the subscriber from the `tracing:` section — see docs/migration/tracing-single-path.md"
+)]
 pub struct Tracing;
 
+#[allow(deprecated)]
 impl Tracing {
-    /// Create a tracing plugin configured from a [`TracingConfig`].
-    ///
-    /// [`TracingConfig`]: crate::runtime::tracing_config::TracingConfig
-    pub fn configured(config: crate::runtime::tracing_config::TracingConfig) -> ConfiguredTracing {
-        ConfiguredTracing(config)
+    /// **Removed.** See `docs/migration/tracing-single-path.md`.
+    #[doc(hidden)]
+    pub fn from_config<'a>(_config: &crate::config::R2eConfig) -> Self
+    where
+        &'a (): crate::runtime::tracing::TracingPluginRemoved,
+    {
+        Tracing
     }
 
-    /// Create a tracing plugin configured from [`R2eConfig`], reading
-    /// keys under the `tracing` prefix.
-    ///
-    /// [`R2eConfig`]: crate::config::R2eConfig
-    pub fn from_config(r2e_config: &crate::config::R2eConfig) -> ConfiguredTracing {
-        use crate::config::ConfigProperties;
-        let config =
-            crate::runtime::tracing_config::TracingConfig::from_config(r2e_config, Some("tracing"))
-                .unwrap_or_default();
-        ConfiguredTracing(config)
+    /// **Removed.** See `docs/migration/tracing-single-path.md`.
+    #[doc(hidden)]
+    pub fn configured<'a>(_config: crate::runtime::tracing_config::TracingConfig) -> Self
+    where
+        &'a (): crate::runtime::tracing::TracingPluginRemoved,
+    {
+        Tracing
     }
 }
 
-impl Plugin for Tracing {
-    type Provided = ();
-    type Deps = ();
-    type Config = ();
+// Not a `Plugin` (its async `build` would capture the gating lifetime): a
+// hand-written `PluginInstall` whose unsatisfiable bound makes
+// `.plugin(Tracing)` fail with the migration diagnostic. Coherent next to the
+// blanket `impl<T: Plugin> PluginInstall for T` because `Tracing` is local and
+// implements no `Plugin`.
+#[allow(deprecated)]
+impl<'a> crate::plugin::PluginInstall for Tracing
+where
+    &'a (): crate::runtime::tracing::TracingPluginRemoved,
+{
+    type Provisions = crate::type_list::TNil;
+    type Required = crate::type_list::TNil;
     type Controllers = ();
 
-    // The subscriber is a process-global, one-shot install: doing it in
-    // `setup` (which runs at `.plugin()` time, before the graph is built)
-    // means bean construction and every other plugin's `build` are already
-    // instrumented.
-    fn setup(&mut self, _ctx: &mut PluginSetupContext) {
-        crate::runtime::layers::init_tracing_from_config();
-    }
-
-    // The subscriber is the whole plugin: no router effect at all. Per-request
-    // spans, the summary line and request ids come from [`HttpTrace`].
-    async fn build(
+    fn install<P, R, Mods>(
         self,
-        _deps: Self::Deps,
-        _config: Option<Self::Config>,
-        _ctx: &mut PluginBuildContext,
-    ) -> Result<Self::Provided, PluginBuildError> {
-        Ok(())
+        _app: crate::builder::AppBuilder<crate::builder::NoState, P, R, Mods>,
+    ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
+    where
+        P: crate::type_list::TAppend<Self::Provisions>,
+        R: crate::type_list::TAppend<Self::Required>,
+        Self::Controllers: crate::di::module::PushPluginCtrls<Self, Mods>,
+    {
+        unreachable!("`TracingPluginRemoved` is implemented by nothing")
     }
 }
 
-/// Subscriber plugin with explicit configuration.
-///
-/// Created via [`Tracing::configured()`] or [`Tracing::from_config()`]. Like
-/// [`Tracing`] it installs **only** the subscriber — pair it with
-/// [`HttpTrace`] for per-request spans.
-pub struct ConfiguredTracing(pub crate::runtime::tracing_config::TracingConfig);
-
-impl Plugin for ConfiguredTracing {
-    type Provided = ();
-    type Deps = ();
-    type Config = ();
-    type Controllers = ();
-
-    // An explicit configuration that loses the race to an earlier subscriber
-    // is not honoured at all, so it says so — unless the winner already logs
-    // exactly what this one asked for, which is what happens when the entry
-    // point read the same `tracing:` section a moment earlier.
-    fn setup(&mut self, _ctx: &mut PluginSetupContext) {
-        if let Err(lost) = crate::runtime::layers::try_init_tracing_with_config(&self.0) {
-            crate::runtime::layers::warn_if_output_differs(&lost, &self.0);
-        }
-    }
-
-    // No router effect — see [`Tracing`].
-    async fn build(
-        self,
-        _deps: Self::Deps,
-        _config: Option<Self::Config>,
-        _ctx: &mut PluginBuildContext,
-    ) -> Result<Self::Provided, PluginBuildError> {
-        Ok(())
-    }
-}
+/// **Removed.** See [`Tracing`]; `ConfiguredTracing(config)` fails to compile
+/// naming `docs/migration/tracing-single-path.md`.
+#[doc(hidden)]
+#[deprecated(
+    note = "the `ConfiguredTracing` plugin was removed: `build_state()` installs the subscriber from the `tracing:` section — see docs/migration/tracing-single-path.md"
+)]
+pub struct ConfiguredTracing<C: crate::runtime::tracing::TracingPluginRemoved>(pub C);
 
 /// Health-check endpoint plugin.
 ///

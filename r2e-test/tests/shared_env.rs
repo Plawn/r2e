@@ -180,7 +180,7 @@ struct PingSuite {
     seen: usize,
 }
 
-#[r2e::test_suite(app = PingApp, env = PING_ENV.get().await, tracing = false)]
+#[r2e::test_suite(app = PingApp, env = PING_ENV.get().await)]
 impl PingSuite {
     #[before_all]
     async fn boot(app: TestApp) -> Self {

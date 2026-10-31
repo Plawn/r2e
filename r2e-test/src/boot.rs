@@ -77,8 +77,13 @@ impl TestApp {
     pub async fn try_boot_with<A: App>(
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
     ) -> Result<Self, BootError> {
+        // Capture before `setup`, so its logs reach the subscriber
+        // `build_state()` installs (or stderr, when the boot fails first).
+        let boot = r2e_core::capture_boot_logs();
         let env = A::setup().await?;
-        Self::assemble::<A>(env, Some(TestJwt::new()), configure).await
+        let app = Self::assemble::<A>(env, Some(TestJwt::new()), configure).await;
+        drop(boot);
+        app
     }
 
     /// Boot an [`App`] **without** the harness JWT wiring — for apps whose
@@ -93,8 +98,13 @@ impl TestApp {
     pub async fn try_boot_plain<A: App>(
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
     ) -> Result<Self, BootError> {
+        // Capture before `setup`, so its logs reach the subscriber
+        // `build_state()` installs (or stderr, when the boot fails first).
+        let boot = r2e_core::capture_boot_logs();
         let env = A::setup().await?;
-        Self::assemble::<A>(env, None, configure).await
+        let app = Self::assemble::<A>(env, None, configure).await;
+        drop(boot);
+        app
     }
 
     // ── Reusing one `App::Env` across boots ──────────────────────────────
@@ -218,6 +228,10 @@ impl TestApp {
         jwt: Option<TestJwt>,
         configure: impl FnOnce(AppBuilder) -> AppBuilder,
     ) -> Result<Self, BootError> {
+        // `build_state()` installs the subscriber from the test profile's
+        // `tracing:` section and replays what was captured; a boot failing
+        // before that prints the buffered lines to stderr on drop.
+        let boot = r2e_core::capture_boot_logs();
         let mut builder = AppBuilder::new().with_profile("test");
         if let Some(jwt) = &jwt {
             builder = builder
@@ -225,7 +239,9 @@ impl TestApp {
                 .override_bean(Arc::new(jwt.validator()));
         }
         let built = A::build(configure(builder), env).await?;
-        Self::from_bootable(built, jwt).await
+        let app = Self::from_bootable(built, jwt).await;
+        drop(boot);
+        app
     }
 
     /// Start the assembled app through the production lifecycle.

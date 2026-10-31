@@ -1,0 +1,24 @@
+warning: use of deprecated function `r2e::init_tracing`: removed: `build_state()` installs the subscriber from the `tracing:` section — see docs/migration/tracing-single-path.md
+ --> cases/tracing/fail/init_tracing.rs:6:10
+  |
+6 |     r2e::init_tracing();
+  |          ^^^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+error[E0277]: `init_tracing*` was removed: `launch`/`TestApp::boot` capture boot logs and `build_state()` installs the subscriber; call `r2e_tracing::install(&TracingOptions::default(), vec![])` in a test without an app — see docs/migration/tracing-single-path.md
+ --> cases/tracing/fail/init_tracing.rs:6:5
+  |
+6 |     r2e::init_tracing();
+  |     ^^^^^^^^^^^^^^^^^^^ removed tracing entry point
+  |
+  = help: the trait `r2e::runtime::tracing::TracingEntryPointRemoved` is not implemented for `&()`
+  = note: the subscriber is configured by the `tracing:` section (`tracing.enabled`, `tracing.console`, `tracing.json`, …); contribute layers with `.tracing_layer(..)`
+note: required by a bound in `r2e::init_tracing`
+ --> $WORKSPACE/r2e-core/src/runtime/tracing.rs
+  |
+  | pub fn init_tracing<'a>()
+  |        ------------ required by a bound in this function
+  | where
+  |     &'a (): TracingEntryPointRemoved,
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `init_tracing`
