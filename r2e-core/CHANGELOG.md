@@ -15,8 +15,25 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The tracing subscriber primitives moved to the new `r2e-tracing` crate:
+  `LogFormat`, `SpanEvents`, `UpstreamNoise` and the subscriber install
+  itself. They are re-exported at their previous `r2e_core` paths, and
+  `init_tracing*` / `TracingConfig` / `SubscriberAlreadyInstalled` stay in
+  `r2e-core` unchanged — no user action. New re-exports: `TracingOptions`,
+  `AlreadyInstalled` and the crate itself as
+  `r2e_core::r2e_tracing`. `r2e-core` no longer depends on
+  `tracing-subscriber` directly.
+
 ### Added
 
+- `UpstreamNoise`: a `tracing_subscriber` per-layer `Filter` the framework
+  subscriber installs on its `fmt` layer next to the `EnvFilter`, dropping the
+  ERROR events a dependency emits for conditions R2E knows to be benign (a
+  `(target, message)` table; today rmcp ≤ 3.8's drain errors after a stateless
+  MCP client disconnect, #1185). Only ERROR is matched. Apps installing their
+  own subscriber can add it with `.with_filter(r2e_core::UpstreamNoise)`.
 - `SerdeConfig<T>`: load any `T: serde::Deserialize + Clone` as a typed config
   section without `#[derive(ConfigProperties)]` — root (`load_config`),
   `provide_config`, plugin `type Config` or `#[config(section)]` field. `T` is

@@ -2,7 +2,7 @@
 #
 # Enforced by scripts/check-source-boundary.sh over git-tracked .rs files
 # under any tests/ directory (examples included; vendor/ and .claude/
-# excluded). Crates below r2e-core (r2e-rt, r2e-http, r2e-macros) and
+# excluded). Crates below r2e-core (r2e-rt, r2e-tracing, r2e-http, r2e-macros) and
 # r2e-devservices are allowlisted: they cannot reach `r2e_core::test`.
 #
 # This baseline ONLY EVER SHRINKS: async tests use `#[r2e_core::test]`

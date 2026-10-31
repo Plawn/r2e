@@ -673,8 +673,9 @@ rmcp service. When the client closes first — typically a `subscriptions/listen
 SSE stream dropped after the client's idle period — rmcp ≤ 3.8 logs the drain
 at ERROR (`failed to send pending response during drain`). Nothing leaks: the
 response simply has no reader. R2E's tracing subscriber drops that line
-(`r2e_core::UpstreamNoise`, a per-layer filter next to the `EnvFilter`); an
-app installing its own subscriber can add the same filter — see
+(`r2e_core::UpstreamNoise`, a per-layer filter next to the `EnvFilter`), and so
+does the subscriber `r2e-observability` installs (console and OpenTelemetry
+layers); an app installing its own subscriber can add the same filter — see
 `UpstreamNoise`'s docs. The entry goes away once the upstream fix is R2E's
 minimum rmcp.
 

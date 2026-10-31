@@ -1,13 +1,9 @@
-use tracing_subscriber::fmt::format::FmtSpan;
+use r2e_tracing::tracing_subscriber::fmt::format::FmtSpan;
 
-/// Log output format.
-#[derive(serde::Deserialize, Clone, Debug, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum LogFormat {
-    #[default]
-    Pretty,
-    Json,
-}
+// The value types live in `r2e-tracing`; the config binding (the
+// `FromConfigValue` impls below and `TracingConfig`) stays here because the
+// trait and the `ConfigProperties` derive are core's.
+pub use r2e_tracing::{LogFormat, SpanEvents, TracingOptions};
 
 impl crate::config::FromConfigValue for LogFormat {
     fn from_config_value(
@@ -15,31 +11,6 @@ impl crate::config::FromConfigValue for LogFormat {
         key: &str,
     ) -> Result<Self, crate::config::ConfigError> {
         crate::config::deserialize_value::<Self>(value, key)
-    }
-}
-
-/// Controls which span lifecycle events are recorded.
-#[derive(serde::Deserialize, Clone, Debug, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum SpanEvents {
-    None,
-    New,
-    #[default]
-    Close,
-    Active,
-    Full,
-}
-
-impl SpanEvents {
-    /// Convert to the `tracing_subscriber` `FmtSpan` bitflag.
-    pub fn to_fmt_span(&self) -> FmtSpan {
-        match self {
-            SpanEvents::None => FmtSpan::NONE,
-            SpanEvents::New => FmtSpan::NEW,
-            SpanEvents::Close => FmtSpan::CLOSE,
-            SpanEvents::Active => FmtSpan::ACTIVE,
-            SpanEvents::Full => FmtSpan::FULL,
-        }
     }
 }
 
@@ -52,7 +23,11 @@ impl crate::config::FromConfigValue for SpanEvents {
     }
 }
 
-/// Configuration for the `tracing-subscriber` fmt layer.
+/// Configuration for the `tracing-subscriber` fmt layer, bound to the YAML
+/// `tracing:` section.
+///
+/// The YAML-bound twin of [`TracingOptions`] (`r2e-tracing`); the two convert
+/// both ways and the install goes through [`r2e_tracing::try_install`].
 ///
 /// All fields except `filter` are `Option` — `None` means "use the subscriber
 /// default". This lets users override only the knobs they care about.
@@ -184,5 +159,38 @@ impl TracingConfig {
             .as_ref()
             .map(SpanEvents::to_fmt_span)
             .unwrap_or(FmtSpan::CLOSE)
+    }
+}
+
+impl From<&TracingConfig> for TracingOptions {
+    fn from(c: &TracingConfig) -> Self {
+        let mut o = TracingOptions::new(c.filter.clone());
+        o.format = c.format.clone();
+        o.target = c.target;
+        o.thread_ids = c.thread_ids;
+        o.thread_names = c.thread_names;
+        o.file = c.file;
+        o.line_number = c.line_number;
+        o.level = c.level;
+        o.ansi = c.ansi;
+        o.span_events = c.span_events.clone();
+        o
+    }
+}
+
+impl From<&TracingOptions> for TracingConfig {
+    fn from(o: &TracingOptions) -> Self {
+        Self {
+            filter: o.filter.clone(),
+            format: o.format.clone(),
+            target: o.target,
+            thread_ids: o.thread_ids,
+            thread_names: o.thread_names,
+            file: o.file,
+            line_number: o.line_number,
+            level: o.level,
+            ansi: o.ansi,
+            span_events: o.span_events.clone(),
+        }
     }
 }

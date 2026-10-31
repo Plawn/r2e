@@ -2,7 +2,7 @@
 
 Quick-reference guide to the R2E workspace. Each section lists every file with a one-line description.
 
-> **Dependency flow:** `r2e-http` <- `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
+> **Dependency flow:** `r2e-rt`, `r2e-tracing` <- `r2e-http` <- `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
 >
 > **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
@@ -38,6 +38,23 @@ src/
   routing.rs                get, post, put, patch, delete, Route
   ws.rs                     WebSocket types (feature = "ws")
   multipart.rs              Multipart extractor (feature = "multipart")
+```
+
+---
+
+## r2e-tracing — Process-global tracing subscriber
+
+Owns the one-shot global `tracing` subscriber. No tokio, no `r2e-*` dependency; re-exported by r2e-core.
+
+```
+src/
+  lib.rs                    Re-exports (TracingOptions, LogFormat, SpanEvents, try_install, installed, AlreadyInstalled, UpstreamNoise, tracing_subscriber)
+  options.rs                TracingOptions + builders, LogFormat, SpanEvents (to_fmt_span)
+  install.rs                try_install (Registry + fmt + EnvFilter), installed(), AlreadyInstalled
+  noise.rs                  UpstreamNoise per-layer filter
+tests/
+  install/                  one-shot install sequence (own binary)
+  options/                  pure-value tests (format, span_events)
 ```
 
 ---
@@ -159,12 +176,13 @@ src/
   plugin/                   Plugin machinery: Plugin, Plugin, DeferredAction, contexts, graph handle
   runtime/
     dev.rs                  Dev-reload statics + endpoints (feature = "dev-reload" consumers)
-    layers.rs               Tower layer utilities: default_cors(), init_tracing()
+    layers.rs               Tower layer utilities: default_cors(), catch-panic, fallbacks
+    tracing.rs              init_tracing*/try_init_tracing_with_config over r2e-tracing, SubscriberAlreadyInstalled
     http_trace.rs           HttpTraceLayer + MakeRequestSpan (per-request span, summary, request id)
     lifecycle.rs            LifecycleController for on_start/on_stop hooks
     service.rs              ServiceComponent trait
     sharded.rs              SO_REUSEPORT sharded serving (server.workers)
-    tracing_config.rs       TracingConfig, LogFormat, SpanEvents
+    tracing_config.rs       TracingConfig (yaml `tracing:`) ⇄ TracingOptions; FromConfigValue for LogFormat/SpanEvents
   web/
     extract.rs              FromRequestPartsVia, ViaBean/ViaAxum, BeanExtract, PeerAddr
     managed.rs              ManagedResource<S> trait, ManagedErr<E> wrapper

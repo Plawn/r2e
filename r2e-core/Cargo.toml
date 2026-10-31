@@ -30,9 +30,10 @@ lazy-fallback-runtime = []
 r2e-http = {workspace = true}
 schemars = {workspace = true, optional = true}
 r2e-rt = {workspace = true}
+# Owner of the process-global subscriber; re-exported (`r2e_core::r2e_tracing`).
+r2e-tracing = {workspace = true}
 tower = {workspace = true}
 tracing = {workspace = true}
-tracing-subscriber = {workspace = true, features = ["json"]}
 serde = {workspace = true}
 serde_json = {workspace = true}
 r2e-macros = {workspace = true}
@@ -71,6 +72,8 @@ tower = {workspace = true, features = ["util"]}
 futures-util = {workspace = true}
 # Raw WebSocket client for the `WsStream` batching tests (tests/http/ws.rs).
 tokio-tungstenite = {workspace = true}
+# `upstream_noise` / `tracing_config` tests build their own subscribers.
+tracing-subscriber = {workspace = true}
 criterion = {version = "0.8", default-features = false, features = ["cargo_bench_support"]}
 
 [target.'cfg(unix)'.dev-dependencies]

@@ -11,6 +11,7 @@ pub mod mailbox;
 pub mod panic;
 pub mod service;
 pub mod sharded;
+pub mod tracing;
 pub mod tracing_config;
 pub mod worker;
 pub mod worker_local;

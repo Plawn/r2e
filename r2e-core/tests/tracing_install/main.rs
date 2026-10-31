@@ -8,9 +8,9 @@
 //! outcome depend on test scheduling. One test drives the sequence here, in
 //! order.
 
-use r2e_core::runtime::tracing_config::{LogFormat, SpanEvents, TracingConfig};
 use r2e_core::{
-    init_tracing_from_config, try_init_tracing_with_config, SubscriberAlreadyInstalled,
+    init_tracing_from_config, try_init_tracing_with_config, LogFormat, SpanEvents,
+    SubscriberAlreadyInstalled, TracingConfig, TracingOptions,
 };
 
 /// The whole point of #1010: the entry point installs the **application's**
@@ -33,7 +33,7 @@ fn entry_point_installs_the_apps_section_and_later_inits_learn_they_lost() {
         .with_span_events(SpanEvents::Full);
 
     // What the entry point resolves before installing: the app's own section.
-    let (resolved, problem) = r2e_core::runtime::layers::resolve_tracing_config();
+    let (resolved, problem) = r2e_core::runtime::tracing::resolve_tracing_config();
     assert_eq!(resolved, from_yaml);
     assert_eq!(problem, None);
 
@@ -45,6 +45,11 @@ fn entry_point_installs_the_apps_section_and_later_inits_learn_they_lost() {
     let lost = try_init_tracing_with_config(&from_yaml)
         .expect_err("a subscriber is already installed at this point");
     assert_eq!(lost.installed.as_ref(), Some(&from_yaml));
+    // The install went through `r2e-tracing`, which recorded the same knobs.
+    assert_eq!(
+        r2e_core::r2e_tracing::installed(),
+        Some(&TracingOptions::from(&from_yaml))
+    );
 
     // Re-installing the very same knobs is redundant but harmless: a
     // `ConfiguredTracing` plugin reading the same section must stay quiet.
@@ -60,7 +65,7 @@ fn entry_point_installs_the_apps_section_and_later_inits_learn_they_lost() {
     // the defaults stand in, and the reason is carried back so the entry point
     // can say it out loud.
     std::fs::write(dir.join("application.yaml"), "tracing:\n  format: neon\n").unwrap();
-    let (resolved, problem) = r2e_core::runtime::layers::resolve_tracing_config();
+    let (resolved, problem) = r2e_core::runtime::tracing::resolve_tracing_config();
     assert_eq!(resolved, TracingConfig::default());
     assert!(
         problem.is_some_and(|p| p.contains("tracing")),

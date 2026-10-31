@@ -63,6 +63,8 @@ AppBuilder::new()
 
 `TracingConfig` — `ConfigProperties` struct that configures the `tracing-subscriber` fmt layer. All fields except `filter` are `Option` — `None` means "use the subscriber default".
 
+The subscriber stack itself lives in the **`r2e-tracing`** crate (below `r2e-core`, no tokio): `TracingOptions` (the config-free mirror of `TracingConfig`, `#[non_exhaustive]` + builders), `LogFormat`, `SpanEvents`, `UpstreamNoise`, `try_install` (returns `AlreadyInstalled` carrying the winner's options) and `installed()`. `r2e-core` keeps `TracingConfig`, the `FromConfigValue` impls and the `init_tracing*` entry points (`runtime/tracing.rs`), converting with `From<&TracingConfig> for TracingOptions` (and back); every moved type is re-exported at its old `r2e_core` path, plus `r2e_core::{TracingOptions, AlreadyInstalled, r2e_tracing}` (`installed()` via `r2e_core::r2e_tracing::installed`).
+
 **YAML** (under a configurable prefix, e.g., `tracing.*` or `observability.tracing.*`):
 ```yaml
 tracing:
@@ -79,7 +81,7 @@ tracing:
 ```
 
 **Programmatic API:**
-- `TracingConfig::default()` — filter `"info,tower_http=debug"`, all other fields `None`
+- `TracingConfig::default()` — filter `"info"`, all other fields `None`
 - Builder methods: `.with_format()`, `.with_filter()`, `.with_target()`, `.with_thread_ids()`, `.with_thread_names()`, `.with_file()`, `.with_line_number()`, `.with_level()`, `.with_ansi()`, `.with_span_events()`
 - `effective_format()` → `LogFormat` (defaults to `Pretty`)
 - `effective_span_events()` → `FmtSpan` (defaults to `CLOSE`)
@@ -107,16 +109,33 @@ tracing:
   false)`. Losing is silent when both sides resolve to the same `TracingConfig`
   (the usual case: both read `tracing.*`) and warns otherwise.
 - `init_tracing()` installs the **built-in defaults**, ignoring the app's
-  section. It is what `#[r2e::test]` and the bare `Tracing` plugin call, and it
-  stays silent when it loses.
+  section. It is what the bare `Tracing` plugin and `#[r2e::test_suite]` call, and it
+  stays silent when it loses. `#[r2e::test]` (like `#[r2e::main]`) calls
+  `init_tracing_from_config()`.
 - `try_init_tracing_with_config(&cfg) -> Result<(), SubscriberAlreadyInstalled>`
   is the reporting form; `SubscriberAlreadyInstalled::changes_output(&cfg)` says
   whether losing actually changed the output (an unknown winner always counts as
   different), and `warn_if_output_differs(&lost, &cfg)` is the warning both the
   entry point and `ConfiguredTracing` emit. The winning config is recorded in a
-  process-global `OnceLock`, which is what makes "same config, stay quiet"
+  process-global `OnceLock` in `r2e-tracing` (`installed()`), which is what makes "same config, stay quiet"
   possible.
-  Tests: `r2e-core/tests/tracing_install/` (own target — one-shot global).
+  Tests: `r2e-core/tests/tracing_install/` and `r2e-tracing/tests/install/` (own
+  targets — one-shot global).
+
+**Subscriber stack:** `Registry` → `fmt` layer (`.json()` under `format: json`)
+`.with_filter(UpstreamNoise)` → `EnvFilter` as the outer global layer, i.e. what
+`tracing_subscriber::fmt().with_env_filter(..)` builds plus one per-layer filter.
+`r2e-observability`'s `tracing_setup.rs` builds the same shape plus an
+OpenTelemetry layer and puts the filter on both of its layers.
+`UpstreamNoise` (`r2e-tracing/src/noise.rs`, re-exported at the `r2e_core` root) drops the
+ERROR events a dependency emits for conditions R2E knows to be benign — a
+`(target, message)` table, matched in `Filter::event_enabled` because the
+message is a field value an `EnvFilter` directive cannot see. Only ERROR is
+matched; WARN and below stay with the `EnvFilter`. Current entries: rmcp ≤ 3.8
+`rmcp::service` drain errors after a stateless client disconnect (#1185). Each
+entry is removed when the fixing upstream release becomes R2E's minimum; the
+canary `r2e-mcp/tests/server/plugin.rs::canary_rmcp_still_logs_stateless_disconnect_at_error`
+fails the moment rmcp stops emitting it. Tests: `r2e-core/tests/runtime/upstream_noise.rs`.
 
 **In ObservabilityConfig:**
 `ObservabilityConfig` embeds `tracing: TracingConfig`. The `from_r2e_config()` loader reads from `observability.tracing.*`. Convenience method: `.with_log_format(LogFormat)` delegates to the embedded `TracingConfig`.

@@ -130,3 +130,37 @@ fn init_tracing_with_config_does_not_panic() {
     let cfg = TracingConfig::default().with_format(LogFormat::Pretty);
     r2e_core::init_tracing_with_config(&cfg);
 }
+
+#[test]
+fn converts_to_and_from_tracing_options() {
+    let cfg = TracingConfig::default()
+        .with_format(LogFormat::Json)
+        .with_filter("debug")
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_thread_names(true)
+        .with_file(true)
+        .with_line_number(true)
+        .with_level(false)
+        .with_ansi(false)
+        .with_span_events(SpanEvents::Active);
+    let opts = r2e_core::TracingOptions::from(&cfg);
+    assert_eq!(
+        opts,
+        r2e_core::TracingOptions::new("debug")
+            .with_format(LogFormat::Json)
+            .with_target(false)
+            .with_thread_ids(true)
+            .with_thread_names(true)
+            .with_file(true)
+            .with_line_number(true)
+            .with_level(false)
+            .with_ansi(false)
+            .with_span_events(SpanEvents::Active)
+    );
+    assert_eq!(TracingConfig::from(&opts), cfg);
+    assert_eq!(
+        r2e_core::TracingOptions::from(&TracingConfig::default()),
+        r2e_core::TracingOptions::default()
+    );
+}

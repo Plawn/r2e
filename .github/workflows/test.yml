@@ -34,7 +34,7 @@ jobs:
           fetch-tags: true
 
       - name: Test CI selection policy
-        run: python3 -m unittest discover -s scripts/tests -p 'test_ci_affected.py'
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 
       # Keep version/release validation unconditional, including prose-only PRs.
       - name: scripts/check-versions.sh

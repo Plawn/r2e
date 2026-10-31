@@ -35,7 +35,8 @@
 #                multi-thread runtime, tracing initialised, `app = …` boot and
 #                bean injection (docs/claude/testing-conventions.md, "Async test
 #                attribute"). Crates BELOW r2e-core in the graph cannot reach the
-#                macro and are allowlisted: r2e-rt, r2e-http, r2e-macros; so is
+#                macro and are allowlisted: r2e-rt, r2e-tracing, r2e-http,
+#                r2e-macros; so is
 #                r2e-devservices (dev-only harness without a core dependency).
 #
 # Also excluded BY DESIGN from the *tokio* group (see
@@ -109,7 +110,7 @@ AXUM_SHAPE_EXCLUDE='^r2e-cli/src/commands/templates/'
 SERDE_JSON_EXCLUDE='^r2e-http/src/json\.rs$'
 # Below r2e-core in the graph (no path to `r2e_core::test`), plus the dev-only
 # testcontainers harness that deliberately has no r2e-core dependency.
-TOKIO_TEST_EXCLUDE='^(r2e-rt|r2e-http|r2e-macros|r2e-devservices)/'
+TOKIO_TEST_EXCLUDE='^(r2e-rt|r2e-tracing|r2e-http|r2e-macros|r2e-devservices)/'
 
 # ── scan: emit `path:count` for every file with >= 1 occurrence of $1 ──────
 scan_group() {
@@ -144,7 +145,7 @@ write_baseline() {
         if [ "$group" = "tokio-test" ]; then
             echo "# Enforced by scripts/check-source-boundary.sh over git-tracked .rs files"
             echo "# under any tests/ directory (examples included; vendor/ and .claude/"
-            echo "# excluded). Crates below r2e-core (r2e-rt, r2e-http, r2e-macros) and"
+            echo "# excluded). Crates below r2e-core (r2e-rt, r2e-tracing, r2e-http, r2e-macros) and"
             echo "# r2e-devservices are allowlisted: they cannot reach \`r2e_core::test\`."
             echo "#"
             echo "# This baseline ONLY EVER SHRINKS: async tests use \`#[r2e_core::test]\`"

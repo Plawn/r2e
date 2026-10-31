@@ -73,7 +73,7 @@ file, and expose internals via `pub` + `#[doc(hidden)]` (never `#[cfg(test)] pub
 Env-mutating tests take `crate::support::env_lock()`. **Async tests use
 `#[r2e_core::test]`** (`#[r2e::test]` where the crate depends on the facade) — never
 `#[tokio::test]`; CI (`scripts/check-source-boundary.sh`, group `tokio-test`) fails on any
-new occurrence, and only the crates below `r2e-core` (`r2e-rt`, `r2e-http`, `r2e-macros`)
+new occurrence, and only the crates below `r2e-core` (`r2e-rt`, `r2e-tracing`, `r2e-http`, `r2e-macros`)
 plus `r2e-devservices` are exempt. `r2e-core/tests/` is the reference layout — full target
 map and conventions: `docs/claude/testing-conventions.md`.
 
@@ -92,6 +92,7 @@ compile-time dependency injection, JWT/OIDC security, zero runtime reflection.
 ```
 r2e               → Facade crate; re-exports subcrates behind feature flags. Users depend on this.
 r2e-rt            → Async-runtime facade; the ONLY crate naming tokio; bottom of the graph; re-exported as r2e_core::rt.
+r2e-tracing       → Owns the process-global tracing subscriber: TracingOptions, LogFormat/SpanEvents, try_install/installed; no tokio; re-exported by r2e-core.
 r2e-macros        → Proc macros: #[controller] + #[routes] generate Axum handlers.
 r2e-http          → HTTP abstraction; sole owner of axum; IntoHttpResponse, axum_compat escape hatch, json codec façade, QUIC/HTTP3.
 r2e-core          → Runtime foundation: AppBuilder → HList state, Controller trait, guards/interceptors, R2eConfig, HttpError, lifecycle, ManagedResource, Page/Pageable. Re-exports r2e-http as `http`.
@@ -120,7 +121,7 @@ r2e-compile-tests → trybuild tests for macro error messages.
 example-app       → Demo app (App trait in lib.rs; main.rs + integration tests boot the same type).
 ```
 
-Dependency flow: `r2e-rt` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← integrations (`r2e-security`, `r2e-events`, `r2e-tenant`, data backends, …) ← `r2e` ← applications.
+Dependency flow: `r2e-rt`, `r2e-tracing` ← `r2e-http` ← `r2e-macros` ← `r2e-core` ← integrations (`r2e-security`, `r2e-events`, `r2e-tenant`, data backends, …) ← `r2e` ← applications.
 
 ### Containment Boundaries (CI-enforced — details: `docs/claude/architecture.md`)
 

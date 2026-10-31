@@ -1818,7 +1818,8 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Marks an `async fn` as an R2E test.
 ///
 /// Wraps the function body in a Tokio **multi-thread** runtime and calls
-/// `init_tracing()` automatically.
+/// `init_tracing_from_config()` automatically (the `tracing:` section of the
+/// test profile's config; a no-op when a subscriber is already installed).
 ///
 /// # App tests (`app = ...`)
 ///

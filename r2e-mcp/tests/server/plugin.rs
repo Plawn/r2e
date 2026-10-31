@@ -5,6 +5,8 @@ use r2e_core::http::StatusCode;
 use r2e_core::{AppBuilder, R2eConfig};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::json;
+use tracing_subscriber::layer::{Layer, SubscriberExt};
+use tracing_subscriber::Registry;
 
 use crate::fixtures::{fixture_app_with, Calc, CallLog, FixtureTools};
 use crate::support;
@@ -156,4 +158,158 @@ async fn stateless_json_response_mode() {
     .await;
     assert_eq!(call.status, StatusCode::OK, "{}", call.raw_body);
     assert_eq!(call.result()["structuredContent"]["value"], 5.0);
+}
+
+// ── #1185: stateless client disconnect must not log at ERROR ───────────────
+
+mod disconnect {
+    use std::sync::{Arc, Mutex};
+
+    use http_body_util::BodyExt;
+    use r2e_core::http::{Body, Request, StatusCode};
+    use r2e_mcp::McpServer;
+    use serde_json::json;
+    use tower::ServiceExt;
+    use tracing::field::{Field, Visit};
+    use tracing::{Event, Level, Subscriber};
+    use tracing_subscriber::layer::{Context, Layer};
+
+    use crate::fixtures::fixture_app_with;
+
+    /// Captures `rmcp*` events as `(level, message)`.
+    #[derive(Clone, Default)]
+    pub(super) struct Events(Arc<Mutex<Vec<(Level, String)>>>);
+
+    struct Message(Option<String>);
+
+    impl Visit for Message {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                self.0 = Some(format!("{value:?}"));
+            }
+        }
+    }
+
+    impl<S: Subscriber> Layer<S> for Events {
+        fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+            if !event.metadata().target().starts_with("rmcp") {
+                return;
+            }
+            let mut message = Message(None);
+            event.record(&mut message);
+            self.0
+                .lock()
+                .unwrap()
+                .push((*event.metadata().level(), message.0.unwrap_or_default()));
+        }
+    }
+
+    impl Events {
+        pub(super) fn take(&self) -> Vec<(Level, String)> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    /// Let the per-request rmcp service observe the disconnect and drain.
+    async fn settle() {
+        for _ in 0..50 {
+            r2e_core::rt::yield_now().await;
+        }
+        r2e_core::rt::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    /// A 2026-07-28 `subscriptions/listen` stream on a stateless endpoint,
+    /// closed by the client after the first frame — the long-lived request a
+    /// client drops after its idle period. Returns the rmcp events emitted
+    /// after the disconnect.
+    pub(super) async fn listen_then_disconnect(events: &Events) -> Vec<(Level, String)> {
+        let (router, _log) =
+            fixture_app_with(McpServer::new().stateless(true).json_response(true)).await;
+        events.take();
+
+        let body = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "subscriptions/listen",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                },
+                "notifications": { "resourceSubscriptions": ["r2e://fixture/log"] }
+            }
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("host", "localhost")
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "subscriptions/listen")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body();
+        let first = r2e_core::rt::timeout(std::time::Duration::from_secs(5), body.frame())
+            .await
+            .expect("first SSE frame within 5s")
+            .expect("stream open")
+            .expect("frame");
+        let first = String::from_utf8_lossy(first.data_ref().expect("data frame")).to_string();
+        assert!(
+            first.contains("notifications/subscriptions/acknowledged"),
+            "unexpected first frame: {first}"
+        );
+        events.take();
+
+        drop(body);
+        settle().await;
+        let after = events.take();
+        assert!(
+            after
+                .iter()
+                .any(|(_, message)| message.contains("serve finished")),
+            "the per-request service must end once the client is gone: {after:?}"
+        );
+        after
+    }
+}
+
+/// Without `UpstreamNoise`, rmcp ≤ 3.8 logs the client's disconnect at
+/// ERROR (`failed to send pending response during drain`). This canary pins
+/// the upstream bug: when it fails after an rmcp bump, the bug is fixed —
+/// delete the entry from `UpstreamNoise`'s table and this test together.
+#[r2e_core::test(flavor = "current_thread")]
+async fn canary_rmcp_still_logs_stateless_disconnect_at_error() {
+    let events = disconnect::Events::default();
+    let _guard = tracing::subscriber::set_default(Registry::default().with(events.clone()));
+
+    let after = disconnect::listen_then_disconnect(&events).await;
+    assert!(
+        after
+            .iter()
+            .any(|(level, message)| *level == tracing::Level::ERROR
+                && r2e_core::UpstreamNoise::suppresses("rmcp::service", message)),
+        "rmcp no longer logs the drain at ERROR — remove the UpstreamNoise entry: {after:?}"
+    );
+}
+
+/// Through the framework subscriber's filter, the same disconnect logs
+/// nothing at ERROR (#1185).
+#[r2e_core::test(flavor = "current_thread")]
+async fn stateless_client_disconnect_logs_no_error() {
+    let events = disconnect::Events::default();
+    let _guard = tracing::subscriber::set_default(
+        Registry::default().with(events.clone().with_filter(r2e_core::UpstreamNoise)),
+    );
+
+    let after = disconnect::listen_then_disconnect(&events).await;
+    let errors: Vec<_> = after
+        .iter()
+        .filter(|(level, _)| *level == tracing::Level::ERROR)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "ERROR events after a client disconnect: {errors:?}"
+    );
 }

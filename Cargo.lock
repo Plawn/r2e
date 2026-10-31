@@ -5881,6 +5881,7 @@ dependencies = [
  "r2e-http",
  "r2e-macros",
  "r2e-rt",
+ "r2e-tracing",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -6366,6 +6367,15 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
+]
+
+[[package]]
+name = "r2e-tracing"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
