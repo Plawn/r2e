@@ -47,6 +47,13 @@ and uses the section as the GitHub release notes.
   registered enrichers' fields. The formatter's keys win over colliding event
   and enricher fields; `log`-bridged events are normalized and their `log.*`
   fields dropped. The nested JSON shape is unchanged when `flatten` is off.
+- Console factory: `set_console_factory(ConsoleFactory)` (with
+  `ConsoleFactory = fn(&TracingOptions) -> BoxedLayer`) replaces the whole
+  console layer of the subscriber `try_install` builds; the late-layer slot,
+  `NoiseFilter` and the `EnvFilter` stay. Must be called before the install
+  (last call wins); afterwards it returns `Err(AlreadyInstalled)` and stores
+  nothing. The factory owns the console line — enrichers are not applied to
+  it.
 
 ### Changed
 

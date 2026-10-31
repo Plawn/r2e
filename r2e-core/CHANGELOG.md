@@ -48,7 +48,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   root: noise rules (`suppress`, `suppress_error`, `is_suppressed`,
   `NoiseRule`, `NoiseFilter`), the late-layer slot (`contribute_layer`,
   `late_layers`, `LateLayers`, `BoxedLayer`, `NotWired`) and console field
-  enrichers (`add_enricher`, `FieldEnricher`, `EnrichContext`).
+  enrichers (`add_enricher`, `FieldEnricher`, `EnrichContext`), and the
+  console factory (`set_console_factory`, `ConsoleFactory`) to replace the
+  console layer before the install, e.g. from `App::setup`.
 - `ensure_tracing_installed()`: install the subscriber from the application's
   `tracing:` section unless one is already installed, and return the options
   the winning install used.

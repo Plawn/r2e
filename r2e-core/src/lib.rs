@@ -81,9 +81,9 @@ pub use plugin::{
 };
 pub use r2e_tracing;
 pub use r2e_tracing::{
-    add_enricher, contribute_layer, is_suppressed, late_layers, suppress, suppress_error,
-    AlreadyInstalled, BoxedLayer, EnrichContext, FieldEnricher, JsonOptions, LateLayers,
-    NoiseFilter, NoiseRule, NotWired, TracingOptions,
+    add_enricher, contribute_layer, is_suppressed, late_layers, set_console_factory, suppress,
+    suppress_error, AlreadyInstalled, BoxedLayer, ConsoleFactory, EnrichContext, FieldEnricher,
+    JsonOptions, LateLayers, NoiseFilter, NoiseRule, NotWired, TracingOptions,
 };
 pub use runtime::harness::WorkerHarness;
 pub use runtime::http_trace::{

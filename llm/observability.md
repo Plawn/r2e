@@ -1,7 +1,7 @@
 ---
 topic: observability
 features: core, observability
-tokens: ~3600
+tokens: ~3900
 requires: plugins
 ---
 
@@ -61,6 +61,8 @@ requires: plugins
 - Extend the installed subscriber with `suppress_error` (drop a benign
   upstream event), `add_enricher` (fields on every console line) and
   `contribute_layer` (a layer added after install) — never by re-installing it.
+  Replace the console layer itself with `set_console_factory` in `App::setup`
+  (before the install).
 
 ### HttpTrace (core, no feature)
 
@@ -211,7 +213,7 @@ tracing:
 
 The subscriber R2E installs has three process-wide, append-only extension
 points (re-exported at the `r2e` root; call them from a plugin's `setup` or
-before `launch`):
+before `launch`), plus a console factory:
 
 - `suppress_error(target, message)` (or `suppress(NoiseRule { .. })`) drops
   one known-benign event — exact level, target and message. For upstream bugs
@@ -253,6 +255,38 @@ fn extend_tracing() {
 `contribute_layer` with the `tracing-opentelemetry` layer (exported spans,
 `Span::current().context()`) and `add_enricher` with a `trace_id`/`span_id`
 enricher — so R2E's noise rules gate the exported spans too.
+
+To replace the **console layer itself** (another `fmt` shape, a layer of your
+own), register a factory with `r2e::set_console_factory` **before** the
+subscriber is installed — in `App::setup`, which runs before the install. The
+factory is a plain `fn(&TracingOptions) -> BoxedLayer`; R2E calls it instead of
+building its own console and keeps the rest of the stack (late-layer slot,
+`NoiseFilter`, `EnvFilter`). The factory owns the line: it honours the
+`TracingOptions` knobs it wants, and enrichers do not apply to it (so
+`Observability`'s `trace_id`/`span_id` fields do not reach a custom console). After the
+install it returns `Err(AlreadyInstalled)`; called twice before, the last wins.
+
+```rust
+use r2e::prelude::*;
+use r2e::r2e_tracing::tracing_subscriber::{fmt, Layer};
+
+pub struct MyApp;
+
+impl App for MyApp {
+    type Env = ();
+
+    async fn setup() -> Result<(), BootError> {
+        // `Err(AlreadyInstalled)` — the subscriber was set earlier — aborts boot.
+        r2e::set_console_factory(|_opts| fmt::layer().compact().boxed())?;
+        Ok(())
+    }
+
+    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
+        Ok(b.load_config::<()>().build_state().await)
+    }
+}
+# fn main() {}
+```
 
 An app installing **its own** subscriber keeps both: add `late_layers()` first,
 directly on the `Registry`, and `NoiseFilter` above the layers it gates
