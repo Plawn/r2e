@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-31
+
 ### Breaking
 
 - `McpServer` mounts `/mcp` and the `mcp.auth` well-known routes in the
@@ -86,6 +88,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `build_state()`.
   Nothing leaks. A canary test pins the upstream behaviour so the rule is
   removed with the rmcp fix (#1185).
+
+### Changed
+
+- Built against `r2e-core` 0.9.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.9.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-security` 0.9.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.9.0/r2e-security/CHANGELOG.md)).
+- Built against `r2e-test` 0.9.0 — its breaking changes surface through this crate's re-exports (see [`r2e-test/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-test-v0.9.0/r2e-test/CHANGELOG.md)).
 
 ## [0.9.0] - 2026-10-25
 

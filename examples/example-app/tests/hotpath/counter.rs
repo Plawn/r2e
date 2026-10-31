@@ -117,10 +117,33 @@ pub fn steady_state(iterations: u64, mut f: impl FnMut()) -> Alloc {
     total.per(iterations)
 }
 
+/// Pin "no subscriber" as the process-global default for this binary.
+///
+/// `AppBuilder::build_state()` installs the global subscriber from the
+/// `tracing:` section (built-in defaults: INFO to the console) when nothing
+/// else has. The `state` guards call it, and without this a console subscriber
+/// would appear mid-run under every other test of the binary — turning the
+/// "level disabled" measurements in `decorators` into enabled, formatted ones
+/// depending on test interleaving. A global `NoSubscriber` set first makes the
+/// builder see a foreign subscriber and back off (silently: no layers are
+/// contributed), while scoped `with_default` subscribers still override it.
+fn pin_no_subscriber() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ =
+            tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::default());
+    });
+}
+
 /// A `current_thread` runtime: every measured future is driven to completion on
 /// the calling thread, so the thread-local counter sees all of its allocations
 /// and none of any other test's.
+///
+/// Also pins the global "no subscriber" default (see [`pin_no_subscriber`]):
+/// every measuring test builds its runtime first, so the pin precedes any
+/// `build_state()` in the binary.
 pub fn runtime() -> r2e::rt::Runtime {
+    pin_no_subscriber();
     r2e::rt::RuntimeBuilder::new_current_thread()
         .enable_all()
         .build()

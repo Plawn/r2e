@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-31
+
 ### Breaking
 
 Migration guide: [`docs/migration/tracing-single-path.md`](../docs/migration/tracing-single-path.md).
@@ -102,6 +104,10 @@ Migration guide: [`docs/migration/tracing-single-path.md`](../docs/migration/tra
 - Logs emitted before the subscriber existed (`App::setup`, config loading,
   plugin `setup`) are no longer lost: they are buffered and replayed, or
   written to stderr when the boot fails first.
+
+### Changed
+
+- Built against `r2e-macros` 0.9.0 — its breaking changes surface through this crate's re-exports (see [`r2e-macros/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-macros-v0.9.0/r2e-macros/CHANGELOG.md)).
 
 ## [0.8.0] - 2026-10-25
 

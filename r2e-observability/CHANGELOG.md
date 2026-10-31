@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-31
+
 ### Breaking
 
 Migration guide: [`docs/migration/tracing-single-path.md`](../docs/migration/tracing-single-path.md).
@@ -53,6 +55,10 @@ Migration guide: [`docs/migration/tracing-single-path.md`](../docs/migration/tra
 - Two `Observability` boots in one process (tests, dev-reload cycles) no
   longer lose OpenTelemetry export to the "subscriber already installed"
   race: the one contributed layer exports through the latest provider.
+
+### Changed
+
+- Built against `r2e-core` 0.9.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.9.0/r2e-core/CHANGELOG.md)).
 
 ## [0.8.0] - 2026-10-25
 

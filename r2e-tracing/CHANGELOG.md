@@ -12,6 +12,8 @@ and uses the section as the GitHub release notes.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-31
+
 ### Added
 
 - New crate, extracted from `r2e-core`: it owns the process-global `tracing`

@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-31
+
 ### Breaking
 
 - `#[r2e::main]`, `#[r2e::test]` and `#[r2e::test_suite]` no longer call
