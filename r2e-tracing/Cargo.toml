@@ -1,0 +1,20 @@
+[package]
+name = "r2e-tracing"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["tracing", "logging", "subscriber", "framework"]
+categories = ["development-tools::debugging"]
+description = "Process-global tracing subscriber for R2E - options, formats and the one-shot install"
+
+[dependencies]
+tracing = {workspace = true}
+tracing-subscriber = {workspace = true, features = ["env-filter", "json", "registry", "fmt", "std"]}
+serde = {workspace = true}
+
+[dev-dependencies]
+serde_json = {workspace = true}

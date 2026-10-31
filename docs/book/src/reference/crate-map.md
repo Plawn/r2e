@@ -35,11 +35,15 @@ R2E is organized as a workspace of focused crates. The `r2e` facade crate re-exp
 | `r2e-security` | JWT/OIDC security module for R2E - token validation, JWKS cache, and AuthenticatedUser extractor |
 | `r2e-static` | Embedded static file serving with SPA support for R2E |
 | `r2e-test` | Test utilities for R2E - TestApp HTTP client and TestJwt token generation |
+| `r2e-tracing` | Process-global tracing subscriber for R2E - options, formats and the one-shot install |
 | `r2e-utils` | Built-in interceptors for R2E - Logged, Timed, Cache, and CacheInvalidate |
 
 ## Dependency flow
 
 ```
+r2e-rt (async-runtime facade - sole tokio dependency)
+r2e-tracing (process-global tracing subscriber - no tokio, no r2e deps)
+    ^
 r2e-http (HTTP abstraction - sole axum dependency)
     ^
 r2e-macros (proc-macro, no runtime deps)

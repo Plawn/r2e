@@ -25,7 +25,16 @@ Rules (also in CLAUDE.md § Project Status):
     `check` fails on it while a release is in flight (#1092);
   * `r2e-macros` is the one crate whose breaking bump is cut with
     `--no-propagate`: it breaks its codegen contract with r2e-core, not the
-    macro syntax, and its direct consumers re-pin it with a patch bump.
+    macro syntax, and its direct consumers re-pin it with a patch bump;
+  * a NEW crate (never tagged `<crate>-v*`) lands through a feature PR with
+    only `## [Unreleased]` in its changelog: it is not "in flight", and
+    merging that PR publishes nothing. Its first release is a `release:` PR
+    cutting it AT its current version (`bump-version.sh <crate> X.Y.Z` with
+    X.Y.Z = the manifest's version), which turns `[Unreleased]` into
+    `[X.Y.Z]`; that changelog section is what `decide` publishes on. The
+    maintainer may `cargo publish` it by hand first (trusted publishing can
+    only be registered for an existing crate): the release run then skips the
+    upload and tags it.
 
 Subcommands:
   check                           verify every invariant (CI + bump-version.sh)
@@ -282,6 +291,32 @@ def released(tags, name, version):
     return release_tag(tags, name, version) is not None
 
 
+def never_tagged(tags, name):
+    """No `<name>-v*` tag at all: the crate has never been released on its own."""
+    prefix = f"{name}-v"
+    return not any(t.startswith(prefix) for t in tags)
+
+
+def first_release_cut(crate, text=None):
+    """Whether the crate's changelog has a `## [<its version>]` section — i.e. a
+    `release:` PR cut its current version. `text` overrides the working-tree
+    changelog (decide reads the base commit's)."""
+    if text is None:
+        path = os.path.join(ROOT, changelog_path(crate))
+        text = read(changelog_path(crate)) if os.path.isfile(path) else ""
+    return changelog_section(text, f"## [{fmt(crate.version)}]") is not None
+
+
+def unreleased_new(tags, crate):
+    """A crate that has never been released and whose first release has not
+    been cut yet: merged by a feature PR, published by a later `release:` PR."""
+    return (
+        never_tagged(tags, crate.name)
+        and release_tag(tags, crate.name, crate.version) is None
+        and not first_release_cut(crate)
+    )
+
+
 def on_crates_io(name, version):
     req = urllib.request.Request(
         f"https://crates.io/api/v1/crates/{name}",
@@ -363,8 +398,13 @@ def left_behind(ws, tags):
 
 def in_flight(ws, tags):
     """Releasable crates whose current version has no tag yet: a release is
-    being cut, or one did not finish."""
-    return [c for c in releasable(ws) if release_tag(tags, c.name, c.version) is None]
+    being cut, or one did not finish. A new crate whose first release is not
+    cut yet (`unreleased_new`) is not in flight: a feature PR added it."""
+    return [
+        c
+        for c in releasable(ws)
+        if release_tag(tags, c.name, c.version) is None and not unreleased_new(tags, c)
+    ]
 
 
 def describe_moved(moved, limit=4):
@@ -548,7 +588,13 @@ def parse_specs(ws, args):
 def make_plan(ws, specs, propagate):
     bumps = {}
     for name, kind in specs:
-        bumps[name] = Bump(next_version(ws[name].version, kind), "requested", True)
+        cur = ws[name].version
+        if kind == fmt(cur):
+            # First release of a new crate, at the version it was added with
+            # (validate_plan refuses it for a crate that was ever tagged).
+            bumps[name] = Bump(cur, "requested, first release", True)
+            continue
+        bumps[name] = Bump(next_version(cur, kind), "requested", True)
 
     if propagate:
         rdeps = reverse_deps(ws)
@@ -584,7 +630,10 @@ def print_plan(ws, bumps):
     width = max(len(n) for n in bumps)
     print("Bump plan:", file=sys.stderr)
     for name, b in bumps.items():
-        kind = "breaking" if is_breaking(ws[name].version, b.new) else "patch"
+        if b.new == ws[name].version:
+            kind = "first"
+        else:
+            kind = "breaking" if is_breaking(ws[name].version, b.new) else "patch"
         print(f"  {name:<{width}}  {fmt(ws[name].version):>8} -> {fmt(b.new):<8} {kind:<9} {b.reason}", file=sys.stderr)
     untouched = len(publishable(ws)) - len(bumps)
     print(f"  ({untouched} publishable crate(s) untouched)", file=sys.stderr)
@@ -596,9 +645,17 @@ def validate_plan(ws, bumps, tags):
     for name, b in bumps.items():
         c = ws[name]
         tag = tag_of(name, b.new)
+        first = b.new == c.version
+        if first and not never_tagged(tags, name):
+            errors.append(
+                f"{name} {fmt(b.new)} is its current version: only a crate never tagged `{name}-v*` "
+                f"is released at its current version (first release)"
+            )
         if released(tags, name, b.new):
             errors.append(f"{name} {fmt(b.new)} is already tagged ({tag} or v{fmt(b.new)})")
-        if on_crates_io(name, b.new):
+        # A first release may already be on crates.io: the maintainer publishes a
+        # new crate by hand once, so trusted publishing can be registered for it.
+        if not first and on_crates_io(name, b.new):
             errors.append(f"{name} {fmt(b.new)} is already on crates.io")
         m = pin_regex(name).search(root)
         if m and m.group(2) != fmt(c.version):
@@ -730,11 +787,21 @@ def cmd_decide(args):
         die("usage: decide [--base REF]")
     ws = workspace()
     tags = local_tags()
-    release, errors = [], []
+    release, errors, pending = [], [], []
     for c in sorted(releasable(ws), key=lambda c: c.name):
         if released(tags, c.name, c.version):
             continue
         prev = version_at(base, c)
+        if never_tagged(tags, c.name):
+            # A new crate: published by the commit that cut its first release
+            # (its `## [X.Y.Z]` changelog section), never by the feature PR
+            # that added it.
+            if not first_release_cut(c):
+                pending.append(c.name)
+                continue
+            if not first_release_cut(c, git_show(base, changelog_path(c)) or ""):
+                release.append({"name": c.name, "version": fmt(c.version), "dir": c.dir, "tag": tag_of(c.name, c.version), "previous": prev})
+                continue
         if prev != fmt(c.version):
             release.append({"name": c.name, "version": fmt(c.version), "dir": c.dir, "tag": tag_of(c.name, c.version), "previous": prev})
         else:
@@ -742,7 +809,7 @@ def cmd_decide(args):
                 f"{c.name} {fmt(c.version)} is not tagged, but this commit did not change it: that release "
                 f"is incomplete. Re-run the Release run of the commit that bumped it (it resumes), or bump again."
             )
-    print(json.dumps({"release": release, "errors": errors}, indent=2))
+    print(json.dumps({"release": release, "errors": errors, "unreleased_new": pending}, indent=2))
     if errors:
         sys.exit(1)
 

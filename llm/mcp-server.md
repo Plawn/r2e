@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~7900
+tokens: ~8000
 requires: guards, security
 ---
 
@@ -311,7 +311,11 @@ a thin HTTP controller and a thin MCP service instead (see
 Config under `mcp.*` (all optional; builder methods override config):
 `path` (default `/mcp`), `enabled` (true), `name`/`version`/`instructions`,
 `sse-keep-alive-secs` (15; 0 disables), `stateless` (false),
-`json-response` (false; stateless only), `elicitation-timeout-secs` (300),
+`json-response` (false; stateless only), `max-protocol-version` (unset = every
+rmcp-known revision; else `server/discover`, `initialize` and the `_meta`
+version gate (-32022) stop at that revision; unknown values fail at boot;
+builder `McpServer::max_protocol_version(ProtocolVersion::V_2025_11_25)`),
+`elicitation-timeout-secs` (300),
 `page-size` (unset/0 = unpaginated; else `*/list` pages + `nextCursor`, a
 stale or replayed cursor → -32602),
 `allowed-hosts` (DNS-rebinding

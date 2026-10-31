@@ -440,7 +440,7 @@ fn generate_suite(args: &SuiteArgs, def: &SuiteDef) -> syn::Result<TokenStream2>
     );
     let tracing_init = args
         .tracing
-        .then(|| quote! { #core_crate::init_tracing(); });
+        .then(|| quote! { #core_crate::init_tracing_from_config(); });
     let init_suite = init_suite_expr(args, def)?;
     let before_each: Vec<_> = def
         .before_each

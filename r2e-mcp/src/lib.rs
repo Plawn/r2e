@@ -77,6 +77,8 @@ pub use error::McpError;
 pub use global::{McpRegistry, RegistryEdit};
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
+#[doc(hidden)]
+pub use plugin::RMCP_NOISE;
 pub use progress::Progress;
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use resource_updates::McpResourceUpdates;
@@ -99,6 +101,9 @@ pub use session::{
 pub use rmcp::model::MetaObject;
 /// The author of a [`PromptMessage`] (`user` / `assistant`).
 pub use rmcp::model::Role as PromptMessageRole;
+/// An MCP protocol revision (`ProtocolVersion::V_2025_11_25`, …), for
+/// [`McpServer::max_protocol_version`].
+pub use rmcp::model::ProtocolVersion;
 
 /// Build a [`MetaObject`] from a JSON object literal (`serde_json::json!`
 /// syntax, braces required):

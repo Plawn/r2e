@@ -614,6 +614,7 @@ mcp:
   sse-keep-alive-secs: 15     # 0 disables keep-alive pings
   stateless: false            # true → no MCP sessions
   json-response: false        # true (stateless only) → plain application/json responses
+  max-protocol-version: "2025-11-25" # cap the MCP revisions served (default: all known)
   elicitation-timeout-secs: 300 # how long an elicitation waits for the user
   page-size: 100              # paginate the */list results (unset/0 = one page)
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
@@ -653,6 +654,30 @@ its own CORS layer, configure it for MCP browser clients:
 
 Missing any of these, a browser client cannot open or resume a session or
 read the auth challenge.
+
+**Protocol version cap.** By default the server speaks every MCP revision
+its rmcp supports (`2024-11-05` … `2026-07-28`). `mcp.max-protocol-version`
+(or `McpServer::max_protocol_version(ProtocolVersion::V_2025_11_25)`, the
+builder wins) caps that at one revision, so a server can stay on the
+`initialize`-handshake protocol while a client fleet is validated against the
+sessionless `2026-07-28` flow. One cap drives three places: `server/discover`
+lists only the revisions up to it, `initialize` negotiates within it (a client
+asking for a newer revision gets the newest capped one that has a handshake),
+and a sessionless request whose `_meta` names a newer revision fails with
+JSON-RPC `-32022` (`Unsupported protocol version`, `data.supported` = the
+capped list). The value must be a known revision: anything else (`2027-01-01`,
+`latest`) fails at boot listing the known ones. Independent of `mcp.stateless`.
+
+**Client disconnects under `stateless`.** Each stateless request runs its own
+rmcp service. When the client closes first — typically a `subscriptions/listen`
+SSE stream dropped after the client's idle period — rmcp ≤ 3.8 logs the drain
+at ERROR (`failed to send pending response during drain`). Nothing leaks: the
+response simply has no reader. `McpServer` registers that event as a noise
+rule (`r2e_core::suppress_error`) at setup, and R2E's tracing subscriber drops
+it through `r2e_core::NoiseFilter` — so does the subscriber `r2e-observability`
+installs (console and OpenTelemetry layers); an app installing its own
+subscriber adds `.with(r2e_core::NoiseFilter)` (or `.with_filter(..)` on a
+layer). The rule goes away once the upstream fix is R2E's minimum rmcp.
 
 **Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
 `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`

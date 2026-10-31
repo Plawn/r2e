@@ -63,6 +63,8 @@ AppBuilder::new()
 
 `TracingConfig` — `ConfigProperties` struct that configures the `tracing-subscriber` fmt layer. All fields except `filter` are `Option` — `None` means "use the subscriber default".
 
+The subscriber stack itself lives in the **`r2e-tracing`** crate (below `r2e-core`, no tokio): `TracingOptions` (the config-free mirror of `TracingConfig`, `#[non_exhaustive]` + builders), `LogFormat`, `SpanEvents`, `try_install` (returns `AlreadyInstalled` carrying the winner's options) and `installed()`. `r2e-core` keeps `TracingConfig`, the `FromConfigValue` impls and the `init_tracing*` entry points (`runtime/tracing.rs`), converting with `From<&TracingConfig> for TracingOptions` (and back); every moved type is re-exported at its old `r2e_core` path, plus `r2e_core::{TracingOptions, AlreadyInstalled, r2e_tracing, ensure_tracing_installed}` and the extension points below (`installed()` via `r2e_core::r2e_tracing::installed`).
+
 **YAML** (under a configurable prefix, e.g., `tracing.*` or `observability.tracing.*`):
 ```yaml
 tracing:
@@ -79,7 +81,7 @@ tracing:
 ```
 
 **Programmatic API:**
-- `TracingConfig::default()` — filter `"info,tower_http=debug"`, all other fields `None`
+- `TracingConfig::default()` — filter `"info"`, all other fields `None`
 - Builder methods: `.with_format()`, `.with_filter()`, `.with_target()`, `.with_thread_ids()`, `.with_thread_names()`, `.with_file()`, `.with_line_number()`, `.with_level()`, `.with_ansi()`, `.with_span_events()`
 - `effective_format()` → `LogFormat` (defaults to `Pretty`)
 - `effective_span_events()` → `FmtSpan` (defaults to `CLOSE`)
@@ -89,7 +91,7 @@ tracing:
 - `SpanEvents` — `None` | `New` | `Close` (default) | `Active` | `Full`. `.to_fmt_span()` converts to `tracing_subscriber::fmt::format::FmtSpan`.
 
 **Plugin integration** (subscriber only — the per-request span is `HttpTrace`):
-- `Tracing` (unit struct) — uses defaults
+- `Tracing` (unit struct) — installs from the app's `tracing:` section (`init_tracing_from_config`; defaults when absent)
 - `Tracing::configured(TracingConfig)` → `ConfiguredTracing` — uses explicit config
 - `Tracing::from_config(&R2eConfig)` → `ConfiguredTracing` — reads `tracing.*` keys
 - `init_tracing_with_config(&TracingConfig)` — low-level function (idempotent)
@@ -107,16 +109,71 @@ tracing:
   false)`. Losing is silent when both sides resolve to the same `TracingConfig`
   (the usual case: both read `tracing.*`) and warns otherwise.
 - `init_tracing()` installs the **built-in defaults**, ignoring the app's
-  section. It is what `#[r2e::test]` and the bare `Tracing` plugin call, and it
-  stays silent when it loses.
+  section, and stays silent when it loses. The bare `Tracing` plugin,
+  `#[r2e::test]`, `#[r2e::test_suite]` and `#[r2e::main]` all call
+  `init_tracing_from_config()`. `ensure_tracing_installed()` is the same install
+  returning the options that won (`None` when a foreign subscriber did).
+- An invalid filter never panics: `try_install` falls back to `info` and logs
+  the parse error at ERROR through the installed subscriber. With `ansi` unset
+  the console colours only when stdout is a terminal.
 - `try_init_tracing_with_config(&cfg) -> Result<(), SubscriberAlreadyInstalled>`
   is the reporting form; `SubscriberAlreadyInstalled::changes_output(&cfg)` says
   whether losing actually changed the output (an unknown winner always counts as
   different), and `warn_if_output_differs(&lost, &cfg)` is the warning both the
   entry point and `ConfiguredTracing` emit. The winning config is recorded in a
-  process-global `OnceLock`, which is what makes "same config, stay quiet"
+  process-global `OnceLock` in `r2e-tracing` (`installed()`), which is what makes "same config, stay quiet"
   possible.
-  Tests: `r2e-core/tests/tracing_install/` (own target — one-shot global).
+  Tests: `r2e-core/tests/tracing_install/` and `r2e-tracing/tests/install/` (own
+  targets — one-shot global).
+
+**Subscriber stack** (`r2e-tracing/src/install.rs`):
+
+```
+Registry
+  └ vec![console layer, late-layer slot]   (console = fmt, `.json()` under format: json, wrapped by the enricher splice)
+  └ NoiseFilter                            (global layer: vetoes matched events for everything below it)
+  └ EnvFilter                              (outermost; RUST_LOG wins over `filter`)
+```
+
+It is installed through an explicit `Dispatch` (`Dispatch::new(stack)` →
+`try_init()` → `late::wire(&dispatch)`): `Vec<L>` does not forward
+`on_register_dispatch`, so the slot is wired by `try_install` itself after the
+install wins. `r2e-observability`'s `tracing_setup.rs` still builds its own
+stack (console + OpenTelemetry) and puts `.with_filter(NoiseFilter)` on both
+layers.
+
+**Extension points** (all in `r2e-tracing`, re-exported at the `r2e_core`
+root; process-wide, append-only):
+- **Noise rules** (`noise.rs`) — `suppress(NoiseRule)` / `suppress_error(target,
+  message)` register an exact (level, target, message) match; `is_suppressed`
+  queries the table; `NoiseFilter` is both a `Layer` (global veto in
+  `event_enabled`) and a `Filter` (per layer). Empty by default (one relaxed
+  atomic load per event); the message is a field value an `EnvFilter`
+  directive cannot see. Neither `r2e-tracing` nor `r2e-core` knows any rule:
+  the integration owning the dependency registers it — `McpServer::setup`
+  registers `r2e_mcp::RMCP_NOISE` (rmcp ≤ 3.8 `rmcp::service` drain ERRORs
+  after a stateless client disconnect, #1185). The canary
+  `r2e-mcp/tests/server/plugin.rs::canary_rmcp_still_logs_stateless_disconnect_at_error`
+  fails the moment rmcp stops emitting it; then the rule goes.
+- **Late-layer slot** (`late.rs`) — `contribute_layer(BoxedLayer)` appends a
+  layer to the installed subscriber (`Err(NotWired)` before an install that
+  hosts the slot). Append-only linked list in a static (never dropped, so
+  `downcast_raw` pointers into children stay valid and `Dispatch::downcast_ref`
+  reaches them); appends take a mutex, readers none; each append replays
+  `on_register_dispatch` and calls `rebuild_interest_cache`. The slot's interest
+  is the max of its children's and never `never`; a child's own
+  `enabled`/`event_enabled` gate only that child. Limits: no per-layer filter on
+  a contributed layer (`on_layer` cannot be replayed on a built registry), and
+  spans opened before the contribution are invisible to it. A hand-built stack
+  hosts the slot by adding `late_layers()` directly on the `Registry`; `on_layer`
+  deliberately does not wire (it also runs for a stack that loses the install).
+- **Field enrichers** (`enrich.rs`) — `add_enricher(Box<dyn FieldEnricher>)`;
+  the console format calls them per event with an `EnrichContext` (metadata,
+  event, parent span) and splices ` k=v` before the newline (text) or
+  `,"k":"v"` before the final `}` (JSON). No enricher = pass-through.
+
+Tests: `r2e-tracing/tests/{noise,late_layers,enrich,install_invalid_filter}/`
+(the last three are their own binaries — process-global state).
 
 **In ObservabilityConfig:**
 `ObservabilityConfig` embeds `tracing: TracingConfig`. The `from_r2e_config()` loader reads from `observability.tracing.*`. Convenience method: `.with_log_format(LogFormat)` delegates to the embedded `TracingConfig`.

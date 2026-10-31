@@ -15,6 +15,7 @@ use r2e_core::prelude::ConfigProperties;
 ///   sse-keep-alive-secs: 15  # 0 disables SSE keep-alive pings
 ///   json-response: false     # prefer application/json replies (stateless mode)
 ///   stateless: false         # no per-session state; scales horizontally
+///   max-protocol-version: "2025-11-25"  # cap the MCP revisions advertised/accepted
 ///   allowed-hosts: ["mcp.example.com"]
 ///   allowed-origins: ["https://claude.ai"]
 ///   max-request-body-bytes: 4194304
@@ -46,6 +47,16 @@ pub struct McpConfig {
     /// Serve every request statelessly (no MCP sessions). Required for
     /// load-balanced deployments without sticky sessions.
     pub stateless: Option<bool>,
+    /// Highest MCP protocol revision this server advertises and accepts:
+    /// bounds `server/discover`, the `initialize` negotiation and the
+    /// per-request `_meta` version gate (`-32022` above the cap). Must be a
+    /// revision rmcp knows (`2024-11-05`, `2025-03-26`, `2025-06-18`,
+    /// `2025-11-25`, `2026-07-28`); anything else fails at boot. Unset =
+    /// every known revision. Independent of `stateless`: a cap below
+    /// `2026-07-28` keeps clients on `initialize`, and with `stateless:
+    /// false` on `Mcp-Session-Id` sessions.
+    #[config(key = "max-protocol-version")]
+    pub max_protocol_version: Option<String>,
     /// Hostnames (or `host:port` authorities) accepted in the `Host` header.
     /// Defaults to loopback only (DNS-rebinding protection) — public
     /// deployments MUST list their hostname here.

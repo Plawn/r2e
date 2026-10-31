@@ -1,6 +1,7 @@
 //! The rmcp `ServerHandler` implementation dispatching to registered R2E
 //! tools, resources and prompts.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, Weak};
@@ -14,9 +15,9 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult, CompletionInfo,
     ErrorCode, ErrorData, GetPromptRequestParams, GetPromptResponse, InitializeRequestParams,
     InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse,
-    ReadResourceResult, Reference, ResourceUpdatedNotificationParam, ServerInfo,
-    SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
+    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+    ReadResourceResponse, ReadResourceResult, Reference, ResourceUpdatedNotificationParam,
+    ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
@@ -136,6 +137,10 @@ pub(crate) struct Endpoint {
     pub(crate) elicitation_timeout: Duration,
     /// `mcp.page-size` (`None` = unpaginated lists).
     pub(crate) page_size: Option<usize>,
+    /// The protocol revisions advertised and accepted (`server/discover`,
+    /// `initialize`, per-request `_meta` gate): rmcp's known list, capped by
+    /// `mcp.max-protocol-version`.
+    pub(crate) supported_versions: &'static [ProtocolVersion],
 }
 
 /// The `ServerHandler` handed to rmcp's streamable-HTTP service. rmcp's
@@ -324,7 +329,7 @@ async fn forward_list_changed(context: &SubscriptionContext, changed: Changed) -
 }
 
 impl ServerHandler for R2eMcpHandler {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         self.endpoint.catalog.info.clone()
     }
 
@@ -352,21 +357,17 @@ impl ServerHandler for R2eMcpHandler {
             }
         }
         self.prepare(&context).await?;
-        context.peer.set_peer_info(request.clone());
-        let mut info = self.get_info();
-        if self
-            .supported_protocol_versions()
-            .contains(&request.protocol_version)
-        {
-            info.protocol_version = request.protocol_version;
-        } else {
-            tracing::warn!(
-                client_requested = %request.protocol_version,
-                server_fallback = %info.protocol_version,
-                "client requested unsupported protocol version; falling back to server default"
-            );
-        }
+        // rmcp's negotiation: the requested revision when it is supported and
+        // still has a handshake, else the newest supported one that does.
+        let info = self.negotiate_initialize(&request)?;
+        context.peer.set_peer_info(request);
         Ok(info)
+    }
+
+    /// `mcp.max-protocol-version`: the one override behind `server/discover`,
+    /// the `initialize` negotiation and the per-request `-32022` gate.
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        Cow::Borrowed(self.endpoint.supported_versions)
     }
 
     async fn list_tools(

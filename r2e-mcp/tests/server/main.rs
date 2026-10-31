@@ -20,6 +20,7 @@ mod pagination;
 mod plugin;
 mod progress;
 mod prompts;
+mod protocol_version;
 mod registry;
 mod rejection;
 mod resources;

@@ -3,12 +3,12 @@ use std::fmt;
 use opentelemetry::trace::{TraceContextExt, TracerProvider};
 use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
-use r2e_core::LogFormat;
+use r2e_core::{LogFormat, NoiseFilter};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Registry};
+use tracing_subscriber::{layer::SubscriberExt, EnvFilter, Layer, Registry};
 
 use crate::config::{ObservabilityConfig, OtlpProtocol};
 
@@ -96,8 +96,12 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
 
             let subscriber = Registry::default()
                 .with(env_filter)
-                .with(fmt_layer)
-                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+                .with(fmt_layer.with_filter(NoiseFilter))
+                .with(
+                    tracing_opentelemetry::layer()
+                        .with_tracer(tracer)
+                        .with_filter(NoiseFilter),
+                );
 
             if tracing::subscriber::set_global_default(subscriber).is_err() {
                 tracing::warn!(
@@ -125,8 +129,12 @@ pub fn init_tracing(config: &ObservabilityConfig) -> OtelGuard {
 
             let subscriber = Registry::default()
                 .with(env_filter)
-                .with(fmt_layer)
-                .with(tracing_opentelemetry::layer().with_tracer(tracer));
+                .with(fmt_layer.with_filter(NoiseFilter))
+                .with(
+                    tracing_opentelemetry::layer()
+                        .with_tracer(tracer)
+                        .with_filter(NoiseFilter),
+                );
 
             if tracing::subscriber::set_global_default(subscriber).is_err() {
                 tracing::warn!(

@@ -73,6 +73,9 @@ cat <<'MID'
 ## Dependency flow
 
 ```
+r2e-rt (async-runtime facade - sole tokio dependency)
+r2e-tracing (process-global tracing subscriber - no tokio, no r2e deps)
+    ^
 r2e-http (HTTP abstraction - sole axum dependency)
     ^
 r2e-macros (proc-macro, no runtime deps)

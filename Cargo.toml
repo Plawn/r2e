@@ -30,6 +30,7 @@ members = [
     "r2e-static",
     "r2e-tenant",
     "r2e-http",
+    "r2e-tracing",
     "r2e-cli",
     "r2e-test",
     "r2e-devservices",
@@ -106,6 +107,7 @@ r2e-devtools = { path = "r2e-devtools", version = "0.6.0" }
 r2e-static = { path = "r2e-static", version = "0.8.0" }
 r2e-tenant = { path = "r2e-tenant", version = "0.8.0" }
 r2e-http = { path = "r2e-http", version = "0.7.0" }
+r2e-tracing = { path = "r2e-tracing", version = "0.1.0" }
 r2e-test = { path = "r2e-test", version = "0.8.0" }
 r2e-devservices = { path = "r2e-devservices", version = "0.6.0" }
 
@@ -150,7 +152,7 @@ testcontainers-modules = "0.15"
 # MCP
 # `default-features = false`: rmcp's default `macros` feature is deliberately unused —
 # R2E dispatches tools itself (#[mcp_routes]), rmcp is the wire only.
-rmcp = { version = "3.1", default-features = false, features = ["server", "transport-streamable-http-server", "elicitation"] }
+rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server", "elicitation"] }
 
 # Security
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
