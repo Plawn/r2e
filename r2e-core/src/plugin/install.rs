@@ -449,13 +449,17 @@ where
         let name = plugin_action_name::<T>();
         let prefix = T::CONFIG_PREFIX;
         let mut plugin = self;
-        let (registry_ops, deferred) = {
+        let (registry_ops, tracing_layers, deferred) = {
             let mut ctx = PluginSetupContext::new();
             plugin.setup(&mut ctx);
             let registry_ops = ctx.take_registry_ops();
-            (registry_ops, ctx.flush(name))
+            let tracing_layers = ctx.take_tracing_layers();
+            (registry_ops, tracing_layers, ctx.flush(name))
         };
         let mut builder = app;
+        // Layers for the subscriber `build_state()` installs — unconditional:
+        // the subscriber exists before any `enabled` flag is read.
+        builder.push_tracing_layers(tracing_layers);
         for action in deferred {
             // Setup actions are UNCONDITIONAL — never gated on
             // `<prefix>.enabled`, and that is sound only because

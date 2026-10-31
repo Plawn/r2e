@@ -38,6 +38,7 @@ impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
                 stop_handle: None,
                 bean_disposers: Vec::new(),
                 deferred_boot_error: None,
+                tracing_layers: Vec::new(),
             },
             state: NoState,
             bean_context: Arc::new(crate::beans::BeanContext::empty()),
@@ -107,6 +108,46 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// `Plugin` impl to deposit a plugin's provided beans).
     pub(crate) fn bean_registry_mut(&mut self) -> &mut BeanRegistry {
         &mut self.shared.bean_registry
+    }
+
+    /// Append layers a plugin's `setup` contributed through
+    /// [`PluginSetupContext::tracing_layer`](crate::plugin::PluginSetupContext::tracing_layer).
+    pub(crate) fn push_tracing_layers(&mut self, layers: Vec<r2e_tracing::BoxedLayer>) {
+        self.shared.tracing_layers.extend(layers);
+    }
+
+    /// Contribute a [`Layer`](r2e_tracing::tracing_subscriber::Layer) to the
+    /// process-global `tracing` subscriber.
+    ///
+    /// The subscriber is installed **once**, by
+    /// [`build_state()`](Self::build_state), from the `tracing:` section of
+    /// the loaded configuration ([`TracingConfig`](crate::TracingConfig)) and
+    /// every layer contributed here or by a plugin's `setup`
+    /// ([`PluginSetupContext::tracing_layer`](crate::plugin::PluginSetupContext::tracing_layer)),
+    /// in contribution order, before R2E's console layer, under the global
+    /// filter:
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .load_config::<()>()
+    ///     .tracing_layer(Suppress::error("noisy_crate", "known benign error"))
+    ///     .tracing_layer(my_custom_console) // with `tracing.console: false`
+    ///     .build_state()
+    ///     .await
+    /// ```
+    ///
+    /// Ignored when `tracing.enabled` is `false`, when R2E already installed
+    /// the subscriber in this process (one DEBUG line), or when another global
+    /// subscriber was set first (one WARN line).
+    pub fn tracing_layer<L>(mut self, layer: L) -> Self
+    where
+        L: r2e_tracing::tracing_subscriber::Layer<r2e_tracing::tracing_subscriber::Registry>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.shared.tracing_layers.push(Box::new(layer));
+        self
     }
 
     /// Reconstruct the builder with updated type-level tracking parameters.
@@ -1074,6 +1115,15 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         R: AllSatisfied<P, W>,
         Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
+        // The subscriber first, before anything fallible: every later boot
+        // error (including the asserts and a parked config failure below) is
+        // logged through it, and the logs buffered since `capture_boot_logs()`
+        // are replayed now.
+        crate::runtime::tracing::install_tracing(
+            self.shared.config.as_ref(),
+            std::mem::take(&mut self.shared.tracing_layers),
+        );
+
         assert!(
             self.shared.preloaded_config.is_none(),
             "override_config() was set but load_config() was never called — the \
@@ -1275,7 +1325,14 @@ impl<P, R> AppBuilder<NoState, P, R, TNil> {
     /// action finds its slot empty and logs a `debug!` no-op. Use it only for raw-router apps
     /// (`register_routes`, `merge_router`); an app with no beans that needs
     /// plugins should call `.build_state().await` (state = empty HList).
-    pub fn with_state<S: Clone + Send + Sync + 'static>(self, state: S) -> AppBuilder<S> {
+    ///
+    /// The `tracing` subscriber is installed here exactly as `build_state()`
+    /// does (the `tracing:` section plus the contributed layers).
+    pub fn with_state<S: Clone + Send + Sync + 'static>(mut self, state: S) -> AppBuilder<S> {
+        crate::runtime::tracing::install_tracing(
+            self.shared.config.as_ref(),
+            std::mem::take(&mut self.shared.tracing_layers),
+        );
         AppBuilder::<S>::from_pre(
             self.shared,
             state,

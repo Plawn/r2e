@@ -55,7 +55,7 @@ impl EchoSuite {
     }
 }
 
-#[r2e::test_suite(tracing = false)]
+#[r2e::test_suite]
 impl EchoSuite {
     #[before_all]
     async fn start_echo_server() -> Self {
@@ -127,7 +127,7 @@ impl WorkerSuite {
     }
 }
 
-#[r2e::test_suite(tracing = false)]
+#[r2e::test_suite]
 impl WorkerSuite {
     #[before_all]
     async fn spawn_worker() -> Self {
@@ -176,7 +176,7 @@ struct RecoverySuite {
     reached: Vec<&'static str>,
 }
 
-#[r2e::test_suite(tracing = false)]
+#[r2e::test_suite]
 impl RecoverySuite {
     #[case(order = 10)]
     #[should_panic(expected = "deliberate")]
@@ -217,7 +217,7 @@ struct PausedClockSuite {
     started: rt::Instant,
 }
 
-#[r2e::test_suite(tracing = false, flavor = "current_thread", start_paused = true)]
+#[r2e::test_suite(flavor = "current_thread", start_paused = true)]
 impl PausedClockSuite {
     #[before_all]
     async fn record_the_start() -> Self {

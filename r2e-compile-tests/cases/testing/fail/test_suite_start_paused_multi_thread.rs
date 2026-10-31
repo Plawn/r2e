@@ -5,7 +5,7 @@
 #[derive(Default)]
 struct PausedSuite;
 
-#[r2e::test_suite(tracing = false, start_paused = true)]
+#[r2e::test_suite(start_paused = true)]
 impl PausedSuite {
     #[case]
     fn runs(&mut self) {}

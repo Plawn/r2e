@@ -94,9 +94,13 @@ pub use crate::runtime::worker_set::{WorkerHealth, WorkerSet};
 pub use crate::builtins::request_id::{RequestId, RequestIdPlugin};
 pub use crate::builtins::secure_headers::SecureHeaders;
 pub use crate::builtins::{
-    AdvancedHealth, ConfiguredTracing, Cors, DevReload, Health, HttpTrace, HttpTraceBuilder,
-    HttpTraceConfig, NormalizePath, Tracing,
+    AdvancedHealth, Cors, DevReload, Health, HttpTrace, HttpTraceBuilder, HttpTraceConfig,
+    NormalizePath,
 };
+// Removed plugin, kept only so `.plugin(Tracing)` names the migration page.
+#[doc(hidden)]
+#[allow(deprecated)]
+pub use crate::builtins::Tracing;
 pub use crate::config::{
     ConfigError, ConfigProperties, ConfigProvider, ConfigProviderContext, ConfigUpdateSink,
     ConfigValidationDetail, ConfigValue, ConfigWatchContext, FromConfigValue, LiveConfig,

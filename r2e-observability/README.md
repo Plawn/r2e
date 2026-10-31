@@ -65,12 +65,14 @@ tracing:
 ```
 
 The plugin does **not** build a subscriber. It contributes to the one R2E
-installs from the top-level `tracing:` section (see `TracingConfig`): the
-OpenTelemetry layer goes into the subscriber's late-layer slot
-(`r2e_core::contribute_layer`), and a field enricher (`r2e_core::add_enricher`)
-adds `trace_id`/`span_id` to log lines. Any other `observability.tracing.*`
-key is ignored and reported by one `ERROR` at boot — see
-[`docs/migration/observability-tracing.md`](../docs/migration/observability-tracing.md).
+installs from the top-level `tracing:` section (see `TracingConfig`): at setup
+it calls `ctx.tracing_layer(tracing_setup::otel_layer())` and then
+`ctx.tracing_layer(tracing_setup::OtelIds)` (only when OTLP export is on).
+`OtelIds` writes `trace_id`/`span_id` as `LogFields` on OpenTelemetry spans,
+so the console prints them on every line inside one. Any other
+`observability.tracing.*` key is ignored and reported by one `ERROR` at boot
+— see
+[`docs/migration/tracing-single-path.md`](../docs/migration/tracing-single-path.md).
 
 ### Programmatic configuration
 
@@ -94,16 +96,19 @@ This reads the `observability.*` keys.
 ### Own subscriber
 
 An application that installs its own `tracing` subscriber (instead of letting
-R2E install it) must host the late-layer slot, first, on its `Registry` —
-otherwise nothing is exported and the plugin warns once:
+R2E install it) sets `tracing.enabled: false` — R2E then installs nothing and
+ignores contributed layers — and adds the OpenTelemetry layers to its own
+`Registry` (`otel_layer()` first, then `OtelIds`). The plugin still
+initialises the provider at setup; `otel_layer()` exports through it.
 
-```rust
+```rust,ignore
+use r2e::r2e_observability::tracing_setup::{otel_layer, OtelIds};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 tracing_subscriber::registry()
-    .with(r2e::r2e_core::late_layers())   // first, on the Registry
+    .with(otel_layer())
+    .with(OtelIds)
     .with(tracing_subscriber::fmt::layer())
-    .with(r2e::r2e_core::NoiseFilter)
     .init();
 ```
 
@@ -152,15 +157,18 @@ uses OTLP/HTTP; requesting gRPC emits an explicit warning rather than silently
 sending HTTP to the usual gRPC port.
 
 Logs emitted within an OpenTelemetry span include `trace_id` and `span_id` in
-both pretty and JSON formats (a field enricher on R2E's console layer). Logs
+text, JSON and flat JSON formats (`OtelIds` writes them as `LogFields`, which R2E's console layer prints). Logs
 outside an OTel span are unchanged.
 
 ## Breaking changes
 
 Since 0.9.0 the plugin no longer builds a subscriber: `ObservabilityConfig::tracing`,
 `with_tracing_config`, `with_log_format` and the `observability.tracing.*` subscriber
-keys are gone — configure the console with the top-level `tracing:` section. See
-[`docs/migration/observability-tracing.md`](../docs/migration/observability-tracing.md).
+keys are gone — configure the console with the top-level `tracing:` section. The
+OpenTelemetry layers reach the subscriber through `ctx.tracing_layer(..)`. See
+[`docs/migration/tracing-single-path.md`](../docs/migration/tracing-single-path.md)
+(and the older
+[`docs/migration/observability-tracing.md`](../docs/migration/observability-tracing.md)).
 
 ## License
 

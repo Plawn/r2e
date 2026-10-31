@@ -24,7 +24,7 @@ use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-use crate::enrich::{self, EnrichContext};
+use crate::enrich;
 use crate::options::{JsonOptions, TracingOptions};
 
 /// A span's fields as a JSON map, kept in the span's extensions by
@@ -58,10 +58,10 @@ where
 /// The flat JSON event format.
 ///
 /// Key precedence, lowest first: event fields, then
-/// [enricher](crate::add_enricher) fields, then the formatter's own keys —
+/// [`LogFields`](crate::LogFields) of the span scope, then the formatter's own keys —
 /// the **reserved keys** `<message_key>`, `timestamp`, `level`, `target`,
 /// `span`, `spans`, `thread_id`, `thread_name`, `file` and `line`. A reserved
-/// key overwrites an event or enricher field of the same name whenever the
+/// key overwrites an event or `LogFields` field of the same name whenever the
 /// formatter writes it (`level`, `target`, `thread_*`, `file`, `line` follow
 /// the matching [`TracingOptions`] knobs; `span`/`spans` are written when the
 /// event sits in a span and [`JsonOptions`] asks for them).
@@ -112,19 +112,8 @@ where
         event.record(&mut FieldVisitor(&mut line));
         let message = line.remove("message");
 
-        if let Some(enrichers) = enrich::snapshot() {
-            let span_id = ctx.parent_span().map(|span| span.id());
-            let cx = EnrichContext {
-                metadata: event.metadata(),
-                event,
-                has_parent_span: span_id.is_some(),
-                span_id,
-            };
-            for enricher in enrichers.iter() {
-                enricher.enrich(&cx, &mut |key, value| {
-                    line.insert(key.to_owned(), Value::String(value.to_string()));
-                });
-            }
+        for (key, value) in enrich::collect(ctx) {
+            line.insert(key.to_owned(), Value::String(value));
         }
 
         // Reserved keys last: they win over any colliding field.

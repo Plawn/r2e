@@ -278,7 +278,7 @@ mod disconnect {
 
 /// Without a noise rule, rmcp ≤ 3.8 logs the client's disconnect at ERROR
 /// (`failed to send pending response during drain`). This canary pins the
-/// upstream bug: the capturing layer has no `NoiseFilter`, so it sees what
+/// upstream bug: the capturing stack has no `Suppress` layer, so it sees what
 /// rmcp emits. When it fails after an rmcp bump, the bug is fixed — delete
 /// the entry from `r2e_mcp::RMCP_NOISE` and this test together.
 #[r2e_core::test(flavor = "current_thread")]
@@ -298,29 +298,21 @@ async fn canary_rmcp_still_logs_stateless_disconnect_at_error() {
     );
 }
 
-/// `McpServer::setup` registers `RMCP_NOISE` as noise rules, so through a
-/// stack carrying `NoiseFilter` (as the framework subscriber does) the same
-/// disconnect logs nothing at ERROR (#1185).
-///
-/// The rules are process-wide: once a test in this binary has built an
-/// `McpServer`, every sibling test runs with them. Acceptable — they match
-/// only these two rmcp ERROR messages.
+/// `McpServer::setup` contributes `RMCP_NOISE` as `Suppress` layers, so
+/// through a stack carrying them (as the framework subscriber does once
+/// `build_state()` installs it) the same disconnect logs nothing at ERROR
+/// (#1185).
 #[r2e_core::test(flavor = "current_thread")]
 async fn stateless_client_disconnect_logs_no_error() {
     let events = disconnect::Events::default();
-    let _guard = tracing::subscriber::set_default(
-        Registry::default()
-            .with(events.clone())
-            .with(r2e_core::NoiseFilter),
-    );
+    let suppress: Vec<_> = r2e_mcp::RMCP_NOISE
+        .iter()
+        .map(|(target, message)| r2e_core::Suppress::error(*target, *message))
+        .collect();
+    let _guard =
+        tracing::subscriber::set_default(Registry::default().with(events.clone()).with(suppress));
 
     let after = disconnect::listen_then_disconnect(&events).await;
-    for (target, message) in r2e_mcp::RMCP_NOISE {
-        assert!(
-            r2e_core::is_suppressed(&tracing::Level::ERROR, target, message),
-            "McpServer::setup must register {target}: {message}"
-        );
-    }
     let errors: Vec<_> = after
         .iter()
         .filter(|(level, _, _)| *level == tracing::Level::ERROR)

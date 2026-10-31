@@ -6,7 +6,7 @@ struct MySuite {
     count: usize,
 }
 
-#[r2e::test_suite(tracing = false)]
+#[r2e::test_suite]
 impl MySuite {
     #[before_each]
     fn reset(&mut self) {

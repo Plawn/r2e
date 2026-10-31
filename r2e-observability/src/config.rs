@@ -2,7 +2,7 @@
 ///
 /// The console subscriber is **not** configured here: it is the app's one
 /// framework subscriber, configured by the top-level `tracing:` section (see
-/// `docs/migration/observability-tracing.md`). This struct only drives the
+/// `docs/migration/tracing-single-path.md`). This struct only drives the
 /// OpenTelemetry side — exporter, sampler, resource, propagation.
 ///
 /// `#[non_exhaustive]`: build it with [`new`](Self::new),
@@ -34,29 +34,6 @@ pub struct ObservabilityConfig {
     /// knobs. Reported once by the plugin's `setup`.
     pub(crate) leftover_tracing_keys: Vec<String>,
 }
-
-/// The former `observability.tracing.*` subscriber knobs, now read from the
-/// top-level `tracing:` section only.
-mod tracing_removed {
-    pub trait Sealed {}
-}
-
-/// Marker for the **removed** `ObservabilityConfig` subscriber knobs.
-///
-/// Nothing implements it (its supertrait is sealed and unimplemented), so the
-/// only thing it can do is turn a leftover
-/// [`with_tracing_config`](ObservabilityConfig::with_tracing_config) /
-/// [`with_log_format`](ObservabilityConfig::with_log_format) call into a
-/// compile error that names the migration. See
-/// `docs/migration/observability-tracing.md`.
-#[doc(hidden)]
-#[diagnostic::on_unimplemented(
-    message = "`ObservabilityConfig::with_tracing_config`/`with_log_format` were removed: the subscriber is configured by the app's top-level `tracing:` section (see docs/migration/observability-tracing.md)",
-    label = "the Observability plugin no longer builds a subscriber",
-    note = "delete the call and move the settings to the top-level `tracing:` section of application.yaml (`tracing.format: json`, `tracing.filter: ...`)",
-    note = "the plugin now contributes its OpenTelemetry layer and the `trace_id`/`span_id` log fields to R2E's one subscriber"
-)]
-pub trait ObservabilityTracingRemoved: tracing_removed::Sealed {}
 
 /// OTLP transport protocol.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -128,31 +105,6 @@ impl ObservabilityConfig {
         self
     }
 
-    /// **Removed.** The plugin no longer builds a subscriber: the console
-    /// output is configured by the app's top-level `tracing:` section.
-    ///
-    /// This shim exists only so the leftover call fails at **compile time**
-    /// with a message that names the migration. Its bound,
-    /// [`ObservabilityTracingRemoved`], is implemented by nothing. See
-    /// `docs/migration/observability-tracing.md`.
-    #[doc(hidden)]
-    #[deprecated(
-        note = "`ObservabilityConfig::with_tracing_config` was removed: configure the subscriber with the app's top-level `tracing:` section — see docs/migration/observability-tracing.md"
-    )]
-    pub fn with_tracing_config<T: ObservabilityTracingRemoved>(self, _config: T) -> Self {
-        self
-    }
-
-    /// **Removed.** See [`with_tracing_config`](Self::with_tracing_config):
-    /// set `tracing.format` in the app's top-level `tracing:` section instead.
-    #[doc(hidden)]
-    #[deprecated(
-        note = "`ObservabilityConfig::with_log_format` was removed: set `tracing.format` in the app's top-level `tracing:` section — see docs/migration/observability-tracing.md"
-    )]
-    pub fn with_log_format<T: ObservabilityTracingRemoved>(self, _format: T) -> Self {
-        self
-    }
-
     pub fn disable_tracing(mut self) -> Self {
         self.tracing_enabled = false;
         self
@@ -207,7 +159,7 @@ impl ObservabilityConfig {
     /// section, not here. Any other `observability.tracing.*` key (the removed
     /// subscriber knobs — `format`, `filter`, …) is recorded and reported by
     /// the plugin as one `ERROR` naming
-    /// `docs/migration/observability-tracing.md`; boot continues.
+    /// `docs/migration/tracing-single-path.md`; boot continues.
     pub fn from_r2e_config(config: &r2e_core::R2eConfig, service_name: &str) -> Self {
         let mut cfg = Self::new(service_name);
         if let Ok(endpoint) = config.get::<String>("observability.otlp-endpoint") {

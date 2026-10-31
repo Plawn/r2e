@@ -125,14 +125,28 @@ fn builder_methods() {
 }
 
 #[test]
-fn init_tracing_with_config_does_not_panic() {
-    // Just verify it doesn't panic — idempotent, so safe to call.
-    let cfg = TracingConfig::default().with_format(LogFormat::Pretty);
-    r2e_core::init_tracing_with_config(&cfg);
+fn default_matches_an_empty_section() {
+    let cfg = TracingConfig::default();
+    assert!(cfg.enabled);
+    assert!(cfg.console);
+    assert_eq!(cfg.json, JsonLogConfig::default());
+    let bound =
+        TracingConfig::from_config(&R2eConfig::from_yaml_str("{}").unwrap(), Some("tracing"))
+            .unwrap();
+    assert_eq!(bound, cfg);
 }
 
 #[test]
-fn converts_to_and_from_tracing_options() {
+fn enabled_and_console_bind() {
+    let yaml = "tracing:\n  enabled: false\n  console: false\n";
+    let r2e_config = R2eConfig::from_yaml_str(yaml).unwrap();
+    let cfg = TracingConfig::from_config(&r2e_config, Some("tracing")).unwrap();
+    assert!(!cfg.enabled);
+    assert!(!cfg.console);
+}
+
+#[test]
+fn every_field_reaches_tracing_options() {
     let cfg = TracingConfig::default()
         .with_format(LogFormat::Json)
         .with_filter("debug")
@@ -143,7 +157,16 @@ fn converts_to_and_from_tracing_options() {
         .with_line_number(true)
         .with_level(false)
         .with_ansi(false)
-        .with_span_events(SpanEvents::Active);
+        .with_span_events(SpanEvents::Active)
+        .with_console(false)
+        .with_json({
+            let mut json = JsonLogConfig::default();
+            json.flatten = true;
+            json.message_key = "_msg".into();
+            json.current_span = false;
+            json.span_list = false;
+            json
+        });
     let opts = r2e_core::TracingOptions::from(&cfg);
     assert_eq!(
         opts,
@@ -157,8 +180,15 @@ fn converts_to_and_from_tracing_options() {
             .with_level(false)
             .with_ansi(false)
             .with_span_events(SpanEvents::Active)
+            .with_console(false)
+            .with_json(
+                r2e_core::JsonOptions::default()
+                    .with_flatten(true)
+                    .with_message_key("_msg")
+                    .with_current_span(false)
+                    .with_span_list(false)
+            )
     );
-    assert_eq!(TracingConfig::from(&opts), cfg);
     assert_eq!(
         r2e_core::TracingOptions::from(&TracingConfig::default()),
         r2e_core::TracingOptions::default()
@@ -166,7 +196,7 @@ fn converts_to_and_from_tracing_options() {
 }
 
 #[test]
-fn json_section_maps_onto_tracing_options() {
+fn json_section_binds_as_a_nested_field() {
     let yaml = r#"
 tracing:
   format: json
@@ -176,23 +206,27 @@ tracing:
     span-list: false
 "#;
     let r2e_config = R2eConfig::from_yaml_str(yaml).unwrap();
-    let (opts, problem) = r2e_core::runtime::tracing::tracing_options_of(&r2e_config);
-    assert!(problem.is_none(), "{problem:?}");
+    let cfg = TracingConfig::from_config(&r2e_config, Some("tracing")).unwrap();
+    assert!(cfg.json.flatten);
+    assert_eq!(cfg.json.message_key, "_msg");
+    assert!(cfg.json.current_span, "unset key keeps its default");
+    assert!(!cfg.json.span_list);
+
+    let opts = r2e_core::TracingOptions::from(&cfg);
     assert_eq!(opts.format, Some(LogFormat::Json));
     assert!(opts.json.flatten);
     assert_eq!(opts.json.message_key, "_msg");
     assert!(opts.json.current_span);
     assert!(!opts.json.span_list);
-
-    let json = JsonLogConfig::from_config(&r2e_config, Some(JsonLogConfig::PREFIX)).unwrap();
-    assert_eq!(r2e_core::JsonOptions::from(&json), opts.json);
 }
 
 #[test]
 fn json_section_defaults_to_nested() {
     let r2e_config = R2eConfig::from_yaml_str("tracing:\n  format: json\n").unwrap();
-    let (opts, problem) = r2e_core::runtime::tracing::tracing_options_of(&r2e_config);
-    assert!(problem.is_none(), "{problem:?}");
-    assert_eq!(opts.json, r2e_core::JsonOptions::default());
-    assert_eq!(JsonLogConfig::default(), JsonLogConfig::from(&opts.json));
+    let cfg = TracingConfig::from_config(&r2e_config, Some("tracing")).unwrap();
+    assert_eq!(cfg.json, JsonLogConfig::default());
+    assert_eq!(
+        r2e_core::TracingOptions::from(&cfg).json,
+        r2e_core::JsonOptions::default()
+    );
 }

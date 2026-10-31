@@ -319,3 +319,14 @@ impl quote::ToTokens for KeyedFlag {
         self.key.to_tokens(tokens);
     }
 }
+
+/// The diagnostic for the removed `tracing = …` argument of `#[r2e::main]`,
+/// `#[r2e::test]` and `#[r2e::test_suite]`.
+pub(crate) fn tracing_removed(meta: &syn::meta::ParseNestedMeta) -> syn::Error {
+    use syn::spanned::Spanned;
+    syn::Error::new(
+        meta.path.span(),
+        "`tracing = …` was removed: the subscriber is installed by `build_state()` from \
+         the `tracing:` section — see docs/migration/tracing-single-path.md",
+    )
+}

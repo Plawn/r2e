@@ -6,7 +6,7 @@ Two concerns, two plugins — keep them apart:
 
 | Concern | Owner | Config section |
 |---|---|---|
-| **Where logs go** — format, filter, ansi (the subscriber) | the entry point (`r2e::launch` / `#[r2e::main]`), or the `Tracing` plugin | `tracing:` |
+| **Where logs go** — format, filter, ansi (the subscriber) | `build_state()`, automatically (layers added with `.tracing_layer(..)`) | `tracing:` |
 | **What each request logs** — span, summary line, request id, exclusions | the `HttpTrace` plugin | `trace:` |
 | Both, plus OTLP export and `traceparent` propagation | `Observability` (feature `observability`) | `observability:` + `trace:` |
 
@@ -176,31 +176,39 @@ Field *names* remain compile-time (`tracing` derives them from static callsite
 metadata) — that is why the enrichment point is your own `MakeRequestSpan`
 rather than a generic `record(name, value)` on the layer.
 
-## Tracing plugin (the subscriber)
+## The log subscriber (`tracing:`)
 
-The `Tracing` plugin installs the global `tracing` subscriber
-(`tracing_subscriber::fmt`) and **nothing else** — no HTTP layer. Under the
-canonical entry point the subscriber is installed for you (see below), so most
-applications never install it.
+R2E installs the global `tracing` subscriber **for you**, in exactly one place:
+`build_state()`, as its first step. It reads your `tracing:` section (profile
+and `R2E_*` overrides included; built-in defaults when there is none) and adds
+every layer contributed with `.tracing_layer(..)` before it. There is no
+plugin to install and nothing to call — `r2e::app_main!(MyApp)` and a
+`tracing:` section are the whole setup.
 
 ```rust
 use r2e::prelude::*;
 
 AppBuilder::new()
-    .plugin(Tracing)              // subscriber only
+    .load_config::<()>()          // the `tracing:` section comes from here
     .plugin(HttpTrace::new())     // the per-request span
-    .build_state()
+    .build_state()                // installs the subscriber, first thing
     .await
     .serve("0.0.0.0:3000")
     .await;
 ```
 
+> Upgrading from an earlier release? The old tracing plugins, the
+> tracing init functions and the `tracing = …` macro argument were removed; each
+> leftover use fails to build with a message naming the repository's
+> `docs/migration/tracing-single-path.md`.
+
 ### Controlling log levels
 
-Set the `RUST_LOG` environment variable:
+Set `tracing.filter`, or the `RUST_LOG` environment variable, which wins when
+set:
 
 ```bash
-# Default (when RUST_LOG is not set)
+# Default (when neither is set)
 RUST_LOG="info"
 
 # Show all framework internals
@@ -213,20 +221,15 @@ RUST_LOG="warn"
 RUST_LOG="info,my_app=debug,r2e::http=debug"
 ```
 
-The `init_tracing()` function is idempotent. If you need logs before the plugin is installed (e.g., during state construction), call it manually:
-
-```rust
-r2e::init_tracing();
-```
-
-## Configurable tracing
-
-For full control over the log subscriber format, use `TracingConfig` and the `ConfiguredTracing` plugin. This lets you configure log format, ANSI colors, thread IDs, file names, and more — either programmatically or via YAML.
+An invalid directive never aborts the boot: the subscriber falls back to
+`info` and logs one `ERROR` naming it.
 
 ### YAML configuration
 
 ```yaml
 tracing:
+  enabled: true        # false: R2E installs nothing (you own the subscriber)
+  console: true        # false: no built-in console; contributed layers still run
   filter: "info,tower_http=debug,my_app=trace"
   format: json
   ansi: false
@@ -241,6 +244,8 @@ tracing:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `enabled` | bool | `true` | `false`: R2E installs no subscriber and ignores contributed layers |
+| `console` | bool | `true` | `false`: no built-in console layer (bring your own with `.tracing_layer(..)`) |
 | `filter` | String | `"info"` | `EnvFilter` directive. `RUST_LOG` env var takes priority. |
 | `format` | `pretty` / `json` | `pretty` | Log output format |
 | `target` | bool | `true` | Print the module path in each log line |
@@ -249,8 +254,13 @@ tracing:
 | `file` | bool | `false` | Print file name where the log originated |
 | `line-number` | bool | `false` | Print line number |
 | `level` | bool | `true` | Print the log level |
-| `ansi` | bool | `true` | Enable ANSI color codes |
+| `ansi` | bool | on when stdout is a terminal | Enable ANSI color codes |
 | `span-events` | `none` / `new` / `close` / `active` / `full` | `close` | Which span lifecycle events to record |
+
+Single-word keys can be overridden from the environment (`R2E_TRACING_ENABLED=false`,
+`R2E_TRACING_FORMAT=json`, `R2E_TRACING_FILTER=debug`). An invalid `tracing:`
+section does not abort the boot either: the defaults are installed and one
+`ERROR` explains what was wrong.
 
 ### Flat JSON lines
 
@@ -280,100 +290,88 @@ tracing:
 | `json.current-span` | bool | `true` | Add the event's span as `span` |
 | `json.span-list` | bool | `true` | Add the span stack, root first, as `spans` |
 
-Event fields keep their JSON types; enricher fields (`r2e::add_enricher`)
-are strings. The formatter's own keys — the message key, `timestamp` (RFC 3339,
-UTC), `level`, `target`, `thread_id`, `thread_name`, `file`, `line`, `span`,
-`spans` — win over a field of the same name. Events from the `log` crate keep
-their real level and target, without the `log.*` bookkeeping fields.
+Event fields keep their JSON types; `LogFields` entries (below) are strings.
+The formatter's own keys — the message key, `timestamp` (RFC 3339, UTC),
+`level`, `target`, `thread_id`, `thread_name`, `file`, `line`, `span`, `spans`
+— win over a field of the same name. Events from the `log` crate keep their
+real level and target, without the `log.*` bookkeeping fields.
+`R2E_TRACING_JSON_FLATTEN=true` toggles flattening from the environment;
+`message-key` (a kebab key) is set in YAML, or from a variable with
+`message-key: "${LOG_MESSAGE_KEY:_msg}"`.
 
-The section is read by the YAML-driven install (`r2e::launch`, `#[r2e::main]`,
-`#[r2e::test]`, the bare `Tracing` plugin); `Tracing::configured(..)` writes
-nested JSON. `R2E_TRACING_JSON_FLATTEN=true` toggles it from the environment.
+### Adding layers: `tracing_layer`
 
-### Programmatic usage
+Anything beyond the knobs above is a `tracing_subscriber` layer contributed
+**before** `build_state()` — on the builder, or from a plugin's `setup` with
+`ctx.tracing_layer(..)`. They are installed together with the subscriber, once.
 
 ```rust
 use r2e::prelude::*;
-
-// Build config programmatically
-let tracing_config = TracingConfig::default()
-    .with_format(LogFormat::Json)
-    .with_ansi(false)
-    .with_thread_ids(true)
-    .with_filter("debug,hyper=warn");
+use r2e::Suppress;
 
 AppBuilder::new()
-    .plugin(Tracing::configured(tracing_config))
+    .load_config::<()>()
+    // Drop one known-benign upstream event (exact level + target + message).
+    .tracing_layer(Suppress::error("some_dep::conn", "connection reset during shutdown"))
     .build_state()
-    .await
-    .serve("0.0.0.0:3000")
     .await;
 ```
 
-### Loading from R2eConfig
+- **`Suppress`** — `Suppress::error(target, message)` /
+  `Suppress::new(level, target, message)` vetoes exactly one event shape for
+  the console and every other layer (OpenTelemetry included).
+- **`LogFields`** — a layer can attach fields to a span (`on_new_span` /
+  `on_enter`); the console prints them on every line inside that span, the
+  closest span winning on a key collision. This is how `Observability` adds
+  `trace_id` / `span_id`.
+- **Your own console** — `tracing.console: false` +
+  `.tracing_layer(fmt::layer().compact())`. The global filter still applies.
 
-When using `load_config`, you can read `TracingConfig` directly from your YAML:
+### Boot logs
 
-```rust
-let builder = AppBuilder::new().load_config::<RootConfig>();
+The subscriber only exists once `build_state()` has read `tracing:` and every
+plugin has contributed — after `App::setup` and config loading already ran.
+So `r2e::launch` / `app_main!` / `TestApp::boot` capture first: what is logged
+before the install is buffered and replayed through the real subscriber, and
+if the boot fails before the install, the buffered lines are printed to stderr
+ahead of the error. Limits: only `INFO` and above are buffered (DEBUG/TRACE
+before the install are lost), replayed lines carry no parent span and are
+timestamped at replay, and the buffer holds 1024 events (one `WARN` reports
+the overflow). A hand-written `main` that calls `build_state()` without
+`launch` should call `let _boot = r2e::capture_boot_logs();` first to get the
+same behaviour.
 
-// The builder exposes the loaded config via `r2e_config()`, so a
-// config-driven plugin can be constructed before `build_state()`.
-let tracing = Tracing::from_config(builder.r2e_config().unwrap());
+### Owning the subscriber yourself
 
-builder
-    .plugin(tracing)
-    .build_state()
-    .await
-    .serve("0.0.0.0:3000")
-    .await;
-```
-
-`Tracing::from_config()` reads the `tracing.*` keys from `R2eConfig`.
-
-### Tracing under the canonical entrypoint
-
-The canonical entrypoint — `r2e::app_main!(MyApp)` / `r2e::launch!` — installs
-the subscriber **for you**, right after `App::setup` returns and before
-`App::build` runs. It reads your own `tracing:` section to do it, so the YAML
-above applies with no plugin and no code:
+A subscriber is a one-shot process global: the first install wins. If you
+build your own `tracing_subscriber` stack, set:
 
 ```yaml
 tracing:
-  format: json
-  filter: "info,my_app=debug"
+  enabled: false
 ```
 
-A missing `application.yaml` is silent (built-in defaults); an unreadable file
-or an invalid `tracing:` section falls back to the defaults and warns through
-the subscriber it just installed, so a bad config never costs you the log line
-explaining the boot error that follows.
+R2E then installs nothing and ignores contributed layers — add the ones you
+need (`Suppress`, `r2e_observability::tracing_setup::otel_layer()` +
+`OtelIds`, …) to your own `Registry`. If you install a subscriber *without*
+setting `enabled: false`, yours still wins, and `build_state()` logs one `WARN`
+naming how many contributed layers it had to drop.
 
-**A subscriber is a one-shot process global: the first install wins.** Since
-the entrypoint installs before `App::build`, a `Tracing` / `ConfiguredTracing`
-plugin declared in `build` *loses that race*. Losing is harmless when the
-plugin reads the same `tracing:` section — it is the same subscriber either
-way, and R2E stays quiet. It is not harmless when the plugin would have logged
-differently: R2E then warns, naming the format and filter it had to ignore.
-(`Observability` is not affected: it does not build a subscriber, it
-contributes to whichever R2E installed — see below.)
+### In tests
 
-So: to install a subscriber of your own, opt the entrypoint out.
+`TestApp::boot` installs from the **test** profile (`application-test.yaml`),
+like any other configuration; `tracing: { enabled: false }` there quiets a
+whole test binary. `#[r2e::test]` itself installs nothing. A test with no app
+that still wants log output installs once:
 
 ```rust
-r2e::app_main!(MyApp, tracing = false);   // R2E installs nothing at all
+let _ = r2e::r2e_tracing::install(&r2e::TracingOptions::default(), vec![]);
 ```
-
-`launch!(MyApp, tracing = false)` and `#[r2e::main(tracing = false)]` are the
-same knob for a custom `main`. Use it for a `Tracing` plugin built from
-something other than the `tracing:` section, or a hand-built subscriber — which
-should then put `r2e_core::late_layers()` first on its `Registry` so plugins
-that contribute layers (`Observability`) still work.
 
 ## OpenTelemetry observability
 
-Enable the `observability` feature and install `Observability` instead of
-`Tracing` for distributed traces:
+Enable the `observability` feature and install `Observability` (instead of
+`HttpTrace`) for distributed traces:
 
 ```rust
 use r2e::r2e_observability::Observability;
@@ -390,16 +388,16 @@ sampler variables. With no `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or
 trace layer — the same plugin therefore works locally and deployed, without
 conditional subscriber initialization in your code.
 
-`Observability` does **not** build a subscriber. It makes sure R2E's one
-subscriber is installed (from your `tracing:` section — usually the entrypoint
-already did), then contributes to it: the OpenTelemetry layer goes into the
-subscriber's late-layer slot, and a field enricher adds `trace_id`/`span_id` to
-console lines. A plain `r2e::app_main!(MyApp)` is all it needs; the console is
-configured by `tracing:` exactly as without the plugin, and R2E's noise rules
-apply to the exported spans too. Only `observability.tracing.enabled` (the OTLP
-switch) is read under `observability.tracing`; any other key there is ignored
-and reported by one `ERROR` at boot (see
-`docs/migration/observability-tracing.md`).
+`Observability` does **not** build a subscriber. In its `setup` it
+contributes two layers with `ctx.tracing_layer(..)` — the OpenTelemetry layer,
+then `OtelIds`, which writes `trace_id`/`span_id` as `LogFields` so they appear
+on console lines — and `build_state()` installs them with R2E's one subscriber.
+A plain `r2e::app_main!(MyApp)` is all it needs; the console is configured by
+`tracing:` exactly as without the plugin, and `Suppress` layers apply to the
+exported spans too. Only `observability.tracing.enabled` (the OTLP switch) is
+read under `observability.tracing`; any other key there is ignored and
+reported by one `ERROR` at boot (see
+the repository's `docs/migration/tracing-single-path.md`).
 
 R2E exports OTLP/HTTP to `http://localhost:4318/v1/traces` by default. A
 pathless HTTP(S) endpoint receives `/v1/traces` automatically; requesting gRPC
@@ -566,13 +564,10 @@ A typical production setup uses all observability features together:
 ```rust
 use r2e::prelude::*;
 
-// Application setup
-let builder = AppBuilder::new().load_config::<RootConfig>();
-
-let tracing = Tracing::from_config(builder.r2e_config().unwrap());
-
-builder
-    .plugin(tracing)             // Configurable subscriber
+// Application setup — the subscriber comes from the `tracing:` section,
+// installed by `build_state()`
+AppBuilder::new()
+    .load_config::<RootConfig>()
     .plugin(HttpTrace::new())    // Per-request span, summary line, request IDs
     .plugin(Health)              // Health check endpoint
     .build_state()
@@ -615,26 +610,25 @@ This produces structured log output with:
 - Per-endpoint duration metrics (via `MetricTimed`)
 - HTTP-level request spans and summary lines (via the `HttpTrace` plugin)
 
-## `Tracing` vs `HttpTrace` vs `Observability`
+## Subscriber vs `HttpTrace` vs `Observability`
 
-Three plugins, three jobs — mix them freely:
+Three jobs — mix them freely:
 
-| | `Tracing` / `ConfiguredTracing` | `HttpTrace` | `Observability` |
+| | Subscriber (`build_state()`) | `HttpTrace` | `Observability` |
 |---|---|---|---|
 | Crate | `r2e-core` (always available) | `r2e-core` (always available) | `r2e-observability` (feature `observability`) |
-| Log subscriber | `tracing_subscriber::fmt` | — | contributes `tracing-opentelemetry` + `trace_id`/`span_id` fields to R2E's |
+| Log subscriber | installs it (`tracing_subscriber` console + contributed layers) | — | contributes `tracing-opentelemetry` + `trace_id`/`span_id` fields to R2E's |
 | Per-request span | — | `request` (short field names) | `request` (OTel semconv names) |
 | Distributed tracing | No | No | Yes (OTLP export to Jaeger, Tempo, etc.) |
 | Context propagation | No | No | Yes (W3C `traceparent`) |
 | Configuration | `TracingConfig` — `tracing.*` | `HttpTraceConfig` — `trace.*` | `ObservabilityConfig` — `observability.*` (+ `trace.*` for the span) |
 
-Install `HttpTrace` in every HTTP service: the entry point already gives you a
-subscriber, so it is usually the only one of the three you name. Switch to
-`Observability` when you need distributed tracing across microservices — it
-installs `HttpTrace`'s layer itself with an OpenTelemetry span shape, so there
-is still exactly **one** span per request; adding `HttpTrace` next to it would
-give you two. `Observability` does not own the subscriber, so pairing it with
-`Tracing` is fine. It reads the same `trace:` section, so exclusions, request ids
-and `record-path` are configured in one place either way.
+Install `HttpTrace` in every HTTP service: the subscriber is installed for
+you, so it is usually the only one you name. Switch to `Observability` when
+you need distributed tracing across microservices — it installs `HttpTrace`'s
+layer itself with an OpenTelemetry span shape, so there is still exactly
+**one** span per request; adding `HttpTrace` next to it would give you two. It
+reads the same `trace:` section, so exclusions, request ids and `record-path`
+are configured in one place either way.
 
 Subscriber formatting options (format, ansi, thread IDs, etc.) live in one place, `TracingConfig` — the top-level `tracing.*` section — with or without `Observability`. `ObservabilityConfig` only carries the OTLP side (`observability.*`, where `observability.tracing.enabled` is the export switch).

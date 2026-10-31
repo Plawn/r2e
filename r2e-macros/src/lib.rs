@@ -1753,9 +1753,9 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 
 /// Marks an `async fn main()` as the R2E application entry point.
 ///
-/// Wraps the function body in a Tokio multi-thread runtime and calls
-/// `init_tracing_from_config()` automatically (unless disabled) — the global
-/// subscriber comes from the application's own `tracing:` section.
+/// Wraps the function body in a Tokio multi-thread runtime. It installs no
+/// `tracing` subscriber: `build_state()` does, from the application's own
+/// `tracing:` section (`tracing.enabled: false` to install nothing).
 ///
 /// The canonical entry point declares the app via `impl r2e::App` and calls
 /// [`r2e::launch`](r2e_core::launch) from a **parameterless** main:
@@ -1774,7 +1774,6 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 ///
 /// | Argument | Default | Description |
 /// |----------|---------|-------------|
-/// | `tracing` | `true` | Call `init_tracing_from_config()` before the body |
 /// | `flavor` | `"multi_thread"` | Tokio runtime flavor |
 /// | `worker_threads` | Tokio default | Number of worker threads |
 /// | `max_blocking_threads` | Tokio default (512) | Max threads for blocking tasks |
@@ -1795,9 +1794,6 @@ pub fn derive_api_error(input: TokenStream) -> TokenStream {
 ///         .serve("0.0.0.0:8080").await.unwrap();
 /// }
 ///
-/// #[r2e::main(tracing = false)]
-/// async fn main() { /* no automatic tracing */ }
-///
 /// #[r2e::main(flavor = "current_thread")]
 /// async fn main() { /* single-threaded runtime */ }
 ///
@@ -1817,9 +1813,9 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 
 /// Marks an `async fn` as an R2E test.
 ///
-/// Wraps the function body in a Tokio **multi-thread** runtime and calls
-/// `init_tracing_from_config()` automatically (the `tracing:` section of the
-/// test profile's config; a no-op when a subscriber is already installed).
+/// Wraps the function body in a Tokio **multi-thread** runtime. The
+/// subscriber is installed by the first `build_state()` of the process (a
+/// booted `TestApp` included), from the test profile's `tracing:` section.
 ///
 /// # App tests (`app = ...`)
 ///
@@ -1847,9 +1843,6 @@ pub fn main(args: TokenStream, input: TokenStream) -> TokenStream {
 ///     let res = app.get("/health").await;
 ///     assert_eq!(res.status(), 200);
 /// }
-///
-/// #[r2e::test(tracing = false)]
-/// async fn test_no_tracing() { /* ... */ }
 ///
 /// #[r2e::test(app = MyApp)]
 /// async fn lists_users(app: TestApp) {

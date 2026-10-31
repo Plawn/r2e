@@ -2,7 +2,7 @@
 
 Quick-reference guide to the R2E workspace. Each section lists every file with a one-line description.
 
-> **Dependency flow:** `r2e-rt`, `r2e-tracing` <- `r2e-http` <- `r2e-macros` <- `r2e-core` <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
+> **Dependency flow:** `r2e-rt` <- `r2e-http` <- `r2e-macros` <- `r2e-core` (`r2e-tracing` also sits at the bottom, consumed first by `r2e-core`) <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
 >
 > **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
@@ -44,24 +44,29 @@ src/
 
 ## r2e-tracing — Process-global tracing subscriber
 
-Owns the one-shot global `tracing` subscriber. No tokio, no `r2e-*` dependency; re-exported by r2e-core.
+Owns the one-shot global `tracing` subscriber. No tokio, no `r2e-*` dependency (deps: tracing, tracing-core, tracing-subscriber, tracing-log, serde/serde_json); not a dependency of `r2e-http` — `r2e-core` is its first consumer and installs it from `build_state()`.
 
 ```
 src/
-  lib.rs                    Re-exports (TracingOptions, LogFormat, SpanEvents, try_install, installed, AlreadyInstalled, noise/late/enrich items, tracing_subscriber)
-  options.rs                TracingOptions + builders, LogFormat, SpanEvents (to_fmt_span)
-  install.rs                try_install (Registry + [console, late slot] + NoiseFilter + EnvFilter), installed(), AlreadyInstalled
-  console.rs                console fmt layer (text/JSON, TTY-aware ansi, enricher splice)
-  noise.rs                  noise rules (suppress, suppress_error, is_suppressed) + NoiseFilter (Layer + Filter)
-  late.rs                   late-layer slot: contribute_layer, late_layers/LateLayers, NotWired
-  enrich.rs                 FieldEnricher, EnrichContext, add_enricher, Enriched format wrapper
+  lib.rs                    Re-exports (TracingOptions, LogFormat, SpanEvents, JsonOptions, BoxedLayer, install, installed, AlreadyInstalled, capture_boot_logs, discard_boot_logs, BootLogs, Suppress, LogFields, console_layer_with_writer, tracing_subscriber)
+  options.rs                TracingOptions + builders, LogFormat, SpanEvents (to_fmt_span), JsonOptions
+  install.rs                install(opts, layers): Registry + [contributed…, console] + EnvFilter (one shot), installed(), AlreadyInstalled
+  boot.rs                   boot-log buffer/forwarder: capture_boot_logs, discard_boot_logs, BootLogs (replay on install, raw flush on drop)
+  console.rs                console fmt layer (text / JSON / flat JSON, TTY-aware ansi), console_layer_with_writer
+  flat_json.rs              flat JSON line format (`tracing.json.flatten: true`)
+  noise.rs                  Suppress layer (Suppress::new / Suppress::error) — gates the console and every sibling layer
+  enrich.rs                 LogFields span extension (fields printed on every line inside the span)
 tests/
-  install/                  one-shot install sequence (own binary)
+  boot/                     boot forwarder: buffered events replayed through the real stack (own binary)
+  boot_bound/               bounded boot buffer + overflow WARN (own binary)
+  boot_disabled/            discard_boot_logs, then a later install (own binary)
+  boot_flush/               boot fails before install: raw flush of buffered lines (own binary)
+  boot_foreign/             foreign subscriber wins: capture inert, unknown winner (own binary)
+  install/                  one-shot install, contributed layers, Suppress gating siblings (own binary)
   install_invalid_filter/   invalid filter falls back to info (own binary)
-  late_layers/              contribute_layer into the installed subscriber (own binary)
-  enrich/                   enrichers on text + JSON lines (own binary)
-  noise/                    noise rules + NoiseFilter as layer and filter
+  format/                   flat JSON + LogFields in text/JSON/flat JSON (scoped subscriber)
   options/                  pure-value tests (format, span_events)
+  support/                  shared test helpers
 ```
 
 ---
@@ -152,7 +157,7 @@ src/
   beans/                    DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry, graph resolve
   builder/                  AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
   builtins/
-    mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, Tracing, DevReload, NormalizePath
+    mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, DevReload, NormalizePath; hidden compile-error shims for the removed Tracing / ConfiguredTracing plugins
     health.rs               HealthIndicator trait, HealthBuilder, HealthState, /health endpoints
     http_trace.rs           HttpTrace plugin + HttpTraceBuilder + HttpTraceConfig (`trace.*`)
     request_id.rs           RequestId extractor and RequestIdPlugin
@@ -184,12 +189,12 @@ src/
   runtime/
     dev.rs                  Dev-reload statics + endpoints (feature = "dev-reload" consumers)
     layers.rs               Tower layer utilities: default_cors(), catch-panic, fallbacks
-    tracing.rs              init_tracing*/try_init_tracing_with_config over r2e-tracing, SubscriberAlreadyInstalled
+    tracing.rs              install_tracing (called by build_state: `tracing:` section + contributed layers → r2e_tracing::install) + compile-error shims for the removed init functions
     http_trace.rs           HttpTraceLayer + MakeRequestSpan (per-request span, summary, request id)
     lifecycle.rs            LifecycleController for on_start/on_stop hooks
     service.rs              ServiceComponent trait
     sharded.rs              SO_REUSEPORT sharded serving (server.workers)
-    tracing_config.rs       TracingConfig (yaml `tracing:`) ⇄ TracingOptions; FromConfigValue for LogFormat/SpanEvents
+    tracing_config.rs       TracingConfig + JsonLogConfig (yaml `tracing:`) → TracingOptions; FromConfigValue for LogFormat/SpanEvents
   web/
     extract.rs              FromRequestPartsVia, ViaBean/ViaAxum, BeanExtract, PeerAddr
     managed.rs              ManagedResource<S> trait, ManagedErr<E> wrapper
@@ -449,7 +454,7 @@ src/
   config.rs                 Observability configuration
   span.rs                   OtelRequestSpan: the OTel span shape for r2e-core's HttpTraceLayer
   propagation.rs            OpenTelemetry context propagation
-  tracing_setup.rs          Tracing subscriber setup
+  tracing_setup.rs          OTel provider init (init_tracing), otel_layer + OtelIds (contributed via ctx.tracing_layer)
 ```
 
 ---

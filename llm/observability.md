@@ -1,7 +1,7 @@
 ---
 topic: observability
 features: core, observability
-tokens: ~3900
+tokens: ~4000
 requires: plugins
 ---
 
@@ -12,10 +12,11 @@ requires: plugins
 - **Per-request logging is the `HttpTrace` plugin** (core, no feature):
   `.plugin(HttpTrace::new())` → one span `request` (target `r2e::http`) + one
   `request completed` line (INFO, ERROR at 5xx) per request, with request ids.
-- `Tracing` / `ConfiguredTracing` install the **subscriber only** (`tracing:`
-  section) and add no HTTP layer. `r2e::launch` / `#[r2e::main]` /
-  `#[r2e::test]` already install a subscriber, so most apps name only
-  `HttpTrace`.
+- The **subscriber** is installed by `build_state()` from the top-level
+  `tracing:` section (no plugin, no macro argument); it adds no HTTP layer, so
+  most apps name only `HttpTrace`. `tracing.enabled: false` installs nothing
+  (the app owns the subscriber), `tracing.console: false` drops R2E's console
+  and keeps the contributed layers.
 - The span carries the **bounded route template** (`/users/{id}`), never the raw
   path. `trace.record-path` / `record-query` put the raw values on the summary
   **event** only.
@@ -58,11 +59,12 @@ requires: plugins
 - `tracing.format: json` + `tracing.json.flatten: true` writes one flat JSON
   object per event (fields at the top level, message under
   `tracing.json.message-key`, `_msg` for VictoriaLogs) — no custom formatter.
-- Extend the installed subscriber with `suppress_error` (drop a benign
-  upstream event), `add_enricher` (fields on every console line) and
-  `contribute_layer` (a layer added after install) — never by re-installing it.
-  Replace the console layer itself with `set_console_factory` in `App::setup`
-  (before the install).
+- Extend the subscriber with `.tracing_layer(layer)` — on the `AppBuilder`
+  or on `PluginSetupContext` — before `build_state()`: `Suppress::error(target,
+  message)` drops a benign upstream event, a layer writing `LogFields` on a span
+  adds fields to every console line inside it, any other `Layer<Registry>`
+  joins the stack. Replace the console with `tracing.console: false` + your own
+  `fmt` layer through `.tracing_layer(..)`.
 
 ### HttpTrace (core, no feature)
 
@@ -205,99 +207,105 @@ tracing:
   `span`, `spans` (the optional ones follow `thread-ids`, `thread-names`,
   `file`, `line-number`).
 - `log`-crate events get their real level/target; `log.*` fields are dropped.
-- Read by the YAML install path (`r2e::launch`, `#[r2e::main]`, `#[r2e::test]`,
-  the `Tracing` plugin). `R2E_TRACING_JSON_FLATTEN=true` works;
+- Read by `build_state()` with the rest of `tracing:`.
+  `R2E_TRACING_JSON_FLATTEN=true` works;
   `message-key` is kebab-case, so set it in YAML (or `${VAR}`).
 
 ### Extending the subscriber
 
-The subscriber R2E installs has three process-wide, append-only extension
-points (re-exported at the `r2e` root; call them from a plugin's `setup` or
-before `launch`), plus a console factory:
+`build_state()` installs the one process-global subscriber, first thing, from
+`tracing:` plus every layer contributed **before** it with `.tracing_layer(..)`
+(on the `AppBuilder`, or on `PluginSetupContext` in a plugin's `setup`). There
+is no install-after-the-fact: a layer contributed once the subscriber is
+installed (a second boot in the same process) is ignored with one DEBUG line.
 
-- `suppress_error(target, message)` (or `suppress(NoiseRule { .. })`) drops
-  one known-benign event — exact level, target and message. For upstream bugs
-  only; the table is empty by default.
-- `add_enricher(Box<dyn FieldEnricher>)` appends fields to every console line
-  (` key=value` in text, a string member in JSON).
-- `contribute_layer(Box<dyn Layer<Registry>>)` adds a layer to the installed
-  subscriber after the fact; `Err(NotWired)` when R2E did not install it. A
-  contributed layer cannot carry a per-layer filter (`.with_filter(..)`), and
-  spans opened before the contribution are invisible to it.
+- `Suppress::error(target, message)` (or `Suppress::new(level, ..)`) drops one
+  known-benign event — exact level, target and message — for **every** layer
+  of the stack. For upstream bugs only.
+- `LogFields` is a span extension: a layer that inserts it on a span makes the
+  console print its fields (` key=value` in text, a string member in JSON) on
+  every line emitted inside that span; the closest span wins on a collision.
+- Any other `Layer<Registry> + Send + Sync + 'static` is added as is.
 
 ```rust
-use r2e::r2e_core::r2e_tracing::tracing_subscriber::{Layer, Registry};
-use r2e::{add_enricher, contribute_layer, suppress_error, EnrichContext, FieldEnricher};
+use r2e::r2e_tracing::tracing_subscriber::layer::Context;
+use r2e::r2e_tracing::tracing_subscriber::registry::LookupSpan;
+use r2e::r2e_tracing::tracing_subscriber::Layer;
+use r2e::{LogFields, Suppress};
 
+/// Writes `region=eu-west-1` on every line logged inside a span.
 struct Region;
 
-impl FieldEnricher for Region {
-    fn enrich(&self, _cx: &EnrichContext<'_>, out: &mut dyn FnMut(&'static str, &dyn std::fmt::Display)) {
-        out("region", &"eu-west-1");
+impl<S> Layer<S> for Region
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(&self, _: &tracing::span::Attributes<'_>, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            let mut fields = LogFields::new();
+            fields.insert("region", "eu-west-1");
+            span.extensions_mut().insert(fields);
+        }
     }
 }
 
-struct Audit;
-impl<S: tracing::Subscriber> Layer<S> for Audit {}
-
-fn extend_tracing() {
-    suppress_error("some_dep::conn", "connection reset during shutdown");
-    add_enricher(Box::new(Region));
-    let layer: Box<dyn Layer<Registry> + Send + Sync> = Box::new(Audit);
-    if let Err(not_wired) = contribute_layer(layer) {
-        tracing::warn!("audit layer not installed: {not_wired}");
-    }
-}
+# async fn __doc() {
+let _state = AppBuilder::new()
+    .tracing_layer(Suppress::error("some_dep::conn", "connection reset during shutdown"))
+    .tracing_layer(Region)
+    .build_state()
+    .await;
+# }
 # fn main() {}
 ```
 
-`Observability` is the canonical example: its `setup` calls
-`contribute_layer` with the `tracing-opentelemetry` layer (exported spans,
-`Span::current().context()`) and `add_enricher` with a `trace_id`/`span_id`
-enricher — so R2E's noise rules gate the exported spans too.
+A plugin contributes from its `setup` (runs before `build_state()` installs):
 
-To replace the **console layer itself** (another `fmt` shape, a layer of your
-own), register a factory with `r2e::set_console_factory` **before** the
-subscriber is installed — in `App::setup`, which runs before the install. The
-factory is a plain `fn(&TracingOptions) -> BoxedLayer`; R2E calls it instead of
-building its own console and keeps the rest of the stack (late-layer slot,
-`NoiseFilter`, `EnvFilter`). The factory owns the line: it honours the
-`TracingOptions` knobs it wants, and enrichers do not apply to it (so
-`Observability`'s `trace_id`/`span_id` fields do not reach a custom console). After the
-install it returns `Err(AlreadyInstalled)`; called twice before, the last wins.
+```rust,ignore
+fn setup(&mut self, ctx: &mut PluginSetupContext) {
+    ctx.tracing_layer(Suppress::error("rmcp::service", "fail to response message"));
+}
+```
+
+`Observability` is the canonical example: its `setup` contributes the
+`tracing-opentelemetry` layer (exported spans, `Span::current().context()`)
+and `OtelIds` (writes `trace_id`/`span_id` as `LogFields`) — so a
+`Suppress` contributed by any plugin gates the exported spans too.
+
+To replace the **console layer itself**, set `tracing.console: false` and
+contribute your own `fmt` layer; the filter (`tracing.filter` / `RUST_LOG`)
+still applies to it:
 
 ```rust
-use r2e::prelude::*;
-use r2e::r2e_tracing::tracing_subscriber::{fmt, Layer};
+use r2e::r2e_tracing::tracing_subscriber::fmt;
 
-pub struct MyApp;
-
-impl App for MyApp {
-    type Env = ();
-
-    async fn setup() -> Result<(), BootError> {
-        // `Err(AlreadyInstalled)` — the subscriber was set earlier — aborts boot.
-        r2e::set_console_factory(|_opts| fmt::layer().compact().boxed())?;
-        Ok(())
-    }
-
-    async fn build(b: AppBuilder, _env: ()) -> Result<impl BootableApp, BootError> {
-        Ok(b.load_config::<()>().build_state().await)
-    }
-}
+# async fn __doc() {
+// application.yaml: tracing: { console: false }
+let _state = AppBuilder::new()
+    .tracing_layer(fmt::layer().compact())
+    .build_state()
+    .await;
+# }
 # fn main() {}
 ```
 
-An app installing **its own** subscriber keeps both: add `late_layers()` first,
-directly on the `Registry`, and `NoiseFilter` above the layers it gates
-(`registry().with(late_layers()).with(fmt::layer()).with(NoiseFilter).with(env_filter)`).
-`NoiseFilter` also works per layer: `layer.with_filter(NoiseFilter)`.
+An app installing **its own** subscriber sets `tracing.enabled: false` (R2E
+then installs nothing and contributed layers are dropped) and adds the layers
+it wants to its own `Registry` — `Suppress` included. A foreign subscriber
+installed before `build_state()` without `enabled: false` wins too, and the
+contributed layers are dropped with one WARN.
+
+Boot logs: `r2e::launch` / `app_main!` / `TestApp::boot` buffer every INFO+
+event emitted before the install (`App::setup`, config loading) and replay it
+through the real subscriber once installed — replayed lines are timestamped
+at replay time and carry no span; DEBUG/TRACE before the install are lost; the
+buffer holds 1024 events (the overflow is counted by one WARN).
 
 ### OpenTelemetry
 
 Requires feature: `observability`. **Replaces `HttpTrace`** — do NOT install
-both. It builds no subscriber, so `Tracing` alongside it is harmless (and
-usually unnecessary: the entry point installs one). `Observability` installs the very same
+both. It builds no subscriber: it contributes its layers to the one
+`build_state()` installs. `Observability` installs the very same
 `HttpTraceLayer` with an OpenTelemetry span shape (semconv
 `http.request.method` / `http.route` / `http.response.status_code`, `otel.kind =
 "server"`, parent context from the inbound `traceparent`), so there is exactly

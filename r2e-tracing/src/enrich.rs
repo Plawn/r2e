@@ -1,86 +1,89 @@
 use std::fmt::{self, Write as _};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, PoisonError, RwLock};
 
-use tracing::{span, Event, Metadata, Subscriber};
+use tracing::{Event, Subscriber};
 use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::registry::LookupSpan;
 
-/// What a [`FieldEnricher`] knows about the event being written.
-#[non_exhaustive]
-#[derive(Debug)]
-pub struct EnrichContext<'a> {
-    /// The event's metadata (level, target, module, file/line).
-    pub metadata: &'static Metadata<'static>,
-    /// The event itself, for enrichers that read its fields.
-    pub event: &'a Event<'a>,
-    /// Whether the event has a parent span (explicit, or the current span).
-    pub has_parent_span: bool,
-    /// The id of that parent span, when there is one.
-    pub span_id: Option<span::Id>,
-}
-
-/// Adds fields to every line the console layer writes.
+/// Extra fields the console prints on every line emitted inside a span.
 ///
-/// Called once per event, on the thread that emits it, while the line is
-/// formatted; `out(key, value)` appends a field — ` key=value` in the text
-/// format, `"key":"value"` (a JSON string) in the JSON format. Emitting
-/// nothing leaves the line untouched. Keep it cheap and do not log from it.
+/// A span **extension**: a contributed layer inserts it in `on_new_span` (or
+/// later, through `extensions_mut().get_mut::<LogFields>()`), and the console
+/// layer of [`install`](crate::install) appends its fields to every event in
+/// that span's scope — ` key=value` in text, `"key":"value"` (a JSON string)
+/// in JSON, a top-level key in flat JSON (where the formatter's reserved keys
+/// still win). When several spans of the scope carry the same key, the
+/// **closest** span wins.
 ///
 /// ```rust,ignore
-/// struct Region;
-/// impl r2e_tracing::FieldEnricher for Region {
-///     fn enrich(
-///         &self,
-///         _cx: &r2e_tracing::EnrichContext<'_>,
-///         out: &mut dyn FnMut(&'static str, &dyn std::fmt::Display),
-///     ) {
-///         out("region", &"eu-west-1");
+/// impl<S> Layer<S> for TraceIds where S: Subscriber + for<'a> LookupSpan<'a> {
+///     fn on_new_span(&self, _: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+///         let span = ctx.span(id).unwrap();
+///         let mut fields = LogFields::new();
+///         fields.insert("trace_id", current_trace_id());
+///         span.extensions_mut().insert(fields);
 ///     }
 /// }
-/// r2e_tracing::add_enricher(Box::new(Region));
 /// ```
-pub trait FieldEnricher: Send + Sync + 'static {
-    /// Append this enricher's fields for the event described by `cx`.
-    fn enrich(&self, cx: &EnrichContext<'_>, out: &mut dyn FnMut(&'static str, &dyn fmt::Display));
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LogFields {
+    fields: Vec<(&'static str, String)>,
 }
 
-/// Copy-on-write list: formatting takes a snapshot and releases the lock
-/// before calling enrichers, so an enricher that (wrongly) logs cannot
-/// deadlock against a concurrent [`add_enricher`].
-type Enrichers = Arc<Vec<Arc<dyn FieldEnricher>>>;
-
-static ENRICHERS: RwLock<Option<Enrichers>> = RwLock::new(None);
-
-/// `true` once an enricher exists: with none, the console format is a
-/// pass-through costing one relaxed load per event.
-static ANY_ENRICHER: AtomicBool = AtomicBool::new(false);
-
-/// Register a [`FieldEnricher`] on the console layer.
-///
-/// Process-wide and append-only; it may be called before or after the
-/// subscriber is installed, and applies to every event formatted from then on.
-pub fn add_enricher(enricher: Box<dyn FieldEnricher>) {
-    let mut slot = ENRICHERS.write().unwrap_or_else(PoisonError::into_inner);
-    let mut list = slot.as_deref().cloned().unwrap_or_default();
-    list.push(Arc::from(enricher));
-    *slot = Some(Arc::new(list));
-    ANY_ENRICHER.store(true, Ordering::Release);
-}
-
-pub(crate) fn snapshot() -> Option<Enrichers> {
-    if !ANY_ENRICHER.load(Ordering::Relaxed) {
-        return None;
+impl LogFields {
+    /// No field.
+    pub fn new() -> Self {
+        Self::default()
     }
-    ENRICHERS
-        .read()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+
+    /// Set `key` to `value`: replaces the value in place when `key` is already
+    /// set, appends it otherwise (fields keep their insertion order).
+    pub fn insert(&mut self, key: &'static str, value: impl fmt::Display) {
+        let value = value.to_string();
+        match self.fields.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, v)) => *v = value,
+            None => self.fields.push((key, value)),
+        }
+    }
+
+    /// The fields, in insertion order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.fields.iter().map(|(k, v)| (*k, v.as_str()))
+    }
+
+    /// Whether no field is set.
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
 }
 
-/// Wraps the console layer's event format and splices the registered
-/// enrichers' fields into each rendered line.
+/// The [`LogFields`] of the event's span scope, merged: leaf to root, the
+/// closest span winning a key. Empty outside any span.
+pub(crate) fn collect<S, N>(ctx: &FmtContext<'_, S, N>) -> Vec<(&'static str, String)>
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+    N: for<'writer> FormatFields<'writer> + 'static,
+{
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    let Some(scope) = ctx.event_scope() else {
+        return out;
+    };
+    for span in scope {
+        let extensions = span.extensions();
+        let Some(fields) = extensions.get::<LogFields>() else {
+            continue;
+        };
+        for (key, value) in &fields.fields {
+            if !out.iter().any(|(k, _)| k == key) {
+                out.push((key, value.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// Wraps the console layer's event format and splices the scope's
+/// [`LogFields`] into each rendered line.
 pub(crate) struct Enriched<F> {
     inner: F,
     json: bool,
@@ -108,23 +111,10 @@ where
         mut writer: Writer<'_>,
         event: &Event<'_>,
     ) -> fmt::Result {
-        let Some(enrichers) = snapshot() else {
-            return self.inner.format_event(ctx, writer, event);
-        };
-
-        let span_id = ctx.parent_span().map(|span| span.id());
-        let cx = EnrichContext {
-            metadata: event.metadata(),
-            event,
-            has_parent_span: span_id.is_some(),
-            span_id,
-        };
+        let fields = collect(ctx);
         let mut extra = String::new();
-        let json = self.json;
-        for enricher in enrichers.iter() {
-            enricher.enrich(&cx, &mut |key, value| {
-                push_field(&mut extra, json, key, value)
-            });
+        for (key, value) in &fields {
+            push_field(&mut extra, self.json, key, value);
         }
         if extra.is_empty() {
             return self.inner.format_event(ctx, writer, event);
@@ -135,7 +125,7 @@ where
         let mut rendered = String::new();
         self.inner
             .format_event(ctx, Writer::new(&mut rendered), event)?;
-        let at = if json {
+        let at = if self.json {
             rendered.rfind('}').unwrap_or(rendered.len())
         } else if rendered.ends_with('\n') {
             rendered.len() - 1

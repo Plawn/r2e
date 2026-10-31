@@ -1,20 +1,23 @@
-//! The flat JSON line format (`tracing.json.flatten: true`).
+//! The console layer's line formats: flat JSON (`tracing.json.flatten:
+//! true`), and the `LogFields` span extension printed in text, JSON and flat
+//! JSON.
 //!
 //! The console layer writes into a buffer under a scoped subscriber; the
-//! global subscriber is never installed. Enrichers are process-wide, so only
-//! one test registers one and no test asserts an exact key set.
+//! global subscriber is never installed.
 
-use std::fmt;
 use std::io;
 use std::sync::{Arc, Mutex};
 
 use r2e_tracing::{
-    add_enricher, console_layer_with_writer, EnrichContext, FieldEnricher, JsonOptions, LogFormat,
-    SpanEvents, TracingOptions,
+    console_layer_with_writer, BoxedLayer, JsonOptions, LogFields, LogFormat, SpanEvents,
+    TracingOptions,
 };
 use serde_json::Value;
+use tracing::span::{Attributes, Id};
+use tracing::Subscriber;
 use tracing_subscriber::fmt::MakeWriter;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Registry;
 
 #[derive(Clone, Default)]
@@ -53,12 +56,23 @@ fn flat(json: JsonOptions) -> TracingOptions {
         .with_json(json.with_flatten(true))
 }
 
+/// Everything written through a console layer configured by `opts`, after
+/// the `before` layers (the way `install` orders contributed layers).
+fn raw(opts: &TracingOptions, before: Vec<BoxedLayer>, emit: impl FnOnce()) -> String {
+    let buffer = Buffer::default();
+    let mut layers = before;
+    layers.push(console_layer_with_writer(opts, buffer.clone()));
+    let subscriber = Registry::default().with(layers);
+    tracing::subscriber::with_default(subscriber, emit);
+    buffer.take()
+}
+
 /// Every line written through a console layer configured by `opts`, parsed.
 fn lines(opts: &TracingOptions, emit: impl FnOnce()) -> Vec<Value> {
-    let buffer = Buffer::default();
-    let subscriber = Registry::default().with(console_layer_with_writer(opts, buffer.clone()));
-    tracing::subscriber::with_default(subscriber, emit);
-    let out = buffer.take();
+    parse(raw(opts, vec![], emit))
+}
+
+fn parse(out: String) -> Vec<Value> {
     assert!(out.ends_with('\n'), "{out:?}");
     out.lines()
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
@@ -221,28 +235,104 @@ fn log_bridged_events_are_normalized() {
     assert!(object.keys().all(|key| !key.starts_with("log.")), "{line}");
 }
 
-struct Region;
+/// Inserts `LogFields` on every new span: `span_name=<name>` always,
+/// `trace_id=<the span's "trace" field>` when it has one — what an OTel ids
+/// layer does.
+struct Ids;
 
-impl FieldEnricher for Region {
-    fn enrich(
-        &self,
-        _cx: &EnrichContext<'_>,
-        out: &mut dyn FnMut(&'static str, &dyn fmt::Display),
-    ) {
-        out("flat_region", &"eu-west-1");
+impl<S> Layer<S> for Ids
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(&self, attrs: &Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+        struct Trace(Option<String>);
+        impl tracing::field::Visit for Trace {
+            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
+                if f.name() == "trace" {
+                    self.0 = Some(format!("{v:?}"));
+                }
+            }
+        }
+        let mut trace = Trace(None);
+        attrs.record(&mut trace);
+        let mut fields = LogFields::new();
+        fields.insert("span_name", attrs.metadata().name());
+        if let Some(t) = trace.0 {
+            fields.insert("trace_id", t);
+        }
+        ctx.span(id).unwrap().extensions_mut().insert(fields);
     }
 }
 
+/// Emits one event in `inner` (trace 22) nested in `outer` (trace 11).
+fn nested() {
+    let _outer = tracing::info_span!("outer", trace = 11).entered();
+    let _inner = tracing::info_span!("inner", trace = 22).entered();
+    tracing::info!(target: "fields_test", "hello");
+}
+
+fn plain_text() -> TracingOptions {
+    TracingOptions::new("trace")
+        .with_ansi(false)
+        .with_span_events(SpanEvents::None)
+}
+
 #[test]
-fn enrichers_land_in_the_object() {
-    add_enricher(Box::new(Region));
-    let line = one(
-        &flat(JsonOptions::default()),
-        || tracing::info!(target: "flat_test", flat_region = "event", "enriched"),
+fn log_fields_are_spliced_into_text_lines() {
+    // Outside any span: the plain line.
+    let plain = raw(
+        &plain_text(),
+        vec![Box::new(Ids)],
+        || tracing::info!(target: "fields_test", "hello"),
     );
-    // Enricher fields win over event fields, lose to reserved keys.
-    assert_eq!(line["flat_region"], "eu-west-1");
-    assert_eq!(line["message"], "enriched");
+    assert!(plain.ends_with("hello\n"), "{plain:?}");
+
+    // Closest span wins a key; insertion order otherwise.
+    let line = raw(&plain_text(), vec![Box::new(Ids)], nested);
+    assert!(
+        line.ends_with("hello span_name=inner trace_id=22\n"),
+        "{line:?}"
+    );
+    assert_eq!(line.matches('\n').count(), 1);
+}
+
+#[test]
+fn log_fields_are_members_of_json_lines() {
+    let opts = plain_text().with_format(LogFormat::Json);
+    let out = raw(&opts, vec![Box::new(Ids)], nested);
+    assert!(out.ends_with("}\n"), "{out:?}");
+    let line: Value = serde_json::from_str(out.trim_end()).expect("valid JSON");
+    assert_eq!(line["trace_id"], "22");
+    assert_eq!(line["span_name"], "inner");
+    assert_eq!(line["fields"]["message"], "hello");
+}
+
+#[test]
+fn log_fields_land_in_the_flat_object() {
+    let out = raw(&flat(JsonOptions::default()), vec![Box::new(Ids)], || {
+        let _s = tracing::info_span!("outer", trace = 11).entered();
+        tracing::info!(target: "fields_test", trace_id = "event", "hello");
+    });
+    let mut all = parse(out);
+    assert_eq!(all.len(), 1, "{all:?}");
+    let line = all.remove(0);
+    // `LogFields` win over event fields, lose to reserved keys.
+    assert_eq!(line["trace_id"], "11");
+    assert_eq!(line["span_name"], "outer");
+    assert_eq!(line["message"], "hello");
+}
+
+#[test]
+fn log_fields_insert_replaces_in_place() {
+    let mut fields = LogFields::new();
+    assert!(fields.is_empty());
+    fields.insert("a", 1);
+    fields.insert("b", "two");
+    fields.insert("a", 3);
+    assert_eq!(
+        fields.iter().collect::<Vec<_>>(),
+        [("a", "3"), ("b", "two")]
+    );
 }
 
 #[test]

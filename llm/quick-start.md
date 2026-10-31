@@ -1,7 +1,7 @@
 ---
 topic: quick-start
 features: default
-tokens: ~2100
+tokens: ~2000
 requires: runtime-facade
 ---
 
@@ -16,7 +16,7 @@ requires: runtime-facade
 - Both phases are fallible: return `BootError` with `?`, never call `std::process::exit` in `setup`/`build`.
 - `load_config` is the sole config registration point that reads disk (`provide_config` is the in-memory counterpart).
 - End `build` with `.try_build_state().await?` then `.register_controller::<C>()`, and return that value — do not serve there.
-- `app_main!` installs the subscriber from the app's own `tracing:` section after `setup`; use `app_main!(MyApp, tracing = false)` only when the app installs a subscriber of its own (`Observability` does not need it: it contributes to R2E's).
+- `build_state()` installs the subscriber from the app's own `tracing:` section (no plugin, no macro argument); `tracing.enabled: false` only when the app installs a subscriber of its own (`Observability` does not need it: it contributes its layers to R2E's).
 - Never write a state struct and never put `state = ...` on `#[controller]`: the state is inferred from `.provide()` / `.register()`.
 - Test the real app with `#[r2e::test(app = my_app::MyApp)]` taking a `TestApp`.
 
@@ -116,29 +116,24 @@ include!("app.rs");
 ```rust,ignore
 // src/main.rs — prod serve AND dev hot-reload
 r2e::app_main!(MyApp);                          // include app.rs + generate main + launch
-// r2e::app_main!(MyApp, tracing = false);      // ...and don't install a subscriber
 ```
 
-`app_main!` installs the global `tracing` subscriber **after** `App::setup`
-returns (and, under `dev-reload`, once — outside the patch loop), so an app that
-builds its own subscriber in `setup` wins; the install is idempotent. Anything
-`setup` logs before that point is dropped. What it installs is the app's own
-`tracing:` section (`init_tracing_from_config()`), so `format: json` in
-`application.yaml` applies from the first log line, with no plugin and no opt-in;
-an unreadable section falls back to the built-in defaults and warns.
+`build_state()` installs the global `tracing` subscriber, first thing, from
+the app's own `tracing:` section — so `format: json` in `application.yaml`
+applies from the first log line, with no plugin and no opt-in; an unreadable
+section falls back to the built-in defaults and logs one ERROR. What `setup`
+logs before that is buffered by `app_main!` (INFO and above, 1024 events) and
+replayed through the real subscriber once it is installed.
 
 The subscriber is only *where logs go*: per-request spans and the
 `request completed` line come from `.plugin(HttpTrace::new())` (see
-llm/observability.md), which is what an app installs in `build`.
+llm/observability.md), which is what an app installs in `build`. Layers
+(`Suppress`, a layer writing `LogFields`, an extra `fmt` layer) are contributed
+with `.tracing_layer(..)` before `build_state()`.
 
-Because that happens before `App::build`, a `Tracing::from_config(&cfg)` /
-`ConfiguredTracing` plugin declared in `build` **loses the race** — silently when
-it reads the same section (same subscriber either way), with a warning naming the
-ignored format/filter when it would have logged differently. To install a
-subscriber of your own, opt the entry point out (plugins that only contribute a
-layer or log fields, like `Observability`, need no opt-out): `app_main!(MyApp, tracing = false)`
-— same spelling as `#[r2e::main(tracing = false)]` — installs nothing at all.
-`launch!(MyApp, tracing = false)` is the same knob for a custom `main`.
+To install a subscriber of your own, set `tracing.enabled: false`: R2E then
+installs nothing at all (plugins that only contribute a layer, like
+`Observability`, need no opt-out). There is no `tracing = …` macro argument.
 
 ```rust
 // src/controllers/hello.rs
