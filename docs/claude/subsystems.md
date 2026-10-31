@@ -161,7 +161,8 @@ Tests: `r2e-tracing/tests/format/`.
 ```
 Registry
   └ vec![console layer, late-layer slot]   (console = fmt, `.json()` under format: json, wrapped by the enricher splice;
-                                            json.flatten → SpanFieldsLayer + FlatJson, enrichers written into the object)
+                                            json.flatten → SpanFieldsLayer + FlatJson, enrichers written into the object;
+                                            or the whole layer from set_console_factory)
   └ NoiseFilter                            (global layer: vetoes matched events for everything below it)
   └ EnvFilter                              (outermost; RUST_LOG wins over `filter`)
 ```
@@ -201,9 +202,20 @@ root; process-wide, append-only):
   the console format calls them per event with an `EnrichContext` (metadata,
   event, parent span) and splices ` k=v` before the newline (text) or
   `,"k":"v"` before the final `}` (JSON). No enricher = pass-through.
+- **Console factory** (`console.rs`) — `set_console_factory(ConsoleFactory)`,
+  `ConsoleFactory = fn(&TracingOptions) -> BoxedLayer`: `try_install` calls it
+  instead of the built-in console layer; slot, `NoiseFilter` and `EnvFilter`
+  stay. A `fn`, not a boxed `FormatEvent` (tracing-subscriber cannot box one).
+  Must run before the install (`App::setup` runs before `launch` installs);
+  after it — or once any global subscriber is set — `Err(AlreadyInstalled)`
+  and nothing stored. Last call before the install wins. `try_install` holds
+  the factory mutex for the whole install, so `Ok` always means "the next
+  install uses it" (the factory must not call `set_console_factory` itself).
+  The factory owns the line: `TracingOptions` knobs are its to honour, and
+  enrichers are not applied (`enrich` is crate-private).
 
-Tests: `r2e-tracing/tests/{noise,late_layers,enrich,install_invalid_filter}/`
-(the last three are their own binaries — process-global state).
+Tests: `r2e-tracing/tests/{noise,late_layers,enrich,install_invalid_filter,console_factory}/`
+(all but `noise` are their own binaries — process-global state).
 
 **Observability (r2e-observability) is the canonical contributor:** it builds no
 subscriber. `setup` calls `ensure_tracing_installed()`, then (OTLP on)

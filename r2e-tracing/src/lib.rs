@@ -11,7 +11,9 @@
 //!   ([`NoiseFilter`] applies them);
 //! - [late layers](contribute_layer) — add a layer after the install
 //!   (custom stacks host the slot with [`late_layers`]);
-//! - [field enrichers](add_enricher) — add fields to every console line.
+//! - [field enrichers](add_enricher) — add fields to every console line;
+//! - a [console factory](set_console_factory) — replace the console layer
+//!   itself, before the install.
 //!
 //! It sits at the bottom of the R2E graph (no tokio, no `r2e-*` dependency).
 //! `r2e-core` binds the YAML `tracing:` section (`TracingConfig`) to
@@ -28,6 +30,7 @@ mod options;
 
 #[doc(hidden)]
 pub use console::console_layer_with_writer;
+pub use console::{set_console_factory, ConsoleFactory};
 pub use enrich::{add_enricher, EnrichContext, FieldEnricher};
 pub use install::{installed, try_install, AlreadyInstalled};
 pub use late::{contribute_layer, late_layers, BoxedLayer, LateLayers, NotWired};

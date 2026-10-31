@@ -5,7 +5,7 @@ use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-use crate::console::console_layer;
+use crate::console::{console_layer, lock_factory};
 use crate::late::{self, late_layers};
 use crate::noise::NoiseFilter;
 use crate::options::TracingOptions;
@@ -73,7 +73,8 @@ impl std::error::Error for AlreadyInstalled {}
 ///
 /// ```text
 /// Registry
-///   + [console layer, late-layer slot]   // fmt (JSON under LogFormat::Json) + contributed layers
+///   + [console layer, late-layer slot]   // fmt (JSON under LogFormat::Json), or the
+///                                        // set_console_factory layer + contributed layers
 ///   + NoiseFilter                        // registered noise rules, for every inner layer
 ///   + EnvFilter                          // outer, global
 /// ```
@@ -88,6 +89,9 @@ impl std::error::Error for AlreadyInstalled {}
 /// [`installed`] returns them, and the [late-layer slot](crate::late_layers)
 /// accepts [contributions](crate::contribute_layer).
 pub fn try_install(opts: &TracingOptions) -> Result<(), AlreadyInstalled> {
+    // Held for the whole install: a concurrent `set_console_factory` either
+    // lands before (and is used here) or after (and sees the install).
+    let factory = lock_factory();
     let mut invalid_filter = None;
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::try_new(&opts.filter).unwrap_or_else(|e| {
@@ -97,7 +101,10 @@ pub fn try_install(opts: &TracingOptions) -> Result<(), AlreadyInstalled> {
     });
 
     let stack = Registry::default()
-        .with(vec![console_layer(opts), late_layers().boxed()])
+        .with(vec![
+            factory.map_or_else(|| console_layer(opts), |make| make(opts)),
+            late_layers().boxed(),
+        ])
         .with(NoiseFilter)
         .with(env_filter);
 
