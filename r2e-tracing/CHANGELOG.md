@@ -15,49 +15,45 @@ and uses the section as the GitHub release notes.
 ### Added
 
 - New crate, extracted from `r2e-core`: it owns the process-global `tracing`
-  subscriber. `LogFormat`, `SpanEvents` (moved as is) and the new plain
+  subscriber. No tokio, no `r2e-*` dependency; `tracing_subscriber` is
+  re-exported.
+- Options: `LogFormat`, `SpanEvents` (moved from `r2e-core` as is), the plain
   options struct `TracingOptions` (same knobs and builders as
-  `r2e_core::TracingConfig`, without the config binding); `try_install` (the
-  body of `r2e_core::try_init_tracing_with_config`), `installed()` (the options
-  the winning install used) and `AlreadyInstalled` (with `changes_output`).
-  `tracing_subscriber` is re-exported. No tokio, no `r2e-*`
-  dependency. `r2e-core` re-exports every item at its previous path.
-- Noise rules: `suppress(NoiseRule)` / `suppress_error(target, message)`
-  register a process-wide, append-only rule (exact level + target + message;
-  empty by default), `is_suppressed` queries it, and `NoiseFilter` — usable as
-  a global `Layer` or a per-layer `Filter` — drops the matched events. The
-  installed subscriber carries it above the console and late layers.
-- Late-layer slot: `contribute_layer(BoxedLayer)` adds a layer to the
-  installed subscriber after the fact (`Err(NotWired)` when no subscriber
-  hosts the slot); `late_layers()` / `LateLayers` puts the slot in a
-  hand-built stack. Contributed layers see spans and events from then on and
-  are reachable through `Dispatch::downcast_ref`; they cannot carry a
-  per-layer filter.
-- Console field enrichers: `add_enricher(Box<dyn FieldEnricher>)` appends
-  fields to every console line (` key=value` in text, string members in JSON),
-  with `EnrichContext` describing the event.
-
-- Flat JSON log lines: with `LogFormat::Json` and `JsonOptions::flatten`
-  (`TracingOptions.json`, new `#[non_exhaustive]` `JsonOptions` with
-  builders), the console layer writes one flat object per event — event
-  fields at the top level, the message under `JsonOptions::message_key`
-  (default `"message"`; the target when the event has none), the current span
-  as `span` and the span stack (root first) as `spans`, RFC 3339 `timestamp`,
-  `level`, `target`, optional `thread_id`/`thread_name`/`file`/`line`, and the
-  registered enrichers' fields. The formatter's keys win over colliding event
-  and enricher fields; `log`-bridged events are normalized and their `log.*`
-  fields dropped. The nested JSON shape is unchanged when `flatten` is off.
-- Console factory: `set_console_factory(ConsoleFactory)` (with
-  `ConsoleFactory = fn(&TracingOptions) -> BoxedLayer`) replaces the whole
-  console layer of the subscriber `try_install` builds; the late-layer slot,
-  `NoiseFilter` and the `EnvFilter` stay. Must be called before the install
-  (last call wins); afterwards it returns `Err(AlreadyInstalled)` and stores
-  nothing. The factory owns the console line — enrichers are not applied to
-  it.
-
-### Changed
-
-- An invalid filter directive no longer panics `try_install`: the subscriber
-  is installed with `info` and the parse error is logged at ERROR through it.
-- With `ansi` unset, the console layer colours its output only when stdout is
-  a terminal.
+  `r2e_core::TracingConfig`, without the config binding) and the
+  `#[non_exhaustive]` `JsonOptions` (`flatten`, `message_key`,
+  `current_span`, `span_list`, with builders).
+- `install(&TracingOptions, Vec<BoxedLayer>)`: the one install, called by the
+  application builder. Builds `Registry` + the contributed layers + the
+  console layer + `EnvFilter` as one plain `Layered` stack — contributed
+  layers see every span and event, are reachable through
+  `Dispatch::downcast_ref`, and may carry per-layer filters. `RUST_LOG` wins
+  over `filter`; an invalid filter directive falls back to `info` and is
+  logged at ERROR instead of failing the install. `installed()` returns the
+  options the winning install used; `AlreadyInstalled` (with
+  `changes_output`) reports a lost install — `installed: None` when a foreign
+  subscriber won.
+- Boot log capture: `capture_boot_logs()` installs a forwarding global
+  subscriber that buffers INFO, WARN and ERROR events (at most 1024; one WARN
+  reports how many were dropped) until `install`, which replays them in order
+  through the real stack, rebuilds the callsite interest cache and forwards
+  everything from then on. Spans opened before the install are safe to use
+  and close after it. Dropping the `BootLogs` handle before any install (a
+  failed boot) writes the buffered lines to stderr as
+  `LEVEL target: message k=v`. `discard_boot_logs()` drops the buffer and
+  disables every callsite (`tracing.enabled: false`). The `log` crate is
+  bridged into `tracing`.
+- `Suppress`: a layer dropping events with an exact level, target and message
+  (`Suppress::new`, `Suppress::error`); contributed like any layer, it gates
+  the whole stack through `event_enabled`.
+- `LogFields`: a span extension (insertion-ordered key/value pairs) that the
+  console layer appends to every line emitted in the span's scope, the
+  closest span winning a key — ` key=value` in text, a string member in JSON,
+  a top-level key in flat JSON.
+- Console layer: text, nested JSON, and flat JSON lines (`LogFormat::Json` +
+  `JsonOptions::flatten`) — event fields at the top level, the message under
+  `JsonOptions::message_key` (the target when the event has none), the current
+  span as `span` and the span stack (root first) as `spans`, RFC 3339
+  `timestamp`, `level`, `target`, optional `thread_id`/`thread_name`/`file`/
+  `line`; the formatter's keys win over colliding event and `LogFields` keys,
+  and `log`-bridged events are normalized (`log.*` fields dropped). With
+  `ansi` unset, colours are on only when stdout is a terminal.

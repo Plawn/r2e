@@ -94,7 +94,7 @@ impl JsonOptions {
     }
 }
 
-/// The knobs of the subscriber [`try_install`](crate::try_install) builds.
+/// The knobs of the subscriber [`install`](crate::install) builds.
 ///
 /// All fields except `filter` and `json` are `Option` — `None` means "use the subscriber
 /// default". `filter` is an `EnvFilter` directive string; the `RUST_LOG`
@@ -128,6 +128,9 @@ pub struct TracingOptions {
     pub span_events: Option<SpanEvents>,
     /// Shape of the JSON lines (flat or nested); ignored by `pretty`.
     pub json: JsonOptions,
+    /// Add R2E's console layer to the stack. Default `true`; `false` leaves
+    /// the output to the contributed layers (a custom console).
+    pub console: bool,
 }
 
 impl Default for TracingOptions {
@@ -151,6 +154,7 @@ impl TracingOptions {
             ansi: None,
             span_events: None,
             json: JsonOptions::default(),
+            console: true,
         }
     }
 
@@ -206,6 +210,11 @@ impl TracingOptions {
 
     pub fn with_json(mut self, json: JsonOptions) -> Self {
         self.json = json;
+        self
+    }
+
+    pub fn with_console(mut self, console: bool) -> Self {
+        self.console = console;
         self
     }
 
