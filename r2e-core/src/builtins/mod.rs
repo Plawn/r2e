@@ -82,7 +82,7 @@ impl Plugin for Cors {
 /// |---|---|
 /// | `r2e::launch` / `#[r2e::main]` / `app_main!` / `#[r2e::test]` | the entry point, from the app's own `tracing:` section — **do not** add this plugin |
 /// | a hand-written `main` / an embedded `AppBuilder` | `.plugin(Tracing)` (the `tracing:` section of `application.yaml`) or [`Tracing::configured`] / [`Tracing::from_config`] (an explicit configuration) |
-/// | `r2e_observability::Observability` | that plugin (fmt + `tracing-opentelemetry`) |
+/// | `r2e_observability::Observability` | still the entry point (or `.plugin(Tracing)`): `Observability` builds no subscriber, it contributes its `tracing-opentelemetry` layer and the `trace_id`/`span_id` fields to the one installed |
 ///
 /// # Who owns what
 ///
@@ -90,9 +90,10 @@ impl Plugin for Cors {
 /// |---|---|
 /// | `Tracing` / [`ConfiguredTracing`] | the subscriber: format, filter, ansi, span events |
 /// | [`HttpTrace`] | the per-request span, summary event, request id, exclusions |
-/// | `r2e_observability::Observability` | subscriber **+** OTLP export/propagation; installs the `HttpTrace` layer with an OpenTelemetry span shape |
+/// | `r2e_observability::Observability` | OTLP export/propagation, contributed to the subscriber above; installs the `HttpTrace` layer with an OpenTelemetry span shape |
 ///
-/// `Observability` supersedes `Tracing` — do not install both.
+/// `Observability` replaces `HttpTrace`, not `Tracing`: it contributes to the
+/// subscriber instead of owning it (see `docs/migration/observability-tracing.md`).
 ///
 /// [`init_tracing()`]: crate::init_tracing
 ///

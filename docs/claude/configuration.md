@@ -873,7 +873,7 @@ nested reporting).
 
 ### Built-in ConfigProperties types
 
-`TracingConfig` (in `r2e-core::tracing_config`) — configurable tracing subscriber options (filter, format, ansi, thread IDs, etc.). Used by the `ConfiguredTracing` plugin and `ObservabilityConfig`. Read from YAML under a prefix (e.g., `tracing.*` or `observability.tracing.*`).
+`TracingConfig` (in `r2e-core::tracing_config`) — configurable tracing subscriber options (filter, format, ansi, thread IDs, etc.). Used by the `ConfiguredTracing` plugin and the entry point's install (`ensure_tracing_installed`). Read from YAML under a prefix (normally `tracing.*`). `ObservabilityConfig` no longer embeds it: the `Observability` plugin contributes to the one subscriber configured by `tracing.*`.
 
 Related enums: `LogFormat` (`pretty` / `json`), `SpanEvents` (`none` / `new` / `close` / `active` / `full`). Both derive `FromConfigValue` via serde.
 

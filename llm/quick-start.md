@@ -16,7 +16,7 @@ requires: runtime-facade
 - Both phases are fallible: return `BootError` with `?`, never call `std::process::exit` in `setup`/`build`.
 - `load_config` is the sole config registration point that reads disk (`provide_config` is the in-memory counterpart).
 - End `build` with `.try_build_state().await?` then `.register_controller::<C>()`, and return that value — do not serve there.
-- `app_main!` installs the subscriber from the app's own `tracing:` section after `setup`; use `app_main!(MyApp, tracing = false)` when a plugin must own the subscriber instead.
+- `app_main!` installs the subscriber from the app's own `tracing:` section after `setup`; use `app_main!(MyApp, tracing = false)` only when the app installs a subscriber of its own (`Observability` does not need it: it contributes to R2E's).
 - Never write a state struct and never put `state = ...` on `#[controller]`: the state is inferred from `.provide()` / `.register()`.
 - Test the real app with `#[r2e::test(app = my_app::MyApp)]` taking a `TestApp`.
 
@@ -134,8 +134,9 @@ llm/observability.md), which is what an app installs in `build`.
 Because that happens before `App::build`, a `Tracing::from_config(&cfg)` /
 `ConfiguredTracing` plugin declared in `build` **loses the race** — silently when
 it reads the same section (same subscriber either way), with a warning naming the
-ignored format/filter when it would have logged differently. To let the plugin
-own the subscriber, opt the entry point out: `app_main!(MyApp, tracing = false)`
+ignored format/filter when it would have logged differently. To install a
+subscriber of your own, opt the entry point out (plugins that only contribute a
+layer or log fields, like `Observability`, need no opt-out): `app_main!(MyApp, tracing = false)`
 — same spelling as `#[r2e::main(tracing = false)]` — installs nothing at all.
 `launch!(MyApp, tracing = false)` is the same knob for a custom `main`.
 

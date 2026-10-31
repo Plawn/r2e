@@ -90,3 +90,33 @@ fn from_env_falls_back_to_standard_tracing_without_an_endpoint() {
         "fallback-service"
     );
 }
+
+#[test]
+fn from_r2e_config_keeps_the_enabled_switch_and_flags_removed_subscriber_keys() {
+    let config = r2e_core::R2eConfig::from_yaml_str(
+        "observability:\n  sampling-ratio: 0.5\n  tracing:\n    enabled: false\n    format: json\n    filter: debug\n",
+    )
+    .unwrap();
+
+    let cfg = ObservabilityConfig::from_r2e_config(&config, "svc");
+    assert!(!cfg.tracing_enabled);
+    assert_eq!(cfg.sampling_ratio, 0.5);
+    assert_eq!(
+        cfg.leftover_tracing_keys(),
+        [
+            "observability.tracing.filter",
+            "observability.tracing.format"
+        ]
+    );
+}
+
+#[test]
+fn from_r2e_config_reports_nothing_without_removed_keys() {
+    let config =
+        r2e_core::R2eConfig::from_yaml_str("observability:\n  tracing:\n    enabled: true\n")
+            .unwrap();
+
+    let cfg = ObservabilityConfig::from_r2e_config(&config, "svc");
+    assert!(cfg.tracing_enabled);
+    assert!(cfg.leftover_tracing_keys().is_empty());
+}

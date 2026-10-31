@@ -1,3 +1,5 @@
+#![allow(deprecated)] // `TraceIdFormat` is deprecated; kept tested until removed.
+
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
