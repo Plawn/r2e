@@ -766,7 +766,7 @@ factory (`set_console_factory`, PR #122). Replacements: `Suppress` (a layer;
 `UpstreamNoise` / noise-registry design), `LogFields` (span extension;
 `Observability` writes `trace_id`/`span_id` with `OtelIds`), `tracing.console:
 false` + a contributed console layer. Release: r2e-core 0.9.0 (breaking) +
-r2e-macros 0.8.0 (syntax break, propagates) batched with r2e 0.10.0 /
+r2e-macros 0.9.0 (syntax break, propagates) batched with r2e 0.10.0 /
 r2e-observability 0.9.0; new crate r2e-tracing 0.1.0. Record:
 `docs/claude/subsystems.md` § Tracing.
 
