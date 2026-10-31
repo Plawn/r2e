@@ -216,8 +216,6 @@ use r2e::r2e_grpc::{GrpcServer, AppBuilderGrpcExt};
 
 #[r2e::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    r2e::init_tracing();
-
     let prefix = GreetingPrefix("Hello".to_string());
 
     let app = AppBuilder::new()

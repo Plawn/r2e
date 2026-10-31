@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `TestApp::boot` / `try_boot*` capture boot logs (`r2e_core::capture_boot_logs`)
+  around `App::setup` and the build, and the subscriber is installed by
+  `build_state()` from the app's **test** profile — `#[r2e::test]` no longer
+  installs one (see `docs/migration/tracing-single-path.md`).
+
 ## [0.8.0] - 2026-10-25
 
 ### Breaking

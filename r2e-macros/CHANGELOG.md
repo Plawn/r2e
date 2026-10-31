@@ -17,6 +17,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- `#[r2e::main]`, `#[r2e::test]` and `#[r2e::test_suite]` no longer call
+  `init_tracing_from_config()`, and their `tracing = …` argument is removed:
+  writing it is a compile error naming the migration page. The subscriber is
+  installed by `build_state()` from the `tracing:` section
+  (`tracing.enabled: false` to install nothing). This is a change of the
+  macro **syntax**, so it propagates as usual. Migration:
+  `docs/migration/tracing-single-path.md`.
 - `#[mcp_routes]` codegen targets the state-generic `McpService<S, W>` of
   `r2e-mcp` (`routes(state, ctx)`): it emits one `FromRequestPartsVia<S, M>`
   bound per member with an `#[inject(identity)]` parameter, folds the

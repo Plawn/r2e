@@ -394,6 +394,47 @@ collecting tasks it never starts. If you want something in `setup()` to be
 conditional, it does not belong in `setup()`: put it in `build`, where
 `ctx.enabled()` is available and the whole effect set is dropped for you.
 
+#### `ctx.tracing_layer(layer)` — contributing to the log subscriber
+
+`PluginSetupContext::tracing_layer<L: Layer<Registry> + Send + Sync + 'static>(&mut self, layer: L)`
+queues a `tracing_subscriber` layer for the process-global subscriber, the
+plugin-side twin of `AppBuilder::tracing_layer` (same verb; `add_layer` is
+tower's and does not exist on the setup context). It lives on the **setup**
+context because the subscriber is installed by `build_state()` as its first
+step, before any plugin's `build` runs: the layers queued by every `setup()`
+(after the builder's own `.tracing_layer(..)` calls, in registration order) are
+handed to `r2e_tracing::install` once.
+
+- **Once-at-install.** A layer only takes effect if *this* `build_state()` is
+  the one that installs. When `tracing.enabled: false`, when a foreign
+  subscriber was installed first (one WARN naming the count), or when R2E
+  already installed in this process (second `TestApp::boot`, dev-reload cycle
+  2+; one DEBUG line), the contributed layers are dropped. There is no
+  late-attach path (the late-layer slot was removed).
+- **Unconditional**, like everything in `setup()`: it is not gated on
+  `<prefix>.enabled` (the subscriber exists before that flag is read). A
+  plugin that should contribute only in some configurations checks its own
+  settings in `setup` (`Observability` contributes only when its
+  `observability.tracing.enabled` + OTLP export are on).
+
+```rust,ignore
+use r2e::Suppress;
+
+impl Plugin for McpServer {
+    // ...
+    fn setup(&mut self, ctx: &mut PluginSetupContext) {
+        // Drop a known-benign upstream ERROR (exact level + target + message).
+        for (target, message) in RMCP_NOISE {
+            ctx.tracing_layer(Suppress::error(*target, *message));
+        }
+    }
+}
+```
+
+`Observability` contributes `tracing_setup::otel_layer()` then
+`tracing_setup::OtelIds` (writes `trace_id`/`span_id` into `LogFields`).
+Install details: `subsystems.md` § Tracing.
+
 ### Enabled gate: `<prefix>.enabled`
 
 `.when()` cannot wrap `.plugin()` (type-level provision list is fixed), so

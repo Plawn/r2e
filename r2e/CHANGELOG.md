@@ -15,6 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- One tracing path: the subscriber is installed by `build_state()` from the
+  `tracing:` section plus the layers contributed with `.tracing_layer(..)`
+  (r2e-core). `app_main!(App, tracing = …)` and `launch!(App, tracing = …)`
+  are compile errors naming the migration page; `launch!` captures the boot
+  logs before `App::setup` (under `dev-reload`, once, outside the patch
+  loop). The `r2e-macros` `tracing = …` argument removal and every `r2e-core`
+  tracing removal reach apps through this facade. Migration:
+  `docs/migration/tracing-single-path.md`.
+
 ## [0.9.0] - 2026-10-25
 
 ### Changed
