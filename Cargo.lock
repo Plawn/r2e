@@ -5863,7 +5863,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -6371,7 +6371,7 @@ dependencies = [
 
 [[package]]
 name = "r2e-tracing"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "log",
  "serde",

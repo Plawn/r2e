@@ -78,7 +78,7 @@ categories = ["web-programming::http-server", "asynchronous"]
 # Internal crates
 r2e = { path = "r2e", version = "0.10.0" }
 r2e-rt = { path = "r2e-rt", version = "0.6.1" }
-r2e-core = { path = "r2e-core", version = "0.9.0" }
+r2e-core = { path = "r2e-core", version = "0.9.1" }
 r2e-macros = { path = "r2e-macros", version = "0.9.0" }
 r2e-security = { path = "r2e-security", version = "0.9.0" }
 r2e-data-sqlx = { path = "r2e-data/backends/sqlx", version = "0.9.0" }
@@ -107,7 +107,7 @@ r2e-devtools = { path = "r2e-devtools", version = "0.6.0" }
 r2e-static = { path = "r2e-static", version = "0.9.0" }
 r2e-tenant = { path = "r2e-tenant", version = "0.9.0" }
 r2e-http = { path = "r2e-http", version = "0.7.0" }
-r2e-tracing = { path = "r2e-tracing", version = "0.1.0" }
+r2e-tracing = { path = "r2e-tracing", version = "0.1.1" }
 r2e-test = { path = "r2e-test", version = "0.9.0" }
 r2e-devservices = { path = "r2e-devservices", version = "0.6.0" }
 
