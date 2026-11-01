@@ -15,6 +15,26 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `build_state()` logs **one INFO line** when it installs the tracing
+  subscriber (#1192), with the effective options and their provenance:
+  `r2e: tracing installed: format=pretty filter="info" ansi=auto:off
+  span_events=close source=defaults`. `source=config` when the loaded
+  configuration has any `tracing.*` key (YAML or `R2E_TRACING_*`); the filter
+  is marked `(RUST_LOG)` when `RUST_LOG` overrides `tracing.filter`;
+  `ansi=auto:on|off` is the unset default resolved against stdout;
+  `console=off` and `layers=N` appear when relevant. Nothing is logged when
+  the install does not happen (`tracing.enabled: false`, a foreign
+  subscriber, a second boot).
+- `build_state()` logs **one WARN** when it installs the subscriber while no
+  boot-log capture was in place (#1192) — a hand-written `main` that calls
+  `build_state()` without `r2e::launch`, whose earlier logs went nowhere:
+  `r2e: no boot-log capture was active: anything logged before build_state()
+  was dropped. Use r2e::launch (env reads and upstream waits belong in
+  App::setup), or call `let _boot = r2e::capture_boot_logs();` first in main`.
+  `launch` / `app_main!` / `TestApp::boot` capture, so they never see it.
+
 ## [0.9.0] - 2026-10-31
 
 ### Breaking

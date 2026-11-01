@@ -1,6 +1,9 @@
 //! `build_state()` installs the process-global `tracing` subscriber, first
 //! thing, from the `tracing:` section plus every layer contributed with
-//! `.tracing_layer(..)` — on the builder and from a plugin's `setup`.
+//! `.tracing_layer(..)` — on the builder and from a plugin's `setup`. With a
+//! boot-log capture in place (what `launch` / `TestApp::boot` do), what was
+//! logged before is replayed, the install is summarised in one INFO line
+//! (`source=config`), and no "no boot-log capture" WARN is emitted.
 //!
 //! Its **own target**: the global subscriber is a one-shot process global, so
 //! who wins the install is a property of the whole binary. One test drives the
@@ -10,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use r2e_core::config::R2eConfig;
 use r2e_core::plugin::{Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext};
-use r2e_core::{installed, AppBuilder, LogFields, Suppress};
+use r2e_core::{capture_boot_logs, installed, AppBuilder, LogFields, Suppress};
 use tracing::span::{Attributes, Id};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::Context;
@@ -100,12 +103,19 @@ impl Plugin for NoisyLib {
 
 #[r2e_core::test]
 async fn build_state_installs_the_section_and_the_contributed_layers() {
+    // SAFETY: the only test of the binary, before anything reads the
+    // environment. `RUST_LOG` would override the filter asserted below.
+    unsafe { std::env::remove_var("RUST_LOG") };
     assert_eq!(installed(), None, "nothing installed before build_state");
+    let _boot = capture_boot_logs();
+    tracing::warn!(target: "noisy_lib", "before build_state");
 
     let seen = Capture::default();
-    let config =
-        R2eConfig::from_yaml_str("tracing:\n  console: false\n  filter: \"warn,noisy_lib=info\"\n")
-            .unwrap();
+    let config = R2eConfig::from_yaml_str(
+        "tracing:\n  console: false\n  ansi: false\n  span-events: none\n  \
+         filter: \"warn,noisy_lib=info,r2e_core::runtime::tracing=info\"\n",
+    )
+    .unwrap();
     let _state = AppBuilder::new()
         .override_config(config)
         .load_config::<()>()
@@ -119,7 +129,22 @@ async fn build_state_installs_the_section_and_the_contributed_layers() {
         !options.console,
         "`tracing.console: false` reached the install"
     );
-    assert_eq!(options.filter, "warn,noisy_lib=info");
+    assert_eq!(
+        options.filter,
+        "warn,noisy_lib=info,r2e_core::runtime::tracing=info"
+    );
+
+    // The buffered event is replayed first, then the install summary; no
+    // "no boot-log capture" WARN.
+    let boot = seen.take();
+    assert_eq!(boot.len(), 2, "{boot:?}");
+    assert_eq!(boot[0], "WARN noisy_lib before build_state");
+    assert_eq!(
+        boot[1],
+        "INFO r2e_core::runtime::tracing r2e: tracing installed: format=pretty \
+         filter=\"warn,noisy_lib=info,r2e_core::runtime::tracing=info\" ansi=off \
+         span_events=none console=off layers=3 source=config"
+    );
 
     // The plugin's `Suppress` vetoes exactly its (level, target, message);
     // its siblings pass, and the global filter applies to contributed layers.
