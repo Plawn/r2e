@@ -122,7 +122,7 @@ r2e::app_main!(MyApp);                          // include app.rs + generate mai
 the app's own `tracing:` section — so `format: json` in `application.yaml`
 applies from the first log line, with no plugin and no opt-in; an unreadable
 section falls back to the built-in defaults and logs one ERROR. What `setup`
-logs before that is buffered by `app_main!` (INFO and above, 1024 events) and
+logs before that is buffered by `app_main!` (what `RUST_LOG` enables, else INFO and above; 1024 events) and
 replayed through the real subscriber once it is installed.
 
 The subscriber is only *where logs go*: per-request spans and the
