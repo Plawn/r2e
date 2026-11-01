@@ -17,6 +17,10 @@ use tracing::Level;
 
 #[test]
 fn first_install_wins_and_later_installs_learn_they_lost() {
+    // SAFETY: the other test of this binary never touches the environment,
+    // and nothing has read it yet. `RUST_LOG` takes priority over the
+    // filter installed below; this scenario asserts what that filter keeps.
+    unsafe { std::env::remove_var("RUST_LOG") };
     assert_eq!(installed(), None, "nothing installed yet");
 
     let wanted = TracingOptions::new("warn,install_test=debug")
