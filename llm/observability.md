@@ -1,7 +1,7 @@
 ---
 topic: observability
 features: core, observability
-tokens: ~4000
+tokens: ~4200
 requires: plugins
 ---
 
@@ -295,11 +295,25 @@ it wants to its own `Registry` — `Suppress` included. A foreign subscriber
 installed before `build_state()` without `enabled: false` wins too, and the
 contributed layers are dropped with one WARN.
 
-Boot logs: `r2e::launch` / `app_main!` / `TestApp::boot` buffer every INFO+
-event emitted before the install (`App::setup`, config loading) and replay it
-through the real subscriber once installed — replayed lines are timestamped
-at replay time and carry no span; DEBUG/TRACE before the install are lost; the
-buffer holds 1024 events (the overflow is counted by one WARN).
+Boot logs: `r2e::launch` / `app_main!` / `TestApp::boot` buffer the events
+emitted before the install (`App::setup`, config loading, plugin `setup`) and
+replay them through the real subscriber once installed. What is buffered
+follows `RUST_LOG` (full directive syntax; unset or invalid: INFO and above);
+`tracing.filter` still applies at the replay. Replayed lines are timestamped
+at replay time and carry no span — a slow upstream wait belongs after
+`build_state()` or in an `#[on_start]` hook, where it logs live. The buffer
+holds 1024 events (the overflow is counted by one WARN).
+
+A hand-written `main` (`#[r2e::main]` + `AppBuilder` by hand, no `launch`)
+has no buffer: what it logs before `build_state()` is dropped, and
+`build_state()` logs one WARN saying so. Move env reads and upstream waits
+into `App::setup` and boot through `app_main!` / `r2e::launch`, or make
+`let _boot = r2e::capture_boot_logs();` the first statement of `main`. Every
+install logs one INFO line with the effective options and their source
+(`r2e: tracing installed: format=pretty filter="info" ansi=auto:off
+span_events=close source=defaults`; `source=config` once any `tracing.*` key
+is set, `(RUST_LOG)` after the filter when `RUST_LOG` overrides it). Unset
+`tracing.ansi` means colours only on a terminal (r2e 0.9 and earlier: always).
 
 ### OpenTelemetry
 

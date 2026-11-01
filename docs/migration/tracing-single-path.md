@@ -47,6 +47,25 @@ Re-exported at the `r2e` / `r2e_core` root: `Suppress`, `LogFields`,
 `TracingConfig`, `JsonLogConfig`, `capture_boot_logs`, `BootLogs`,
 `installed`, `AlreadyInstalled`, and the crate itself as `r2e::r2e_tracing`.
 
+### Default values that changed
+
+The keys kept their names, and most defaults did not move. Compared with the
+subscriber r2e-core 0.7/0.8 installed (r2e 0.8/0.9: `init_tracing*`, and
+`r2e-observability`'s `init_tracing` when it owned the subscriber):
+
+| Setting | r2e-core 0.7/0.8 (r2e 0.8/0.9) | r2e-core 0.9 (r2e 0.10) |
+|---|---|---|
+| `tracing.ansi` unset | colours always on (`true`) | on only when stdout is a terminal — piped / collected logs carry no escape codes; set `ansi: true` to force them |
+| invalid `tracing.filter` (with `RUST_LOG` unset) | the entry point's install **panicked** (`Observability`'s subscriber skipped the invalid directives silently) | falls back to `info`, one ERROR names the directive |
+| invalid `tracing:` section (a wrong type, an unknown enum value) | built-in defaults + one WARN | built-in defaults + one ERROR |
+
+Unchanged: `filter: info`, `format: pretty`, `span-events: close`,
+`target: true`, `level: true`, `thread-ids` / `thread-names` / `file` /
+`line-number: false`, nested JSON lines, and `RUST_LOG` winning over
+`tracing.filter`. The install now logs one INFO line naming the effective
+values and whether they came from the `tracing:` section or these defaults
+(see [Boot logs](#boot-logs)).
+
 ## Step by step
 
 1. **Entry point.** Remove every `tracing = …` argument (`app_main!`,
@@ -164,18 +183,103 @@ already logged. `r2e::launch` / `app_main!` / `TestApp::boot` therefore call
 `capture_boot_logs()` first: a forwarder buffers what is logged before the
 install and replays it through the real subscriber once installed. Limits:
 
-- **INFO and above only**: DEBUG / TRACE emitted before the install are lost.
-- **No spans**: a replayed event has no parent span (no `LogFields` either).
-- **Replay timestamps**: replayed lines are timestamped at replay time (the
-  gap is `setup` + plugin `setup`, typically milliseconds).
+- **What is buffered follows `RUST_LOG`**, read when the capture starts (full
+  directive syntax: `RUST_LOG=info,my_app=debug` keeps `my_app`'s DEBUG lines
+  without hyper's). Unset or invalid: INFO and above. `tracing.filter` is not
+  loaded yet at that point, so it only applies at the replay — every replayed
+  line still goes through the installed filter, which never prints a line it
+  rejects. Span-scoped directives (`[span]=debug`) buffer nothing extra.
+- **No spans**: a replayed event has no parent span (no `LogFields` either)
+  and keeps at most 32 fields.
+- **Replay timestamps**: replayed lines are timestamped at replay time, not
+  emission time. The gap is `App::setup` + plugin `setup`, typically
+  milliseconds — but a boot that waits on an upstream with multi-second
+  retries in `setup` shows every line of that wait stamped at the install.
+  This is an accepted limitation for now. Waits placed after the install —
+  after `build_state()` (bean constructors, producers and `#[post_construct]`
+  run there, after it installed) or in an `#[on_start]` hook — log live with
+  their real timestamps.
 - **Bounded at 1024 events**; the overflow is counted and reported by one WARN
   after the replay.
 - If the boot fails **before** the install (config unreadable, …), dropping
   the `BootLogs` handle writes the buffered lines to stderr, ahead of the boot
   error report.
 - A hand-written `main` that calls `build_state()` without `launch` gets no
-  buffer: what it logs before `build_state()` goes nowhere. Call
-  `let _boot = r2e::capture_boot_logs();` first to keep it.
+  buffer: what it logs before `build_state()` goes nowhere, and
+  `build_state()` says so with one WARN (below).
+
+Every install is summarised by **one INFO line** naming the effective options
+and where they came from — `source=config` when the loaded configuration has
+any `tracing.*` key (YAML or `R2E_TRACING_*`), `source=defaults` otherwise;
+the filter is marked `(RUST_LOG)` when `RUST_LOG` overrides `tracing.filter`:
+
+```text
+INFO r2e_core::runtime::tracing: r2e: tracing installed: format=pretty filter="info" ansi=auto:off span_events=close source=defaults
+```
+
+### Hand-written `main` / proxy that logs before building the app
+
+`#[r2e::main]` only builds the runtime. A `main` that logs, waits on an
+upstream, then builds the app by hand has no boot-log capture, so everything
+before `build_state()` is dropped:
+
+```rust,ignore
+#[r2e::main]
+async fn main() {
+    tracing::warn!("UPSTREAM_URL unset, using the default");  // dropped
+    wait_upstream().await;                                    // its retry logs: dropped
+    tracing::info!("Starting");                               // dropped
+    AppBuilder::new()
+        .load_config::<()>()
+        .build_state()   // installs here; logs one WARN:
+        .await           // "r2e: no boot-log capture was active: anything logged
+        // ...           //  before build_state() was dropped. …"
+        .serve_auto()
+        .await
+        .unwrap();
+}
+```
+
+**Recommended:** move the env reads and upstream waits to `App::setup` and
+let `launch` drive the boot — it captures first, so they are replayed through
+the real subscriber:
+
+```rust,ignore
+pub struct Proxy;
+
+impl App for Proxy {
+    type Env = Upstream;
+
+    async fn setup() -> Result<Upstream, BootError> {
+        tracing::warn!("UPSTREAM_URL unset, using the default");  // buffered, replayed
+        let upstream = wait_upstream().await;                     // buffered, replayed
+        tracing::info!("Starting");
+        Ok(upstream)
+    }
+
+    async fn build(b: AppBuilder, upstream: Upstream) -> Result<impl BootableApp, BootError> {
+        Ok(b.provide(upstream).load_config::<()>().try_build_state().await?)
+    }
+}
+
+r2e::app_main!(Proxy);   // generates main: capture, setup, build, serve
+```
+
+**Minimal alternative:** keep the hand-written `main` and capture first —
+one line, as the first statement:
+
+```rust,ignore
+#[r2e::main]
+async fn main() {
+    let _boot = r2e::capture_boot_logs();   // buffer until build_state() installs
+    tracing::warn!("UPSTREAM_URL unset, using the default");  // replayed
+    // ... unchanged
+}
+```
+
+Keep `_boot` alive until `build_state()` returns: if the boot fails before
+the install, dropping it writes the buffered lines to stderr ahead of the
+error.
 
 ## Tests
 

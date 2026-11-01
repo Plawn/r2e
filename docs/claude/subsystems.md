@@ -73,7 +73,7 @@ There is no other install path: no plugin, no entry-point macro argument, no
 
 | | Owns | Surface |
 |---|---|---|
-| `r2e-tracing` (bottom of the graph, next to `r2e-rt`; deps: `tracing`, `tracing-core`, `tracing-subscriber`, `tracing-log` only; **not** a dependency of `r2e-http`) | the stack, the one-shot install, the boot-log buffer | `TracingOptions` (`#[non_exhaustive]` + `with_*`), `LogFormat`, `SpanEvents`, `JsonOptions`, `BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>`, `install(&TracingOptions, Vec<BoxedLayer>) -> Result<(), AlreadyInstalled>`, `installed() -> Option<&'static TracingOptions>`, `AlreadyInstalled { installed: Option<TracingOptions> }` (`None` = a foreign subscriber won), `capture_boot_logs() -> BootLogs`, `discard_boot_logs()`, `Suppress`, `LogFields`, `pub use tracing_subscriber` |
+| `r2e-tracing` (bottom of the graph, next to `r2e-rt`; deps: `tracing`, `tracing-core`, `tracing-subscriber`, `tracing-log` only; **not** a dependency of `r2e-http`) | the stack, the one-shot install, the boot-log buffer | `TracingOptions` (`#[non_exhaustive]` + `with_*`), `LogFormat`, `SpanEvents`, `JsonOptions`, `BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>`, `install(&TracingOptions, Vec<BoxedLayer>) -> Result<(), AlreadyInstalled>`, `installed() -> Option<&'static TracingOptions>`, `AlreadyInstalled { installed: Option<TracingOptions> }` (`None` = a foreign subscriber won), `capture_boot_logs() -> BootLogs`, `boot_logs_captured() -> bool`, `discard_boot_logs()`, `Suppress`, `LogFields`, `pub use tracing_subscriber` |
 | `r2e-core` | binding `tracing.*`, collecting layers, calling `install` | `TracingConfig` (+ nested `JsonLogConfig`), `From<&TracingConfig> for TracingOptions`, `AppBuilder::tracing_layer`, `PluginSetupContext::tracing_layer`, `runtime/tracing.rs::install_tracing` (crate-private), the entry points' `capture_boot_logs()` calls; re-exports `r2e_tracing` and `{capture_boot_logs, installed, AlreadyInstalled, BootLogs, BoxedLayer, JsonOptions, LogFields, Suppress, TracingOptions}` + `{JsonLogConfig, LogFormat, SpanEvents, TracingConfig}` at the root (the `r2e` facade re-exports the same) |
 | integrations | their own layers, contributed in `Plugin::setup` | `Observability` → `otel_layer()` + `OtelIds`; `McpServer` → one `Suppress::error` per `RMCP_NOISE` entry |
 
@@ -182,7 +182,7 @@ fallible, so a later boot error is logged through the real subscriber:
 and `TestApp::boot*` (`r2e-test/src/boot.rs`) all run:
 
 ```text
-let boot = capture_boot_logs();   // forwarder buffers INFO+ events
+let boot = capture_boot_logs();   // forwarder buffers what RUST_LOG enables (else INFO+)
 A::setup().await?                 // buffered
 A::build(AppBuilder::new(), env)  // plugin setup()s contribute layers (buffered);
                                   // build_state() installs + replays the buffer
@@ -193,25 +193,57 @@ serve_auto()
 ```
 
 `capture_boot_logs()` installs a forwarding subscriber as the global default
-(and the `log` → `tracing` bridge). While buffering it renders INFO/WARN/ERROR
-events to strings (bound 1024, overflow counted); spans get ids from a reserved
+(and the `log` → `tracing` bridge). While buffering it renders to strings the
+events its **boot filter** enables (bound 1024, overflow counted): `RUST_LOG`
+read once at capture — the only filter source available then, and the one
+`install` gives priority to — as an `EnvFilter` evaluated over a bare
+`Registry` (`Layered<EnvFilter, Registry>::enabled`, since
+`EnvFilter::enabled` needs a layer `Context`), so the full directive set is
+honoured (`info,my_app=debug` does not buffer hyper's DEBUG); unset/invalid
+`RUST_LOG` → INFO. Only static directives can match (the boot filter sees no
+span), which loses nothing: a replayed event has no parent span, so a
+span-scoped directive would not match it at replay either. The forwarder's
+`max_level_hint` is the boot filter's hint, callsites stay `sometimes()`;
+spans get ids from a reserved
 range and are swallowed after the install (so an `#[instrument]`ed
 `App::build` straddling the install does not panic the `Registry`). After
 `install`, every call forwards 1:1 to the real stack and the callsite interest
-cache is rebuilt. If the boot dies **before** the install, dropping the
+cache is rebuilt. The replay calls the target's `enabled` + `event_enabled`
+before each `event` (it bypasses the interest cache, so this is what applies
+the installed filter / `Suppress`): a line the boot filter kept but
+`tracing.filter` rejects is not printed. If the boot dies **before** the install, dropping the
 `BootLogs` handle writes the buffered lines to stderr in raw
 `LEVEL target: message k=v` form, ahead of the boot error report. A second
 `capture_boot_logs()` in the same process (tests, dev-reload cycle 2+) returns
 an inert handle; a pre-existing foreign subscriber also makes it inert.
 `install` captures itself when nobody did, so a hand-written `main` calling
 `build_state()` works — but logs emitted before it are lost unless it calls
-`let _boot = r2e::capture_boot_logs();` first.
+`let _boot = r2e::capture_boot_logs();` first. `install_tracing` reads
+`r2e_tracing::boot_logs_captured()` (forwarder ours, no target yet, not
+discarded) **before** calling `install`; when the install succeeds without a
+capture it logs one WARN (`r2e: no boot-log capture was active: anything
+logged before build_state() was dropped. …`, naming `r2e::launch` /
+`App::setup` / `capture_boot_logs()` and the migration page). Never on the
+`launch` / `TestApp::boot` path, with a foreign subscriber, under
+`tracing.enabled: false`, or on a second install (dev-reload cycle 2+).
+Every successful install also logs one INFO summary (`install_summary`):
+`r2e: tracing installed: format=… filter=… ansi=… span_events=… [console=off]
+[layers=N] source=config|defaults` — `config` iff `R2eConfig::has_prefix("tracing")`
+and the section bound, filter marked `(RUST_LOG)` when that overrides it,
+`ansi=auto:on|off` resolved against stdout. Both from target
+`r2e_core::runtime::tracing`; tests: `r2e-core/tests/tracing_install/`
+(capture + `source=config`) and `tracing_no_capture/` (WARN +
+`source=defaults`).
 
-**Limits:** replayed events are timestamped at replay time (the gap is `setup`
-+ plugin `setup`, milliseconds); only events INFO+ are buffered — DEBUG/TRACE
-before the install are lost, spans opened before the install are not replayed
-(a replayed event has no parent span, hence no `LogFields`); works from any
-thread. Rejected alternatives (do not re-propose): `tracing_subscriber::reload`,
+**Limits (accepted, not fixed — #1192 point 3):** replayed events are
+timestamped at replay time, not emission time (the gap is `setup` + plugin
+`setup`, usually milliseconds, but seconds when `App::setup` or a plugin
+`setup` waits on an upstream with retries — every line of that wait is stamped
+at the install; waits after the install — bean constructors / producers /
+`#[post_construct]` inside `build_state()`, or an `#[on_start]` hook — log
+live); spans opened before the install are not replayed (a replayed event has
+no parent span, hence no `LogFields`); a replayed event keeps at most
+`MAX_FIELDS` = 32 fields; works from any thread. Rejected alternatives (do not re-propose): `tracing_subscriber::reload`,
 a thread-local `set_default` guard held across awaits.
 
 ### Who installs what
@@ -228,9 +260,9 @@ a thread-local `set_default` guard held across awaits.
 
 `LaunchOptions` has no field left (`#[non_exhaustive]`, `Default`).
 
-Tests: `r2e-tracing/tests/{boot,boot_bound,boot_disabled,boot_flush,boot_foreign,install,install_invalid_filter,format,options}/`
+Tests: `r2e-tracing/tests/{boot,boot_bound,boot_disabled,boot_flush,boot_foreign,boot_rust_log,boot_rust_log_directives,install,install_invalid_filter,format,options}/`
 (one binary each where process-global state is touched),
-`r2e-core/tests/tracing_install/`, `r2e-core/tests/runtime/tracing_config.rs`;
+`r2e-core/tests/tracing_install/`, `tracing_no_capture/`, `r2e-core/tests/runtime/tracing_config.rs`;
 the removed-API diagnostics are pinned in `r2e-compile-tests/cases/tracing/fail/`.
 
 **Observability (r2e-observability) is the canonical contributor:** it builds no

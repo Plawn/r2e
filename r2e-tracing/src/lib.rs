@@ -30,7 +30,7 @@ mod options;
 
 #[doc(hidden)]
 pub use boot::flush_boot_logs_to;
-pub use boot::{capture_boot_logs, discard_boot_logs, BootLogs};
+pub use boot::{boot_logs_captured, capture_boot_logs, discard_boot_logs, BootLogs};
 #[doc(hidden)]
 pub use console::console_layer_with_writer;
 pub use enrich::LogFields;

@@ -8,8 +8,8 @@
 mod support;
 
 use r2e_tracing::{
-    capture_boot_logs, discard_boot_logs, flush_boot_logs_to, install, installed, SpanEvents,
-    TracingOptions,
+    boot_logs_captured, capture_boot_logs, discard_boot_logs, flush_boot_logs_to, install,
+    installed, SpanEvents, TracingOptions,
 };
 use support::Capture;
 use tracing::Level;
@@ -20,6 +20,7 @@ fn discarded_boot_logs_are_gone_and_logging_is_off() {
     tracing::info!(target: "disabled_test", "buffered then discarded");
 
     discard_boot_logs();
+    assert!(!boot_logs_captured(), "a discard ends the capture");
     assert_eq!(installed(), None);
     assert!(!tracing::enabled!(Level::ERROR));
     tracing::error!(target: "disabled_test", "dropped while disabled");

@@ -13,18 +13,36 @@
 //!
 //! The forwarder has three states:
 //!
-//! - **Buffering** (initial): INFO, WARN and ERROR events are rendered to
-//!   strings and stored (at most [`BUFFER_CAP`]; the rest is counted and
-//!   reported by one WARN after the replay). Spans get ids from a reserved
-//!   range and are not stored.
+//! - **Buffering** (initial): the events the boot filter (below) enables are
+//!   rendered to strings and stored (at most [`BUFFER_CAP`]; the rest is
+//!   counted and reported by one WARN after the replay). Spans get ids from a
+//!   reserved range and are not stored.
 //! - **Forwarding** (after [`take_over`]): every `Subscriber` call goes 1:1 to
 //!   the real stack — one atomic load (the target's `OnceLock`) and a deref.
 //!   The buffer is replayed in order right after the switch, and the callsite
 //!   interest cache is rebuilt (interest and `LevelFilter::current()` were
-//!   computed against the buffering hints).
+//!   computed against the buffering hints). Each replayed event goes through
+//!   the real stack's `enabled` / `event_enabled` first, so the installed
+//!   filter (`RUST_LOG` or `tracing.filter`) and any
+//!   [`Suppress`](crate::Suppress) still decide what is printed.
 //! - **Disabled** ([`discard_boot_logs`], `tracing.enabled: false`): every
 //!   callsite is `never`, the buffer is dropped. A later `install` still
 //!   switches to Forwarding.
+//!
+//! # Boot filter
+//!
+//! What the buffer keeps is decided by `RUST_LOG`, read once when the
+//! forwarder is put in place: it is the only filter source available that
+//! early (`tracing.filter` is not loaded yet), and the one [`install`](crate::install)
+//! gives priority to — so with `RUST_LOG` set, the buffer is filtered by the
+//! same directives as the final subscriber. Unset or invalid, the buffer keeps INFO
+//! and above. The full directive set is honoured (`info,my_app=debug` buffers
+//! `my_app`'s DEBUG lines, not hyper's), by evaluating an `EnvFilter` over a
+//! bare `Registry`: only its static directives can match, since the boot
+//! filter never sees a span — span-scoped directives (`[boot]=debug`) buffer
+//! nothing beyond the static ones. That loses nothing the replay could have
+//! printed: a replayed event has no parent span, so such a directive would
+//! not match it there either.
 //!
 //! # Reserved span ids
 //!
@@ -43,12 +61,13 @@
 //!
 //! # Limits
 //!
-//! - Replayed events are timestamped at replay time (the gap is `setup` +
-//!   plugin setup, typically milliseconds). Primitive field values keep their
-//!   type; any other value is replayed as its `Debug` rendering, captured at
-//!   emission.
-//! - Events only, INFO and above: DEBUG/TRACE emitted before the install are
-//!   lost, and so are spans — a replayed event has no parent span.
+//! - Replayed events are timestamped at replay time, not emission time (the
+//!   gap is `setup` + plugin setup, typically milliseconds — but seconds when
+//!   the boot waits on an upstream with retries). Primitive field values keep
+//!   their type; any other value is replayed as its `Debug` rendering,
+//!   captured at emission.
+//! - Events only, filtered by the boot filter: spans are lost — a replayed
+//!   event has no parent span and no [`LogFields`](crate::LogFields).
 //! - A replayed event keeps at most [`MAX_FIELDS`] fields.
 
 use std::any::TypeId;
@@ -61,8 +80,10 @@ use tracing::field::{DisplayValue, Field, Value, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::span::{self, Attributes, Id, Record};
 use tracing::subscriber::Interest;
-use tracing::{Dispatch, Event, Level, Metadata, Subscriber};
+use tracing::{Dispatch, Event, Metadata, Subscriber};
 use tracing_core::span::Current;
+use tracing_subscriber::layer::{Layered, SubscriberExt};
+use tracing_subscriber::{EnvFilter, Registry};
 
 /// The real stack; set once by [`take_over`]. Its presence **is** the
 /// Forwarding state — the hot path reads nothing else.
@@ -85,6 +106,9 @@ static NEXT_SPAN: AtomicU64 = AtomicU64::new(1);
 static RESERVED: Mutex<Option<HashMap<u64, usize>>> = Mutex::new(None);
 /// `RESERVED.len()`, readable without the lock.
 static LIVE_RESERVED: AtomicUsize = AtomicUsize::new(0);
+/// What the buffer keeps — see the module docs. Built on first use, which
+/// [`ensure_forwarder`] forces before the forwarder is registered.
+static BOOT_FILTER: OnceLock<BootFilter> = OnceLock::new();
 
 /// Start of the span-id range handed out while buffering.
 const RESERVED_BASE: u64 = 1 << 62;
@@ -201,6 +225,29 @@ impl Visit for Render {
     }
 }
 
+// ── boot filter ──────────────────────────────────────────────────────────────
+
+/// `RUST_LOG` (or `info`), evaluable on its own: `EnvFilter::enabled` needs a
+/// layer `Context`, which only a `Layered` stack can build, so the filter sits
+/// on a bare `Registry` that sees nothing but `enabled` calls.
+struct BootFilter {
+    stack: Layered<EnvFilter, Registry>,
+    hint: Option<LevelFilter>,
+}
+
+fn boot_filter() -> &'static BootFilter {
+    BOOT_FILTER.get_or_init(|| {
+        // Same source and precedence as `install`: a valid `RUST_LOG` is what
+        // the final subscriber will use; otherwise `tracing.filter` will, and
+        // it is not known yet.
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        BootFilter {
+            hint: filter.max_level_hint(),
+            stack: Registry::default().with(filter),
+        }
+    })
+}
+
 // ── reserved span ids ────────────────────────────────────────────────────────
 
 fn reserve() -> Id {
@@ -282,7 +329,7 @@ impl Subscriber for Forwarder {
         match TARGET.get() {
             Some(target) => target.max_level_hint(),
             None if DISABLED.load(Ordering::Relaxed) => Some(LevelFilter::OFF),
-            None => Some(LevelFilter::INFO),
+            None => boot_filter().hint,
         }
     }
 
@@ -290,7 +337,7 @@ impl Subscriber for Forwarder {
         match TARGET.get() {
             Some(target) => target.enabled(metadata),
             None if DISABLED.load(Ordering::Relaxed) => false,
-            None => *metadata.level() <= Level::INFO,
+            None => boot_filter().stack.enabled(metadata),
         }
     }
 
@@ -423,6 +470,9 @@ impl Subscriber for Forwarder {
 /// `true` when it is (or already was) ours.
 pub(crate) fn ensure_forwarder() -> bool {
     *OURS.get_or_init(|| {
+        // Registering the forwarder computes every callsite's interest and
+        // the max level from the boot filter: build it first.
+        boot_filter();
         let ours = tracing::subscriber::set_global_default(Forwarder).is_ok();
         if ours {
             // What `try_init` would do: route `log` records into `tracing`.
@@ -436,9 +486,15 @@ pub(crate) fn ensure_forwarder() -> bool {
 ///
 /// Installs the boot forwarder as the process-global `tracing` subscriber
 /// (and the `log` → `tracing` bridge). Until `install` hands it the real
-/// stack, INFO, WARN and ERROR events are buffered (at most 1024; one WARN
-/// reports how many were dropped); `install` replays them in order, then
-/// forwards everything.
+/// stack, events are buffered (at most 1024; one WARN reports how many were
+/// dropped); `install` replays them in order through the installed filter,
+/// then forwards everything.
+///
+/// What is buffered follows `RUST_LOG` as read by the first call (full
+/// directive syntax, static directives only — span-scoped ones never match a
+/// buffered event); with `RUST_LOG` unset or invalid, INFO and above.
+/// `tracing.filter` is not loaded yet at this point, so it only applies at the
+/// replay: a line it rejects is buffered but not printed.
 ///
 /// When a subscriber was installed by someone else first, nothing is
 /// captured: the returned handle is inert and `install` will report
@@ -449,6 +505,18 @@ pub fn capture_boot_logs() -> BootLogs {
     BootLogs {
         live: ensure_forwarder(),
     }
+}
+
+/// Whether boot logs are being captured right now: [`capture_boot_logs`]
+/// put the forwarder in place and [`install`](crate::install) has not run
+/// yet (nor [`discard_boot_logs`]).
+///
+/// `false` before any capture, once the subscriber is installed, after a
+/// discard, and when a foreign subscriber won the global default. The
+/// builder reads it just before installing, to warn when nothing was
+/// capturing — the events logged before the install were then dropped.
+pub fn boot_logs_captured() -> bool {
+    OURS.get() == Some(&true) && TARGET.get().is_none() && !DISABLED.load(Ordering::Relaxed)
 }
 
 /// Stop capturing: drop the buffered boot logs and make every callsite
@@ -561,7 +629,12 @@ pub(crate) fn take_over(target: Arc<dyn Subscriber + Send + Sync>) -> bool {
     true
 }
 
-/// Dispatch one stored event to `target`, as the macros would.
+/// Dispatch one stored event to `target`, as the macros would — `enabled`
+/// and `event_enabled` included. Calling `target.event` directly bypasses the
+/// callsite interest cache, so this check is the only thing applying the
+/// installed filter to the replay: the boot filter may have kept a line the
+/// installed one rejects (`RUST_LOG` invalid or changed, `tracing.filter`
+/// stricter, a `Suppress` layer).
 fn replay(target: &(dyn Subscriber + Send + Sync), event: &Stored) {
     let metadata = event.metadata;
     let fields = metadata.fields();

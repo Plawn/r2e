@@ -10,13 +10,18 @@
 mod support;
 
 use r2e_tracing::{
-    install, installed, AlreadyInstalled, LogFormat, SpanEvents, Suppress, TracingOptions,
+    boot_logs_captured, install, installed, AlreadyInstalled, LogFormat, SpanEvents, Suppress,
+    TracingOptions,
 };
 use support::Capture;
 use tracing::Level;
 
 #[test]
 fn first_install_wins_and_later_installs_learn_they_lost() {
+    // SAFETY: the other test of this binary never touches the environment,
+    // and nothing has read it yet. `RUST_LOG` takes priority over the
+    // filter installed below; this scenario asserts what that filter keeps.
+    unsafe { std::env::remove_var("RUST_LOG") };
     assert_eq!(installed(), None, "nothing installed yet");
 
     let wanted = TracingOptions::new("warn,install_test=debug")
@@ -41,6 +46,10 @@ fn first_install_wins_and_later_installs_learn_they_lost() {
         ],
     )
     .expect("the first install wins");
+    assert!(
+        !boot_logs_captured(),
+        "an install without a capture never captured"
+    );
     assert_eq!(installed(), Some(&wanted));
     assert!(!installed().unwrap().console, "the console was left out");
 

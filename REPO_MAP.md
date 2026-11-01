@@ -62,6 +62,8 @@ tests/
   boot_disabled/            discard_boot_logs, then a later install (own binary)
   boot_flush/               boot fails before install: raw flush of buffered lines (own binary)
   boot_foreign/             foreign subscriber wins: capture inert, unknown winner (own binary)
+  boot_rust_log/            RUST_LOG=debug: DEBUG buffered + replayed (own binary)
+  boot_rust_log_directives/ directive-scoped RUST_LOG buffer + installed filter at replay (own binary)
   install/                  one-shot install, contributed layers, Suppress gating siblings (own binary)
   install_invalid_filter/   invalid filter falls back to info (own binary)
   format/                   flat JSON + LogFields in text/JSON/flat JSON (scoped subscriber)

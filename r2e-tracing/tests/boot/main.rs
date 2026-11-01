@@ -8,7 +8,9 @@
 #[path = "../support/mod.rs"]
 mod support;
 
-use r2e_tracing::{capture_boot_logs, install, installed, SpanEvents, TracingOptions};
+use r2e_tracing::{
+    boot_logs_captured, capture_boot_logs, install, installed, SpanEvents, TracingOptions,
+};
 use support::Capture;
 use tracing::Level;
 
@@ -18,7 +20,16 @@ fn debug_hit(n: u32) {
 
 #[test]
 fn boot_logs_are_replayed_then_forwarded() {
+    // SAFETY: single-threaded at this point — the only test of the binary,
+    // before anything reads the environment. The boot filter follows
+    // `RUST_LOG`; this scenario is about the default (INFO).
+    unsafe { std::env::remove_var("RUST_LOG") };
+    assert!(
+        !boot_logs_captured(),
+        "nothing captures before the first call"
+    );
     let boot = capture_boot_logs();
+    assert!(boot_logs_captured());
 
     tracing::info!(target: "boot_test", count = 3, who = "me", "first");
     tracing::debug!(target: "boot_test", "never buffered");
@@ -37,6 +48,7 @@ fn boot_logs_are_replayed_then_forwarded() {
         vec![seen.boxed()],
     )
     .expect("the forwarder is ours");
+    assert!(!boot_logs_captured(), "the install ends the capture");
     assert!(installed().is_some());
 
     let replayed = seen.take();

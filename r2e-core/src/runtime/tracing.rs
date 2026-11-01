@@ -25,6 +25,10 @@ use r2e_tracing::{AlreadyInstalled, BoxedLayer, TracingOptions};
 ///   dev-reload cycle after the first) → the contributed layers are ignored
 ///   (one DEBUG line).
 /// - A foreign global subscriber won → one WARN when layers were contributed.
+/// - Installed here → one INFO line with the effective options and where they
+///   came from ([`install_summary`]), plus one WARN when no boot-log capture
+///   was in place: whatever was logged before `build_state()` (a hand-written
+///   `main` without `launch`) went nowhere.
 pub(crate) fn install_tracing(config: Option<&R2eConfig>, layers: Vec<BoxedLayer>) {
     let (tracing, bind_error) = match config {
         Some(config) => match TracingConfig::from_config(config, Some("tracing")) {
@@ -39,9 +43,22 @@ pub(crate) fn install_tracing(config: Option<&R2eConfig>, layers: Vec<BoxedLayer
         return;
     }
 
+    // Read before `install`, which puts the forwarder in place itself when
+    // nobody did — and ends any capture.
+    let captured = r2e_tracing::boot_logs_captured();
+    let source = match config {
+        Some(config) if bind_error.is_none() && config.has_prefix("tracing") => "config",
+        _ => "defaults",
+    };
     let contributed = layers.len();
-    match r2e_tracing::install(&TracingOptions::from(&tracing), layers) {
-        Ok(()) => {}
+    let options = TracingOptions::from(&tracing);
+    match r2e_tracing::install(&options, layers) {
+        Ok(()) => {
+            tracing::info!("{}", install_summary(&options, contributed, source));
+            if !captured {
+                tracing::warn!("{NO_BOOT_CAPTURE}");
+            }
+        }
         Err(AlreadyInstalled { installed: Some(_) }) => {
             if contributed > 0 {
                 tracing::debug!(
@@ -65,6 +82,66 @@ pub(crate) fn install_tracing(config: Option<&R2eConfig>, layers: Vec<BoxedLayer
             "r2e: the `tracing:` section is invalid, using the built-in defaults — {e}"
         );
     }
+}
+
+/// The WARN `build_state()` logs when it installs the subscriber while no
+/// boot-log capture was in place.
+const NO_BOOT_CAPTURE: &str = "r2e: no boot-log capture was active: anything logged \
+     before build_state() was dropped. Use r2e::launch (env reads and upstream waits belong \
+     in App::setup), or call `let _boot = r2e::capture_boot_logs();` first in main — see \
+     docs/migration/tracing-single-path.md";
+
+/// The INFO line `build_state()` logs after installing the subscriber: the
+/// effective options and their provenance.
+///
+/// `source` is `config` when the loaded configuration has at least one
+/// `tracing.*` key (YAML or `R2E_TRACING_*`), `defaults` otherwise (no
+/// configuration, no `tracing` key, or an invalid section). The filter is
+/// the one the install applies: `RUST_LOG` when set and valid (marked
+/// `(RUST_LOG)`), else `tracing.filter`, else `info` when that is invalid.
+/// `ansi=auto:on|off` is the unset default resolved against stdout.
+fn install_summary(options: &TracingOptions, contributed: usize, source: &str) -> String {
+    use r2e_tracing::tracing_subscriber::EnvFilter;
+    use r2e_tracing::{LogFormat, SpanEvents};
+    use std::io::IsTerminal;
+
+    let format = match options.effective_format() {
+        LogFormat::Json if options.json.flatten => "json(flat)",
+        LogFormat::Json => "json",
+        LogFormat::Pretty => "pretty",
+    };
+    let filter = match std::env::var("RUST_LOG") {
+        Ok(env) if EnvFilter::try_from_default_env().is_ok() => format!("{env:?} (RUST_LOG)"),
+        _ if EnvFilter::try_new(&options.filter).is_err() => {
+            format!("\"info\" (invalid {:?})", options.filter)
+        }
+        _ => format!("{:?}", options.filter),
+    };
+    let ansi = match options.ansi {
+        Some(true) => "on",
+        Some(false) => "off",
+        None if std::io::stdout().is_terminal() => "auto:on",
+        None => "auto:off",
+    };
+    let span_events = match options.span_events.clone().unwrap_or_default() {
+        SpanEvents::None => "none",
+        SpanEvents::New => "new",
+        SpanEvents::Close => "close",
+        SpanEvents::Active => "active",
+        SpanEvents::Full => "full",
+    };
+    let mut line = format!(
+        "r2e: tracing installed: format={format} filter={filter} ansi={ansi} \
+         span_events={span_events}"
+    );
+    if !options.console {
+        line.push_str(" console=off");
+    }
+    if contributed > 0 {
+        line.push_str(&format!(" layers={contributed}"));
+    }
+    line.push_str(&format!(" source={source}"));
+    line
 }
 
 // ── Removed entry points (migration diagnostics) ────────────────────────────

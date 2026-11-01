@@ -14,8 +14,9 @@ R2E installs it once, from the application builder, through this crate:
   contributed layers + the console layer + `EnvFilter` (`RUST_LOG` wins over
   `filter`); `Err(AlreadyInstalled)` when a subscriber is already in place.
 - `installed()` — the options the winning install used, when R2E installed it.
-- `capture_boot_logs()` — buffers the INFO+ events emitted before `install`
-  and replays them through the real stack (or writes them to stderr when the
+- `capture_boot_logs()` — buffers the events emitted before `install` (what
+  `RUST_LOG` enables, INFO+ without it) and replays them through the real
+  stack and its filter (or writes them to stderr when the
   boot fails first); `discard_boot_logs()` turns logging off instead.
 - `Suppress` — a layer dropping one exact (level, target, message) event.
 - `LogFields` — a span extension whose fields the console prints on every
