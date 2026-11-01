@@ -18,6 +18,10 @@ fn debug_hit(n: u32) {
 
 #[test]
 fn boot_logs_are_replayed_then_forwarded() {
+    // SAFETY: single-threaded at this point — the only test of the binary,
+    // before anything reads the environment. The boot filter follows
+    // `RUST_LOG`; this scenario is about the default (INFO).
+    unsafe { std::env::remove_var("RUST_LOG") };
     let boot = capture_boot_logs();
 
     tracing::info!(target: "boot_test", count = 3, who = "me", "first");

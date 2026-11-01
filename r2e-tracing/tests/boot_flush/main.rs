@@ -12,6 +12,10 @@ use support::Capture;
 
 #[test]
 fn buffered_lines_are_flushed_raw_and_install_still_works() {
+    // SAFETY: single-threaded at this point — the only test of the binary,
+    // before anything reads the environment. The boot filter follows
+    // `RUST_LOG`; this scenario is about the default (INFO).
+    unsafe { std::env::remove_var("RUST_LOG") };
     let boot = capture_boot_logs();
     tracing::info!(target: "flush_test", port = 3000, "starting");
     tracing::error!(target: "flush_test::config", key = "db.url", "missing key");

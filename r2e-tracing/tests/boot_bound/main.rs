@@ -12,6 +12,10 @@ use tracing::Level;
 
 #[test]
 fn the_buffer_keeps_1024_events_and_reports_the_rest() {
+    // SAFETY: single-threaded at this point — the only test of the binary,
+    // before anything reads the environment. The boot filter follows
+    // `RUST_LOG`; this scenario is about the default (INFO).
+    unsafe { std::env::remove_var("RUST_LOG") };
     let _boot = capture_boot_logs();
     for i in 0..1100 {
         tracing::info!(target: "bound_test", i, "boot line");

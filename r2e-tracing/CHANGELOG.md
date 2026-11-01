@@ -12,6 +12,18 @@ and uses the section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- The boot-log buffer honours `RUST_LOG` (#1192): what `capture_boot_logs()`
+  keeps until `install` is decided by `RUST_LOG`, read when the capture
+  starts, with its full directive syntax (`info,my_app=debug` buffers
+  `my_app`'s DEBUG lines, not hyper's TRACE). DEBUG/TRACE lines from
+  `App::setup`, config loading and plugin `setup` were dropped even when
+  `RUST_LOG` asked for them. Unset or invalid `RUST_LOG` keeps INFO and above,
+  as before; the 1024-event bound and the overflow WARN are unchanged. The
+  replay still goes through the installed filter, so a buffered line that
+  `tracing.filter` rejects is not printed.
+
 ## [0.1.0] - 2026-10-31
 
 ### Added

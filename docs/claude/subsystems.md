@@ -182,7 +182,7 @@ fallible, so a later boot error is logged through the real subscriber:
 and `TestApp::boot*` (`r2e-test/src/boot.rs`) all run:
 
 ```text
-let boot = capture_boot_logs();   // forwarder buffers INFO+ events
+let boot = capture_boot_logs();   // forwarder buffers what RUST_LOG enables (else INFO+)
 A::setup().await?                 // buffered
 A::build(AppBuilder::new(), env)  // plugin setup()s contribute layers (buffered);
                                   // build_state() installs + replays the buffer
@@ -193,12 +193,25 @@ serve_auto()
 ```
 
 `capture_boot_logs()` installs a forwarding subscriber as the global default
-(and the `log` → `tracing` bridge). While buffering it renders INFO/WARN/ERROR
-events to strings (bound 1024, overflow counted); spans get ids from a reserved
+(and the `log` → `tracing` bridge). While buffering it renders to strings the
+events its **boot filter** enables (bound 1024, overflow counted): `RUST_LOG`
+read once at capture — the only filter source available then, and the one
+`install` gives priority to — as an `EnvFilter` evaluated over a bare
+`Registry` (`Layered<EnvFilter, Registry>::enabled`, since
+`EnvFilter::enabled` needs a layer `Context`), so the full directive set is
+honoured (`info,my_app=debug` does not buffer hyper's DEBUG); unset/invalid
+`RUST_LOG` → INFO. Only static directives can match (the boot filter sees no
+span), which loses nothing: a replayed event has no parent span, so a
+span-scoped directive would not match it at replay either. The forwarder's
+`max_level_hint` is the boot filter's hint, callsites stay `sometimes()`;
+spans get ids from a reserved
 range and are swallowed after the install (so an `#[instrument]`ed
 `App::build` straddling the install does not panic the `Registry`). After
 `install`, every call forwards 1:1 to the real stack and the callsite interest
-cache is rebuilt. If the boot dies **before** the install, dropping the
+cache is rebuilt. The replay calls the target's `enabled` + `event_enabled`
+before each `event` (it bypasses the interest cache, so this is what applies
+the installed filter / `Suppress`): a line the boot filter kept but
+`tracing.filter` rejects is not printed. If the boot dies **before** the install, dropping the
 `BootLogs` handle writes the buffered lines to stderr in raw
 `LEVEL target: message k=v` form, ahead of the boot error report. A second
 `capture_boot_logs()` in the same process (tests, dev-reload cycle 2+) returns
@@ -207,11 +220,15 @@ an inert handle; a pre-existing foreign subscriber also makes it inert.
 `build_state()` works — but logs emitted before it are lost unless it calls
 `let _boot = r2e::capture_boot_logs();` first.
 
-**Limits:** replayed events are timestamped at replay time (the gap is `setup`
-+ plugin `setup`, milliseconds); only events INFO+ are buffered — DEBUG/TRACE
-before the install are lost, spans opened before the install are not replayed
-(a replayed event has no parent span, hence no `LogFields`); works from any
-thread. Rejected alternatives (do not re-propose): `tracing_subscriber::reload`,
+**Limits (accepted, not fixed — #1192 point 3):** replayed events are
+timestamped at replay time, not emission time (the gap is `setup` + plugin
+`setup`, usually milliseconds, but seconds when `App::setup` or a plugin
+`setup` waits on an upstream with retries — every line of that wait is stamped
+at the install; waits after the install — bean constructors / producers /
+`#[post_construct]` inside `build_state()`, or an `#[on_start]` hook — log
+live); spans opened before the install are not replayed (a replayed event has
+no parent span, hence no `LogFields`); a replayed event keeps at most
+`MAX_FIELDS` = 32 fields; works from any thread. Rejected alternatives (do not re-propose): `tracing_subscriber::reload`,
 a thread-local `set_default` guard held across awaits.
 
 ### Who installs what
@@ -228,7 +245,7 @@ a thread-local `set_default` guard held across awaits.
 
 `LaunchOptions` has no field left (`#[non_exhaustive]`, `Default`).
 
-Tests: `r2e-tracing/tests/{boot,boot_bound,boot_disabled,boot_flush,boot_foreign,install,install_invalid_filter,format,options}/`
+Tests: `r2e-tracing/tests/{boot,boot_bound,boot_disabled,boot_flush,boot_foreign,boot_rust_log,boot_rust_log_directives,install,install_invalid_filter,format,options}/`
 (one binary each where process-global state is touched),
 `r2e-core/tests/tracing_install/`, `r2e-core/tests/runtime/tracing_config.rs`;
 the removed-API diagnostics are pinned in `r2e-compile-tests/cases/tracing/fail/`.

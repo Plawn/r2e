@@ -334,10 +334,14 @@ plugin has contributed — after `App::setup` and config loading already ran.
 So `r2e::launch` / `app_main!` / `TestApp::boot` capture first: what is logged
 before the install is buffered and replayed through the real subscriber, and
 if the boot fails before the install, the buffered lines are printed to stderr
-ahead of the error. Limits: only `INFO` and above are buffered (DEBUG/TRACE
-before the install are lost), replayed lines carry no parent span and are
-timestamped at replay, and the buffer holds 1024 events (one `WARN` reports
-the overflow). A hand-written `main` that calls `build_state()` without
+ahead of the error. What is buffered follows `RUST_LOG` (full directive
+syntax, e.g. `RUST_LOG=info,my_app=debug`; unset or invalid: `INFO` and
+above) — `tracing.filter` is not loaded yet then, but still applies to the
+replay. Limits: replayed lines carry no parent span and are timestamped at
+replay, not emission (a slow upstream wait in `App::setup` shows up stamped
+at the install; put it after `build_state()` or in an `#[on_start]` hook to
+log it live), and the buffer holds 1024 events (one `WARN` reports the
+overflow). A hand-written `main` that calls `build_state()` without
 `launch` should call `let _boot = r2e::capture_boot_logs();` first to get the
 same behaviour.
 

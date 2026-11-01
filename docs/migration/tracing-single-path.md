@@ -164,10 +164,22 @@ already logged. `r2e::launch` / `app_main!` / `TestApp::boot` therefore call
 `capture_boot_logs()` first: a forwarder buffers what is logged before the
 install and replays it through the real subscriber once installed. Limits:
 
-- **INFO and above only**: DEBUG / TRACE emitted before the install are lost.
-- **No spans**: a replayed event has no parent span (no `LogFields` either).
-- **Replay timestamps**: replayed lines are timestamped at replay time (the
-  gap is `setup` + plugin `setup`, typically milliseconds).
+- **What is buffered follows `RUST_LOG`**, read when the capture starts (full
+  directive syntax: `RUST_LOG=info,my_app=debug` keeps `my_app`'s DEBUG lines
+  without hyper's). Unset or invalid: INFO and above. `tracing.filter` is not
+  loaded yet at that point, so it only applies at the replay — every replayed
+  line still goes through the installed filter, which never prints a line it
+  rejects. Span-scoped directives (`[span]=debug`) buffer nothing extra.
+- **No spans**: a replayed event has no parent span (no `LogFields` either)
+  and keeps at most 32 fields.
+- **Replay timestamps**: replayed lines are timestamped at replay time, not
+  emission time. The gap is `App::setup` + plugin `setup`, typically
+  milliseconds — but a boot that waits on an upstream with multi-second
+  retries in `setup` shows every line of that wait stamped at the install.
+  This is an accepted limitation for now. Waits placed after the install —
+  after `build_state()` (bean constructors, producers and `#[post_construct]`
+  run there, after it installed) or in an `#[on_start]` hook — log live with
+  their real timestamps.
 - **Bounded at 1024 events**; the overflow is counted and reported by one WARN
   after the replay.
 - If the boot fails **before** the install (config unreadable, …), dropping
