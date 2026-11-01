@@ -507,6 +507,18 @@ pub fn capture_boot_logs() -> BootLogs {
     }
 }
 
+/// Whether boot logs are being captured right now: [`capture_boot_logs`]
+/// put the forwarder in place and [`install`](crate::install) has not run
+/// yet (nor [`discard_boot_logs`]).
+///
+/// `false` before any capture, once the subscriber is installed, after a
+/// discard, and when a foreign subscriber won the global default. The
+/// builder reads it just before installing, to warn when nothing was
+/// capturing — the events logged before the install were then dropped.
+pub fn boot_logs_captured() -> bool {
+    OURS.get() == Some(&true) && TARGET.get().is_none() && !DISABLED.load(Ordering::Relaxed)
+}
+
 /// Stop capturing: drop the buffered boot logs and make every callsite
 /// disabled — what `tracing.enabled: false` means.
 ///

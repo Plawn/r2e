@@ -12,6 +12,14 @@ and uses the section as the GitHub release notes.
 
 ## [Unreleased]
 
+### Added
+
+- `boot_logs_captured()` (#1192): whether `capture_boot_logs()` is buffering
+  right now (the forwarder is ours, `install` has not run, nothing was
+  discarded). `r2e-core`'s builder reads it before installing, to warn when
+  nothing was capturing and the events logged before `build_state()` were
+  dropped.
+
 ### Fixed
 
 - The boot-log buffer honours `RUST_LOG` (#1192): what `capture_boot_logs()`

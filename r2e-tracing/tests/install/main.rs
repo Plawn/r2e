@@ -10,7 +10,8 @@
 mod support;
 
 use r2e_tracing::{
-    install, installed, AlreadyInstalled, LogFormat, SpanEvents, Suppress, TracingOptions,
+    boot_logs_captured, install, installed, AlreadyInstalled, LogFormat, SpanEvents, Suppress,
+    TracingOptions,
 };
 use support::Capture;
 use tracing::Level;
@@ -45,6 +46,10 @@ fn first_install_wins_and_later_installs_learn_they_lost() {
         ],
     )
     .expect("the first install wins");
+    assert!(
+        !boot_logs_captured(),
+        "an install without a capture never captured"
+    );
     assert_eq!(installed(), Some(&wanted));
     assert!(!installed().unwrap().console, "the console was left out");
 

@@ -3,7 +3,7 @@
 //!
 //! Its **own target**: it sets the process-global subscriber.
 
-use r2e_tracing::{capture_boot_logs, install, installed, TracingOptions};
+use r2e_tracing::{boot_logs_captured, capture_boot_logs, install, installed, TracingOptions};
 
 #[test]
 fn a_foreign_subscriber_wins() {
@@ -11,6 +11,7 @@ fn a_foreign_subscriber_wins() {
         .expect("first global subscriber");
 
     let boot = capture_boot_logs();
+    assert!(!boot_logs_captured(), "an inert capture captures nothing");
     tracing::info!(target: "foreign_test", "goes to the foreign subscriber");
     drop(boot);
 
