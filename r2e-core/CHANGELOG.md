@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-01
+
 ### Added
 
 - `build_state()` logs **one INFO line** when it installs the tracing
