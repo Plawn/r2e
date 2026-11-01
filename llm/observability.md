@@ -1,7 +1,7 @@
 ---
 topic: observability
 features: core, observability
-tokens: ~4000
+tokens: ~4200
 requires: plugins
 ---
 
@@ -303,6 +303,17 @@ follows `RUST_LOG` (full directive syntax; unset or invalid: INFO and above);
 at replay time and carry no span — a slow upstream wait belongs after
 `build_state()` or in an `#[on_start]` hook, where it logs live. The buffer
 holds 1024 events (the overflow is counted by one WARN).
+
+A hand-written `main` (`#[r2e::main]` + `AppBuilder` by hand, no `launch`)
+has no buffer: what it logs before `build_state()` is dropped, and
+`build_state()` logs one WARN saying so. Move env reads and upstream waits
+into `App::setup` and boot through `app_main!` / `r2e::launch`, or make
+`let _boot = r2e::capture_boot_logs();` the first statement of `main`. Every
+install logs one INFO line with the effective options and their source
+(`r2e: tracing installed: format=pretty filter="info" ansi=auto:off
+span_events=close source=defaults`; `source=config` once any `tracing.*` key
+is set, `(RUST_LOG)` after the filter when `RUST_LOG` overrides it). Unset
+`tracing.ansi` means colours only on a terminal (r2e 0.9 and earlier: always).
 
 ### OpenTelemetry
 
