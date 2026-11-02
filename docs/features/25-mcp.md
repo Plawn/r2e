@@ -696,6 +696,8 @@ visible list, which is fine up to thousands of members.
 loopback-only, so an MCP endpoint behind a proxy or public hostname silently
 403s every request until `mcp.allowed-hosts` names the public hostname(s).
 R2E warns at boot when the bind host is non-loopback and the key is unset.
+An empty list or an empty entry is a boot error: rmcp reads an empty list as
+"no `Host` check at all", so `allowed-hosts: []` would turn the protection off.
 
 ## Sharded serving & shutdown
 
@@ -913,7 +915,7 @@ impl AccountTools {
 | `resource`, `resource-name` | derived | canonical resource URI + display name |
 | `discovery` | `eager` (`lazy` under `dev` profile) | `eager` = fetch at boot, fail fast; `lazy` = first use; `off` = explicit endpoints only (requires `jwks-url` / `introspection-endpoint` / `userinfo-endpoint`, per validation mode) |
 | `discovery-ttl-secs` | 3600 | metadata cache TTL (stale-if-error) |
-| `jwks-url`, `authorization-endpoint`, `token-endpoint`, … | discovered | explicit overrides |
+| `jwks-url`, `authorization-endpoint`, `token-endpoint`, … | discovered | explicit overrides; each must be an absolute `https://` URL (`http://` only with `allow-insecure`), checked at boot |
 | `token-validation` | `jwt` | `jwt` = local JWKS validation (zero network per request); `introspection` = RFC 7662 (opaque tokens; requires `client-id` + `client-secret`); `userinfo` = OIDC userinfo probe (Google-style opaque tokens; forces `audience: skip`) |
 | `client-id`, `client-secret` | — | confidential client the introspection backend authenticates as (Basic) |
 | `introspection-endpoint`, `userinfo-endpoint` | discovered | explicit overrides for the opaque backends |
@@ -923,6 +925,7 @@ impl AccountTools {
 | `clock-skew-secs` | 60 | leeway for `exp`/`nbf` |
 | `audience` | `resource` | `any-of` (+ `extra-audiences`), `client-id`, `skip` |
 | `required-scopes` | — | server-wide scope floor (403 below it) |
+| `scopes-supported` | `required-scopes` | advertised in the PRM and shim metadata |
 | `scope-claim` | `scope`, then `scp` | set `permissions` for Auth0 RBAC |
 | `roles-claim` | `roles` + `realm_access.roles` | custom claim REPLACES defaults |
 | `client-roles-for` | — | merge Keycloak `resource_access.<id>.roles` |
@@ -934,6 +937,11 @@ impl AccountTools {
 | `allow-insecure` | `false` | permit `http://` issuer/JWKS (dev only) |
 | `mcp.allowed-origins` | — | transport-level Origin rejection list (DNS-rebinding guard) |
 | `mcp.cors.allowed-origins` | Claude origins (+ localhost under `dev`) | origins granted browser CORS access |
+
+Scope lists (`required-scopes`, `scopes-supported`) take one scope per entry:
+an empty entry, or one holding a space, `"`, `\` or a non-printable / non-ASCII
+character (RFC 6749 §3.3), fails the boot — `["openid profile"]` must be
+written `[openid, profile]`.
 
 ### Provider matrix
 
