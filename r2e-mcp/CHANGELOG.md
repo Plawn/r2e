@@ -15,6 +15,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- More `mcp.*` keys fail fast at boot instead of misbehaving at request time
+  (#1204). The error names the key and the offending value; the config types
+  are unchanged.
+  - `mcp.auth.scopes-supported` / `mcp.auth.required-scopes`: an empty entry,
+    or a character outside the RFC 6749 §3.3 scope-token grammar (space, `"`,
+    `\`, control or non-ASCII), is rejected. An entry like `"openid profile"`
+    used to reach clients as-is and make IdPs answer `invalid_scope`.
+  - `mcp.auth.jwks-url`, `authorization-endpoint`, `token-endpoint`,
+    `userinfo-endpoint`, `introspection-endpoint`: must be an absolute URL
+    with a host, and `https` unless `mcp.auth.allow-insecure: true`. An
+    empty `jwks-url` (what `${MCP_JWKS_URL:}` resolves to) still means
+    "resolve from discovery"; an empty explicit endpoint is a boot error.
+  - `mcp.allowed-hosts` (and `McpServer::with_allowed_hosts`): an empty list,
+    an empty entry, or an entry with leading/trailing whitespace is rejected.
+    rmcp reads an empty list as "Host check off", so `[]` (or a `${VAR}` that
+    resolved to nothing) used to turn off the DNS-rebinding protection
+    without saying so; a padded entry never matches a `Host` header and
+    would 403 every request.
+
 ## [0.10.0] - 2026-10-31
 
 ### Breaking

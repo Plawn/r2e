@@ -6239,7 +6239,8 @@ builder `McpServer::max_protocol_version(ProtocolVersion::V_2025_11_25)`),
 stale or replayed cursor → -32602),
 `allowed-hosts` (DNS-rebinding
 protection — REQUIRED behind a proxy/public hostname; default accepts loopback
-`Host` headers only), `allowed-origins`, `max-request-body-bytes`.
+`Host` headers only; an empty list or entry fails at boot), `allowed-origins`,
+`max-request-body-bytes`.
 
 Sharded serving (`server.workers`) shares one session map across workers;
 graceful shutdown terminates live SSE streams. Test over `TestApp`: POST the
@@ -6453,7 +6454,8 @@ already be configured on the IdP client). IdP outages → 503, not 401. No
 `mcp.auth` section → unauthenticated server.
 
 Other `mcp.auth.*` keys (all optional): `resource`/`resource-name`, `discovery`
-(`eager`|`lazy`|`off`) + `discovery-ttl-secs`/`jwks-url`/explicit endpoints,
+(`eager`|`lazy`|`off`) + `discovery-ttl-secs`/`jwks-url`/explicit
+endpoints (absolute `https` URLs unless `allow-insecure`, checked at boot),
 `token-validation` (`jwt` default — local JWKS, zero network per request;
 `introspection` — RFC 7662 for opaque tokens, requires the confidential
 `client-id` + `client-secret`; `userinfo` — OIDC userinfo probe for
@@ -6463,7 +6465,9 @@ cache (`opaque-cache-ttl-secs` 60 — capped by the token's `exp`, rejections
 cached 5s, IdP outages never; `opaque-cache-max-entries` 1024),
 `allowed-algorithms`, `clock-skew-secs`, `audience`
 (`resource`|`any-of`|`client-id`|`skip`) + `extra-audiences` (Auth0/Entra),
-`required-scopes` (server-wide floor → 403), `scopes-supported`, `scope-claim`
+`required-scopes` (server-wide floor → 403), `scopes-supported` (both: one
+RFC 6749 scope token per entry — `[openid, profile]`, never `["openid profile"]`;
+empty entries, spaces, `"`, `\` fail at boot), `scope-claim`
 (default `scope` then `scp`; Auth0 RBAC → `permissions`), `roles-claim`
 (default `roles` + Keycloak `realm_access.roles`), `client-roles-for`
 (Keycloak `resource_access.<id>.roles`), `shim`, `registration-path`,

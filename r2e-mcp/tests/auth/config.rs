@@ -6,7 +6,7 @@
 
 use r2e_core::http::StatusCode;
 use r2e_core::AppBuilder;
-use r2e_mcp::auth::{AudienceMode, McpAuthConfig, TokenValidationMode};
+use r2e_mcp::auth::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::Value;
 
@@ -194,6 +194,140 @@ async fn eager_discovery_failure_is_a_boot_error() {
         ..offline_auth()
     })
     .await;
+}
+
+// ── Scope and endpoint-URL validation (#1204) ─────────────────────────────
+
+/// The 2026-11-01 `invalid_scope` incident: one entry holding two
+/// space-separated scopes.
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.scopes-supported: scope `openid profile` contains a space")]
+async fn scope_with_a_space_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        scopes_supported: Some(vec!["openid profile".into(), "mcp".into()]),
+        ..offline_auth()
+    })
+    .await;
+}
+
+/// What an unset `${VAR:}` placeholder leaves behind once the loader has
+/// resolved it: an empty entry.
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.required-scopes: empty scope entry")]
+async fn empty_scope_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        required_scopes: Some(vec!["mcp".into(), String::new()]),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.required-scopes: scope `a\"b` contains the character '\"'")]
+async fn scope_with_a_quote_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        required_scopes: Some(vec!["a\"b".into()]),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.scopes-supported: scope `a\\b` contains the character '\\\\'")]
+async fn scope_with_a_backslash_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        scopes_supported: Some(vec!["a\\b".into()]),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.jwks-url: `not a url` is not an absolute URL")]
+async fn non_url_jwks_url_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        jwks_url: Some("not a url".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+/// An empty `jwks-url` (what a `${MCP_JWKS_URL:}` placeholder resolves to)
+/// means "resolve from discovery" and must keep booting.
+#[r2e_core::test]
+async fn empty_jwks_url_means_discovery_and_boots() {
+    let _ = secured_app_with(McpAuthConfig {
+        discovery: Some(DiscoveryMode::Lazy),
+        jwks_url: Some(String::new()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.token-endpoint is empty")]
+async fn empty_explicit_endpoint_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_endpoint: Some(String::new()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.token-endpoint: `/oauth/token` is not an absolute URL")]
+async fn relative_endpoint_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_endpoint: Some("/oauth/token".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.authorization-endpoint `http://idp.example/auth` is not https")]
+async fn plaintext_endpoint_without_allow_insecure_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        issuer: "https://idp.example".into(),
+        allow_insecure: None,
+        jwks_url: Some("https://idp.example/jwks".into()),
+        authorization_endpoint: Some("http://idp.example/auth".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.userinfo-endpoint: `ftp://idp.example/me` has scheme `ftp`")]
+async fn non_http_endpoint_scheme_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        userinfo_endpoint: Some("ftp://idp.example/me".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+/// Regression guard: well-formed scopes and https endpoints still boot.
+#[r2e_core::test]
+async fn valid_scopes_and_endpoints_boot() {
+    let router = secured_app_with(McpAuthConfig {
+        issuer: "https://idp.example".into(),
+        allow_insecure: None,
+        jwks_url: Some("https://idp.example/jwks".into()),
+        authorization_endpoint: Some("https://idp.example/auth".into()),
+        token_endpoint: Some("https://idp.example/token".into()),
+        userinfo_endpoint: Some("https://idp.example/me".into()),
+        introspection_endpoint: Some("https://idp.example/introspect".into()),
+        scopes_supported: Some(vec![
+            "openid".into(),
+            "mcp:read".into(),
+            "api://x/.default".into(),
+        ]),
+        required_scopes: Some(vec!["mcp:read".into()]),
+        ..offline_auth()
+    })
+    .await;
+    assert_eq!(prm_resource(&router).await, RESOURCE);
 }
 
 // ── Resource resolution ────────────────────────────────────────────────────
