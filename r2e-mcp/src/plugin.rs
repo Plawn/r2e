@@ -333,6 +333,17 @@ fn validate_allowed_hosts(hosts: Option<&[String]>) -> Result<(), PluginBuildErr
         )
         .into());
     }
+    // rmcp compares the `Host` header with each entry byte for byte: a
+    // padded entry (a trailing space, a `${VAR}` that expanded with a
+    // newline) would boot fine and 403 every request.
+    if let Some(padded) = hosts.iter().find(|host| host.trim() != host.as_str()) {
+        return Err(format!(
+            "mcp.allowed-hosts: entry {padded:?} has leading or trailing whitespace — \
+             it would never match a `Host` header; every entry must be exactly a \
+             hostname or `host:port` authority"
+        )
+        .into());
+    }
     Ok(())
 }
 

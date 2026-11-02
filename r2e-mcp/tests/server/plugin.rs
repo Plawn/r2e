@@ -140,6 +140,16 @@ async fn empty_allowed_host_entry_is_a_boot_error() {
     boot_with_config("mcp.allowed-hosts", hosts(&["api.example.com", ""])).await;
 }
 
+/// rmcp matches `Host` byte for byte: a padded entry would boot and 403
+/// every request.
+#[r2e_core::test]
+#[should_panic(
+    expected = "mcp.allowed-hosts: entry \"api.example.com \" has leading or trailing whitespace"
+)]
+async fn padded_allowed_host_entry_is_a_boot_error() {
+    boot_with_config("mcp.allowed-hosts", hosts(&["api.example.com "])).await;
+}
+
 #[r2e_core::test]
 #[should_panic(expected = "mcp.allowed-hosts must not be empty")]
 async fn empty_builder_allowed_hosts_is_a_boot_error() {

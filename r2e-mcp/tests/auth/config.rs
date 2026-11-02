@@ -6,7 +6,7 @@
 
 use r2e_core::http::StatusCode;
 use r2e_core::AppBuilder;
-use r2e_mcp::auth::{AudienceMode, McpAuthConfig, TokenValidationMode};
+use r2e_mcp::auth::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::Value;
 
@@ -247,6 +247,28 @@ async fn scope_with_a_backslash_is_a_boot_error() {
 async fn non_url_jwks_url_is_a_boot_error() {
     let _ = secured_app_with(McpAuthConfig {
         jwks_url: Some("not a url".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+/// An empty `jwks-url` (what a `${MCP_JWKS_URL:}` placeholder resolves to)
+/// means "resolve from discovery" and must keep booting.
+#[r2e_core::test]
+async fn empty_jwks_url_means_discovery_and_boots() {
+    let _ = secured_app_with(McpAuthConfig {
+        discovery: Some(DiscoveryMode::Lazy),
+        jwks_url: Some(String::new()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.token-endpoint is empty")]
+async fn empty_explicit_endpoint_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_endpoint: Some(String::new()),
         ..offline_auth()
     })
     .await;

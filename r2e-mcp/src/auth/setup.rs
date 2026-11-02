@@ -170,6 +170,11 @@ fn validate_scopes(key: &str, scopes: Option<&[String]>) -> Result<(), PluginBui
 /// `authorization-endpoint`, …) must be an absolute `https` URL — `http` is
 /// only accepted under `allow-insecure`, like the issuer. Checked at boot so
 /// a typo surfaces there instead of on the first authenticated request.
+///
+/// `jwks-url` is the one key where an EMPTY value is meaningful (resolve
+/// the JWKS from discovery — the documented default, and what a
+/// `${MCP_JWKS_URL:}` placeholder resolves to), so it is skipped; an empty
+/// explicit endpoint is a misconfiguration named as such.
 fn validate_endpoint_url(
     key: &str,
     value: Option<&str>,
@@ -178,6 +183,16 @@ fn validate_endpoint_url(
     let Some(value) = value else {
         return Ok(());
     };
+    if value.trim().is_empty() {
+        if key == "jwks-url" {
+            return Ok(());
+        }
+        return Err(format!(
+            "mcp.auth.{key} is empty — set an absolute https URL, or remove the key to \
+             use the issuer's discovery document"
+        )
+        .into());
+    }
     let url = url::Url::parse(value)
         .map_err(|e| format!("mcp.auth.{key}: `{value}` is not an absolute URL: {e}"))?;
     match url.scheme() {

@@ -696,8 +696,10 @@ visible list, which is fine up to thousands of members.
 loopback-only, so an MCP endpoint behind a proxy or public hostname silently
 403s every request until `mcp.allowed-hosts` names the public hostname(s).
 R2E warns at boot when the bind host is non-loopback and the key is unset.
-An empty list or an empty entry is a boot error: rmcp reads an empty list as
-"no `Host` check at all", so `allowed-hosts: []` would turn the protection off.
+An empty list, an empty entry or a padded entry (`"api.example.com "`) is a
+boot error: rmcp reads an empty list as "no `Host` check at all", so
+`allowed-hosts: []` would turn the protection off, and it compares `Host` byte
+for byte, so a padded entry would 403 every request.
 
 ## Sharded serving & shutdown
 
@@ -915,7 +917,7 @@ impl AccountTools {
 | `resource`, `resource-name` | derived | canonical resource URI + display name |
 | `discovery` | `eager` (`lazy` under `dev` profile) | `eager` = fetch at boot, fail fast; `lazy` = first use; `off` = explicit endpoints only (requires `jwks-url` / `introspection-endpoint` / `userinfo-endpoint`, per validation mode) |
 | `discovery-ttl-secs` | 3600 | metadata cache TTL (stale-if-error) |
-| `jwks-url`, `authorization-endpoint`, `token-endpoint`, … | discovered | explicit overrides; each must be an absolute `https://` URL (`http://` only with `allow-insecure`), checked at boot |
+| `jwks-url`, `authorization-endpoint`, `token-endpoint`, … | discovered | explicit overrides; each must be an absolute `https://` URL (`http://` only with `allow-insecure`), checked at boot. An empty `jwks-url` (`${MCP_JWKS_URL:}`) means "discovered"; an empty endpoint is a boot error |
 | `token-validation` | `jwt` | `jwt` = local JWKS validation (zero network per request); `introspection` = RFC 7662 (opaque tokens; requires `client-id` + `client-secret`); `userinfo` = OIDC userinfo probe (Google-style opaque tokens; forces `audience: skip`) |
 | `client-id`, `client-secret` | — | confidential client the introspection backend authenticates as (Basic) |
 | `introspection-endpoint`, `userinfo-endpoint` | discovered | explicit overrides for the opaque backends |
