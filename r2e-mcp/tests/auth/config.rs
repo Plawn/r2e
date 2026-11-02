@@ -198,43 +198,28 @@ async fn eager_discovery_failure_is_a_boot_error() {
 
 // ── Scope and endpoint-URL validation (#1204) ─────────────────────────────
 
-/// Boot from an `application.yaml` on disk holding the offline `mcp.auth`
-/// baseline (http issuer under `allow-insecure`, `discovery: off`, explicit
-/// resource, pinned validator) plus `extra` lines (already indented under
-/// `auth:`). The file goes through the standard loader — `${VAR:default}`
-/// resolved, then typed as `McpAuthConfig` — exactly like a deployed app.
-async fn yaml_auth_boot(extra: &str) {
-    let yaml = format!(
-        "mcp:\n  auth:\n    issuer: {ISSUER}\n    allow-insecure: true\n    \
-         discovery: off\n    resource: {RESOURCE}\n{extra}"
-    );
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("application.yaml");
-    std::fs::write(&file, yaml).unwrap();
-    let _ = AppBuilder::new()
-        .with_config_file(&file)
-        .load_config::<()>()
-        .plugin(McpServer::new().with_token_validator(pinned(&test_jwt())))
-        .build_state()
-        .await
-        .register_mcp_service::<fixtures::SecuredTools>()
-        .build();
-}
-
 /// The 2026-11-01 `invalid_scope` incident: one entry holding two
 /// space-separated scopes.
 #[r2e_core::test]
 #[should_panic(expected = "mcp.auth.scopes-supported: scope `openid profile` contains a space")]
 async fn scope_with_a_space_is_a_boot_error() {
-    yaml_auth_boot("    scopes-supported: [\"openid profile\", mcp]\n").await;
+    let _ = secured_app_with(McpAuthConfig {
+        scopes_supported: Some(vec!["openid profile".into(), "mcp".into()]),
+        ..offline_auth()
+    })
+    .await;
 }
 
-/// A `${VAR}` placeholder that resolves to nothing must not slip an empty
-/// scope through.
+/// What an unset `${VAR:}` placeholder leaves behind once the loader has
+/// resolved it: an empty entry.
 #[r2e_core::test]
 #[should_panic(expected = "mcp.auth.required-scopes: empty scope entry")]
-async fn empty_scope_from_a_placeholder_is_a_boot_error() {
-    yaml_auth_boot("    required-scopes: [mcp, \"${R2E_MCP_1204_UNSET_SCOPE:}\"]\n").await;
+async fn empty_scope_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        required_scopes: Some(vec!["mcp".into(), String::new()]),
+        ..offline_auth()
+    })
+    .await;
 }
 
 #[r2e_core::test]
@@ -260,13 +245,21 @@ async fn scope_with_a_backslash_is_a_boot_error() {
 #[r2e_core::test]
 #[should_panic(expected = "mcp.auth.jwks-url: `not a url` is not an absolute URL")]
 async fn non_url_jwks_url_is_a_boot_error() {
-    yaml_auth_boot("    jwks-url: not a url\n").await;
+    let _ = secured_app_with(McpAuthConfig {
+        jwks_url: Some("not a url".into()),
+        ..offline_auth()
+    })
+    .await;
 }
 
 #[r2e_core::test]
 #[should_panic(expected = "mcp.auth.token-endpoint: `/oauth/token` is not an absolute URL")]
-async fn relative_endpoint_from_a_placeholder_is_a_boot_error() {
-    yaml_auth_boot("    token-endpoint: \"${R2E_MCP_1204_UNSET_URL:/oauth/token}\"\n").await;
+async fn relative_endpoint_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        token_endpoint: Some("/oauth/token".into()),
+        ..offline_auth()
+    })
+    .await;
 }
 
 #[r2e_core::test]

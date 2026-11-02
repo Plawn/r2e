@@ -6136,7 +6136,6 @@ dependencies = [
  "serde",
  "serde_json",
  "subtle",
- "tempfile",
  "tokio",
  "tower",
  "tracing",

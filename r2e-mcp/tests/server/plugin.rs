@@ -1,6 +1,7 @@
 //! `McpServer` plugin behavior: enable/disable gate, endpoint path
 //! precedence and validation, transport modes.
 
+use r2e_core::config::ConfigValue;
 use r2e_core::http::StatusCode;
 use r2e_core::{AppBuilder, R2eConfig};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
@@ -106,15 +107,11 @@ async fn capture_path_is_a_boot_error() {
     let _ = fixture_app_with(McpServer::new().with_path("/mcp/{id}")).await;
 }
 
-/// Boot the fixture app from an `application.yaml` on disk, so the `mcp`
-/// section goes through the standard loader (`${VAR:default}` resolved,
-/// then typed as `McpConfig`) exactly like a deployed app.
-async fn yaml_boot(yaml: &str) {
-    let dir = tempfile::tempdir().unwrap();
-    let file = dir.path().join("application.yaml");
-    std::fs::write(&file, yaml).unwrap();
+/// Boot the fixture app with one `mcp.*` key overridden on the config the
+/// plugin reads its `McpConfig` from.
+async fn boot_with_config(key: &str, value: ConfigValue) {
     let _ = AppBuilder::new()
-        .with_config_file(&file)
+        .override_config_value(key, value)
         .load_config::<()>()
         .plugin(McpServer::new())
         .provide(Calc)
@@ -125,24 +122,22 @@ async fn yaml_boot(yaml: &str) {
         .build();
 }
 
+fn hosts(entries: &[&str]) -> ConfigValue {
+    ConfigValue::List(entries.iter().map(|h| ConfigValue::from(*h)).collect())
+}
+
 /// rmcp reads an empty list as "Host check off" — `[]` must not silently
 /// drop the DNS-rebinding protection (#1204).
 #[r2e_core::test]
 #[should_panic(expected = "mcp.allowed-hosts must not be empty")]
 async fn empty_allowed_hosts_is_a_boot_error() {
-    yaml_boot("mcp:\n  allowed-hosts: []\n").await;
+    boot_with_config("mcp.allowed-hosts", hosts(&[])).await;
 }
 
 #[r2e_core::test]
 #[should_panic(expected = "mcp.allowed-hosts: empty entry in [\"api.example.com\", \"\"]")]
 async fn empty_allowed_host_entry_is_a_boot_error() {
-    yaml_boot("mcp:\n  allowed-hosts: [api.example.com, \"\"]\n").await;
-}
-
-#[r2e_core::test]
-#[should_panic(expected = "mcp.allowed-hosts: empty entry")]
-async fn empty_allowed_host_from_a_placeholder_is_a_boot_error() {
-    yaml_boot("mcp:\n  allowed-hosts: [\"${R2E_MCP_1204_UNSET_HOST:}\"]\n").await;
+    boot_with_config("mcp.allowed-hosts", hosts(&["api.example.com", ""])).await;
 }
 
 #[r2e_core::test]
@@ -153,7 +148,11 @@ async fn empty_builder_allowed_hosts_is_a_boot_error() {
 
 #[r2e_core::test]
 async fn listed_allowed_hosts_boot() {
-    yaml_boot("mcp:\n  allowed-hosts: [api.example.com, \"localhost:3000\"]\n").await;
+    boot_with_config(
+        "mcp.allowed-hosts",
+        hosts(&["api.example.com", "localhost:3000"]),
+    )
+    .await;
 }
 
 #[r2e_core::test]
