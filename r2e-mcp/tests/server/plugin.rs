@@ -12,7 +12,13 @@ use crate::fixtures::{fixture_app_with, Calc, CallLog, FixtureTools};
 use crate::support;
 
 fn config(yaml: &str) -> R2eConfig {
-    R2eConfig::from_yaml_str(yaml).unwrap()
+    // Resolve `${...}` like a loaded `application.yaml` (`override_config`
+    // takes the tree verbatim).
+    let mut config = R2eConfig::from_yaml_str(yaml).unwrap();
+    config
+        .resolve_placeholders_with(&r2e_core::config::DefaultSecretResolver)
+        .unwrap();
+    config
 }
 
 #[r2e_core::test]
@@ -104,6 +110,51 @@ async fn trailing_slash_path_is_a_boot_error() {
 #[should_panic(expected = "no `{param}` captures or wildcards")]
 async fn capture_path_is_a_boot_error() {
     let _ = fixture_app_with(McpServer::new().with_path("/mcp/{id}")).await;
+}
+
+/// Boot the fixture app from a YAML `mcp` section.
+async fn yaml_boot(yaml: &str) {
+    let _ = AppBuilder::new()
+        .override_config(config(yaml))
+        .load_config::<()>()
+        .plugin(McpServer::new())
+        .provide(Calc)
+        .provide(CallLog::default())
+        .build_state()
+        .await
+        .register_mcp_service::<FixtureTools>()
+        .build();
+}
+
+/// rmcp reads an empty list as "Host check off" — `[]` must not silently
+/// drop the DNS-rebinding protection (#1204).
+#[r2e_core::test]
+#[should_panic(expected = "mcp.allowed-hosts must not be empty")]
+async fn empty_allowed_hosts_is_a_boot_error() {
+    yaml_boot("mcp:\n  allowed-hosts: []\n").await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.allowed-hosts: empty entry in [\"api.example.com\", \"\"]")]
+async fn empty_allowed_host_entry_is_a_boot_error() {
+    yaml_boot("mcp:\n  allowed-hosts: [api.example.com, \"\"]\n").await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.allowed-hosts: empty entry")]
+async fn empty_allowed_host_from_a_placeholder_is_a_boot_error() {
+    yaml_boot("mcp:\n  allowed-hosts: [\"${R2E_MCP_1204_UNSET_HOST:}\"]\n").await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.allowed-hosts must not be empty")]
+async fn empty_builder_allowed_hosts_is_a_boot_error() {
+    let _ = fixture_app_with(McpServer::new().with_allowed_hosts(Vec::<String>::new())).await;
+}
+
+#[r2e_core::test]
+async fn listed_allowed_hosts_boot() {
+    yaml_boot("mcp:\n  allowed-hosts: [api.example.com, \"localhost:3000\"]\n").await;
 }
 
 #[r2e_core::test]

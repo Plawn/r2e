@@ -309,6 +309,33 @@ fn supported_protocol_versions(
     Ok(ProtocolVersion::known_up_to(known))
 }
 
+/// `mcp.allowed-hosts`, when set, must name at least one host and no empty
+/// entry: rmcp reads an EMPTY list as "Host check off", so `[]` (or a
+/// `${VAR}` that resolved to nothing) would silently drop the DNS-rebinding
+/// protection instead of tightening it.
+fn validate_allowed_hosts(hosts: Option<&[String]>) -> Result<(), PluginBuildError> {
+    let Some(hosts) = hosts else {
+        return Ok(());
+    };
+    if hosts.is_empty() {
+        return Err(
+            "mcp.allowed-hosts must not be empty: an empty list disables the `Host` \
+             header check (DNS-rebinding protection) entirely. List the public \
+             hostname(s), or remove the key for the loopback-only default"
+                .to_string()
+                .into(),
+        );
+    }
+    if hosts.iter().any(|host| host.trim().is_empty()) {
+        return Err(format!(
+            "mcp.allowed-hosts: empty entry in {hosts:?} — every entry must be a \
+             hostname or `host:port` authority"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn validate_path(path: &str) -> Result<(), PluginBuildError> {
     if !path.starts_with('/') {
         return Err(format!("mcp.path must start with '/': got `{path}`").into());
@@ -407,6 +434,7 @@ impl Plugin for McpServer {
                 .as_deref(),
         )?;
         let allowed_hosts = self.allowed_hosts.or(cfg.allowed_hosts);
+        validate_allowed_hosts(allowed_hosts.as_deref())?;
         let allowed_origins = self
             .allowed_origins
             .or(cfg.allowed_origins)

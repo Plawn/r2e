@@ -5,7 +5,7 @@
 //! resolved resource is observed through the PRM document it feeds.
 
 use r2e_core::http::StatusCode;
-use r2e_core::AppBuilder;
+use r2e_core::{AppBuilder, R2eConfig};
 use r2e_mcp::auth::{AudienceMode, McpAuthConfig, TokenValidationMode};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::Value;
@@ -194,6 +194,126 @@ async fn eager_discovery_failure_is_a_boot_error() {
         ..offline_auth()
     })
     .await;
+}
+
+// ── Scope and endpoint-URL validation (#1204) ─────────────────────────────
+
+/// Boot from a YAML `mcp.auth` section: the offline baseline (http issuer
+/// under `allow-insecure`, `discovery: off`, explicit resource, pinned
+/// validator) plus `extra` lines (already indented under `auth:`).
+async fn yaml_auth_boot(extra: &str) {
+    let yaml = format!(
+        "mcp:\n  auth:\n    issuer: {ISSUER}\n    allow-insecure: true\n    \
+         discovery: off\n    resource: {RESOURCE}\n{extra}"
+    );
+    // Resolve `${...}` like a loaded `application.yaml` (`override_config`
+    // takes the tree verbatim).
+    let mut config = R2eConfig::from_yaml_str(&yaml).unwrap();
+    config
+        .resolve_placeholders_with(&r2e_core::config::DefaultSecretResolver)
+        .unwrap();
+    let _ = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .plugin(McpServer::new().with_token_validator(pinned(&test_jwt())))
+        .build_state()
+        .await
+        .register_mcp_service::<fixtures::SecuredTools>()
+        .build();
+}
+
+/// The 2026-11-01 `invalid_scope` incident: one entry holding two
+/// space-separated scopes.
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.scopes-supported: scope `openid profile` contains a space")]
+async fn scope_with_a_space_is_a_boot_error() {
+    yaml_auth_boot("    scopes-supported: [\"openid profile\", mcp]\n").await;
+}
+
+/// A `${VAR}` placeholder that resolves to nothing must not slip an empty
+/// scope through.
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.required-scopes: empty scope entry")]
+async fn empty_scope_from_a_placeholder_is_a_boot_error() {
+    yaml_auth_boot("    required-scopes: [mcp, \"${R2E_MCP_1204_UNSET_SCOPE:}\"]\n").await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.required-scopes: scope `a\"b` contains the character '\"'")]
+async fn scope_with_a_quote_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        required_scopes: Some(vec!["a\"b".into()]),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.scopes-supported: scope `a\\b` contains the character '\\\\'")]
+async fn scope_with_a_backslash_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        scopes_supported: Some(vec!["a\\b".into()]),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.jwks-url: `not a url` is not an absolute URL")]
+async fn non_url_jwks_url_is_a_boot_error() {
+    yaml_auth_boot("    jwks-url: not a url\n").await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.token-endpoint: `/oauth/token` is not an absolute URL")]
+async fn relative_endpoint_from_a_placeholder_is_a_boot_error() {
+    yaml_auth_boot("    token-endpoint: \"${R2E_MCP_1204_UNSET_URL:/oauth/token}\"\n").await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.authorization-endpoint `http://idp.example/auth` is not https")]
+async fn plaintext_endpoint_without_allow_insecure_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        issuer: "https://idp.example".into(),
+        allow_insecure: None,
+        jwks_url: Some("https://idp.example/jwks".into()),
+        authorization_endpoint: Some("http://idp.example/auth".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "mcp.auth.userinfo-endpoint: `ftp://idp.example/me` has scheme `ftp`")]
+async fn non_http_endpoint_scheme_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        userinfo_endpoint: Some("ftp://idp.example/me".into()),
+        ..offline_auth()
+    })
+    .await;
+}
+
+/// Regression guard: well-formed scopes and https endpoints still boot.
+#[r2e_core::test]
+async fn valid_scopes_and_endpoints_boot() {
+    let router = secured_app_with(McpAuthConfig {
+        issuer: "https://idp.example".into(),
+        allow_insecure: None,
+        jwks_url: Some("https://idp.example/jwks".into()),
+        authorization_endpoint: Some("https://idp.example/auth".into()),
+        token_endpoint: Some("https://idp.example/token".into()),
+        userinfo_endpoint: Some("https://idp.example/me".into()),
+        introspection_endpoint: Some("https://idp.example/introspect".into()),
+        scopes_supported: Some(vec![
+            "openid".into(),
+            "mcp:read".into(),
+            "api://x/.default".into(),
+        ]),
+        required_scopes: Some(vec!["mcp:read".into()]),
+        ..offline_auth()
+    })
+    .await;
+    assert_eq!(prm_resource(&router).await, RESOURCE);
 }
 
 // ── Resource resolution ────────────────────────────────────────────────────

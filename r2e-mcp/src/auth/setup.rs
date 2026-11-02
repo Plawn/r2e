@@ -132,6 +132,78 @@ fn split_resource(resource: &str) -> Result<(String, String), PluginBuildError> 
     Ok((origin, path))
 }
 
+/// RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — printable
+/// ASCII minus space, `"` and `\`. A space in one entry is the classic
+/// mistake (`"openid profile"`): on the wire scopes are space-delimited, so
+/// the entry silently becomes two scopes in one place and one in another,
+/// and IdPs answer `invalid_scope`.
+fn validate_scopes(key: &str, scopes: Option<&[String]>) -> Result<(), PluginBuildError> {
+    for scope in scopes.into_iter().flatten() {
+        if scope.is_empty() {
+            return Err(format!(
+                "mcp.auth.{key}: empty scope entry — remove it (an empty scope token \
+                 is invalid per RFC 6749 §3.3)"
+            )
+            .into());
+        }
+        let bad = scope
+            .chars()
+            .find(|c| !matches!(*c as u32, 0x21 | 0x23..=0x5B | 0x5D..=0x7E));
+        if let Some(bad) = bad {
+            let what = match bad {
+                ' ' => "a space (scopes are space-delimited on the wire — list each scope \
+                        as its own entry)"
+                    .to_string(),
+                other => format!("the character {other:?}"),
+            };
+            return Err(format!(
+                "mcp.auth.{key}: scope `{scope}` contains {what}; RFC 6749 §3.3 scope \
+                 tokens are printable ASCII without space, `\"` or `\\`"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// An explicitly configured OAuth endpoint (`jwks-url`,
+/// `authorization-endpoint`, …) must be an absolute `https` URL — `http` is
+/// only accepted under `allow-insecure`, like the issuer. Checked at boot so
+/// a typo surfaces there instead of on the first authenticated request.
+fn validate_endpoint_url(
+    key: &str,
+    value: Option<&str>,
+    allow_insecure: bool,
+) -> Result<(), PluginBuildError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let url = url::Url::parse(value)
+        .map_err(|e| format!("mcp.auth.{key}: `{value}` is not an absolute URL: {e}"))?;
+    match url.scheme() {
+        "https" => {}
+        "http" if allow_insecure => {}
+        "http" => {
+            return Err(format!(
+                "mcp.auth.{key} `{value}` is not https — a plaintext OAuth endpoint lets \
+                 a network MITM tamper with keys or tokens. Set \
+                 `mcp.auth.allow-insecure: true` for local development only"
+            )
+            .into());
+        }
+        other => {
+            return Err(format!(
+                "mcp.auth.{key}: `{value}` has scheme `{other}`; expected an https URL"
+            )
+            .into());
+        }
+    }
+    if !url.has_host() {
+        return Err(format!("mcp.auth.{key}: `{value}` has no host").into());
+    }
+    Ok(())
+}
+
 /// `mcp.allowed-origins` as the layer stores it (`None` = no check).
 fn allowed_origins(inputs: &AuthInputs<'_>) -> Option<Arc<[String]>> {
     if inputs.allowed_origins.is_empty() {
@@ -180,6 +252,9 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
 /// Assemble the whole auth surface from the resolved `mcp.auth` section.
 pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, PluginBuildError> {
     let cfg = &inputs.cfg;
+
+    validate_scopes("scopes-supported", cfg.scopes_supported.as_deref())?;
+    validate_scopes("required-scopes", cfg.required_scopes.as_deref())?;
 
     let basic = cfg
         .basic
@@ -237,6 +312,16 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
              for local development only"
         )
         .into());
+    }
+
+    for (key, value) in [
+        ("jwks-url", &cfg.jwks_url),
+        ("authorization-endpoint", &cfg.authorization_endpoint),
+        ("token-endpoint", &cfg.token_endpoint),
+        ("userinfo-endpoint", &cfg.userinfo_endpoint),
+        ("introspection-endpoint", &cfg.introspection_endpoint),
+    ] {
+        validate_endpoint_url(key, value.as_deref(), allow_insecure)?;
     }
 
     let resource = resolve_resource(&inputs)?;
