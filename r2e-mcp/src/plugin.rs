@@ -22,6 +22,7 @@ use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
 use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
+use crate::request_log::McpRequestLog;
 use crate::resource_updates::McpResourceUpdates;
 use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, TrackSessionId};
 
@@ -679,6 +680,9 @@ impl Plugin for McpServer {
             if let Some(bytes) = max_request_body_bytes {
                 transport_config.max_request_body_bytes = bytes;
             }
+            let request_log = McpRequestLog {
+                limit: transport_config.max_request_body_bytes,
+            };
             let service = StreamableHttpService::new(
                 move || Ok(R2eMcpHandler::new(Arc::clone(&endpoint))),
                 session_manager,
@@ -689,8 +693,14 @@ impl Plugin for McpServer {
             // `WWW-Authenticate` challenge. The well-known/shim routes are
             // merged NEXT TO the service — public by design, never behind
             // the auth layer (they answer unauthenticated discovery).
+            //
+            // The request log sits OUTSIDE the auth layer (it must see
+            // rejections and their status); it taps the body rather than
+            // reading it, so a request rejected before rmcp reads the body
+            // (auth, rmcp's header checks) never has it buffered.
             let service = tower::ServiceBuilder::new()
                 .layer(cors)
+                .layer(request_log)
                 .option_layer(auth_layer)
                 .layer(TrackSessionId)
                 .map_response(r2e_core::http::response::IntoResponse::into_response)

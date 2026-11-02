@@ -47,6 +47,7 @@ mod global;
 pub mod guard;
 pub mod handler;
 mod pagination;
+mod request_log;
 pub mod params;
 pub mod plugin;
 pub mod progress;

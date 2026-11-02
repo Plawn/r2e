@@ -33,6 +33,9 @@ url = { workspace = true }
 # percent-decoded before reaching `ResourceCall::variables`.
 percent-encoding = { workspace = true }
 tower = { workspace = true }
+# `Body::size_hint` — the MCP request log peeks the JSON-RPC method only of a
+# body whose exact length is known and within the transport limit.
+http-body = { workspace = true }
 # `default-features = false`: rmcp's default `macros` feature is deliberately
 # unused — R2E dispatches tools itself (#[mcp_routes]), rmcp is the wire only.
 rmcp = { workspace = true }

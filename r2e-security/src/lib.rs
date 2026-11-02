@@ -12,18 +12,18 @@ pub mod openid;
 
 // Re-export primary public types for convenience.
 pub use config::SecurityConfig;
-pub use error::SecurityError;
+pub use error::{SecurityError, SecurityErrorKind};
 pub use extractor::{extract_jwt_claims, extract_jwt_claims_as, extract_jwt_identity};
 pub use guards::{AllRolesGuard, RoleBasedIdentity, RolesDenied, RolesGuard};
 pub use identity::{
     AuthenticatedUser, ClaimsIdentity, DefaultIdentityBuilder, DefaultRoleExtractor,
     FromValidatedJwtClaims, IdentityBuilder, IdentityBuilderWith,
 };
-pub use jwks::JwksCache;
 /// The JWKS HTTP client builder doubles as the OAuth-metadata HTTP client
 /// (same timeouts, same HTTPS-only policy) for crates building on
 /// r2e-security, e.g. r2e-mcp discovery.
 pub use jwks::build_jwks_client as build_oauth_http_client;
+pub use jwks::JwksCache;
 pub use jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
 
 /// JWT signature algorithms accepted by [`SecurityConfig::with_allowed_algorithms`].

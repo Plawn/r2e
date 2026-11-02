@@ -40,6 +40,31 @@ use super::wellknown::{preflight, public_json_response, put_public_headers};
 /// payload is a handful of redirect URIs).
 const MAX_REGISTER_BODY_BYTES: usize = 16 * 1024;
 
+/// Bounds on what a registration log line echoes from the request (see
+/// `register`): the `client_name`, and how many / how long dropped
+/// redirect URIs are sampled.
+const LOG_NAME_CHARS: usize = 64;
+const LOG_SAMPLE_ENTRIES: usize = 3;
+const LOG_SAMPLE_CHARS: usize = 128;
+
+/// `value` cut to `max` characters (on a char boundary), with an ellipsis
+/// when it was longer.
+fn clip(value: &str, max: usize) -> String {
+    match value.char_indices().nth(max) {
+        Some((end, _)) => format!("{}…", &value[..end]),
+        None => value.to_string(),
+    }
+}
+
+/// The first few dropped URIs, each clipped, for the log line.
+fn log_sample(dropped: &[&str]) -> Vec<String> {
+    dropped
+        .iter()
+        .take(LOG_SAMPLE_ENTRIES)
+        .map(|uri| clip(uri, LOG_SAMPLE_CHARS))
+        .collect()
+}
+
 /// Default redirect-URI allowlist: local development plus the callbacks of
 /// the mainstream MCP clients.
 pub(crate) const DEFAULT_REDIRECT_ALLOWLIST: &[&str] = &[
@@ -61,7 +86,8 @@ pub(crate) struct ShimState {
     /// Absolute URL of the shim's own registration endpoint (rewritten into
     /// the mirrored metadata).
     pub registration_endpoint: String,
-    /// Extra scopes to union into the mirrored `scopes_supported`.
+    /// The PRM's advertised scopes: unioned into the mirrored
+    /// `scopes_supported` and echoed as `scope` by the registration answer.
     pub scopes_supported: Vec<String>,
     /// `mcp.auth.redirect-uri-allowlist`, or the default list.
     pub redirect_allowlist: Vec<String>,
@@ -111,27 +137,46 @@ fn oauth_error(status: StatusCode, code: &str, description: &str) -> Response {
 }
 
 /// `POST {mcp.path}{registration-path}` — the static registration answer.
+///
+/// Logs exactly one line per call: INFO when every requested redirect URI
+/// was accepted, WARN when the call failed or some URIs were dropped (an
+/// allowlist that misses a client's callback is the usual cause of a
+/// stalled OAuth flow). Client-supplied values are Debug-escaped.
 async fn register(state: Arc<ShimState>, req: Request) -> Response {
     let body = match to_bytes(req.into_body(), MAX_REGISTER_BODY_BYTES).await {
         Ok(bytes) => bytes,
         Err(_) => {
+            tracing::warn!(
+                status = 413,
+                "DCR shim registration rejected: request body too large"
+            );
             return oauth_error(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "invalid_client_metadata",
                 "registration request body too large",
-            )
+            );
         }
     };
     let request: Value = match r2e_core::json::from_slice(&body) {
         Ok(v) => v,
         Err(_) => {
+            tracing::warn!(
+                status = 400,
+                "DCR shim registration rejected: request is not a JSON object"
+            );
             return oauth_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_client_metadata",
                 "registration request is not a JSON object",
-            )
+            );
         }
     };
+    let client_name = request.get("client_name").and_then(Value::as_str);
+    // What the log lines carry is BOUNDED: the endpoint is public and
+    // unauthenticated, so a client must not be able to size a WARN line
+    // (`client_name`, the dropped URIs) — the response still echoes the
+    // full `client_name`.
+    let logged_name = client_name.map(|name| clip(name, LOG_NAME_CHARS));
 
     let requested: Vec<&str> = request
         .get("redirect_uris")
@@ -143,7 +188,20 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
         .copied()
         .filter(|uri| redirect_allowed(&state.redirect_allowlist, uri))
         .collect();
+    let dropped: Vec<&str> = requested
+        .iter()
+        .copied()
+        .filter(|uri| !accepted.contains(uri))
+        .collect();
     if accepted.is_empty() {
+        tracing::warn!(
+            status = 400,
+            client_name = ?logged_name,
+            rejected_redirect_uris = dropped.len(),
+            rejected_sample = ?log_sample(&dropped),
+            "DCR shim registration rejected: no requested redirect_uri is on \
+             `mcp.auth.redirect-uri-allowlist`"
+        );
         return oauth_error(
             StatusCode::BAD_REQUEST,
             "invalid_redirect_uri",
@@ -151,11 +209,25 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
              (`mcp.auth.redirect-uri-allowlist`)",
         );
     }
-    if accepted.len() < requested.len() {
+    let scope = state.scopes_supported.join(" ");
+    if dropped.is_empty() {
+        tracing::info!(
+            status = 201,
+            client_name = ?logged_name,
+            redirect_uris = accepted.len(),
+            scope = %scope,
+            "DCR shim registration answered"
+        );
+    } else {
         tracing::warn!(
-            requested = requested.len(),
-            accepted = accepted.len(),
-            "DCR shim dropped redirect URIs not on the allowlist"
+            status = 201,
+            client_name = ?logged_name,
+            redirect_uris = accepted.len(),
+            rejected_redirect_uris = dropped.len(),
+            rejected_sample = ?log_sample(&dropped),
+            scope = %scope,
+            "DCR shim registration answered; dropped redirect URIs not on \
+             `mcp.auth.redirect-uri-allowlist`"
         );
     }
 
@@ -166,8 +238,14 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
         "response_types": ["code"],
         "redirect_uris": accepted,
     });
-    if let Some(name) = request.get("client_name").and_then(Value::as_str) {
+    if let Some(name) = client_name {
         doc["client_name"] = json!(name);
+    }
+    // RFC 7591 §2 `scope`: the scopes the client may request — the ones the
+    // PRM advertises. Without it a client falls back to a scope of its own,
+    // which the IdP may refuse (`invalid_scope`).
+    if !scope.is_empty() {
+        doc["scope"] = json!(scope);
     }
 
     let mut response = Response::new(doc.to_string().into());

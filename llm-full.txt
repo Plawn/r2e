@@ -6449,9 +6449,16 @@ Everything else is discovered from the issuer. You get: local JWT validation
 with `WWW-Authenticate: Bearer resource_metadata="…"` (RFC 9728), public
 protected-resource metadata at `/.well-known/oauth-protected-resource{path}`,
 and — when `public-client-id` is set — a DCR shim (`POST {path}/oauth/register`
-hands every client that pre-created public client id; redirect URIs must
-already be configured on the IdP client). IdP outages → 503, not 401. No
-`mcp.auth` section → unauthenticated server.
+hands every client that pre-created public client id and echoes the
+advertised scopes as `scope`; redirect URIs must already be configured on the
+IdP client). With the shim on, set `mcp.auth.scopes-supported` (or
+`required-scopes`) — boot WARNs otherwise, since clients then invent a scope
+the IdP refuses (`invalid_scope`). IdP outages → 503, not 401. No `mcp.auth`
+section → unauthenticated server. Logs: every refused credential is one WARN
+`MCP request rejected` with a `cause` (`token_expired`, `claims`,
+`unknown_kid`, `algorithm_refused`, …; a request with no credentials is DEBUG),
+every MCP request one DEBUG `MCP request` line (`rpc_method`, `status`,
+`auth`), every DCR call one line — never the token.
 
 Other `mcp.auth.*` keys (all optional): `resource`/`resource-name`, `discovery`
 (`eager`|`lazy`|`off`) + `discovery-ttl-secs`/`jwks-url`/explicit

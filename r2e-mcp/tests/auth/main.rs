@@ -14,6 +14,7 @@ mod discovery;
 mod identity;
 mod keycloak;
 mod layer;
+mod observability;
 mod pagination;
 mod scopes;
 mod sessions;

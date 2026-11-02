@@ -62,6 +62,67 @@ impl std::fmt::Display for McpAuthError {
 
 impl std::error::Error for McpAuthError {}
 
+/// The `cause` of a request that presented no credentials at all — the
+/// normal first leg of every OAuth flow, logged at DEBUG by the layer.
+pub(crate) const MISSING_CREDENTIALS: &str = "missing_credentials";
+
+/// An auth failure as the layer sees it: the client-facing [`McpAuthError`]
+/// plus the operator-facing cause the rejection log line carries.
+///
+/// Crate-private by design: the wire only ever renders `error` (a static,
+/// allow-listed reason); `cause` and `detail` go to the log, never to the
+/// client. `detail` is never token or credential bytes — at most the
+/// validator's own error text (a `kid`, an algorithm, a claim name).
+#[derive(Debug)]
+pub(crate) struct AuthFailure {
+    pub error: McpAuthError,
+    /// Stable snake_case category (`missing_credentials`, `unknown_kid`, …).
+    pub cause: &'static str,
+    pub detail: Option<String>,
+}
+
+impl AuthFailure {
+    pub(crate) fn new(error: McpAuthError, cause: &'static str) -> Self {
+        Self {
+            error,
+            cause,
+            detail: None,
+        }
+    }
+
+    pub(crate) fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    pub(crate) fn with_cause(mut self, cause: &'static str) -> Self {
+        self.cause = cause;
+        self
+    }
+}
+
+/// The generic categorization, for errors coming out of a backend that
+/// does not classify its own failures (opaque backends, custom validators):
+/// their `InvalidToken` reason is already specific and is logged as `reason`.
+impl From<McpAuthError> for AuthFailure {
+    fn from(error: McpAuthError) -> Self {
+        let (cause, detail) = match &error {
+            McpAuthError::MissingToken => (MISSING_CREDENTIALS, None),
+            McpAuthError::InvalidToken(_) => ("invalid_token", None),
+            McpAuthError::InsufficientScope { missing } => {
+                ("insufficient_scope", Some(missing.join(" ")))
+            }
+            McpAuthError::InvalidOrigin => ("invalid_origin", None),
+            McpAuthError::Upstream(detail) => ("upstream_unavailable", Some(detail.clone())),
+        };
+        Self {
+            error,
+            cause,
+            detail,
+        }
+    }
+}
+
 /// Escape a value for use inside an RFC 9110 quoted-string.
 fn quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
