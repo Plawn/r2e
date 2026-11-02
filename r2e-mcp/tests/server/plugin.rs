@@ -12,13 +12,7 @@ use crate::fixtures::{fixture_app_with, Calc, CallLog, FixtureTools};
 use crate::support;
 
 fn config(yaml: &str) -> R2eConfig {
-    // Resolve `${...}` like a loaded `application.yaml` (`override_config`
-    // takes the tree verbatim).
-    let mut config = R2eConfig::from_yaml_str(yaml).unwrap();
-    config
-        .resolve_placeholders_with(&r2e_core::config::DefaultSecretResolver)
-        .unwrap();
-    config
+    R2eConfig::from_yaml_str(yaml).unwrap()
 }
 
 #[r2e_core::test]
@@ -112,10 +106,15 @@ async fn capture_path_is_a_boot_error() {
     let _ = fixture_app_with(McpServer::new().with_path("/mcp/{id}")).await;
 }
 
-/// Boot the fixture app from a YAML `mcp` section.
+/// Boot the fixture app from an `application.yaml` on disk, so the `mcp`
+/// section goes through the standard loader (`${VAR:default}` resolved,
+/// then typed as `McpConfig`) exactly like a deployed app.
 async fn yaml_boot(yaml: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("application.yaml");
+    std::fs::write(&file, yaml).unwrap();
     let _ = AppBuilder::new()
-        .override_config(config(yaml))
+        .with_config_file(&file)
         .load_config::<()>()
         .plugin(McpServer::new())
         .provide(Calc)

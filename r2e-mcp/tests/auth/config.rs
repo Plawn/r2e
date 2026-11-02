@@ -5,7 +5,7 @@
 //! resolved resource is observed through the PRM document it feeds.
 
 use r2e_core::http::StatusCode;
-use r2e_core::{AppBuilder, R2eConfig};
+use r2e_core::AppBuilder;
 use r2e_mcp::auth::{AudienceMode, McpAuthConfig, TokenValidationMode};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::Value;
@@ -198,22 +198,21 @@ async fn eager_discovery_failure_is_a_boot_error() {
 
 // ── Scope and endpoint-URL validation (#1204) ─────────────────────────────
 
-/// Boot from a YAML `mcp.auth` section: the offline baseline (http issuer
-/// under `allow-insecure`, `discovery: off`, explicit resource, pinned
-/// validator) plus `extra` lines (already indented under `auth:`).
+/// Boot from an `application.yaml` on disk holding the offline `mcp.auth`
+/// baseline (http issuer under `allow-insecure`, `discovery: off`, explicit
+/// resource, pinned validator) plus `extra` lines (already indented under
+/// `auth:`). The file goes through the standard loader — `${VAR:default}`
+/// resolved, then typed as `McpAuthConfig` — exactly like a deployed app.
 async fn yaml_auth_boot(extra: &str) {
     let yaml = format!(
         "mcp:\n  auth:\n    issuer: {ISSUER}\n    allow-insecure: true\n    \
          discovery: off\n    resource: {RESOURCE}\n{extra}"
     );
-    // Resolve `${...}` like a loaded `application.yaml` (`override_config`
-    // takes the tree verbatim).
-    let mut config = R2eConfig::from_yaml_str(&yaml).unwrap();
-    config
-        .resolve_placeholders_with(&r2e_core::config::DefaultSecretResolver)
-        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("application.yaml");
+    std::fs::write(&file, yaml).unwrap();
     let _ = AppBuilder::new()
-        .override_config(config)
+        .with_config_file(&file)
         .load_config::<()>()
         .plugin(McpServer::new().with_token_validator(pinned(&test_jwt())))
         .build_state()
