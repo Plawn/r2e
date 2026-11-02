@@ -597,6 +597,18 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         cfg.resource_name.as_deref(),
     );
     let mut extra_routes = prm_routes(prm, inputs.mcp_path);
+    if shim_on && scopes_supported.is_empty() {
+        // The 2026-11-01 incident: with no scope in the PRM, a DCR client
+        // (claude.ai) falls back to a scope of its own (`claudeai`) and the
+        // IdP answers `invalid_scope` — nothing failed on this side.
+        tracing::warn!(
+            "mcp.auth: the DCR shim is active but the protected-resource metadata \
+             advertises no scope — set `mcp.auth.scopes-supported` (or \
+             `mcp.auth.required-scopes`) to the scopes your IdP grants for this \
+             client; without it MCP clients pick a scope of their own and the IdP \
+             typically rejects the authorization request with `invalid_scope`"
+        );
+    }
     if shim_on {
         let registration_path = cfg
             .registration_path

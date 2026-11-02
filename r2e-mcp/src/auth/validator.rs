@@ -10,7 +10,7 @@ use r2e_core::rt;
 use r2e_security::openid::RoleExtractor;
 use r2e_security::{AuthenticatedUser, SecurityError, StandardClaims};
 
-use super::error::McpAuthError;
+use super::error::{AuthFailure, McpAuthError};
 
 /// The authenticated caller of an MCP request.
 ///
@@ -63,20 +63,24 @@ pub trait TokenValidatorBackend: Send + Sync + 'static {
     ) -> impl Future<Output = Result<McpPrincipal, McpAuthError>> + Send;
 }
 
-/// Object-safe adapter over [`TokenValidatorBackend`].
+type ValidateFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<McpPrincipal, AuthFailure>> + Send + 'a>>;
+
+/// Object-safe validator. Unlike the public [`TokenValidatorBackend`], it
+/// reports an [`AuthFailure`]: the built-in JWT backends classify the
+/// precise rejection cause (unknown `kid`, refused algorithm, signature,
+/// claims…) for the auth layer's log line, while the client still only sees
+/// the coarse, allow-listed [`McpAuthError`].
 trait ErasedTokenValidator: Send + Sync {
-    fn validate<'a>(
-        &'a self,
-        bearer: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<McpPrincipal, McpAuthError>> + Send + 'a>>;
+    fn validate<'a>(&'a self, bearer: &'a str) -> ValidateFuture<'a>;
 }
 
-impl<B: TokenValidatorBackend> ErasedTokenValidator for B {
-    fn validate<'a>(
-        &'a self,
-        bearer: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<McpPrincipal, McpAuthError>> + Send + 'a>> {
-        Box::pin(TokenValidatorBackend::validate(self, bearer))
+/// A user/opaque [`TokenValidatorBackend`], categorized generically.
+struct Custom<B>(B);
+
+impl<B: TokenValidatorBackend> ErasedTokenValidator for Custom<B> {
+    fn validate<'a>(&'a self, bearer: &'a str) -> ValidateFuture<'a> {
+        Box::pin(async move { self.0.validate(bearer).await.map_err(AuthFailure::from) })
     }
 }
 
@@ -125,7 +129,7 @@ impl McpTokenValidator {
     /// A custom validation backend.
     pub fn custom(backend: impl TokenValidatorBackend) -> Self {
         Self {
-            inner: Some(Arc::new(backend)),
+            inner: Some(Arc::new(Custom(backend))),
         }
     }
 
@@ -137,12 +141,24 @@ impl McpTokenValidator {
 
     /// Validate a bearer token.
     pub async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
+        self.validate_detailed(bearer)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// [`validate`](Self::validate), keeping the operator-facing cause for
+    /// the auth layer's rejection log line.
+    pub(crate) async fn validate_detailed(
+        &self,
+        bearer: &str,
+    ) -> Result<McpPrincipal, AuthFailure> {
         match &self.inner {
             Some(backend) => backend.validate(bearer).await,
             // Fail closed: a disabled validator reached by an enabled layer
             // is a wiring bug, not an open door.
-            None => Err(McpAuthError::InvalidToken(
-                "token validation is not configured",
+            None => Err(AuthFailure::new(
+                McpAuthError::InvalidToken("token validation is not configured"),
+                "validator_disabled",
             )),
         }
     }
@@ -253,10 +269,64 @@ struct JwtBackend {
     scopes: ScopePolicy,
 }
 
-impl TokenValidatorBackend for JwtBackend {
-    async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
-        validate_jwt(&self.validator, &self.scopes, bearer).await
+impl ErasedTokenValidator for JwtBackend {
+    fn validate<'a>(&'a self, bearer: &'a str) -> ValidateFuture<'a> {
+        Box::pin(validate_jwt(&self.validator, &self.scopes, bearer))
     }
+}
+
+/// The operator-facing category of a JWT rejection.
+///
+/// `SecurityError` carries most of its distinctions in its message, so the
+/// finer split (signature vs malformed, algorithm vs claims) is read from
+/// the messages r2e-security and jsonwebtoken produce; anything unrecognized
+/// falls back to `malformed_token` / `claims` — the `detail` field always
+/// carries the full error text anyway.
+fn jwt_cause(err: &SecurityError) -> &'static str {
+    match err {
+        SecurityError::JwksFetchError(_) => "jwks_unavailable",
+        SecurityError::TokenExpired => "token_expired",
+        SecurityError::UnknownKeyId(_) => "unknown_kid",
+        SecurityError::MissingAuthHeader | SecurityError::InvalidAuthScheme => {
+            "malformed_header"
+        }
+        SecurityError::InvalidToken(msg) => {
+            if msg.contains("missing 'kid'") {
+                "missing_kid"
+            } else if msg.contains("InvalidSignature") {
+                "invalid_signature"
+            } else if msg.contains("ImmatureSignature")
+                || msg.contains("InvalidSubject")
+                || msg.contains("claim")
+            {
+                "claims"
+            } else {
+                "malformed_token"
+            }
+        }
+        SecurityError::ValidationFailed(msg) => {
+            if msg.contains("algorithm") {
+                "algorithm_refused"
+            } else if msg.starts_with("JWK") || msg.contains("key missing") {
+                "signing_key_unusable"
+            } else {
+                "claims"
+            }
+        }
+    }
+}
+
+/// Map a JWT validation error to the client-facing error (unchanged: a
+/// static reason, never crypto detail) plus its logged cause.
+fn jwt_failure(err: SecurityError) -> AuthFailure {
+    let cause = jwt_cause(&err);
+    let error = match &err {
+        // IdP outage ≠ bad token: 503, no re-auth challenge.
+        e if e.is_server_error() => McpAuthError::Upstream(e.to_string()),
+        SecurityError::TokenExpired => McpAuthError::InvalidToken("token expired"),
+        _ => McpAuthError::InvalidToken("token validation failed"),
+    };
+    AuthFailure::new(error, cause).with_detail(err.to_string())
 }
 
 /// The shared JWT validation path (used by both the eager and lazy
@@ -265,13 +335,8 @@ async fn validate_jwt(
     validator: &r2e_security::JwtClaimsValidator,
     scopes: &ScopePolicy,
     bearer: &str,
-) -> Result<McpPrincipal, McpAuthError> {
-    let claims: StandardClaims = validator.validate(bearer).await.map_err(|err| match err {
-        // IdP outage ≠ bad token: 503, no re-auth challenge.
-        e if e.is_server_error() => McpAuthError::Upstream(e.to_string()),
-        SecurityError::TokenExpired => McpAuthError::InvalidToken("token expired"),
-        _ => McpAuthError::InvalidToken("token validation failed"),
-    })?;
+) -> Result<McpPrincipal, AuthFailure> {
+    let claims: StandardClaims = validator.validate(bearer).await.map_err(jwt_failure)?;
     let scope_values: Arc<[String]> = scopes.scopes(&claims).into();
     let user = Arc::new(r2e_security::identity::build_authenticated_user(
         claims, scopes,
@@ -299,8 +364,14 @@ struct LazyJwtBackend {
     inner: rt::sync::OnceCell<Arc<r2e_security::JwtClaimsValidator>>,
 }
 
-impl TokenValidatorBackend for LazyJwtBackend {
-    async fn validate(&self, bearer: &str) -> Result<McpPrincipal, McpAuthError> {
+impl ErasedTokenValidator for LazyJwtBackend {
+    fn validate<'a>(&'a self, bearer: &'a str) -> ValidateFuture<'a> {
+        Box::pin(self.validate_lazy(bearer))
+    }
+}
+
+impl LazyJwtBackend {
+    async fn validate_lazy(&self, bearer: &str) -> Result<McpPrincipal, AuthFailure> {
         let validator = self
             .inner
             .get_or_try_init(|| async {
@@ -326,7 +397,8 @@ impl TokenValidatorBackend for LazyJwtBackend {
                     config,
                 )))
             })
-            .await?;
+            .await
+            .map_err(|err: McpAuthError| AuthFailure::from(err).with_cause("jwks_unavailable"))?;
         validate_jwt(validator, &self.scopes, bearer).await
     }
 }

@@ -27,8 +27,9 @@ use r2e_core::http::{HeaderMap, Method, Request, Response, StatusCode, AUTHORIZA
 use tower::{Layer, Service};
 
 use super::basic::{basic_credentials, BasicCredentials};
-use super::error::{auth_error_response, Challenges, McpAuthError};
+use super::error::{auth_error_response, AuthFailure, Challenges, McpAuthError};
 use super::validator::{McpPrincipal, McpTokenValidator};
+use crate::request_log::AuthOutcome;
 use crate::session::{SessionBindings, SessionLink};
 
 /// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
@@ -113,39 +114,49 @@ fn session_not_found() -> Response {
 }
 
 /// Run the pre-call checks; `Ok` carries what to insert into extensions.
-async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipal, McpAuthError> {
+async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipal, AuthFailure> {
     // Origin allowlist (browser clients only — no header, no check).
     if let Some(allowed) = &state.allowed_origins
         && let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok())
-            && !origin_allowed(allowed, origin) {
-                return Err(McpAuthError::InvalidOrigin);
-            }
+        && !origin_allowed(allowed, origin)
+    {
+        return Err(AuthFailure::from(McpAuthError::InvalidOrigin).with_detail(origin));
+    }
 
-    let header = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .ok_or(McpAuthError::MissingToken)?;
+    let header = match headers.get(AUTHORIZATION) {
+        None => return Err(AuthFailure::new(McpAuthError::MissingToken, "missing_credentials")),
+        Some(value) => value.to_str().map_err(|_| {
+            AuthFailure::new(McpAuthError::MissingToken, "malformed_header")
+                .with_detail("Authorization header is not visible ASCII")
+        })?,
+    };
 
     // The scheme selects the path: Basic when configured and presented,
     // otherwise the bearer path (its own scheme check keeps a stray `Basic`
     // on an OAuth-only endpoint a 401, as before).
     let principal = match (&state.basic, basic_credentials(header)) {
-        (Some(basic), Some(encoded)) => basic.authenticate(encoded)?,
+        (Some(basic), Some(encoded)) => basic
+            .authenticate(encoded)
+            .map_err(|e| AuthFailure::new(e, "basic_credentials"))?,
         _ if state.oauth => {
-            let bearer = r2e_security::extractor::extract_bearer_token(header)
-                .map_err(|_| McpAuthError::MissingToken)?;
+            let bearer = r2e_security::extractor::extract_bearer_token(header).map_err(|_| {
+                AuthFailure::new(McpAuthError::MissingToken, "malformed_header")
+                    .with_detail("Authorization header is not `Bearer <token>`")
+            })?;
             let Some(validator) = state.validator.get() else {
                 // after_build has not run — a wiring bug, never a client error.
                 tracing::error!("MCP auth validator not initialised (after_build did not run)");
-                return Err(McpAuthError::Upstream(
-                    "authentication not initialised".into(),
+                return Err(AuthFailure::new(
+                    McpAuthError::Upstream("authentication not initialised".into()),
+                    "validator_not_initialised",
                 ));
             };
-            validator.validate(bearer).await?
+            validator.validate_detailed(bearer).await?
         }
         _ => {
-            return Err(McpAuthError::InvalidToken(
-                "unsupported authorization scheme",
+            return Err(AuthFailure::new(
+                McpAuthError::InvalidToken("unsupported authorization scheme"),
+                "unsupported_scheme",
             ))
         }
     };
@@ -157,10 +168,38 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
         .cloned()
         .collect();
     if !missing.is_empty() {
-        return Err(McpAuthError::InsufficientScope { missing });
+        return Err(AuthFailure::from(McpAuthError::InsufficientScope { missing }));
     }
 
     Ok(principal)
+}
+
+/// Log a rejection with its cause — never the token or credentials.
+///
+/// One rule for the level: a request with **no** `Authorization` header is
+/// the first leg of every OAuth flow (the client fetches the challenge), so
+/// it is DEBUG; every other rejection — a credential that was presented and
+/// refused, or an IdP outage — is WARN.
+fn log_rejection(failure: &AuthFailure, status: StatusCode) {
+    let reason = failure.error.description();
+    let detail = failure.detail.as_deref().unwrap_or_default();
+    if failure.cause == "missing_credentials" {
+        tracing::debug!(
+            cause = failure.cause,
+            status = status.as_u16(),
+            "MCP request without credentials; answering with the OAuth challenge"
+        );
+    } else {
+        // `?detail`: Debug-escaped — it can carry client-controlled text
+        // (a `kid`, an `Origin`), which must not forge log lines.
+        tracing::warn!(
+            cause = failure.cause,
+            status = status.as_u16(),
+            reason,
+            detail = ?detail,
+            "MCP request rejected"
+        );
+    }
 }
 
 impl<S> Service<Request> for McpAuthService<S>
@@ -205,7 +244,11 @@ where
                                     "MCP session id presented by a different principal; \
                                      request refused"
                                 );
-                                return Ok(session_not_found());
+                                let mut response = session_not_found();
+                                response
+                                    .extensions_mut()
+                                    .insert(AuthOutcome("session_mismatch"));
+                                return Ok(response);
                             }
                             None
                         }
@@ -229,7 +272,10 @@ where
                     // `T` only when a member asks for one by hand.
                     req.extensions_mut().insert(Arc::clone(&principal.user));
                     req.extensions_mut().insert(principal);
-                    let response = inner.call(req).await?.into_response();
+                    let mut response = inner.call(req).await?.into_response();
+                    response
+                        .extensions_mut()
+                        .insert(AuthOutcome("authenticated"));
                     if let Some(opened) = link.and_then(|link| link.take())
                         && let Some(id) = response
                             .headers()
@@ -240,7 +286,12 @@ where
                     }
                     Ok(response)
                 }
-                Err(err) => Ok(auth_error_response(&err, &state.challenges)),
+                Err(failure) => {
+                    let mut response = auth_error_response(&failure.error, &state.challenges);
+                    log_rejection(&failure, response.status());
+                    response.extensions_mut().insert(AuthOutcome(failure.cause));
+                    Ok(response)
+                }
             }
         })
     }

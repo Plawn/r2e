@@ -23,6 +23,7 @@ use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
 use crate::resource_updates::McpResourceUpdates;
+use crate::request_log::{McpRequestLog, PeekRpcMethod};
 use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, TrackSessionId};
 
 /// Resolves the `session_init` hook bean from the built graph (`None` = no
@@ -679,6 +680,9 @@ impl Plugin for McpServer {
             if let Some(bytes) = max_request_body_bytes {
                 transport_config.max_request_body_bytes = bytes;
             }
+            let peek = PeekRpcMethod {
+                limit: transport_config.max_request_body_bytes,
+            };
             let service = StreamableHttpService::new(
                 move || Ok(R2eMcpHandler::new(Arc::clone(&endpoint))),
                 session_manager,
@@ -689,9 +693,15 @@ impl Plugin for McpServer {
             // `WWW-Authenticate` challenge. The well-known/shim routes are
             // merged NEXT TO the service — public by design, never behind
             // the auth layer (they answer unauthenticated discovery).
+            //
+            // The request log sits OUTSIDE the auth layer (it must see
+            // rejections and their status); the JSON-RPC method peek INSIDE
+            // it (only authenticated bodies are buffered).
             let service = tower::ServiceBuilder::new()
                 .layer(cors)
+                .layer(McpRequestLog)
                 .option_layer(auth_layer)
+                .layer(peek)
                 .layer(TrackSessionId)
                 .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);
