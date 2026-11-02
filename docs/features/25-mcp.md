@@ -760,7 +760,11 @@ What you get, with zero additional code:
   RFC 7591. **The shim registers nothing** — redirect URIs must already be
   configured on the IdP client; requested ones are filtered against
   `redirect-uri-allowlist` (default: localhost any-port, the Claude
-  callbacks, the MCP Inspector).
+  callbacks, the MCP Inspector). The registration response echoes the
+  advertised scopes as `scope`; set `mcp.auth.scopes-supported` (or
+  `required-scopes`) when the shim is on — without it clients pick a scope of
+  their own and the IdP typically answers `invalid_scope`, so boot logs a
+  WARN naming the key.
 - **Authorize-redirect shim** (when `extra-authorize-params` is set): the
   mirrored metadata's `authorization_endpoint` points at
   `GET {mcp.path}/oauth/authorize`, which merges the configured params into
@@ -771,6 +775,33 @@ What you get, with zero additional code:
 - **IdP outages are 503, not 401** — clients aren't sent into a re-auth loop
   when JWKS/discovery are briefly unreachable (stale-if-error caches on
   both).
+
+### Auth logs
+
+Operators can diagnose a failing OAuth flow from the server logs alone. No
+log line carries a token or credential bytes.
+
+| Event | Level | Message | Fields |
+|---|---|---|---|
+| Request without `Authorization` (the normal first leg of every OAuth flow) | DEBUG | `MCP request without credentials; …` | — |
+| Credentials presented and refused, IdP unreachable | WARN | `MCP request rejected` | `cause`, `status`, `reason` (the wire `error_description`), `detail` |
+| Every MCP request | DEBUG | `MCP request` | `http_method`, `rpc_method`, `status`, `auth` |
+| Every DCR shim call | INFO (201) / WARN (refused, or redirect URIs dropped) | `DCR shim registration …` | `status`, `client_name`, `redirect_uris`, `scope` |
+
+`cause` is one of `malformed_header`, `malformed_token`, `missing_kid`,
+`unknown_kid`, `algorithm_refused`, `invalid_signature`, `token_expired`,
+`claims` (issuer/audience/`nbf`/required claim), `signing_key_unusable`,
+`insufficient_scope` (`detail` = the missing scopes), `invalid_origin`,
+`basic_credentials`, `jwks_unavailable` / `upstream_unavailable`, or
+`invalid_token` for a custom/opaque validator (its `reason` is specific). The
+client still only sees the coarse `error_description`.
+
+The `MCP request` line complements `HttpTrace`'s `request completed` summary
+(emitted inside its span, so it carries the `request_id`): `rpc_method` is the
+JSON-RPC method of an authenticated `POST` (`initialize`, `tools/call`, …;
+`batch`, `other` for an unknown method, `-` when the body was not read —
+rejected, chunked or oversized), `auth` is `authenticated`, the rejection
+`cause`, or `none` without `mcp.auth`.
 
 ### HTTP Basic (`mcp.auth.basic.*`)
 

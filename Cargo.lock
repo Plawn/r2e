@@ -6124,6 +6124,7 @@ name = "r2e-mcp"
 version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
+ "http-body",
  "http-body-util",
  "percent-encoding",
  "r2e-core",

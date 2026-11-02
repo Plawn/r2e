@@ -16,7 +16,7 @@
 //!   extension the auth layer sets.
 //! - [`PeekRpcMethod`] (inside the auth layer, so only AUTHENTICATED bodies
 //!   are ever buffered here) reads the JSON-RPC `method` of a `POST` whose
-//!   `Content-Length` is within `mcp.max-request-body-bytes` and fills the
+//!   exact length (`Content-Length`) is within `mcp.max-request-body-bytes` and fills the
 //!   slot. rmcp buffers that body anyway; the bytes are handed back to it
 //!   unchanged. A chunked body, an oversized one, or a rejected request logs
 //!   `rpc_method="-"`.
@@ -27,7 +27,6 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::header::CONTENT_LENGTH;
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{Body, Method, Request, Response, StatusCode};
 use tower::{Layer, Service};
@@ -193,11 +192,11 @@ where
 
     fn call(&mut self, req: Request) -> Self::Future {
         let slot = req.extensions().get::<RpcMethodSlot>().cloned();
-        let length = req
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<usize>().ok());
+        // Exact only for a `Content-Length` body (or a fully buffered one);
+        // a chunked stream is left untouched.
+        let length = http_body::Body::size_hint(req.body())
+            .exact()
+            .and_then(|n| usize::try_from(n).ok());
         let (Some(slot), Some(length)) = (slot, length) else {
             return Box::pin(self.inner.call(req));
         };
@@ -219,7 +218,9 @@ where
                 return Ok(response);
             };
             let _ = slot.0.set(rpc_method(&bytes));
-            inner.call(Request::from_parts(parts, Body::from(bytes))).await
+            inner
+                .call(Request::from_parts(parts, Body::from(bytes)))
+                .await
         })
     }
 }

@@ -36,6 +36,29 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
     without saying so; a padded entry never matches a `Host` header and
     would 403 every request.
 
+### Added
+
+- Auth observability (#1206): an OAuth flow that fails can be diagnosed from
+  the server logs. No line carries a token.
+  - Every refused credential logs one WARN `MCP request rejected` with its
+    `cause` (`malformed_header`, `malformed_token`, `missing_kid`,
+    `unknown_kid`, `algorithm_refused`, `invalid_signature`,
+    `token_expired`, `claims`, `insufficient_scope`, `jwks_unavailable`, …)
+    and the validator's `detail`. A request without credentials, the normal
+    first leg of every OAuth flow, is DEBUG. The wire `error_description`
+    stays coarse.
+  - One DEBUG `MCP request` line per request: JSON-RPC method (read only
+    from authenticated bodies, bounded to the known MCP methods), HTTP
+    status, auth outcome. It complements `HttpTrace`'s summary and runs
+    inside its span.
+  - One line per DCR shim call: INFO on success, WARN on a refusal or dropped
+    redirect URIs.
+  - The DCR shim's registration response echoes the advertised scopes as
+    `scope`.
+  - Boot WARNs when the DCR shim is on and the protected-resource metadata
+    advertises no scope, naming `mcp.auth.scopes-supported`: clients then
+    pick a scope of their own and the IdP answers `invalid_scope`.
+
 ## [0.10.0] - 2026-10-31
 
 ### Breaking
