@@ -22,8 +22,8 @@ use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
 use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::registry::McpServiceRegistry;
+use crate::request_log::McpRequestLog;
 use crate::resource_updates::McpResourceUpdates;
-use crate::request_log::{McpRequestLog, PeekRpcMethod};
 use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, TrackSessionId};
 
 /// Resolves the `session_init` hook bean from the built graph (`None` = no
@@ -680,7 +680,7 @@ impl Plugin for McpServer {
             if let Some(bytes) = max_request_body_bytes {
                 transport_config.max_request_body_bytes = bytes;
             }
-            let peek = PeekRpcMethod {
+            let request_log = McpRequestLog {
                 limit: transport_config.max_request_body_bytes,
             };
             let service = StreamableHttpService::new(
@@ -695,13 +695,13 @@ impl Plugin for McpServer {
             // the auth layer (they answer unauthenticated discovery).
             //
             // The request log sits OUTSIDE the auth layer (it must see
-            // rejections and their status); the JSON-RPC method peek INSIDE
-            // it (only authenticated bodies are buffered).
+            // rejections and their status); it taps the body rather than
+            // reading it, so a request rejected before rmcp reads the body
+            // (auth, rmcp's header checks) never has it buffered.
             let service = tower::ServiceBuilder::new()
                 .layer(cors)
-                .layer(McpRequestLog)
+                .layer(request_log)
                 .option_layer(auth_layer)
-                .layer(peek)
                 .layer(TrackSessionId)
                 .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);

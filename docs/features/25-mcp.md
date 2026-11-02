@@ -786,7 +786,7 @@ log line carries a token or credential bytes.
 | Request without `Authorization` (the normal first leg of every OAuth flow) | DEBUG | `MCP request without credentials; …` | — |
 | Credentials presented and refused, IdP unreachable | WARN | `MCP request rejected` | `cause`, `status`, `reason` (the wire `error_description`), `detail` |
 | Every MCP request | DEBUG | `MCP request` | `http_method`, `rpc_method`, `status`, `auth` |
-| Every DCR shim call | INFO (201) / WARN (refused, or redirect URIs dropped) | `DCR shim registration …` | `status`, `client_name`, `redirect_uris`, `scope` |
+| Every DCR shim call | INFO (201) / WARN (refused, or redirect URIs dropped) | `DCR shim registration …` | `status`, `client_name` (clipped), `redirect_uris`, `rejected_redirect_uris` (count) + `rejected_sample`, `scope` |
 
 `cause` is one of `malformed_header`, `malformed_token`, `missing_kid`,
 `unknown_kid`, `algorithm_refused`, `invalid_signature`, `token_expired`,
@@ -798,10 +798,11 @@ client still only sees the coarse `error_description`.
 
 The `MCP request` line complements `HttpTrace`'s `request completed` summary
 (emitted inside its span, so it carries the `request_id`): `rpc_method` is the
-JSON-RPC method of an authenticated `POST` (`initialize`, `tools/call`, …;
-`batch`, `other` for an unknown method, `-` when the body was not read —
-rejected, chunked or oversized), `auth` is `authenticated`, the rejection
-`cause`, or `none` without `mcp.auth`.
+JSON-RPC method of a `POST` (`initialize`, `tools/call`, …; `batch`, `other`
+for an unknown method). The body is tapped as rmcp reads it, never read ahead
+of it: `-` means rmcp did not read it (rejected on headers or credentials) or
+it exceeded `mcp.max-request-body-bytes`. `auth` is `authenticated`, the
+rejection `cause`, or `none` without `mcp.auth`.
 
 ### HTTP Basic (`mcp.auth.basic.*`)
 

@@ -277,42 +277,25 @@ impl ErasedTokenValidator for JwtBackend {
 
 /// The operator-facing category of a JWT rejection.
 ///
-/// `SecurityError` carries most of its distinctions in its message, so the
-/// finer split (signature vs malformed, algorithm vs claims) is read from
-/// the messages r2e-security and jsonwebtoken produce; anything unrecognized
-/// falls back to `malformed_token` / `claims` — the `detail` field always
-/// carries the full error text anyway.
+/// The logged `cause` of a JWT rejection, from r2e-security's own
+/// classification ([`SecurityError::kind`]) — never from the message text.
+/// A kind this crate does not know yet (the enum is `#[non_exhaustive]`)
+/// logs as `invalid_token`; the `detail` field carries the full error text
+/// anyway.
 fn jwt_cause(err: &SecurityError) -> &'static str {
-    match err {
-        SecurityError::JwksFetchError(_) => "jwks_unavailable",
-        SecurityError::TokenExpired => "token_expired",
-        SecurityError::UnknownKeyId(_) => "unknown_kid",
-        SecurityError::MissingAuthHeader | SecurityError::InvalidAuthScheme => {
-            "malformed_header"
-        }
-        SecurityError::InvalidToken(msg) => {
-            if msg.contains("missing 'kid'") {
-                "missing_kid"
-            } else if msg.contains("InvalidSignature") {
-                "invalid_signature"
-            } else if msg.contains("ImmatureSignature")
-                || msg.contains("InvalidSubject")
-                || msg.contains("claim")
-            {
-                "claims"
-            } else {
-                "malformed_token"
-            }
-        }
-        SecurityError::ValidationFailed(msg) => {
-            if msg.contains("algorithm") {
-                "algorithm_refused"
-            } else if msg.starts_with("JWK") || msg.contains("key missing") {
-                "signing_key_unusable"
-            } else {
-                "claims"
-            }
-        }
+    use r2e_security::SecurityErrorKind as Kind;
+    match err.kind() {
+        Kind::JwksUnavailable => "jwks_unavailable",
+        Kind::TokenExpired => "token_expired",
+        Kind::UnknownKid => "unknown_kid",
+        Kind::MissingKid => "missing_kid",
+        Kind::MissingAuthHeader | Kind::InvalidAuthScheme => "malformed_header",
+        Kind::MalformedToken => "malformed_token",
+        Kind::InvalidSignature => "invalid_signature",
+        Kind::AlgorithmRefused => "algorithm_refused",
+        Kind::SigningKeyUnusable => "signing_key_unusable",
+        Kind::Claims => "claims",
+        _ => "invalid_token",
     }
 }
 

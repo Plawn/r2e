@@ -27,7 +27,9 @@ use r2e_core::http::{HeaderMap, Method, Request, Response, StatusCode, AUTHORIZA
 use tower::{Layer, Service};
 
 use super::basic::{basic_credentials, BasicCredentials};
-use super::error::{auth_error_response, AuthFailure, Challenges, McpAuthError};
+use super::error::{
+    auth_error_response, AuthFailure, Challenges, McpAuthError, MISSING_CREDENTIALS,
+};
 use super::validator::{McpPrincipal, McpTokenValidator};
 use crate::request_log::AuthOutcome;
 use crate::session::{SessionBindings, SessionLink};
@@ -124,7 +126,7 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
     }
 
     let header = match headers.get(AUTHORIZATION) {
-        None => return Err(AuthFailure::new(McpAuthError::MissingToken, "missing_credentials")),
+        None => return Err(McpAuthError::MissingToken.into()),
         Some(value) => value.to_str().map_err(|_| {
             AuthFailure::new(McpAuthError::MissingToken, "malformed_header")
                 .with_detail("Authorization header is not visible ASCII")
@@ -144,12 +146,13 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
                     .with_detail("Authorization header is not `Bearer <token>`")
             })?;
             let Some(validator) = state.validator.get() else {
-                // after_build has not run — a wiring bug, never a client error.
-                tracing::error!("MCP auth validator not initialised (after_build did not run)");
+                // after_build has not run — a wiring bug, never a client
+                // error; `log_rejection` reports it (cause + detail).
                 return Err(AuthFailure::new(
                     McpAuthError::Upstream("authentication not initialised".into()),
                     "validator_not_initialised",
-                ));
+                )
+                .with_detail("after_build did not run"));
             };
             validator.validate_detailed(bearer).await?
         }
@@ -168,7 +171,9 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
         .cloned()
         .collect();
     if !missing.is_empty() {
-        return Err(AuthFailure::from(McpAuthError::InsufficientScope { missing }));
+        return Err(AuthFailure::from(McpAuthError::InsufficientScope {
+            missing,
+        }));
     }
 
     Ok(principal)
@@ -182,21 +187,22 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
 /// refused, or an IdP outage — is WARN.
 fn log_rejection(failure: &AuthFailure, status: StatusCode) {
     let reason = failure.error.description();
-    let detail = failure.detail.as_deref().unwrap_or_default();
-    if failure.cause == "missing_credentials" {
+    if failure.cause == MISSING_CREDENTIALS {
         tracing::debug!(
             cause = failure.cause,
             status = status.as_u16(),
             "MCP request without credentials; answering with the OAuth challenge"
         );
     } else {
-        // `?detail`: Debug-escaped — it can carry client-controlled text
-        // (a `kid`, an `Origin`), which must not forge log lines.
+        // Debug-escaped: `detail` can carry client-controlled text (a
+        // `kid`, an `Origin`), which must not forge log lines. `None`
+        // leaves the field out instead of printing `detail=""`.
+        let detail = failure.detail.as_deref().map(tracing::field::debug);
         tracing::warn!(
             cause = failure.cause,
             status = status.as_u16(),
             reason,
-            detail = ?detail,
+            detail,
             "MCP request rejected"
         );
     }

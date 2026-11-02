@@ -40,6 +40,31 @@ use super::wellknown::{preflight, public_json_response, put_public_headers};
 /// payload is a handful of redirect URIs).
 const MAX_REGISTER_BODY_BYTES: usize = 16 * 1024;
 
+/// Bounds on what a registration log line echoes from the request (see
+/// `register`): the `client_name`, and how many / how long dropped
+/// redirect URIs are sampled.
+const LOG_NAME_CHARS: usize = 64;
+const LOG_SAMPLE_ENTRIES: usize = 3;
+const LOG_SAMPLE_CHARS: usize = 128;
+
+/// `value` cut to `max` characters (on a char boundary), with an ellipsis
+/// when it was longer.
+fn clip(value: &str, max: usize) -> String {
+    match value.char_indices().nth(max) {
+        Some((end, _)) => format!("{}…", &value[..end]),
+        None => value.to_string(),
+    }
+}
+
+/// The first few dropped URIs, each clipped, for the log line.
+fn log_sample(dropped: &[&str]) -> Vec<String> {
+    dropped
+        .iter()
+        .take(LOG_SAMPLE_ENTRIES)
+        .map(|uri| clip(uri, LOG_SAMPLE_CHARS))
+        .collect()
+}
+
 /// Default redirect-URI allowlist: local development plus the callbacks of
 /// the mainstream MCP clients.
 pub(crate) const DEFAULT_REDIRECT_ALLOWLIST: &[&str] = &[
@@ -147,6 +172,11 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
         }
     };
     let client_name = request.get("client_name").and_then(Value::as_str);
+    // What the log lines carry is BOUNDED: the endpoint is public and
+    // unauthenticated, so a client must not be able to size a WARN line
+    // (`client_name`, the dropped URIs) — the response still echoes the
+    // full `client_name`.
+    let logged_name = client_name.map(|name| clip(name, LOG_NAME_CHARS));
 
     let requested: Vec<&str> = request
         .get("redirect_uris")
@@ -166,8 +196,9 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
     if accepted.is_empty() {
         tracing::warn!(
             status = 400,
-            client_name = ?client_name,
-            rejected_redirect_uris = ?dropped,
+            client_name = ?logged_name,
+            rejected_redirect_uris = dropped.len(),
+            rejected_sample = ?log_sample(&dropped),
             "DCR shim registration rejected: no requested redirect_uri is on \
              `mcp.auth.redirect-uri-allowlist`"
         );
@@ -182,7 +213,7 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
     if dropped.is_empty() {
         tracing::info!(
             status = 201,
-            client_name = ?client_name,
+            client_name = ?logged_name,
             redirect_uris = accepted.len(),
             scope = %scope,
             "DCR shim registration answered"
@@ -190,9 +221,10 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
     } else {
         tracing::warn!(
             status = 201,
-            client_name = ?client_name,
+            client_name = ?logged_name,
             redirect_uris = accepted.len(),
-            rejected_redirect_uris = ?dropped,
+            rejected_redirect_uris = dropped.len(),
+            rejected_sample = ?log_sample(&dropped),
             scope = %scope,
             "DCR shim registration answered; dropped redirect URIs not on \
              `mcp.auth.redirect-uri-allowlist`"

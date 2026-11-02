@@ -47,12 +47,18 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
     and the validator's `detail`. A request without credentials, the normal
     first leg of every OAuth flow, is DEBUG. The wire `error_description`
     stays coarse.
-  - One DEBUG `MCP request` line per request: JSON-RPC method (read only
-    from authenticated bodies, bounded to the known MCP methods), HTTP
-    status, auth outcome. It complements `HttpTrace`'s summary and runs
-    inside its span.
+  - One DEBUG `MCP request` line per request: JSON-RPC method, HTTP status,
+    auth outcome. The method is taken from the bytes rmcp itself reads (the
+    body is tapped, never buffered ahead of it; bounded to the known MCP
+    methods), so a request refused on its headers or credentials costs no
+    body read. It complements `HttpTrace`'s summary and runs inside its span.
   - One line per DCR shim call: INFO on success, WARN on a refusal or dropped
-    redirect URIs.
+    redirect URIs. The line is bounded whatever the unauthenticated caller
+    sends: `client_name` is clipped, dropped URIs appear as a count plus a
+    short clipped sample.
+  - A validator that never got initialised (`after_build` did not run) is one
+    WARN `MCP request rejected` with cause `validator_not_initialised`, not a
+    bare ERROR beside it.
   - The DCR shim's registration response echoes the advertised scopes as
     `scope`.
   - Boot WARNs when the DCR shim is on and the protected-resource metadata

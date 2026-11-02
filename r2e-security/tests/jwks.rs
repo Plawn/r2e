@@ -5,7 +5,7 @@ use r2e_security::jwks::{
     build_jwks_client, can_attempt, can_use_stale, is_stale, kty_for_algorithm, validate_jwks_url,
     CachedJwk, JwksCache,
 };
-use r2e_security::SecurityConfig;
+use r2e_security::{SecurityConfig, SecurityErrorKind};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const TEST_JWKS: &str = r#"{"keys":[{"kid":"test-key","kty":"RSA","alg":"RS256","use":"sig","key_ops":["verify"],"n":"AQ","e":"AQAB"}]}"#;
@@ -134,7 +134,9 @@ fn rsa_key_requires_n_and_e() {
         x: None,
         y: None,
     };
-    let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
+    let err = jwk.to_decoding_key().unwrap_err();
+    assert_eq!(err.kind(), SecurityErrorKind::SigningKeyUnusable);
+    let err = format!("{err:?}");
     assert!(err.contains("'n' component"));
 }
 
@@ -182,7 +184,9 @@ fn unsupported_key_type_rejected() {
         x: None,
         y: None,
     };
-    let err = format!("{:?}", jwk.to_decoding_key().unwrap_err());
+    let err = jwk.to_decoding_key().unwrap_err();
+    assert_eq!(err.kind(), SecurityErrorKind::SigningKeyUnusable);
+    let err = format!("{err:?}");
     assert!(err.contains("Unsupported key type"));
 }
 

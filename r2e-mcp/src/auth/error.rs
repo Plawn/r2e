@@ -62,6 +62,10 @@ impl std::fmt::Display for McpAuthError {
 
 impl std::error::Error for McpAuthError {}
 
+/// The `cause` of a request that presented no credentials at all — the
+/// normal first leg of every OAuth flow, logged at DEBUG by the layer.
+pub(crate) const MISSING_CREDENTIALS: &str = "missing_credentials";
+
 /// An auth failure as the layer sees it: the client-facing [`McpAuthError`]
 /// plus the operator-facing cause the rejection log line carries.
 ///
@@ -103,7 +107,7 @@ impl AuthFailure {
 impl From<McpAuthError> for AuthFailure {
     fn from(error: McpAuthError) -> Self {
         let (cause, detail) = match &error {
-            McpAuthError::MissingToken => ("missing_credentials", None),
+            McpAuthError::MissingToken => (MISSING_CREDENTIALS, None),
             McpAuthError::InvalidToken(_) => ("invalid_token", None),
             McpAuthError::InsufficientScope { missing } => {
                 ("insufficient_scope", Some(missing.join(" ")))

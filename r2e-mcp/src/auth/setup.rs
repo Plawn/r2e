@@ -675,8 +675,8 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
 /// `WWW-Authenticate` challenge and the session id.
 pub(crate) fn cors_layer(origins: Vec<String>) -> r2e_core::http::layers::cors::CorsLayer {
     use r2e_core::http::header::{HeaderName, AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
-    use r2e_core::http::Method;
     use r2e_core::http::layers::cors::{AllowOrigin, CorsLayer};
+    use r2e_core::http::Method;
 
     let session_id = HeaderName::from_static("mcp-session-id");
     CorsLayer::new()

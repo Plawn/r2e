@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use tracing::{debug, warn};
 
 use crate::config::SecurityConfig;
-use crate::error::SecurityError;
+use crate::error::{msg, SecurityError};
 use crate::identity::{DefaultIdentityBuilder, IdentityBuilder, IdentityBuilderWith};
 use crate::jwks::JwksCache;
 use crate::openid::RoleExtractor;
@@ -172,20 +172,22 @@ impl JwtClaimsValidator {
     pub async fn validate_as<C: JwtClaimSet>(&self, token: &str) -> Result<C, SecurityError> {
         // Step 1: Decode header to get kid and algorithm
         let header = decode_header(token)
-            .map_err(|e| SecurityError::InvalidToken(format!("Failed to decode header: {e}")))?;
+            .map_err(|e| SecurityError::InvalidToken(format!("{}{e}", msg::HEADER)))?;
 
         let algorithm = header.alg;
         debug!(?algorithm, kid = ?header.kid, "Decoded JWT header");
 
         if self.config.allowed_algorithms.is_empty() {
-            return Err(SecurityError::ValidationFailed(
-                "No allowed JWT algorithms configured".into(),
-            ));
+            return Err(SecurityError::ValidationFailed(format!(
+                "{}no allowed JWT algorithms configured",
+                msg::ALGORITHM
+            )));
         }
 
         if !self.config.allowed_algorithms.contains(&algorithm) {
             return Err(SecurityError::ValidationFailed(format!(
-                "Disallowed JWT algorithm: {algorithm:?}"
+                "{}{algorithm:?}",
+                msg::ALGORITHM
             )));
         }
 
@@ -193,9 +195,10 @@ impl JwtClaimsValidator {
         let decoding_key = match &self.key_source {
             KeySource::Static(key) => Arc::clone(key),
             KeySource::Jwks(jwks) => {
-                let kid = header.kid.as_deref().ok_or_else(|| {
-                    SecurityError::InvalidToken("JWT header missing 'kid' field".into())
-                })?;
+                let kid = header
+                    .kid
+                    .as_deref()
+                    .ok_or_else(|| SecurityError::InvalidToken(msg::MISSING_KID.into()))?;
                 jwks.get_shared_key(kid, algorithm).await?
             }
         };
@@ -209,7 +212,7 @@ impl JwtClaimsValidator {
             .find(|(candidate, _)| *candidate == algorithm)
             .map(|(_, validation)| validation)
             .ok_or_else(|| {
-                SecurityError::ValidationFailed(format!("Disallowed JWT algorithm: {algorithm:?}"))
+                SecurityError::ValidationFailed(format!("{}{algorithm:?}", msg::ALGORITHM))
             })?;
         let token_data = decode::<C>(token, &decoding_key, validation).map_err(|e| {
             let err = match e.kind() {
@@ -222,6 +225,15 @@ impl JwtClaimsValidator {
                 }
                 jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) => {
                     SecurityError::ValidationFailed(format!("Missing required claim: {claim}"))
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                    SecurityError::InvalidToken(msg::SIGNATURE.into())
+                }
+                jsonwebtoken::errors::ErrorKind::ImmatureSignature => {
+                    SecurityError::InvalidToken(msg::NOT_YET_VALID.into())
+                }
+                jsonwebtoken::errors::ErrorKind::InvalidSubject => {
+                    SecurityError::InvalidToken(msg::SUBJECT.into())
                 }
                 _ => SecurityError::InvalidToken(e.to_string()),
             };

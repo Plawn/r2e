@@ -378,6 +378,70 @@ async fn each_mcp_request_logs_method_status_and_auth_outcome() {
     assert_eq!(lines[0].field("auth"), "malformed_token");
 }
 
+/// A request rmcp refuses on its headers never has its body read: the log
+/// line says so (`-`) rather than buffering a body nobody parses.
+#[r2e_core::test(flavor = "current_thread")]
+async fn body_rejected_on_headers_is_never_read() {
+    let captured = Captured::default();
+    let _guard = captured.install();
+    let router = secured_app().await;
+    captured.take();
+
+    let token = test_jwt().token("alice", &[]);
+    let bearer = format!("Bearer {token}");
+    let (status, _, _) = send(
+        &router,
+        "POST",
+        "/mcp",
+        &[
+            ("authorization", bearer.as_str()),
+            ("content-type", "application/json"),
+            // Missing `text/event-stream`: rmcp answers 406 before the body.
+            ("accept", "application/json"),
+        ],
+        Body::from(support::initialize_body().to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
+    let lines = captured.with_message(REQUEST);
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert_eq!(lines[0].field("rpc_method"), "-");
+    assert_eq!(lines[0].field("auth"), "authenticated");
+}
+
+/// The DCR line is bounded whatever the (unauthenticated) client sends:
+/// counts plus a clipped sample, never the full request.
+#[r2e_core::test(flavor = "current_thread")]
+async fn dcr_log_line_is_bounded() {
+    let captured = Captured::default();
+    let _guard = captured.install();
+    let router = secured_app_with(shim_auth()).await;
+    captured.take();
+
+    // ~12 KiB: under the 16 KiB registration cap, far over any log budget.
+    let long_name = "n".repeat(500);
+    let uris: Vec<String> = (0..50)
+        .map(|i| format!("https://evil.example/{}/{i}", "x".repeat(200)))
+        .collect();
+    let body = serde_json::json!({ "client_name": long_name, "redirect_uris": uris });
+    let (status, doc) = register(&router, &body.to_string()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{doc}");
+
+    let lines: Vec<Line> = captured
+        .take()
+        .into_iter()
+        .filter(|line| line.message().starts_with("DCR shim"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert_eq!(lines[0].field("rejected_redirect_uris"), "50");
+    assert!(lines[0].field("client_name").len() < 100, "{lines:#?}");
+    let total: usize = lines[0].fields.values().map(String::len).sum();
+    assert!(
+        total < 1024,
+        "log line not bounded ({total} bytes): {lines:#?}"
+    );
+}
+
 /// No scope requirement: mountable without `mcp.auth`.
 #[controller]
 pub struct OpenTools;
