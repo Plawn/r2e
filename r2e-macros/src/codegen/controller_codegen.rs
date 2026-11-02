@@ -98,13 +98,23 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     // `guard_identity` reads the identity field off the request façade, never the
     // core (which no longer holds it). Non-identity `#[inject(request)]` fields
     // are not visible to guards.
+    //
+    // `request_identity` is the same accessor on the extracted request data,
+    // before it is bound to a façade — for the transport layer that extracts
+    // once per HTTP request (`#[mcp_routes]`) and needs the subject up front.
     let (identity_type, guard_identity_fn) = if let Some(identity) = def.identity_fields.first() {
         let field_name = &identity.name;
         let inner_ty = &identity.inner_ty;
-        let identity_expr = if identity.is_optional {
-            quote! { __facade.#field_name.as_ref() }
+        let (facade_expr, data_expr) = if identity.is_optional {
+            (
+                quote! { __facade.#field_name.as_ref() },
+                quote! { __data.#field_name.as_ref() },
+            )
         } else {
-            quote! { Some(&__facade.#field_name) }
+            (
+                quote! { Some(&__facade.#field_name) },
+                quote! { Some(&__data.#field_name) },
+            )
         };
         (
             quote! { pub type IdentityType = #inner_ty; },
@@ -113,7 +123,14 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
                 // it, never from this generated accessor (task #985).
                 #[allow(deprecated)]
                 pub fn guard_identity(__facade: &super::#facade_name) -> Option<&super::#inner_ty> {
-                    #identity_expr
+                    #facade_expr
+                }
+
+                #[allow(deprecated)]
+                pub fn request_identity<__M>(
+                    __data: &super::#data_name<__M>,
+                ) -> Option<&super::#inner_ty> {
+                    #data_expr
                 }
             },
         )
@@ -124,8 +141,35 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
                 pub fn guard_identity(_facade: &super::#facade_name) -> Option<&#krate::NoIdentity> {
                     None
                 }
+
+                pub fn request_identity<__M>(
+                    _data: &super::#data_name<__M>,
+                ) -> Option<&#krate::NoIdentity> {
+                    None
+                }
             },
         )
+    };
+
+    // Whether extracting the request data does anything at all. A consumer
+    // that extracts once per transport request (`#[mcp_routes]`) skips the
+    // extraction entirely when this is `false` and builds the (empty) data
+    // by hand through `unscoped_request_data`.
+    let has_request_scope = !def.request_scoped_fields().is_empty();
+    let unscoped_request_data_fn = if has_request_scope {
+        quote! {
+            pub fn unscoped_request_data<__M>() -> Option<super::#data_name<__M>> {
+                None
+            }
+        }
+    } else {
+        quote! {
+            pub fn unscoped_request_data<__M>() -> Option<super::#data_name<__M>> {
+                Some(super::#data_name {
+                    __r2e_markers: ::std::marker::PhantomData,
+                })
+            }
+        }
     };
 
     // Move request-scoped values from the extracted request-data type onto the
@@ -227,9 +271,11 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
             pub const OPENAPI_TAG: &str = #openapi_tag;
             pub const HAS_STRUCT_IDENTITY: bool = #has_struct_identity;
             pub const STRUCT_IDENTITY_IS_REQUIRED: bool = #struct_identity_is_required;
+            pub const HAS_REQUEST_SCOPE: bool = #has_request_scope;
             #identity_type
             #guard_identity_fn
             #bind_request_fn
+            #unscoped_request_data_fn
             #validate_fn
         }
     }
@@ -268,6 +314,15 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
                 __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
             }
 
+            impl<__M> ::core::clone::Clone for #data_name<__M> {
+                #[inline(always)]
+                fn clone(&self) -> Self {
+                    #data_name {
+                        __r2e_markers: ::std::marker::PhantomData,
+                    }
+                }
+            }
+
             // Named bridge point (plan §5.3b): the generated request-scoped
             // extraction the entry function runs once per request. Its
             // *fields* go through `FromRequestPartsVia`; this outer impl is the
@@ -292,7 +347,10 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
 
     let field_decls: Vec<TokenStream> = fields
         .iter()
-        .map(|f| { let (n, t, a) = (f.name, f.ty, f.attrs); quote! { #(#a)* #n: #t } })
+        .map(|f| {
+            let (n, t, a) = (f.name, f.ty, f.attrs);
+            quote! { #(#a)* #n: #t }
+        })
         .collect();
 
     let marker_idents: Vec<syn::Ident> = (0..fields.len())
@@ -324,12 +382,36 @@ fn generate_request_data(def: &ControllerStructDef) -> TokenStream {
 
     let field_inits: Vec<&syn::Ident> = fields.iter().map(|f| f.name).collect();
 
+    // `Clone` through the marker (see `CloneVia`): the bound names `__M`, so
+    // a non-`Clone` request-scoped field is an error only where the data is
+    // actually cloned (`register_mcp_service`), never here.
+    let clone_bounds: Vec<TokenStream> = fields
+        .iter()
+        .map(|f| {
+            let field_ty = f.ty;
+            quote! { #field_ty: #krate::web::extract::CloneVia<__M> }
+        })
+        .collect();
+
     quote! {
         #[doc(hidden)]
         #[allow(non_camel_case_types, dead_code, deprecated)]
         struct #data_name<__M> {
             #(#field_decls,)*
             __r2e_markers: ::std::marker::PhantomData<fn() -> __M>,
+        }
+
+        #[allow(deprecated)]
+        impl<__M> ::core::clone::Clone for #data_name<__M>
+        where
+            #(#clone_bounds,)*
+        {
+            fn clone(&self) -> Self {
+                #data_name {
+                    #( #field_inits: #krate::web::extract::CloneVia::<__M>::clone_via(&self.#field_inits), )*
+                    __r2e_markers: ::std::marker::PhantomData,
+                }
+            }
         }
 
         // Named bridge point (plan §5.3b) — see the marker-free variant above.

@@ -15,6 +15,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `#[mcp_routes]` members run on the generated request façade, like
+  `#[routes]` handlers (#1210): `Self` in a member body names the façade (name
+  associated items through the service type), and `Self` in a member
+  signature is rejected with an error naming the rule.
+
+### Added
+
+- `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /
+  `#[inject(request)]` fields (#1210), reusing the `#[controller]` items
+  (request-data extractor, `bind_request`, façade, `guard_identity`) and
+  emitting `McpRoutes::request_scope` when the service has any. The witness
+  `W` of the generated `McpService<S, W>` impl starts with the request-data
+  marker (`((),)` for a plain service).
+- `#[controller]` meta module gains `HAS_REQUEST_SCOPE`, `request_identity`
+  and `unscoped_request_data`, and the request-data type implements `Clone`
+  through the hidden `CloneVia<__M>` bound (so a non-`Clone` request-scoped
+  field still compiles on an HTTP controller and only fails where a clone is
+  needed).
+
 ## [0.9.0] - 2026-10-31
 
 ### Breaking

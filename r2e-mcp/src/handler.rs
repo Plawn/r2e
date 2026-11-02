@@ -22,8 +22,8 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use serde_json::Value;
 
-use crate::auth::tools::requirements_visible;
-use crate::catalog::{principal_in, Catalog, Changed};
+use crate::auth::tools::visible_to;
+use crate::catalog::{caller_in, Catalog, Changed};
 use crate::elicitation::ClientChannel;
 use crate::error::McpError;
 use crate::global::McpRegistry;
@@ -187,7 +187,7 @@ impl R2eMcpHandler {
         {
             self.state.set_id(id);
         }
-        let subject = principal_in(parts).map(|p| p.user.sub.as_str());
+        let subject = caller_in(parts).map(|c| c.sub);
         if !self.state.bind(subject) {
             tracing::warn!(
                 bound = ?self.state.subject(),
@@ -211,10 +211,10 @@ impl R2eMcpHandler {
     /// Resource interests do not grant access: resolve against the initialized
     /// view and enforce scope/role visibility even when list filtering is off.
     fn resource_visible(&self, uri: &str, context: &RequestContext<RoleServer>) -> bool {
-        let principal = principal_in(context.extensions.get::<Parts>());
+        let caller = caller_in(context.extensions.get::<Parts>());
         self.state
             .resource(uri)
-            .is_some_and(|(route, _)| requirements_visible(principal, &route.requirements))
+            .is_some_and(|(route, _)| visible_to(caller.as_ref(), &route.requirements))
     }
 
     /// The session handle a member call carries.
@@ -230,7 +230,7 @@ impl R2eMcpHandler {
         request: Option<PaginatedRequestParams>,
         context: &RequestContext<RoleServer>,
     ) -> Result<(Vec<W>, Option<String>), ErrorData> {
-        let subject = principal_in(context.extensions.get::<Parts>()).map(|p| p.user.sub.as_str());
+        let subject = caller_in(context.extensions.get::<Parts>()).map(|c| c.sub);
         let cursor = request.and_then(|r| r.cursor);
         paginate(list, cursor.as_deref(), self.endpoint.page_size, subject)
     }
@@ -532,11 +532,11 @@ impl ServerHandler for R2eMcpHandler {
         self.prepare(&context).await?;
         // Authorize and bind the SAME route: a concurrent replacement must
         // not inherit the authorization checked on the previous route.
-        let principal = principal_in(context.extensions.get::<Parts>());
+        let caller = caller_in(context.extensions.get::<Parts>());
         let Some((route, _)) = self
             .state
             .resource(&request.uri)
-            .filter(|(route, _)| requirements_visible(principal, &route.requirements))
+            .filter(|(route, _)| visible_to(caller.as_ref(), &route.requirements))
         else {
             // Same answer for unknown and unauthorized URIs: no existence oracle.
             return Err(ErrorData::new(
@@ -649,9 +649,9 @@ impl ServerHandler for R2eMcpHandler {
         // error: completion values must not reveal a hidden member, whether
         // hidden by its group or by its requirements (checked here even
         // without `mcp.auth.filter-members`).
-        let principal = principal_in(context.extensions.get::<Parts>());
+        let caller = caller_in(context.extensions.get::<Parts>());
         let Some((reference, _, providers)) =
-            target.filter(|(_, requirements, _)| requirements_visible(principal, requirements))
+            target.filter(|(_, requirements, _)| visible_to(caller.as_ref(), requirements))
         else {
             return Err(ErrorData::new(
                 ErrorCode::INVALID_PARAMS,

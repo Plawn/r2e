@@ -236,8 +236,9 @@ static MCP_PLUGINS: &[&dyn RoutePlugin] = &[
 const MCP_DISALLOWED_ATTRS: &[&str] = &[
     // Pre-auth/anonymous/middleware are HTTP-pipeline concepts; MCP tools sit
     // behind one shared transport endpoint and have no per-tool middleware
-    // stack. `#[anonymous]` needs a fail-closed struct identity, which
-    // `#[mcp_routes]` types don't have (identity is per-method).
+    // stack. A struct-level `#[inject(identity)]` on an MCP service is
+    // extracted once per HTTP request, before any member is dispatched, so
+    // no member can opt out of it: mixed access is `Option<I>`.
     "anonymous",
     "pre_guard",
     "middleware",

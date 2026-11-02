@@ -199,9 +199,17 @@ pub struct McpRoutesImplDef {
     pub members: Vec<McpTool>,
     /// Some member takes an `McpSession` parameter.
     pub uses_session: bool,
-    /// The original inherent impl with only MCP-owned attributes stripped.
-    /// Keeping the complete item preserves helper ordering, associated items,
-    /// and passive impl attributes instead of reconstructing a lossy impl.
+    /// The methods that run on the request façade `__R2eRequest_<Name>`,
+    /// in declaration order: every member (`#[tool]`/`#[resource]`/
+    /// `#[prompt]`/`#[completion]`, markers stripped) and every
+    /// `#[request_helper]` helper (marker stripped) — exactly the split
+    /// `#[routes]` makes for HTTP controllers, so `self.<identity field>`
+    /// and `self.<request field>` resolve to the façade.
+    pub facade_methods: Vec<syn::ImplItemFn>,
+    /// The original inherent impl with the façade methods removed and only
+    /// MCP-owned attributes stripped: the core (`impl Name`) keeps every
+    /// other method and associated item in their original order, plus the
+    /// passive impl attributes.
     pub impl_block: syn::ItemImpl,
 }
 
@@ -448,10 +456,10 @@ fn full_doc_text(attrs: &[syn::Attribute]) -> Option<String> {
                     lit: syn::Lit::Str(lit_str),
                     ..
                 }) = &nv.value
-                {
-                    let raw = lit_str.value();
-                    return Some(raw.strip_prefix(' ').unwrap_or(&raw).to_string());
-                }
+            {
+                let raw = lit_str.value();
+                return Some(raw.strip_prefix(' ').unwrap_or(&raw).to_string());
+            }
             None
         })
         .collect();
@@ -656,6 +664,7 @@ pub fn parse(
 
     let mut members = Vec::new();
     let mut impl_items = Vec::with_capacity(item.items.len());
+    let mut facade_methods = Vec::new();
     // Duplicate keys are per family: tool names, resource URIs, prompt names.
     let mut seen_tools: std::collections::HashMap<String, syn::Ident> =
         std::collections::HashMap::new();
@@ -714,8 +723,23 @@ pub fn parse(
                     }
                 }
             }
-            method.attrs = all_attrs;
-            impl_items.push(syn::ImplItem::Fn(method));
+            // `#[request_helper]`: a plain helper moved onto the request
+            // façade so it can read the identity / `#[inject(request)]`
+            // fields — callable from members only, like its HTTP twin.
+            let is_request_helper = all_attrs
+                .iter()
+                .any(|a| a.path().is_ident("request_helper"));
+            if is_request_helper {
+                reject_self_in_facade_signature(&method.sig, "#[request_helper]")?;
+                method.attrs = all_attrs
+                    .into_iter()
+                    .filter(|a| !a.path().is_ident("request_helper"))
+                    .collect();
+                facade_methods.push(method);
+            } else {
+                method.attrs = all_attrs;
+                impl_items.push(syn::ImplItem::Fn(method));
+            }
             continue;
         };
 
@@ -757,6 +781,7 @@ pub fn parse(
             })
             .collect();
 
+        reject_self_in_facade_signature(&method.sig, &format!("#[{}]", kind.attr_name()))?;
         let args = classify_args(&mut method, kind)?;
         let name = method.sig.ident.clone();
 
@@ -799,7 +824,7 @@ pub fn parse(
             // Keyed by method name, which Rust already keeps unique.
             McpMemberKind::Completion => {
                 members.push(member);
-                impl_items.push(syn::ImplItem::Fn(method));
+                facade_methods.push(method);
                 continue;
             }
         };
@@ -810,7 +835,7 @@ pub fn parse(
             ));
         }
         members.push(member);
-        impl_items.push(syn::ImplItem::Fn(method));
+        facade_methods.push(method);
     }
 
     item.items = impl_items;
@@ -827,8 +852,16 @@ pub fn parse(
         controller_roles,
         controller_all_roles,
         members,
+        facade_methods,
         impl_block: item,
     })
+}
+
+/// Members and `#[request_helper]` helpers are emitted on the request façade
+/// (`impl __R2eRequest_<Name>`), where `Self` is the façade, not the user's
+/// type — the same rule `#[routes]` applies to HTTP route methods.
+fn reject_self_in_facade_signature(sig: &syn::Signature, kind: &str) -> syn::Result<()> {
+    crate::parsing::routes_parsing::reject_self_in_route_signature(sig, kind)
 }
 
 /// `complete(...)` wiring: every provider names a `#[completion]` method of

@@ -8,15 +8,21 @@
 //! * `Option<AppUser>`: `None` when absent; a required one surfaces the
 //!   extractor's own rejection message as a JSON-RPC error;
 //! * `AuthenticatedUser` through its bean-backed extractor (`ViaBean`), with
-//!   the `Arc<JwtClaimsValidator>` bean provided and a `TestJwt` bearer.
+//!   the `Arc<JwtClaimsValidator>` bean provided and a `TestJwt` bearer;
+//! * the struct-level request scope (`#[inject(identity)]` /
+//!   `#[inject(request)]` fields on the service struct): extracted once per
+//!   HTTP request on the endpoint, failing the whole request closed, read by
+//!   every member family and `#[request_helper]`, `#[roles]` gating and
+//!   `tools/list` filtering on the identity's roles, session ↔ subject
+//!   binding, and the caller probe's autoref priority.
 
 use std::sync::Arc;
 
 use r2e_core::http::extract::{FromRequestParts, OptionalFromRequestParts};
 use r2e_core::http::header::Parts;
-use r2e_core::http::Routes;
+use r2e_core::http::{Body, HeaderMap, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
-use r2e_core::{AppBuilder, Rejection, RejectionKind};
+use r2e_core::{AppBuilder, Identity, Rejection, RejectionKind};
 use r2e_mcp::AppBuilderMcpExt;
 use r2e_mcp::McpServer;
 use r2e_security::AuthenticatedUser;
@@ -291,4 +297,485 @@ async fn dropping_the_endpoint_releases_the_state() {
         observed.upgrade().is_none(),
         "the state must be released with the endpoint (McpRegistry ↔ catalog cycle)"
     );
+}
+
+// ── Struct-level request scope (endpoint identity) ─────────────────────────
+//
+// The same `#[inject(identity)]` / `#[inject(request)]` fields an HTTP
+// controller declares, on the MCP service struct: extracted ONCE per HTTP
+// request by the endpoint layer, before any JSON-RPC message is dispatched,
+// and read by every member as `self.<field>` on the request façade.
+
+/// The app identity declared once on the struct: every request on the
+/// endpoint — `initialize` included — must carry it.
+#[controller]
+struct StructAppTools {
+    #[inject(identity)]
+    user: AppUser,
+    #[inject(request)]
+    headers: HeaderMap,
+}
+
+#[mcp_routes]
+impl StructAppTools {
+    #[tool]
+    async fn who(&self) -> String {
+        format!("who {}", self.user.0)
+    }
+
+    /// Through a `#[request_helper]` reading both request-scoped fields.
+    #[tool]
+    async fn tag(&self) -> String {
+        self.tagged("tag")
+    }
+
+    #[resource(uri = "r2e://struct/me")]
+    async fn me(&self) -> String {
+        format!("me:{}", self.user.0)
+    }
+
+    #[prompt]
+    async fn greet(&self) -> String {
+        format!("greet {}", self.user.0)
+    }
+
+    #[request_helper]
+    fn tagged(&self, what: &str) -> String {
+        let tag = self
+            .headers
+            .get("x-tag")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-");
+        format!("{what}:{}:{tag}", self.user.0)
+    }
+}
+
+#[controller]
+struct OptionalStructTools {
+    #[inject(identity)]
+    user: Option<AppUser>,
+}
+
+#[mcp_routes]
+impl OptionalStructTools {
+    #[tool]
+    async fn maybe_who(&self) -> String {
+        self.user
+            .as_ref()
+            .map_or_else(|| "anonymous".to_string(), |u| format!("who {}", u.0))
+    }
+}
+
+async fn struct_app() -> Routes {
+    AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<StructAppTools>()
+        .build()
+}
+
+fn as_user(user: &str) -> [(&str, &str); 1] {
+    [("x-user", user)]
+}
+
+#[r2e_core::test]
+async fn a_struct_identity_rejects_the_whole_request_without_it() {
+    let router = struct_app().await;
+
+    // `initialize` itself fails closed, with the extractor's own rejection.
+    let response =
+        support::post_with_headers(&router, "/mcp", None, &[], &support::initialize_body()).await;
+    assert_eq!(
+        response.status,
+        StatusCode::UNAUTHORIZED,
+        "{}",
+        response.raw_body
+    );
+    assert!(
+        !response.raw_body.contains("jsonrpc"),
+        "no JSON-RPC message was dispatched: {}",
+        response.raw_body
+    );
+    assert!(
+        response.raw_body.contains(MISSING_USER),
+        "{}",
+        response.raw_body
+    );
+
+    // With it, the session opens — and every later request must carry it
+    // too: a bare `tools/list` on that session is rejected the same way.
+    let session = support::initialize_with_headers(&router, "/mcp", &as_user("alice")).await;
+    let response = support::post(
+        &router,
+        "/mcp",
+        Some(&session),
+        &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        StatusCode::UNAUTHORIZED,
+        "{}",
+        response.raw_body
+    );
+    assert!(
+        !response.raw_body.contains("jsonrpc"),
+        "{}",
+        response.raw_body
+    );
+}
+
+#[r2e_core::test]
+async fn struct_fields_reach_every_member_family() {
+    let router = struct_app().await;
+    let session = support::initialize_with_headers(&router, "/mcp", &as_user("alice")).await;
+
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &as_user("alice"),
+        "who",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "who alice", "{message}");
+
+    // `#[request_helper]` on the façade, reading the identity AND the
+    // `#[inject(request)]` field.
+    let headers = [("x-user", "alice"), ("x-tag", "blue")];
+    let message =
+        support::tools_call_with_headers(&router, "/mcp", &session, &headers, "tag", json!({}))
+            .await;
+    assert_eq!(text(&message), "tag:alice:blue", "{message}");
+
+    let response = support::post_with_headers(
+        &router,
+        "/mcp",
+        Some(&session),
+        &as_user("alice"),
+        &json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": { "uri": "r2e://struct/me" } }),
+    )
+    .await;
+    assert_eq!(
+        response.result()["contents"][0]["text"],
+        "me:alice",
+        "{}",
+        response.raw_body
+    );
+
+    let response = support::post_with_headers(
+        &router,
+        "/mcp",
+        Some(&session),
+        &as_user("alice"),
+        &json!({ "jsonrpc": "2.0", "id": 5, "method": "prompts/get", "params": { "name": "greet" } }),
+    )
+    .await;
+    assert_eq!(
+        response.result()["messages"][0]["content"]["text"],
+        "greet alice",
+        "{}",
+        response.raw_body
+    );
+}
+
+#[r2e_core::test]
+async fn an_optional_struct_identity_admits_anonymous_requests() {
+    let router = AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<OptionalStructTools>()
+        .build();
+    let session = support::initialize(&router, "/mcp").await;
+
+    let message = support::tools_call(&router, "/mcp", &session, "maybe_who", json!({})).await;
+    assert_eq!(text(&message), "anonymous", "{message}");
+
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &as_user("bob"),
+        "maybe_who",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "who bob", "{message}");
+}
+
+/// The endpoint is shared: every registered service's request scope runs on
+/// every request, so one required struct identity fails the endpoint closed
+/// for the members of the other services too (like one HTTP controller's
+/// identity does not leak onto another's routes — but here the layer is the
+/// endpoint, not the route).
+#[r2e_core::test]
+async fn every_registered_scope_must_pass_on_the_shared_endpoint() {
+    let router = AppBuilder::new()
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<StructAppTools>()
+        .register_mcp_service::<AppIdentityTools>()
+        .build();
+
+    let response =
+        support::post_with_headers(&router, "/mcp", None, &[], &support::initialize_body()).await;
+    assert_eq!(
+        response.status,
+        StatusCode::UNAUTHORIZED,
+        "{}",
+        response.raw_body
+    );
+
+    let session = support::initialize_with_headers(&router, "/mcp", &as_user("alice")).await;
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &as_user("alice"),
+        "maybe_hello",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "hello alice", "{message}");
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &as_user("alice"),
+        "who",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "who alice", "{message}");
+}
+
+/// CORS preflight carries no credentials by design: the request scope is
+/// skipped for `OPTIONS`.
+#[r2e_core::test]
+async fn preflight_skips_the_request_scope() {
+    use tower::ServiceExt;
+    let router = struct_app().await;
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/mcp")
+        .header("host", "localhost")
+        .header("origin", "http://localhost:5173")
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ── Struct-level identity with roles: filtering + session binding ──────────
+
+#[controller]
+struct SecuredStructTools {
+    #[inject(identity)]
+    user: AuthenticatedUser,
+}
+
+#[mcp_routes]
+impl SecuredStructTools {
+    #[tool]
+    async fn whoami(&self) -> String {
+        self.user.sub.clone()
+    }
+
+    /// Gated by the struct identity's roles (enforced by the guard, and
+    /// filtered out of `tools/list` for callers without the role).
+    #[tool]
+    #[roles("admin")]
+    async fn admin_only(&self) -> String {
+        format!("admin:{}", self.user.sub)
+    }
+}
+
+async fn secured_struct_app(jwt: &TestJwt) -> Routes {
+    AppBuilder::new()
+        .provide(Arc::new(jwt.claims_validator()))
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<SecuredStructTools>()
+        .build()
+}
+
+fn bearer(jwt: &TestJwt, sub: &str, roles: &[&str]) -> String {
+    format!("Bearer {}", jwt.token_builder(sub).roles(roles).build())
+}
+
+async fn list_as(router: &Routes, session: &str, bearer: &str) -> Vec<String> {
+    let response = support::post_with_headers(
+        router,
+        "/mcp",
+        Some(session),
+        &[("authorization", bearer)],
+        &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "{}", response.raw_body);
+    support::tool_names(response.result())
+}
+
+#[r2e_core::test]
+async fn roles_on_a_struct_identity_gate_the_member_and_filter_the_list() {
+    let jwt = TestJwt::new();
+    let router = secured_struct_app(&jwt).await;
+
+    let alice = bearer(&jwt, "alice", &[]);
+    let session =
+        support::initialize_with_headers(&router, "/mcp", &[("authorization", &alice)]).await;
+    let tools = list_as(&router, &session, &alice).await;
+    assert_eq!(tools, vec!["whoami".to_string()], "{tools:?}");
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &[("authorization", &alice)],
+        "whoami",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "alice", "{message}");
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &[("authorization", &alice)],
+        "admin_only",
+        json!({}),
+    )
+    .await;
+    assert_eq!(message["error"]["data"], "forbidden", "{message}");
+
+    let root = bearer(&jwt, "root", &["admin"]);
+    let session =
+        support::initialize_with_headers(&router, "/mcp", &[("authorization", &root)]).await;
+    let tools = list_as(&router, &session, &root).await;
+    assert_eq!(
+        tools,
+        vec!["admin_only".to_string(), "whoami".to_string()],
+        "{tools:?}"
+    );
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &[("authorization", &root)],
+        "admin_only",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "admin:root", "{message}");
+}
+
+/// A session opened by one subject is a 404 for another — rmcp's own
+/// "unknown session" answer, so the second caller learns nothing — exactly
+/// what the `mcp.auth` layer does for its principal.
+#[r2e_core::test]
+async fn a_session_is_bound_to_the_struct_identitys_subject() {
+    let jwt = TestJwt::new();
+    let router = secured_struct_app(&jwt).await;
+    let alice = bearer(&jwt, "alice", &[]);
+    let bob = bearer(&jwt, "bob", &[]);
+    let session =
+        support::initialize_with_headers(&router, "/mcp", &[("authorization", &alice)]).await;
+
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+    let replayed = support::post_with_headers(
+        &router,
+        "/mcp",
+        Some(&session),
+        &[("authorization", &bob)],
+        &list,
+    )
+    .await;
+    assert_eq!(
+        replayed.status,
+        StatusCode::NOT_FOUND,
+        "{}",
+        replayed.raw_body
+    );
+    assert!(replayed.messages.is_empty(), "{}", replayed.raw_body);
+    let unknown = support::post_with_headers(
+        &router,
+        "/mcp",
+        Some("no-such-session"),
+        &[("authorization", &bob)],
+        &list,
+    )
+    .await;
+    assert_eq!(unknown.status, replayed.status);
+    assert_eq!(unknown.raw_body, replayed.raw_body);
+
+    // The owner is unaffected by the refused replay.
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &session,
+        &[("authorization", &alice)],
+        "whoami",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "alice", "{message}");
+}
+
+// ── What the layer learns from the identity type ───────────────────────────
+
+/// The caller probe picks the richest view the identity type offers, by
+/// autoref priority: roles when `RoleBasedIdentity`, the subject alone when
+/// only `Identity`, nothing otherwise — none of the traits being required.
+#[test]
+fn the_caller_probe_prefers_roles_then_subject_then_nothing() {
+    use r2e_mcp::__macro_support::{
+        CallerProbe, CallerViaIdentity as _, CallerViaNone as _, CallerViaRoles as _,
+    };
+    use r2e_security::RoleBasedIdentity;
+
+    struct SubjectOnly;
+    impl Identity for SubjectOnly {
+        fn sub(&self) -> &str {
+            "subject-only"
+        }
+    }
+    struct WithRoles(Vec<String>);
+    impl Identity for WithRoles {
+        fn sub(&self) -> &str {
+            "with-roles"
+        }
+    }
+    impl RoleBasedIdentity for WithRoles {
+        fn roles(&self) -> &[String] {
+            &self.0
+        }
+    }
+
+    let caller = (&&CallerProbe::<WithRoles>::new()).caller(Some(&WithRoles(vec!["admin".into()])));
+    let caller = caller.expect("a RoleBasedIdentity reports a caller");
+    assert_eq!(
+        (caller.sub.as_str(), caller.roles.as_slice()),
+        ("with-roles", &["admin".to_string()][..])
+    );
+
+    let caller = (&&CallerProbe::<SubjectOnly>::new()).caller(Some(&SubjectOnly));
+    let caller = caller.expect("an Identity reports a caller");
+    assert_eq!(
+        (caller.sub.as_str(), caller.roles.len()),
+        ("subject-only", 0)
+    );
+
+    // The `&&` is the autoref ladder itself (the probe picks the impl by
+    // receiver depth), not a borrow to simplify.
+    #[allow(clippy::needless_borrow)]
+    let anonymous = (&&CallerProbe::<AppUser>::new())
+        .caller(Some(&AppUser("x".into())))
+        .is_none();
+    assert!(anonymous);
+    assert!((&&CallerProbe::<WithRoles>::new()).caller(None).is_none());
 }

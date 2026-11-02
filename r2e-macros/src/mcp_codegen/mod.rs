@@ -1,17 +1,25 @@
 //! Code generation for the `#[mcp_routes]` attribute macro.
 //!
 //! Generates:
-//! - The user's impl block (methods with stripped attributes)
-//! - A wrapper struct `__R2eMcp<Name>` holding the core and every prebuilt
-//!   guard/interceptor product; the wrapper itself is shared through one Arc
+//! - The user's impl, split exactly like `#[routes]` splits an HTTP
+//!   controller: members and `#[request_helper]` helpers on the request
+//!   façade `impl __R2eRequest_<Name>` (where `self.<identity field>` /
+//!   `self.<request field>` resolve), everything else on the core `impl Name`
+//! - A wrapper struct `__R2eMcp<Name>` holding the `Arc`'d core and every
+//!   prebuilt guard/interceptor product; the wrapper itself is shared
+//!   through one Arc
 //! - One hidden invocation method per member on the wrapper
 //!   (`__r2e_tool_<fn>` / `__r2e_resource_<fn>` / `__r2e_prompt_<fn>`):
-//!   scope check → identity extraction → guards → params → method call
-//!   (interceptor-wrapped) → family-specific result conversion
+//!   scope check → façade binding (the request data extracted once per HTTP
+//!   request by the endpoint layer) → parameter identity extraction → guards
+//!   → params → method call (interceptor-wrapped) → family-specific result
+//!   conversion
 //! - A state-generic impl of `McpService<S, W>` for the controller
-//!   (`routes()` bundling tool, resource and prompt routes with schemas); one
-//!   extraction marker per member `#[inject(identity)]` is folded into `W`,
-//!   exactly like `Controller<S, W>` for HTTP routes
+//!   (`routes()` bundling tool, resource and prompt routes with schemas, plus
+//!   the once-per-request extraction of the struct's request scope); the
+//!   request-data marker and one extraction marker per member
+//!   `#[inject(identity)]` are folded into `W`, exactly like
+//!   `Controller<S, W>` for HTTP routes
 //! - An impl of `EndpointDeps` for the controller (compile-time bean check
 //!   at `register_mcp_service()`)
 
@@ -54,6 +62,25 @@ impl McpDecoLayout {
 /// The hidden wrapper struct ident for a service.
 pub(crate) fn wrapper_ident(controller_name: &syn::Ident) -> syn::Ident {
     format_ident!("__R2eMcp{}", controller_name)
+}
+
+/// The `#[controller]`-generated items a service is wired through: the meta
+/// module, the request-data type and its marker generic, the façade.
+pub(crate) struct ControllerItems {
+    pub meta_mod: syn::Ident,
+    pub data_name: syn::Ident,
+    pub data_marker: syn::Ident,
+    pub facade_name: syn::Ident,
+}
+
+pub(crate) fn controller_items(controller_name: &syn::Ident) -> ControllerItems {
+    ControllerItems {
+        meta_mod: format_ident!("__r2e_meta_{}", controller_name),
+        data_name: format_ident!("__R2eRequestData_{}", controller_name),
+        // The same spelling `#[routes]` uses (`handlers::data_marker`).
+        data_marker: format_ident!("__R2eMd"),
+        facade_name: format_ident!("__R2eRequest_{}", controller_name),
+    }
 }
 
 /// The hidden per-member invocation method ident on the wrapper, prefixed by
@@ -223,16 +250,8 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     let mcp_service_impl = service_impl::generate_mcp_service_impl(def, &deco);
     let endpoint_deps_impl = service_impl::generate_endpoint_deps_impl(def);
     let deco_items = &deco.items;
-    let meta_mod = format_ident!("__r2e_meta_{}", def.controller_name);
-    let identity_assert = quote_spanned! { def.controller_name.span() =>
-        const _: () = ::core::assert!(
-            !#meta_mod::HAS_STRUCT_IDENTITY,
-            "#[mcp_routes] does not support struct-level #[inject(identity)]: MCP identity is per member; move it to a #[tool], #[resource] or #[prompt] method parameter"
-        );
-    };
 
     quote! {
-        #identity_assert
         #impl_block
         #deco_items
         #wrapper
@@ -242,10 +261,39 @@ pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate the user's impl block with member attributes stripped.
+/// Generate the user's impl, split by execution scope like `#[routes]`
+/// does: members and `#[request_helper]` helpers on the request façade,
+/// everything else (helpers, associated items) on the core. The impl-level
+/// attributes are carried by both blocks (`validate_mcp_impl_attrs` only
+/// lets inert ones through, so emitting them twice is sound).
 fn generate_impl_block(def: &McpRoutesImplDef) -> TokenStream {
     let impl_block = &def.impl_block;
-    quote! { #impl_block }
+    let core_impl = if impl_block.items.is_empty() {
+        quote! {}
+    } else {
+        quote! { #impl_block }
+    };
+    let facade_impl = if def.facade_methods.is_empty() {
+        quote! {}
+    } else {
+        let facade_name = controller_items(&def.controller_name).facade_name;
+        let impl_attrs = &impl_block.attrs;
+        let methods = def.facade_methods.iter().map(|f| {
+            let mut f = f.clone();
+            crate::codegen::precise_capture::add_handler_precise_captures(&mut f.sig);
+            quote! { #f }
+        });
+        quote! {
+            #(#impl_attrs)*
+            impl #facade_name {
+                #(#methods)*
+            }
+        }
+    };
+    quote! {
+        #facade_impl
+        #core_impl
+    }
 }
 
 /// Generate the single wrapper struct holding the controller core and every
@@ -261,7 +309,9 @@ fn generate_wrapper_struct(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Toke
     quote! {
         #[doc(hidden)]
         pub struct #wrapper_name {
-            core: #controller_name,
+            // Shared with every façade bound per call (`bind_request` takes
+            // an `Arc` of the core), like an HTTP controller's core.
+            core: ::std::sync::Arc<#controller_name>,
             #(#field_decls,)*
         }
     }

@@ -80,7 +80,17 @@ references.
      extractor, run on an owned copy of the transport request's parts. The
      `mcp.auth` principal is just another extractor (`McpPrincipal`, marker
      `ViaMcpAuth`, `r2e-mcp/src/auth/extract.rs`) — no MCP-only identity
-     path,
+     path. Struct-level request scope (#1210) reuses the `#[controller]`
+     items unchanged (`__R2eRequestData_<Name>::extract`, `bind_request`,
+     façade, `guard_identity`): `#[mcp_routes]` only moves the call point —
+     `McpRoutes::request_scope` is a `RequestScope` closure the `McpServer`
+     plugin collects into one `McpIdentityLayer` on `/mcp` (runs every
+     service's extraction once per HTTP request, deposits the data in the
+     request extensions, derives an `McpCaller` {sub, roles} through the
+     `CallerProbe` autoref ladder — `RoleBasedIdentity` > `Identity` > none);
+     each member binds its façade from the deposit (`r2e-mcp/src/identity.rs`,
+     `r2e-macros/src/mcp_codegen/service_impl.rs`). The witness `W` starts
+     with the request-data marker, so a plain service is `McpService<S, ((),)>`,
    - the `GuardContext` builder and the `Rejection` → wire-error projection
      (HTTP: the route envelope; gRPC: `guard_context` +
      `rejection_to_status`; MCP: `member_guard_context` +

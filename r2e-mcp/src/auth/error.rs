@@ -169,6 +169,7 @@ pub fn basic_challenge(realm: &str) -> HeaderValue {
 }
 
 /// The challenges a 401/403 advertises, fixed at boot per auth layer.
+#[derive(Clone)]
 pub(crate) struct Challenges {
     /// `Bearer resource_metadata="…"` — set when OAuth is configured.
     pub resource_metadata_url: Option<Arc<str>>,

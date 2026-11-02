@@ -216,6 +216,31 @@ pub trait RequestData<S>: Sized {
     ) -> impl std::future::Future<Output = Result<Self, Rejection>> + Send;
 }
 
+/// `Clone` reached through a marker generic, for the generated
+/// `__R2eRequestData_<Name><__M>` type.
+///
+/// `#[controller]` emits `impl<__M> Clone for __R2eRequestData_<Name><__M>
+/// where <field type>: CloneVia<__M>` for every request-scoped field. The
+/// bound names `__M`, so it is not a *trivial* bound: a controller whose
+/// request-scoped field is not `Clone` still compiles — the impl just never
+/// applies — and only a consumer that needs the data cloned (today
+/// `#[mcp_routes]`, which extracts once per HTTP request and hands each
+/// JSON-RPC member a copy) sees the missing `Clone`, at its registration
+/// site. A direct `where <field type>: Clone` would be rejected by rustc at
+/// the `#[controller]` site for every HTTP controller with a non-`Clone`
+/// request-scoped field.
+#[doc(hidden)]
+pub trait CloneVia<M> {
+    fn clone_via(&self) -> Self;
+}
+
+impl<M, T: Clone> CloneVia<M> for T {
+    #[inline]
+    fn clone_via(&self) -> Self {
+        self.clone()
+    }
+}
+
 /// Autoref probe converting a route-method parameter's extractor rejection
 /// into the [`Rejection`] hub.
 ///

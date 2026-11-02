@@ -87,7 +87,7 @@ fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<Id
 /// façade semantics for such signatures are deliberately designed, reject them
 /// with a single targeted error. The `&self` receiver is fine — only type
 /// positions are checked.
-fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Result<()> {
+pub(crate) fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Result<()> {
     fn ty_mentions_self(ty: &syn::Type) -> bool {
         use quote::ToTokens;
         ty.to_token_stream()
@@ -97,30 +97,32 @@ fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Resu
 
     for arg in sig.inputs.iter() {
         if let syn::FnArg::Typed(pt) = arg
-            && ty_mentions_self(&pt.ty) {
-                return Err(syn::Error::new_spanned(
-                    &pt.ty,
-                    format!(
-                        "{kind} methods cannot expose `Self` in their signature\n\n\
+            && ty_mentions_self(&pt.ty)
+        {
+            return Err(syn::Error::new_spanned(
+                &pt.ty,
+                format!(
+                    "{kind} methods cannot expose `Self` in their signature\n\n\
                          {kind} methods run on the generated request façade, where `Self` no \
                          longer refers to the controller. Name the controller type explicitly \
                          instead of using `Self`.",
-                    ),
-                ));
-            }
-    }
-    if let syn::ReturnType::Type(_, ty) = &sig.output
-        && ty_mentions_self(ty) {
-            return Err(syn::Error::new_spanned(
-                ty,
-                format!(
-                    "{kind} methods cannot expose `Self` in their return type\n\n\
-                     {kind} methods run on the generated request façade, where `Self` no \
-                     longer refers to the controller. Name the controller type explicitly \
-                     instead of using `Self`.",
                 ),
             ));
         }
+    }
+    if let syn::ReturnType::Type(_, ty) = &sig.output
+        && ty_mentions_self(ty)
+    {
+        return Err(syn::Error::new_spanned(
+            ty,
+            format!(
+                "{kind} methods cannot expose `Self` in their return type\n\n\
+                     {kind} methods run on the generated request façade, where `Self` no \
+                     longer refers to the controller. Name the controller type explicitly \
+                     instead of using `Self`.",
+            ),
+        ));
+    }
     Ok(())
 }
 
@@ -426,9 +428,10 @@ fn reject_non_inert_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
                 continue;
             }
         } else if let Some(ident) = path.get_ident()
-            && INERT.iter().any(|n| ident == n) {
-                continue;
-            }
+            && INERT.iter().any(|n| ident == n)
+        {
+            continue;
+        }
         let name = quote::ToTokens::to_token_stream(path).to_string();
         return Err(syn::Error::new_spanned(
             attr,
@@ -824,15 +827,16 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // per-route layers. Reject the combination rather than silently exempt the
     // fallback from a guard the impl block promises for ALL routes.
     if !controller_decorators.pre_auth_guard_fns.is_empty()
-        && let Some(rm) = route_methods.iter().find(|m| m.is_fallback) {
-            return Err(syn::Error::new(
-                rm.fn_item.sig.ident.span(),
-                "controller-level #[pre_guard] cannot be combined with a #[fallback] route — \
+        && let Some(rm) = route_methods.iter().find(|m| m.is_fallback)
+    {
+        return Err(syn::Error::new(
+            rm.fn_item.sig.ident.span(),
+            "controller-level #[pre_guard] cannot be combined with a #[fallback] route — \
                  the fallback is registered via `Routes::fallback`, which takes no per-route \
                  layers, so the pre-guard could not apply to it. Move the #[pre_guard] to the \
                  individual routes, or guard the fallback's work with #[guard] / in its body.",
-            ));
-        }
+        ));
+    }
 
     // A controller-level guard with nothing to apply to is exactly the silent
     // no-op this family of attributes is meant to eliminate — fail loud.

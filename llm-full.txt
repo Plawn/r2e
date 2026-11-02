@@ -6529,6 +6529,49 @@ against the app state — the HTTP contract (llm/security.md):
 Rejection → `McpError` by kind (401 → `Unauthorized`). Order per call: scope
 check → identity → guards → params → method.
 
+**Struct-level identity (endpoint identity).** `#[inject(identity)]` /
+`#[inject(request)]` *fields* on the service struct follow the `#[controller]`
+contract (same attributes, same extractors, `#[request_helper]`, members read
+`self.<field>`), but are extracted **once per HTTP request** in a layer on
+`/mcp`, before rmcp parses the body: the whole endpoint fails closed —
+`initialize` included, no session opened — with the extractor's **HTTP**
+rejection (`Option<T>` admits anonymous callers with `None`). Every registered
+service's scope runs on every request; `OPTIONS` is skipped. Members run on the
+request façade (name associated items via the service type, never expose
+`Self` in a member signature). `#[roles]` checks the struct identity
+(`RoleBasedIdentity`); lists are filtered for it; a session is bound to its
+subject (`Identity`). Under `mcp.auth` the field may be `McpPrincipal` (the
+deposited principal, validated once); an app identity's bare 401 gets the
+`mcp.auth` challenge appended. Request-scoped field types must be `Clone`
+(checked at `.register_mcp_service::<Svc>()`).
+
+```rust
+use r2e::prelude::*;
+use r2e::http::HeaderMap;
+
+#[controller]
+pub struct AccountTools {
+    #[inject(identity)] principal: McpPrincipal,
+    #[inject(request)] headers: HeaderMap,
+}
+
+#[mcp_routes]
+impl AccountTools {
+    #[tool]
+    async fn whoami(&self) -> String { self.greet("hello") }
+
+    #[tool]
+    #[roles("admin")]
+    async fn audit(&self) -> String { format!("audit by {}", self.principal.user.sub) }
+
+    #[request_helper]
+    fn greet(&self, word: &str) -> String {
+        format!("{word} {} via {:?}", self.principal.user.sub, self.headers.get("x-request-id"))
+    }
+}
+# fn main() {}
+```
+
 ```rust
 use r2e::prelude::*;
 
