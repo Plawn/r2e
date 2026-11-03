@@ -1018,7 +1018,8 @@ impl<'a> Pipeline<'a> {
 
     /// Post-auth guards: controller-level (`"*"` context, one stateful-guard
     /// bucket per controller) first, then the method's own. Requires
-    /// [`Self::head_bindings`] in scope.
+    /// `__parts` (not yet consumed by the body) and [`Self::head_bindings`]
+    /// (`__path_params`) in scope.
     fn guards(&self) -> TokenStream {
         let krate = &self.krate;
         let controller_name_q = &self.controller_name_q;
@@ -1026,17 +1027,13 @@ impl<'a> Pipeline<'a> {
         let identity = self.guard_identity_expr();
         let ctx = |method_name: TokenStream| {
             quote! {
-                #krate::GuardContext {
-                    method_name: #method_name,
-                    controller_name: #controller_name_q,
-                    method: __method,
-                    headers: __headers,
-                    uri: __uri,
-                    extensions: __extensions,
-                    peer_addr: __peer_addr,
-                    path_params: __path_params,
-                    identity: #identity,
-                }
+                #krate::GuardContext::from_parts(
+                    &__parts,
+                    #method_name,
+                    #controller_name_q,
+                    #identity,
+                    __path_params,
+                )
             }
         };
         let check = |recv: TokenStream, field: &syn::Ident, ctx: TokenStream| {

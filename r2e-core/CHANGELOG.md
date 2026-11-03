@@ -17,6 +17,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `GuardContext::from_parts(parts, method_name, controller_name, identity,
+  path_params)` (#1213): builds the guard context from a request head
+  (`peer_addr` read from the `ConnectInfo<SocketAddr>` extension). The one
+  constructor HTTP routes, MCP members and gRPC methods go through; the
+  struct's fields are unchanged and stay public.
+
 - `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
   `Clone` bound `#[controller]` puts on the generated request-data type, so a
   controller with a non-`Clone` request-scoped field keeps compiling and only
