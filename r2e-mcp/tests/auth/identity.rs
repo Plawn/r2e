@@ -38,7 +38,7 @@ use crate::support;
 #[controller]
 struct IdentityTools;
 
-#[mcp_routes]
+#[routes]
 impl IdentityTools {
     /// Whether the identity extension and the principal are the SAME
     /// `AuthenticatedUser` allocation.

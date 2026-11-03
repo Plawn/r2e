@@ -26,7 +26,7 @@ pub struct ReviewIn {
 #[controller]
 pub struct Completer;
 
-#[mcp_routes]
+#[routes]
 impl Completer {
     /// Review code in a language (`lang` is completed).
     #[prompt(complete(lang = "languages"))]
@@ -150,7 +150,7 @@ impl Completer {
 #[controller]
 pub struct SecretPrompts;
 
-#[mcp_routes(group = "secret", opt_in)]
+#[routes(group = "secret", opt_in)]
 impl SecretPrompts {
     /// Only visible once the `secret` group is enabled.
     #[prompt(complete(lang = "secret_languages"))]

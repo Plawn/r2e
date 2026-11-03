@@ -49,7 +49,7 @@ pub struct Sum {
 #[controller]
 struct ShortDocs;
 
-#[mcp_routes]
+#[routes]
 impl ShortDocs {
     /// Add.
     #[tool(read_only, idempotent)]
@@ -96,7 +96,7 @@ impl ShortDocs {
 #[controller]
 struct LongDocs;
 
-#[mcp_routes]
+#[routes]
 impl LongDocs {
     #[tool(
         read_only,

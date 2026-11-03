@@ -34,7 +34,7 @@ async fn capabilities_advertise_resources_and_prompts_when_present() {
 #[controller]
 struct ToolsOnly;
 
-#[mcp_routes]
+#[routes]
 impl ToolsOnly {
     /// Reply with `pong`.
     #[tool]
@@ -128,7 +128,7 @@ async fn domain_error_degrades_to_a_json_rpc_internal_error() {
 #[controller]
 struct TemplateResources;
 
-#[mcp_routes]
+#[routes]
 impl TemplateResources {
     /// Read one user by URI.
     #[resource(uri = "r2e://users/{id}{?view}", mime_type = "text/plain")]
@@ -180,7 +180,7 @@ async fn uri_templates_are_listed_separately_and_capture_variables() {
 #[controller]
 struct NestedTemplateResources;
 
-#[mcp_routes]
+#[routes]
 impl NestedTemplateResources {
     /// A more specific template registered AFTER the broad one.
     #[resource(uri = "r2e://users/{id}/posts/{post}", mime_type = "text/plain")]
@@ -265,7 +265,7 @@ async fn form_style_template_variables_are_optional() {
 #[controller]
 struct RenamedTemplateResources;
 
-#[mcp_routes]
+#[routes]
 impl RenamedTemplateResources {
     /// Same shape as `TemplateResources::user` with the positional variable
     /// renamed (`{?view}` stays: query names are part of the wire, so

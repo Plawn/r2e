@@ -154,7 +154,7 @@ testcontainers-modules = "0.15"
 
 # MCP
 # `default-features = false`: rmcp's default `macros` feature is deliberately unused —
-# R2E dispatches tools itself (#[mcp_routes]), rmcp is the wire only.
+# R2E dispatches tools itself (#[routes] MCP members), rmcp is the wire only.
 rmcp = { version = "3.8", default-features = false, features = ["server", "transport-streamable-http-server", "elicitation"] }
 
 # Security

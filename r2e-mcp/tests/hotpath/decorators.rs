@@ -53,7 +53,7 @@ impl<R: Send> Interceptor<R> for Through {
 #[controller]
 struct Plain;
 
-#[mcp_routes]
+#[routes]
 impl Plain {
     #[tool]
     async fn ping(&self) -> &'static str {
@@ -64,7 +64,7 @@ impl Plain {
 #[controller]
 struct Decorated;
 
-#[mcp_routes]
+#[routes]
 #[guard(Pass)]
 #[intercept(Through)]
 impl Decorated {

@@ -65,7 +65,7 @@ pub struct GoldenOutput {
 #[controller]
 struct GoldenService;
 
-#[mcp_routes]
+#[routes]
 impl GoldenService {
     /// Echo a name.
     ///

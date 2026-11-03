@@ -1,4 +1,4 @@
-//! Shared fixtures for the `server` target: a small `#[mcp_routes]` service
+//! Shared fixtures for the `server` target: a small `#[routes]` service
 //! over graph beans, a bean-reading interceptor, and a header guard —
 //! the same shapes `examples/example-mcp` ships.
 
@@ -138,7 +138,7 @@ pub struct FixtureTools {
     log: CallLog,
 }
 
-#[mcp_routes]
+#[routes]
 impl FixtureTools {
     /// Add two numbers.
     #[tool(read_only, idempotent)]

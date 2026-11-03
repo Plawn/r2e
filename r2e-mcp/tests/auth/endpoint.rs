@@ -29,7 +29,7 @@ struct PrincipalTools {
     principal: McpPrincipal,
 }
 
-#[mcp_routes]
+#[routes]
 impl PrincipalTools {
     #[tool]
     async fn whoami(&self) -> String {
@@ -68,7 +68,7 @@ struct TenantTools {
     tenant: Tenant,
 }
 
-#[mcp_routes]
+#[routes]
 impl TenantTools {
     #[tool]
     async fn tenant(&self) -> String {

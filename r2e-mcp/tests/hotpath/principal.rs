@@ -34,7 +34,7 @@ const RESOURCE: &str = "http://localhost:3000/mcp";
 #[controller]
 struct Guarded;
 
-#[mcp_routes]
+#[routes]
 impl Guarded {
     /// A tool that reads nothing: the measurement is the request plumbing —
     /// validate, deposit the identity, dispatch — not the handler.

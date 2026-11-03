@@ -50,7 +50,7 @@ pub struct WhoAmI {
 #[controller]
 pub struct IdentityTools;
 
-#[mcp_routes]
+#[routes]
 impl IdentityTools {
     /// Report who the calling agent is authenticated as.
     ///

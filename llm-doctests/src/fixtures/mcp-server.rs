@@ -77,7 +77,7 @@ pub struct MathTools {
     calc: CalcService,
 }
 
-#[mcp_routes]
+#[routes]
 impl MathTools {
     /// Add two numbers.
     #[tool(read_only, idempotent)]

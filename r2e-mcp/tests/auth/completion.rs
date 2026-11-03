@@ -20,7 +20,7 @@ pub struct DraftIn {
 #[controller]
 pub struct GatedCompletions;
 
-#[mcp_routes]
+#[routes]
 impl GatedCompletions {
     /// Scope-gated prompt with a completed argument.
     #[prompt(scopes = "mcp:write", complete(topic = "topics"))]
