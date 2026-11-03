@@ -823,6 +823,12 @@ impl_module_controllers!(
 ///
 /// `build_state()` applies this right after materializing the state; user
 /// code never names it. `W` nests one witness pair per module.
+///
+/// Hidden: the trait is `pub` only because the builder's bounds name it. Its
+/// witness shape is an implementation detail inferred end to end, and
+/// reshaping it (#1213 nested the endpoint witness beside the controller
+/// one) is not a breaking change of r2e-core.
+#[doc(hidden)]
 pub trait ModuleList<T: Clone + Send + Sync + 'static, W> {
     /// Register every pending module's controllers, in registration order.
     ///

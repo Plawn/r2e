@@ -32,7 +32,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `((WC, WE), WR)` where it was `(WC, WR)`. `ModuleList` is an
   inference-only fold that user code never names (its own docs say so), so
   the reshaped witness is not a source break — which is why this is filed
-  under Added, not Breaking.
+  under Added, not Breaking. The trait is now `#[doc(hidden)]` to make that
+  contract explicit.
 
 - `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
   `Clone` bound `#[controller]` puts on the generated request-data type, so a
