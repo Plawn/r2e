@@ -17,6 +17,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- MCP services are declared with `#[routes]` (#1215, via `r2e-macros`); one
+  impl may also carry HTTP routes, making the type both a `Controller` and an
+  `McpService` (register it with `.register_controller::<T>()` and
+  `.register_mcp_service::<T>()`). `#[mcp_routes]` is a deprecated alias
+  (`since = "0.10.0"`), **removed in the next minor**: rename
+  `#[mcp_routes(...)]` to `#[routes(...)]`; silence the warning meanwhile with
+  a module/crate-level `#![allow(deprecated)]` (an item-level allow does not
+  reach it). Impl-level guards/interceptors of a mixed impl apply to both
+  transports, built once per transport. Docs: `docs/features/25-mcp.md`
+  § One type, two transports, `llm/mcp-server.md`.
+
 - `#[mcp_routes]` members now run on the request façade, exactly like
   `#[routes]` handlers (#1210). In a member body `Self` names the façade:
   name an associated item of the service through the service type

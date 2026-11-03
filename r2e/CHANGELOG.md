@@ -17,6 +17,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- One `#[routes]` impl may mix HTTP routes and MCP members (#1215, via
+  `r2e-macros` / `r2e-mcp`); `#[mcp_routes]` is a deprecated alias
+  (`since = "0.10.0"`) removed in the next minor — rename it to `#[routes]`.
+  See `docs/features/25-mcp.md` § One type, two transports.
+
 - gRPC identity (#1213, via `r2e-grpc` / `r2e-security` / `r2e-macros`):
   `GrpcIdentity` and `JwtIdentitySpec` are removed, gRPC `#[inject(identity)]`
   uses the HTTP extractor contract, `GrpcService` is `GrpcService<S, W>`, and

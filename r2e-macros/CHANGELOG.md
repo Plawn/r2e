@@ -17,6 +17,28 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- `#[routes]` accepts MCP members (#1215, transport-layering level 3a):
+  `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]` beside HTTP routes in
+  one impl, plus `#[routes(group = "…", opt_in)]`. A mixed impl emits one
+  façade, one `EndpointDeps` (HTTP + MCP sites) and both `Controller<S, W>`
+  and `McpService<S, W>`, each with its own witness; HTTP-only and MCP-only
+  expansions are unchanged. Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/
+  `#[intercept]` apply to both transports (built once per transport);
+  `#[pre_guard]`/`#[middleware]`/`#[layer]` stay HTTP-only. New compile
+  errors: `#[get]` + `#[tool]` on one method; `group`/`opt_in` on an impl
+  without an MCP member; an MCP marker in `#[grpc_routes]`.
+  - `#[mcp_routes]` is a `#[deprecated(since = "0.10.0")]` alias of
+    `#[routes]` and is **removed in the next minor**. Migration: rename
+    `#[mcp_routes(...)]` to `#[routes(...)]` (and the import). The lint fires
+    at the attribute path, so an item-level `#[allow(deprecated)]` on the
+    impl does not silence it; use a module- or crate-level
+    `#![allow(deprecated)]`. An empty MCP service (no member) is spellable
+    only through the alias until then.
+  - Changed messages: errors that named `#[mcp_routes]` now name `#[routes]`
+    (unknown completion provider, generic impl, `opt_in` without `group`),
+    and `#[middleware]`/`#[layer]` on an MCP-only impl reads "not supported on
+    a #[routes] impl block with no HTTP route".
+
 - `#[grpc_routes]` codegen contract (#1213, cut with `--no-propagate`): the
   generated wrapper is `__R2eGrpc<Name><S, W>` holding the state, each call
   builds an HTTP head (`r2e_grpc::into_head`), extracts the struct request

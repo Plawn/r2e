@@ -230,10 +230,37 @@ sessions, plus one release PR.
 
 ## 4. Level 3 — neutral operations exposed on several transports (product decision)
 
-**Status: NEXT — decided 2026-11-03, to run in a fresh session.** The user
-decided level 3 goes ahead: 3a first; 3b after its own design round; 3c only
-if the explicit registration pair reads badly in a real app. This block is
-the handoff; the rest of §4 is the design as written before levels 1–2.
+**Status: 3a DONE (Tasker #1215, branch `task/transport-layering-l3a`,
+2026-11-03); 3b NEXT after its own design round; 3c only if the explicit
+registration pair reads badly in a real app.** The user decided level 3 goes
+ahead on 2026-11-03. The handoff block below is kept as written; the 3a
+record follows it.
+
+- *3a as shipped.* `#[routes]` accepts `#[tool]`/`#[resource]`/`#[prompt]`/
+  `#[completion]` members and `#[routes(group, opt_in)]`. A dispatcher
+  (`r2e-macros/src/attrs/routes_attr.rs`) classifies the impl: HTTP-only and
+  MCP-only go through their existing parser + codegen untouched (expand
+  diff: byte-identical on every non-reworked target); a mixed impl is split
+  by member, each half parsed by its own parser, then the HTTP codegen emits
+  the one façade impl and the one `EndpointDeps` (HTTP + MCP sites), the MCP
+  codegen skips its carrier (`McpRoutesImplDef::mixed_http_sites`), and
+  `validate_config` unions both site sets. Each trait keeps its witness.
+  Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
+  both transports, built once per transport; `#[pre_guard]`/`#[middleware]`/
+  `#[layer]` stay HTTP-only (rejected with no HTTP route). `#[get]`+`#[tool]`
+  on one method and an MCP marker in `#[grpc_routes]` are compile errors.
+  `#[mcp_routes]` = `#[deprecated(since = "0.10.0")]` alias through the same
+  dispatcher, removed next minor. `example-mcp`'s `MathTools` serves an HTTP
+  route and its tools from one impl.
+- *Learnings.* (1) Split-and-reuse beat merging the parsers: it is what made
+  byte stability free. (2) A proc-macro `#[deprecated]` fires at the
+  attribute path — an item-level `#[allow(deprecated)]` on the impl does NOT
+  silence it; a module/crate-level `#![allow(deprecated)]` does. (3) An
+  empty impl reads as HTTP under `#[routes]`, so an empty MCP service is only
+  spellable through the alias (one compile-fail case stays on it).
+  (4) `scripts/smoke-registry.sh` keeps `#[mcp_routes]` until the release:
+  it builds against the published crates, which predate MCP members in
+  `#[routes]`.
 
 - *Prerequisites.* #132 (level 1) merged; #133 (level 2) merged; release PR
   cut with `scripts/bump-version.sh` (`r2e-grpc breaking`, `r2e-security
