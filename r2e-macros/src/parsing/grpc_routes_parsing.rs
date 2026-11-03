@@ -243,29 +243,29 @@ fn substitute_self_assoc(
 
     impl VisitMut for Subst<'_> {
         fn visit_type_mut(&mut self, ty: &mut syn::Type) {
-            if let syn::Type::Path(tp) = ty {
-                if let Some((declared, rest)) = self.split(&tp.qself, &tp.path) {
-                    let declared = declared.clone();
-                    *ty = if rest.is_empty() {
-                        declared
-                    } else {
-                        syn::parse_quote!(<#declared>#(::#rest)*)
-                    };
-                    return;
-                }
+            if let syn::Type::Path(tp) = ty
+                && let Some((declared, rest)) = self.split(&tp.qself, &tp.path)
+            {
+                let declared = declared.clone();
+                *ty = if rest.is_empty() {
+                    declared
+                } else {
+                    syn::parse_quote!(<#declared>#(::#rest)*)
+                };
+                return;
             }
             visit_mut::visit_type_mut(self, ty);
         }
 
         fn visit_expr_path_mut(&mut self, e: &mut syn::ExprPath) {
-            if let Some((declared, rest)) = self.split(&e.qself, &e.path) {
-                if !rest.is_empty() {
-                    let declared = declared.clone();
-                    let attrs = std::mem::take(&mut e.attrs);
-                    *e = syn::parse_quote!(<#declared>#(::#rest)*);
-                    e.attrs = attrs;
-                    return;
-                }
+            if let Some((declared, rest)) = self.split(&e.qself, &e.path)
+                && !rest.is_empty()
+            {
+                let declared = declared.clone();
+                let attrs = std::mem::take(&mut e.attrs);
+                *e = syn::parse_quote!(<#declared>#(::#rest)*);
+                e.attrs = attrs;
+                return;
             }
             visit_mut::visit_expr_path_mut(self, e);
         }
