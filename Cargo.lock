@@ -6130,6 +6130,7 @@ dependencies = [
  "percent-encoding",
  "r2e-core",
  "r2e-devservices",
+ "r2e-events",
  "r2e-security",
  "r2e-test",
  "reqwest 0.13.4",

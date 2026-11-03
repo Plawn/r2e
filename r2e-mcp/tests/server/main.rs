@@ -25,4 +25,5 @@ mod registry;
 mod rejection;
 mod resources;
 mod schema;
+mod single_core;
 mod wire_golden;
