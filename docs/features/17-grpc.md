@@ -485,7 +485,7 @@ After generation, you need to:
 | `#[guard(...)]` | Any HTTP `Guard<I>` (impl and method level), built through `DecoratorSpec` |
 | `#[inject(identity)]` | Identity — struct field or method parameter (`AuthenticatedUser` or `Option<AuthenticatedUser>`), extracted through the HTTP `FromRequestPartsVia` contract from the `authorization: Bearer ..` metadata |
 | `#[inject(request)]` | Request-scoped struct field (any `FromRequestParts` type: `HeaderMap`, `Uri`, `ConnectInfo<SocketAddr>`, …); an HTTP-only extractor (`Query<T>`) fails per call as a `Status`, never a panic |
-| `#[request_helper]` | Non-async helper on the façade, callable from methods through `self` |
+| `#[request_helper]` | Helper (sync or `async`) on the façade, callable from methods through `self` |
 
 Identity and guard rejections are projected onto `tonic::Status` by kind
 (`r2e_grpc::rejection_to_status`). Not supported: `#[pre_guard]`,

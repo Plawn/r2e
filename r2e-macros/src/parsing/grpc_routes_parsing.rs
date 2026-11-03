@@ -1,7 +1,5 @@
 //! Parsing for the `#[grpc_routes(TraitPath)]` attribute macro.
 
-use proc_macro2::{Group, TokenStream, TokenTree};
-use quote::ToTokens;
 
 use crate::parsing::member::{
     parse_decorators, parse_member, reject_self_in_route_signature, validate_impl_attrs,
@@ -145,7 +143,22 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
             }
         };
 
-        // Every async method in the impl block is considered a gRPC method
+        // `#[request_helper]` is classified first: a helper may be `async`
+        // and take `&self`, which would otherwise read as an rpc.
+        if method
+            .attrs
+            .iter()
+            .any(|a| a.path().is_ident("request_helper"))
+        {
+            validate_member_attrs(&method.attrs, &rules)?;
+            let mut method = substitute_self_assoc(method, &assoc_types);
+            reject_self_in_route_signature(&method.sig, "#[request_helper]")?;
+            method.attrs.retain(|a| !a.path().is_ident("request_helper"));
+            facade_helpers.push(method);
+            continue;
+        }
+
+        // Every other async method with a receiver is a gRPC method
         // (matching the tonic trait). Non-async or methods without &self are helpers.
         let is_receiver = method
             .sig
@@ -154,7 +167,7 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
             .is_some_and(|arg| matches!(arg, syn::FnArg::Receiver(_)));
 
         if method.sig.asyncness.is_some() && is_receiver {
-            let method = substitute_self_assoc(method, &assoc_types)?;
+            let method = substitute_self_assoc(method, &assoc_types);
             reject_self_in_route_signature(&method.sig, "#[grpc_routes]")?;
             methods.push(GrpcMethod {
                 member: parse_member(method, &rules)?,
@@ -164,18 +177,7 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
             // markers: a sync `#[pre_destroy] fn close(&self)` would
             // otherwise be re-emitted verbatim and silently never run.
             validate_member_attrs(&method.attrs, &rules)?;
-            if method
-                .attrs
-                .iter()
-                .any(|a| a.path().is_ident("request_helper"))
-            {
-                let mut method = substitute_self_assoc(method, &assoc_types)?;
-                reject_self_in_route_signature(&method.sig, "#[request_helper]")?;
-                method.attrs.retain(|a| !a.path().is_ident("request_helper"));
-                facade_helpers.push(method);
-            } else {
-                other_items.push(syn::ImplItem::Fn(method));
-            }
+            other_items.push(syn::ImplItem::Fn(method));
         }
     }
 
@@ -194,43 +196,84 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
 
 /// Rewrite every `Self::<Assoc>` path (one of the impl's associated types)
 /// in `method` to the type the impl declares for it.
+///
+/// Structural, not token-level: in a type position `Self::X` becomes the
+/// declared type; in an expression or a longer type path, `Self::X::rest`
+/// becomes the qualified path `<Declared>::rest` (`Self::WatchStream::new(rx)`
+/// → `<ReceiverStream<..>>::new(rx)`), which is what keeps generic declared
+/// types parseable in expression position.
 fn substitute_self_assoc(
-    method: syn::ImplItemFn,
+    mut method: syn::ImplItemFn,
     assoc_types: &[syn::ImplItemType],
-) -> syn::Result<syn::ImplItemFn> {
+) -> syn::ImplItemFn {
+    use syn::visit_mut::{self, VisitMut};
+
     if assoc_types.is_empty() {
-        return Ok(method);
+        return method;
     }
-    fn rewrite(tokens: TokenStream, assoc: &[syn::ImplItemType]) -> TokenStream {
-        let tts: Vec<TokenTree> = tokens.into_iter().collect();
-        let mut out: Vec<TokenTree> = Vec::with_capacity(tts.len());
-        let mut i = 0;
-        while i < tts.len() {
-            if let TokenTree::Ident(id) = &tts[i]
-                && id == "Self"
-                && let (Some(TokenTree::Punct(c1)), Some(TokenTree::Punct(c2)), Some(TokenTree::Ident(name))) =
-                    (tts.get(i + 1), tts.get(i + 2), tts.get(i + 3))
-                && c1.as_char() == ':'
-                && c2.as_char() == ':'
-                && let Some(t) = assoc.iter().find(|t| t.ident == *name)
-            {
-                let ty = &t.ty;
-                let group = Group::new(proc_macro2::Delimiter::None, ty.to_token_stream());
-                out.push(TokenTree::Group(group));
-                i += 4;
-                continue;
+
+    struct Subst<'a> {
+        assoc: &'a [syn::ImplItemType],
+    }
+
+    impl Subst<'_> {
+        /// `Self::X…` with `X` an associated type of the impl: the declared
+        /// type and the segments after `X`.
+        fn split<'p>(
+            &self,
+            qself: &Option<syn::QSelf>,
+            path: &'p syn::Path,
+        ) -> Option<(&syn::Type, Vec<&'p syn::PathSegment>)> {
+            if qself.is_some() || path.leading_colon.is_some() || path.segments.len() < 2 {
+                return None;
             }
-            match &tts[i] {
-                TokenTree::Group(g) => {
-                    let mut ng = Group::new(g.delimiter(), rewrite(g.stream(), assoc));
-                    ng.set_span(g.span());
-                    out.push(TokenTree::Group(ng));
-                }
-                other => out.push(other.clone()),
+            let mut segs = path.segments.iter();
+            let first = segs.next()?;
+            if first.ident != "Self" || !first.arguments.is_none() {
+                return None;
             }
-            i += 1;
+            let second = segs.next()?;
+            if !second.arguments.is_none() {
+                return None;
+            }
+            let t = self.assoc.iter().find(|t| t.ident == second.ident)?;
+            Some((&t.ty, segs.collect()))
         }
-        out.into_iter().collect()
     }
-    syn::parse2(rewrite(method.to_token_stream(), assoc_types))
+
+    impl VisitMut for Subst<'_> {
+        fn visit_type_mut(&mut self, ty: &mut syn::Type) {
+            if let syn::Type::Path(tp) = ty {
+                if let Some((declared, rest)) = self.split(&tp.qself, &tp.path) {
+                    let declared = declared.clone();
+                    *ty = if rest.is_empty() {
+                        declared
+                    } else {
+                        syn::parse_quote!(<#declared>#(::#rest)*)
+                    };
+                    return;
+                }
+            }
+            visit_mut::visit_type_mut(self, ty);
+        }
+
+        fn visit_expr_path_mut(&mut self, e: &mut syn::ExprPath) {
+            if let Some((declared, rest)) = self.split(&e.qself, &e.path) {
+                if !rest.is_empty() {
+                    let declared = declared.clone();
+                    let attrs = std::mem::take(&mut e.attrs);
+                    *e = syn::parse_quote!(<#declared>#(::#rest)*);
+                    e.attrs = attrs;
+                    return;
+                }
+            }
+            visit_mut::visit_expr_path_mut(self, e);
+        }
+    }
+
+    Subst {
+        assoc: assoc_types,
+    }
+    .visit_impl_item_fn_mut(&mut method);
+    method
 }

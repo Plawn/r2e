@@ -41,8 +41,9 @@ The service core is still built once from the bean graph; per call the
 identity (and any `#[inject(request)]` field — `HeaderMap`, `Uri`,
 `ConnectInfo<SocketAddr>`, …) is extracted and the method runs on a per-call
 façade over the core, exactly as on HTTP. Because the method runs on the
-façade, `Self` is not allowed in a method signature, and a non-async helper
-called on `self` needs `#[request_helper]`.
+façade, `Self` is not allowed in a method signature (`Self::<Assoc>` paths
+are rewritten to the declared type), and a helper called on `self` — sync or
+`async` — needs `#[request_helper]`.
 
 ### Parameter identity
 

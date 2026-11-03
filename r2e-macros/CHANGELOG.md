@@ -37,8 +37,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 - `#[grpc_routes]` accepts struct-level `#[inject(identity)]` /
   `#[inject(request)]` fields (#1213; the old "identity is per method" refusal
-  is gone), `#[request_helper]` fns on the façade, and associated types of the
-  service trait (server-streaming `type XStream = …;`), with the whole head
+  is gone), `#[request_helper]` fns (sync or `async`) on the façade, and
+  associated types of the service trait (server-streaming `type XStream = …;`;
+  `Self::XStream` in a method is rewritten structurally — as a type, or as the
+  qualified `<Declared>::new(..)` in expression position), with the whole head
   extracted before a stream opens. A guard requiring an identity is accepted
   when either the struct or the method provides one.
 - `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /

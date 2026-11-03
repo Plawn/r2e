@@ -137,8 +137,8 @@ or assert on the `Unauthenticated` message.
    service mixing public and protected methods keeps per-method parameters or
    declares `Option<AuthenticatedUser>`; `#[anonymous]` is not available on
    gRPC. Methods now run on the request façade: `Self` in a method signature
-   is rejected (name the type), and a non-async helper the methods call on
-   `self` takes `#[request_helper]`.
+   is rejected (name the type; `Self::<Assoc>` still works), and a helper the
+   methods call on `self` — sync or `async` — takes `#[request_helper]`.
 
 4. **`guard_context`.** Code (usually a test) that built a guard context by
    hand goes through the head:
