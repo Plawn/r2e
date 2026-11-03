@@ -1,5 +1,5 @@
 use r2e_security::config::SecurityConfig;
-use r2e_security::error::SecurityError;
+use r2e_security::error::{SecurityError, SecurityErrorKind};
 use r2e_security::jwt::{JwtClaimSet, JwtClaimsValidator, JwtValidator};
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
@@ -122,6 +122,7 @@ async fn validate_expired_token() {
         matches!(err, SecurityError::TokenExpired),
         "expected TokenExpired, got: {err}"
     );
+    assert_eq!(err.kind(), SecurityErrorKind::TokenExpired);
 }
 
 #[r2e_core::test]
@@ -146,10 +147,10 @@ async fn validate_token_before_not_before() {
 
     let result = validator.validate(&token).await;
     assert!(result.is_err());
-    assert!(matches!(
-        result.unwrap_err(),
-        SecurityError::InvalidToken(_)
-    ));
+    let err = result.unwrap_err();
+    assert!(matches!(err, SecurityError::InvalidToken(_)));
+    // `nbf` is a claim check, not a malformed token.
+    assert_eq!(err.kind(), SecurityErrorKind::Claims);
 }
 
 #[r2e_core::test]
@@ -180,6 +181,7 @@ async fn validate_invalid_signature() {
         matches!(err, SecurityError::InvalidToken(_)),
         "expected InvalidToken, got: {err}"
     );
+    assert_eq!(err.kind(), SecurityErrorKind::InvalidSignature);
 }
 
 #[r2e_core::test]
@@ -192,6 +194,7 @@ async fn validate_disallowed_algorithm() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err, SecurityError::ValidationFailed(_)));
+    assert_eq!(err.kind(), SecurityErrorKind::AlgorithmRefused);
 }
 
 #[r2e_core::test]
@@ -205,6 +208,7 @@ async fn validate_empty_allowed_algorithms() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(matches!(err, SecurityError::ValidationFailed(_)));
+    assert_eq!(err.kind(), SecurityErrorKind::AlgorithmRefused);
 }
 
 #[r2e_core::test]
@@ -234,6 +238,7 @@ async fn validate_wrong_issuer() {
         matches!(err, SecurityError::ValidationFailed(_)),
         "expected ValidationFailed, got: {err}"
     );
+    assert_eq!(err.kind(), SecurityErrorKind::Claims);
 }
 
 #[r2e_core::test]
@@ -528,7 +533,10 @@ async fn skip_audience_validation_still_enforces_issuer_and_exp() {
     let wrong_iss = serde_json::json!({
         "sub": "u", "iss": "evil", "exp": now_secs() + 3600,
     });
-    assert!(validator.validate(&encode_claims(&wrong_iss)).await.is_err());
+    assert!(validator
+        .validate(&encode_claims(&wrong_iss))
+        .await
+        .is_err());
 
     let expired = serde_json::json!({
         "sub": "u", "iss": TEST_ISSUER, "exp": 0,
@@ -583,6 +591,49 @@ async fn mixed_family_allowed_algorithms_still_validate() {
     let validator =
         JwtClaimsValidator::new_with_static_key(DecodingKey::from_secret(TEST_SECRET), config);
     let token = valid_token("user-1", &["admin"]);
-    let claims = validator.validate(&token).await.expect("token must validate");
+    let claims = validator
+        .validate(&token)
+        .await
+        .expect("token must validate");
     assert_eq!(claims.sub, "user-1");
+}
+
+// ── SecurityError::kind: the finer category, without parsing messages ──
+
+#[r2e_core::test]
+async fn malformed_token_kind() {
+    let validator = test_claims_validator();
+    let err = validator.validate("not.a.jwt").await.unwrap_err();
+    assert!(matches!(err, SecurityError::InvalidToken(_)), "{err}");
+    assert_eq!(err.kind(), SecurityErrorKind::MalformedToken);
+}
+
+#[test]
+fn variant_only_kinds() {
+    assert_eq!(
+        SecurityError::MissingAuthHeader.kind(),
+        SecurityErrorKind::MissingAuthHeader
+    );
+    assert_eq!(
+        SecurityError::InvalidAuthScheme.kind(),
+        SecurityErrorKind::InvalidAuthScheme
+    );
+    assert_eq!(
+        SecurityError::UnknownKeyId("k1".into()).kind(),
+        SecurityErrorKind::UnknownKid
+    );
+    assert_eq!(
+        SecurityError::JwksFetchError("timeout".into()).kind(),
+        SecurityErrorKind::JwksUnavailable
+    );
+    // A message built outside this crate's producers falls back to the
+    // variant's coarse category.
+    assert_eq!(
+        SecurityError::ValidationFailed("custom".into()).kind(),
+        SecurityErrorKind::Claims
+    );
+    assert_eq!(
+        SecurityError::InvalidToken("custom".into()).kind(),
+        SecurityErrorKind::MalformedToken
+    );
 }

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::config::SecurityConfig;
-use crate::error::SecurityError;
+use crate::error::{msg, SecurityError};
 
 /// Raw JWK structure as returned by a JWKS endpoint.
 /// Extra fields are allowed by serde's default behavior; we only capture
@@ -97,42 +97,61 @@ impl CachedJwk {
         match self.kty.as_str() {
             "RSA" => {
                 let n = self.n.as_deref().ok_or_else(|| {
-                    SecurityError::ValidationFailed("RSA key missing 'n' component".into())
+                    SecurityError::ValidationFailed(format!(
+                        "{}RSA key missing 'n' component",
+                        msg::SIGNING_KEY
+                    ))
                 })?;
                 let e = self.e.as_deref().ok_or_else(|| {
-                    SecurityError::ValidationFailed("RSA key missing 'e' component".into())
+                    SecurityError::ValidationFailed(format!(
+                        "{}RSA key missing 'e' component",
+                        msg::SIGNING_KEY
+                    ))
                 })?;
                 DecodingKey::from_rsa_components(n, e).map_err(|err| {
                     SecurityError::ValidationFailed(format!(
-                        "Failed to construct RSA decoding key: {err}"
+                        "{}Failed to construct RSA decoding key: {err}",
+                        msg::SIGNING_KEY
                     ))
                 })
             }
             "EC" => {
                 let x = self.x.as_deref().ok_or_else(|| {
-                    SecurityError::ValidationFailed("EC key missing 'x' component".into())
+                    SecurityError::ValidationFailed(format!(
+                        "{}EC key missing 'x' component",
+                        msg::SIGNING_KEY
+                    ))
                 })?;
                 let y = self.y.as_deref().ok_or_else(|| {
-                    SecurityError::ValidationFailed("EC key missing 'y' component".into())
+                    SecurityError::ValidationFailed(format!(
+                        "{}EC key missing 'y' component",
+                        msg::SIGNING_KEY
+                    ))
                 })?;
                 DecodingKey::from_ec_components(x, y).map_err(|err| {
                     SecurityError::ValidationFailed(format!(
-                        "Failed to construct EC decoding key: {err}"
+                        "{}Failed to construct EC decoding key: {err}",
+                        msg::SIGNING_KEY
                     ))
                 })
             }
             "OKP" => {
                 let x = self.x.as_deref().ok_or_else(|| {
-                    SecurityError::ValidationFailed("OKP key missing 'x' component".into())
+                    SecurityError::ValidationFailed(format!(
+                        "{}OKP key missing 'x' component",
+                        msg::SIGNING_KEY
+                    ))
                 })?;
                 DecodingKey::from_ed_components(x).map_err(|err| {
                     SecurityError::ValidationFailed(format!(
-                        "Failed to construct EdDSA decoding key: {err}"
+                        "{}Failed to construct EdDSA decoding key: {err}",
+                        msg::SIGNING_KEY
                     ))
                 })
             }
             other => Err(SecurityError::ValidationFailed(format!(
-                "Unsupported key type: {other}"
+                "{}Unsupported key type: {other}",
+                msg::SIGNING_KEY
             ))),
         }
     }
@@ -202,27 +221,34 @@ fn validate_key_metadata(
     let expected_kty = kty_for_algorithm(algorithm);
     if kty != expected_kty {
         return Err(SecurityError::ValidationFailed(format!(
-            "JWK key type '{kty}' is incompatible with token algorithm {algorithm:?}"
+            "{}JWK key type '{kty}' is incompatible with token algorithm {algorithm:?}",
+            msg::SIGNING_KEY
         )));
     }
     if let Some(advertised_algorithm) = advertised_algorithm
-        && !advertised_algorithm.eq_ignore_ascii_case(name_for_algorithm(algorithm)) {
-            return Err(SecurityError::ValidationFailed(format!(
-                "JWK algorithm '{advertised_algorithm}' does not match token algorithm {algorithm:?}"
-            )));
-        }
+        && !advertised_algorithm.eq_ignore_ascii_case(name_for_algorithm(algorithm))
+    {
+        return Err(SecurityError::ValidationFailed(format!(
+            "{}JWK algorithm '{advertised_algorithm}' does not match token algorithm {algorithm:?}",
+            msg::SIGNING_KEY
+        )));
+    }
     if let Some(key_use) = key_use
-        && key_use != "sig" {
-            return Err(SecurityError::ValidationFailed(format!(
-                "JWK use '{key_use}' does not permit signature verification"
-            )));
-        }
+        && key_use != "sig"
+    {
+        return Err(SecurityError::ValidationFailed(format!(
+            "{}JWK use '{key_use}' does not permit signature verification",
+            msg::SIGNING_KEY
+        )));
+    }
     if let Some(key_ops) = key_ops
-        && !key_ops.iter().any(|operation| operation == "verify") {
-            return Err(SecurityError::ValidationFailed(
-                "JWK key_ops does not permit signature verification".into(),
-            ));
-        }
+        && !key_ops.iter().any(|operation| operation == "verify")
+    {
+        return Err(SecurityError::ValidationFailed(format!(
+            "{}JWK key_ops does not permit signature verification",
+            msg::SIGNING_KEY
+        )));
+    }
     Ok(())
 }
 
@@ -498,11 +524,12 @@ async fn read_body_limited(
     max_bytes: u64,
 ) -> Result<Vec<u8>, SecurityError> {
     if let Some(len) = response.content_length()
-        && len > max_bytes {
-            return Err(SecurityError::JwksFetchError(format!(
-                "JWKS response too large: {len} bytes (max {max_bytes})"
-            )));
-        }
+        && len > max_bytes
+    {
+        return Err(SecurityError::JwksFetchError(format!(
+            "JWKS response too large: {len} bytes (max {max_bytes})"
+        )));
+    }
 
     let max = max_bytes as usize;
     let mut body = Vec::new();

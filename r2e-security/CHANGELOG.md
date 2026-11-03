@@ -15,6 +15,19 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `SecurityError::kind() -> SecurityErrorKind`: the finer category of a
+  failure (`MissingAuthHeader`, `InvalidAuthScheme`, `MalformedToken`,
+  `InvalidSignature`, `TokenExpired`, `MissingKid`, `UnknownKid`,
+  `JwksUnavailable`, `AlgorithmRefused`, `SigningKeyUnusable`, `Claims`) for
+  logging and metrics, without parsing the message. The enum is
+  `#[non_exhaustive]`; the messages of `InvalidToken` / `ValidationFailed`
+  are unchanged apart from a stable prefix on the algorithm and signing-key
+  failures.
+
+## [Unreleased]
+
 ## [0.9.0] - 2026-10-31
 
 ### Changed
