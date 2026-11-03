@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- gRPC identity (#1213, via `r2e-grpc` / `r2e-security` / `r2e-macros`):
+  `GrpcIdentity` and `JwtIdentitySpec` are removed, gRPC `#[inject(identity)]`
+  uses the HTTP extractor contract, `GrpcService` is `GrpcService<S, W>`, and
+  `#[grpc_routes]` services accept struct-level `#[inject(identity)]` /
+  `#[inject(request)]` fields. Migration: `docs/migration/grpc-identity.md`.
+
 ## [0.10.0] - 2026-10-31
 
 ### Breaking

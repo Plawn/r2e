@@ -17,6 +17,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- `#[grpc_routes]` codegen contract (#1213, cut with `--no-propagate`): the
+  generated wrapper is `__R2eGrpc<Name><S, W>` holding the state, each call
+  builds an HTTP head (`r2e_grpc::into_head`), extracts the struct request
+  scope and any identity parameter through the HTTP extractor contract, and
+  the controller implements `GrpcService<S, W>`; the identity parameter no
+  longer goes through `GrpcIdentity`. Methods run on the request façade, so
+  `Self` in a method signature is rejected (as on `#[routes]` /
+  `#[mcp_routes]`). Needs `r2e-grpc` from the same release.
+
+### Breaking
+
 - `#[mcp_routes]` members run on the generated request façade, like
   `#[routes]` handlers (#1210): `Self` in a member body names the façade (name
   associated items through the service type), and `Self` in a member
@@ -24,6 +35,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `#[grpc_routes]` accepts struct-level `#[inject(identity)]` /
+  `#[inject(request)]` fields (#1213; the old "identity is per method" refusal
+  is gone), `#[request_helper]` fns on the façade, and associated types of the
+  service trait (server-streaming `type XStream = …;`), with the whole head
+  extracted before a stream opens. A guard requiring an identity is accepted
+  when either the struct or the method provides one.
 - `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /
   `#[inject(request)]` fields (#1210), reusing the `#[controller]` items
   (request-data extractor, `bind_request`, façade, `guard_identity`) and

@@ -1,7 +1,7 @@
 ---
 topic: guards
 features: core, rate-limit
-tokens: ~2700
+tokens: ~2800
 requires: security
 ---
 
@@ -82,8 +82,12 @@ impl DataController {
 `uri` (`.path()`, `.query_string()`), `extensions`, `peer_addr`, `path_params`
 (`path_param()`, `parse_path_param()`), `identity: Option<&I>`, plus
 `identity_sub()`, `identity_email()`, `identity_claims()`, and `head()` (the
-same `RequestHead` view `#[managed]` resources get). Building one by hand (rare
-— outside a request) can use `default_method()` / `no_extensions()`.
+same `RequestHead` view `#[managed]` resources get). Every transport builds it
+with `GuardContext::from_parts(&parts, method_name, controller_name, identity,
+path_params)` over a request head — on gRPC the head is the call's (`POST`,
+`/<package.Service>/<Method>`, metadata as headers), so a guard reading
+headers works on both. Building one by hand (rare — outside a request) can use
+`default_method()` / `no_extensions()`.
 Error helper: `GuardError::forbidden(...)`,
 `GuardError::unauthorized(...)`, `GuardError::new(status, msg)`.
 

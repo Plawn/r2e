@@ -163,11 +163,11 @@ impl GreeterService {
 
 The macro produces:
 
-- A wrapper struct `__R2eGrpc_<Name>` holding the retained `Arc<BeanContext>`
-- An `#[async_trait]` implementation of the tonic service trait (e.g., `Greeter`)
-- An implementation of the `GrpcService` trait (no state generic) that wires everything into the builder via `add_to_routes(Routes, &Arc<BeanContext>)` — each registered service folds into a single `tonic::service::Routes` collection, drained once by the `GrpcServer` plugin at serve time
+- A wrapper struct `__R2eGrpc<Name><S, W>` holding the service core (built once via `ContextConstruct`), one shared copy of the application state and the prebuilt guard/interceptor sets
+- An `#[async_trait]` implementation of the tonic service trait (e.g., `Greeter`), associated stream types included
+- An implementation of `GrpcService<S, W>` — generic over the state `S`, with an inference-only witness `W` like `Controller<S, W>` / `McpService<S, W>` — that wires everything into the builder via `add_to_routes(Routes, &S, &Arc<BeanContext>)`. Each registered service folds into a single `tonic::service::Routes` collection (wrapped in `CaptureMethodPath`, which records the real method path), drained once by the `GrpcServer` plugin at serve time
 
-Each method goes through the pipeline: controller construction via `ContextConstruct` (from the bean context, by type), interceptor wrapping, then the method body.
+Each call goes through the pipeline: the tonic request is turned into an HTTP request head (`http::request::Parts`: `POST`, uri `/<package.Service>/<Method>`, metadata moved into the headers without copying, extensions moved, `ConnectInfo` from the peer address) → the struct request scope (`#[inject(identity)]` / `#[inject(request)]` fields) and any identity parameter are extracted through `FromRequestPartsVia<S, M>`, exactly as on an HTTP route → guards (against `GuardContext::from_parts` over that head) → the tonic request is rebuilt → interceptors → the method, on the per-call façade. All of it runs before a server stream opens. A missing extractor bean (the `Arc<JwtClaimsValidator>` behind `AuthenticatedUser`) is a compile error at `register_grpc_service`.
 
 ### 6. Dependency Injection
 
@@ -427,7 +427,7 @@ AppBuilder::new()
 
 ## Prerequisites
 
-- gRPC service structs must **not** have `#[inject(identity)]` fields at the struct level: gRPC services construct from the bean context outside any HTTP request (via `ContextConstruct`), where no request identity is available. Use handler-level identity if needed.
+- Struct-level `#[inject(identity)]` / `#[inject(request)]` fields are extracted per call from the call head (like an HTTP controller); a required struct identity authenticates every method. A service mixing public and protected methods uses `Option<I>` (field or parameter) — `#[anonymous]` is not available on gRPC
 - The `GrpcServer` plugin must be installed before `build_state()`
 - Proto files are compiled at build time — changes to `.proto` files require a `cargo build`
 
@@ -481,13 +481,16 @@ After generation, you need to:
 | Decorator | Description |
 |-----------|-------------|
 | `#[intercept(...)]` | Interceptors (impl and method level) |
-| `#[roles(...)]` / `#[all_roles(...)]` | Role guards (impl and method level); the method needs an `#[inject(identity)]` parameter |
+| `#[roles(...)]` / `#[all_roles(...)]` | Role guards (impl and method level); the service needs a struct-level identity or the method an `#[inject(identity)]` parameter |
 | `#[guard(...)]` | Any HTTP `Guard<I>` (impl and method level), built through `DecoratorSpec` |
-| `#[inject(identity)]` | Identity method parameter (`AuthenticatedUser` or `Option<AuthenticatedUser>`), read from `authorization: Bearer ..` metadata via `GrpcIdentity` |
+| `#[inject(identity)]` | Identity — struct field or method parameter (`AuthenticatedUser` or `Option<AuthenticatedUser>`), extracted through the HTTP `FromRequestPartsVia` contract from the `authorization: Bearer ..` metadata |
+| `#[inject(request)]` | Request-scoped struct field (any `FromRequestParts` type: `HeaderMap`, `Uri`, `ConnectInfo<SocketAddr>`, …); an HTTP-only extractor (`Query<T>`) fails per call as a `Status`, never a panic |
+| `#[request_helper]` | Non-async helper on the façade, callable from methods through `self` |
 
 Identity and guard rejections are projected onto `tonic::Status` by kind
-(`r2e_grpc::rejection_to_status`). Not supported: struct-level
-`#[inject(identity)]`, `#[pre_guard]`, `#[anonymous]`.
+(`r2e_grpc::rejection_to_status`). Not supported: `#[pre_guard]`,
+`#[anonymous]`, `Self` in a method signature. Migrating from the pre-0.10 identity trait:
+`docs/migration/grpc-identity.md`.
 
 ## Validation Criteria
 

@@ -135,6 +135,30 @@ façade-binding block.
 
 ## 3. Level 2 — one request head, one identity contract (product, core break)
 
+**Status: DONE (2026-11-03).** Task #1213, branch `task/transport-layering-l2`
+(stacked on L1).
+
+Exit-criteria outcome: generated code builds every `GuardContext` through
+`GuardContext::from_parts` (HTTP, MCP, gRPC; struct literals survive only in
+tests). `grep GrpcIdentity` is not empty but only names the deprecated
+empty stub (compile-time migration: an old impl fails with "not a member of
+trait" errors plus a deprecation warning naming the migration page), the
+changelogs and `docs/migration/grpc-identity.md`. example-grpc exposes
+`AccountGreeter` (struct-level `AuthenticatedUser`, `#[roles]`, a
+`#[request_helper]`), a server stream whose head is extracted before it
+opens, and head/`ConnectInfo`/`Query` services. The missing-validator
+trybuild case now fails at `register_grpc_service` through the
+`GrpcService<S, W>` witness (stderr re-blessed). HTTP and MCP suites
+unchanged. Deviations: item 4 uses `Arrival::ExtractHere` against the
+wrapper's state (not `FromDeposit`); the URI comes from a
+`CaptureMethodPath` routing layer (tonic trait methods do not see it) with
+a `/<service>/<PascalCase(fn)>` fallback; `#[anonymous]` stays disallowed on
+gRPC (use `Option<I>`); the identity rejection is now the HTTP one
+(`Unauthorized`, no `www-authenticate` — the `AuthenticatedUser` `HttpError`
+rejection follow-up); r2e-core change is additive (`ModuleEndpoints<T, W>`
+witness), no core break. The transport-adapters §6 reversal is in its
+Decisions log.
+
 **Goal.** `#[inject(identity)]`, `#[inject(request)]`, struct-level identity and
 every `FromRequestPartsVia` extractor work on **every** transport the same
 way; a `GuardContext` is built by one function. Moving a service from HTTP

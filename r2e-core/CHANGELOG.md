@@ -23,6 +23,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   constructor HTTP routes, MCP members and gRPC methods go through; the
   struct's fields are unchanged and stay public.
 
+- `ModuleEndpoints<T, W = ()>` gains an inference-only witness parameter
+  (#1213; default `()`, so existing impls and bounds still compile): a
+  transport whose endpoints are generic over the state (`GrpcService<S, W>`)
+  threads its per-endpoint witnesses through feature modules. The
+  `ModuleList` cons impl carries the endpoint witness beside the controller
+  one.
+
 - `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
   `Clone` bound `#[controller]` puts on the generated request-data type, so a
   controller with a non-`Clone` request-scoped field keeps compiling and only
