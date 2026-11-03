@@ -213,7 +213,12 @@ references.
   `register_controller`, checked at `build()`); `#[pre_guard]`/
   `#[middleware]`/`#[layer]` stay HTTP-only. Implemented by splitting the
   impl and reusing each transport's parser unchanged (no merged parser), so
-  HTTP-only and MCP-only expansions are byte-stable. `#[mcp_routes]` became a
+  the HTTP-only expansion is byte-stable and the MCP-only expansion changes
+  by exactly the core-store contract: a new `construct` fn, an `__core:
+  Arc<Self>` parameter on `routes`, and `core: __core` instead of
+  constructing the core locally. A type registered several times (two
+  prefixed module mounts, plus MCP) keeps ONE core whose lifecycle is wired
+  by its first controller registration only (fix round 2). `#[mcp_routes]` became a
   `#[deprecated]` alias through the same dispatcher (removed next minor); an
   empty MCP service is spellable only through it. The macro deprecation lint
   fires at the attribute path: an item-level `#[allow(deprecated)]` on the

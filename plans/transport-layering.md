@@ -240,7 +240,9 @@ record follows it.
   `#[completion]` members and `#[routes(group, opt_in)]`. A dispatcher
   (`r2e-macros/src/attrs/routes_attr.rs`) classifies the impl: HTTP-only and
   MCP-only go through their existing parser + codegen untouched (expand
-  diff: byte-identical on every non-reworked target); a mixed impl is split
+  diff: byte-identical on every non-reworked target, except the MCP core-store
+  contract of review fix round 1 — new `construct` fn, `__core: Arc<Self>`
+  on `routes`, `core: __core`); a mixed impl is split
   by member, each half parsed by its own parser, then the HTTP codegen emits
   the one façade impl and the one `EndpointDeps` (HTTP + MCP sites), the MCP
   codegen skips its carrier (`McpRoutesImplDef::mixed_http_sites`), and

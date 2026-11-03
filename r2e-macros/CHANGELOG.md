@@ -21,8 +21,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]` beside HTTP routes in
   one impl, plus `#[routes(group = "…", opt_in)]`. A mixed impl emits one
   façade, one `EndpointDeps` (HTTP + MCP sites) and both `Controller<S, W>`
-  and `McpService<S, W>`, each with its own witness; HTTP-only and MCP-only
-  expansions are unchanged. Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/
+  and `McpService<S, W>`, each with its own witness. HTTP-only expansions
+  are unchanged; MCP-only expansions change by exactly a new `construct` fn,
+  an `__core: Arc<Self>` parameter on `routes` and `core: __core` instead of
+  constructing the core locally (see the codegen-contract bullet below). Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/
   `#[intercept]` apply to both transports (their decorators built once per
   transport, over ONE shared core);
   `#[pre_guard]`/`#[middleware]`/`#[layer]` stay HTTP-only. New compile

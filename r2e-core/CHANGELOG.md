@@ -17,15 +17,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
-- Per-type endpoint core store on the builder (#1215): `#[doc(hidden)]`
-  `AppBuilder::endpoint_core_or_insert::<C>(make)` returns the one
-  `Arc<C>` core of a type for this builder (constructing it on first use) and
+- `#[doc(hidden)]` builder hooks for the per-type endpoint core store
+  (#1215): `AppBuilder::endpoint_core_or_insert::<C>(make)` returns the one
+  `Arc<C>` core of a type for this builder (constructing it on first use);
   `require_controller_registration::<C>(registration, markers)` records that
   a transport registration needs a matching `register_controller::<C>()`
-  (checked at `build()`, panic naming the call). `register_controller` now
-  takes its core from the store, so a type registered on several transports
-  (HTTP + MCP) has ONE core; registering the same controller type twice also
-  shares one core.
+  (checked at `build()`, panic naming the call).
 
 - `GuardContext::from_parts(parts, method_name, controller_name, identity,
   path_params)` (#1213): builds the guard context from a request head
@@ -51,6 +48,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   a consumer that clones the data (`#[mcp_routes]`) sees the missing `Clone`.
 
 ### Changed
+
+- A controller type registered more than once on one builder (#1215: two
+  prefixed `#[module]` mounts, or HTTP + MCP) used to get one independent core
+  per registration — each constructed, `#[post_construct]`/`#[on_start]`/
+  `#[pre_destroy]` run, consumers and scheduled tasks registered per core —
+  and now gets ONE shared core whose lifecycle, consumers and scheduled tasks
+  are wired once by the first controller registration, while its routes are
+  still mounted on every registration.
 
 - Every boot-time configuration banner (`=== CONFIGURATION ERRORS … ===`) is
   rendered by one formatter, `#[doc(hidden)] pub`
