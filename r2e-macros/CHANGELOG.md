@@ -57,6 +57,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Changed
 
+- `#[routes]` post-auth guard contexts are built with
+  `GuardContext::from_parts` (#1213), then given the peer address
+  snapshotted when the request was split: an `#[inject(request)]` extractor
+  that removes or replaces `ConnectInfo` does not change what the guards see
+  (the pre-auth guards read the same snapshot).
 - Internal: the `#[routes]`, `#[mcp_routes]` and `#[grpc_routes]` codegen is
   consolidated (#1212) — one member model (`parse_member`/`MemberRules`), one
   decorator storage layout for MCP and gRPC (`MemberDecoSets`), one

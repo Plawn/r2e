@@ -141,9 +141,11 @@ façade-binding block.
 Exit-criteria outcome: generated code builds every `GuardContext` through
 `GuardContext::from_parts` (HTTP, MCP, gRPC; struct literals survive only in
 tests). `grep GrpcIdentity` is not empty but only names the deprecated
-empty stub (compile-time migration: an old impl fails with "not a member of
-trait" errors plus a deprecation warning naming the migration page), the
-changelogs and `docs/migration/grpc-identity.md`. example-grpc exposes
+empty stub (compile-time migration: its sealed supertrait carries a
+`#[diagnostic::on_unimplemented]`, so an old impl fails with an E0277 naming
+the migration page even under `#[allow(deprecated)]`, next to the "not a
+member of trait" errors and the deprecation warning), the changelogs and
+`docs/migration/grpc-identity.md`. example-grpc exposes
 `AccountGreeter` (struct-level `AuthenticatedUser`, `#[roles]`, a
 `#[request_helper]`), a server stream whose head is extracted before it
 opens, and head/`ConnectInfo`/`Query` services. The missing-validator
@@ -152,7 +154,10 @@ trybuild case now fails at `register_grpc_service` through the
 unchanged. Deviations: item 4 uses `Arrival::ExtractHere` against the
 wrapper's state (not `FromDeposit`); the URI comes from a
 `CaptureMethodPath` routing layer (tonic trait methods do not see it) with
-a `/<service>/<PascalCase(fn)>` fallback; `#[anonymous]` stays disallowed on
+a `/<service>/<PascalCase(fn)>` fallback; the head deposits no
+`MetadataMap` (an extractor builds `MetadataMap::from_headers(parts.headers.clone())`
+itself) and inserts `ConnectInfo` only when none is there; HTTP guards keep
+reading the peer address snapshotted before extraction; `#[anonymous]` stays disallowed on
 gRPC (use `Option<I>`); the identity rejection is now the HTTP one
 (`Unauthorized`, no `www-authenticate` — the `AuthenticatedUser` `HttpError`
 rejection follow-up); r2e-core change is additive (`ModuleEndpoints<T, W>`

@@ -1,7 +1,7 @@
 ---
 topic: grpc
 features: grpc
-tokens: ~2600
+tokens: ~2700
 requires: core-concepts, modules
 ---
 
