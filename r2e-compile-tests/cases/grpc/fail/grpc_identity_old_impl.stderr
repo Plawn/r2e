@@ -1,0 +1,40 @@
+error[E0437]: type `Spec` is not a member of trait `GrpcIdentity`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:22:5
+   |
+22 |     type Spec = ();
+   |     ^^^^^^^^^^^^^^^ not a member of trait `GrpcIdentity`
+
+error[E0407]: method `spec` is not a member of trait `GrpcIdentity`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:24:5
+   |
+24 |     fn spec() -> Self::Spec {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not a member of trait `GrpcIdentity`
+
+error[E0407]: method `extract` is not a member of trait `GrpcIdentity`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:26:5
+   |
+26 | /     async fn extract(_: &(), metadata: &MetadataMap) -> Result<Self, HttpError> {
+27 | |         let key = metadata.get("x-api-key").unwrap().to_str().unwrap().to_owned();
+28 | |         Ok(ApiKeyUser { key })
+29 | |     }
+   | |_____^ not a member of trait `GrpcIdentity`
+
+warning: use of deprecated trait `r2e::prelude::GrpcIdentity`: `GrpcIdentity` was removed: implement `FromRequestPartsVia` (or `FromRequestParts`) for the identity type instead — the validator becomes a bean. See docs/migration/grpc-identity.md
+ --> cases/grpc/fail/grpc_identity_old_impl.rs:8:20
+  |
+8 | use r2e::r2e_grpc::GrpcIdentity;
+  |                    ^^^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated trait `r2e::prelude::GrpcIdentity`: `GrpcIdentity` was removed: implement `FromRequestPartsVia` (or `FromRequestParts`) for the identity type instead — the validator becomes a bean. See docs/migration/grpc-identity.md
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:21:6
+   |
+21 | impl GrpcIdentity for ApiKeyUser {
+   |      ^^^^^^^^^^^^
+
+error[E0220]: associated type `Spec` not found for `Self`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:24:24
+   |
+24 |     fn spec() -> Self::Spec {}
+   |                        ^^^^ associated type `Spec` not found
