@@ -117,8 +117,11 @@ async fn call_add(app: &TestApp, session: &str, token: Option<&str>) -> Value {
     response_message(response)
 }
 
+/// `MathTools` is one `#[routes]` impl registered as both a controller and an
+/// MCP service: its `add` tool and its `GET /api/calc/add/{a}/{b}` route are
+/// served by the same type, over the same `CalcService` bean.
 #[r2e::test(app = McpApp)]
-async fn facade_blueprint_serves_http_and_all_mcp_families(app: TestApp) {
+async fn one_type_serves_its_http_route_and_its_mcp_tool(app: TestApp) {
     let (session, initialized) = initialize(&app, None).await;
     let capabilities = &initialized["result"]["capabilities"];
     assert!(capabilities.get("tools").is_some(), "{capabilities}");
