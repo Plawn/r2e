@@ -122,7 +122,7 @@ pub enum McpToolArg {
     Identity,
     /// `Params(p): Params<T>` — the inner `T` (deserialized arguments;
     /// tools and prompts only).
-    Params(syn::Type),
+    Params(Box<syn::Type>),
     /// A `ToolCall` / `ResourceCall` / `PromptCall` parameter (raw call
     /// metadata, matching the member's family).
     Call,
@@ -171,7 +171,7 @@ impl McpTool {
     /// The `Params<T>` inner type, if any.
     pub fn params_type(&self) -> Option<&syn::Type> {
         self.args.iter().find_map(|a| match a {
-            McpToolArg::Params(t) => Some(t),
+            McpToolArg::Params(t) => Some(&**t),
             _ => None,
         })
     }
@@ -479,7 +479,7 @@ fn classify_args(member: &mut MemberDef, kind: McpMemberKind) -> syn::Result<Vec
                 ));
             }
             has_params = true;
-            args.push(McpToolArg::Params(inner));
+            args.push(McpToolArg::Params(Box::new(inner)));
             continue;
         }
         if type_last_segment_is(&pat_type.ty, call_type) {
