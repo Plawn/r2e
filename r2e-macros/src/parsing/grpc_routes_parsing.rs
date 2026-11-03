@@ -396,6 +396,9 @@ fn substitute_self_assoc(
                     && is_colon2(i + 1)
                     && let Some(TokenTree::Ident(assoc)) = trees.get(i + 3)
                     && let Some(t) = self.assoc.iter().find(|t| &t.ident == assoc)
+                    // A non-empty turbofish on the associated type (a GAT)
+                    // is left as written, like the structural visitor does.
+                    && !(is_colon2(i + 4) && is_punct(i + 6, '<') && !is_punct(i + 7, '>'))
                 {
                     let ty = &t.ty;
                     i += 4;
