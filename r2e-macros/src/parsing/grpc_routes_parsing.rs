@@ -274,8 +274,12 @@ fn substitute_self_assoc(
                 return None;
             }
             let second = segs.next()?;
-            if !second.arguments.is_none() {
-                return None;
+            // `Self::X::<>` is `Self::X`; non-empty arguments (a GAT) are
+            // not rewritten.
+            match &second.arguments {
+                syn::PathArguments::None => {}
+                syn::PathArguments::AngleBracketed(args) if args.args.is_empty() => {}
+                _ => return None,
             }
             let t = self.assoc.iter().find(|t| t.ident == second.ident)?;
             Some(t.ty.clone())
@@ -382,6 +386,9 @@ fn substitute_self_assoc(
                         if a.as_char() == ':' && b.as_char() == ':'
                             && a.spacing() == proc_macro2::Spacing::Joint)
             };
+            let is_punct = |i: usize, c: char| {
+                matches!(trees.get(i), Some(TokenTree::Punct(p)) if p.as_char() == c)
+            };
             let mut i = 0;
             while i < trees.len() {
                 if let TokenTree::Ident(id) = &trees[i]
@@ -391,7 +398,12 @@ fn substitute_self_assoc(
                     && let Some(t) = self.assoc.iter().find(|t| &t.ident == assoc)
                 {
                     let ty = &t.ty;
-                    if is_colon2(i + 4) {
+                    i += 4;
+                    // `Self::X::<>` is `Self::X`: drop the empty turbofish.
+                    if is_colon2(i) && is_punct(i + 2, '<') && is_punct(i + 3, '>') {
+                        i += 4;
+                    }
+                    if is_colon2(i) {
                         match Self::expr_path(ty) {
                             Some(p) => p.to_tokens(&mut out),
                             None => out.extend(quote::quote!(<#ty>)),
@@ -399,7 +411,6 @@ fn substitute_self_assoc(
                     } else {
                         ty.to_tokens(&mut out);
                     }
-                    i += 4;
                     continue;
                 }
                 match &trees[i] {

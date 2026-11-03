@@ -39,6 +39,12 @@ impl WatchService {
         let (tx, rx) = r2e::rt::sync::mpsc::channel(1);
         let _ = tx.try_send(Ok(ping::PingReply { msg }));
         let stream: Self::WatchStream = dbg!(Self::WatchStream::new(rx));
+        // An empty turbofish on the associated type, structural and in a
+        // macro body that only the token-level fallback rewrites.
+        let (_tx2, rx2) = r2e::rt::sync::mpsc::channel::<Result<ping::PingReply, Status>>(1);
+        let _empty: Self::WatchStream = Self::WatchStream::<>::new(rx2);
+        let (_tx3, rx3) = r2e::rt::sync::mpsc::channel::<Result<ping::PingReply, Status>>(1);
+        assert!(!matches!(Self::WatchStream::<>::new(rx3), _ if false));
 
         // A nested impl introduces its own `Self`: not rewritten.
         trait Local {
