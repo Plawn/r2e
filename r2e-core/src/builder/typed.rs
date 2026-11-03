@@ -779,7 +779,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // The core comes from the builder's per-type store: a type also
         // registered on another transport (a mixed `#[routes]` impl's MCP
         // side) shares this one core, whichever registered first.
-        self.shared
+        //
+        // One type = one core per builder, so its lifecycle is wired exactly
+        // once — by the FIRST controller registration of the type (even when
+        // an MCP registration constructed the core earlier). A type mounted
+        // several times (two prefixed modules) gets its routes on every
+        // mount, but one `fill_decos`, one `#[post_construct]`/`#[on_start]`/
+        // `#[pre_destroy]` run, one set of scheduled tasks and consumers.
+        let first = self
+            .shared
             .endpoint_cores
             .controllers
             .insert(TypeId::of::<C>());
@@ -790,7 +798,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // after construct, before scheduled tasks are built and before any
         // consumer or direct call can fire. No-op for controllers without
         // intercepted `#[scheduled]`/`#[consumer]` methods.
-        C::fill_decos(&core, &self.bean_context);
+        if first {
+            C::fill_decos(&core, &self.bean_context);
+        }
 
         let routes = C::routes(state, Arc::clone(&core), &self.bean_context);
         self.routes.push(match prefix {
@@ -798,6 +808,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             None => routes,
         });
 
+        if first {
+            self.wire_controller_lifecycle::<C, W>(core);
+        }
+
+        Ok(self)
+    }
+
+    /// Queue the lifecycle and background members of a controller core:
+    /// `#[post_construct]`, `#[on_start]`, scheduled tasks, `#[pre_destroy]`
+    /// and consumers. Called once per type per builder, by its first
+    /// controller registration.
+    fn wire_controller_lifecycle<C, W>(&mut self, core: Arc<C>)
+    where
+        C: Controller<T, W>,
+    {
         // Queue this core's `#[post_construct]` hooks — awaited at startup
         // before consumer registrations (no-op future for controllers without
         // `#[post_construct]`).
@@ -849,7 +874,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.consumer_registrations
             .push(Box::new(move |state| C::register_consumers(state, core)));
 
-        Ok(self)
     }
 
     /// Run the bean scheduled-source hooks (queued by `#[bean]` via
