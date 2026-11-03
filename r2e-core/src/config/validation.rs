@@ -77,6 +77,60 @@ impl std::fmt::Display for ConfigValidationError {
 
 impl std::error::Error for ConfigValidationError {}
 
+/// The one banner every boot-time configuration failure is rendered in
+/// (#1214): controller / endpoint / service registration, module validation,
+/// the MCP and gRPC service registrations and `server.drain-timeout`.
+///
+/// ```text
+///
+/// === CONFIGURATION ERRORS (<kind>: <subject>) ===
+///
+/// <body>
+/// ============================
+/// ```
+///
+/// [`unscoped`](Self::unscoped) drops the ` (<kind>: <subject>)` part. The
+/// bytes are pinned by `r2e-core/tests/config/report.rs`.
+#[doc(hidden)]
+pub struct ConfigErrorReport<'a> {
+    scope: Option<(&'a str, &'a dyn std::fmt::Display)>,
+    body: &'a dyn std::fmt::Display,
+}
+
+impl<'a> ConfigErrorReport<'a> {
+    /// A report about one registered item: `kind` is `"controller"`,
+    /// `"endpoint"`, `"service"`, `"mcp service"`, `"grpc service"`, …
+    pub fn scoped(
+        kind: &'a str,
+        subject: &'a dyn std::fmt::Display,
+        body: &'a dyn std::fmt::Display,
+    ) -> Self {
+        Self {
+            scope: Some((kind, subject)),
+            body,
+        }
+    }
+
+    /// A report not tied to a registered item (e.g. a `server.*` key).
+    pub fn unscoped(body: &'a dyn std::fmt::Display) -> Self {
+        Self { scope: None, body }
+    }
+}
+
+impl std::fmt::Display for ConfigErrorReport<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("\n=== CONFIGURATION ERRORS")?;
+        if let Some((kind, subject)) = self.scope {
+            write!(f, " ({kind}: {subject})")?;
+        }
+        write!(
+            f,
+            " ===\n\n{}\n============================\n",
+            self.body
+        )
+    }
+}
+
 /// Validate a list of config keys against an `R2eConfig`.
 ///
 /// Each entry is `(source_name, key, type_name)`. Returns the list of

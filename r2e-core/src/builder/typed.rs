@@ -538,9 +538,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub(crate) fn spawn_service_impl<C: ServiceComponent>(self) -> Self {
         self.try_spawn_service_impl::<C>().unwrap_or_else(|err| {
             panic!(
-                "\n=== CONFIGURATION ERRORS (service: {}) ===\n\n{}\n============================\n",
-                std::any::type_name::<C>(),
-                err
+                "{}",
+                crate::config::ConfigErrorReport::scoped(
+                    "service",
+                    &std::any::type_name::<C>(),
+                    &err
+                )
             )
         })
     }
@@ -655,9 +658,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.try_register_controller_unchecked_impl::<C, W>()
             .unwrap_or_else(|err| {
                 panic!(
-                    "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
-                    std::any::type_name::<C>(),
-                    err
+                    "{}",
+                    crate::config::ConfigErrorReport::scoped(
+                        "controller",
+                        &std::any::type_name::<C>(),
+                        &err
+                    )
                 )
             })
     }

@@ -120,6 +120,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
     advertises no scope, naming `mcp.auth.scopes-supported`: clients then
     pick a scope of their own and the IdP answers `invalid_scope`.
 
+### Changed
+
+- The `register_mcp_service` configuration-error panic renders through
+  `r2e_core::config::ConfigErrorReport` (#1214); the message is
+  byte-identical.
+
 ## [0.10.0] - 2026-10-31
 
 ### Breaking

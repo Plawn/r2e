@@ -24,7 +24,8 @@ pub use serde_config::SerdeConfig;
 pub use typed::{ConfigProperties, NoChildren, PropertyMeta};
 pub use validation::{
     validate_declared_keys, validate_declared_sections, validate_keys, validate_section,
-    validate_section_keys, ConfigValidationError, MissingKeyError, SectionValidator,
+    validate_section_keys, ConfigErrorReport, ConfigValidationError, MissingKeyError,
+    SectionValidator,
 };
 pub use value::{deserialize_value, ConfigValue, FromConfigValue};
 

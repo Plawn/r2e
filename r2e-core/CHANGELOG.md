@@ -40,6 +40,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   controller with a non-`Clone` request-scoped field keeps compiling and only
   a consumer that clones the data (`#[mcp_routes]`) sees the missing `Clone`.
 
+### Changed
+
+- Every boot-time configuration banner (`=== CONFIGURATION ERRORS … ===`) is
+  rendered by one formatter, `#[doc(hidden)] pub`
+  `r2e_core::config::ConfigErrorReport` (#1214): `BeanError::ControllerConfig`
+  / `EndpointConfig`, the `register_controller` / `spawn_service` panics and
+  the `server.drain-timeout` panic. The output is byte-identical (pinned by
+  `r2e-core/tests/config/report.rs`).
+
 ## [0.9.1] - 2026-11-01
 
 ### Added

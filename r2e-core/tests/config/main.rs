@@ -14,6 +14,7 @@ mod loader;
 mod properties;
 mod provider;
 mod registry;
+mod report;
 mod secrets;
 mod sections;
 mod serde_config;

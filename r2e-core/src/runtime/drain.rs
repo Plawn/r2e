@@ -70,9 +70,11 @@ pub fn resolve_drain_timeout(
     match config.get::<Duration>(DRAIN_TIMEOUT_CONFIG_KEY) {
         Ok(d) => Some(d),
         Err(e) => panic!(
-            "\n=== CONFIGURATION ERRORS ===\n\n{DRAIN_TIMEOUT_CONFIG_KEY}: {e}\n\
-             expected a duration (integer seconds, or \"30s\" / \"500ms\" / \"2m\")\n\
-             ============================\n"
+            "{}",
+            crate::config::ConfigErrorReport::unscoped(&format_args!(
+                "{DRAIN_TIMEOUT_CONFIG_KEY}: {e}\n\
+                 expected a duration (integer seconds, or \"30s\" / \"500ms\" / \"2m\")"
+            ))
         ),
     }
 }
