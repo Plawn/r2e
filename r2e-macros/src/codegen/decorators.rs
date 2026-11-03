@@ -26,7 +26,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::model::types::MethodDecorators;
+use crate::model::types::{MemberDef, MethodDecorators};
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
 
@@ -107,9 +107,8 @@ pub(crate) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
 /// Emit the field declaration and initializer for one prebuilt decorator
 /// product site.
 ///
-/// Storage stays host-specific: HTTP/bean use named sets while MCP embeds the
-/// fields in one flat wrapper. Only the `DecoratorSpec`/`build_decorator`
-/// contract is shared here.
+/// Every host stores the products in named sets ([`DecoSet`]); this is the
+/// one place the `DecoratorSpec`/`build_decorator` contract is spelled.
 pub(crate) fn decorator_product_field(
     field: &syn::Ident,
     expr: &syn::Expr,
@@ -220,6 +219,159 @@ pub(crate) fn generate_named_deco_items(
     match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, path_param_module) {
         Ok(items) => (items, Some(set)),
         Err(err) => (err, None),
+    }
+}
+
+/// The decorator storage of an adapter whose members are dispatched by one
+/// hand-written service object (`#[mcp_routes]`, `#[grpc_routes]`): one
+/// shared controller-level [`DecoSet`] (`__ctrl`, impl-level guards +
+/// interceptors, built **once per service** — the adapter peer of HTTP's
+/// [`CtrlDecoSet`]) plus one [`DecoSet`] per member (`__deco_<fn>`, that
+/// member's own sites). The sets are stored **by value** in the adapter's
+/// storage struct (the MCP wrapper, the gRPC container), so a call reaches a
+/// product through plain field borrows — no per-call `Arc` clone.
+///
+/// Controller guards are checked against a controller-scoped `GuardContext`
+/// (`method_name = "*"`), so a stateful impl-level guard (`RateLimit`) keeps
+/// one service-wide bucket and never collides with a member-level site of the
+/// same spec. A set is `None` when it has no sites (the controller set also
+/// when there is no member) or when spec inference failed — the
+/// `compile_error!` then lives in `items` and the member degrades to the
+/// unguarded, unwrapped shape.
+pub(crate) struct MemberDecoSets {
+    pub items: TokenStream,
+    ctrl: Option<DecoSet>,
+    /// `(storage field, set)` per member, positionally paired with the
+    /// adapter's member list.
+    sets: Vec<(syn::Ident, Option<DecoSet>)>,
+}
+
+impl MemberDecoSets {
+    /// Build the sets. `adapter` discriminates the hidden item names
+    /// (`__R2e<adapter>CtrlDeco_<Ctrl>_ctrl`, `__R2e<adapter>Deco_<Ctrl>_<fn>`).
+    pub fn build<'a>(
+        controller_name: &syn::Ident,
+        adapter: &str,
+        ctrl_guards: &[syn::Expr],
+        ctrl_intercepts: &[syn::Expr],
+        members: impl ExactSizeIterator<Item = &'a MemberDef>,
+    ) -> Self {
+        let mut items = quote! {};
+        let ctrl = if members.len() == 0 {
+            None
+        } else {
+            let intercept_exprs: Vec<&syn::Expr> = ctrl_intercepts.iter().collect();
+            let (ctrl_items, set) = generate_named_deco_items(
+                controller_name,
+                &format!("{adapter}CtrlDeco"),
+                &format_ident!("ctrl"),
+                ctrl_guards,
+                &intercept_exprs,
+                quote! {},
+            );
+            items.extend(ctrl_items);
+            set
+        };
+        let kind = format!("{adapter}Deco");
+        let sets = members
+            .map(|member| {
+                let intercept_exprs: Vec<&syn::Expr> =
+                    member.decorators.intercept_fns.iter().collect();
+                let (member_items, set) = generate_named_deco_items(
+                    controller_name,
+                    &kind,
+                    &member.name,
+                    &member.decorators.guard_fns,
+                    &intercept_exprs,
+                    quote! {},
+                );
+                items.extend(member_items);
+                (format_ident!("__deco_{}", member.name), set)
+            })
+            .collect();
+        Self { items, ctrl, sets }
+    }
+
+    /// Whether any set exists.
+    pub fn is_empty(&self) -> bool {
+        self.ctrl.is_none() && self.sets.iter().all(|(_, s)| s.is_none())
+    }
+
+    /// `(storage field, set)` for the controller set (first) and every
+    /// decorated member — the single source of the field ↔ set pairing shared
+    /// by the storage declaration, its initializer and the call sites.
+    fn fields(&self) -> impl Iterator<Item = (syn::Ident, &DecoSet)> {
+        self.ctrl
+            .iter()
+            .map(|s| (format_ident!("__ctrl"), s))
+            .chain(
+                self.sets
+                    .iter()
+                    .filter_map(|(f, s)| s.as_ref().map(|s| (f.clone(), s))),
+            )
+    }
+
+    /// The storage struct's field declarations (`__deco_<fn>: <set type>`).
+    pub fn field_decls(&self) -> Vec<TokenStream> {
+        self.fields()
+            .map(|(field, set)| {
+                let ty = set.ty();
+                quote! { #field: #ty }
+            })
+            .collect()
+    }
+
+    /// The storage struct's field initializers, built from the `__ctx` bean
+    /// context in scope.
+    pub fn field_inits(&self) -> Vec<TokenStream> {
+        self.fields()
+            .map(|(field, set)| {
+                let ctor = &set.ctor_ident;
+                quote! { #field: #ctor(__ctx) }
+            })
+            .collect()
+    }
+
+    /// The controller-level guard products, as places under `base` (the
+    /// expression owning the storage: `self`, `self.__decos`, …).
+    pub fn ctrl_guards(&self, base: &TokenStream) -> Vec<TokenStream> {
+        Self::places(base, &format_ident!("__ctrl"), self.ctrl.as_ref(), |s| {
+            &s.guard_fields
+        })
+    }
+
+    /// The member-level guard products of member `index`, under `base`.
+    pub fn member_guards(&self, index: usize, base: &TokenStream) -> Vec<TokenStream> {
+        let (field, set) = &self.sets[index];
+        Self::places(base, field, set.as_ref(), |s| &s.guard_fields)
+    }
+
+    /// The interceptor products wrapping member `index` — controller-level
+    /// first, then the member's own (execution order) — under `base`.
+    pub fn intercepts(&self, index: usize, base: &TokenStream) -> Vec<TokenStream> {
+        let (field, set) = &self.sets[index];
+        let mut places = Self::places(base, &format_ident!("__ctrl"), self.ctrl.as_ref(), |s| {
+            &s.intercept_fields
+        });
+        places.extend(Self::places(base, field, set.as_ref(), |s| {
+            &s.intercept_fields
+        }));
+        places
+    }
+
+    fn places(
+        base: &TokenStream,
+        field: &syn::Ident,
+        set: Option<&DecoSet>,
+        family: impl Fn(&DecoSet) -> &Vec<syn::Ident>,
+    ) -> Vec<TokenStream> {
+        set.map(|s| {
+            family(s)
+                .iter()
+                .map(|f| quote! { #base.#field.#f })
+                .collect()
+        })
+        .unwrap_or_default()
     }
 }
 

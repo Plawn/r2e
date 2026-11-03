@@ -78,13 +78,7 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
     // decorator sets — into the single Arc'd container.
     let decos_init = if deco.has_any(def) {
         let container = GrpcDecoSets::container_ident(controller_name);
-        let mut field_inits: Vec<TokenStream> = deco
-            .fields(def)
-            .map(|(field, set)| {
-                let ctor = &set.ctor_ident;
-                quote! { #field: #ctor(__ctx) }
-            })
-            .collect();
+        let mut field_inits = deco.sets.field_inits();
         field_inits.extend(GrpcDecoSets::identity_fields(def).map(|(field, ty)| {
             quote! {
                 #field: #krate::decorators::decorator::build_decorator::<

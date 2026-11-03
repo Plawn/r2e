@@ -8,7 +8,7 @@ use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpToo
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 use crate::util::type_utils::{unwrap_json_type, unwrap_result_type};
 
-use super::McpDecoLayout;
+use crate::codegen::decorators::MemberDecoSets;
 
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
@@ -56,7 +56,7 @@ pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
 /// `<declared ty>: FromRequestPartsVia<__R2eS, __R2eMp<Fn>>`. The markers are
 /// folded into the witness `W` (E0207 forbids leaving them unconstrained on
 /// the impl), so `register_mcp_service::<Svc>()` infers them.
-pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
+pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) -> TokenStream {
     let krate = r2e_core_path();
     let mcp = r2e_mcp_path();
     let controller_name = &def.controller_name;
@@ -65,7 +65,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
 
     // Products are built once and stored directly beside the core in the
     // single Arc'd wrapper — no nested Arc/container and no per-member ctor.
-    let deco_field_inits = &deco.field_inits;
+    let deco_field_inits = deco.field_inits();
 
     // Aggregated config validation: the core's own `#[config]`/
     // `#[config_section]` keys (from the `#[controller]`-generated meta

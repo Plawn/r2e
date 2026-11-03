@@ -9,11 +9,12 @@ use crate::codegen::handlers::qualified_controller_name;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool, McpToolArg};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
-use super::{invoke_ident, McpDecoLayout};
+use super::invoke_ident;
+use crate::codegen::decorators::MemberDecoSets;
 
 /// Generate `impl __R2eMcp<Name> { async fn __r2e_<kind>_<fn>(...) ... }` —
 /// one invocation method per member.
-pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
+pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) -> TokenStream {
     if def.members.is_empty() {
         return quote! {};
     }
@@ -52,7 +53,7 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Tok
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
-    deco: &McpDecoLayout,
+    deco: &MemberDecoSets,
     member_index: usize,
     krate: &TokenStream,
     mcp: &TokenStream,
@@ -191,9 +192,11 @@ fn generate_invoke_method(
     };
 
     // --- guard checks ------------------------------------------------------
-    let member_deco = deco.member(member_index);
-    let has_controller_guards = !deco.controller_guard_fields.is_empty();
-    let has_member_guards = !member_deco.guard_fields.is_empty();
+    let wrapper = quote! { self };
+    let controller_guards = deco.ctrl_guards(&wrapper);
+    let member_guards = deco.member_guards(member_index, &wrapper);
+    let has_controller_guards = !controller_guards.is_empty();
+    let has_member_guards = !member_guards.is_empty();
     let has_guards = has_controller_guards || has_member_guards;
     let guard_stmts = if has_guards {
         // A parameter identity wins; otherwise the struct identity is read
@@ -204,13 +207,12 @@ fn generate_invoke_method(
             Some(_) => quote! { ::core::option::Option::Some(&__identity) },
             None => quote! { #meta_mod::guard_identity(__ctrl) },
         };
-        let controller_checks: Vec<TokenStream> = deco
-            .controller_guard_fields
+        let controller_checks: Vec<TokenStream> = controller_guards
             .iter()
-            .map(|field| {
+            .map(|place| {
                 quote! {
                     if let ::core::result::Result::Err(__resp) =
-                        #krate::Guard::check(&self.#field, &__ctrl_gctx).await
+                        #krate::Guard::check(&#place, &__ctrl_gctx).await
                     {
                         return ::core::result::Result::Err(
                             #mcp::__macro_support::McpError::from(__resp),
@@ -219,13 +221,12 @@ fn generate_invoke_method(
                 }
             })
             .collect();
-        let member_checks: Vec<TokenStream> = member_deco
-            .guard_fields
+        let member_checks: Vec<TokenStream> = member_guards
             .iter()
-            .map(|field| {
+            .map(|place| {
                 quote! {
                     if let ::core::result::Result::Err(__resp) =
-                        #krate::Guard::check(&self.#field, &__member_gctx).await
+                        #krate::Guard::check(&#place, &__member_gctx).await
                     {
                         return ::core::result::Result::Err(
                             #mcp::__macro_support::McpError::from(__resp),
@@ -381,10 +382,9 @@ fn generate_invoke_method(
     // own products. References are borrowed for the duration of this invoke;
     // no nested Arc clone is needed.
     let interceptor_refs: Vec<TokenStream> = deco
-        .controller_intercept_fields
-        .iter()
-        .chain(&member_deco.intercept_fields)
-        .map(|field| quote! { &self.#field })
+        .intercepts(member_index, &quote! { self })
+        .into_iter()
+        .map(|place| quote! { &#place })
         .collect();
     let has_intercepts = !interceptor_refs.is_empty();
     let body = if has_intercepts {

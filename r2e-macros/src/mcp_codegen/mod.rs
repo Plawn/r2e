@@ -5,9 +5,9 @@
 //!   controller: members and `#[request_helper]` helpers on the request
 //!   façade `impl __R2eRequest_<Name>` (where `self.<identity field>` /
 //!   `self.<request field>` resolve), everything else on the core `impl Name`
-//! - A wrapper struct `__R2eMcp<Name>` holding the `Arc`'d core and every
-//!   prebuilt guard/interceptor product; the wrapper itself is shared
-//!   through one Arc
+//! - A wrapper struct `__R2eMcp<Name>` holding the `Arc`'d core and the
+//!   prebuilt guard/interceptor sets (`MemberDecoSets`, embedded by value);
+//!   the wrapper itself is shared through one Arc
 //! - One hidden invocation method per member on the wrapper
 //!   (`__r2e_tool_<fn>` / `__r2e_resource_<fn>` / `__r2e_prompt_<fn>`):
 //!   scope check → façade binding (the request data extracted once per HTTP
@@ -30,34 +30,8 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::codegen::decorators::{decorator_product_field, spec_type_of};
+use crate::codegen::decorators::MemberDecoSets;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
-
-#[derive(Default)]
-pub(crate) struct McpMemberDecos {
-    pub guard_fields: Vec<syn::Ident>,
-    pub intercept_fields: Vec<syn::Ident>,
-}
-
-/// Flat decorator layout embedded directly in the single MCP wrapper.
-///
-/// A flat layout keeps the generated surface compact: no per-member structs,
-/// constructors, or nested Arcs. Controller-level products have one field and
-/// are shared by every member; method-level products keep one field per site.
-pub(crate) struct McpDecoLayout {
-    pub items: TokenStream,
-    pub field_decls: Vec<TokenStream>,
-    pub field_inits: Vec<TokenStream>,
-    pub controller_guard_fields: Vec<syn::Ident>,
-    pub controller_intercept_fields: Vec<syn::Ident>,
-    members: Vec<McpMemberDecos>,
-}
-
-impl McpDecoLayout {
-    pub fn member(&self, index: usize) -> &McpMemberDecos {
-        &self.members[index]
-    }
-}
 
 /// The hidden wrapper struct ident for a service.
 pub(crate) fn wrapper_ident(controller_name: &syn::Ident) -> syn::Ident {
@@ -147,103 +121,26 @@ pub(crate) fn requirements_expr(
     }
 }
 
-/// Build one flat decorator layout for the wrapper. Controller-level sites
-/// are emitted once, followed by each member's own sites.
-fn build_deco_layout(def: &McpRoutesImplDef) -> McpDecoLayout {
-    let all_sites = def
-        .controller_intercepts
-        .iter()
-        .chain(def.controller_guards.iter())
-        .chain(def.members.iter().flat_map(|m| {
-            m.member.decorators
-                .guard_fns
-                .iter()
-                .chain(&m.member.decorators.intercept_fns)
-        }));
-    let mut items = TokenStream::new();
-    for expr in all_sites {
-        if let Err(err) = spec_type_of(expr) {
-            items.extend(err.to_compile_error());
-        }
-    }
-    if !items.is_empty() {
-        return McpDecoLayout {
-            items,
-            field_decls: Vec::new(),
-            field_inits: Vec::new(),
-            controller_guard_fields: Vec::new(),
-            controller_intercept_fields: Vec::new(),
-            members: (0..def.members.len())
-                .map(|_| McpMemberDecos::default())
-                .collect(),
-        };
-    }
-
-    let mut field_decls = Vec::new();
-    let mut field_inits = Vec::new();
-    let mut add_site = |field: syn::Ident, expr: &syn::Expr| {
-        let (field_decl, field_init) =
-            decorator_product_field(&field, expr).expect("decorator specs prevalidated");
-        field_decls.push(field_decl);
-        field_inits.push(field_init);
-        field
-    };
-
-    // Impl-level sites are only built when at least one member exists —
-    // this MUST mirror `service_impl::site_exprs`, which feeds the
-    // `EndpointDeps` fold and `validate_config`: a product built here without
-    // its deps folded there turns a missing bean into a boot panic instead of
-    // a compile error at `register_mcp_service`.
-    let has_members = !def.members.is_empty();
-    let controller_intercept_fields = def
-        .controller_intercepts
-        .iter()
-        .enumerate()
-        .filter(|_| has_members)
-        .map(|(i, expr)| add_site(format_ident!("__ctrl_i{}", i), expr))
-        .collect();
-    let controller_guard_fields = def
-        .controller_guards
-        .iter()
-        .enumerate()
-        .filter(|_| has_members)
-        .map(|(i, expr)| add_site(format_ident!("__ctrl_g{}", i), expr))
-        .collect();
-    let members = def
-        .members
-        .iter()
-        .enumerate()
-        .map(|(member_index, member)| McpMemberDecos {
-            guard_fields: member
-                .member.decorators
-                .guard_fns
-                .iter()
-                .enumerate()
-                .map(|(i, expr)| add_site(format_ident!("__m{}_g{}", member_index, i), expr))
-                .collect(),
-            intercept_fields: member
-                .member.decorators
-                .intercept_fns
-                .iter()
-                .enumerate()
-                .map(|(i, expr)| add_site(format_ident!("__m{}_i{}", member_index, i), expr))
-                .collect(),
-        })
-        .collect();
-
-    McpDecoLayout {
-        items,
-        field_decls,
-        field_inits,
-        controller_guard_fields,
-        controller_intercept_fields,
-        members,
-    }
+/// Build the decorator sets embedded in the wrapper: the shared
+/// controller-level set (impl-level sites, built only when at least one
+/// member exists — this MUST mirror `service_impl::site_exprs`, which feeds
+/// the `EndpointDeps` fold and `validate_config`: a product built here
+/// without its deps folded there turns a missing bean into a boot panic
+/// instead of a compile error at `register_mcp_service`) plus one set per
+/// member.
+fn build_deco_sets(def: &McpRoutesImplDef) -> MemberDecoSets {
+    MemberDecoSets::build(
+        &def.controller_name,
+        "Mcp",
+        &def.controller_guards,
+        &def.controller_intercepts,
+        def.members.iter().map(|m| &m.member),
+    )
 }
 
 /// Main entry point: generate all code for an `#[mcp_routes]` impl block.
 pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
-    let deco = build_deco_layout(def);
+    let deco = build_deco_sets(def);
     let impl_block = generate_impl_block(def);
     let wrapper = generate_wrapper_struct(def, &deco);
     let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
@@ -299,12 +196,13 @@ fn generate_impl_block(def: &McpRoutesImplDef) -> TokenStream {
 /// Generate the single wrapper struct holding the controller core and every
 /// prebuilt decorator product.
 ///
-/// `routes()` puts this wrapper behind one Arc. There are no nested core/deco
-/// Arcs and no per-member generated structs.
-fn generate_wrapper_struct(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
+/// `routes()` puts this wrapper behind one Arc. The decorator sets are
+/// embedded by value (no nested deco Arc): a call borrows
+/// `&self.__deco_<fn>.__g0` straight through the wrapper.
+fn generate_wrapper_struct(def: &McpRoutesImplDef, deco: &MemberDecoSets) -> TokenStream {
     let controller_name = &def.controller_name;
     let wrapper_name = wrapper_ident(controller_name);
-    let field_decls = &deco.field_decls;
+    let field_decls = deco.field_decls();
 
     quote! {
         #[doc(hidden)]
