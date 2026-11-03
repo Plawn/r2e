@@ -25,11 +25,8 @@ pub struct Pass;
 impl SelfBuilt for Pass {}
 
 impl<I: Identity> Guard<I> for Pass {
-    fn check(
-        &self,
-        _ctx: &GuardContext<'_, I>,
-    ) -> impl std::future::Future<Output = Result<(), Rejection>> + Send {
-        async { Ok(()) }
+    async fn check(&self, _ctx: &GuardContext<'_, I>) -> Result<(), Rejection> {
+        Ok(())
     }
 }
 
