@@ -15,7 +15,6 @@
 //! against the bean.
 //!
 //! ```ignore
-//! #[derive(Controller)]
 //! #[controller]
 //! pub struct GreeterService {
 //!     #[inject(identity)]
