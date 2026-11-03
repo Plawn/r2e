@@ -80,6 +80,14 @@ promise.
 - **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
   half was absorbed by W10; what remains is a pass over which concern lives in
   which crate/macro (core vs http vs macros vs integrations).
+- **One config-error report format** — Tasker #1214 (low). The
+  `=== CONFIGURATION ERRORS (<scope>) ===` banner is hand-copied at seven
+  sites (`r2e-core` beans/error.rs ×2, builder/typed.rs ×2, runtime/drain.rs;
+  `r2e-mcp/src/lib.rs`; `r2e-grpc/src/lib.rs`) and every new transport
+  adapter copies it again. One formatter in `r2e-core` (a `Display` type or
+  `format_config_errors(scope, body)`), reused by all sites, byte-identical
+  output, patch bumps. Group with transport-layering level 3a (the first
+  adapter that would otherwise copy it).
 
 ## W13 — Live config × dev-reload — remainder
 
