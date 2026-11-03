@@ -45,7 +45,7 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   (`registration`: `EndpointDeps` fold + witness). Witness shapes and
   generated behaviour are unchanged, with three deliberate drifts on
   `#[mcp_routes]`: impl-level guards are now built before impl-level
-  interceptors (the HTTP/gRPC order — construction only, the execution order
+  interceptors (the gRPC order — construction only, the execution order
   is untouched); when one member carries two errors (e.g. an unknown
   attribute and an `#[inject(identity)]` parameter beside a struct-level
   identity) the identity error is reported first; the hidden MCP decorator

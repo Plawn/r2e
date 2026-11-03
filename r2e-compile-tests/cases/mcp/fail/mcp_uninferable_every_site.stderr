@@ -1,0 +1,23 @@
+error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
+  --> cases/mcp/fail/mcp_uninferable_every_site.rs:48:9
+   |
+48 | #[guard(make_guard())]
+   |         ^^^^^^^^^^^^
+
+error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
+  --> cases/mcp/fail/mcp_uninferable_every_site.rs:49:13
+   |
+49 | #[intercept(make_interceptor())]
+   |             ^^^^^^^^^^^^^^^^^^
+
+error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
+  --> cases/mcp/fail/mcp_uninferable_every_site.rs:52:13
+   |
+52 |     #[guard(make_guard())]
+   |             ^^^^^^^^^^^^
+
+error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
+  --> cases/mcp/fail/mcp_uninferable_every_site.rs:58:17
+   |
+58 |     #[intercept(make_interceptor())]
+   |                 ^^^^^^^^^^^^^^^^^^
