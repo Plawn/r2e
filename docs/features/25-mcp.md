@@ -15,7 +15,7 @@ results.
 
 ## TL;DR
 
-Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[mcp_routes]` on a dedicated type turn plain async methods into tools: `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — raw wire escape hatches are re-exported by R2E, so user code never imports rmcp directly. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
+Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[routes]` turn plain async methods into tools (one impl may mix them with HTTP routes; `#[mcp_routes]` is a deprecated alias, removed in the next minor): `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — raw wire escape hatches are re-exported by R2E, so user code never imports rmcp directly. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
 
 ## Quick start
 
@@ -41,7 +41,7 @@ pub struct MathTools {
     #[inject] calc: CalcService,    // beans + #[config] fields work as usual
 }
 
-#[mcp_routes]
+#[routes]
 impl MathTools {
     /// Add two numbers.            // doc comment → tool description
     #[tool(read_only, idempotent)]
@@ -136,7 +136,7 @@ three markers. All members of a service share ONE core (built once from the
 bean graph) and the same prebuilt guard/interceptor sets.
 
 ```rust
-#[mcp_routes]
+#[routes]
 impl MathTools {
     /// The call log, one entry per line.
     #[resource(uri = "r2e://calc/call-log", mime_type = "text/plain")]
@@ -368,7 +368,7 @@ All members (tools, resources, prompts) use the **same** `Guard<I>` /
 once at registration from the bean graph:
 
 ```rust
-#[mcp_routes]
+#[routes]
 #[intercept(Logged::info())]          // impl-level: wraps every tool (outermost)
 impl MathTools {
     #[tool(destructive)]
@@ -391,31 +391,58 @@ decorators remain one built product per member. The generated service uses one
 Arc containing the core and all decorator products, with no nested Arc or
 per-member decorator container.
 
-## One bean, two transports
+## One type, two transports
 
-`EndpointDeps` is one-per-type: a struct cannot carry both `#[routes]` and
-`#[mcp_routes]`. The pattern is a shared bean plus thin adapters:
+One `#[routes]` impl may mix HTTP routes and MCP members (#1215). The type is
+then both a `Controller` and an `McpService` — one façade, one `EndpointDeps`
+folding both transports' dependencies — and is registered on each transport
+explicitly:
 
 ```rust
 #[derive(Clone, Default)]
-pub struct CalcService;              // the logic, plain bean
-
-#[controller]
-pub struct MathTools { #[inject] calc: CalcService }     // MCP adapter (#[mcp_routes])
+pub struct CalcService;
 
 #[controller(path = "/api/calc")]
-pub struct CalcController { #[inject] calc: CalcService } // HTTP adapter (#[routes])
+pub struct MathTools { #[inject] calc: CalcService }
+
+#[routes]
+#[intercept(Logged::info())]                 // applies to the route AND the tool
+impl MathTools {
+    #[get("/add/{a}/{b}")]
+    async fn add_route(&self, Path((a, b)): Path<(f64, f64)>) -> Json<CalcResult> { ... }
+
+    #[tool(read_only)]
+    async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> { ... }
+}
+
+// AppBuilder
+.register_controller::<MathTools>()
+.register_mcp_service::<MathTools>()
 ```
 
-`examples/example-mcp` is the worked example (HTTP + MCP + guards +
-interceptors + `TestApp` e2e tests).
+- Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
+  both transports. They are built **once per transport**: a stateful guard or
+  interceptor (a rate limiter, a counter) keeps one state for the HTTP routes
+  and a separate one for the MCP members.
+- Impl-level `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: they wrap
+  the routes, never the MCP members, and are rejected on an impl with no HTTP
+  route.
+- A method is either an HTTP member or an MCP member: `#[get]` + `#[tool]` on
+  one method is a compile error — share the logic through a helper or a bean.
+- `#[routes(group = "…", opt_in)]` applies to the MCP members; without an MCP
+  member it is a compile error.
+- A missing bean fails at each registration call that needs it.
+
+`examples/example-mcp` is the worked example (a mixed `#[routes]` impl, guards,
+interceptors, `TestApp` e2e tests). A shared bean plus two separate adapter
+types still works when the two surfaces should not share a struct.
 
 ## Dynamic members (per-session lists)
 
 By default every session sees the same list, fixed at boot (modulo the
 scope/role filter). Three levers let each session have its own list, for all
 three families, and a fourth — the `McpRegistry` bean — changes the list every
-session sees. Typed `#[mcp_routes]` members stay declared and compile-checked;
+session sees. Typed `#[routes]` MCP members stay declared and compile-checked;
 what changes at runtime is **which** members a session sees, plus members
 built after boot.
 
@@ -423,14 +450,14 @@ Three holders serve one endpoint, in this precedence:
 
 | holder | who writes it | who sees it | key clash |
 |---|---|---|---|
-| **catalog** — `#[mcp_routes]` members | boot only (immutable) | everyone, through groups + scope filter | duplicate = boot panic |
+| **catalog** — `#[routes]` MCP members | boot only (immutable) | everyone, through groups + scope filter | duplicate = boot panic |
 | **session-private** — `McpSession::add_*` | one session's code | that session only | catalog namesake = `Err`; shadows a global namesake for that session |
 | **global registry** — `McpRegistry::add_*` | any bean, after boot | every session + sessionless callers | catalog namesake = `Err` (boot panic if added before the mount); no cross-check with session-private members |
 
 ### Groups
 
 ```rust
-#[mcp_routes(group = "git", opt_in)]   // every member in "git", hidden until enabled
+#[routes(group = "git", opt_in)]   // every member in "git", hidden until enabled
 impl GitTools {
     #[tool]
     async fn git_status(&self) -> &'static str { "clean" }
@@ -578,7 +605,7 @@ impl PackLoader {
 - The registry works before the mount (members are validated when the catalog
   appears), under `mcp.stateless` (served per request) and with
   `mcp.enabled = false` (accepts members, serves nothing). The endpoint is
-  mounted even when no `#[mcp_routes]` service is registered, so a
+  mounted even when no `#[routes]` MCP service is registered, so a
   registry-only server is a valid shape.
 
 ### Security, capabilities, stateless
@@ -853,7 +880,7 @@ trailing slash/query/fragment) and never derived from `Host` /
 ### Per-tool authorization
 
 ```rust
-#[mcp_routes]
+#[routes]
 impl AdminTools {
     #[tool(scopes = "mcp:read")]                      // must hold ALL listed scopes
     async fn read_data(&self) -> &'static str { "data" }
@@ -899,7 +926,7 @@ here:
 | `Option<T>` | the type's optional extractor: `None` when the caller is absent (e.g. no principal on the request, no `Authorization` header); a present but invalid credential is still the extractor's rejection. |
 
 ```rust
-#[mcp_routes]
+#[routes]
 impl AccountTools {
     /// Who is calling?
     #[tool]
@@ -946,7 +973,7 @@ A parameter identity is per member. When *every* member of a service needs the
 caller — an application identity resolved from a session cookie, an API key, a
 header the gateway sets — declare it once on the struct, exactly as on an HTTP
 controller. `#[inject(identity)]` and `#[inject(request)]` fields on an
-`#[mcp_routes]` service follow the `#[controller]` contract: same field
+MCP service follow the `#[controller]` contract: same field
 attributes, same extractors, same `#[anonymous]`-less fail-closed rule, same
 `#[request_helper]` methods, and the members read them as `self.<field>`.
 
@@ -958,7 +985,7 @@ pub struct SurveyTools {
     #[inject(request)] headers: HeaderMap,       // any other request-scoped extractor
 }
 
-#[mcp_routes]
+#[routes]
 impl SurveyTools {
     #[tool]
     async fn mine(&self) -> Vec<Survey> {

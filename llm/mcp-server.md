@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~8600
+tokens: ~9200
 requires: guards, security
 ---
 
@@ -10,8 +10,11 @@ requires: guards, security
 ### TL;DR
 
 - Enable feature `mcp`; declare the service with `#[controller]` +
-  `#[mcp_routes]` and register it with `.register_mcp_service::<T>()` after
-  `build_state()` (deps and config keys are checked there).
+  `#[routes]` (the SAME impl macro as HTTP — an impl whose methods carry
+  `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]` is an MCP service) and
+  register it with `.register_mcp_service::<T>()` after `build_state()` (deps
+  and config keys are checked there). `#[mcp_routes]` is a deprecated alias,
+  removed in the next minor.
 - Install the `McpServer::new()` plugin (endpoint `/mcp` by default);
   everything else is `mcp.*` config, which builder methods override.
 - One marker per method: `#[tool]`, `#[resource(uri = …)]` (fixed URI, no
@@ -39,9 +42,12 @@ requires: guards, security
   `authorization, content-type, mcp-protocol-version, mcp-session-id,
   last-event-id` and expose `mcp-session-id, www-authenticate`.
 - A duplicate tool name, fixed resource URI, URI template or prompt name across
-  services is a **boot panic**; one type cannot be both `#[routes]` and
-  `#[mcp_routes]`.
-- Per-session lists: `#[mcp_routes(group = "git", opt_in)]` hides a service
+  services is a **boot panic**.
+- One `#[routes]` impl may mix HTTP routes and MCP members: the type is then
+  both a `Controller` and an `McpService` — register it with BOTH
+  `register_controller::<T>()` and `register_mcp_service::<T>()`. A method is
+  one member (`#[get]` + `#[tool]` on one method is a compile error).
+- Per-session lists: `#[routes(group = "git", opt_in)]` hides a service
   until a session enables it; a member parameter `session: McpSession` lets a
   tool `enable_group`/`add_tool(DynamicTool::…)`; `McpServer::session_init::<T>()`
   shapes the list from the opening request; the `McpSessions` bean reaches
@@ -51,7 +57,7 @@ requires: guards, security
   `edit(|e| …)` for one atomic batch) — every session and sessionless caller
   serves them, one `list_changed` per touched family, no per-session work.
   Precedence: catalog > session-private > registry; a catalog key is never
-  overridable. The endpoint is mounted even with no `#[mcp_routes]` service.
+  overridable. The endpoint is mounted even with no MCP service registered.
 - `#[tool(meta = meta!({ … }))]` (also `#[resource]`/`#[prompt]`,
   `DynamicTool::meta`) puts a free-form `_meta` on the list entry (MCP Apps:
   `_meta.ui.resourceUri`). `ToolCall::session_id()` is the transport's
@@ -89,7 +95,7 @@ pub struct MathTools {
     #[inject] calc: CalcService,
 }
 
-#[mcp_routes]
+#[routes]
 #[intercept(Logged::info())]               // impl-level interceptor wraps every tool
 impl MathTools {
     /// Add two numbers.                   // doc comment → tool description shown to the agent
@@ -151,7 +157,7 @@ member families (one marker per method):
 ```rust
 # #[controller]
 # pub struct MathTools { #[inject] log: CallLog }
-#[mcp_routes]
+#[routes]
 impl MathTools {
     /// The call log, one entry per line.  // doc comment → description
     #[resource(uri = "r2e://calc/call-log", mime_type = "text/plain")]   // uri REQUIRED, fixed (no templates)
@@ -190,7 +196,7 @@ reports `notifications/progress` on the request's own stream:
 ```rust
 # #[controller]
 # pub struct Indexer;
-#[mcp_routes]
+#[routes]
 impl Indexer {
     /// Reindex everything.
     #[tool]
@@ -220,7 +226,7 @@ struct Confirm {
 }
 # #[controller]
 # pub struct Wiper;
-#[mcp_routes]
+#[routes]
 impl Wiper {
     /// Wipe the index after asking the user.
     #[tool]
@@ -255,7 +261,7 @@ pub struct ReviewArgs {
 }
 # #[controller]
 # pub struct Reviewer;
-#[mcp_routes]
+#[routes]
 impl Reviewer {
     /// Review code in a language.
     #[prompt(complete(lang = "languages"))]
@@ -304,9 +310,61 @@ custom guards/interceptors do NOT run — guard and rate-limit the
 Sampling, roots and logging (deprecated by SEP-2577) are NOT implemented — no
 API, no capability.
 
-One type cannot be both `#[routes]` and `#[mcp_routes]` — share a bean between
-a thin HTTP controller and a thin MCP service instead (see
-`examples/example-mcp`).
+### One type, two transports
+
+A `#[routes]` impl can carry HTTP routes AND MCP members. The type is both a
+`Controller` and an `McpService`, with ONE dependency carrier folding both
+transports' decorator sites (a missing bean fails both registrations):
+
+```rust
+use r2e::prelude::*;
+
+#[derive(serde::Deserialize, schemars::JsonSchema, ObjectParams)]
+pub struct Operands { pub a: f64, pub b: f64 }
+
+#[controller(path = "/api/calc")]
+pub struct Calc {
+    #[inject] calc: CalcService,
+}
+
+#[routes]
+#[intercept(Logged::info())]               // impl-level: wraps the route AND the tool
+impl Calc {
+    /// `GET /api/calc/add/{a}/{b}`
+    #[get("/add/{a}/{b}")]
+    async fn add_route(&self, Path((a, b)): Path<(f64, f64)>) -> String {
+        self.calc.add(a, b).to_string()
+    }
+
+    /// Add two numbers.                   // the MCP twin: a separate method
+    #[tool(read_only)]
+    async fn add(&self, Params(p): Params<Operands>) -> String {
+        self.calc.add(p.a, p.b).to_string()
+    }
+}
+
+# async fn __doc(b: AppBuilder) -> impl Sized {
+# let b = b.register::<CalcService>();
+b.plugin(McpServer::new())
+    .build_state().await
+    .register_controller::<Calc>()         // the HTTP routes
+    .register_mcp_service::<Calc>()        // the MCP members
+# }
+# fn main() {}
+```
+
+- Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
+  transports and are built **once per transport**: a stateful guard or
+  interceptor (a counter, a rate-limit bucket held in the spec) gets one
+  instance for the HTTP routes and another for the MCP members. Keep shared
+  state in a bean the spec injects.
+- `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: on a mixed impl
+  they wrap the HTTP routes and never the MCP members; on an impl with no HTTP
+  route they are a compile error.
+- `#[routes(group = "…", opt_in)]` applies to the MCP members only (compile
+  error on an impl with no MCP member).
+- The struct-level request scope (`#[inject(identity)]`/`#[inject(request)]`)
+  is shared: each transport extracts it from its own HTTP request.
 
 Config under `mcp.*` (all optional; builder methods override config):
 `path` (default `/mcp`), `enabled` (true), `name`/`version`/`instructions`,
@@ -332,7 +390,7 @@ JSON-RPC envelope to `/mcp` with `accept: application/json, text/event-stream`
 
 Every session starts from the boot-time catalog; groups, a session handle and
 session-private members change what ONE session sees; the `McpRegistry` bean
-changes what EVERY session sees. Typed `#[mcp_routes]` members stay
+changes what EVERY session sees. Typed `#[routes]` MCP members stay
 compile-checked; the dynamism is *which* members a caller sees.
 
 ```rust
@@ -345,7 +403,7 @@ pub struct QueryIn { pub sql: String }
 #[controller]
 pub struct GitTools;
 
-#[mcp_routes(group = "git", opt_in)]      // whole service in group "git", hidden until enabled
+#[routes(group = "git", opt_in)]      // whole service in group "git", hidden until enabled
 impl GitTools {
     /// Working tree status.
     #[tool]
@@ -355,7 +413,7 @@ impl GitTools {
 #[controller]
 pub struct Toolbox;
 
-#[mcp_routes]
+#[routes]
 impl Toolbox {
     /// Reveal the git tools to this session.
     #[tool]
@@ -403,7 +461,7 @@ b.provide(RoleToolsets)                                    // the hook is a bean
 # fn main() {}
 ```
 
-- Groups: `#[mcp_routes(group = "…")]` (service) or `#[tool|resource|prompt(group
+- Groups: `#[routes(group = "…")]` (service) or `#[tool|resource|prompt(group
   = "…")]` (member, overrides); `opt_in` = hidden until enabled (needs a
   `group` — compile error otherwise). No group = always visible (existing apps
   unchanged).
@@ -509,7 +567,7 @@ impl PackLoader {
   unchanged).
 - Works before the mount, under `mcp.stateless`, and with `mcp.enabled: false`
   (accepts members, serves nothing). The endpoint is mounted even when no
-  `#[mcp_routes]` service is registered — a registry-only server is valid.
+  MCP service is registered — a registry-only server is valid.
 
 ### MCP auth — OAuth 2.1 resource server (`mcp.auth.*`)
 
@@ -636,7 +694,7 @@ pub struct AccountTools {
     #[inject(request)] headers: HeaderMap,
 }
 
-#[mcp_routes]
+#[routes]
 impl AccountTools {
     #[tool]
     async fn whoami(&self) -> String { self.greet("hello") }
@@ -659,7 +717,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct AccountTools;
 
-#[mcp_routes]
+#[routes]
 impl AccountTools {
     /// Who is calling?
     #[tool]
@@ -724,5 +782,9 @@ exhaustive protocol and auth cases live in `r2e-mcp/tests`.
   strings.
 - Do not try to hide a tool by filtering `tools/list` yourself — use a group;
   an `opt_in` member is also uncallable, a filtered one would not be.
-- Do not make one type both `#[routes]` and `#[mcp_routes]`; share a bean
-  between a thin HTTP controller and a thin MCP service instead.
+- Do not put `#[get]` (or any HTTP marker) and `#[tool]` on the same method —
+  give each transport its own method over a shared helper or bean.
+- Do not register a mixed `#[routes]` type with only one of
+  `register_controller` / `register_mcp_service`: each registers its own
+  transport's members only.
+- Do not write new `#[mcp_routes]` — it is a deprecated alias of `#[routes]`.

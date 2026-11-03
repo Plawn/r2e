@@ -15,7 +15,7 @@ the decorator machinery (`DecoratorSpec`, `Interceptor<R>`,
 `AllSatisfied`). A transport adapter supplies only what is genuinely
 wire-specific: request extraction, error mapping to the wire's failure
 type, routing syntax, and the serve loop. HTTP (`#[routes]`), gRPC
-(`#[grpc_routes]`), MCP (`#[mcp_routes]`, `r2e-mcp`), and scheduled tasks
+(`#[grpc_routes]`), MCP (`#[routes]` MCP members — `#[mcp_routes]` is the deprecated alias — `r2e-mcp`), and scheduled tasks
 (`#[scheduled]`, timer-driven) are the existing adapters — use them as
 references.
 
@@ -79,8 +79,18 @@ references.
    `tuple()` (`(__R2eMd, __R2eMp<Fn>, …)`) and the marker/identity
    predicates — `Controller<S, W>`, `McpService<S, W>` and (since #1213)
    `GrpcService<S, W>` all use it.
-   Constraint: one type = one `EndpointDeps` impl, so a struct cannot be
-   two endpoint kinds at once — share logic through a bean instead.
+   One type = one `EndpointDeps` impl folding **every** transport's sites
+   (#1215): a type that is several endpoint kinds at once gets a single
+   carrier whose `Deps` covers all of them, and each transport trait keeps
+   its own witness. Today the only multi-transport impl is `#[routes]` with
+   MCP members (`attrs/routes_attr.rs` splits the impl by member, parses each
+   side with its own parser, then the HTTP codegen emits the one façade impl
+   and the one carrier from `controller_site_exprs` + the MCP `site_exprs`;
+   the MCP codegen skips its own carrier when `mixed_http_sites` is set, and
+   `validate_config` unions both site sets). A new transport that wants to
+   share a type with HTTP joins that dispatcher rather than emitting a
+   second carrier. gRPC stays a separate macro (`#[grpc_routes]` rejects MCP
+   markers).
 
 5. **A registration extension trait with the compile check** — mirror
    `AppBuilderGrpcExt` (`r2e-grpc/src/lib.rs`): inference witnesses on the
@@ -112,7 +122,7 @@ references.
      through `RequestData<S>` / `FromRequestPartsVia<S, M>` against the
      state, and the validator bean is checked through the witness. MCP rides HTTP, so it reuses the
      **HTTP contract** (#1175): `McpService<T, W>` is state-generic like
-     `Controller<T, W>`, `#[mcp_routes]` emits one
+     `Controller<T, W>`, `#[routes]` emits one
      `FromRequestPartsVia<S, M>` bound per member with an
      `#[inject(identity)]` parameter and folds the markers into the witness
      `W`, which `AppBuilderMcpExt<T, W, DepIdx>` infers at
@@ -123,7 +133,7 @@ references.
      `ViaMcpAuth`, `r2e-mcp/src/auth/extract.rs`) — no MCP-only identity
      path. Struct-level request scope (#1210) reuses the `#[controller]`
      items unchanged (`__R2eRequestData_<Name>::extract`, `bind_request`,
-     façade, `guard_identity`): `#[mcp_routes]` only moves the call point —
+     façade, `guard_identity`): the MCP codegen only moves the call point —
      `McpRoutes::request_scope` is a `RequestScope` closure the `McpServer`
      plugin collects into one `McpIdentityLayer` on `/mcp` (runs every
      service's extraction once per HTTP request, deposits the data in the
@@ -174,6 +184,23 @@ references.
   is no longer an option to reach for — build a `GuardContext` instead.
 
 ## Decisions log
+
+- **2026-11-03 (#1215, transport-layering level 3a) — reverses the §4
+  "one type = one endpoint kind" constraint.** `#[routes]` accepts MCP
+  members (`#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`) beside HTTP
+  routes; a mixed impl is both a `Controller` and an `McpService` with ONE
+  `EndpointDeps` impl and explicit dual registration
+  (`register_controller` + `register_mcp_service`). Impl-level
+  `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
+  transports and are built once per transport; `#[pre_guard]`/
+  `#[middleware]`/`#[layer]` stay HTTP-only. Implemented by splitting the
+  impl and reusing each transport's parser unchanged (no merged parser), so
+  HTTP-only and MCP-only expansions are byte-stable. `#[mcp_routes]` became a
+  `#[deprecated]` alias through the same dispatcher (removed next minor); an
+  empty MCP service is spellable only through it. The macro deprecation lint
+  fires at the attribute path: an item-level `#[allow(deprecated)]` on the
+  impl does not silence it, a module/crate-level `#![allow(deprecated)]`
+  does.
 
 - **2026-11-03 (#1213, transport-layering level 2) — reverses §6 bullet 1
   for gRPC.** "Identity extraction stays wire-specific" was right for a wire

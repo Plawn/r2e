@@ -1,7 +1,7 @@
 ---
 topic: interceptors
 features: utils
-tokens: ~1900
+tokens: ~2000
 requires: guards
 ---
 
@@ -89,10 +89,13 @@ Semantics:
   route-family attribute on the impl block (`#[anonymous]`, `#[status]`, …) is
   also a targeted compile error, and a controller-level guard (or
   `#[middleware]`/`#[layer]`) whose impl block has no eligible route is
-  rejected as dead configuration.
+  rejected as dead configuration (MCP members of a mixed `#[routes]` impl are
+  eligible targets for the guard family and `#[intercept]`).
 - gRPC: `#[grpc_routes]` impl blocks accept `#[intercept]` only; the guard
   family there is a compile error. `#[middleware]`/`#[layer]` are rejected on
-  `#[grpc_routes]` and `#[mcp_routes]` (method and impl level).
+  `#[grpc_routes]` and on MCP members (`#[tool]` & co: method level; impl
+  level when the `#[routes]` impl has no HTTP route — on a mixed impl they
+  wrap the HTTP routes only).
 
 ### Tower layers: `#[middleware]` / `#[layer]`
 

@@ -1,7 +1,7 @@
 ---
 topic: method-attribute-quick-reference
 features: core
-tokens: ~600
+tokens: ~800
 requires: core-concepts
 ---
 
@@ -13,6 +13,7 @@ requires: core-concepts
 - Auth markers: `#[anonymous]` per route; `#[roles]`/`#[all_roles]`/`#[guard]`/`#[pre_guard]` on a method or on the impl — only `#[pre_guard]` also covers `#[anonymous]` routes.
 - Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]` (all three on a method or on the impl), `#[managed]` (on a parameter), `#[async_exec]`.
 - Off-request and documentation markers: `#[consumer]`, `#[scheduled]`, `#[request_helper]`, `#[status(N)]` / `#[returns(T)]`.
+- MCP members on the same `#[routes]` impl: `#[tool]`, `#[resource(uri = …)]`, `#[prompt]`, `#[completion]` (see llm/mcp-server.md). One marker per method — an HTTP marker and an MCP marker on one method is a compile error. Impl-level `#[roles]`/`#[all_roles]`/`#[guard]`/`#[intercept]` cover MCP members too (one instance per transport); `#[pre_guard]`/`#[layer]`/`#[middleware]` never do.
 
 | Attribute | Level | Purpose |
 |-----------|-------|---------|
@@ -35,3 +36,5 @@ requires: core-concepts
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
 | `#[request_helper]` | method | Helper on the per-request façade (reads identity; callable only from routes/SSE/WS) |
 | `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |
+| `#[tool]` / `#[resource(uri)]` / `#[prompt]` / `#[completion]` | method | MCP member (registered by `register_mcp_service`) |
+| `#[routes(group = "g", opt_in)]` | impl | MCP group of the impl's MCP members (compile error without one) |

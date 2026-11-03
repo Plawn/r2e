@@ -210,7 +210,7 @@ Rules:
 - **Order** — per route, the method's `#[middleware]`s and `#[layer]`s are applied first, then the controller's: controller layers are the **outer** ones. Within a level, a later-declared attribute wraps an earlier one, and `#[layer]`s wrap `#[middleware]`s.
 - **`#[fallback]` is skipped** — `Routes::fallback` takes no per-route layers. If the impl block has no other route, the impl-level attribute is a compile error (it would apply to nothing).
 - **Body limits keep the envelope** — the limit is enforced by the body extractor inside the handler, so an oversized body answers `413` through the route's error type, like any other extraction rejection.
-- `#[grpc_routes]` and `#[mcp_routes]` do not accept `#[middleware]`/`#[layer]`.
+- `#[grpc_routes]` and MCP members (`#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`) do not accept `#[middleware]`/`#[layer]`. On a `#[routes]` impl that mixes HTTP routes and MCP members, the impl-level attributes wrap the HTTP routes only; on an impl with no HTTP route they are a compile error.
 
 ---
 
