@@ -26,7 +26,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::model::types::MethodDecorators;
+use crate::model::types::{MemberDef, MethodDecorators};
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
 
@@ -107,9 +107,8 @@ pub(crate) fn spec_type_of(expr: &syn::Expr) -> syn::Result<(syn::Path, syn::Exp
 /// Emit the field declaration and initializer for one prebuilt decorator
 /// product site.
 ///
-/// Storage stays host-specific: HTTP/bean use named sets while MCP embeds the
-/// fields in one flat wrapper. Only the `DecoratorSpec`/`build_decorator`
-/// contract is shared here.
+/// Every host stores the products in named sets ([`DecoSet`]); this is the
+/// one place the `DecoratorSpec`/`build_decorator` contract is spelled.
 pub(crate) fn decorator_product_field(
     field: &syn::Ident,
     expr: &syn::Expr,
@@ -138,6 +137,10 @@ pub(crate) fn all_specs_inferable<'a>(exprs: impl IntoIterator<Item = &'a syn::E
 pub(crate) struct DecoSet {
     pub struct_ident: syn::Ident,
     pub ctor_ident: syn::Ident,
+    /// When set, the constructor is an associated function of this type
+    /// (`<owner>::<ctor_ident>`) instead of a free function, so the spec
+    /// expressions it evaluates may name `Self` (`Self::make_guard()`).
+    pub owner: Option<syn::Ident>,
     /// Field idents for guard sites, in `guard_fns` order.
     pub guard_fields: Vec<syn::Ident>,
     /// Field idents for interceptor sites, controller-level first then
@@ -148,6 +151,16 @@ pub(crate) struct DecoSet {
 impl DecoSet {
     pub fn ty(&self) -> &syn::Ident {
         &self.struct_ident
+    }
+
+    /// The path that calls the constructor: `<owner>::<ctor>` for an
+    /// owner-scoped set, the bare `<ctor>` otherwise.
+    pub fn ctor_path(&self) -> TokenStream {
+        let ctor = &self.ctor_ident;
+        match &self.owner {
+            Some(owner) => quote! { #owner::#ctor },
+            None => quote! { #ctor },
+        }
     }
 }
 
@@ -191,6 +204,31 @@ pub(crate) fn generate_named_deco_items(
     intercept_exprs: &[&syn::Expr],
     path_param_module: TokenStream,
 ) -> (TokenStream, Option<DecoSet>) {
+    generate_scoped_deco_items(
+        None,
+        controller_name,
+        kind,
+        fn_ident,
+        guard_exprs,
+        intercept_exprs,
+        path_param_module,
+    )
+}
+
+/// [`generate_named_deco_items`] with an optional `owner`: when `Some`, the
+/// constructor is emitted as an associated function of that type
+/// (`impl <owner> { fn <ctor> … }`), so the spec expressions can name `Self`.
+/// [`MemberDecoSets`] uses it to keep the controller in scope for MCP / gRPC
+/// decorator expressions; the HTTP sets stay free functions.
+fn generate_scoped_deco_items(
+    owner: Option<&syn::Ident>,
+    controller_name: &syn::Ident,
+    kind: &str,
+    fn_ident: &syn::Ident,
+    guard_exprs: &[syn::Expr],
+    intercept_exprs: &[&syn::Expr],
+    path_param_module: TokenStream,
+) -> (TokenStream, Option<DecoSet>) {
     if guard_exprs.is_empty() && intercept_exprs.is_empty() {
         return (quote! {}, None);
     }
@@ -203,6 +241,7 @@ pub(crate) fn generate_named_deco_items(
             controller_name,
             fn_ident
         ),
+        owner: owner.cloned(),
         guard_fields: (0..guard_exprs.len())
             .map(|i| format_ident!("__g{}", i))
             .collect(),
@@ -217,18 +256,221 @@ pub(crate) fn generate_named_deco_items(
             .zip(intercept_exprs.iter().copied()),
     );
 
-    match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, path_param_module) {
+    match emit_deco_struct(
+        owner,
+        &set.struct_ident,
+        &set.ctor_ident,
+        sites,
+        path_param_module,
+    ) {
         Ok(items) => (items, Some(set)),
         Err(err) => (err, None),
+    }
+}
+
+/// The decorator storage of an adapter whose members are dispatched by one
+/// hand-written service object (`#[mcp_routes]`, `#[grpc_routes]`): one
+/// shared controller-level [`DecoSet`] (`__ctrl`, impl-level guards +
+/// interceptors, built **once per service** — the adapter peer of HTTP's
+/// [`CtrlDecoSet`]) plus one [`DecoSet`] per member (`__deco_<fn>`, that
+/// member's own sites). The sets are stored **by value** in the adapter's
+/// storage struct (the MCP wrapper, the gRPC container), so a call reaches a
+/// product through plain field borrows — no per-call `Arc` clone.
+///
+/// Controller guards are checked against a controller-scoped `GuardContext`
+/// (`method_name = "*"`), so a stateful impl-level guard (`RateLimit`) keeps
+/// one service-wide bucket and never collides with a member-level site of the
+/// same spec. A set is `None` when it has no sites (the controller set also
+/// when there is no member). Every site is validated up front
+/// (`spec_type_of`): when any spec is not inferable, `items` holds one
+/// `compile_error!` per bad site — controller sites included, even on a
+/// service without members — and every set is `None`, so the members degrade
+/// to the unguarded, unwrapped shape and the only errors are the spec ones.
+///
+/// The constructors are associated functions of the controller
+/// (`<Ctrl>::__r2e_…`), so a decorator expression may name `Self`
+/// (`#[guard(AllowAll = Self::make_guard())]`).
+pub(crate) struct MemberDecoSets {
+    pub items: TokenStream,
+    ctrl: Option<DecoSet>,
+    /// `(storage field, set)` per member, positionally paired with the
+    /// adapter's member list.
+    sets: Vec<(syn::Ident, Option<DecoSet>)>,
+}
+
+impl MemberDecoSets {
+    /// Build the sets. `adapter` discriminates the hidden item names
+    /// (`__R2e<adapter>CtrlDeco_<Ctrl>_ctrl`, `__R2e<adapter>Deco_<Ctrl>_<fn>`).
+    pub fn build<'a>(
+        controller_name: &syn::Ident,
+        adapter: &str,
+        ctrl_guards: &[syn::Expr],
+        ctrl_intercepts: &[syn::Expr],
+        members: impl IntoIterator<Item = &'a MemberDef>,
+    ) -> Self {
+        let members: Vec<&MemberDef> = members.into_iter().collect();
+        let storage_field = |member: &MemberDef| format_ident!("__deco_{}", member.name);
+
+        // Validate every site before emitting anything, so one bad spec
+        // anywhere reports every bad spec (and nothing else), and so a
+        // controller-level site is checked even when the service has no
+        // member to carry it.
+        let mut errors = TokenStream::new();
+        let member_sites = members.iter().flat_map(|m| {
+            m.decorators
+                .guard_fns
+                .iter()
+                .chain(m.decorators.intercept_fns.iter())
+        });
+        for expr in ctrl_guards
+            .iter()
+            .chain(ctrl_intercepts.iter())
+            .chain(member_sites)
+        {
+            if let Err(err) = spec_type_of(expr) {
+                errors.extend(err.to_compile_error());
+            }
+        }
+        if !errors.is_empty() {
+            return Self {
+                items: errors,
+                ctrl: None,
+                sets: members.iter().map(|m| (storage_field(m), None)).collect(),
+            };
+        }
+
+        let owner = Some(controller_name);
+        let mut items = quote! {};
+        let ctrl = if members.is_empty() {
+            None
+        } else {
+            let intercept_exprs: Vec<&syn::Expr> = ctrl_intercepts.iter().collect();
+            let (ctrl_items, set) = generate_scoped_deco_items(
+                owner,
+                controller_name,
+                &format!("{adapter}CtrlDeco"),
+                &format_ident!("ctrl"),
+                ctrl_guards,
+                &intercept_exprs,
+                quote! {},
+            );
+            items.extend(ctrl_items);
+            set
+        };
+        let kind = format!("{adapter}Deco");
+        let sets = members
+            .iter()
+            .map(|member| {
+                let intercept_exprs: Vec<&syn::Expr> =
+                    member.decorators.intercept_fns.iter().collect();
+                let (member_items, set) = generate_scoped_deco_items(
+                    owner,
+                    controller_name,
+                    &kind,
+                    &member.name,
+                    &member.decorators.guard_fns,
+                    &intercept_exprs,
+                    quote! {},
+                );
+                items.extend(member_items);
+                (storage_field(member), set)
+            })
+            .collect();
+        Self { items, ctrl, sets }
+    }
+
+    /// Whether any set exists.
+    pub fn is_empty(&self) -> bool {
+        self.ctrl.is_none() && self.sets.iter().all(|(_, s)| s.is_none())
+    }
+
+    /// `(storage field, set)` for the controller set (first) and every
+    /// decorated member — the single source of the field ↔ set pairing shared
+    /// by the storage declaration, its initializer and the call sites.
+    fn fields(&self) -> impl Iterator<Item = (syn::Ident, &DecoSet)> {
+        self.ctrl
+            .iter()
+            .map(|s| (format_ident!("__ctrl"), s))
+            .chain(
+                self.sets
+                    .iter()
+                    .filter_map(|(f, s)| s.as_ref().map(|s| (f.clone(), s))),
+            )
+    }
+
+    /// The storage struct's field declarations (`__deco_<fn>: <set type>`).
+    pub fn field_decls(&self) -> Vec<TokenStream> {
+        self.fields()
+            .map(|(field, set)| {
+                let ty = set.ty();
+                quote! { #field: #ty }
+            })
+            .collect()
+    }
+
+    /// The storage struct's field initializers, built from the `__ctx` bean
+    /// context in scope.
+    pub fn field_inits(&self) -> Vec<TokenStream> {
+        self.fields()
+            .map(|(field, set)| {
+                let ctor = set.ctor_path();
+                quote! { #field: #ctor(__ctx) }
+            })
+            .collect()
+    }
+
+    /// The controller-level guard products, as places under `base` (the
+    /// expression owning the storage: `self`, `self.__decos`, …).
+    pub fn ctrl_guards(&self, base: &TokenStream) -> Vec<TokenStream> {
+        Self::places(base, &format_ident!("__ctrl"), self.ctrl.as_ref(), |s| {
+            &s.guard_fields
+        })
+    }
+
+    /// The member-level guard products of member `index`, under `base`.
+    pub fn member_guards(&self, index: usize, base: &TokenStream) -> Vec<TokenStream> {
+        let (field, set) = &self.sets[index];
+        Self::places(base, field, set.as_ref(), |s| &s.guard_fields)
+    }
+
+    /// The interceptor products wrapping member `index` — controller-level
+    /// first, then the member's own (execution order) — under `base`.
+    pub fn intercepts(&self, index: usize, base: &TokenStream) -> Vec<TokenStream> {
+        let (field, set) = &self.sets[index];
+        let mut places = Self::places(base, &format_ident!("__ctrl"), self.ctrl.as_ref(), |s| {
+            &s.intercept_fields
+        });
+        places.extend(Self::places(base, field, set.as_ref(), |s| {
+            &s.intercept_fields
+        }));
+        places
+    }
+
+    fn places(
+        base: &TokenStream,
+        field: &syn::Ident,
+        set: Option<&DecoSet>,
+        family: impl Fn(&DecoSet) -> &Vec<syn::Ident>,
+    ) -> Vec<TokenStream> {
+        set.map(|s| {
+            family(s)
+                .iter()
+                .map(|f| quote! { #base.#field.#f })
+                .collect()
+        })
+        .unwrap_or_default()
     }
 }
 
 /// Shared emitter for a hidden decorator-product struct + its `BeanContext`
 /// constructor: one field per (ident, spec expr) site, initialized via
 /// `build_decorator`. `path_param_module` is spliced into the ctor body (pass
-/// empty tokens when unused). `Err` carries the `spec_type_of` compile_error
-/// for the first non-inferable spec.
+/// empty tokens when unused). With an `owner`, the ctor is emitted as an
+/// associated function of that type (`impl <owner> { … }`) so spec
+/// expressions may name `Self`. `Err` carries the `spec_type_of`
+/// compile_error for the first non-inferable spec.
 fn emit_deco_struct<'a, 'b>(
+    owner: Option<&syn::Ident>,
     struct_ident: &syn::Ident,
     ctor_ident: &syn::Ident,
     sites: impl Iterator<Item = (&'a syn::Ident, &'b syn::Expr)>,
@@ -246,13 +488,7 @@ fn emit_deco_struct<'a, 'b>(
         field_inits.push(field_init);
     }
 
-    Ok(quote! {
-        #[allow(non_camel_case_types)]
-        #[doc(hidden)]
-        struct #struct_ident {
-            #(#field_decls,)*
-        }
-
+    let ctor = quote! {
         #[allow(non_snake_case)]
         #[doc(hidden)]
         fn #ctor_ident(__ctx: &#krate::beans::BeanContext) -> #struct_ident {
@@ -261,6 +497,20 @@ fn emit_deco_struct<'a, 'b>(
                 #(#field_inits,)*
             }
         }
+    };
+    let ctor = match owner {
+        Some(owner) => quote! { impl #owner { #ctor } },
+        None => ctor,
+    };
+
+    Ok(quote! {
+        #[allow(non_camel_case_types)]
+        #[doc(hidden)]
+        struct #struct_ident {
+            #(#field_decls,)*
+        }
+
+        #ctor
     })
 }
 
@@ -280,6 +530,7 @@ pub(super) fn generate_predeco_items(
     let set = DecoSet {
         struct_ident: format_ident!("__R2ePreDeco_{}_{}", controller_name, fn_ident),
         ctor_ident: format_ident!("__r2e_predeco_{}_{}", controller_name, fn_ident),
+        owner: None,
         guard_fields: (0..decorators.pre_auth_guard_fns.len())
             .map(|i| format_ident!("__p{}", i))
             .collect(),
@@ -524,7 +775,7 @@ pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
         .zip(intercepts.iter())
         .chain(set.guard_fields.iter().zip(guards.iter()))
         .chain(set.pre_guard_fields.iter().zip(pre_guards.iter()));
-    match emit_deco_struct(&set.struct_ident, &set.ctor_ident, sites, quote! {}) {
+    match emit_deco_struct(None, &set.struct_ident, &set.ctor_ident, sites, quote! {}) {
         Ok(items) => items,
         // Unreachable: `ctrl_deco_set` returned `Some`, so every spec is
         // inferable — kept as the error path for defense in depth.
@@ -532,28 +783,9 @@ pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// The `EndpointDeps::Deps` fold: the core's `ContextConstruct::Deps`
-/// extended with every decorator site's `<Spec as DecoratorSpec>::Deps`,
-/// deduplicated by spec type. All lists are concrete, so the `TAppend`
-/// projections normalize without extra bounds on the impl.
-///
-/// Transport-neutral: `#[routes]` (via [`controller_deps_fold`]) and
-/// `#[grpc_routes]` both fold their sites through here, so every endpoint
-/// kind carries the same shape of dep list.
-pub(crate) fn endpoint_deps_fold<'a>(
-    endpoint_name: &syn::Ident,
-    site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
-) -> TokenStream {
-    let krate = r2e_core_path();
-    deps_fold_from_base(
-        quote! { <#endpoint_name as #krate::ContextConstruct>::Deps },
-        site_exprs,
-    )
-}
-
 /// Fold every decorator site's `<Spec as DecoratorSpec>::Deps` onto an
 /// arbitrary `base` dep-list token stream, deduplicated by spec type. Used by
-/// [`endpoint_deps_fold`] (base = `ContextConstruct::Deps`) and by `#[bean]`
+/// `registration::DepsFold::endpoint` (base = `ContextConstruct::Deps`) and by `#[bean]`
 /// (base = the constructor's `TCons` dep list) so bean decorator deps are
 /// compile-checked at `.register::<T>()` alongside the constructor deps.
 pub(crate) fn deps_fold_from_base<'a>(
@@ -566,13 +798,14 @@ pub(crate) fn deps_fold_from_base<'a>(
     let mut deps = base;
     for expr in site_exprs {
         if let Ok((spec, _)) = spec_type_of(expr)
-            && seen.insert(quote!(#spec).to_string()) {
-                deps = quote! {
-                    <#deps as #krate::type_list::TAppend<
-                        <#spec as #krate::DecoratorSpec>::Deps,
-                    >>::Output
-                };
-            }
+            && seen.insert(quote!(#spec).to_string())
+        {
+            deps = quote! {
+                <#deps as #krate::type_list::TAppend<
+                    <#spec as #krate::DecoratorSpec>::Deps,
+                >>::Output
+            };
+        }
     }
     deps
 }
@@ -587,9 +820,10 @@ pub(crate) fn unique_spec_types<'a>(
     let mut specs = Vec::new();
     for expr in site_exprs {
         if let Ok((spec, _)) = spec_type_of(expr)
-            && seen.insert(quote!(#spec).to_string()) {
-                specs.push(spec);
-            }
+            && seen.insert(quote!(#spec).to_string())
+        {
+            specs.push(spec);
+        }
     }
     specs
 }
@@ -617,7 +851,7 @@ pub(crate) fn decorator_config_key_stmts<'a>(
 }
 
 /// Every decorator site expression of a `#[routes]` block, in the order the
-/// dep fold visits them. Shared by [`controller_deps_fold`] and the
+/// dep fold visits them. Shared by `registration::controller_deps_fold` and the
 /// config-key aggregation so both see exactly the same site set.
 pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
@@ -630,9 +864,9 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     exprs.extend(ctrl_guards);
     exprs.extend(ctrl_pre_guards);
     for rm in &def.route_methods {
-        exprs.extend(&rm.decorators.guard_fns);
-        exprs.extend(&rm.decorators.pre_auth_guard_fns);
-        exprs.extend(&rm.decorators.intercept_fns);
+        exprs.extend(&rm.member.decorators.guard_fns);
+        exprs.extend(&rm.member.decorators.pre_auth_guard_fns);
+        exprs.extend(&rm.member.decorators.intercept_fns);
     }
     // Scheduled + consumer methods run interceptors (built once at
     // registration, from the retained context, via `fill_decos`).
@@ -644,39 +878,13 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     }
     // SSE/WS methods run guards (and pre-auth guards) but not interceptors.
     for sm in &def.sse_methods {
-        exprs.extend(&sm.decorators.guard_fns);
-        exprs.extend(&sm.decorators.pre_auth_guard_fns);
+        exprs.extend(&sm.member.decorators.guard_fns);
+        exprs.extend(&sm.member.decorators.pre_auth_guard_fns);
     }
     for wm in &def.ws_methods {
-        exprs.extend(&wm.decorators.guard_fns);
-        exprs.extend(&wm.decorators.pre_auth_guard_fns);
+        exprs.extend(&wm.member.decorators.guard_fns);
+        exprs.extend(&wm.member.decorators.pre_auth_guard_fns);
     }
 
     exprs
-}
-
-/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block,
-/// plus the [`ManagedDeps`] of every distinct `#[managed]` parameter type.
-///
-/// Managed resources resolve their collaborators dynamically inside `acquire`
-/// (`state.bean::<T>()`), which cannot fail at compile time — folding
-/// `<Ty as ManagedDeps>::Deps` in here is what turns "pool was never provided"
-/// from a runtime 500 into a `register_controller` compile error.
-pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
-    let krate = r2e_core_path();
-    let mut deps = endpoint_deps_fold(&def.controller_name, controller_site_exprs(def));
-    let mut seen = std::collections::HashSet::new();
-    for rm in &def.route_methods {
-        for mp in &rm.managed_params {
-            let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
-            if seen.insert(quote!(#ty).to_string()) {
-                deps = quote! {
-                    <#deps as #krate::type_list::TAppend<
-                        <#ty as #krate::ManagedDeps>::Deps,
-                    >>::Output
-                };
-            }
-        }
-    }
-    deps
 }

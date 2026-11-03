@@ -198,7 +198,7 @@ impl RoutePlugin for ReturnsPlugin {
 /// Ordered registry of all decorator plugins for HTTP/SSE/WS routes.
 /// **Ordering matters**: `RolesPlugin` runs before `GuardPlugin` so the
 /// generated `RolesGuard` is inserted at the front of `guard_fns`.
-static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
+pub(crate) static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
     &AnonymousPlugin,
     &RolesPlugin,
     &AllRolesPlugin,
@@ -215,7 +215,7 @@ static HTTP_PLUGINS: &[&dyn RoutePlugin] = &[
 /// (`GuardContext` is transport-neutral — gRPC feeds it the request metadata
 /// as headers) plus interceptors. Ordering matters as for HTTP: roles-derived
 /// guards are injected at the front of `guard_fns`.
-static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[
+pub(crate) static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[
     &RolesPlugin,
     &AllRolesPlugin,
     &GuardPlugin,
@@ -226,172 +226,12 @@ static GRPC_PLUGINS: &[&dyn RoutePlugin] = &[
 /// as gRPC (rule of three: HTTP + gRPC + MCP share `Guard<I>`). Ordering
 /// matters as for HTTP: roles-derived guards are injected at the front of
 /// `guard_fns`.
-static MCP_PLUGINS: &[&dyn RoutePlugin] = &[
+pub(crate) static MCP_PLUGINS: &[&dyn RoutePlugin] = &[
     &RolesPlugin,
     &AllRolesPlugin,
     &GuardPlugin,
     &InterceptPlugin,
 ];
-
-const MCP_DISALLOWED_ATTRS: &[&str] = &[
-    // Pre-auth/anonymous/middleware are HTTP-pipeline concepts; MCP tools sit
-    // behind one shared transport endpoint and have no per-tool middleware
-    // stack. A struct-level `#[inject(identity)]` on an MCP service is
-    // extracted once per HTTP request, before any member is dispatched, so
-    // no member can opt out of it: mixed access is `Option<I>`.
-    "anonymous",
-    "pre_guard",
-    "middleware",
-    "layer",
-    // HTTP response shaping has no MCP equivalent.
-    "status",
-    "returns",
-    // Lifecycle / transverse markers are not wired for MCP services (same
-    // rationale as gRPC): left unrejected they would silently never run.
-    "pre_destroy",
-    "post_construct",
-    "on_start",
-    "scheduled",
-    "consumer",
-    "async_exec",
-];
-
-const GRPC_DISALLOWED_ATTRS: &[&str] = &[
-    // Pre-auth/anonymous/middleware are HTTP-pipeline concepts: a gRPC
-    // method has no per-method tower stack, and `#[anonymous]` needs a
-    // fail-closed struct identity, which `#[grpc_routes]` types don't have
-    // (identity is per method).
-    "anonymous",
-    "pre_guard",
-    "middleware",
-    "layer",
-    // Lifecycle / transverse markers are not wired for gRPC services. Left
-    // unrejected they either silently never run (sync shapes drop into
-    // `other_methods`) or die with a confusing E0407 "not a member of trait"
-    // (async shapes land in the tonic trait impl). Reject them up front.
-    "pre_destroy",
-    "post_construct",
-    "on_start",
-    "scheduled",
-    "consumer",
-    "async_exec",
-];
-
-/// Parse all decorator attributes into a single `MethodDecorators`.
-pub fn parse_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDecorators> {
-    let mut decorators = MethodDecorators::default();
-    for plugin in HTTP_PLUGINS {
-        plugin.parse(attrs, &mut decorators)?;
-    }
-    Ok(decorators)
-}
-
-/// Parse decorators for gRPC routes (`#[roles]`/`#[all_roles]`/`#[guard]`/
-/// `#[intercept]`).
-pub fn parse_grpc_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDecorators> {
-    validate_grpc_attrs(attrs)?;
-    let mut decorators = MethodDecorators::default();
-    for plugin in GRPC_PLUGINS {
-        plugin.parse(attrs, &mut decorators)?;
-    }
-    Ok(decorators)
-}
-
-/// Reject attributes that are not supported on `#[grpc_routes]` methods.
-///
-/// This runs for **every** method in a gRPC impl — both RPC methods (via
-/// [`parse_grpc_decorators`]) and pass-through helpers in `other_methods` —
-/// so a disallowed marker on a sync `&self` helper is caught too, rather than
-/// being silently dropped.
-pub fn validate_grpc_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
-    for attr in attrs {
-        for name in GRPC_DISALLOWED_ATTRS {
-            if attr.path().is_ident(name) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!("#[{}] is not supported on #[grpc_routes] methods", name),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Reject disallowed attributes on the `#[grpc_routes]` **impl block** itself.
-/// The impl level supports `#[intercept]`, `#[guard]`, `#[roles]` and
-/// `#[all_roles]` (applied to every method). Left unrejected, the rest would
-/// be silently dropped — the impl attrs are mined for decorators and never
-/// re-emitted.
-pub fn validate_grpc_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
-    for attr in attrs {
-        for name in GRPC_DISALLOWED_ATTRS {
-            if attr.path().is_ident(name) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!(
-                        "#[{}] is not supported on a #[grpc_routes] impl block — \
-                         gRPC controller-level decorators support #[intercept], \
-                         #[guard], #[roles] and #[all_roles] only",
-                        name
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Parse decorators for MCP tools (`#[roles]`/`#[all_roles]`/`#[guard]`/
-/// `#[intercept]`).
-pub fn parse_mcp_decorators(attrs: &[syn::Attribute]) -> syn::Result<MethodDecorators> {
-    validate_mcp_attrs(attrs)?;
-    let mut decorators = MethodDecorators::default();
-    for plugin in MCP_PLUGINS {
-        plugin.parse(attrs, &mut decorators)?;
-    }
-    Ok(decorators)
-}
-
-/// Reject attributes that are not supported on `#[mcp_routes]` methods.
-///
-/// Runs for **every** method in an MCP impl — both `#[tool]` methods (via
-/// [`parse_mcp_decorators`]) and pass-through helpers — so a disallowed
-/// marker on a helper is caught instead of silently dropped.
-pub fn validate_mcp_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
-    for attr in attrs {
-        for name in MCP_DISALLOWED_ATTRS {
-            if attr.path().is_ident(name) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!("#[{}] is not supported on #[mcp_routes] methods", name),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Reject disallowed attributes on the `#[mcp_routes]` **impl block** itself.
-/// The impl level supports `#[intercept]`, `#[guard]`, `#[roles]` and
-/// `#[all_roles]` (applied to every tool).
-pub fn validate_mcp_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
-    for attr in attrs {
-        for name in MCP_DISALLOWED_ATTRS {
-            if attr.path().is_ident(name) {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    format!(
-                        "#[{}] is not supported on a #[mcp_routes] impl block — \
-                         MCP controller-level decorators support #[intercept], \
-                         #[guard], #[roles] and #[all_roles] only",
-                        name
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
 
 /// Collect all attribute names consumed by plugins.
 pub fn all_decorator_attr_names() -> Vec<&'static str> {

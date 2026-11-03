@@ -13,6 +13,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
+use super::identity_path;
 use crate::model::types::*;
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
@@ -169,16 +170,16 @@ impl<'a> RequestParams<'a> {
     pub(super) fn route(rm: &'a RouteMethod) -> Self {
         let mut excluded: Vec<Option<usize>> =
             rm.managed_params.iter().map(|mp| Some(mp.index)).collect();
-        excluded.push(rm.identity_param.as_ref().map(|p| p.index));
-        Self::new(&rm.fn_item.sig, &excluded, true)
+        excluded.push(rm.member.identity_param.as_ref().map(|p| p.index));
+        Self::new(&rm.member.fn_item.sig, &excluded, true)
     }
 
     /// An `#[sse]` endpoint: everything but the identity; the last param may
     /// read the body.
     pub(super) fn sse(sm: &'a SseMethod) -> Self {
         Self::new(
-            &sm.fn_item.sig,
-            &[sm.identity_param.as_ref().map(|p| p.index)],
+            &sm.member.fn_item.sig,
+            &[sm.member.identity_param.as_ref().map(|p| p.index)],
             true,
         )
     }
@@ -187,10 +188,10 @@ impl<'a> RequestParams<'a> {
     /// upgrade is the trailing extractor, so nothing reads the body.
     pub(super) fn ws(wm: &'a WsMethod) -> Self {
         Self::new(
-            &wm.fn_item.sig,
+            &wm.member.fn_item.sig,
             &[
                 wm.ws_param.as_ref().map(|p| p.index),
-                wm.identity_param.as_ref().map(|p| p.index),
+                wm.member.identity_param.as_ref().map(|p| p.index),
             ],
             false,
         )
@@ -843,27 +844,25 @@ impl<'a> Pipeline<'a> {
     /// façade (`__facade`, with `__ctrl: &Façade`), or borrow the core for
     /// `#[anonymous]` endpoints (`__ctrl: &Core`).
     fn bind_receiver(&self) -> TokenStream {
-        let krate = &self.krate;
         let controller_name = &self.def.controller_name;
         if self.plan.anonymous {
-            return quote! {
-                let __ctrl: &#controller_name = &__core;
-            };
+            return identity_path::bind_core(controller_name, quote! { __core });
         }
         let data_name = request_data_ident_for(controller_name);
         let md = data_marker();
-        let meta_mod = &self.meta_mod;
-        let project = self.project(quote! { __rej });
-        quote! {
-            let __data = match <#data_name<#md> as #krate::web::extract::RequestData<__R2eS>>
-                ::extract(&mut __parts, &__state).await
-            {
-                Ok(__d) => __d,
-                Err(__rej) => #project
-            };
-            let __facade = #meta_mod::bind_request(__core, __data);
-            let __ctrl = &__facade;
-        }
+        let names = identity_path::FacadeNames {
+            meta_mod: &self.meta_mod,
+            data_name: &data_name,
+            data_marker: &md,
+        };
+        identity_path::bind_facade(
+            &names,
+            quote! { __core },
+            identity_path::Arrival::ExtractHere {
+                krate: &self.krate,
+                on_reject: self.project(quote! { __rej }),
+            },
+        )
     }
 
     /// Extract the param-level `#[inject(identity)]` (bean-backed, witness in
@@ -945,24 +944,22 @@ impl<'a> Pipeline<'a> {
 
     /// The identity expression of a guard context.
     fn guard_identity_expr(&self) -> TokenStream {
-        let meta_mod = &self.meta_mod;
-        if let Some(id) = self.identity_param {
+        let arg;
+        let source = if let Some(id) = self.identity_param {
             // Case A: param-level identity, already extracted.
-            let arg = format_ident!("__arg_{}", id.index);
-            if id.is_optional {
-                quote! { #arg.as_ref() }
-            } else {
-                quote! { Some(&#arg) }
+            arg = format_ident!("__arg_{}", id.index);
+            identity_path::GuardIdentity::Param {
+                binding: &arg,
+                optional: id.is_optional,
             }
         } else if self.plan.anonymous {
-            // Case C: #[anonymous] — no identity was extracted. Guards still
-            // run (e.g. rate limiting) with `identity: None`, typed to the
-            // controller's `IdentityType` so `GuardContext<I>` stays pinned.
-            quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
+            // Case C: #[anonymous] — guards still run (e.g. rate limiting).
+            identity_path::GuardIdentity::Anonymous
         } else {
             // Case B: struct-level identity or no identity, read off the façade.
-            quote! { #meta_mod::guard_identity(__ctrl) }
-        }
+            identity_path::GuardIdentity::Facade
+        };
+        identity_path::guard_identity(&self.meta_mod, source)
     }
 
     /// Request-head bindings (`__method`, `__uri`, `__headers`, `__extensions`:
@@ -1275,24 +1272,24 @@ fn entry_turbofish(
 fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
-    let fn_ident = &rm.fn_item.sig.ident;
+    let fn_ident = &rm.member.fn_item.sig.ident;
     let plan = plan_endpoint(
         def,
         fn_ident,
-        &rm.decorators,
+        &rm.member.decorators,
         true,
         &rm.path,
-        &rm.fn_item.sig,
+        &rm.member.fn_item.sig,
     );
     let pipeline = Pipeline::new(
         def,
         fn_ident,
         &plan,
-        rm.identity_param.as_ref(),
-        Projection::for_signature(&rm.fn_item.sig),
+        rm.member.identity_param.as_ref(),
+        Projection::for_signature(&rm.member.fn_item.sig),
     );
 
-    let all_params = extract_sig_params(&rm.fn_item.sig);
+    let all_params = extract_sig_params(&rm.member.fn_item.sig);
     let managed_indices: std::collections::HashSet<usize> =
         rm.managed_params.iter().map(|mp| mp.index).collect();
     // Request-extracted params: everything but `#[managed]` and the identity.
@@ -1310,7 +1307,7 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
             }
         })
         .collect();
-    let call = if rm.fn_item.sig.asyncness.is_some() {
+    let call = if rm.member.fn_item.sig.asyncness.is_some() {
         quote! { __ctrl.#fn_ident(#(#call_args),*).await }
     } else {
         quote! { __ctrl.#fn_ident(#(#call_args),*) }
@@ -1381,8 +1378,8 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
         def,
         fn_ident,
         plan.anonymous,
-        rm.identity_param.as_ref(),
-        &rm.fn_item.sig,
+        rm.member.identity_param.as_ref(),
+        &rm.member.fn_item.sig,
         &rm.managed_params,
         &krate,
     );
@@ -1428,24 +1425,24 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
 fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
-    let fn_ident = &sm.fn_item.sig.ident;
+    let fn_ident = &sm.member.fn_item.sig.ident;
     let plan = plan_endpoint(
         def,
         fn_ident,
-        &sm.decorators,
+        &sm.member.decorators,
         false,
         &sm.path,
-        &sm.fn_item.sig,
+        &sm.member.fn_item.sig,
     );
     let pipeline = Pipeline::new(
         def,
         fn_ident,
         &plan,
-        sm.identity_param.as_ref(),
+        sm.member.identity_param.as_ref(),
         Projection::Default,
     );
 
-    let all_params = extract_sig_params(&sm.fn_item.sig);
+    let all_params = extract_sig_params(&sm.member.fn_item.sig);
     let request = RequestParams::sse(sm);
     let extracted = &request.params;
     let call_args: Vec<TokenStream> = all_params
@@ -1455,7 +1452,7 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
             quote! { #arg }
         })
         .collect();
-    let call = if sm.fn_item.sig.asyncness.is_some() {
+    let call = if sm.member.fn_item.sig.asyncness.is_some() {
         quote! { __ctrl.#fn_ident(#(#call_args),*).await }
     } else {
         quote! { __ctrl.#fn_ident(#(#call_args),*) }
@@ -1491,8 +1488,8 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
         def,
         fn_ident,
         plan.anonymous,
-        sm.identity_param.as_ref(),
-        &sm.fn_item.sig,
+        sm.member.identity_param.as_ref(),
+        &sm.member.fn_item.sig,
         &[],
         &krate,
     );
@@ -1542,20 +1539,20 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
 fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
-    let fn_ident = &wm.fn_item.sig.ident;
+    let fn_ident = &wm.member.fn_item.sig.ident;
     let plan = plan_endpoint(
         def,
         fn_ident,
-        &wm.decorators,
+        &wm.member.decorators,
         false,
         &wm.path,
-        &wm.fn_item.sig,
+        &wm.member.fn_item.sig,
     );
     let pipeline = Pipeline::new(
         def,
         fn_ident,
         &plan,
-        wm.identity_param.as_ref(),
+        wm.member.identity_param.as_ref(),
         Projection::Default,
     );
     let receiver_ty = receiver_ty_for(plan.anonymous, controller_name);
@@ -1570,7 +1567,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         fn_ident.span(),
     );
 
-    let all_params = extract_sig_params(&wm.fn_item.sig);
+    let all_params = extract_sig_params(&wm.member.fn_item.sig);
     let ws_param_index = wm.ws_param.as_ref().map(|p| p.index);
     // Request-extracted params: everything but the socket and the identity.
     // None of them may consume the body: the upgrade is the trailing
@@ -1625,7 +1622,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                 let __ws_stream = #krate::web::ws::WsStream::with_shutdown(__socket, __shutdown);
             }
         });
-        let call = if wm.fn_item.sig.asyncness.is_some() {
+        let call = if wm.member.fn_item.sig.asyncness.is_some() {
             quote! { __ctrl.#fn_ident(#(#call_args),*).await; }
         } else {
             quote! { __ctrl.#fn_ident(#(#call_args),*); }
@@ -1639,7 +1636,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
                 quote! { #arg }
             })
             .collect();
-        let call = if wm.fn_item.sig.asyncness.is_some() {
+        let call = if wm.member.fn_item.sig.asyncness.is_some() {
             quote! { let __handler = __ctrl.#fn_ident(#(#call_args),*).await; }
         } else {
             quote! { let __handler = __ctrl.#fn_ident(#(#call_args),*); }
@@ -1677,8 +1674,8 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
         def,
         fn_ident,
         plan.anonymous,
-        wm.identity_param.as_ref(),
-        &wm.fn_item.sig,
+        wm.member.identity_param.as_ref(),
+        &wm.member.fn_item.sig,
         &[],
         &krate,
     );
@@ -1791,20 +1788,20 @@ fn registration_closure(
 
 /// Generate the closure registering an HTTP route.
 pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
-    let fn_ident = &rm.fn_item.sig.ident;
+    let fn_ident = &rm.member.fn_item.sig.ident;
     let plan = plan_endpoint(
         def,
         fn_ident,
-        &rm.decorators,
+        &rm.member.decorators,
         true,
         &rm.path,
-        &rm.fn_item.sig,
+        &rm.member.fn_item.sig,
     );
     registration_closure(
         def,
         fn_ident,
         &plan,
-        rm.identity_param.is_some(),
+        rm.member.identity_param.is_some(),
         quote! {},
         Vec::new(),
     )
@@ -1815,20 +1812,20 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
 /// app with no graph) = `None` = no termination wrapper behaviour.
 pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
-    let fn_ident = &sm.fn_item.sig.ident;
+    let fn_ident = &sm.member.fn_item.sig.ident;
     let plan = plan_endpoint(
         def,
         fn_ident,
-        &sm.decorators,
+        &sm.member.decorators,
         false,
         &sm.path,
-        &sm.fn_item.sig,
+        &sm.member.fn_item.sig,
     );
     registration_closure(
         def,
         fn_ident,
         &plan,
-        sm.identity_param.is_some(),
+        sm.member.identity_param.is_some(),
         quote! { let __shutdown_capture = #krate::web::sse::shutdown_token_of(__ctx); },
         vec![quote! { __shutdown_capture }],
     )
@@ -1839,20 +1836,20 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
 /// the bean context and cloned into every upgrade.
 pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
-    let fn_ident = &wm.fn_item.sig.ident;
+    let fn_ident = &wm.member.fn_item.sig.ident;
     let plan = plan_endpoint(
         def,
         fn_ident,
-        &wm.decorators,
+        &wm.member.decorators,
         false,
         &wm.path,
-        &wm.fn_item.sig,
+        &wm.member.fn_item.sig,
     );
     registration_closure(
         def,
         fn_ident,
         &plan,
-        wm.identity_param.is_some(),
+        wm.member.identity_param.is_some(),
         quote! { let __ws_sessions_capture = #krate::builder::WsSessions::from_context(__ctx); },
         vec![quote! { __ws_sessions_capture }],
     )

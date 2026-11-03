@@ -15,7 +15,9 @@ pub(crate) mod controller_codegen;
 pub(crate) mod controller_impl;
 pub(crate) mod decorators;
 pub(crate) mod handlers;
+pub(crate) mod identity_path;
 pub(crate) mod precise_capture;
+pub(crate) mod registration;
 pub(crate) mod scheduled;
 pub(crate) mod transverse;
 mod wrapping;
@@ -120,23 +122,23 @@ fn generate_identity_requirement_asserts(def: &RoutesImplDef) -> Vec<TokenStream
 
     for rm in &def.route_methods {
         emit(
-            &rm.decorators.guard_fns,
-            rm.identity_param.is_some(),
-            rm.decorators.anonymous,
+            &rm.member.decorators.guard_fns,
+            rm.member.identity_param.is_some(),
+            rm.member.decorators.anonymous,
         );
     }
     for sm in &def.sse_methods {
         emit(
-            &sm.decorators.guard_fns,
-            sm.identity_param.is_some(),
-            sm.decorators.anonymous,
+            &sm.member.decorators.guard_fns,
+            sm.member.identity_param.is_some(),
+            sm.member.decorators.anonymous,
         );
     }
     for wm in &def.ws_methods {
         emit(
-            &wm.decorators.guard_fns,
-            wm.identity_param.is_some(),
-            wm.decorators.anonymous,
+            &wm.member.decorators.guard_fns,
+            wm.member.identity_param.is_some(),
+            wm.member.decorators.anonymous,
         );
     }
 
@@ -149,19 +151,19 @@ fn generate_identity_requirement_asserts(def: &RoutesImplDef) -> Vec<TokenStream
     let all_identity_param = def
         .route_methods
         .iter()
-        .filter(|m| !m.decorators.anonymous)
-        .map(|m| m.identity_param.is_some())
+        .filter(|m| !m.member.decorators.anonymous)
+        .map(|m| m.member.identity_param.is_some())
         .chain(
             def.sse_methods
                 .iter()
-                .filter(|m| !m.decorators.anonymous)
-                .map(|m| m.identity_param.is_some()),
+                .filter(|m| !m.member.decorators.anonymous)
+                .map(|m| m.member.identity_param.is_some()),
         )
         .chain(
             def.ws_methods
                 .iter()
-                .filter(|m| !m.decorators.anonymous)
-                .map(|m| m.identity_param.is_some()),
+                .filter(|m| !m.member.decorators.anonymous)
+                .map(|m| m.member.identity_param.is_some()),
         )
         .all(|has| has);
     emit(
@@ -192,16 +194,16 @@ fn generate_anonymous_asserts(def: &RoutesImplDef) -> Vec<TokenStream> {
 
     def.route_methods
         .iter()
-        .filter_map(|m| first_anonymous(&m.decorators, &m.fn_item))
+        .filter_map(|m| first_anonymous(&m.member.decorators, &m.member.fn_item))
         .chain(
             def.sse_methods
                 .iter()
-                .filter_map(|m| first_anonymous(&m.decorators, &m.fn_item)),
+                .filter_map(|m| first_anonymous(&m.member.decorators, &m.member.fn_item)),
         )
         .chain(
             def.ws_methods
                 .iter()
-                .filter_map(|m| first_anonymous(&m.decorators, &m.fn_item)),
+                .filter_map(|m| first_anonymous(&m.member.decorators, &m.member.fn_item)),
         )
         .next()
         .map(|span| {
@@ -242,13 +244,13 @@ fn generate_fga_path_param_asserts(def: &RoutesImplDef) -> TokenStream {
     // `from_path` in a guard/pre-guard expression on any HTTP/SSE/WS method.
     let mut refs: Vec<(String, syn::LitStr)> = Vec::new();
     for m in &def.route_methods {
-        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.decorators);
+        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.member.decorators);
     }
     for m in &def.sse_methods {
-        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.decorators);
+        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.member.decorators);
     }
     for m in &def.ws_methods {
-        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.decorators);
+        collect_decorator_fga_path_refs(&mut refs, &m.path, &m.member.decorators);
     }
 
     if refs.is_empty() {

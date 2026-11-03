@@ -21,27 +21,63 @@ references.
 
 ## What a new transport must provide
 
-1. **A parsing + codegen macro** (in `r2e-macros`), analogous to
-   `grpc_codegen/` (the smallest adapter: ~680 lines across
-   `parsing/grpc_routes_parsing.rs` + `grpc_codegen/{mod,trait_impl,service_impl}.rs`).
-   The struct keeps using `#[controller]` unchanged — that macro owns
-   `#[inject]`/`#[config]` fields and emits `ContextConstruct`.
+1. **A parsing + codegen macro** (in `r2e-macros`): a parser for the
+   transport's own attributes plus an emitter. Members go through the shared
+   member model — `parsing/member.rs`: `parse_member(method, &MemberRules)`
+   returns a `MemberDef { name, fn_item, decorators, identity_param, doc,
+   deprecated }` that the transport's member type embeds (`RouteMethod`,
+   `SseMethod`, `WsMethod`, `McpTool`, `GrpcMethod` all do). `MemberRules`
+   carries the per-transport differences (plugin registry, disallowed
+   attributes, member markers, legacy identity, duplicate-identity message:
+   `MemberRules::http()` / `grpc()` / `mcp(marker)`); impl-level attributes go
+   through `validate_impl_attrs` / `parse_decorators`, and
+   `reject_self_in_route_signature` lives there too. The struct keeps using
+   `#[controller]` unchanged — that macro owns `#[inject]`/`#[config]` fields
+   and emits `ContextConstruct`.
 
 2. **A wrapper struct holding the shared core** — build the core ONCE at
    registration via `ContextConstruct::from_context(ctx)`, hold it in an
-   `Arc`, clone the `Arc` per call. Never re-resolve beans per request.
+   `Arc`, clone the `Arc` per call. Never re-resolve beans per request. A
+   member that runs on the struct's request scope binds the façade through
+   `codegen/identity_path.rs`: `bind_facade(names, core, arrival)` emits
+   `let __data = …; let __facade = __r2e_meta_<Name>::bind_request(core,
+   __data); let __ctrl = &__facade;`, where the `Arrival` is `ExtractHere`
+   (HTTP: `RequestData::extract` from the handler's parts) or `FromDeposit`
+   (MCP: the data the endpoint layer deposited in the call parts, or
+   `unscoped_request_data` for a service without request scope). The guard
+   identity is `identity_path::guard_identity(meta_mod, GuardIdentity::…)`
+   (`Param` / `Anonymous` / `Facade`). HTTP `#[anonymous]` routes run on the
+   core (`bind_core`); MCP members always run on the façade.
 
-3. **Prebuilt interceptor sets** — reuse
-   `codegen::decorators::generate_named_deco_items(controller, kind, fn, …)`
-   with a distinct `kind` string (HTTP uses `"Deco"`, scheduled `"Sched"`,
-   gRPC `"GrpcDeco"`, MCP `"McpDeco"`) and wrap method bodies with
-   `wrap_with_deco_interceptors`. Sets are built from the `BeanContext` at
-   registration, stored behind one `Arc` on the wrapper.
+3. **Prebuilt decorator sets** — one storage layout for every
+   member-per-method adapter: `codegen::decorators::MemberDecoSets::build(
+   controller, adapter, ctrl_guards, ctrl_intercepts, members)` emits one
+   shared controller set (kind `"{adapter}CtrlDeco"`, built once per
+   service) plus one `DecoSet` per member (kind `"{adapter}Deco"`, field
+   `__deco_<fn>`) through `generate_named_deco_items` — gRPC uses
+   `"Grpc"`, MCP `"Mcp"` (HTTP routes keep `"Deco"`, scheduled `"Sched"`).
+   Every site is validated with `spec_type_of` before anything is emitted
+   (one `compile_error!` per bad site, controller sites included on a
+   service without members), and the constructors are associated functions
+   of the service type (`<Ctrl>::__r2e_mcpdeco_<Ctrl>_<fn>`), so a decorator
+   expression may name `Self` — HTTP sets are still free functions.
+   The wrapper declares `field_decls()`, registration initializes
+   `field_inits()` from the `BeanContext`, and the invoke code reads
+   `ctrl_guards(base)` / `member_guards(i, base)` / `intercepts(i, base)`
+   (controller sites first) — plain field borrows, no per-call `Arc` clone
+   or allocation. Wrap method bodies with `wrap_with_interceptor_refs`.
 
-4. **The `EndpointDeps` carrier** — emit
-   `impl r2e_core::EndpointDeps for <Name> { type Deps = <fold> }` using
-   `codegen::decorators::endpoint_deps_fold(name, site_exprs)` over every
-   decorator site. This is what makes missing beans a compile error.
+4. **The `EndpointDeps` carrier** — `codegen/registration.rs`:
+   `DepsFold::endpoint(name, site_exprs)` folds every decorator site's spec
+   deps onto `ContextConstruct::Deps`, `append(list)` adds transport extras
+   (HTTP: `ManagedDeps` of `#[managed]` params via `controller_deps_fold`;
+   gRPC: each `GrpcIdentity::Spec`'s deps), and `carrier_impl(name)` emits
+   `impl r2e_core::EndpointDeps for <Name> { type Deps = <fold> }`. This is
+   what makes missing beans a compile error. A state-generic transport trait
+   assembles its witness with `registration::Witness`: `push_identity(fn,
+   declared_ty)` per `#[inject(identity)]` parameter, then `generics()` /
+   `tuple()` (`(__R2eMd, __R2eMp<Fn>, …)`) and the marker/identity
+   predicates — `Controller<S, W>` and `McpService<S, W>` both use it.
    Constraint: one type = one `EndpointDeps` impl, so a struct cannot be
    two endpoint kinds at once — share logic through a bean instead.
 

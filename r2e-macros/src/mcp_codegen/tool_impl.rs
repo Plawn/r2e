@@ -1,19 +1,21 @@
 //! Generate the hidden per-member invocation methods on the wrapper struct.
 
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::codegen::decorators::wrap_with_interceptor_refs;
 use crate::codegen::handlers::qualified_controller_name;
+use crate::codegen::identity_path;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool, McpToolArg};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
-use super::{invoke_ident, McpDecoLayout};
+use super::invoke_ident;
+use crate::codegen::decorators::MemberDecoSets;
 
 /// Generate `impl __R2eMcp<Name> { async fn __r2e_<kind>_<fn>(...) ... }` —
 /// one invocation method per member.
-pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
+pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) -> TokenStream {
     if def.members.is_empty() {
         return quote! {};
     }
@@ -52,12 +54,12 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Tok
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
-    deco: &McpDecoLayout,
+    deco: &MemberDecoSets,
     member_index: usize,
     krate: &TokenStream,
     mcp: &TokenStream,
 ) -> TokenStream {
-    let fn_name = &tool.name;
+    let fn_name = &tool.member.name;
     let kind = tool.kind;
     let kind_str = kind.attr_name();
     let invoke_name = invoke_ident(kind, fn_name);
@@ -105,28 +107,18 @@ fn generate_invoke_method(
          come through the MCP endpoint)",
         kind_str, tool_name_str, controller_name_str,
     );
-    let facade_stmts = quote! {
-        let __data: #data_name<#data_marker> =
-            match #meta_mod::unscoped_request_data::<#data_marker>() {
-                ::core::option::Option::Some(__d) => __d,
-                ::core::option::Option::None => {
-                    match #mcp::__macro_support::request_data::<#data_name<#data_marker>>(
-                        __call.parts.as_deref(),
-                    ) {
-                        ::core::option::Option::Some(__d) => __d,
-                        ::core::option::Option::None => {
-                            return ::core::result::Result::Err(
-                                #mcp::__macro_support::McpError::Internal(
-                                    ::std::string::String::from(#missing_scope),
-                                ),
-                            );
-                        }
-                    }
-                }
-            };
-        let __facade = #meta_mod::bind_request(::std::sync::Arc::clone(&self.core), __data);
-        let __ctrl = &__facade;
-    };
+    let facade_stmts = identity_path::bind_facade(
+        &identity_path::FacadeNames {
+            meta_mod: &meta_mod,
+            data_name: &data_name,
+            data_marker: &data_marker,
+        },
+        quote! { ::std::sync::Arc::clone(&self.core) },
+        identity_path::Arrival::FromDeposit {
+            mcp,
+            missing: missing_scope,
+        },
+    );
     let data_bound = quote! {
         #data_name<#data_marker>: ::core::clone::Clone
             + ::core::marker::Send
@@ -191,26 +183,33 @@ fn generate_invoke_method(
     };
 
     // --- guard checks ------------------------------------------------------
-    let member_deco = deco.member(member_index);
-    let has_controller_guards = !deco.controller_guard_fields.is_empty();
-    let has_member_guards = !member_deco.guard_fields.is_empty();
+    let wrapper = quote! { self };
+    let controller_guards = deco.ctrl_guards(&wrapper);
+    let member_guards = deco.member_guards(member_index, &wrapper);
+    let has_controller_guards = !controller_guards.is_empty();
+    let has_member_guards = !member_guards.is_empty();
     let has_guards = has_controller_guards || has_member_guards;
     let guard_stmts = if has_guards {
         // A parameter identity wins; otherwise the struct identity is read
         // off the façade (`None` typed to the controller's `IdentityType`
         // when it declares none) — the HTTP handler's own three cases.
-        let identity_ref = match identity_param {
-            Some(p) if p.is_optional => quote! { __identity.as_ref() },
-            Some(_) => quote! { ::core::option::Option::Some(&__identity) },
-            None => quote! { #meta_mod::guard_identity(__ctrl) },
-        };
-        let controller_checks: Vec<TokenStream> = deco
-            .controller_guard_fields
+        let identity_binding = format_ident!("__identity");
+        let identity_ref = identity_path::guard_identity(
+            &meta_mod,
+            match identity_param {
+                Some(p) => identity_path::GuardIdentity::Param {
+                    binding: &identity_binding,
+                    optional: p.is_optional,
+                },
+                None => identity_path::GuardIdentity::Facade,
+            },
+        );
+        let controller_checks: Vec<TokenStream> = controller_guards
             .iter()
-            .map(|field| {
+            .map(|place| {
                 quote! {
                     if let ::core::result::Result::Err(__resp) =
-                        #krate::Guard::check(&self.#field, &__ctrl_gctx).await
+                        #krate::Guard::check(&#place, &__ctrl_gctx).await
                     {
                         return ::core::result::Result::Err(
                             #mcp::__macro_support::McpError::from(__resp),
@@ -219,13 +218,12 @@ fn generate_invoke_method(
                 }
             })
             .collect();
-        let member_checks: Vec<TokenStream> = member_deco
-            .guard_fields
+        let member_checks: Vec<TokenStream> = member_guards
             .iter()
-            .map(|field| {
+            .map(|place| {
                 quote! {
                     if let ::core::result::Result::Err(__resp) =
-                        #krate::Guard::check(&self.#field, &__member_gctx).await
+                        #krate::Guard::check(&#place, &__member_gctx).await
                     {
                         return ::core::result::Result::Err(
                             #mcp::__macro_support::McpError::from(__resp),
@@ -363,7 +361,7 @@ fn generate_invoke_method(
         .args
         .iter()
         .map(|arg| match arg {
-            McpToolArg::Identity(_) => quote! { __identity },
+            McpToolArg::Identity => quote! { __identity },
             McpToolArg::Params(_) => quote! { #mcp::__macro_support::Params(__params) },
             McpToolArg::Call => quote! { __call },
             McpToolArg::Cancel if has_call => quote! { __cancel },
@@ -381,10 +379,9 @@ fn generate_invoke_method(
     // own products. References are borrowed for the duration of this invoke;
     // no nested Arc clone is needed.
     let interceptor_refs: Vec<TokenStream> = deco
-        .controller_intercept_fields
-        .iter()
-        .chain(&member_deco.intercept_fields)
-        .map(|field| quote! { &self.#field })
+        .intercepts(member_index, &quote! { self })
+        .into_iter()
+        .map(|place| quote! { &#place })
         .collect();
     let has_intercepts = !interceptor_refs.is_empty();
     let body = if has_intercepts {
@@ -437,7 +434,7 @@ fn generate_invoke_method(
             }
         }
         McpMemberKind::Prompt => {
-            let desc = match tool.meta.description.as_ref().or(tool.doc_text.as_ref()) {
+            let desc = match tool.meta.description.as_ref().or(tool.member.doc.as_ref()) {
                 Some(d) => quote! { ::core::option::Option::Some(#d) },
                 None => quote! { ::core::option::Option::None },
             };

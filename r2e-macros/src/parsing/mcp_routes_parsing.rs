@@ -7,9 +7,12 @@
 //! itself may carry `#[intercept]`, `#[guard]`, `#[roles]` and
 //! `#[all_roles]`, applied to every member.
 
-use crate::extract::*;
-use crate::model::types::{IdentityParam, MethodDecorators};
-use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
+use crate::extract::strip_known_attrs;
+use crate::model::types::IdentityParam;
+use crate::parsing::member::{
+    parse_decorators, parse_member, reject_self_in_route_signature, validate_impl_attrs,
+    validate_member_attrs, MemberDef, MemberRules,
+};
 use crate::util::type_utils::type_last_segment_is;
 
 /// Which MCP member family a marked method belongs to.
@@ -114,11 +117,12 @@ pub struct McpGroupSpec {
 /// One (typed, non-receiver) parameter of a member method, in declaration
 /// order — the codegen re-emits the call arguments in this order.
 pub enum McpToolArg {
-    /// `#[inject(identity)] user: I` or `Option<I>`.
-    Identity(IdentityParam),
+    /// `#[inject(identity)] user: I` or `Option<I>` (parsed into
+    /// [`MemberDef::identity_param`]).
+    Identity,
     /// `Params(p): Params<T>` — the inner `T` (deserialized arguments;
     /// tools and prompts only).
-    Params(syn::Type),
+    Params(Box<syn::Type>),
     /// A `ToolCall` / `ResourceCall` / `PromptCall` parameter (raw call
     /// metadata, matching the member's family).
     Call,
@@ -137,22 +141,17 @@ pub enum McpToolArg {
 pub struct McpTool {
     /// Which family the method belongs to.
     pub kind: McpMemberKind,
-    /// Method name.
-    pub name: syn::Ident,
     /// `#[tool(...)]` metadata.
     pub meta: McpToolMeta,
-    /// The method's doc comment, verbatim (line structure preserved) — MCP
-    /// tool descriptions have no summary/body split.
-    pub doc_text: Option<String>,
-    /// Parsed decorator attributes (`#[roles]`/`#[all_roles]`/`#[guard]`/
-    /// `#[intercept]`).
-    pub decorators: MethodDecorators,
     /// Typed parameters in declaration order.
     pub args: Vec<McpToolArg>,
     /// The member's group: its own `group`, else the service's.
     pub group: Option<McpGroupSpec>,
-    /// The original method item (with known attrs stripped).
-    pub fn_item: syn::ImplItemFn,
+    /// The shared member model: name, method item (known attrs stripped),
+    /// decorators (`#[roles]`/`#[all_roles]`/`#[guard]`/`#[intercept]`),
+    /// identity parameter and doc comment (verbatim — MCP descriptions have
+    /// no summary/body split).
+    pub member: MemberDef,
 }
 
 impl McpTool {
@@ -161,21 +160,18 @@ impl McpTool {
         self.meta
             .name
             .clone()
-            .unwrap_or_else(|| self.name.to_string())
+            .unwrap_or_else(|| self.member.name.to_string())
     }
 
     /// The identity parameter, if any.
     pub fn identity_param(&self) -> Option<&IdentityParam> {
-        self.args.iter().find_map(|a| match a {
-            McpToolArg::Identity(p) => Some(p),
-            _ => None,
-        })
+        self.member.identity_param.as_ref()
     }
 
     /// The `Params<T>` inner type, if any.
     pub fn params_type(&self) -> Option<&syn::Type> {
         self.args.iter().find_map(|a| match a {
-            McpToolArg::Params(t) => Some(t),
+            McpToolArg::Params(t) => Some(&**t),
             _ => None,
         })
     }
@@ -440,43 +436,13 @@ fn unwrap_params_type(ty: &syn::Type) -> Option<syn::Type> {
     })
 }
 
-/// The full doc comment of a method, verbatim: one string with the original
-/// line structure (each line stripped of the single leading space rustdoc
-/// inserts), leading/trailing blank lines trimmed. MCP tool descriptions are
-/// a single field — no OpenAPI-style summary/body split.
-fn full_doc_text(attrs: &[syn::Attribute]) -> Option<String> {
-    let lines: Vec<String> = attrs
-        .iter()
-        .filter_map(|attr| {
-            if !attr.path().is_ident("doc") {
-                return None;
-            }
-            if let syn::Meta::NameValue(nv) = &attr.meta
-                && let syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(lit_str),
-                    ..
-                }) = &nv.value
-            {
-                let raw = lit_str.value();
-                return Some(raw.strip_prefix(' ').unwrap_or(&raw).to_string());
-            }
-            None
-        })
-        .collect();
-    let text = lines.join("\n");
-    let text = text.trim();
-    (!text.is_empty()).then(|| text.to_string())
-}
-
 /// Classify the typed parameters of a member method, in order.
-fn classify_args(
-    method: &mut syn::ImplItemFn,
-    kind: McpMemberKind,
-) -> syn::Result<Vec<McpToolArg>> {
+fn classify_args(member: &mut MemberDef, kind: McpMemberKind) -> syn::Result<Vec<McpToolArg>> {
+    let identity_index = member.identity_param.as_ref().map(|p| p.index);
+    let method = &mut member.fn_item;
     let marker = kind.attr_name();
     let call_type = kind.call_type();
     let mut args = Vec::new();
-    let mut has_identity = false;
     let mut has_params = false;
     let mut has_call = false;
     let mut has_cancel = false;
@@ -488,18 +454,8 @@ fn classify_args(
         let syn::FnArg::Typed(pat_type) = arg else {
             continue;
         };
-        if let Some(identity) = parse_identity_param(pat_type, args.len(), true)? {
-            if has_identity {
-                return Err(syn::Error::new_spanned(
-                    pat_type,
-                    format!(
-                        "only one #[inject(identity)] parameter is allowed per #[{marker}] method"
-                    ),
-                ));
-            }
-            has_identity = true;
-            strip_identity_param_attrs(pat_type, true);
-            args.push(McpToolArg::Identity(identity));
+        if identity_index == Some(args.len()) {
+            args.push(McpToolArg::Identity);
             continue;
         }
         if let Some(inner) = unwrap_params_type(&pat_type.ty) {
@@ -523,7 +479,7 @@ fn classify_args(
                 ));
             }
             has_params = true;
-            args.push(McpToolArg::Params(inner));
+            args.push(McpToolArg::Params(Box::new(inner)));
             continue;
         }
         if type_last_segment_is(&pat_type.ty, call_type) {
@@ -654,8 +610,9 @@ pub fn parse(
 
     // Impl-level decorators are consumed by MCP codegen. Every other
     // attribute stays on the user's impl.
-    validate_mcp_impl_attrs(&item.attrs)?;
-    let controller_decorators = parse_mcp_decorators(&item.attrs)?;
+    let service_rules = MemberRules::mcp("tool");
+    validate_impl_attrs(&item.attrs, &service_rules)?;
+    let controller_decorators = parse_decorators(&item.attrs, &service_rules)?;
     let controller_guards = controller_decorators.guard_fns;
     let controller_intercepts = controller_decorators.intercept_fns;
     let controller_roles = controller_decorators.roles;
@@ -708,7 +665,7 @@ pub fn parse(
         let Some((kind, marker_attr)) = marker else {
             // Pass-through helpers still can't carry disallowed markers, and a
             // decorator without a member marker would silently never run.
-            validate_mcp_attrs(&all_attrs)?;
+            validate_member_attrs(&all_attrs, &service_rules)?;
             for attr in &all_attrs {
                 for name in ["roles", "all_roles", "guard", "intercept"] {
                     if attr.path().is_ident(name) {
@@ -730,7 +687,7 @@ pub fn parse(
                 .iter()
                 .any(|a| a.path().is_ident("request_helper"));
             if is_request_helper {
-                reject_self_in_facade_signature(&method.sig, "#[request_helper]")?;
+                reject_self_in_route_signature(&method.sig, "#[request_helper]")?;
                 method.attrs = all_attrs
                     .into_iter()
                     .filter(|a| !a.path().is_ident("request_helper"))
@@ -766,24 +723,13 @@ pub fn parse(
                 "#[resource] requires a URI: #[resource(uri = \"…\")]",
             ));
         }
-        let decorators = parse_mcp_decorators(&all_attrs)?;
-        let doc_text = full_doc_text(&all_attrs);
-
-        // strip_known_attrs keeps doc comments and unknown attrs; the member
-        // markers are MCP-specific, strip them explicitly.
-        method.attrs = strip_known_attrs(all_attrs)
-            .into_iter()
-            .filter(|a| {
-                !(a.path().is_ident("tool")
-                    || a.path().is_ident("resource")
-                    || a.path().is_ident("prompt")
-                    || a.path().is_ident("completion"))
-            })
-            .collect();
-
-        reject_self_in_facade_signature(&method.sig, &format!("#[{}]", kind.attr_name()))?;
-        let args = classify_args(&mut method, kind)?;
-        let name = method.sig.ident.clone();
+        method.attrs = all_attrs;
+        let mut member_def = parse_member(method, &MemberRules::mcp(kind.attr_name()))?;
+        reject_self_in_route_signature(
+            &member_def.fn_item.sig,
+            &format!("#[{}]", kind.attr_name()),
+        )?;
+        let args = classify_args(&mut member_def, kind)?;
 
         let group = match &meta.group {
             Some(name) => Some(McpGroupSpec {
@@ -792,15 +738,13 @@ pub fn parse(
             }),
             None => service_group.clone(),
         };
+        let method = member_def.fn_item.clone();
         let member = McpTool {
             kind,
-            name,
             meta,
-            doc_text,
-            decorators,
             args,
             group,
-            fn_item: method.clone(),
+            member: member_def,
         };
         let (seen, key, what, hint) = match kind {
             McpMemberKind::Tool => (
@@ -828,9 +772,9 @@ pub fn parse(
                 continue;
             }
         };
-        if let Some(prev) = seen.insert(key.clone(), member.name.clone()) {
+        if let Some(prev) = seen.insert(key.clone(), member.member.name.clone()) {
             return Err(syn::Error::new_spanned(
-                &member.name,
+                &member.member.name,
                 format!("duplicate {what} `{key}` (also produced by method `{prev}`); {hint}"),
             ));
         }
@@ -857,13 +801,6 @@ pub fn parse(
     })
 }
 
-/// Members and `#[request_helper]` helpers are emitted on the request façade
-/// (`impl __R2eRequest_<Name>`), where `Self` is the façade, not the user's
-/// type — the same rule `#[routes]` applies to HTTP route methods.
-fn reject_self_in_facade_signature(sig: &syn::Signature, kind: &str) -> syn::Result<()> {
-    crate::parsing::routes_parsing::reject_self_in_route_signature(sig, kind)
-}
-
 /// `complete(...)` wiring: every provider names a `#[completion]` method of
 /// this impl and a real argument (prompt: it needs `Params<T>`, whose
 /// property names are checked at boot) or URI-template variable (resource);
@@ -872,7 +809,7 @@ fn check_completion_wiring(members: &[McpTool]) -> syn::Result<()> {
     let completions: Vec<&syn::Ident> = members
         .iter()
         .filter(|m| m.kind == McpMemberKind::Completion)
-        .map(|m| &m.name)
+        .map(|m| &m.member.name)
         .collect();
     let mut used = std::collections::HashSet::new();
     for member in members {

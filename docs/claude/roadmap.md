@@ -786,6 +786,12 @@ Kept where the context lives rather than duplicated here:
   gate, tunnel `copy_bidirectional` (543).
 - `docs/research/thread-per-core.md` — stall detector, `#[offload]`/
   `#[blocking]`, `threads_per_worker` (none implemented).
+- `plans/transport-layering.md` — share more between `#[routes]` /
+  `#[mcp_routes]` / `#[grpc_routes]`: level 1 one member model + one decorator
+  layout (macros tech debt), level 2 one request head (`Parts`) + one identity
+  contract on gRPC (`GrpcIdentity` removed, core break), level 3 one type on
+  several transports (3a multi-kind impl, 3b neutral operations). PROPOSED
+  2026-11-03, not acknowledged.
 
 ---
 

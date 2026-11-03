@@ -8,7 +8,8 @@ use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpToo
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 use crate::util::type_utils::{unwrap_json_type, unwrap_result_type};
 
-use super::McpDecoLayout;
+use crate::codegen::decorators::MemberDecoSets;
+use crate::codegen::registration::{DepsFold, Witness};
 
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
@@ -20,8 +21,8 @@ fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
         exprs.extend(&def.controller_guards);
     }
     for t in &def.members {
-        exprs.extend(&t.decorators.guard_fns);
-        exprs.extend(&t.decorators.intercept_fns);
+        exprs.extend(&t.member.decorators.guard_fns);
+        exprs.extend(&t.member.decorators.intercept_fns);
     }
     exprs
 }
@@ -32,17 +33,7 @@ fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
 /// HTTP controllers. Checked by `AllSatisfied` at `register_mcp_service()`,
 /// so a missing bean is a compile error at the registration call site.
 pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
-    let krate = r2e_core_path();
-    let controller_name = &def.controller_name;
-    let deps_fold =
-        crate::codegen::decorators::endpoint_deps_fold(controller_name, site_exprs(def));
-
-    quote! {
-        #[doc(hidden)]
-        impl #krate::EndpointDeps for #controller_name {
-            type Deps = #deps_fold;
-        }
-    }
+    DepsFold::endpoint(&def.controller_name, site_exprs(def)).carrier_impl(&def.controller_name)
 }
 
 /// Generate the state-generic `impl McpService<__R2eS, W> for ControllerName`.
@@ -56,7 +47,7 @@ pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
 /// `<declared ty>: FromRequestPartsVia<__R2eS, __R2eMp<Fn>>`. The markers are
 /// folded into the witness `W` (E0207 forbids leaving them unconstrained on
 /// the impl), so `register_mcp_service::<Svc>()` infers them.
-pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
+pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) -> TokenStream {
     let krate = r2e_core_path();
     let mcp = r2e_mcp_path();
     let controller_name = &def.controller_name;
@@ -65,7 +56,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
 
     // Products are built once and stored directly beside the core in the
     // single Arc'd wrapper — no nested Arc/container and no per-member ctor.
-    let deco_field_inits = &deco.field_inits;
+    let deco_field_inits = deco.field_inits();
 
     // Aggregated config validation: the core's own `#[config]`/
     // `#[config_section]` keys (from the `#[controller]`-generated meta
@@ -83,22 +74,17 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     let uses_session = def
         .uses_session
         .then(|| quote! { __routes.uses_session = true; });
-    let sites: Vec<super::IdentitySite> = def
-        .members
-        .iter()
-        .filter_map(super::identity_site)
-        .collect();
-    let markers: Vec<&syn::Ident> = sites.iter().map(|s| &s.marker).collect();
-    let marker_bounds: Vec<TokenStream> = sites
-        .iter()
-        .map(|site| {
-            let marker = &site.marker;
-            let declared_ty = &site.declared_ty;
-            quote! {
-                #declared_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>
-            }
-        })
-        .collect();
+    let mut witness = Witness::new();
+    for member in &def.members {
+        if let Some(site) = super::identity_site(member) {
+            witness.push_identity(&member.member.name, site.declared_ty);
+        }
+    }
+    let witness_generics = witness.generics();
+    let witness_tuple = witness.tuple();
+    let data_marker_pred = witness.data_marker_pred();
+    let marker_preds = witness.marker_preds();
+    let identity_bounds = witness.identity_bounds();
     // One shared copy of the state: the once-per-request extraction of the
     // struct's request scope runs against it, and so does every member that
     // extracts a parameter identity; each call clones the `Arc`, not the
@@ -158,22 +144,22 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
         .collect();
 
     quote! {
-        impl<__R2eS, #data_marker, #(#markers),*>
-            #mcp::__macro_support::McpService<__R2eS, (#data_marker, #(#markers,)*)>
+        impl<__R2eS, #witness_generics>
+            #mcp::__macro_support::McpService<__R2eS, #witness_tuple>
             for #controller_name
         where
             __R2eS: ::core::clone::Clone
                 + ::core::marker::Send
                 + ::core::marker::Sync
                 + 'static,
-            #data_marker: ::core::marker::Send + ::core::marker::Sync + 'static,
+            #data_marker_pred
             #data_name<#data_marker>: #krate::web::extract::RequestData<__R2eS>
                 + ::core::clone::Clone
                 + ::core::marker::Send
                 + ::core::marker::Sync
                 + 'static,
-            #(#markers: ::core::marker::Send + ::core::marker::Sync + 'static,)*
-            #(#marker_bounds,)*
+            #marker_preds
+            #identity_bounds
         {
             fn service_name() -> &'static str {
                 #controller_name_str
@@ -220,7 +206,7 @@ pub(super) struct InvokeCall {
 }
 
 pub(super) fn invoke_call(member: &McpTool) -> InvokeCall {
-    let invoke_name = super::invoke_ident(member.kind, &member.name);
+    let invoke_name = super::invoke_ident(member.kind, &member.member.name);
     // The request-data marker is not inferable from the call either: it is
     // the impl's own generic, named on every invoke.
     let md = crate::codegen::handlers::data_marker();
@@ -283,7 +269,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     // Output schema: autoref-specialization probe over the JSON body type of
     // the return (`Result<Json<T>, _>` / `Json<T>` → `T`); types without
     // `JsonSchema` (or non-Json returns) advertise none.
-    let output_schema = match output_body_type(&tool.fn_item.sig.output) {
+    let output_schema = match output_body_type(&tool.member.fn_item.sig.output) {
         Some(out_ty) => output_schema_probe(&out_ty, mcp),
         None => quote! { ::core::option::Option::None },
     };
@@ -438,7 +424,7 @@ fn completions_expr(def: &McpRoutesImplDef, member: &McpTool, mcp: &TokenStream)
         let provider_member = def
             .members
             .iter()
-            .find(|m| m.kind == McpMemberKind::Completion && m.name == provider_name)
+            .find(|m| m.kind == McpMemberKind::Completion && m.member.name == provider_name)
             .expect("parse() checked the completion provider exists");
         let InvokeCall { outer, inner, call } = invoke_call(provider_member);
         quote! {
@@ -468,7 +454,7 @@ fn tool_description(tool: &McpTool) -> Option<String> {
     if tool.meta.description.is_some() {
         return tool.meta.description.clone();
     }
-    tool.doc_text.clone()
+    tool.member.doc.clone()
 }
 
 fn opt_string(value: &Option<String>) -> TokenStream {

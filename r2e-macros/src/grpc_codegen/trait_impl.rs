@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::codegen::decorators::{wrap_with_interceptor_refs, DecoSet};
+use crate::codegen::decorators::{wrap_with_interceptor_refs, MemberDecoSets};
 use crate::codegen::handlers::qualified_controller_name;
 use crate::parsing::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
@@ -25,8 +25,8 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -
         .map(|(i, m)| {
             generate_method_impl(
                 m,
-                deco.ctrl(),
-                deco.set_for(i),
+                &deco.sets,
+                i,
                 &krate,
                 &grpc_krate,
                 controller_name,
@@ -56,16 +56,16 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -
 /// and never shares a bucket with a method-level site.
 fn generate_method_impl(
     method: &GrpcMethod,
-    ctrl_set: Option<&DecoSet>,
-    deco_set: Option<&DecoSet>,
+    sets: &MemberDecoSets,
+    index: usize,
     krate: &TokenStream,
     grpc_krate: &TokenStream,
     controller_name: &syn::Ident,
 ) -> TokenStream {
-    let fn_name = &method.name;
-    let fn_item = &method.fn_item;
+    let fn_name = &method.member.name;
+    let fn_item = &method.member.fn_item;
     let sig = &fn_item.sig;
-    let identity_index = method.identity_param.as_ref().map(|p| p.index);
+    let identity_index = method.member.identity_param.as_ref().map(|p| p.index);
 
     // The request message parameter: the first typed param that is not the
     // identity parameter.
@@ -98,7 +98,7 @@ fn generate_method_impl(
     // at registration into the container; per call only the metadata lookup
     // + validation run. A required identity failing is `Unauthenticated`
     // before any guard sees the call.
-    let identity_stmts = match &method.identity_param {
+    let identity_stmts = match &method.member.identity_param {
         Some(p) => {
             let id_ty = &p.ty;
             let id_field = GrpcDecoSets::identity_field_ident(fn_name);
@@ -131,12 +131,13 @@ fn generate_method_impl(
     };
 
     // --- guard checks ------------------------------------------------------
-    let ctrl_guards: &[syn::Ident] = ctrl_set.map_or(&[], |s| &s.guard_fields);
-    let method_guards: &[syn::Ident] = deco_set.map_or(&[], |s| &s.guard_fields);
+    let decos = quote! { self.__decos };
+    let ctrl_guards = sets.ctrl_guards(&decos);
+    let method_guards = sets.member_guards(index, &decos);
     let guard_stmts = if ctrl_guards.is_empty() && method_guards.is_empty() {
         quote! {}
     } else {
-        let identity_ref = match &method.identity_param {
+        let identity_ref = match &method.member.identity_param {
             Some(p) if p.is_optional => quote! { __identity.as_ref() },
             Some(_) => quote! { ::core::option::Option::Some(&__identity) },
             None => quote! { ::core::option::Option::<&#krate::NoIdentity>::None },
@@ -144,14 +145,14 @@ fn generate_method_impl(
         // Module-qualified, like HTTP: identically named services in two
         // modules must not share identity-scoped guard state.
         let controller_name_q = qualified_controller_name(controller_name);
-        let checks = |set_field: syn::Ident, fields: &[syn::Ident], method_name: TokenStream| {
-            if fields.is_empty() {
+        let checks = |places: &[TokenStream], method_name: TokenStream| {
+            if places.is_empty() {
                 return quote! {};
             }
-            let checks = fields.iter().map(|field| {
+            let checks = places.iter().map(|place| {
                 quote! {
                     if let ::core::result::Result::Err(__rej) =
-                        #krate::Guard::check(&self.__decos.#set_field.#field, &__gctx).await
+                        #krate::Guard::check(&#place, &__gctx).await
                     {
                         return ::core::result::Result::Err(
                             #grpc_krate::__macro_support::rejection_to_status(__rej),
@@ -173,12 +174,8 @@ fn generate_method_impl(
                 }
             }
         };
-        let ctrl = checks(GrpcDecoSets::ctrl_field_ident(), ctrl_guards, quote! { "*" });
-        let own = checks(
-            GrpcDecoSets::field_ident(fn_name),
-            method_guards,
-            quote! { #fn_name_str },
-        );
+        let ctrl = checks(&ctrl_guards, quote! { "*" });
+        let own = checks(&method_guards, quote! { #fn_name_str });
         quote! { #ctrl #own }
     };
 
@@ -212,18 +209,10 @@ fn generate_method_impl(
     // ones (outermost) then the method's own. A set is `None` when it has no
     // decorator sites or when spec inference failed (the `compile_error!` is
     // already emitted — degrade to the unwrapped shape).
-    let ctrl_field = GrpcDecoSets::ctrl_field_ident();
-    let method_field = GrpcDecoSets::field_ident(fn_name);
-    let interceptor_refs: Vec<TokenStream> = ctrl_set
+    let interceptor_refs: Vec<TokenStream> = sets
+        .intercepts(index, &quote! { __decos })
         .into_iter()
-        .flat_map(|s| s.intercept_fields.iter())
-        .map(|f| quote! { &__decos.#ctrl_field.#f })
-        .chain(
-            deco_set
-                .into_iter()
-                .flat_map(|s| s.intercept_fields.iter())
-                .map(|f| quote! { &__decos.#method_field.#f }),
-        )
+        .map(|place| quote! { &#place })
         .collect();
     let body = if interceptor_refs.is_empty() {
         method_call

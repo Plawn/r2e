@@ -56,22 +56,22 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let route_fns: Vec<TokenStream> = def
         .route_methods
         .iter()
-        .filter(|rm| !rm.decorators.anonymous)
-        .map(|rm| emit_handler(&rm.fn_item))
+        .filter(|rm| !rm.member.decorators.anonymous)
+        .map(|rm| emit_handler(&rm.member.fn_item))
         .collect();
 
     let sse_fns: Vec<TokenStream> = def
         .sse_methods
         .iter()
-        .filter(|sm| !sm.decorators.anonymous)
-        .map(|sm| emit_handler(&sm.fn_item))
+        .filter(|sm| !sm.member.decorators.anonymous)
+        .map(|sm| emit_handler(&sm.member.fn_item))
         .collect();
 
     let ws_fns: Vec<TokenStream> = def
         .ws_methods
         .iter()
-        .filter(|wm| !wm.decorators.anonymous)
-        .map(|wm| emit_handler(&wm.fn_item))
+        .filter(|wm| !wm.member.decorators.anonymous)
+        .map(|wm| emit_handler(&wm.member.fn_item))
         .collect();
 
     // Request helpers are emitted verbatim on the façade too, so they can read
@@ -88,20 +88,20 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
     let anon_route_fns: Vec<TokenStream> = def
         .route_methods
         .iter()
-        .filter(|rm| rm.decorators.anonymous)
-        .map(|rm| emit_handler(&rm.fn_item))
+        .filter(|rm| rm.member.decorators.anonymous)
+        .map(|rm| emit_handler(&rm.member.fn_item))
         .collect();
 
     let anon_sse_ws_fns: Vec<TokenStream> = def
         .sse_methods
         .iter()
-        .filter(|sm| sm.decorators.anonymous)
-        .map(|sm| &sm.fn_item)
+        .filter(|sm| sm.member.decorators.anonymous)
+        .map(|sm| &sm.member.fn_item)
         .chain(
             def.ws_methods
                 .iter()
-                .filter(|wm| wm.decorators.anonymous)
-                .map(|wm| &wm.fn_item),
+                .filter(|wm| wm.member.decorators.anonymous)
+                .map(|wm| &wm.member.fn_item),
         )
         .map(emit_handler)
         .collect();

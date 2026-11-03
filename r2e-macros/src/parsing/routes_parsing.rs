@@ -1,6 +1,8 @@
 use crate::extract::*;
 use crate::model::types::*;
-use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
+use crate::parsing::member::{
+    parse_decorators, parse_member, reject_self_in_route_signature, MemberDef, MemberRules,
+};
 
 /// Parsed representation of a `#[routes] impl Name { ... }` block.
 pub struct RoutesImplDef {
@@ -51,81 +53,6 @@ pub struct RoutesImplDef {
     pub other_items: Vec<syn::ImplItem>,
 }
 
-/// Detect `#[inject(identity)]` on handler parameters.
-/// Returns the parameter index (among typed params, excluding `&self`) and the
-/// parameter type if found. Strips the attribute from the parameter.
-fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<IdentityParam>> {
-    let mut identity_param = None;
-    let mut param_idx = 0usize;
-
-    for arg in method.sig.inputs.iter_mut() {
-        if let syn::FnArg::Typed(pat_type) = arg {
-            if let Some(identity) = parse_identity_param(pat_type, param_idx, false)? {
-                if identity_param.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        pat_type,
-                        "only one #[inject(identity)] parameter is allowed per handler\n\n\
-                         hint: extract additional fields from the single identity:\n\
-                         \n  async fn handler(&self, #[inject(identity)] user: AuthenticatedUser) {\n\
-                         \n      let email = user.email();\n      let roles = user.roles();\n  }",
-                    ));
-                }
-                strip_identity_param_attrs(pat_type, false);
-                identity_param = Some(identity);
-            }
-            param_idx += 1;
-        }
-    }
-    Ok(identity_param)
-}
-
-/// Reject route/SSE/WS methods that mention `Self` in their public signature.
-///
-/// These methods are moved onto the generated request façade
-/// (`impl __R2eRequest_<Name>`), so `Self` in a parameter or return type would
-/// silently change meaning from the controller core to the hidden façade. Until
-/// façade semantics for such signatures are deliberately designed, reject them
-/// with a single targeted error. The `&self` receiver is fine — only type
-/// positions are checked.
-pub(crate) fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -> syn::Result<()> {
-    fn ty_mentions_self(ty: &syn::Type) -> bool {
-        use quote::ToTokens;
-        ty.to_token_stream()
-            .into_iter()
-            .any(|tt| matches!(&tt, proc_macro2::TokenTree::Ident(i) if i == "Self"))
-    }
-
-    for arg in sig.inputs.iter() {
-        if let syn::FnArg::Typed(pt) = arg
-            && ty_mentions_self(&pt.ty)
-        {
-            return Err(syn::Error::new_spanned(
-                &pt.ty,
-                format!(
-                    "{kind} methods cannot expose `Self` in their signature\n\n\
-                         {kind} methods run on the generated request façade, where `Self` no \
-                         longer refers to the controller. Name the controller type explicitly \
-                         instead of using `Self`.",
-                ),
-            ));
-        }
-    }
-    if let syn::ReturnType::Type(_, ty) = &sig.output
-        && ty_mentions_self(ty)
-    {
-        return Err(syn::Error::new_spanned(
-            ty,
-            format!(
-                "{kind} methods cannot expose `Self` in their return type\n\n\
-                     {kind} methods run on the generated request façade, where `Self` no \
-                     longer refers to the controller. Name the controller type explicitly \
-                     instead of using `Self`.",
-            ),
-        ));
-    }
-    Ok(())
-}
-
 /// Validate `#[anonymous]` against the rest of the method's surface.
 ///
 /// Anonymous routes skip the struct identity: combining the marker with role
@@ -136,11 +63,9 @@ pub(crate) fn reject_self_in_route_signature(sig: &syn::Signature, kind: &str) -
 /// (The "controller has no struct identity at all" case cannot be seen from
 /// `#[routes]` — that one is a const-assert on `HAS_STRUCT_IDENTITY`, emitted
 /// in codegen.)
-fn validate_anonymous(
-    decorators: &MethodDecorators,
-    identity_param: &Option<IdentityParam>,
-    method: &syn::ImplItemFn,
-) -> syn::Result<()> {
+fn validate_anonymous(member: &MemberDef) -> syn::Result<()> {
+    let (decorators, identity_param, method) =
+        (&member.decorators, &member.identity_param, &member.fn_item);
     if !decorators.anonymous {
         return Ok(());
     }
@@ -161,6 +86,15 @@ fn validate_anonymous(
         ));
     }
     Ok(())
+}
+
+/// Strip the `#[raw]` no-op marker from handler params.
+fn strip_raw_markers(method: &mut syn::ImplItemFn) {
+    for arg in method.sig.inputs.iter_mut() {
+        if let syn::FnArg::Typed(pat_type) = arg {
+            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
+        }
+    }
 }
 
 /// Check if a type is a WS type (WsStream or WebSocket) by inspecting the last path segment.
@@ -474,7 +408,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // rejected up front so it can never silently no-op. The scan runs first, so
     // the parsed struct's unsupported families are empty by construction.
     reject_unsupported_impl_attrs(&item.attrs)?;
-    let controller_decorators = parse_decorators(&item.attrs)?;
+    let rules = MemberRules::http();
+    let controller_decorators = parse_decorators(&item.attrs, &rules)?;
     // Everything the decorator families did NOT claim belongs to the user and
     // must reach the emitted impl blocks.
     let impl_attrs = crate::extract::plugins::strip_known_attrs(item.attrs.clone());
@@ -705,48 +640,30 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         fn_item: method,
                     });
                 } else if let Some((sse_path, keep_alive)) = extract_sse_attr(&all_attrs)? {
-                    let decorators = parse_decorators(&all_attrs)?;
-
-                    method.attrs = strip_known_attrs(all_attrs);
-                    let identity_param = extract_identity_param(&mut method)?;
-                    validate_anonymous(&decorators, &identity_param, &method)?;
-                    for arg in method.sig.inputs.iter_mut() {
-                        if let syn::FnArg::Typed(pat_type) = arg {
-                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
-                        }
-                    }
-
+                    method.attrs = all_attrs;
+                    let mut member = parse_member(method, &rules)?;
+                    validate_anonymous(&member)?;
+                    strip_raw_markers(&mut member.fn_item);
                     sse_methods.push(SseMethod {
                         path: sse_path,
                         keep_alive,
-                        decorators,
-                        identity_param,
-                        fn_item: method,
+                        member,
                     });
                 } else if let Some(ws_path) = extract_ws_attr(&all_attrs)? {
-                    let decorators = parse_decorators(&all_attrs)?;
-
-                    method.attrs = strip_known_attrs(all_attrs);
-                    let identity_param = extract_identity_param(&mut method)?;
-                    validate_anonymous(&decorators, &identity_param, &method)?;
-                    let ws_param = find_ws_param(&method)?;
-                    for arg in method.sig.inputs.iter_mut() {
-                        if let syn::FnArg::Typed(pat_type) = arg {
-                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
-                        }
-                    }
-
+                    method.attrs = all_attrs;
+                    let mut member = parse_member(method, &rules)?;
+                    validate_anonymous(&member)?;
+                    let ws_param = find_ws_param(&member.fn_item)?;
+                    strip_raw_markers(&mut member.fn_item);
                     ws_methods.push(WsMethod {
                         path: ws_path,
-                        decorators,
-                        identity_param,
+                        member,
                         ws_param,
-                        fn_item: method,
                     });
                 } else if let Some(route_kind) = extract_route_kind(&all_attrs)? {
-                    let mut decorators = parse_decorators(&all_attrs)?;
-                    // Read #[deprecated] before stripping — it's a standard Rust attr, not stripped
-                    decorators.deprecated = crate::extract::route::is_deprecated(&all_attrs);
+                    method.attrs = all_attrs;
+                    let mut member = parse_member(method, &rules)?;
+                    let decorators = &member.decorators;
 
                     // #[middleware]/#[layer]/#[pre_guard] attach to a
                     // `.route(path, method_router)` registration; a fallback is
@@ -759,36 +676,23 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                             || !decorators.layer_exprs.is_empty())
                     {
                         return Err(syn::Error::new(
-                            method.sig.ident.span(),
+                            member.name.span(),
                             "#[pre_guard], #[middleware], and #[layer] are not supported on \
                                  #[fallback] routes — use #[guard]/#[intercept] (which run inside \
                                  the handler) or do the work in the handler body",
                         ));
                     }
-
-                    method.attrs = strip_known_attrs(all_attrs);
-
-                    // Detect #[inject(identity)] on handler params
-                    let identity_param = extract_identity_param(&mut method)?;
-                    validate_anonymous(&decorators, &identity_param, &method)?;
+                    validate_anonymous(&member)?;
 
                     // Detect #[managed] on handler params
-                    let managed_params = extract_managed_params(&mut method)?;
-
-                    // Strip #[raw] no-op marker from handler params
-                    for arg in method.sig.inputs.iter_mut() {
-                        if let syn::FnArg::Typed(pat_type) = arg {
-                            pat_type.attrs.retain(|a| !a.path().is_ident("raw"));
-                        }
-                    }
+                    let managed_params = extract_managed_params(&mut member.fn_item)?;
+                    strip_raw_markers(&mut member.fn_item);
 
                     route_methods.push(RouteMethod {
                         method: route_kind.method,
                         path: route_kind.path,
-                        decorators,
-                        identity_param,
+                        member,
                         managed_params,
-                        fn_item: method,
                         is_fallback: route_kind.is_fallback,
                     });
                 } else {
@@ -817,7 +721,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // At most one #[fallback] per controller — a `Routes` has a single fallback slot.
     if let Some(rm) = route_methods.iter().filter(|m| m.is_fallback).nth(1) {
         return Err(syn::Error::new(
-            rm.fn_item.sig.ident.span(),
+            rm.member.fn_item.sig.ident.span(),
             "a controller may declare at most one #[fallback] route",
         ));
     }
@@ -830,7 +734,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         && let Some(rm) = route_methods.iter().find(|m| m.is_fallback)
     {
         return Err(syn::Error::new(
-            rm.fn_item.sig.ident.span(),
+            rm.member.fn_item.sig.ident.span(),
             "controller-level #[pre_guard] cannot be combined with a #[fallback] route — \
                  the fallback is registered via `Routes::fallback`, which takes no per-route \
                  layers, so the pre-guard could not apply to it. Move the #[pre_guard] to the \
@@ -842,9 +746,9 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     // no-op this family of attributes is meant to eliminate — fail loud.
     let has_http_methods =
         !route_methods.is_empty() || !sse_methods.is_empty() || !ws_methods.is_empty();
-    let has_non_anonymous_http = route_methods.iter().any(|m| !m.decorators.anonymous)
-        || sse_methods.iter().any(|m| !m.decorators.anonymous)
-        || ws_methods.iter().any(|m| !m.decorators.anonymous);
+    let has_non_anonymous_http = route_methods.iter().any(|m| !m.member.decorators.anonymous)
+        || sse_methods.iter().any(|m| !m.member.decorators.anonymous)
+        || ws_methods.iter().any(|m| !m.member.decorators.anonymous);
     if !controller_decorators.guard_fns.is_empty() && !has_non_anonymous_http {
         return Err(syn::Error::new(
             controller_name.span(),
@@ -881,14 +785,14 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
 
     // Route-scoped methods move to the request façade; `Self` in their public
     // signature would change meaning. Reject it with a targeted error.
-    for rm in route_methods.iter().filter(|m| !m.decorators.anonymous) {
-        reject_self_in_route_signature(&rm.fn_item.sig, "route")?;
+    for rm in route_methods.iter().filter(|m| !m.member.decorators.anonymous) {
+        reject_self_in_route_signature(&rm.member.fn_item.sig, "route")?;
     }
-    for sm in sse_methods.iter().filter(|m| !m.decorators.anonymous) {
-        reject_self_in_route_signature(&sm.fn_item.sig, "sse")?;
+    for sm in sse_methods.iter().filter(|m| !m.member.decorators.anonymous) {
+        reject_self_in_route_signature(&sm.member.fn_item.sig, "sse")?;
     }
-    for wm in ws_methods.iter().filter(|m| !m.decorators.anonymous) {
-        reject_self_in_route_signature(&wm.fn_item.sig, "ws")?;
+    for wm in ws_methods.iter().filter(|m| !m.member.decorators.anonymous) {
+        reject_self_in_route_signature(&wm.member.fn_item.sig, "ws")?;
     }
 
     Ok(RoutesImplDef {

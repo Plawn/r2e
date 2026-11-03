@@ -30,7 +30,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // `EndpointDeps` carrier — checked by `AllSatisfied` at
     // `register_controller()` and by `ModuleDepsSatisfied` at
     // `register_module()`.
-    let deps_fold = super::decorators::controller_deps_fold(def);
+    let deps_fold = super::registration::controller_deps_fold(def);
     // Same site set, config side: a decorator bean's `#[config]` keys are
     // declared on its `DecoratorSpec` but only the host knows the sites, so the
     // controller's aggregated `validate_config` reports them at
@@ -139,15 +139,12 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // folded into the `Controller<S, W>` witness parameter so registration can
     // infer them (E0207 forbids leaving them unconstrained on the impl).
     let state_ident = super::handlers::state_generic();
-    let md = super::handlers::data_marker();
     let data_name = format_ident!("__R2eRequestData_{}", name);
     let state_bounds = super::handlers::state_bounds(&krate);
 
-    let mut param_markers: Vec<syn::Ident> = Vec::new();
-    let mut param_marker_bounds: Vec<TokenStream> = Vec::new();
+    let mut witness = super::registration::Witness::new();
     {
         let mut push_identity = |fn_item: &syn::ImplItemFn, index: usize| {
-            let marker = super::handlers::identity_marker_for(&fn_item.sig.ident);
             let declared_ty = fn_item
                 .sig
                 .inputs
@@ -157,29 +154,33 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                     syn::FnArg::Receiver(_) => None,
                 })
                 .nth(index)
-                .map(|pt| (*pt.ty).clone())
+                .map(|pt| &*pt.ty)
                 .expect("identity parameter index out of range");
-            param_marker_bounds.push(quote! {
-                #declared_ty: #krate::web::extract::FromRequestPartsVia<#state_ident, #marker>
-            });
-            param_markers.push(marker);
+            witness.push_identity(&fn_item.sig.ident, quote! { #declared_ty });
         };
         for rm in &def.route_methods {
-            if let Some(ref p) = rm.identity_param {
-                push_identity(&rm.fn_item, p.index);
+            if let Some(ref p) = rm.member.identity_param {
+                push_identity(&rm.member.fn_item, p.index);
             }
         }
         for sm in &def.sse_methods {
-            if let Some(ref p) = sm.identity_param {
-                push_identity(&sm.fn_item, p.index);
+            if let Some(ref p) = sm.member.identity_param {
+                push_identity(&sm.member.fn_item, p.index);
             }
         }
         for wm in &def.ws_methods {
-            if let Some(ref p) = wm.identity_param {
-                push_identity(&wm.fn_item, p.index);
+            if let Some(ref p) = wm.member.identity_param {
+                push_identity(&wm.member.fn_item, p.index);
             }
         }
     }
+    let md = witness.data_marker();
+    let witness_generics = witness.generics();
+    let witness_tuple = witness.tuple();
+    let data_marker_pred = witness.data_marker_pred();
+    let marker_preds = witness.marker_preds();
+    let identity_bounds = witness.identity_bounds();
+    let endpoint_deps_impl = deps_fold.carrier_impl(name);
 
     // Managed resource bounds, deduplicated by type tokens.
     let mut managed_seen = std::collections::HashSet::new();
@@ -208,19 +209,16 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         // State-independent carrier of the full dep list (core ++ decorator
         // deps) — lets `register_module` check decorator deps in the NoState
         // phase, where `Controller<S, W>::Deps` is not yet nameable.
-        #[doc(hidden)]
-        impl #krate::EndpointDeps for #name {
-            type Deps = #deps_fold;
-        }
+        #endpoint_deps_impl
 
-        impl<#state_ident, #md, #(#param_markers),*>
-            #krate::Controller<#state_ident, (#md, #(#param_markers,)*)> for #name
+        impl<#state_ident, #witness_generics>
+            #krate::Controller<#state_ident, #witness_tuple> for #name
         where
             #state_ident: #state_bounds,
-            #md: Send + Sync + 'static,
-            #(#param_markers: Send + Sync + 'static,)*
+            #data_marker_pred
+            #marker_preds
             #data_name<#md>: #krate::web::extract::RequestData<#state_ident>,
-            #(#param_marker_bounds,)*
+            #identity_bounds
             #(#managed_bounds,)*
         {
             type Deps = <#name as #krate::EndpointDeps>::Deps;
@@ -276,24 +274,24 @@ fn generate_route_metadata(
         .map(|rm| {
             let route_path_str = &rm.path;
             let method = rm.method.as_routing_fn().to_uppercase();
-            let op_id = format!("{}_{}", name, rm.fn_item.sig.ident);
+            let op_id = format!("{}_{}", name, rm.member.fn_item.sig.ident);
             // Controller-level #[roles]/#[all_roles]/#[guard] apply to every
             // non-#[anonymous] route (anonymous opts out of the controller's
             // post-auth checks), so their metadata folds in on the same rule.
             let ctrl = &def.controller_decorators;
-            let ctrl_applies = !rm.decorators.anonymous;
+            let ctrl_applies = !rm.member.decorators.anonymous;
             let mut role_strs: Vec<&String> = rm
-                .decorators
+                .member.decorators
                 .roles
                 .iter()
-                .chain(rm.decorators.all_roles.iter())
+                .chain(rm.member.decorators.all_roles.iter())
                 .collect();
             if ctrl_applies {
                 role_strs.extend(ctrl.roles.iter().chain(ctrl.all_roles.iter()));
             }
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
 
-            let params_expr = params_expr(&rm.fn_item.sig, None, &krate);
+            let params_expr = params_expr(&rm.member.fn_item.sig, None, &krate);
             let request = super::handlers::RequestParams::route(rm);
             let extracted = request.owned();
             let body = extract_body_info(&extracted, request.last_consumes_body, &rm.method);
@@ -309,7 +307,7 @@ fn generate_route_metadata(
 
             // Extract doc comments for summary + description
             let (doc_summary, doc_description) =
-                crate::extract::route::extract_doc_comments(&rm.fn_item.attrs);
+                crate::extract::route::extract_doc_comments(&rm.member.fn_item.attrs);
             let summary_token = match doc_summary {
                 Some(s) => quote! { Some(#s.to_string()) },
                 None => quote! { None },
@@ -320,16 +318,16 @@ fn generate_route_metadata(
             };
 
             // Status: #[status(N)] override > default_status_for_method
-            let status_code = rm.decorators.status_override
+            let status_code = rm.member.decorators.status_override
                 .unwrap_or_else(|| default_status_for_method(&rm.method));
 
-            let deprecated = rm.decorators.deprecated;
+            let deprecated = rm.member.deprecated;
 
             let has_roles = !role_strs.is_empty();
             let static_kinds = static_rejection_kinds(
                 def,
-                &rm.decorators,
-                rm.identity_param.as_ref(),
+                &rm.member.decorators,
+                rm.member.identity_param.as_ref(),
                 has_roles,
                 &extracted,
                 request.last_consumes_body,
@@ -337,12 +335,12 @@ fn generate_route_metadata(
             );
             let kinds_expr = rejection_kinds_expr(
                 &static_kinds,
-                rm.decorators.anonymous,
+                rm.member.decorators.anonymous,
                 &extracted,
                 meta_mod,
             );
             let error_schema =
-                super::handlers::Projection::for_signature(&rm.fn_item.sig).schema_expr(&krate);
+                super::handlers::Projection::for_signature(&rm.member.fn_item.sig).schema_expr(&krate);
 
             quote! {
                 {
@@ -752,7 +750,7 @@ struct ResponseInfo {
 ///   other such type is unmapped.
 fn response_info(rm: &crate::model::types::RouteMethod) -> ResponseInfo {
     let krate = r2e_core_path();
-    if let Some(returns_ty) = &rm.decorators.returns_type {
+    if let Some(returns_ty) = &rm.member.decorators.returns_type {
         let direct = response_probe_tokens(returns_ty);
         let json_ty: syn::Type = syn::parse_quote!(#krate::http::Json<#returns_ty>);
         let as_json = response_probe_tokens(&json_ty);
@@ -761,7 +759,7 @@ fn response_info(rm: &crate::model::types::RouteMethod) -> ResponseInfo {
             unmapped: Some(readable_type(returns_ty)),
         };
     }
-    let ret_ty = match &rm.fn_item.sig.output {
+    let ret_ty = match &rm.member.fn_item.sig.output {
         syn::ReturnType::Default => {
             return ResponseInfo {
                 probe: quote! { Some(Vec::new()) },
@@ -1255,7 +1253,7 @@ fn generate_sse_route_metadata(
     def.sse_methods
         .iter()
         .map(|sm| {
-            let roles = streaming_effective_roles(def, &sm.decorators);
+            let roles = streaming_effective_roles(def, &sm.member.decorators);
             // The same params the SSE entry fn extracts (its last may read
             // the body) — see `handlers::RequestParams`.
             let request = super::handlers::RequestParams::sse(sm);
@@ -1267,8 +1265,8 @@ fn generate_sse_route_metadata(
             );
             let kinds = static_rejection_kinds(
                 def,
-                &sm.decorators,
-                sm.identity_param.as_ref(),
+                &sm.member.decorators,
+                sm.member.identity_param.as_ref(),
                 !roles.is_empty(),
                 &extracted,
                 request.last_consumes_body,
@@ -1278,7 +1276,7 @@ fn generate_sse_route_metadata(
                 name,
                 meta_mod,
                 &sm.path,
-                &sm.fn_item.sig,
+                &sm.member.fn_item.sig,
                 &roles,
                 &kinds,
                 &extracted,
@@ -1286,8 +1284,8 @@ fn generate_sse_route_metadata(
                 body.required,
                 body.unmapped_token(),
                 quote! { vec![#krate::di::meta::ResponseContent::event_stream(None)] },
-                sm.decorators.anonymous,
-                &sm.fn_item.attrs,
+                sm.member.decorators.anonymous,
+                &sm.member.fn_item.attrs,
                 None,
                 "SSE stream",
             )
@@ -1303,14 +1301,14 @@ fn generate_ws_route_metadata(
     def.ws_methods
         .iter()
         .map(|wm| {
-            let roles = streaming_effective_roles(def, &wm.decorators);
+            let roles = streaming_effective_roles(def, &wm.member.decorators);
             // The same params the WS entry fn extracts (none reads the body).
             let request = super::handlers::RequestParams::ws(wm);
             let extracted = request.owned();
             let kinds = static_rejection_kinds(
                 def,
-                &wm.decorators,
-                wm.identity_param.as_ref(),
+                &wm.member.decorators,
+                wm.member.identity_param.as_ref(),
                 !roles.is_empty(),
                 &extracted,
                 request.last_consumes_body,
@@ -1320,7 +1318,7 @@ fn generate_ws_route_metadata(
                 name,
                 meta_mod,
                 &wm.path,
-                &wm.fn_item.sig,
+                &wm.member.fn_item.sig,
                 &roles,
                 &kinds,
                 &extracted,
@@ -1328,8 +1326,8 @@ fn generate_ws_route_metadata(
                 true,
                 quote! { None },
                 quote! { Vec::new() },
-                wm.decorators.anonymous,
-                &wm.fn_item.attrs,
+                wm.member.decorators.anonymous,
+                &wm.member.fn_item.attrs,
                 // The socket itself comes from the upgrade, not from an
                 // extractor — it is not a documentable parameter.
                 wm.ws_param.as_ref().map(|p| p.index),
@@ -1475,7 +1473,7 @@ fn generate_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
                     .fallback(#closure)
                 }
             } else {
-                let layers = route_layer_chain(def, &rm.decorators);
+                let layers = route_layer_chain(def, &rm.member.decorators);
                 quote! {
                     .route(
                         #path,
@@ -1495,7 +1493,7 @@ fn generate_sse_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
         .map(|sm| {
             let path = &sm.path;
             let closure = super::handlers::generate_sse_closure(def, sm);
-            let layers = route_layer_chain(def, &sm.decorators);
+            let layers = route_layer_chain(def, &sm.member.decorators);
             quote! {
                 .route(
                     #path,
@@ -1514,7 +1512,7 @@ fn generate_ws_route_registrations(def: &RoutesImplDef) -> Vec<TokenStream> {
         .map(|wm| {
             let path = &wm.path;
             let closure = super::handlers::generate_ws_closure(def, wm);
-            let layers = route_layer_chain(def, &wm.decorators);
+            let layers = route_layer_chain(def, &wm.member.decorators);
             quote! {
                 .route(
                     #path,
@@ -1585,9 +1583,9 @@ fn uses_layer_closure(def: &RoutesImplDef) -> bool {
             .route_methods
             .iter()
             .filter(|m| !m.is_fallback)
-            .any(|m| is_closure(&m.decorators))
-        || def.sse_methods.iter().any(|m| is_closure(&m.decorators))
-        || def.ws_methods.iter().any(|m| is_closure(&m.decorators))
+            .any(|m| is_closure(&m.member.decorators))
+        || def.sse_methods.iter().any(|m| is_closure(&m.member.decorators))
+        || def.ws_methods.iter().any(|m| is_closure(&m.member.decorators))
 }
 
 /// Router-body prelude for the layer chains: the closure helper (when used)

@@ -36,6 +36,28 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   field still compiles on an HTTP controller and only fails where a clone is
   needed).
 
+### Changed
+
+- Internal: the `#[routes]`, `#[mcp_routes]` and `#[grpc_routes]` codegen is
+  consolidated (#1212) — one member model (`parse_member`/`MemberRules`), one
+  decorator storage layout for MCP and gRPC (`MemberDecoSets`), one
+  façade-binding emitter (`identity_path`) and one registration emitter
+  (`registration`: `EndpointDeps` fold + witness). Witness shapes and
+  generated behaviour are unchanged, with three deliberate drifts on
+  `#[mcp_routes]`: impl-level guards are now built before impl-level
+  interceptors (the gRPC order — construction only, the execution order
+  is untouched); when one member carries two errors (e.g. an unknown
+  attribute and an `#[inject(identity)]` parameter beside a struct-level
+  identity) the identity error is reported first; the hidden MCP decorator
+  storage is one `__R2eMcpDeco_<Service>_<member>` set per member plus one
+  `__R2eMcpCtrlDeco_<Service>_ctrl` set (gRPC: `__R2eGrpcDeco_…` /
+  `__R2eGrpcCtrlDeco_…`) instead of one flat product struct.
+- `#[mcp_routes]` and `#[grpc_routes]` decorator expressions can name `Self`
+  (`#[guard(AllowAll = Self::make_guard())]`): the prebuilt sets are
+  constructed by associated functions of the service type. A non-inferable
+  spec is reported at every site, including an impl-level `#[guard]` /
+  `#[intercept]` on a service without members (#1212).
+
 ## [0.9.0] - 2026-10-31
 
 ### Breaking

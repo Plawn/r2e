@@ -1,8 +1,9 @@
 //! Parsing for the `#[grpc_routes(TraitPath)]` attribute macro.
 
-use crate::extract::*;
-use crate::model::types::{IdentityParam, MethodDecorators};
-use crate::parsing::identity_param::{parse_identity_param, strip_identity_param_attrs};
+use crate::parsing::member::{
+    parse_decorators, parse_member, validate_impl_attrs, validate_member_attrs, MemberDef,
+    MemberRules,
+};
 
 /// Parsed arguments of the `#[grpc_routes(...)]` attribute:
 /// `TraitPath` optionally followed by `, descriptor = <expr>`.
@@ -68,39 +69,10 @@ pub struct GrpcRoutesImplDef {
     pub other_methods: Vec<syn::ImplItemFn>,
 }
 
-/// A single gRPC method with parsed attributes.
+/// A single gRPC method: the shared member model (its name must match the
+/// tonic trait method name; decorators are guards, roles and interceptors).
 pub struct GrpcMethod {
-    /// Method name (must match the tonic trait method name).
-    pub name: syn::Ident,
-    /// Parsed decorator attributes (guards, roles and interceptors).
-    pub decorators: MethodDecorators,
-    /// Identity parameter (if `#[inject(identity)]` is on a handler param).
-    pub identity_param: Option<IdentityParam>,
-    /// The original method item (with route attrs stripped).
-    pub fn_item: syn::ImplItemFn,
-}
-
-/// Detect `#[inject(identity)]` on handler parameters.
-fn extract_identity_param(method: &mut syn::ImplItemFn) -> syn::Result<Option<IdentityParam>> {
-    let mut identity_param = None;
-    let mut param_idx = 0usize;
-
-    for arg in method.sig.inputs.iter_mut() {
-        if let syn::FnArg::Typed(pat_type) = arg {
-            if let Some(identity) = parse_identity_param(pat_type, param_idx, true)? {
-                if identity_param.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        pat_type,
-                        "only one #[inject(identity)] parameter is allowed per gRPC handler",
-                    ));
-                }
-                strip_identity_param_attrs(pat_type, true);
-                identity_param = Some(identity);
-            }
-            param_idx += 1;
-        }
-    }
-    Ok(identity_param)
+    pub member: MemberDef,
 }
 
 /// Parse a `#[grpc_routes(TraitPath)] impl Name { ... }` block.
@@ -130,8 +102,9 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
     // gRPC codegen. Everything else in the HTTP decorator family is rejected
     // up front — impl attrs are never re-emitted, so an unrejected
     // `#[pre_guard]` would silently no-op.
-    validate_grpc_impl_attrs(&item.attrs)?;
-    let controller_decorators = parse_grpc_decorators(&item.attrs)?;
+    let rules = MemberRules::grpc();
+    validate_impl_attrs(&item.attrs, &rules)?;
+    let controller_decorators = parse_decorators(&item.attrs, &rules)?;
     let controller_guards = controller_decorators.guard_fns;
     let controller_intercepts = controller_decorators.intercept_fns;
 
@@ -139,10 +112,9 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
     let mut other_methods = Vec::new();
 
     for impl_item in item.items {
-        let syn::ImplItem::Fn(mut method) = impl_item else {
+        let syn::ImplItem::Fn(method) = impl_item else {
             continue;
         };
-        let all_attrs = std::mem::take(&mut method.attrs);
 
         // Every async method in the impl block is considered a gRPC method
         // (matching the tonic trait). Non-async or methods without &self are helpers.
@@ -153,24 +125,14 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
             .is_some_and(|arg| matches!(arg, syn::FnArg::Receiver(_)));
 
         if method.sig.asyncness.is_some() && is_receiver {
-            let decorators = parse_grpc_decorators(&all_attrs)?;
-
-            method.attrs = strip_known_attrs(all_attrs);
-            let identity_param = extract_identity_param(&mut method)?;
-            let name = method.sig.ident.clone();
-
             methods.push(GrpcMethod {
-                name,
-                decorators,
-                identity_param,
-                fn_item: method,
+                member: parse_member(method, &rules)?,
             });
         } else {
             // Pass-through helpers still can't carry gRPC-disallowed
             // markers: a sync `#[pre_destroy] fn close(&self)` would
             // otherwise be re-emitted verbatim and silently never run.
-            validate_grpc_attrs(&all_attrs)?;
-            method.attrs = all_attrs;
+            validate_member_attrs(&method.attrs, &rules)?;
             other_methods.push(method);
         }
     }

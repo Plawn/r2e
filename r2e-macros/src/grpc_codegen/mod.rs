@@ -22,33 +22,18 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
-use crate::codegen::decorators::{generate_named_deco_items, spec_type_of, DecoSet};
+use crate::codegen::decorators::{spec_type_of, MemberDecoSets};
 use crate::parsing::grpc_routes_parsing::GrpcRoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
 
-/// Per-method prebuilt guard/interceptor sets for a gRPC impl block.
-///
-/// `sets` is parallel to `def.methods`: `None` when the method has no
-/// guard/interceptor sites (or when spec inference failed — the
-/// `compile_error!` then lives in `items` and the method degrades to the
-/// unguarded, unwrapped shape).
-///
-/// All sets — and every method's identity extractor — live in one hidden
-/// container struct behind a single `Arc` on the wrapper (`__decos`), so
-/// cloning the wrapper (tonic clones the service per call) costs one
-/// ref-count bump regardless of how many methods are decorated.
+/// The gRPC decorator storage: the shared [`MemberDecoSets`] (controller
+/// set + one set per method, paired positionally with `def.methods`) plus
+/// every method's identity extractor, all in one hidden container struct
+/// behind a single `Arc` on the wrapper (`__decos`) — tonic clones the
+/// service per call, so cloning the wrapper costs one ref-count bump
+/// regardless of how many methods are decorated.
 pub(crate) struct GrpcDecoSets {
-    pub items: TokenStream,
-    /// The impl-level (controller) guard/interceptor set, built **once per
-    /// service** and shared by every method — the gRPC peer of HTTP's
-    /// `CtrlDecoSet`. Its guards are checked against a controller-scoped
-    /// `GuardContext` (`method_name = "*"`), so a stateful impl-level guard
-    /// (`RateLimit`) keeps one service-wide bucket and never collides with a
-    /// method-level site of the same spec. `None` when the impl has no
-    /// controller-level sites (or no method), or when spec inference failed.
-    ctrl: Option<DecoSet>,
-    /// Method-level sets only (controller sites live in `ctrl`).
-    sets: Vec<Option<DecoSet>>,
+    pub sets: MemberDecoSets,
 }
 
 impl GrpcDecoSets {
@@ -57,60 +42,16 @@ impl GrpcDecoSets {
         format_ident!("__R2eGrpcDecos_{}", controller_name)
     }
 
-    /// The container field holding one method's prebuilt set.
-    pub fn field_ident(fn_name: &syn::Ident) -> syn::Ident {
-        format_ident!("__deco_{}", fn_name)
-    }
-
     /// The container field holding one method's identity extractor
     /// (`<I as GrpcIdentity>::Spec::Product`).
     pub fn identity_field_ident(fn_name: &syn::Ident) -> syn::Ident {
         format_ident!("__id_{}", fn_name)
     }
 
-    /// The container field holding the shared controller-level set.
-    pub fn ctrl_field_ident() -> syn::Ident {
-        format_ident!("__ctrl")
-    }
-
-    /// Whether the container exists: the controller-level set, any method's
-    /// prebuilt set, or an identity extractor.
+    /// Whether the container exists: any prebuilt set or an identity
+    /// extractor.
     pub fn has_any(&self, def: &GrpcRoutesImplDef) -> bool {
-        self.ctrl.is_some()
-            || self.sets.iter().any(Option::is_some)
-            || def.methods.iter().any(|m| m.identity_param.is_some())
-    }
-
-    /// The shared controller-level set, when the impl has one.
-    pub fn ctrl(&self) -> Option<&DecoSet> {
-        self.ctrl.as_ref()
-    }
-
-    /// The method-level set for one method, positionally paired with
-    /// `def.methods`.
-    pub fn set_for(&self, index: usize) -> Option<&DecoSet> {
-        self.sets[index].as_ref()
-    }
-
-    /// `(container field, set)` for the controller-level set (first, when
-    /// present) and every decorated method, in `def.methods` order — the
-    /// single source of the field ↔ set pairing shared by the container
-    /// decl, its init, and the trait impl.
-    pub fn fields<'a>(
-        &'a self,
-        def: &'a GrpcRoutesImplDef,
-    ) -> impl Iterator<Item = (syn::Ident, &'a DecoSet)> {
-        self.ctrl
-            .iter()
-            .map(|s| (Self::ctrl_field_ident(), s))
-            .chain(
-                def.methods
-                    .iter()
-                    .zip(self.sets.iter())
-                    .filter_map(|(m, set)| {
-                        set.as_ref().map(|s| (Self::field_ident(&m.name), s))
-                    }),
-            )
+        !self.sets.is_empty() || def.methods.iter().any(|m| m.member.identity_param.is_some())
     }
 
     /// `(container field, identity type)` for every method with an
@@ -119,9 +60,9 @@ impl GrpcDecoSets {
         def: &GrpcRoutesImplDef,
     ) -> impl Iterator<Item = (syn::Ident, &syn::Type)> {
         def.methods.iter().filter_map(|m| {
-            m.identity_param
+            m.member.identity_param
                 .as_ref()
-                .map(|p| (Self::identity_field_ident(&m.name), &p.ty))
+                .map(|p| (Self::identity_field_ident(&m.member.name), &p.ty))
         })
     }
 }
@@ -137,8 +78,8 @@ pub(crate) fn site_exprs(def: &GrpcRoutesImplDef) -> Vec<&syn::Expr> {
         exprs.extend(&def.controller_intercepts);
     }
     for m in &def.methods {
-        exprs.extend(&m.decorators.guard_fns);
-        exprs.extend(&m.decorators.intercept_fns);
+        exprs.extend(&m.member.decorators.guard_fns);
+        exprs.extend(&m.member.decorators.intercept_fns);
     }
     exprs
 }
@@ -150,7 +91,7 @@ pub(crate) fn unique_identity_types(def: &GrpcRoutesImplDef) -> Vec<&syn::Type> 
     let mut seen = std::collections::HashSet::new();
     let mut types = Vec::new();
     for m in &def.methods {
-        if let Some(p) = &m.identity_param {
+        if let Some(p) = &m.member.identity_param {
             let ty = &p.ty;
             if seen.insert(quote!(#ty).to_string()) {
                 types.push(ty);
@@ -161,42 +102,19 @@ pub(crate) fn unique_identity_types(def: &GrpcRoutesImplDef) -> Vec<&syn::Type> 
 }
 
 /// Build the decorator sets: one shared controller-level set (impl-level
-/// guards + interceptors, built once per service — mirrors HTTP's
-/// `CtrlDecoSet`) and one set per method holding only that method's own
-/// sites. Execution order is unchanged: controller sites first, then the
-/// method's — same as HTTP routes and MCP members.
+/// guards + interceptors, built once per service) and one set per method
+/// holding only that method's own sites. Execution order: controller sites
+/// first, then the method's — same as HTTP routes and MCP members.
 fn build_deco_sets(def: &GrpcRoutesImplDef) -> GrpcDecoSets {
-    let mut items = quote! {};
-    let ctrl = if def.methods.is_empty() {
-        None
-    } else {
-        let intercept_exprs: Vec<&syn::Expr> = def.controller_intercepts.iter().collect();
-        let (ctrl_items, set) = generate_named_deco_items(
+    GrpcDecoSets {
+        sets: MemberDecoSets::build(
             &def.controller_name,
-            "GrpcCtrlDeco",
-            &format_ident!("ctrl"),
+            "Grpc",
             &def.controller_guards,
-            &intercept_exprs,
-            quote! {},
-        );
-        items.extend(ctrl_items);
-        set
-    };
-    let mut sets = Vec::with_capacity(def.methods.len());
-    for method in &def.methods {
-        let intercept_exprs: Vec<&syn::Expr> = method.decorators.intercept_fns.iter().collect();
-        let (method_items, set) = generate_named_deco_items(
-            &def.controller_name,
-            "GrpcDeco",
-            &method.name,
-            &method.decorators.guard_fns,
-            &intercept_exprs,
-            quote! {},
-        );
-        items.extend(method_items);
-        sets.push(set);
+            &def.controller_intercepts,
+            def.methods.iter().map(|m| &m.member),
+        ),
     }
-    GrpcDecoSets { items, ctrl, sets }
 }
 
 /// Compile-time identity checks:
@@ -217,11 +135,11 @@ fn generate_identity_asserts(def: &GrpcRoutesImplDef) -> TokenStream {
         );
     }];
     for method in &def.methods {
-        let cond = method.identity_param.is_some();
+        let cond = method.member.identity_param.is_some();
         for expr in def
             .controller_guards
             .iter()
-            .chain(method.decorators.guard_fns.iter())
+            .chain(method.member.decorators.guard_fns.iter())
         {
             let Ok((spec_ty, _)) = spec_type_of(expr) else {
                 continue;
@@ -248,7 +166,7 @@ pub fn generate(def: &GrpcRoutesImplDef) -> TokenStream {
     let tonic_trait_impl = trait_impl::generate_tonic_trait_impl(def, &deco);
     let grpc_service_impl = service_impl::generate_grpc_service_impl(def, &deco);
     let endpoint_deps_impl = service_impl::generate_endpoint_deps_impl(def);
-    let deco_items = &deco.items;
+    let deco_items = &deco.sets.items;
 
     quote! {
         #identity_asserts
@@ -268,7 +186,7 @@ fn generate_impl_block(def: &GrpcRoutesImplDef) -> TokenStream {
     let methods: Vec<&syn::ImplItemFn> = def
         .methods
         .iter()
-        .map(|m| &m.fn_item)
+        .map(|m| &m.member.fn_item)
         .chain(def.other_methods.iter())
         .collect();
 
@@ -295,13 +213,7 @@ fn generate_wrapper_struct(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> Toke
 
     let (container_decl, decos_field) = if deco.has_any(def) {
         let container = GrpcDecoSets::container_ident(controller_name);
-        let mut fields: Vec<TokenStream> = deco
-            .fields(def)
-            .map(|(field, set)| {
-                let ty = set.ty();
-                quote! { #field: #ty }
-            })
-            .collect();
+        let mut fields = deco.sets.field_decls();
         fields.extend(GrpcDecoSets::identity_fields(def).map(|(field, ty)| {
             quote! {
                 #field: <<#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec
