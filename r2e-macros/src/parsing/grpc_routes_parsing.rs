@@ -258,7 +258,7 @@ fn substitute_self_assoc(
         /// `Self::X::rest` rewritten in place.
         Done,
         /// `Self::X` alone: the declared type, for the caller to place.
-        Bare(syn::Type),
+        Bare(Box<syn::Type>),
     }
 
     impl Subst<'_> {
@@ -311,7 +311,7 @@ fn substitute_self_assoc(
                 return Rewritten::No;
             };
             if path.segments.len() == 2 {
-                return Rewritten::Bare(declared);
+                return Rewritten::Bare(Box::new(declared));
             }
             let rest: syn::punctuated::Punctuated<syn::PathSegment, syn::Token![::]> =
                 path.segments.iter().skip(2).cloned().collect();
@@ -423,7 +423,7 @@ fn substitute_self_assoc(
                     Rewritten::No => {}
                     Rewritten::Done => return,
                     Rewritten::Bare(declared) => {
-                        *ty = declared;
+                        *ty = *declared;
                         return;
                     }
                 }
