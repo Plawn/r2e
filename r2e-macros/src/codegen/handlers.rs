@@ -1026,15 +1026,23 @@ impl<'a> Pipeline<'a> {
         let controller_name_q = &self.controller_name_q;
         let fn_name_str = &self.fn_name_str;
         let identity = self.guard_identity_expr();
+        // `peer_addr` is the snapshot taken when the request was split
+        // (`open`), not re-read from the post-extraction head: an extractor
+        // that removes or replaces `ConnectInfo` must not change what the
+        // guards see (pre-auth guards read the same snapshot).
         let ctx = |method_name: TokenStream| {
             quote! {
-                #krate::GuardContext::from_parts(
-                    &__parts,
-                    #method_name,
-                    #controller_name_q,
-                    #identity,
-                    __path_params,
-                )
+                {
+                    let mut __ctx = #krate::GuardContext::from_parts(
+                        &__parts,
+                        #method_name,
+                        #controller_name_q,
+                        #identity,
+                        __path_params,
+                    );
+                    __ctx.peer_addr = __peer_addr;
+                    __ctx
+                }
             }
         };
         let check = |recv: TokenStream, field: &syn::Ident, ctx: TokenStream| {
