@@ -30,7 +30,7 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // `EndpointDeps` carrier — checked by `AllSatisfied` at
     // `register_controller()` and by `ModuleDepsSatisfied` at
     // `register_module()`.
-    let deps_fold = super::decorators::controller_deps_fold(def);
+    let deps_fold = super::registration::controller_deps_fold(def);
     // Same site set, config side: a decorator bean's `#[config]` keys are
     // declared on its `DecoratorSpec` but only the host knows the sites, so the
     // controller's aggregated `validate_config` reports them at
@@ -139,15 +139,12 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // folded into the `Controller<S, W>` witness parameter so registration can
     // infer them (E0207 forbids leaving them unconstrained on the impl).
     let state_ident = super::handlers::state_generic();
-    let md = super::handlers::data_marker();
     let data_name = format_ident!("__R2eRequestData_{}", name);
     let state_bounds = super::handlers::state_bounds(&krate);
 
-    let mut param_markers: Vec<syn::Ident> = Vec::new();
-    let mut param_marker_bounds: Vec<TokenStream> = Vec::new();
+    let mut witness = super::registration::Witness::new();
     {
         let mut push_identity = |fn_item: &syn::ImplItemFn, index: usize| {
-            let marker = super::handlers::identity_marker_for(&fn_item.sig.ident);
             let declared_ty = fn_item
                 .sig
                 .inputs
@@ -157,12 +154,9 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
                     syn::FnArg::Receiver(_) => None,
                 })
                 .nth(index)
-                .map(|pt| (*pt.ty).clone())
+                .map(|pt| &*pt.ty)
                 .expect("identity parameter index out of range");
-            param_marker_bounds.push(quote! {
-                #declared_ty: #krate::web::extract::FromRequestPartsVia<#state_ident, #marker>
-            });
-            param_markers.push(marker);
+            witness.push_identity(&fn_item.sig.ident, quote! { #declared_ty });
         };
         for rm in &def.route_methods {
             if let Some(ref p) = rm.member.identity_param {
@@ -180,6 +174,13 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
             }
         }
     }
+    let md = witness.data_marker();
+    let witness_generics = witness.generics();
+    let witness_tuple = witness.tuple();
+    let data_marker_pred = witness.data_marker_pred();
+    let marker_preds = witness.marker_preds();
+    let identity_bounds = witness.identity_bounds();
+    let endpoint_deps_impl = deps_fold.carrier_impl(name);
 
     // Managed resource bounds, deduplicated by type tokens.
     let mut managed_seen = std::collections::HashSet::new();
@@ -208,19 +209,16 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
         // State-independent carrier of the full dep list (core ++ decorator
         // deps) — lets `register_module` check decorator deps in the NoState
         // phase, where `Controller<S, W>::Deps` is not yet nameable.
-        #[doc(hidden)]
-        impl #krate::EndpointDeps for #name {
-            type Deps = #deps_fold;
-        }
+        #endpoint_deps_impl
 
-        impl<#state_ident, #md, #(#param_markers),*>
-            #krate::Controller<#state_ident, (#md, #(#param_markers,)*)> for #name
+        impl<#state_ident, #witness_generics>
+            #krate::Controller<#state_ident, #witness_tuple> for #name
         where
             #state_ident: #state_bounds,
-            #md: Send + Sync + 'static,
-            #(#param_markers: Send + Sync + 'static,)*
+            #data_marker_pred
+            #marker_preds
             #data_name<#md>: #krate::web::extract::RequestData<#state_ident>,
-            #(#param_marker_bounds,)*
+            #identity_bounds
             #(#managed_bounds,)*
         {
             type Deps = <#name as #krate::EndpointDeps>::Deps;

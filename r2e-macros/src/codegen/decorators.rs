@@ -684,28 +684,9 @@ pub(crate) fn generate_ctrl_deco_items(def: &RoutesImplDef) -> TokenStream {
     }
 }
 
-/// The `EndpointDeps::Deps` fold: the core's `ContextConstruct::Deps`
-/// extended with every decorator site's `<Spec as DecoratorSpec>::Deps`,
-/// deduplicated by spec type. All lists are concrete, so the `TAppend`
-/// projections normalize without extra bounds on the impl.
-///
-/// Transport-neutral: `#[routes]` (via [`controller_deps_fold`]) and
-/// `#[grpc_routes]` both fold their sites through here, so every endpoint
-/// kind carries the same shape of dep list.
-pub(crate) fn endpoint_deps_fold<'a>(
-    endpoint_name: &syn::Ident,
-    site_exprs: impl IntoIterator<Item = &'a syn::Expr>,
-) -> TokenStream {
-    let krate = r2e_core_path();
-    deps_fold_from_base(
-        quote! { <#endpoint_name as #krate::ContextConstruct>::Deps },
-        site_exprs,
-    )
-}
-
 /// Fold every decorator site's `<Spec as DecoratorSpec>::Deps` onto an
 /// arbitrary `base` dep-list token stream, deduplicated by spec type. Used by
-/// [`endpoint_deps_fold`] (base = `ContextConstruct::Deps`) and by `#[bean]`
+/// `registration::DepsFold::endpoint` (base = `ContextConstruct::Deps`) and by `#[bean]`
 /// (base = the constructor's `TCons` dep list) so bean decorator deps are
 /// compile-checked at `.register::<T>()` alongside the constructor deps.
 pub(crate) fn deps_fold_from_base<'a>(
@@ -769,7 +750,7 @@ pub(crate) fn decorator_config_key_stmts<'a>(
 }
 
 /// Every decorator site expression of a `#[routes]` block, in the order the
-/// dep fold visits them. Shared by [`controller_deps_fold`] and the
+/// dep fold visits them. Shared by `registration::controller_deps_fold` and the
 /// config-key aggregation so both see exactly the same site set.
 pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
@@ -807,28 +788,3 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     exprs
 }
 
-/// [`endpoint_deps_fold`] over every decorator site of a `#[routes]` block,
-/// plus the [`ManagedDeps`] of every distinct `#[managed]` parameter type.
-///
-/// Managed resources resolve their collaborators dynamically inside `acquire`
-/// (`state.bean::<T>()`), which cannot fail at compile time — folding
-/// `<Ty as ManagedDeps>::Deps` in here is what turns "pool was never provided"
-/// from a runtime 500 into a `register_controller` compile error.
-pub(super) fn controller_deps_fold(def: &RoutesImplDef) -> TokenStream {
-    let krate = r2e_core_path();
-    let mut deps = endpoint_deps_fold(&def.controller_name, controller_site_exprs(def));
-    let mut seen = std::collections::HashSet::new();
-    for rm in &def.route_methods {
-        for mp in &rm.managed_params {
-            let ty = crate::util::type_utils::staticize_lifetimes(&mp.ty);
-            if seen.insert(quote!(#ty).to_string()) {
-                deps = quote! {
-                    <#deps as #krate::type_list::TAppend<
-                        <#ty as #krate::ManagedDeps>::Deps,
-                    >>::Output
-                };
-            }
-        }
-    }
-    deps
-}

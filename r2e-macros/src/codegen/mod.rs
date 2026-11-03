@@ -17,6 +17,7 @@ pub(crate) mod decorators;
 pub(crate) mod handlers;
 pub(crate) mod identity_path;
 pub(crate) mod precise_capture;
+pub(crate) mod registration;
 pub(crate) mod scheduled;
 pub(crate) mod transverse;
 mod wrapping;

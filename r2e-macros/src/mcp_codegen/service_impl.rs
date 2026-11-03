@@ -9,6 +9,7 @@ use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 use crate::util::type_utils::{unwrap_json_type, unwrap_result_type};
 
 use crate::codegen::decorators::MemberDecoSets;
+use crate::codegen::registration::{DepsFold, Witness};
 
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
@@ -32,17 +33,7 @@ fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
 /// HTTP controllers. Checked by `AllSatisfied` at `register_mcp_service()`,
 /// so a missing bean is a compile error at the registration call site.
 pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
-    let krate = r2e_core_path();
-    let controller_name = &def.controller_name;
-    let deps_fold =
-        crate::codegen::decorators::endpoint_deps_fold(controller_name, site_exprs(def));
-
-    quote! {
-        #[doc(hidden)]
-        impl #krate::EndpointDeps for #controller_name {
-            type Deps = #deps_fold;
-        }
-    }
+    DepsFold::endpoint(&def.controller_name, site_exprs(def)).carrier_impl(&def.controller_name)
 }
 
 /// Generate the state-generic `impl McpService<__R2eS, W> for ControllerName`.
@@ -83,22 +74,17 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
     let uses_session = def
         .uses_session
         .then(|| quote! { __routes.uses_session = true; });
-    let sites: Vec<super::IdentitySite> = def
-        .members
-        .iter()
-        .filter_map(super::identity_site)
-        .collect();
-    let markers: Vec<&syn::Ident> = sites.iter().map(|s| &s.marker).collect();
-    let marker_bounds: Vec<TokenStream> = sites
-        .iter()
-        .map(|site| {
-            let marker = &site.marker;
-            let declared_ty = &site.declared_ty;
-            quote! {
-                #declared_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>
-            }
-        })
-        .collect();
+    let mut witness = Witness::new();
+    for member in &def.members {
+        if let Some(site) = super::identity_site(member) {
+            witness.push_identity(&member.member.name, site.declared_ty);
+        }
+    }
+    let witness_generics = witness.generics();
+    let witness_tuple = witness.tuple();
+    let data_marker_pred = witness.data_marker_pred();
+    let marker_preds = witness.marker_preds();
+    let identity_bounds = witness.identity_bounds();
     // One shared copy of the state: the once-per-request extraction of the
     // struct's request scope runs against it, and so does every member that
     // extracts a parameter identity; each call clones the `Arc`, not the
@@ -158,22 +144,22 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
         .collect();
 
     quote! {
-        impl<__R2eS, #data_marker, #(#markers),*>
-            #mcp::__macro_support::McpService<__R2eS, (#data_marker, #(#markers,)*)>
+        impl<__R2eS, #witness_generics>
+            #mcp::__macro_support::McpService<__R2eS, #witness_tuple>
             for #controller_name
         where
             __R2eS: ::core::clone::Clone
                 + ::core::marker::Send
                 + ::core::marker::Sync
                 + 'static,
-            #data_marker: ::core::marker::Send + ::core::marker::Sync + 'static,
+            #data_marker_pred
             #data_name<#data_marker>: #krate::web::extract::RequestData<__R2eS>
                 + ::core::clone::Clone
                 + ::core::marker::Send
                 + ::core::marker::Sync
                 + 'static,
-            #(#markers: ::core::marker::Send + ::core::marker::Sync + 'static,)*
-            #(#marker_bounds,)*
+            #marker_preds
+            #identity_bounds
         {
             fn service_name() -> &'static str {
                 #controller_name_str

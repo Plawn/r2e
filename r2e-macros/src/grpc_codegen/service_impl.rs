@@ -6,6 +6,8 @@ use quote::{format_ident, quote};
 use crate::parsing::grpc_routes_parsing::GrpcRoutesImplDef;
 use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
 
+use crate::codegen::registration::DepsFold;
+
 use super::{site_exprs, unique_identity_types, GrpcDecoSets};
 
 /// Generate the `EndpointDeps` carrier for the service: the core's
@@ -19,23 +21,14 @@ pub fn generate_endpoint_deps_impl(def: &GrpcRoutesImplDef) -> TokenStream {
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
 
-    let mut deps_fold =
-        crate::codegen::decorators::endpoint_deps_fold(controller_name, site_exprs(def));
+    let mut fold = DepsFold::endpoint(controller_name, site_exprs(def));
     for ty in unique_identity_types(def) {
-        deps_fold = quote! {
-            <#deps_fold as #krate::type_list::TAppend<
-                <<#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec
-                    as #krate::DecoratorSpec>::Deps,
-            >>::Output
-        };
+        fold.append(quote! {
+            <<#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec
+                as #krate::DecoratorSpec>::Deps
+        });
     }
-
-    quote! {
-        #[doc(hidden)]
-        impl #krate::EndpointDeps for #controller_name {
-            type Deps = #deps_fold;
-        }
-    }
+    fold.carrier_impl(controller_name)
 }
 
 /// Generate `impl GrpcService for ControllerName`.
