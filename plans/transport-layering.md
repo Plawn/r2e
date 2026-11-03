@@ -235,12 +235,33 @@ decided level 3 goes ahead: 3a first; 3b after its own design round; 3c only
 if the explicit registration pair reads badly in a real app. This block is
 the handoff; the rest of §4 is the design as written before levels 1–2.
 
-- *Prerequisites.* #132 (level 1) merged; #133 (level 2) merged; release PR
-  cut with `scripts/bump-version.sh` (`r2e-grpc breaking`, `r2e-security
-  breaking`, `r2e-macros breaking --no-propagate` + patch re-pins on
-  `r2e-core`/`r2e-executor`/`r2e-openapi`/`r2e`; façade `r2e` 0.11.0);
-  `scripts/smoke-registry.sh` green after it. Check `git log master` and
-  the crates' `CHANGELOG.md` before starting — do not assume.
+- *Prerequisites.* #132 (level 1) and #133 (level 2) are merged on
+  `master` (2026-11-03). **No release in between — user decision
+  2026-11-03:** level 2 is deliberately unreleased so that 3a ships in the
+  same release and the `GrpcIdentity` stub and the `#[mcp_routes]` alias go
+  through one deprecation window instead of two (one breaking cycle on
+  `r2e-macros`/`r2e-mcp`/`r2e` instead of three). So 3a starts on a `master`
+  that already carries unreleased `Breaking` entries in `r2e-grpc`,
+  `r2e-security`, `r2e-macros`, `r2e-mcp` and `r2e` — add to those sections,
+  do not open a release. Check `git log master` and the crates'
+  `CHANGELOG.md` before starting — do not assume.
+- *The release, after 3a is merged (recipe, tried on 2026-11-03 as PR #134,
+  closed unmerged on purpose; branch `release/r2e-0.11.0` kept).*
+  `scripts/bump-version.sh --no-propagate r2e-grpc breaking r2e-security
+  breaking r2e-macros breaking r2e-mcp breaking r2e-oidc breaking r2e-test
+  breaking r2e breaking r2e-core patch r2e-executor patch r2e-openapi patch`
+  (re-check the list against `--dry-run` with propagation: 3a may add
+  crates; `r2e-cli` follows `r2e` by itself). `--no-propagate` is global, so
+  every carried crate is listed explicitly and counts as *requested*: the
+  script refuses a requested crate with an empty `[Unreleased]`, so the
+  "Built against `r2e-security` 0.10.0 …" entries (r2e-oidc, r2e-test,
+  r2e-mcp, r2e) and the "Re-pins `r2e-macros` 0.10.0 …" entries (r2e-core,
+  r2e-executor, r2e-openapi) are written by hand first — commit `5e66ec7d`
+  on that branch has the exact wording; the version numbers in it stay valid
+  as long as 3a does not break `r2e-core`. Run the script outside the
+  sandbox (its crates.io lookup is truncated by the sandbox proxy,
+  `IncompleteRead`). Then `release: …` PR, user merges, CI publishes and
+  tags, `scripts/smoke-registry.sh`.
 - *Method.* As #1212/#1213: one Tasker ticket (label `macros`, `breaking`
   for 3a), one branch off `master`, implementation by an Opus subagent,
   full verification (r2e-macros, r2e-compile-tests, r2e-mcp, r2e-grpc,
@@ -278,8 +299,9 @@ the handoff; the rest of §4 is the design as written before levels 1–2.
   config-error report formatter) is grouped with 3a: the first adapter that
   would otherwise copy the banner uses the shared formatter instead.
 - *Follow-ups carried, not blocking 3a.* `GrpcIdentity` deprecated stub:
-  remove at the `r2e-grpc` release after the one that ships #1213
-  (`Breaking` entry, migration page already exists). `AuthenticatedUser`'s
+  remove at the `r2e-grpc` release after the one that ships #1213 and 3a
+  together (`Breaking` entry, migration page already exists); the
+  `#[mcp_routes]` alias is removed at that same later release. `AuthenticatedUser`'s
   rejection is `HttpError`, so a validator failure drops `www-authenticate`
   on HTTP and on gRPC (metadata). `#[anonymous]` stays disallowed on gRPC
   (`Option<I>` instead). Level-1 review follow-ups in §2 (hidden decorator
@@ -293,7 +315,8 @@ the handoff; the rest of §4 is the design as written before levels 1–2.
   deprecation; one example (`example-mcp` or a blumana-survey-shaped
   service) exposes the same operation on both; compile tests for a member
   kind mixed into the wrong attribute; `llm/*.md` + book + changelogs
-  updated; no existing `.stderr` re-blessed without a stated reason.
+  updated (3a entries join the unreleased level-2 sections, no version
+  change); no existing `.stderr` re-blessed without a stated reason.
 
 **Goal.** The thing the user actually asked for: one type, one member body,
 exposed on HTTP and MCP (and, within limits, gRPC) without rewriting it, and

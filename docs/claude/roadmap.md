@@ -799,13 +799,18 @@ Kept where the context lives rather than duplicated here:
   layout (macros tech debt), level 2 one request head (`Parts`) + one identity
   contract on gRPC (identity trait removed), level 3 one type on
   several transports (3a multi-kind impl, 3b neutral operations). Levels 1
-  (#1212, PR #132) and 2 (#1213, PR #133) DONE 2026-11-03; **level 3 is
-  NEXT** (user decision 2026-11-03, fresh session) — the handoff block at the
-  top of plan §4 lists prerequisites, method, shared code locations, carried
-  design notes and 3a exit criteria. Release gate carried from level 2:
-  remove the deprecated `GrpcIdentity` stub (`r2e-grpc/src/identity.rs`) at
-  the `r2e-grpc` release after the one shipping #1213 (`Breaking` entry;
-  `docs/migration/grpc-identity.md` already covers it).
+  (#1212, PR #132) and 2 (#1213, PR #133) merged 2026-11-03 and **left
+  unreleased on purpose**: 3a ships in the same release as level 2 (one
+  breaking cycle, one deprecation window for the `GrpcIdentity` stub and the
+  `#[mcp_routes]` alias; release PR #134 was closed unmerged, its branch is
+  the recipe). **Level 3a is NEXT** (user decision 2026-11-03, fresh
+  session) — the handoff block at the top of plan §4 lists prerequisites,
+  the release recipe to run after 3a, method, shared code locations, carried
+  design notes and 3a exit criteria. Release gate carried: remove the
+  deprecated `GrpcIdentity` stub (`r2e-grpc/src/identity.rs`) and the
+  `#[mcp_routes]` alias at the release after the one shipping #1213 + 3a
+  (`Breaking` entries; `docs/migration/grpc-identity.md` already covers the
+  stub).
 
 ---
 
