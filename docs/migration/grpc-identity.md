@@ -156,11 +156,9 @@ or assert on the `Unauthenticated` message.
    let ctx = r2e_grpc::guard_context(&request, "say_hello", "Greeter", Some(&identity));
 
    // After
-   let (parts, _msg) = r2e_grpc::into_head(
-       request,
-       || "/greeter.Greeter/SayHello".parse().unwrap(),
-       false,
-   );
+   let (parts, _msg) = r2e_grpc::into_head(request, || {
+       "/greeter.Greeter/SayHello".parse().unwrap()
+   });
    let ctx = GuardContext::from_parts(&parts, "say_hello", "Greeter", Some(&identity), PathParams::EMPTY);
    ```
 
