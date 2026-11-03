@@ -109,6 +109,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
     advertises no scope, naming `mcp.auth.scopes-supported`: clients then
     pick a scope of their own and the IdP answers `invalid_scope`.
 
+### Changed
+
+- Built against `r2e-security` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.10.0/r2e-security/CHANGELOG.md)).
+
 ## [0.10.0] - 2026-10-31
 
 ### Breaking

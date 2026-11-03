@@ -40,6 +40,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   controller with a non-`Clone` request-scoped field keeps compiling and only
   a consumer that clones the data (`#[mcp_routes]`) sees the missing `Clone`.
 
+### Changed
+
+- Re-pins `r2e-macros` 0.10.0 (#1213, a codegen-contract break cut with
+  `--no-propagate`): a registry build resolves a single macro crate version
+  next to `r2e-core` 0.9.2. No API change.
+
 ## [0.9.1] - 2026-11-01
 
 ### Added
