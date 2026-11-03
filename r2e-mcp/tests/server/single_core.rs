@@ -16,7 +16,7 @@ use r2e_core::http::header::Parts;
 use r2e_core::http::{Body, Request, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, Identity, Rejection, RejectionKind};
-use r2e_events::LocalEventBus;
+use r2e_events::{EventBus, LocalEventBus};
 use r2e_mcp::{AppBuilderMcpExt, McpServer};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -357,4 +357,160 @@ async fn lifecycle_members_registered_on_both_transports_boot() {
             "{order:?}"
         );
     }
+}
+
+// ── T7: one type mounted twice on HTTP and served on MCP ────────────────────
+//
+// Two prefixed modules mount the same controller type, and the type is also
+// an MCP service: still ONE core, so one `#[post_construct]` run and one
+// consumer registration, while both HTTP mounts serve. Module controllers
+// register inside `build_state()`, so an MCP registration cannot precede
+// both mounts; the second shape puts it between them instead.
+
+/// Core-local, like [`CoreSlot`]: setting it twice = one core initialised
+/// twice.
+#[derive(Clone, Default)]
+pub struct InitOnce(OnceLock<()>);
+
+/// `#[post_construct]` runs, shared by every core.
+#[derive(Clone, Default)]
+pub struct PostRuns(Arc<AtomicUsize>);
+
+#[controller(path = "/state")]
+pub struct Mounted {
+    #[inject]
+    once: InitOnce,
+    #[inject]
+    post_runs: PostRuns,
+    #[inject]
+    event_bus: LocalEventBus,
+}
+
+#[routes]
+impl Mounted {
+    #[post_construct]
+    async fn init(&self) {
+        self.post_runs.0.fetch_add(1, Ordering::SeqCst);
+        self.once.0.set(()).expect("core initialized twice");
+    }
+
+    #[get("/")]
+    async fn state(&self) -> &'static str {
+        self.read_state()
+    }
+
+    #[consumer(bus = "event_bus")]
+    #[intercept(Counting::spec())]
+    async fn on_ping(&self, _event: Arc<Ping>) {}
+
+    #[tool]
+    async fn mounted_state(&self) -> String {
+        self.read_state().to_string()
+    }
+
+    fn read_state(&self) -> &'static str {
+        if self.once.0.get().is_some() {
+            "ready"
+        } else {
+            "unset"
+        }
+    }
+}
+
+#[module(
+    prefix = "/v1",
+    controllers(Mounted),
+    imports(InitOnce, PostRuns, LocalEventBus, Calls)
+)]
+struct MountV1;
+
+#[module(
+    prefix = "/v2",
+    controllers(Mounted),
+    imports(InitOnce, PostRuns, LocalEventBus, Calls)
+)]
+struct MountV2;
+
+#[derive(Clone, Copy, Debug)]
+enum MountOrder {
+    /// `/v1` + `/v2` (modules), then the MCP service.
+    TwoMountsThenMcp,
+    /// `/v1` (module), then the MCP service, then a root mount.
+    McpBetweenMounts,
+}
+
+#[r2e_core::test]
+async fn a_type_mounted_twice_and_served_on_mcp_has_one_core() {
+    for order in [MountOrder::TwoMountsThenMcp, MountOrder::McpBetweenMounts] {
+        let bus = LocalEventBus::new();
+        let calls = Calls::default();
+        let post_runs = PostRuns::default();
+        let builder = AppBuilder::new()
+            .plugin(McpServer::new())
+            .provide(InitOnce::default())
+            .provide(post_runs.clone())
+            .provide(bus.clone())
+            .provide(calls.clone());
+        let (router, paths) = match order {
+            MountOrder::TwoMountsThenMcp => (
+                builder
+                    .register_module::<MountV1>()
+                    .register_module::<MountV2>()
+                    .build_state()
+                    .await
+                    .register_mcp_service::<Mounted>()
+                    .build_with_consumers()
+                    .await,
+                ["/v1/state", "/v2/state"],
+            ),
+            MountOrder::McpBetweenMounts => (
+                builder
+                    .register_module::<MountV1>()
+                    .build_state()
+                    .await
+                    .register_mcp_service::<Mounted>()
+                    .register_controller::<Mounted>()
+                    .build_with_consumers()
+                    .await,
+                ["/v1/state", "/state"],
+            ),
+        };
+
+        assert_eq!(
+            post_runs.0.load(Ordering::SeqCst),
+            1,
+            "{order:?}: post_construct runs"
+        );
+        for path in paths {
+            let (status, body) = http_get_body(&router, path).await;
+            assert_eq!(status, StatusCode::OK, "{order:?}: {path}");
+            assert_eq!(body, "ready", "{order:?}: {path}");
+        }
+
+        let session = support::initialize(&router, "/mcp").await;
+        let message =
+            support::tools_call(&router, "/mcp", &session, "mounted_state", json!({})).await;
+        assert_eq!(text(&message), "ready", "{order:?}: {message}");
+
+        // One consumer registration: one delivery, one interceptor call.
+        bus.emit(Ping).await.unwrap();
+        bus.wait_idle().await;
+        assert_eq!(
+            calls.0.load(Ordering::SeqCst),
+            1,
+            "{order:?}: consumer deliveries"
+        );
+    }
+}
+
+async fn http_get_body(router: &Routes, path: &str) -> (StatusCode, String) {
+    use http_body_util::BodyExt;
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
 }
