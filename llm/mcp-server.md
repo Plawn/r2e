@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~9200
+tokens: ~9400
 requires: guards, security
 ---
 
@@ -353,11 +353,20 @@ b.plugin(McpServer::new())
 # fn main() {}
 ```
 
+- Both registrations share **one controller core** per type and builder
+  (in either order): the HTTP routes and the MCP members see the same
+  injected beans, the same state written by `#[post_construct]`, and the same
+  wired `#[consumer]`/`#[scheduled]`/`#[async_exec]` members.
+- Lifecycle and background members (`#[post_construct]`, `#[on_start]`,
+  `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`, `#[async_exec]`) are wired
+  by `register_controller` alone: registering such a mixed type only with
+  `register_mcp_service` panics at `build()` with a message naming the
+  missing `.register_controller::<T>()`.
 - Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
-  transports and are built **once per transport**: a stateful guard or
-  interceptor (a counter, a rate-limit bucket held in the spec) gets one
-  instance for the HTTP routes and another for the MCP members. Keep shared
-  state in a bean the spec injects.
+  transports. The core is shared, but these **decorators** are built **once
+  per transport**: a stateful guard or interceptor (a counter, a rate-limit
+  bucket held in the spec) gets one instance for the HTTP routes and another
+  for the MCP members. Keep shared state in a bean the spec injects.
 - `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: on a mixed impl
   they wrap the HTTP routes and never the MCP members; on an impl with no HTTP
   route they are a compile error.

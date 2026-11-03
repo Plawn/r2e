@@ -35,9 +35,21 @@ references.
    `#[controller]` unchanged — that macro owns `#[inject]`/`#[config]` fields
    and emits `ContextConstruct`.
 
-2. **A wrapper struct holding the shared core** — build the core ONCE at
-   registration via `ContextConstruct::from_context(ctx)`, hold it in an
-   `Arc`, clone the `Arc` per call. Never re-resolve beans per request. A
+2. **A wrapper struct holding the shared core** — never construct the core
+   yourself: take it from the builder's per-type core store,
+   `AppBuilder::endpoint_core_or_insert::<C>(make)` (`#[doc(hidden)]`,
+   `r2e-core/src/builder/typed.rs`), so a type registered on several
+   transports has ONE core whatever the registration order — the one
+   `register_controller` ran `#[post_construct]` on and filled the
+   `#[consumer]`/`#[scheduled]`/`#[async_exec]` slots of (#1215 fix round 1).
+   MCP: the trait carries `construct(state, ctx)` (the `make`, emitting
+   `ContextConstruct::from_context(ctx)`) and `routes(state, core: Arc<Self>,
+   ctx)` receives the stored core. Lifecycle/background members are wired by
+   `register_controller` alone, so an adapter registering a type that has them
+   calls `require_controller_registration::<C>(name, markers)`; `build()`
+   panics when no `register_controller::<C>()` followed. gRPC does not use the
+   store yet (open follow-up in `plans/transport-layering.md` §4). Hold the
+   core in an `Arc`, clone the `Arc` per call. Never re-resolve beans per request. A
    member that runs on the struct's request scope binds the façade through
    `codegen/identity_path.rs`: `bind_facade(names, core, arrival)` emits
    `let __data = …; let __facade = __r2e_meta_<Name>::bind_request(core,
@@ -127,7 +139,7 @@ references.
      `#[inject(identity)]` parameter and folds the markers into the witness
      `W`, which `AppBuilderMcpExt<T, W, DepIdx>` infers at
      `.register_mcp_service::<Svc>()` (missing bean = compile error there).
-     `McpService::routes(state, ctx)` hands the state to every member's
+     `McpService::routes(state, core, ctx)` hands the state to every member's
      extractor, run on an owned copy of the transport request's parts. The
      `mcp.auth` principal is just another extractor (`McpPrincipal`, marker
      `ViaMcpAuth`, `r2e-mcp/src/auth/extract.rs`) — no MCP-only identity
@@ -166,6 +178,8 @@ references.
 - Interceptors (`Interceptor<R>`) are transport-neutral — `Logged`, `Timed`
   and user interceptors must work on every transport unchanged.
 - Decorators are built at registration, never per request/call.
+- One controller core per type per builder: every transport registration
+  goes through `endpoint_core_or_insert` (MCP and HTTP today; gRPC pending).
 - Every registration path compile-checks `EndpointDeps` via `AllSatisfied`
   (or `ModuleDepsSatisfied` for module scope).
 - Guards: the rule of three was met by MCP (third wire transport,
@@ -192,7 +206,11 @@ references.
   `EndpointDeps` impl and explicit dual registration
   (`register_controller` + `register_mcp_service`). Impl-level
   `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
-  transports and are built once per transport; `#[pre_guard]`/
+  transports; their decorators are built once per transport but both
+  registrations share ONE controller core per type and builder (fix round 1:
+  `AppBuilder::endpoint_core_or_insert`, `McpService::construct` +
+  `routes(state, core, ctx)`; lifecycle/background members require
+  `register_controller`, checked at `build()`); `#[pre_guard]`/
   `#[middleware]`/`#[layer]` stay HTTP-only. Implemented by splitting the
   impl and reusing each transport's parser unchanged (no merged parser), so
   HTTP-only and MCP-only expansions are byte-stable. `#[mcp_routes]` became a

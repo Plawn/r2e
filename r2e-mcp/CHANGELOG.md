@@ -25,8 +25,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `#[mcp_routes(...)]` to `#[routes(...)]`; silence the warning meanwhile with
   a module/crate-level `#![allow(deprecated)]` (an item-level allow does not
   reach it). Impl-level guards/interceptors of a mixed impl apply to both
-  transports, built once per transport. Docs: `docs/features/25-mcp.md`
-  § One type, two transports, `llm/mcp-server.md`.
+  transports; their decorators are built once per transport. Docs:
+  `docs/features/25-mcp.md` § One type, two transports, `llm/mcp-server.md`.
+  - **One core per type.** `register_controller` and `register_mcp_service`
+    of the same type share ONE controller core (taken from the builder's
+    per-type core store, in either registration order): MCP members see the
+    beans, the `#[post_construct]` state and the wired
+    `#[consumer]`/`#[scheduled]`/`#[async_exec]` members of the HTTP side.
+  - `McpService` trait: new required `fn construct(state: &T, ctx:
+    &BeanContext) -> Self`, and `routes` takes the core —
+    `fn routes(state: &T, core: Arc<Self>, ctx: &Arc<BeanContext>) ->
+    McpRoutes`; new defaulted `const NEEDS_CONTROLLER_REGISTRATION: &'static
+    [&'static str]`. `#[routes]` generates all three; a hand-written impl
+    moves its `from_context` call into `construct` and uses the `core`
+    argument.
+  - `AppBuilderMcpExt::register_mcp_service` / `try_register_mcp_service`
+    now also require `S: Send + Sync` (the stored core is shared).
+  - A mixed impl with lifecycle or background members (`#[post_construct]`,
+    `#[on_start]`, `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`,
+    `#[async_exec]`) registered only with `register_mcp_service` panics at
+    `build()` naming the missing `.register_controller::<T>()` — those
+    members are wired by `register_controller` alone.
 
 - `#[mcp_routes]` members now run on the request façade, exactly like
   `#[routes]` handlers (#1210). In a member body `Self` names the façade:

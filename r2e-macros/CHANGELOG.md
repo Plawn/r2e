@@ -23,7 +23,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   façade, one `EndpointDeps` (HTTP + MCP sites) and both `Controller<S, W>`
   and `McpService<S, W>`, each with its own witness; HTTP-only and MCP-only
   expansions are unchanged. Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/
-  `#[intercept]` apply to both transports (built once per transport);
+  `#[intercept]` apply to both transports (their decorators built once per
+  transport, over ONE shared core);
   `#[pre_guard]`/`#[middleware]`/`#[layer]` stay HTTP-only. New compile
   errors: `#[get]` + `#[tool]` on one method; `group`/`opt_in` on an impl
   without an MCP member; an MCP marker in `#[grpc_routes]`.
@@ -38,6 +39,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
     (unknown completion provider, generic impl, `opt_in` without `group`),
     and `#[middleware]`/`#[layer]` on an MCP-only impl reads "not supported on
     a #[routes] impl block with no HTTP route".
+  - MCP codegen contract (needs `r2e-mcp` and `r2e-core` from the same
+    release): the generated `McpService` impl emits `fn construct(state,
+    ctx)` (the `ContextConstruct::from_context` call, used by the builder's
+    core store) and `routes(state, core: Arc<Self>, ctx)` wraps the core it is
+    handed instead of constructing one. A mixed impl whose HTTP side carries
+    `#[post_construct]`/`#[on_start]`/`#[pre_destroy]`/`#[scheduled]`/
+    `#[consumer]`/`#[async_exec]` also emits `const
+    NEEDS_CONTROLLER_REGISTRATION` listing them (MCP-only impls never do).
 
 - `#[grpc_routes]` codegen contract (#1213, cut with `--no-propagate`): the
   generated wrapper is `__R2eGrpc<Name><S, W>` holding the state, each call

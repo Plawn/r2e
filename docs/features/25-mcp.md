@@ -420,10 +420,20 @@ impl MathTools {
 .register_mcp_service::<MathTools>()
 ```
 
+- Both registrations share **one controller core** per type and builder,
+  whatever their order: the HTTP routes and the MCP members see the same
+  injected beans, whatever `#[post_construct]` wrote, and the same wired
+  `#[consumer]`/`#[scheduled]`/`#[async_exec]` members.
+- Lifecycle and background members (`#[post_construct]`, `#[on_start]`,
+  `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`, `#[async_exec]`) are wired
+  by `register_controller` only. A mixed type that has them but is registered
+  only with `register_mcp_service` fails at `build()` with a panic naming the
+  missing `.register_controller::<T>()`.
 - Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
-  both transports. They are built **once per transport**: a stateful guard or
-  interceptor (a rate limiter, a counter) keeps one state for the HTTP routes
-  and a separate one for the MCP members.
+  both transports. The core is shared, but these **decorators** are built
+  **once per transport**: a stateful guard or interceptor (a rate limiter, a
+  counter) keeps one state for the HTTP routes and a separate one for the MCP
+  members.
 - Impl-level `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: they wrap
   the routes, never the MCP members, and are rejected on an impl with no HTTP
   route.

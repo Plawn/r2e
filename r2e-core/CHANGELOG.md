@@ -17,6 +17,16 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- Per-type endpoint core store on the builder (#1215): `#[doc(hidden)]`
+  `AppBuilder::endpoint_core_or_insert::<C>(make)` returns the one
+  `Arc<C>` core of a type for this builder (constructing it on first use) and
+  `require_controller_registration::<C>(registration, markers)` records that
+  a transport registration needs a matching `register_controller::<C>()`
+  (checked at `build()`, panic naming the call). `register_controller` now
+  takes its core from the store, so a type registered on several transports
+  (HTTP + MCP) has ONE core; registering the same controller type twice also
+  shares one core.
+
 - `GuardContext::from_parts(parts, method_name, controller_name, identity,
   path_params)` (#1213): builds the guard context from a request head
   (`peer_addr` read from the `ConnectInfo<SocketAddr>` extension). The one

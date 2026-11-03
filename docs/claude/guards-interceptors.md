@@ -297,7 +297,9 @@ one per intercepted `#[scheduled]`/`#[consumer]` method).
 HTTP routes and MCP members, the impl-level `#[guard]`/`#[roles]`/
 `#[all_roles]`/`#[intercept]` apply to both transports but are built **once
 per transport**: `Controller::routes` builds the HTTP set, `McpService::routes`
-builds the MCP set (inside the `__R2eMcp<Name>` wrapper). A stateful guard or
+builds the MCP set (inside the `__R2eMcp<Name>` wrapper). The controller
+**core** itself is not duplicated — both registrations take it from the
+builder's per-type core store (`endpoint_core_or_insert`). A stateful guard or
 interceptor (rate-limit bucket, counter) therefore gets one instance for the
 HTTP routes and another for the MCP members — keep cross-transport state in a
 bean the spec injects. `#[pre_guard]`/`#[middleware]`/`#[layer]` are

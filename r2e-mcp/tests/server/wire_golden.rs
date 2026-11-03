@@ -22,8 +22,10 @@
 //! These files landed in the same commit as the change they guard, so on their
 //! own they would only prove the new code agrees with itself. They were
 //! checked against the pre-change tree instead: this file compiles unchanged
-//! against master (it only uses `#[mcp_routes]`'s public surface), so master
-//! can emit its own goldens.
+//! against master (it only used the MCP service's public surface — at the
+//! time spelled `#[mcp_routes]`, since renamed `#[routes]` by #1215; to
+//! replay on a pre-#1215 tree, write `#[mcp_routes]` back), so master could
+//! emit its own goldens.
 //!
 //! ```bash
 //! git checkout -b tmp/golden-provenance c8da199   # master, pre-#994/#993

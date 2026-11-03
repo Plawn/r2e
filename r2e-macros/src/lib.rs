@@ -194,8 +194,9 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// `#[intercept]`, `#[guard]`, `#[roles]` and `#[all_roles]` on the impl
 /// apply to the HTTP routes **and** the MCP members; each transport builds
-/// its own instance once at registration (a stateful guard keeps one state
-/// per transport). `#[pre_guard]`, `#[middleware]` and `#[layer]` are
+/// its own decorator instance once at registration (a stateful guard keeps
+/// one state per transport) over the ONE controller core both registrations
+/// share. `#[pre_guard]`, `#[middleware]` and `#[layer]` are
 /// HTTP-only: they need at least one HTTP route and never touch MCP members.
 ///
 /// # MCP members
@@ -241,6 +242,11 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 ///
 /// Registration stays explicit per transport: `register_controller::<T>()`
 /// serves the HTTP members, `register_mcp_service::<T>()` the MCP members.
+/// Both share one core per type and builder. Lifecycle and background members
+/// (`#[post_construct]`, `#[on_start]`, `#[pre_destroy]`, `#[scheduled]`,
+/// `#[consumer]`, `#[async_exec]`) are wired by `register_controller` alone;
+/// registering such a mixed impl only with `register_mcp_service` panics at
+/// `build()`.
 ///
 /// # What is generated
 ///
@@ -1592,7 +1598,11 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 /// `#[resource]`/`#[prompt]`/`#[completion]` members (and HTTP routes beside
 /// them on the same impl).
 ///
-/// `#[mcp_routes(args)]` expands exactly like `#[routes(args)]`; rename it.
+/// `#[mcp_routes(args)]` expands like `#[routes(args)]` with one exception:
+/// an impl with neither an MCP member nor an HTTP-side marker (only plain
+/// methods, or nothing) is an empty MCP service under `#[mcp_routes]` but an
+/// empty HTTP controller under `#[routes]`. Any other impl expands
+/// identically; rename it.
 /// The alias is removed in the next minor release of `r2e-macros`.
 #[deprecated(
     since = "0.10.0",

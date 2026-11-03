@@ -246,7 +246,11 @@ record follows it.
   codegen skips its carrier (`McpRoutesImplDef::mixed_http_sites`), and
   `validate_config` unions both site sets. Each trait keeps its witness.
   Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
-  both transports, built once per transport; `#[pre_guard]`/`#[middleware]`/
+  both transports; their decorators are built once per transport, but both
+  registrations share ONE core per type and builder (review fix round 1:
+  core store `endpoint_core_or_insert` in the builder, `McpService::construct`
+  + `routes(state, core, ctx)`, lifecycle/background members require
+  `register_controller` — checked at `build()`); `#[pre_guard]`/`#[middleware]`/
   `#[layer]` stay HTTP-only (rejected with no HTTP route). `#[get]`+`#[tool]`
   on one method and an MCP marker in `#[grpc_routes]` are compile errors.
   `#[mcp_routes]` = `#[deprecated(since = "0.10.0")]` alias through the same
@@ -311,7 +315,10 @@ record follows it.
   on HTTP and on gRPC (metadata). `#[anonymous]` stays disallowed on gRPC
   (`Option<I>` instead). Level-1 review follow-ups in §2 (hidden decorator
   item-name collision; `Self` in HTTP decorator expressions). `#[mcp_routes]`
-  deliberate drifts in `r2e-macros/CHANGELOG.md` (#1212).
+  deliberate drifts in `r2e-macros/CHANGELOG.md` (#1212). Wire the builder's
+  per-type core store (`endpoint_core_or_insert`) to `register_grpc_service`
+  next, so a type served on HTTP and gRPC shares one core as HTTP + MCP do
+  (#1215 fix round 1 left gRPC constructing its own).
 - *Exit criteria for 3a (to confirm in the ticket).* One impl carrying
   `#[get]`/`#[post]` and `#[tool]`/`#[resource]`/`#[prompt]` members
   compiles and registers on both transports with one identity/guard
