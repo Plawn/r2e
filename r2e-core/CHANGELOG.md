@@ -28,7 +28,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   transport whose endpoints are generic over the state (`GrpcService<S, W>`)
   threads its per-endpoint witnesses through feature modules. The
   `ModuleList` cons impl carries the endpoint witness beside the controller
-  one.
+  one: its witness tuple now nests `(controllers, endpoints)` per module —
+  `((WC, WE), WR)` where it was `(WC, WR)`. `ModuleList` is an
+  inference-only fold that user code never names (its own docs say so), so
+  the reshaped witness is not a source break — which is why this is filed
+  under Added, not Breaking.
 
 - `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
   `Clone` bound `#[controller]` puts on the generated request-data type, so a
