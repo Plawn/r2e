@@ -439,8 +439,13 @@ fn substitute_self_assoc(
             }
         }
 
+        /// Not a `Self::X…` path: the default visitor, so the path's own
+        /// qself and generic arguments (`Holder::<Self::X> { .. }`) are
+        /// reached too.
         fn visit_expr_struct_mut(&mut self, e: &mut syn::ExprStruct) {
-            self.path_position(&mut e.qself, &mut e.path, Pos::Literal);
+            if !self.path_position(&mut e.qself, &mut e.path, Pos::Literal) {
+                return visit_mut::visit_expr_struct_mut(self, e);
+            }
             for field in e.fields.iter_mut() {
                 self.visit_field_value_mut(field);
             }
@@ -450,14 +455,18 @@ fn substitute_self_assoc(
         }
 
         fn visit_pat_struct_mut(&mut self, p: &mut syn::PatStruct) {
-            self.path_position(&mut p.qself, &mut p.path, Pos::Literal);
+            if !self.path_position(&mut p.qself, &mut p.path, Pos::Literal) {
+                return visit_mut::visit_pat_struct_mut(self, p);
+            }
             for field in p.fields.iter_mut() {
                 self.visit_field_pat_mut(field);
             }
         }
 
         fn visit_pat_tuple_struct_mut(&mut self, p: &mut syn::PatTupleStruct) {
-            self.path_position(&mut p.qself, &mut p.path, Pos::Literal);
+            if !self.path_position(&mut p.qself, &mut p.path, Pos::Literal) {
+                return visit_mut::visit_pat_tuple_struct_mut(self, p);
+            }
             for elem in p.elems.iter_mut() {
                 self.visit_pat_mut(elem);
             }

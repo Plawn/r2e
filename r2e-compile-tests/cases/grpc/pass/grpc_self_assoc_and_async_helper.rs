@@ -89,6 +89,12 @@ impl r2e::rt::stream::Stream for Replies {
     }
 }
 
+pub struct Holder<T> {
+    pub value: T,
+}
+
+pub struct TupleHolder<T>(pub T);
+
 #[controller]
 pub struct PatternWatchService {}
 
@@ -120,6 +126,12 @@ impl PatternWatchService {
         // only the token-level fallback rewrites.
         assert!(matches!(live, Self::WatchStream::Live(_)));
         assert!(!matches!(done, Self::WatchStream::Done { .. } if request.get_ref().msg.is_empty()));
+        // `Self::WatchStream` as a generic argument of an ordinary struct
+        // literal / pattern path.
+        let holder = Holder::<Self::WatchStream> { value: idle };
+        let Holder::<Self::WatchStream> { value } = holder;
+        let tuple_holder = TupleHolder::<Self::WatchStream>(value);
+        let TupleHolder::<Self::WatchStream>(_value) = tuple_holder;
         Ok(r2e::r2e_grpc::tonic::Response::new(live))
     }
 }
