@@ -1,4 +1,4 @@
-//! The [`McpService`] trait — what `#[mcp_routes]` implements.
+//! The [`McpService`] trait — what `#[routes]` implements.
 
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use crate::route::McpRoutes;
 
 /// Trait for MCP tool services that can be registered with the R2E builder.
 ///
-/// Implement this trait (typically via the `#[mcp_routes]` macro) to expose a
+/// Implement this trait (typically via the `#[routes]` macro) to expose a
 /// type's `#[tool]`/`#[resource]`/`#[prompt]` methods over the MCP
 /// endpoint. The service core is constructed from the resolved bean graph by
 /// type (see [`ContextConstruct`](r2e_core::ContextConstruct)) — once, at

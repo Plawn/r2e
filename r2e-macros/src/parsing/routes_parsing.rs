@@ -51,6 +51,22 @@ pub struct RoutesImplDef {
     /// They used to be swallowed by the classification loop, which turned
     /// `Self::PAGE_SIZE` into a bewildering E0599 (task #985).
     pub other_items: Vec<syn::ImplItem>,
+    /// The MCP side of a mixed impl (HTTP and MCP members on one `#[routes]`
+    /// block); `None` for an HTTP-only impl. Set by `attrs::routes_attr`
+    /// after both sides are parsed.
+    pub mcp: Option<MixedMcp>,
+}
+
+/// What the HTTP codegen of a mixed `#[routes]` impl folds in from its MCP
+/// members: one façade impl and one `EndpointDeps` carrier per type.
+pub struct MixedMcp {
+    /// The MCP members (markers stripped), emitted on the same request façade
+    /// `impl __R2eRequest_<Name>` as the HTTP routes.
+    pub facade_methods: Vec<syn::ImplItemFn>,
+    /// Every MCP decorator site, appended to the controller's site set so
+    /// the single `EndpointDeps` carrier and `Controller::validate_config`
+    /// cover both transports.
+    pub site_exprs: Vec<syn::Expr>,
 }
 
 /// Validate `#[anonymous]` against the rest of the method's surface.
@@ -385,7 +401,10 @@ fn reject_non_inert_impl_attrs(attrs: &[syn::Attribute]) -> syn::Result<()> {
     Ok(())
 }
 
-pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
+/// Parse the HTTP side of a `#[routes]` impl block. `has_mcp_members` is set
+/// for a mixed impl (its MCP members already split off): impl-level guards
+/// then also target the MCP members, so they are not "applied to no route".
+pub fn parse(item: syn::ItemImpl, has_mcp_members: bool) -> syn::Result<RoutesImplDef> {
     // Extract controller name from self type
     let controller_name = match *item.self_ty {
         syn::Type::Path(ref type_path) => type_path
@@ -749,7 +768,7 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     let has_non_anonymous_http = route_methods.iter().any(|m| !m.member.decorators.anonymous)
         || sse_methods.iter().any(|m| !m.member.decorators.anonymous)
         || ws_methods.iter().any(|m| !m.member.decorators.anonymous);
-    if !controller_decorators.guard_fns.is_empty() && !has_non_anonymous_http {
+    if !controller_decorators.guard_fns.is_empty() && !has_non_anonymous_http && !has_mcp_members {
         return Err(syn::Error::new(
             controller_name.span(),
             "controller-level #[guard]/#[roles]/#[all_roles] would apply to no route — it \
@@ -811,5 +830,6 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
         other_methods,
         impl_attrs,
         other_items,
+        mcp: None,
     })
 }

@@ -101,7 +101,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     //
     // `request_identity` is the same accessor on the extracted request data,
     // before it is bound to a façade — for the transport layer that extracts
-    // once per HTTP request (`#[mcp_routes]`) and needs the subject up front.
+    // once per HTTP request (MCP members) and needs the subject up front.
     let (identity_type, guard_identity_fn) = if let Some(identity) = def.identity_fields.first() {
         let field_name = &identity.name;
         let inner_ty = &identity.inner_ty;
@@ -152,7 +152,7 @@ fn generate_meta_module(def: &ControllerStructDef) -> TokenStream {
     };
 
     // Whether extracting the request data does anything at all. A consumer
-    // that extracts once per transport request (`#[mcp_routes]`) skips the
+    // that extracts once per transport request (MCP members) skips the
     // extraction entirely when this is `false` and builds the (empty) data
     // by hand through `unscoped_request_data`.
     let has_request_scope = !def.request_scoped_fields().is_empty();

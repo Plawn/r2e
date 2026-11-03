@@ -1,6 +1,7 @@
-//! Parsing for the `#[mcp_routes]` attribute macro.
+//! Parsing for the MCP members of a `#[routes]` impl block (the deprecated
+//! `#[mcp_routes]` alias expands through the same path).
 //!
-//! `#[mcp_routes] impl Name { ... }` turns every `#[tool]`-marked async
+//! `#[routes] impl Name { ... }` turns every `#[tool]`-marked async
 //! `&self` method into an MCP tool, every `#[resource]` method into an MCP
 //! resource and every `#[prompt]` method into an MCP prompt. Other methods
 //! pass through unchanged (after attribute validation). The impl block
@@ -106,7 +107,7 @@ pub struct McpToolMeta {
     pub meta: Option<syn::Expr>,
 }
 
-/// A resolved member group: `#[mcp_routes(group = "...", opt_in)]` or the
+/// A resolved member group: `#[routes(group = "...", opt_in)]` or the
 /// member's own `group`/`opt_in`.
 #[derive(Clone)]
 pub struct McpGroupSpec {
@@ -177,7 +178,8 @@ impl McpTool {
     }
 }
 
-/// Parsed representation of an `#[mcp_routes] impl Name { ... }` block.
+/// Parsed representation of the MCP side of a `#[routes] impl Name { ... }`
+/// block.
 pub struct McpRoutesImplDef {
     /// The service struct name (e.g., `MathTools`).
     pub controller_name: syn::Ident,
@@ -207,6 +209,13 @@ pub struct McpRoutesImplDef {
     /// other method and associated item in their original order, plus the
     /// passive impl attributes.
     pub impl_block: syn::ItemImpl,
+    /// On a mixed impl (HTTP routes beside the MCP members), the HTTP side's
+    /// decorator sites, in the order `#[routes]` folds them. `Some` switches
+    /// the codegen to the mixed shape: the façade methods and the
+    /// `EndpointDeps` carrier are emitted by the HTTP side (one per type),
+    /// and `McpService::validate_config` covers both site sets. Set by
+    /// `attrs::routes_attr`.
+    pub mixed_http_sites: Option<Vec<syn::Expr>>,
 }
 
 /// The argument keys each member family accepts, for validation and the
@@ -393,8 +402,13 @@ fn parse_group_name(nested: &syn::meta::ParseNestedMeta) -> syn::Result<String> 
     Ok(name)
 }
 
-/// Parse the `#[mcp_routes(group = "...", opt_in)]` arguments.
-pub fn parse_impl_args(args: proc_macro2::TokenStream) -> syn::Result<Option<McpGroupSpec>> {
+/// Parse the `#[routes(group = "...", opt_in)]` arguments. `attr` is the
+/// attribute as written (`routes`, or the deprecated `mcp_routes` alias),
+/// named in the errors.
+pub fn parse_impl_args(
+    args: proc_macro2::TokenStream,
+    attr: &str,
+) -> syn::Result<Option<McpGroupSpec>> {
     if args.is_empty() {
         return Ok(None);
     }
@@ -406,16 +420,16 @@ pub fn parse_impl_args(args: proc_macro2::TokenStream) -> syn::Result<Option<Mcp
         } else if nested.path.is_ident("opt_in") {
             opt_in = parse_flag(&nested)?;
         } else {
-            return Err(nested.error(
-                "unknown #[mcp_routes] argument; expected `group = \"…\"` and/or `opt_in`",
-            ));
+            return Err(nested.error(format!(
+                "unknown #[{attr}] argument; expected `group = \"…\"` and/or `opt_in`"
+            )));
         }
         Ok(())
     });
     syn::parse::Parser::parse2(parser, args.clone())?;
     match group {
         Some(name) => Ok(Some(McpGroupSpec { name, opt_in })),
-        None if opt_in => Err(opt_in_without_group(args, "mcp_routes")),
+        None if opt_in => Err(opt_in_without_group(args, attr)),
         None => Ok(None),
     }
 }
@@ -572,7 +586,9 @@ fn classify_args(member: &mut MemberDef, kind: McpMemberKind) -> syn::Result<Vec
     Ok(args)
 }
 
-/// Parse an `#[mcp_routes] impl Name { ... }` block.
+/// Parse the MCP side of a `#[routes] impl Name { ... }` block: the whole
+/// impl when it has no HTTP route, or only its MCP members (split off by
+/// `attrs::routes_attr`) when it mixes both.
 pub fn parse(
     mut item: syn::ItemImpl,
     service_group: Option<McpGroupSpec>,
@@ -580,13 +596,13 @@ pub fn parse(
     if let Some((_, trait_path, _)) = &item.trait_ {
         return Err(syn::Error::new_spanned(
             trait_path,
-            "#[mcp_routes] only supports inherent impl blocks",
+            "a #[routes] impl with MCP members must be an inherent impl block",
         ));
     }
     if !item.generics.params.is_empty() || item.generics.where_clause.is_some() {
         return Err(syn::Error::new_spanned(
             &item.generics,
-            "generic #[mcp_routes] impl blocks are not supported; use a concrete MCP adapter type",
+            "generic #[routes] impl blocks with MCP members are not supported; use a concrete MCP adapter type",
         ));
     }
 
@@ -604,7 +620,7 @@ pub fn parse(
             }
             _ => return Err(syn::Error::new_spanned(
                 &item.self_ty,
-                "#[mcp_routes] requires a concrete local adapter type without generic arguments",
+                "a #[routes] impl with MCP members requires a concrete local adapter type without generic arguments",
             )),
         };
 
@@ -673,7 +689,7 @@ pub fn parse(
                             attr,
                             format!(
                                 "#[{name}] on a method without #[tool], #[resource], \
-                                 #[prompt] or #[completion] does nothing in an #[mcp_routes] impl — add a \
+                                 #[prompt] or #[completion] does nothing in a #[routes] impl — add a \
                                  member marker or remove the decorator"
                             ),
                         ));
@@ -798,6 +814,7 @@ pub fn parse(
         members,
         facade_methods,
         impl_block: item,
+        mixed_http_sites: None,
     })
 }
 
@@ -857,7 +874,7 @@ fn check_completion_wiring(members: &[McpTool]) -> syn::Result<()> {
                 return Err(syn::Error::new_spanned(
                     provider,
                     format!(
-                        "no #[completion] method `{name}` in this #[mcp_routes] impl — a \
+                        "no #[completion] method `{name}` in this #[routes] impl — a \
                          completion provider is an `async fn {name}(&self, c: Completion)` \
                          marked #[completion]"
                     ),

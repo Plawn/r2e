@@ -14,7 +14,7 @@ use crate::codegen::registration::{DepsFold, Witness};
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
 /// one member exists), then per-member guards and interceptors.
-fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
+pub(crate) fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
     if !def.members.is_empty() {
         exprs.extend(&def.controller_intercepts);
@@ -68,8 +68,14 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
         data_marker,
         ..
     } = super::controller_items(controller_name);
-    let decorator_config_stmts =
-        crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
+    // A mixed impl validates both transports' sites, in the order the HTTP
+    // side folds them, so both registrations report the same keys.
+    let decorator_config_stmts = crate::codegen::decorators::decorator_config_key_stmts(
+        def.mixed_http_sites
+            .iter()
+            .flatten()
+            .chain(site_exprs(def)),
+    );
 
     let uses_session = def
         .uses_session

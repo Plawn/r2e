@@ -2,7 +2,7 @@
 //!
 //! Three member holders serve one MCP endpoint, in this precedence:
 //!
-//! 1. the **catalog** — every `#[mcp_routes]` member registered at boot
+//! 1. the **catalog** — every `#[routes]` member registered at boot
 //!    (immutable; grouped; see [`Catalog`]);
 //! 2. a session's **private members** ([`McpSession::add_tool`] & co.) —
 //!    visible to that session only;

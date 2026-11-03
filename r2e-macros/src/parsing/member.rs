@@ -1,4 +1,4 @@
-//! The one member model shared by `#[routes]`, `#[mcp_routes]` and
+//! The one member model shared by `#[routes]` (HTTP and MCP members) and
 //! `#[grpc_routes]`.
 //!
 //! A *member* is a method a transport dispatches to: an HTTP route / `#[sse]`
@@ -37,9 +37,12 @@ pub struct MemberDef {
 
 /// Per-transport parsing rules for [`parse_member`] and friends.
 pub struct MemberRules {
-    /// The transport's attribute, as it appears in error messages
-    /// (`#[grpc_routes]`, `#[mcp_routes]`).
+    /// The transport's members, as they appear in method-level error
+    /// messages (`#[grpc_routes]`, `#[tool]/#[resource]/#[prompt]/#[completion]`).
     pub transport: &'static str,
+    /// The impl block the transport's impl-level errors name
+    /// (`a #[grpc_routes] impl block`).
+    pub impl_block: &'static str,
     /// The transport's short name in impl-level errors (`gRPC`, `MCP`).
     pub label: &'static str,
     /// Decorator plugins the transport understands, in parse order (roles
@@ -57,7 +60,7 @@ pub struct MemberRules {
     pub duplicate_identity: String,
 }
 
-/// Disallowed on `#[mcp_routes]` methods and impl blocks.
+/// Disallowed on MCP members and on an MCP-only `#[routes]` impl block.
 const MCP_DISALLOWED_ATTRS: &[&str] = &[
     // Pre-auth/anonymous/middleware are HTTP-pipeline concepts; MCP tools sit
     // behind one shared transport endpoint and have no per-tool middleware
@@ -113,6 +116,7 @@ impl MemberRules {
     pub fn http() -> Self {
         Self {
             transport: "#[routes]",
+            impl_block: "a #[routes] impl block",
             label: "HTTP",
             plugins: HTTP_PLUGINS,
             disallowed: &[],
@@ -130,6 +134,7 @@ impl MemberRules {
     pub fn grpc() -> Self {
         Self {
             transport: "#[grpc_routes]",
+            impl_block: "a #[grpc_routes] impl block",
             label: "gRPC",
             plugins: GRPC_PLUGINS,
             disallowed: GRPC_DISALLOWED_ATTRS,
@@ -140,12 +145,16 @@ impl MemberRules {
         }
     }
 
-    /// `#[mcp_routes]`: guards, roles and interceptors. `marker` is the
+    /// MCP members of a `#[routes]` impl: guards, roles and interceptors.
+    /// Impl-level, only an impl with no HTTP route is checked against these
+    /// rules (a mixed impl keeps the HTTP-only decorators for its routes).
+    /// `marker` is the
     /// member family's attribute name (`tool`, `resource`, …), named in the
     /// duplicate-identity error.
     pub fn mcp(marker: &str) -> Self {
         Self {
-            transport: "#[mcp_routes]",
+            transport: "#[tool]/#[resource]/#[prompt]/#[completion]",
+            impl_block: "a #[routes] impl block with no HTTP route",
             label: "MCP",
             plugins: MCP_PLUGINS,
             disallowed: MCP_DISALLOWED_ATTRS,
@@ -223,10 +232,10 @@ pub fn validate_impl_attrs(attrs: &[syn::Attribute], rules: &MemberRules) -> syn
         return Err(syn::Error::new_spanned(
             attr,
             format!(
-                "#[{}] is not supported on a {} impl block — \
+                "#[{}] is not supported on {} — \
                  {} controller-level decorators support #[intercept], \
                  #[guard], #[roles] and #[all_roles] only",
-                name, rules.transport, rules.label
+                name, rules.impl_block, rules.label
             ),
         ));
     }

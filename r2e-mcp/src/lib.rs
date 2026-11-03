@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) server support for R2E.
 //!
-//! Exposes `#[tool]` methods on `#[mcp_routes]` types over MCP's streamable
+//! Exposes `#[tool]` methods on `#[routes]` types over MCP's streamable
 //! HTTP transport, with the same DX as HTTP controllers: `#[inject]`,
 //! `#[config]`, guards (`#[roles]`/`#[guard]` — the SAME `Guard<I>` machinery
 //! HTTP uses), interceptors, typed config, graceful shutdown, sharded
@@ -19,7 +19,7 @@
 //!     #[inject] calc: CalcService,
 //! }
 //!
-//! #[mcp_routes]
+//! #[routes]
 //! impl MathTools {
 //!     /// Add two numbers.
 //!     #[tool(name = "add", read_only)]
@@ -137,7 +137,7 @@ pub use schemars;
 /// The MCP analog of `register_controller` for HTTP — including the
 /// compile-time dependency check: the service's [`EndpointDeps`] (its core's
 /// `#[inject]` fields plus every `#[intercept(...)]`/`#[guard(...)]` spec's
-/// deps, emitted by `#[mcp_routes]`) are checked against the application
+/// deps, emitted by `#[routes]`) are checked against the application
 /// state via `AllSatisfied`, so a missing bean is a compile error at this
 /// call site.
 ///

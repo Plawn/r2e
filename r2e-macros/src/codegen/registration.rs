@@ -1,6 +1,6 @@
-//! The registration emitter shared by every endpoint kind: `#[routes]`
-//! (`Controller<S, W>`, `codegen/controller_impl.rs`), `#[mcp_routes]`
-//! (`McpService<S, W>`, `mcp_codegen/service_impl.rs`) and `#[grpc_routes]`
+//! The registration emitter shared by every endpoint kind: `#[routes]` HTTP
+//! members (`Controller<S, W>`, `codegen/controller_impl.rs`), `#[routes]` MCP
+//! members (`McpService<S, W>`, `mcp_codegen/service_impl.rs`) and `#[grpc_routes]`
 //! (`GrpcService<S, W>`, `grpc_codegen/service_impl.rs`).
 //!
 //! Two pieces:

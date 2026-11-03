@@ -46,7 +46,10 @@ pub use r2e_macros::{consumer, scheduled};
 
 // gRPC attribute
 pub use r2e_macros::grpc_routes;
-pub use r2e_macros::{completion, mcp_routes, prompt, resource, tool, ObjectParams};
+pub use r2e_macros::{completion, prompt, resource, tool, ObjectParams};
+// Deprecated alias of `#[routes]`, re-exported until its removal (next minor).
+#[allow(deprecated)]
+pub use r2e_macros::mcp_routes;
 
 // Entry-point macro (r2e::test is NOT in prelude to avoid conflict with #[test])
 pub use r2e_macros::main;

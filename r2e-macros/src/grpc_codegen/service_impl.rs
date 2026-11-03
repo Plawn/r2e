@@ -25,7 +25,7 @@ pub fn generate_endpoint_deps_impl(def: &GrpcRoutesImplDef) -> TokenStream {
 
 /// Generate `impl<S, W> GrpcService<S, W> for ControllerName`.
 ///
-/// Mirrors the `McpService<S, W>` impl `#[mcp_routes]` emits: generic over
+/// Mirrors the `McpService<S, W>` impl `#[routes]` emits for MCP members: generic over
 /// the state `__R2eS`, the request-data marker `__R2eMd` (bound
 /// `__R2eRequestData_<Name><__R2eMd>: RequestData<__R2eS>` — the struct's
 /// `#[inject(identity)]` / `#[inject(request)]` fields) plus one opaque
