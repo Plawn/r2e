@@ -630,9 +630,9 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     exprs.extend(ctrl_guards);
     exprs.extend(ctrl_pre_guards);
     for rm in &def.route_methods {
-        exprs.extend(&rm.decorators.guard_fns);
-        exprs.extend(&rm.decorators.pre_auth_guard_fns);
-        exprs.extend(&rm.decorators.intercept_fns);
+        exprs.extend(&rm.member.decorators.guard_fns);
+        exprs.extend(&rm.member.decorators.pre_auth_guard_fns);
+        exprs.extend(&rm.member.decorators.intercept_fns);
     }
     // Scheduled + consumer methods run interceptors (built once at
     // registration, from the retained context, via `fill_decos`).
@@ -644,12 +644,12 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     }
     // SSE/WS methods run guards (and pre-auth guards) but not interceptors.
     for sm in &def.sse_methods {
-        exprs.extend(&sm.decorators.guard_fns);
-        exprs.extend(&sm.decorators.pre_auth_guard_fns);
+        exprs.extend(&sm.member.decorators.guard_fns);
+        exprs.extend(&sm.member.decorators.pre_auth_guard_fns);
     }
     for wm in &def.ws_methods {
-        exprs.extend(&wm.decorators.guard_fns);
-        exprs.extend(&wm.decorators.pre_auth_guard_fns);
+        exprs.extend(&wm.member.decorators.guard_fns);
+        exprs.extend(&wm.member.decorators.pre_auth_guard_fns);
     }
 
     exprs

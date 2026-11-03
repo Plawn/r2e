@@ -109,7 +109,7 @@ pub(crate) fn identity_site(tool: &McpTool) -> Option<IdentitySite> {
         quote! { #ty }
     };
     Some(IdentitySite {
-        marker: crate::codegen::handlers::identity_marker_for(&tool.name),
+        marker: crate::codegen::handlers::identity_marker_for(&tool.member.name),
         declared_ty,
     })
 }
@@ -130,12 +130,12 @@ pub(crate) fn requirements_expr(
     let roles: Vec<&String> = def
         .controller_roles
         .iter()
-        .chain(tool.decorators.roles.iter())
+        .chain(tool.member.decorators.roles.iter())
         .collect();
     let all_roles: Vec<&String> = def
         .controller_all_roles
         .iter()
-        .chain(tool.decorators.all_roles.iter())
+        .chain(tool.member.decorators.all_roles.iter())
         .collect();
     quote! {
         #mcp::__macro_support::ToolRequirements {
@@ -155,10 +155,10 @@ fn build_deco_layout(def: &McpRoutesImplDef) -> McpDecoLayout {
         .iter()
         .chain(def.controller_guards.iter())
         .chain(def.members.iter().flat_map(|m| {
-            m.decorators
+            m.member.decorators
                 .guard_fns
                 .iter()
-                .chain(&m.decorators.intercept_fns)
+                .chain(&m.member.decorators.intercept_fns)
         }));
     let mut items = TokenStream::new();
     for expr in all_sites {
@@ -215,14 +215,14 @@ fn build_deco_layout(def: &McpRoutesImplDef) -> McpDecoLayout {
         .enumerate()
         .map(|(member_index, member)| McpMemberDecos {
             guard_fields: member
-                .decorators
+                .member.decorators
                 .guard_fns
                 .iter()
                 .enumerate()
                 .map(|(i, expr)| add_site(format_ident!("__m{}_g{}", member_index, i), expr))
                 .collect(),
             intercept_fields: member
-                .decorators
+                .member.decorators
                 .intercept_fns
                 .iter()
                 .enumerate()

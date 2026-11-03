@@ -78,7 +78,7 @@ impl GrpcDecoSets {
     pub fn has_any(&self, def: &GrpcRoutesImplDef) -> bool {
         self.ctrl.is_some()
             || self.sets.iter().any(Option::is_some)
-            || def.methods.iter().any(|m| m.identity_param.is_some())
+            || def.methods.iter().any(|m| m.member.identity_param.is_some())
     }
 
     /// The shared controller-level set, when the impl has one.
@@ -108,7 +108,7 @@ impl GrpcDecoSets {
                     .iter()
                     .zip(self.sets.iter())
                     .filter_map(|(m, set)| {
-                        set.as_ref().map(|s| (Self::field_ident(&m.name), s))
+                        set.as_ref().map(|s| (Self::field_ident(&m.member.name), s))
                     }),
             )
     }
@@ -119,9 +119,9 @@ impl GrpcDecoSets {
         def: &GrpcRoutesImplDef,
     ) -> impl Iterator<Item = (syn::Ident, &syn::Type)> {
         def.methods.iter().filter_map(|m| {
-            m.identity_param
+            m.member.identity_param
                 .as_ref()
-                .map(|p| (Self::identity_field_ident(&m.name), &p.ty))
+                .map(|p| (Self::identity_field_ident(&m.member.name), &p.ty))
         })
     }
 }
@@ -137,8 +137,8 @@ pub(crate) fn site_exprs(def: &GrpcRoutesImplDef) -> Vec<&syn::Expr> {
         exprs.extend(&def.controller_intercepts);
     }
     for m in &def.methods {
-        exprs.extend(&m.decorators.guard_fns);
-        exprs.extend(&m.decorators.intercept_fns);
+        exprs.extend(&m.member.decorators.guard_fns);
+        exprs.extend(&m.member.decorators.intercept_fns);
     }
     exprs
 }
@@ -150,7 +150,7 @@ pub(crate) fn unique_identity_types(def: &GrpcRoutesImplDef) -> Vec<&syn::Type> 
     let mut seen = std::collections::HashSet::new();
     let mut types = Vec::new();
     for m in &def.methods {
-        if let Some(p) = &m.identity_param {
+        if let Some(p) = &m.member.identity_param {
             let ty = &p.ty;
             if seen.insert(quote!(#ty).to_string()) {
                 types.push(ty);
@@ -184,12 +184,12 @@ fn build_deco_sets(def: &GrpcRoutesImplDef) -> GrpcDecoSets {
     };
     let mut sets = Vec::with_capacity(def.methods.len());
     for method in &def.methods {
-        let intercept_exprs: Vec<&syn::Expr> = method.decorators.intercept_fns.iter().collect();
+        let intercept_exprs: Vec<&syn::Expr> = method.member.decorators.intercept_fns.iter().collect();
         let (method_items, set) = generate_named_deco_items(
             &def.controller_name,
             "GrpcDeco",
-            &method.name,
-            &method.decorators.guard_fns,
+            &method.member.name,
+            &method.member.decorators.guard_fns,
             &intercept_exprs,
             quote! {},
         );
@@ -217,11 +217,11 @@ fn generate_identity_asserts(def: &GrpcRoutesImplDef) -> TokenStream {
         );
     }];
     for method in &def.methods {
-        let cond = method.identity_param.is_some();
+        let cond = method.member.identity_param.is_some();
         for expr in def
             .controller_guards
             .iter()
-            .chain(method.decorators.guard_fns.iter())
+            .chain(method.member.decorators.guard_fns.iter())
         {
             let Ok((spec_ty, _)) = spec_type_of(expr) else {
                 continue;
@@ -268,7 +268,7 @@ fn generate_impl_block(def: &GrpcRoutesImplDef) -> TokenStream {
     let methods: Vec<&syn::ImplItemFn> = def
         .methods
         .iter()
-        .map(|m| &m.fn_item)
+        .map(|m| &m.member.fn_item)
         .chain(def.other_methods.iter())
         .collect();
 

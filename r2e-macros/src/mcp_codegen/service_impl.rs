@@ -20,8 +20,8 @@ fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
         exprs.extend(&def.controller_guards);
     }
     for t in &def.members {
-        exprs.extend(&t.decorators.guard_fns);
-        exprs.extend(&t.decorators.intercept_fns);
+        exprs.extend(&t.member.decorators.guard_fns);
+        exprs.extend(&t.member.decorators.intercept_fns);
     }
     exprs
 }
@@ -220,7 +220,7 @@ pub(super) struct InvokeCall {
 }
 
 pub(super) fn invoke_call(member: &McpTool) -> InvokeCall {
-    let invoke_name = super::invoke_ident(member.kind, &member.name);
+    let invoke_name = super::invoke_ident(member.kind, &member.member.name);
     // The request-data marker is not inferable from the call either: it is
     // the impl's own generic, named on every invoke.
     let md = crate::codegen::handlers::data_marker();
@@ -283,7 +283,7 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
     // Output schema: autoref-specialization probe over the JSON body type of
     // the return (`Result<Json<T>, _>` / `Json<T>` → `T`); types without
     // `JsonSchema` (or non-Json returns) advertise none.
-    let output_schema = match output_body_type(&tool.fn_item.sig.output) {
+    let output_schema = match output_body_type(&tool.member.fn_item.sig.output) {
         Some(out_ty) => output_schema_probe(&out_ty, mcp),
         None => quote! { ::core::option::Option::None },
     };
@@ -438,7 +438,7 @@ fn completions_expr(def: &McpRoutesImplDef, member: &McpTool, mcp: &TokenStream)
         let provider_member = def
             .members
             .iter()
-            .find(|m| m.kind == McpMemberKind::Completion && m.name == provider_name)
+            .find(|m| m.kind == McpMemberKind::Completion && m.member.name == provider_name)
             .expect("parse() checked the completion provider exists");
         let InvokeCall { outer, inner, call } = invoke_call(provider_member);
         quote! {
@@ -468,7 +468,7 @@ fn tool_description(tool: &McpTool) -> Option<String> {
     if tool.meta.description.is_some() {
         return tool.meta.description.clone();
     }
-    tool.doc_text.clone()
+    tool.member.doc.clone()
 }
 
 fn opt_string(value: &Option<String>) -> TokenStream {

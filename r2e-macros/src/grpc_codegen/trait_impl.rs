@@ -62,10 +62,10 @@ fn generate_method_impl(
     grpc_krate: &TokenStream,
     controller_name: &syn::Ident,
 ) -> TokenStream {
-    let fn_name = &method.name;
-    let fn_item = &method.fn_item;
+    let fn_name = &method.member.name;
+    let fn_item = &method.member.fn_item;
     let sig = &fn_item.sig;
-    let identity_index = method.identity_param.as_ref().map(|p| p.index);
+    let identity_index = method.member.identity_param.as_ref().map(|p| p.index);
 
     // The request message parameter: the first typed param that is not the
     // identity parameter.
@@ -98,7 +98,7 @@ fn generate_method_impl(
     // at registration into the container; per call only the metadata lookup
     // + validation run. A required identity failing is `Unauthenticated`
     // before any guard sees the call.
-    let identity_stmts = match &method.identity_param {
+    let identity_stmts = match &method.member.identity_param {
         Some(p) => {
             let id_ty = &p.ty;
             let id_field = GrpcDecoSets::identity_field_ident(fn_name);
@@ -136,7 +136,7 @@ fn generate_method_impl(
     let guard_stmts = if ctrl_guards.is_empty() && method_guards.is_empty() {
         quote! {}
     } else {
-        let identity_ref = match &method.identity_param {
+        let identity_ref = match &method.member.identity_param {
             Some(p) if p.is_optional => quote! { __identity.as_ref() },
             Some(_) => quote! { ::core::option::Option::Some(&__identity) },
             None => quote! { ::core::option::Option::<&#krate::NoIdentity>::None },

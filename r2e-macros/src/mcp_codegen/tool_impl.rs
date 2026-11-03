@@ -57,7 +57,7 @@ fn generate_invoke_method(
     krate: &TokenStream,
     mcp: &TokenStream,
 ) -> TokenStream {
-    let fn_name = &tool.name;
+    let fn_name = &tool.member.name;
     let kind = tool.kind;
     let kind_str = kind.attr_name();
     let invoke_name = invoke_ident(kind, fn_name);
@@ -363,7 +363,7 @@ fn generate_invoke_method(
         .args
         .iter()
         .map(|arg| match arg {
-            McpToolArg::Identity(_) => quote! { __identity },
+            McpToolArg::Identity => quote! { __identity },
             McpToolArg::Params(_) => quote! { #mcp::__macro_support::Params(__params) },
             McpToolArg::Call => quote! { __call },
             McpToolArg::Cancel if has_call => quote! { __cancel },
@@ -437,7 +437,7 @@ fn generate_invoke_method(
             }
         }
         McpMemberKind::Prompt => {
-            let desc = match tool.meta.description.as_ref().or(tool.doc_text.as_ref()) {
+            let desc = match tool.meta.description.as_ref().or(tool.member.doc.as_ref()) {
                 Some(d) => quote! { ::core::option::Option::Some(#d) },
                 None => quote! { ::core::option::Option::None },
             };

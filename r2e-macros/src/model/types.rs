@@ -1,4 +1,5 @@
 use crate::model::route::HttpMethod;
+pub use crate::parsing::member::MemberDef;
 
 pub struct InjectedField {
     pub name: syn::Ident,
@@ -163,7 +164,6 @@ pub struct MethodDecorators {
     pub layer_exprs: Vec<LayerExpr>,
     pub status_override: Option<u16>,
     pub returns_type: Option<syn::Type>,
-    pub deprecated: bool,
     /// `#[anonymous]` — opt this route out of the controller's struct-level
     /// identity: no extraction runs and the method is emitted on the core
     /// (reading the identity field is a compile error).
@@ -206,10 +206,8 @@ pub struct ManagedParam {
 pub struct RouteMethod {
     pub method: HttpMethod,
     pub path: String,
-    pub decorators: MethodDecorators,
-    pub identity_param: Option<IdentityParam>,
+    pub member: MemberDef,
     pub managed_params: Vec<ManagedParam>,
-    pub fn_item: syn::ImplItemFn,
     /// `#[fallback]` route: registered via `Routes::fallback` instead of
     /// `.route(path, ...)`. `method`/`path` are placeholders (`Any` / `""`).
     pub is_fallback: bool,
@@ -228,18 +226,14 @@ pub enum SseKeepAlive {
 pub struct SseMethod {
     pub path: String,
     pub keep_alive: SseKeepAlive,
-    pub decorators: MethodDecorators,
-    pub identity_param: Option<IdentityParam>,
-    pub fn_item: syn::ImplItemFn,
+    pub member: MemberDef,
 }
 
 pub struct WsMethod {
     pub path: String,
-    pub decorators: MethodDecorators,
-    pub identity_param: Option<IdentityParam>,
+    pub member: MemberDef,
     /// Index of the WsStream/WebSocket parameter among typed params, or None if returning WsHandler.
     pub ws_param: Option<WsParam>,
-    pub fn_item: syn::ImplItemFn,
 }
 
 pub struct WsParam {
