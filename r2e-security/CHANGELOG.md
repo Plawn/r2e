@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Feature `grpc` (#1213): `JwtIdentitySpec` and the `GrpcIdentity` impl of
+  `AuthenticatedUser` are removed — gRPC extracts `AuthenticatedUser` through
+  its HTTP `FromRequestPartsVia` impl (the `Arc<JwtClaimsValidator>` bean).
+  The feature keeps `impl JwtClaimsValidatorLike for JwtClaimsValidator` for
+  the manual metadata helpers. Migration: `docs/migration/grpc-identity.md`.
+
 ### Added
 
 - `SecurityError::kind() -> SecurityErrorKind`: the finer category of a
@@ -25,8 +33,6 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `#[non_exhaustive]`; the messages of `InvalidToken` / `ValidationFailed`
   are unchanged apart from a stable prefix on the algorithm and signing-key
   failures.
-
-## [Unreleased]
 
 ## [0.9.0] - 2026-10-31
 

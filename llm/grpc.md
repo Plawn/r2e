@@ -1,7 +1,7 @@
 ---
 topic: grpc
 features: grpc
-tokens: ~2200
+tokens: ~2700
 requires: core-concepts, modules
 ---
 
@@ -30,13 +30,16 @@ requires: core-concepts, modules
   `tonic::Status` by kind (`r2e_grpc::rejection_to_status`: Unauthenticated →
   `UNAUTHENTICATED`, Forbidden → `PERMISSION_DENIED`, RateLimited →
   `RESOURCE_EXHAUSTED`, request-shape kinds → `INVALID_ARGUMENT`, …).
-- Identity is a method **parameter**: `#[inject(identity)] user:
-  AuthenticatedUser` (or `Option<..>`), read from `authorization: Bearer ..`
-  metadata and validated by the `Arc<JwtClaimsValidator>` bean — provide it,
-  or `register_grpc_service` fails to compile. `#[roles]` needs that parameter.
-- Not supported on `#[grpc_routes]` (compile errors): struct-level
-  `#[inject(identity)]`, `#[pre_guard]`, `#[anonymous]`, `#[post_construct]`,
-  `#[pre_destroy]`, `#[on_start]`.
+- Identity uses the HTTP extractor contract: a struct-level
+  `#[inject(identity)] user: AuthenticatedUser` field (every method
+  authenticated) or an `#[inject(identity)]` method **parameter** (or
+  `Option<..>`), read from `authorization: Bearer ..` metadata and validated
+  by the `Arc<JwtClaimsValidator>` bean — provide it, or
+  `register_grpc_service` fails to compile. `#[inject(request)]` fields work
+  too. `#[roles]` needs a struct or parameter identity.
+- Not supported on `#[grpc_routes]` (compile errors): `#[pre_guard]`,
+  `#[anonymous]` (use `Option<I>`), `#[post_construct]`, `#[pre_destroy]`,
+  `#[on_start]`, `Self` in a method signature.
 - `register_grpc_service` panics on a missing config key; use
   `try_register_grpc_service::<S>()` to report the failure yourself.
 - A service owned by a feature module is registered by
@@ -132,15 +135,25 @@ gRPC methods take the same decorators as HTTP routes — `#[guard]`, `#[roles]`,
 `#[all_roles]`, `#[intercept]` — on the method or on the impl block
 (controller-level sites run first). Guards are `Guard<I>` impls, built once at
 registration through `DecoratorSpec` (bean deps checked at
-`register_grpc_service`), and receive a `GuardContext` whose `headers` is the
-request metadata (`method` is `POST`, `uri` is `/`, `path_params` empty).
+`register_grpc_service`).
 
-Identity is an `#[inject(identity)]` **method parameter** (any position;
-`Option<T>` for optional). The type must implement `r2e_grpc::GrpcIdentity`;
-`AuthenticatedUser` does (features `grpc` + `security`): `authorization:
-Bearer <jwt>` metadata validated by the `Arc<JwtClaimsValidator>` bean, which
-becomes a compile-time dependency of the service. Optional identity is `None`
-without `authorization` metadata but still rejects an invalid token.
+Each call is turned into an HTTP request head (`http::request::Parts`):
+`method` is `POST`, `uri` is `/<package.Service>/<Method>`, `headers` are the
+request metadata (moved, not copied), the tonic extensions are kept and
+`ConnectInfo` carries the peer address (unless a layer already inserted one).
+No `MetadataMap` is put in the extensions: an extractor that wants the tonic
+view builds `MetadataMap::from_headers(parts.headers.clone())` itself. Identity and `#[inject(request)]` values are extracted from that
+head through `FromRequestPartsVia<S, M>` — the same contract as HTTP — so any
+HTTP identity or extractor works unchanged, and the guards receive a
+`GuardContext` built over it (`path_params` empty).
+
+Identity is either a struct-level `#[inject(identity)]` field — every method
+is authenticated, fail-closed, and runs on the per-call façade — or an
+`#[inject(identity)]` **method parameter** (any position). `Option<T>` works in
+both places: `None` without `authorization` metadata, still rejecting an
+invalid token. `AuthenticatedUser` validates `authorization: Bearer <jwt>`
+with the `Arc<JwtClaimsValidator>` bean, a compile-time dependency of the
+service (checked through the `GrpcService<S, W>` witness).
 
 ```rust
 use r2e::r2e_grpc::tonic::{Request, Response, Status};
@@ -149,24 +162,43 @@ use r2e::r2e_security::AuthenticatedUser;
 #[controller]
 pub struct SecureGreeter {
     #[inject] user_service: UserService,
+    #[inject(identity)] user: AuthenticatedUser,   // every method authenticated
 }
 
 #[grpc_routes(proto::greeter::greeter_server::Greeter)]
 #[intercept(Logged::info())]
 impl SecureGreeter {
     #[roles("admin")]
+    async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloReply>, Status> {
+        Ok(Response::new(HelloReply { message: format!("Hello {} from {}", request.into_inner().name, self.user.sub) }))
+    }
+}
+
+#[controller]
+pub struct MixedGreeter {
+    #[inject] user_service: UserService,
+}
+
+#[grpc_routes(proto::greeter::greeter_server::Greeter)]
+impl MixedGreeter {
     async fn say_hello(
         &self,
-        #[inject(identity)] user: AuthenticatedUser,
+        #[inject(identity)] user: Option<AuthenticatedUser>,   // per-method, optional
         request: Request<HelloRequest>,
     ) -> Result<Response<HelloReply>, Status> {
-        Ok(Response::new(HelloReply { message: format!("Hello {} from {}", request.into_inner().name, user.sub) }))
+        let who = user.map(|u| u.sub).unwrap_or_else(|| "anonymous".into());
+        Ok(Response::new(HelloReply { message: format!("Hello {} from {who}", request.into_inner().name) }))
     }
 }
 # fn main() {}
 ```
 
-Per call: identity extraction → controller guards → method guards →
+Server-streaming rpcs work: declare the trait's associated stream type in the
+impl block (`type WatchStream = Pin<Box<dyn Stream<Item = Result<Tick, Status>> + Send>>;`);
+identity, request scope and guards all run before the stream is opened.
+
+Per call: head → struct request scope (identity + `#[inject(request)]`
+fields) → identity parameter → controller guards → method guards →
 interceptors → method. Every `Rejection` is projected onto `tonic::Status` by
 kind with `r2e_grpc::rejection_to_status` (Unauthenticated → `UNAUTHENTICATED`,
 Forbidden → `PERMISSION_DENIED`, NotFound → `NOT_FOUND`, Conflict → `ABORTED`,
@@ -177,11 +209,21 @@ the status message and the rejection's headers (`Retry-After`,
 `WWW-Authenticate`) become response metadata. It is a free function (orphan
 rule) — call it yourself only when projecting a `Rejection` by hand.
 
-Compile errors: `#[roles]` on a method without an `#[inject(identity)]`
-parameter (`NoIdentity: RoleBasedIdentity` unsatisfied); a guard whose spec
-has `REQUIRES_IDENTITY` on such a method; struct-level `#[inject(identity)]`;
-`#[pre_guard]`, `#[anonymous]`, `#[post_construct]`, `#[pre_destroy]`,
-`#[on_start]`.
+Compile errors: `#[roles]` on a method of a service with neither a
+struct-level identity nor an `#[inject(identity)]` parameter
+(`NoIdentity: RoleBasedIdentity` unsatisfied); a guard whose spec has
+`REQUIRES_IDENTITY` on such a method; a missing extractor bean at
+`register_grpc_service`; `#[pre_guard]`, `#[anonymous]`, `#[post_construct]`,
+`#[pre_destroy]`, `#[on_start]`.
+
+An HTTP-only extractor (`Query<T>`, `Path<T>`) compiles and its outcome
+depends on the head and the target type — `Query<T>` deserializes an empty
+query string (a `T` whose fields are all optional/defaulted succeeds, a
+required field is an `INVALID_ARGUMENT`), `Path<T>` sees the `{*rest}`
+capture tonic's `Routes` installs — never a panic; a
+rejection becomes a `Status` by kind. Message of a missing/invalid bearer:
+`UNAUTHENTICATED` / `"Unauthorized"` (the HTTP extractor's), without
+`www-authenticate` metadata.
 
 Manual claims: `r2e_grpc::bearer_token(metadata) -> Result<&str, Rejection>`,
 `extract_jwt_claims_from_metadata(metadata, &validator).await ->

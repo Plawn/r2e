@@ -83,10 +83,11 @@ const MCP_DISALLOWED_ATTRS: &[&str] = &[
 
 /// Disallowed on `#[grpc_routes]` methods and impl blocks.
 const GRPC_DISALLOWED_ATTRS: &[&str] = &[
-    // Pre-auth/anonymous/middleware are HTTP-pipeline concepts: a gRPC
-    // method has no per-method tower stack, and `#[anonymous]` needs a
-    // fail-closed struct identity, which `#[grpc_routes]` types don't have
-    // (identity is per method).
+    // Pre-auth/middleware are HTTP-pipeline concepts: a gRPC method has no
+    // per-method tower stack. `#[anonymous]` stays out too: a struct-level
+    // identity authenticates every method of the service, and a service
+    // mixing public and protected methods declares `Option<I>` (struct
+    // field or method parameter) instead of opting methods out.
     "anonymous",
     "pre_guard",
     "middleware",

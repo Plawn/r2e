@@ -71,13 +71,14 @@ references.
    `DepsFold::endpoint(name, site_exprs)` folds every decorator site's spec
    deps onto `ContextConstruct::Deps`, `append(list)` adds transport extras
    (HTTP: `ManagedDeps` of `#[managed]` params via `controller_deps_fold`;
-   gRPC: each `GrpcIdentity::Spec`'s deps), and `carrier_impl(name)` emits
+   gRPC: none since #1213 — identity is a witness bound, below), and `carrier_impl(name)` emits
    `impl r2e_core::EndpointDeps for <Name> { type Deps = <fold> }`. This is
    what makes missing beans a compile error. A state-generic transport trait
    assembles its witness with `registration::Witness`: `push_identity(fn,
    declared_ty)` per `#[inject(identity)]` parameter, then `generics()` /
    `tuple()` (`(__R2eMd, __R2eMp<Fn>, …)`) and the marker/identity
-   predicates — `Controller<S, W>` and `McpService<S, W>` both use it.
+   predicates — `Controller<S, W>`, `McpService<S, W>` and (since #1213)
+   `GrpcService<S, W>` all use it.
    Constraint: one type = one `EndpointDeps` impl, so a struct cannot be
    two endpoint kinds at once — share logic through a bean instead.
 
@@ -103,9 +104,13 @@ references.
 6. **Wire-specific pieces, kept wire-specific** (do not abstract these —
    deliberate decision):
    - identity extraction — wire-specific only where the wire has no HTTP
-     request head. gRPC: `GrpcIdentity` over metadata (a
-     `DecoratorSpec`-backed extractor, so the validator bean is a
-     compile-time dep of the service). MCP rides HTTP, so it reuses the
+     request head. gRPC builds one per call (#1213: `r2e_grpc::__macro_support::into_head`
+     — `POST`, `uri` = the method path recorded by the `CaptureMethodPath`
+     routing layer, headers = the metadata moved zero-copy, extensions moved +
+     `ConnectInfo`) and so reuses the HTTP contract too: `GrpcService<S, W>`
+     is state-generic, struct request data and identity parameters extract
+     through `RequestData<S>` / `FromRequestPartsVia<S, M>` against the
+     state, and the validator bean is checked through the witness. MCP rides HTTP, so it reuses the
      **HTTP contract** (#1175): `McpService<T, W>` is state-generic like
      `Controller<T, W>`, `#[mcp_routes]` emits one
      `FromRequestPartsVia<S, M>` bound per member with an
@@ -128,8 +133,8 @@ references.
      `r2e-macros/src/mcp_codegen/service_impl.rs`). The witness `W` starts
      with the request-data marker, so a plain service is `McpService<S, ((),)>`,
    - the `GuardContext` builder and the `Rejection` → wire-error projection
-     (HTTP: the route envelope; gRPC: `guard_context` +
-     `rejection_to_status`; MCP: `member_guard_context` +
+     (HTTP: the route envelope; gRPC: `GuardContext::from_parts` over the
+     call head + `rejection_to_status`; MCP: `member_guard_context` +
      `From<Rejection> for McpError`) — the guard trait itself is shared,
    - error mapping and the serve loop / plugin (registry filled at
      registration, drained ONCE at serve time — see `GrpcServiceRegistry`:
@@ -162,8 +167,22 @@ references.
   `r2e_grpc::rejection_to_status` — a free fn, orphan rule) — so `#[guard]`,
   `#[roles]`-style specs, `RateLimitGuard` and every user
   `#[derive(DecoratorBean)]` guard work on MCP members and gRPC methods with
-  zero new impls. gRPC joined in #1072 P3: `guard_context` views the tonic
-  metadata as the `HeaderMap` (`MetadataMap: AsRef<HeaderMap>`), `method` is
-  `POST`, `uri` is `/`, `path_params` empty; the former `GrpcGuard` /
+  zero new impls. gRPC joined in #1072 P3 and, since #1213, builds its
+  context with `GuardContext::from_parts` over the per-call head (`method`
+  `POST`, `uri` the method path, `path_params` empty); the former `GrpcGuard` /
   `GrpcRolesGuard` / `GrpcGuardContext` are gone. A per-transport guard trait
   is no longer an option to reach for — build a `GuardContext` instead.
+
+## Decisions log
+
+- **2026-11-03 (#1213, transport-layering level 2) — reverses §6 bullet 1
+  for gRPC.** "Identity extraction stays wire-specific" was right for a wire
+  with no request head; gRPC *has* one (HTTP/2 `:path` + headers), so the
+  generated tonic method now turns each call into `http::request::Parts`
+  and every extractor — identity, `#[inject(request)]` fields, custom
+  `FromRequestPartsVia` types — rides the HTTP contract. `GrpcIdentity` /
+  `JwtIdentitySpec` / `guard_context` were removed (compile-time migration:
+  a deprecated `GrpcIdentity` stub over an unsatisfiable sealed supertrait
+  fails any impl with an E0277 naming `docs/migration/grpc-identity.md`).
+  The bullet still holds for a future wire with no HTTP head.
+

@@ -17,3 +17,9 @@ message PingRequest {
 message PingReply {
   string msg = 1;
 }
+
+// Server streaming: `Self::<Assoc>` paths in a method body (constructor call
+// and `let` annotation) resolve through the declared associated type.
+service Watch {
+  rpc Watch (PingRequest) returns (stream PingReply);
+}

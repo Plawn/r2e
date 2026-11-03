@@ -2560,6 +2560,7 @@ dependencies = [
  "r2e",
  "r2e-grpc-build",
  "r2e-test",
+ "serde",
  "tonic",
  "tonic-prost",
  "tonic-reflection",

@@ -1,63 +1,55 @@
-//! Identity extraction for gRPC calls.
+//! Identity helpers for gRPC calls.
 //!
-//! Two paths exist:
-//!
-//! - **Declarative** — an `#[inject(identity)]` parameter on a
-//!   `#[grpc_routes]` method. The generated dispatch builds the type's
-//!   [`GrpcIdentity::Spec`] once at registration (from the bean graph, like
-//!   any decorator spec) and runs [`GrpcIdentity::extract`] per call, before
-//!   guards; a failure is projected onto a [`tonic::Status`] by kind.
-//!   `r2e-security` implements it for `AuthenticatedUser` under its `grpc`
-//!   feature.
+//! - **Declarative** — an `#[inject(identity)]` parameter or struct field on
+//!   a `#[grpc_routes]` service. It follows the HTTP identity contract to
+//!   the letter: the call is seen as request [`Parts`](r2e_core::http::Parts)
+//!   (see [`head`](crate::head)), and the identity type is extracted through
+//!   [`FromRequestPartsVia`](r2e_core::web::extract::FromRequestPartsVia)
+//!   against the application state — `AuthenticatedUser` reads the
+//!   `authorization` metadata (the same header) with the
+//!   `Arc<JwtClaimsValidator>` bean, compile-checked at
+//!   `register_grpc_service()`. There is no gRPC-specific identity trait.
 //! - **Manual** — [`extract_jwt_claims_from_metadata`] /
 //!   [`GrpcIdentityExtractor`] over any [`JwtClaimsValidatorLike`], for
-//!   handlers that want the raw [`StandardClaims`].
+//!   handlers that want the raw [`StandardClaims`] from a [`MetadataMap`].
 
-use std::future::Future;
 use std::sync::Arc;
 
-use r2e_core::{DecoratorSpec, Identity, Rejection, StandardClaims};
+use r2e_core::{Rejection, StandardClaims};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 
 use crate::status::rejection_to_status;
 
-/// An identity type that `#[grpc_routes]` can inject from request metadata.
+/// **Removed.** gRPC identity goes through the HTTP contract now.
 ///
-/// The extractor (the validator bean, typically) is built **once at
-/// registration** from the bean graph through [`Self::Spec`] — exactly like a
-/// guard or interceptor spec — and its [`DecoratorSpec::Deps`] are folded into
-/// the service's [`EndpointDeps`](r2e_core::EndpointDeps), so a missing
-/// validator bean is a compile error at `register_grpc_service()`.
-pub trait GrpcIdentity: Identity + Sized {
-    /// The spec that builds the per-service extractor from the bean context.
-    type Spec: DecoratorSpec;
+/// An `#[inject(identity)]` type on a `#[grpc_routes]` service is extracted
+/// through [`FromRequestPartsVia`](r2e_core::web::extract::FromRequestPartsVia)
+/// (or axum's `FromRequestParts`) from the call's request head, with the
+/// application state — the validator is a bean. This empty trait is kept for
+/// one release so an old `impl GrpcIdentity for …` fails to build pointing
+/// at the migration guide, `docs/migration/grpc-identity.md`.
+///
+/// Its sealed supertrait has no impls, so any impl fails with an E0277
+/// naming the page — even under `#[allow(deprecated)]`, where the
+/// deprecation note is silenced.
+#[deprecated(
+    since = "0.10.0",
+    note = "`GrpcIdentity` was removed: implement `FromRequestPartsVia` (or `FromRequestParts`) \
+            for the identity type instead — the validator becomes a bean. \
+            See docs/migration/grpc-identity.md"
+)]
+pub trait GrpcIdentity: sealed::__GrpcIdentityRemoved {}
 
-    /// The spec value to build the extractor with.
-    fn spec() -> Self::Spec;
-
-    /// Extract a **required** identity from the call metadata.
-    fn extract(
-        extractor: &<Self::Spec as DecoratorSpec>::Product,
-        metadata: &MetadataMap,
-    ) -> impl Future<Output = Result<Self, Rejection>> + Send;
-
-    /// Extract an **optional** identity (`Option<Self>` parameters): `None`
-    /// when no credential is presented, `Err` when one is presented but
-    /// rejected — a bad token on an optional identity is still a failure,
-    /// never silently anonymous. Default: no `authorization` metadata ⇒
-    /// `None`.
-    fn extract_optional(
-        extractor: &<Self::Spec as DecoratorSpec>::Product,
-        metadata: &MetadataMap,
-    ) -> impl Future<Output = Result<Option<Self>, Rejection>> + Send {
-        async move {
-            if metadata.get("authorization").is_none() {
-                return Ok(None);
-            }
-            Self::extract(extractor, metadata).await.map(Some)
-        }
-    }
+mod sealed {
+    /// Unsatisfiable on purpose: no type implements it, and it cannot be
+    /// named outside this crate, so `impl GrpcIdentity for T` never builds.
+    #[doc(hidden)]
+    #[diagnostic::on_unimplemented(
+        message = "`GrpcIdentity` was removed (r2e-grpc 0.10): implement `FromRequestPartsVia` / `FromRequestParts` for `{Self}` instead",
+        note = "see docs/migration/grpc-identity.md"
+    )]
+    pub trait __GrpcIdentityRemoved {}
 }
 
 /// Extract and validate a JWT from gRPC metadata.
@@ -78,8 +70,8 @@ pub async fn extract_jwt_claims_from_metadata<V: JwtClaimsValidatorLike>(
 }
 
 /// Extract the bearer token string from gRPC metadata as a typed
-/// [`Rejection`] (`Unauthenticated` kind) — the form [`GrpcIdentity`]
-/// implementations use.
+/// [`Rejection`] (`Unauthenticated` kind) — the form a hand-written
+/// extractor over a [`MetadataMap`] uses.
 ///
 /// Returns the token without the `Bearer ` prefix.
 pub fn bearer_token(metadata: &MetadataMap) -> Result<&str, Rejection> {

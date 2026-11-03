@@ -1,7 +1,7 @@
 ---
 topic: modules
 features: core
-tokens: ~2100
+tokens: ~2200
 requires: di-beans, plugins
 ---
 
@@ -133,7 +133,11 @@ app-level `.register_grpc_service::<S>()` cannot — its deps must be in the
 application state). The services are dependency-checked module-locally at
 `register_module` (deps ⊆ providers ∪ imports, decorator deps included) and
 registered by `build_state()` from the retained bean context, in declaration
-order after the module's controllers. The key implies the `GrpcServer` plugin:
+order after the module's controllers. Their extractors (struct-level
+`#[inject(identity)]` / `#[inject(request)]`, identity parameters) resolve
+against the application state like a module controller's request scope, so
+the `Arc<JwtClaimsValidator>` behind `AuthenticatedUser` must be app-visible
+(provided on the app or exported). The key implies the `GrpcServer` plugin:
 it is appended to the module's `requires_plugins`, so forgetting
 `.plugin(GrpcServer::...)` is a compile error **naming `GrpcServer`** (the
 module may also bring it itself with `plugins(GrpcServer = GrpcServer::on_port(..))`).

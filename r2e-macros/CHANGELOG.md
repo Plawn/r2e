@@ -17,6 +17,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- `#[grpc_routes]` codegen contract (#1213, cut with `--no-propagate`): the
+  generated wrapper is `__R2eGrpc<Name><S, W>` holding the state, each call
+  builds an HTTP head (`r2e_grpc::into_head`), extracts the struct request
+  scope and any identity parameter through the HTTP extractor contract, and
+  the controller implements `GrpcService<S, W>`; the identity parameter no
+  longer goes through `GrpcIdentity`. Methods run on the request façade, so
+  `Self` in a method signature is rejected (as on `#[routes]` /
+  `#[mcp_routes]`). Needs `r2e-grpc` from the same release.
+
+### Breaking
+
 - `#[mcp_routes]` members run on the generated request façade, like
   `#[routes]` handlers (#1210): `Self` in a member body names the façade (name
   associated items through the service type), and `Self` in a member
@@ -24,6 +35,19 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `#[grpc_routes]` accepts struct-level `#[inject(identity)]` /
+  `#[inject(request)]` fields (#1213; the old "identity is per method" refusal
+  is gone), `#[request_helper]` fns (sync or `async`) on the façade, and
+  associated types of the service trait (server-streaming `type XStream = …;`;
+  `Self::XStream` in a method is rewritten structurally — as a type, as the
+  declared path in expression form (`Declared::<..>::new(..)`, also in
+  struct literals, patterns, turbofish arguments and macro arguments; a
+  macro body that is not an expression list gets a token-level rewrite), or
+  as the qualified `<Declared>::..` in expression position when the declared
+  type is not a plain path; items nested in the method body — a local
+  `impl`/`trait` with its own `Self` — are left alone), with the whole head
+  extracted before a stream opens. A guard requiring an identity is accepted
+  when either the struct or the method provides one.
 - `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /
   `#[inject(request)]` fields (#1210), reusing the `#[controller]` items
   (request-data extractor, `bind_request`, façade, `guard_identity`) and
@@ -38,6 +62,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Changed
 
+- `#[routes]` post-auth guard contexts are built with
+  `GuardContext::from_parts` (#1213), then given the peer address
+  snapshotted when the request was split: an `#[inject(request)]` extractor
+  that removes or replaces `ConnectInfo` does not change what the guards see
+  (the pre-auth guards read the same snapshot).
 - Internal: the `#[routes]`, `#[mcp_routes]` and `#[grpc_routes]` codegen is
   consolidated (#1212) — one member model (`parse_member`/`MemberRules`), one
   decorator storage layout for MCP and gRPC (`MemberDecoSets`), one

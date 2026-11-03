@@ -69,13 +69,14 @@ impl EndpointDeps for UserGrpcService {
     type Deps = r2e::type_list::TNil;
 }
 
-impl GrpcService for UserGrpcService {
+impl<S: Clone + Send + Sync + 'static> GrpcService<S> for UserGrpcService {
     fn service_name() -> &'static str {
         "demo.Users"
     }
 
     fn add_to_routes(
         routes: r2e::r2e_grpc::tonic::service::Routes,
+        _state: &S,
         _ctx: &Arc<BeanContext>,
     ) -> r2e::r2e_grpc::tonic::service::Routes {
         routes
@@ -100,13 +101,14 @@ impl EndpointDeps for GreeterService {
     type Deps = r2e::type_list::TCons<GreetingRepo, r2e::type_list::TNil>;
 }
 
-impl GrpcService for GreeterService {
+impl<S: Clone + Send + Sync + 'static> GrpcService<S> for GreeterService {
     fn service_name() -> &'static str {
         "demo.Greeter"
     }
 
     fn add_to_routes(
         routes: r2e::r2e_grpc::tonic::service::Routes,
+        _state: &S,
         _ctx: &Arc<BeanContext>,
     ) -> r2e::r2e_grpc::tonic::service::Routes {
         routes

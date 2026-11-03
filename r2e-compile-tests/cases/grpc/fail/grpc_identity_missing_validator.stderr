@@ -1,26 +1,45 @@
-error[E0277]: type `Arc<JwtClaimsValidator>` was not provided to the AppBuilder
-  --> cases/grpc/fail/grpc_identity_missing_validator.rs:33:38
+error[E0277]: bean `Arc<JwtClaimsValidator>` is not present in the application state
+  --> cases/grpc/fail/grpc_identity_missing_validator.rs:34:38
    |
-33 |             .register_grpc_service::<PingService>()
-   |                                      ^^^^^^^^^^^ missing `.provide::<Arc<JwtClaimsValidator>>()` or `.register::<Arc<JwtClaimsValidator>>()`
+34 |             .register_grpc_service::<PingService>()
+   |              ---------------------   ^^^^^^^^^^^ `Arc<JwtClaimsValidator>` was never provided or registered on the AppBuilder
+   |              |
+   |              required by a bound introduced by this call
    |
-   = help: the trait `Contains<Arc<JwtClaimsValidator>, _>` is not implemented for `HNil`
-   = note: every dependency must be provided or registered as a bean before calling `build_state()`
-   = help: the following other types implement trait `Contains<H, Idx>`:
-             `BeanState<L>` implements `Contains<H, Idx>`
-             `HCons<H, T>` implements `Contains<H, Here>`
-             `HCons<X, T>` implements `Contains<H, There<I>>`
-             `TCons<H, T>` implements `Contains<H, Here>`
-             `TCons<X, T>` implements `Contains<H, There<I>>`
-   = note: required for `HCons<ShutdownToken, HNil>` to implement `Contains<Arc<JwtClaimsValidator>, There<_>>`
+   = help: the trait `HasBean<Arc<JwtClaimsValidator>, _>` is not implemented for `HNil`
+   = note: add `.provide(value)` or `.register::<Arc<JwtClaimsValidator>>()` before `build_state()` so the bean is part of the provision list
+help: the following other types implement trait `HasBean<T, Idx>`
+  --> $WORKSPACE/r2e-core/src/type_list.rs
+   |
+   |   impl<H: Clone, Tail> HasBean<H, Here> for HCons<H, Tail> {
+   |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `HCons<H, Tail>` implements `HasBean<H, Here>`
+...
+   | / impl<H, Tail, T, I> HasBean<T, There<I>> for HCons<H, Tail>
+   | | where
+   | |     Tail: HasBean<T, I>,
+   | |________________________^ `HCons<H, Tail>` implements `HasBean<T, There<I>>`
+...
+   | / impl<L, T, Idx> HasBean<T, Idx> for BeanState<L>
+   | | where
+   | |     L: HasBean<T, Idx>,
+   | |_______________________^ `BeanState<L>` implements `HasBean<T, Idx>`
+   = note: required for `HCons<ShutdownToken, HNil>` to implement `HasBean<Arc<JwtClaimsValidator>, There<_>>`
    = note: 1 redundant requirement hidden
-   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `Contains<Arc<JwtClaimsValidator>, There<_>>`
-   = note: required for `TCons<Arc<JwtClaimsValidator>, TNil>` to implement `AllSatisfied<BeanState<HCons<ShutdownToken, HNil>>, (There<_>, _)>`
+   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `HasBean<Arc<JwtClaimsValidator>, There<_>>`
+   = note: required for `AuthenticatedUser` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaBean<There<_>>>`
+note: required for `PingService` to implement `r2e::prelude::GrpcService<BeanState<HCons<ShutdownToken, HNil>>, ((), ViaBean<There<_>>)>`
+  --> cases/grpc/fail/grpc_identity_missing_validator.rs:16:1
+   |
+16 | #[grpc_routes(ping::ping_server::Ping)]
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+17 | impl PingService {
+   |      ^^^^^^^^^^^
 note: required by a bound in `register_grpc_service`
   --> $WORKSPACE/r2e-grpc/src/lib.rs
    |
    |     fn register_grpc_service<S>(self) -> Self
    |        --------------------- required by a bound in this associated function
-...
-   |         S::Deps: AllSatisfied<T, DepIdx>;
-   |                  ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `AppBuilderGrpcExt::register_grpc_service`
+   |     where
+   |         S: GrpcService<T, W> + EndpointDeps,
+   |            ^^^^^^^^^^^^^^^^^ required by this bound in `AppBuilderGrpcExt::register_grpc_service`
+   = note: this error originates in the attribute macro `grpc_routes` (in Nightly builds, run with -Z macro-backtrace for more info)

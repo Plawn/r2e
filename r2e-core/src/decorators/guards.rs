@@ -295,6 +295,39 @@ pub fn no_extensions() -> &'static Extensions {
 }
 
 impl<'a, I: Identity> GuardContext<'a, I> {
+    /// Build the context from a request head — the one constructor every
+    /// transport goes through (HTTP routes, MCP members, gRPC methods).
+    ///
+    /// `method`, `uri`, `headers` and `extensions` borrow `parts`;
+    /// `peer_addr` is read from the [`ConnectInfo<SocketAddr>`](crate::http::ConnectInfo)
+    /// extension the server deposits when it serves with connection info
+    /// (`None` otherwise). A transport without real HTTP request parts hands
+    /// in synthesized ones (MCP's hand-built calls use an empty head, gRPC
+    /// builds `POST /<service>/<method>` over the call metadata).
+    #[must_use]
+    pub fn from_parts(
+        parts: &'a crate::http::Parts,
+        method_name: &'static str,
+        controller_name: &'static str,
+        identity: Option<&'a I>,
+        path_params: PathParams<'a>,
+    ) -> Self {
+        Self {
+            method_name,
+            controller_name,
+            method: &parts.method,
+            headers: &parts.headers,
+            uri: &parts.uri,
+            extensions: &parts.extensions,
+            peer_addr: parts
+                .extensions
+                .get::<crate::http::ConnectInfo<SocketAddr>>()
+                .map(|c| c.0),
+            path_params,
+            identity,
+        }
+    }
+
     /// The request head as the shared [`RequestHead`] view.
     ///
     /// Lets a guard hand the request to machinery that is not guard-specific —

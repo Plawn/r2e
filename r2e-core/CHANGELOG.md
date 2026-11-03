@@ -17,6 +17,24 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `GuardContext::from_parts(parts, method_name, controller_name, identity,
+  path_params)` (#1213): builds the guard context from a request head
+  (`peer_addr` read from the `ConnectInfo<SocketAddr>` extension). The one
+  constructor HTTP routes, MCP members and gRPC methods go through; the
+  struct's fields are unchanged and stay public.
+
+- `ModuleEndpoints<T, W = ()>` gains an inference-only witness parameter
+  (#1213; default `()`, so existing impls and bounds still compile): a
+  transport whose endpoints are generic over the state (`GrpcService<S, W>`)
+  threads its per-endpoint witnesses through feature modules. The
+  `ModuleList` cons impl carries the endpoint witness beside the controller
+  one: its witness tuple now nests `(controllers, endpoints)` per module —
+  `((WC, WE), WR)` where it was `(WC, WR)`. `ModuleList` is an
+  inference-only fold that user code never names (its own docs say so), so
+  the reshaped witness is not a source break — which is why this is filed
+  under Added, not Breaking. The trait is now `#[doc(hidden)]` to make that
+  contract explicit.
+
 - `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
   `Clone` bound `#[controller]` puts on the generated request-data type, so a
   controller with a non-`Clone` request-scoped field keeps compiling and only

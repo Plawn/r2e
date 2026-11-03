@@ -389,3 +389,43 @@ fn guard_context_identity_claims() {
     // Non-standard claims stay in `extra` and are read through `get`.
     assert_eq!(seen.get("tenant").and_then(|v| v.as_str()), Some("acme"));
 }
+
+#[test]
+fn from_parts_borrows_the_head_and_reads_the_peer_from_connect_info() {
+    let mut parts = r2e_core::http::Request::builder()
+        .method(r2e_core::http::Method::POST)
+        .uri("/greeter.Greeter/SayHello")
+        .header("x-tenant-id", "acme")
+        .body(())
+        .unwrap()
+        .into_parts()
+        .0;
+    let peer: SocketAddr = "10.0.0.7:5000".parse().unwrap();
+    parts.extensions.insert(r2e_core::http::ConnectInfo(peer));
+    let user = TestIdentity::new("alice");
+    let raw = [("id", "42")];
+    let ctx = GuardContext::from_parts(
+        &parts,
+        "say_hello",
+        "Greeter",
+        Some(&user),
+        PathParams::from_pairs(&raw),
+    );
+    assert_eq!(ctx.method_name, "say_hello");
+    assert_eq!(ctx.controller_name, "Greeter");
+    assert_eq!(ctx.method, r2e_core::http::Method::POST);
+    assert_eq!(ctx.uri.path(), "/greeter.Greeter/SayHello");
+    assert_eq!(ctx.headers.get("x-tenant-id").unwrap(), "acme");
+    assert_eq!(ctx.peer_addr, Some(peer));
+    assert_eq!(ctx.identity_sub(), Some("alice"));
+    assert_eq!(ctx.path_params.get("id"), Some("42"));
+}
+
+#[test]
+fn from_parts_without_connect_info_has_no_peer() {
+    let parts = r2e_core::http::Request::new(()).into_parts().0;
+    let ctx: GuardContext<'_, NoIdentity> =
+        GuardContext::from_parts(&parts, "m", "C", None, PathParams::EMPTY);
+    assert_eq!(ctx.peer_addr, None);
+    assert!(ctx.identity.is_none());
+}

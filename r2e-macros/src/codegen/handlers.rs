@@ -860,6 +860,7 @@ impl<'a> Pipeline<'a> {
             quote! { __core },
             identity_path::Arrival::ExtractHere {
                 krate: &self.krate,
+                state: quote! { &__state },
                 on_reject: self.project(quote! { __rej }),
             },
         )
@@ -1018,24 +1019,29 @@ impl<'a> Pipeline<'a> {
 
     /// Post-auth guards: controller-level (`"*"` context, one stateful-guard
     /// bucket per controller) first, then the method's own. Requires
-    /// [`Self::head_bindings`] in scope.
+    /// `__parts` (not yet consumed by the body) and [`Self::head_bindings`]
+    /// (`__path_params`) in scope.
     fn guards(&self) -> TokenStream {
         let krate = &self.krate;
         let controller_name_q = &self.controller_name_q;
         let fn_name_str = &self.fn_name_str;
         let identity = self.guard_identity_expr();
+        // `peer_addr` is the snapshot taken when the request was split
+        // (`open`), not re-read from the post-extraction head: an extractor
+        // that removes or replaces `ConnectInfo` must not change what the
+        // guards see (pre-auth guards read the same snapshot).
         let ctx = |method_name: TokenStream| {
             quote! {
-                #krate::GuardContext {
-                    method_name: #method_name,
-                    controller_name: #controller_name_q,
-                    method: __method,
-                    headers: __headers,
-                    uri: __uri,
-                    extensions: __extensions,
-                    peer_addr: __peer_addr,
-                    path_params: __path_params,
-                    identity: #identity,
+                {
+                    let mut __ctx = #krate::GuardContext::from_parts(
+                        &__parts,
+                        #method_name,
+                        #controller_name_q,
+                        #identity,
+                        __path_params,
+                    );
+                    __ctx.peer_addr = __peer_addr;
+                    __ctx
                 }
             }
         };

@@ -1,9 +1,11 @@
 //! The full post-auth guard family compiles on `#[grpc_routes]`: impl-level
 //! `#[guard]`, method-level `#[guard]`/`#[roles]`/`#[all_roles]` over a
 //! required or optional `#[inject(identity)]` parameter, identity in any
-//! parameter position, and `#[intercept]` alongside. The identity's
-//! validator bean and the guard's bean are folded into `EndpointDeps`, so
-//! `register_grpc_service()` type-checks only with both provided.
+//! parameter position, a struct-level `#[inject(identity)]` /
+//! `#[inject(request)]` scope, and `#[intercept]` alongside. The guard's bean
+//! is folded into `EndpointDeps` and the identity's validator bean into the
+//! `GrpcService<S, W>` witness, so `register_grpc_service()` type-checks only
+//! with both provided.
 
 use r2e::prelude::*;
 use r2e::r2e_grpc::AppBuilderGrpcExt;
@@ -71,6 +73,24 @@ impl AnonymousPingService {
     }
 }
 
+#[controller]
+pub struct StructIdentityPingService {
+    #[inject(identity)]
+    user: AuthenticatedUser,
+    #[inject(request)]
+    headers: HeaderMap,
+}
+
+#[grpc_routes(ping::ping_server::Ping)]
+#[guard(ApiKey::spec())]
+impl StructIdentityPingService {
+    #[roles("admin")]
+    async fn ping(&self, request: Req) -> Resp {
+        let _ = (self.user.sub(), self.headers.len(), request);
+        unimplemented!()
+    }
+}
+
 fn main() {
     let _ = async {
         AppBuilder::new()
@@ -81,5 +101,6 @@ fn main() {
             .register_grpc_service::<PingService>()
             .register_grpc_service::<OptionalPingService>()
             .register_grpc_service::<AnonymousPingService>()
+            .register_grpc_service::<StructIdentityPingService>()
     };
 }

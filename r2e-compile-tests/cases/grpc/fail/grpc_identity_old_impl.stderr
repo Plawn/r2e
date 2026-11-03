@@ -1,0 +1,59 @@
+error[E0437]: type `Spec` is not a member of trait `GrpcIdentity`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:23:5
+   |
+23 |     type Spec = ();
+   |     ^^^^^^^^^^^^^^^ not a member of trait `GrpcIdentity`
+
+error[E0407]: method `spec` is not a member of trait `GrpcIdentity`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:25:5
+   |
+25 |     fn spec() -> Self::Spec {}
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ not a member of trait `GrpcIdentity`
+
+error[E0407]: method `extract` is not a member of trait `GrpcIdentity`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:27:5
+   |
+27 | /     async fn extract(_: &(), metadata: &MetadataMap) -> Result<Self, HttpError> {
+28 | |         let key = metadata.get("x-api-key").unwrap().to_str().unwrap().to_owned();
+29 | |         Ok(ApiKeyUser { key })
+30 | |     }
+   | |_____^ not a member of trait `GrpcIdentity`
+
+warning: use of deprecated trait `r2e::prelude::GrpcIdentity`: `GrpcIdentity` was removed: implement `FromRequestPartsVia` (or `FromRequestParts`) for the identity type instead — the validator becomes a bean. See docs/migration/grpc-identity.md
+ --> cases/grpc/fail/grpc_identity_old_impl.rs:9:20
+  |
+9 | use r2e::r2e_grpc::GrpcIdentity;
+  |                    ^^^^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated trait `r2e::prelude::GrpcIdentity`: `GrpcIdentity` was removed: implement `FromRequestPartsVia` (or `FromRequestParts`) for the identity type instead — the validator becomes a bean. See docs/migration/grpc-identity.md
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:22:6
+   |
+22 | impl GrpcIdentity for ApiKeyUser {
+   |      ^^^^^^^^^^^^
+
+error[E0277]: `GrpcIdentity` was removed (r2e-grpc 0.10): implement `FromRequestPartsVia` / `FromRequestParts` for `ApiKeyUser` instead
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:22:23
+   |
+22 | impl GrpcIdentity for ApiKeyUser {
+   |                       ^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `r2e::r2e_grpc::identity::sealed::__GrpcIdentityRemoved` is not implemented for `ApiKeyUser`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:12:1
+   |
+12 | pub struct ApiKeyUser {
+   | ^^^^^^^^^^^^^^^^^^^^^
+   = note: see docs/migration/grpc-identity.md
+note: required by a bound in `GrpcIdentity`
+  --> $WORKSPACE/r2e-grpc/src/identity.rs
+   |
+   | pub trait GrpcIdentity: sealed::__GrpcIdentityRemoved {}
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `GrpcIdentity`
+   = note: `GrpcIdentity` is a "sealed trait", because to implement it you also need to implement `r2e::r2e_grpc::identity::sealed::__GrpcIdentityRemoved`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
+
+error[E0220]: associated type `Spec` not found for `Self`
+  --> cases/grpc/fail/grpc_identity_old_impl.rs:25:24
+   |
+25 |     fn spec() -> Self::Spec {}
+   |                        ^^^^ associated type `Spec` not found

@@ -157,7 +157,9 @@ Design record: `plans/error-projection.md`. User guide: `llm/error-handling.md`.
    `#[guard(X::new())]` on the `#[grpc_routes]` impl or method. Role checks use
    `#[roles("admin")]` with an `#[inject(identity)] user: AuthenticatedUser` parameter on the
    method (struct-level identity is a compile error on gRPC). Hand-written mappings
-   call `r2e_grpc::rejection_to_status(rejection)`.
+   call `r2e_grpc::rejection_to_status(rejection)`. *Superseded for identity by
+   [grpc-identity.md](grpc-identity.md): since r2e-grpc 0.10 struct-level identity
+   works on gRPC and the gRPC-specific identity trait is gone.*
 
 10. **MCP.** Delete any use of `guard_response_to_error`; `McpError::from(rejection)`
     carries the kind. Tests asserting on the `-32600` message text should assert on

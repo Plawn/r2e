@@ -1,7 +1,8 @@
 //! An `#[inject(identity)] AuthenticatedUser` parameter on a `#[grpc_routes]`
-//! method needs the `Arc<JwtClaimsValidator>` bean (its `GrpcIdentity::Spec`
-//! dep) — folded into `EndpointDeps`, so registering the service without
-//! providing it is rejected at `register_grpc_service()`.
+//! method is extracted through `FromRequestPartsVia<S, M>`, whose bean (the
+//! `Arc<JwtClaimsValidator>`) must be in the state: the witness `W` of
+//! `GrpcService<S, W>` makes registering the service without providing it a
+//! compile error at `register_grpc_service()`.
 
 use r2e::prelude::*;
 use r2e::r2e_grpc::AppBuilderGrpcExt;

@@ -53,7 +53,7 @@ unaffected (additive). `FgaCheck` (r2e-openfga) sets it, since it checks
 `user:{identity.sub()}`.
 
 The macro combines the type-level `REQUIRES_IDENTITY` const with the route's
-identity source (see `handlers::generate_guard_context`) and the
+identity source (see `handlers.rs` `guard_identity_expr`) and the
 `#[controller]`-side `HAS_STRUCT_IDENTITY` const:
 
 | Guard placement | Identity source | Identity-requiring guard |
@@ -334,7 +334,8 @@ macro), not just `#[intercept]`. Semantics (locked in task #906):
   `#[bean]`/`#[grpc_routes]` errors via `deny_decorator_above_impl` in
   `r2e-macros/src/lib.rs` (attribute macros expand top-down, so the
   transformer would never see it). `#[grpc_routes]` impl blocks accept
-  `#[intercept]` only (`validate_grpc_impl_attrs`).
+  `#[guard]`/`#[roles]`/`#[intercept]`; `#[layer]`/`#[middleware]` are
+  rejected (`cases/grpc/fail/grpc_impl_layer_not_supported.rs`).
 
 Tests: `r2e-core/tests/decorators/controller_level.rs` (runtime semantics) +
 `r2e-compile-tests/cases/decorators/{pass,fail}/controller_level_*` and

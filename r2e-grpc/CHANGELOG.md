@@ -15,6 +15,42 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- gRPC identity rides the HTTP extractor contract (#1213). `GrpcIdentity` is
+  removed: an `#[inject(identity)]` type is extracted through
+  `FromRequestPartsVia<S, M>` (or `FromRequestParts`) against the app state,
+  and its validator is a bean. The trait left behind is an empty
+  `#[deprecated]` stub over an unsatisfiable sealed supertrait, so an old
+  `impl GrpcIdentity for …` fails to build with an E0277 naming
+  `docs/migration/grpc-identity.md` — even under `#[allow(deprecated)]`.
+- `GrpcService<S, W>` is generic over the application state `S` and an
+  inference-only witness `W` (like `McpService<S, W>`); `add_to_routes` takes
+  `(routes, state: &S, ctx)`. A missing extractor bean (the
+  `Arc<JwtClaimsValidator>` behind `AuthenticatedUser`) is a compile error at
+  `register_grpc_service`. `AppBuilderGrpcExt` gains the witness parameter;
+  `ModuleGrpcServices` implements `ModuleEndpoints<T, (W0, ..)>`.
+- `guard_context(&tonic::Request, ..)` is removed: guards see a
+  `GuardContext::from_parts` built over the per-call head.
+- Missing credentials on an `AuthenticatedUser` identity answer
+  `Unauthenticated` with the HTTP extractor's message (`"Unauthorized"`,
+  previously `"Missing authorization metadata"`); a validator failure keeps
+  `"Unauthorized"` but no longer carries `www-authenticate: Bearer` metadata
+  (the HTTP extractor rejects with `HttpError` — known follow-up).
+
+### Added
+
+- `head` module: `into_head` / `from_head` turn a `tonic::Request` into an
+  `http::request::Parts` head (POST, `/<service>/<method>` uri, metadata moved
+  into the headers without copying, extensions moved — caller-owned entries
+  kept —, `ConnectInfo` from the peer address unless one is already there) and
+  back; no `MetadataMap` is deposited (an extractor wanting the tonic view
+  builds `MetadataMap::from_headers(parts.headers.clone())`, paying the clone
+  only where used); `CaptureMethodPath` is the routing layer that records the real
+  method path (`MethodPath`). `#[grpc_routes]` services are wrapped in it.
+- Struct-level `#[inject(identity)]` / `#[inject(request)]` fields and server
+  streaming rpcs on `#[grpc_routes]` services (see `r2e-macros`).
+
 ## [0.9.0] - 2026-10-31
 
 ### Changed

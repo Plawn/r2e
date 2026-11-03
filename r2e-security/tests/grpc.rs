@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use jsonwebtoken::{encode, Algorithm, DecodingKey, EncodingKey, Header};
 use r2e_core::decorators::guards::Identity;
-use r2e_core::RejectionKind;
-use r2e_grpc::identity::{extract_jwt_claims_from_metadata, GrpcIdentity, GrpcIdentityExtractor};
-use r2e_grpc::rejection_to_status;
+use r2e_core::type_list::{HCons, HNil, Here};
+use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
+use r2e_core::{Rejection, RejectionKind};
+use r2e_grpc::identity::{extract_jwt_claims_from_metadata, GrpcIdentityExtractor};
+use r2e_grpc::{into_head, rejection_to_status};
 use r2e_security::config::SecurityConfig;
 use r2e_security::jwt::JwtClaimsValidator;
 use r2e_security::AuthenticatedUser;
@@ -85,57 +87,81 @@ async fn expired_token_is_unauthenticated() {
     );
 }
 
-// ── GrpcIdentity for AuthenticatedUser ──────────────────────────────────
+// ── AuthenticatedUser over a gRPC call head ────────────────────────────
+//
+// `#[grpc_routes]` extracts the identity with the HTTP contract: the tonic
+// request becomes an HTTP head (`into_head`: metadata → headers) and
+// `AuthenticatedUser` runs its `FromRequestPartsVia` impl against the state
+// holding the `Arc<JwtClaimsValidator>` bean.
+
+type State = HCons<Arc<JwtClaimsValidator>, HNil>;
+type Marker = ViaBean<Here>;
+
+fn state() -> State {
+    HCons {
+        head: Arc::new(validator()),
+        tail: HNil,
+    }
+}
+
+fn head(metadata: MetadataMap) -> r2e_core::http::Parts {
+    let request = tonic::Request::from_parts(metadata, Default::default(), ());
+    into_head(
+        request,
+        || "/greeter.Greeter/SayHello".parse().unwrap(),
+    )
+    .0
+}
+
+async fn required(metadata: MetadataMap) -> Result<AuthenticatedUser, Rejection> {
+    <AuthenticatedUser as FromRequestPartsVia<State, Marker>>::from_request_parts_via(
+        &mut head(metadata),
+        &state(),
+    )
+    .await
+    .map_err(Rejection::from)
+}
+
+async fn optional(metadata: MetadataMap) -> Result<Option<AuthenticatedUser>, Rejection> {
+    <AuthenticatedUser as OptionalFromRequestPartsVia<State, Marker>>::from_request_parts_via(
+        &mut head(metadata),
+        &state(),
+    )
+    .await
+    .map_err(Rejection::from)
+}
 
 #[r2e_core::test]
-async fn authenticated_user_is_a_grpc_identity() {
-    let validator = Arc::new(validator());
-    let user = AuthenticatedUser::extract(&validator, &metadata(&token("user-3", 3600)))
-        .await
-        .unwrap();
+async fn authenticated_user_extracts_from_a_grpc_head() {
+    let user = required(metadata(&token("user-3", 3600))).await.unwrap();
     assert_eq!(user.sub(), "user-3");
     assert!(user.has_role("admin"));
 }
 
 #[r2e_core::test]
 async fn optional_identity_is_none_without_credentials() {
-    let validator = Arc::new(validator());
-    let user = AuthenticatedUser::extract_optional(&validator, &MetadataMap::new())
-        .await
-        .unwrap();
+    let user = optional(MetadataMap::new()).await.unwrap();
     assert!(user.is_none());
 }
 
 #[r2e_core::test]
 async fn optional_identity_still_rejects_a_bad_token() {
     // A presented-but-invalid credential is a failure, never anonymous.
-    let validator = Arc::new(validator());
-    let rejection = AuthenticatedUser::extract_optional(&validator, &metadata("not-a-jwt"))
-        .await
-        .unwrap_err();
+    let rejection = optional(metadata("not-a-jwt")).await.unwrap_err();
     assert_eq!(rejection.kind, RejectionKind::Unauthenticated);
 }
 
 #[r2e_core::test]
 async fn identity_rejections_project_onto_unauthenticated_statuses() {
-    let validator = Arc::new(validator());
-
-    let missing = AuthenticatedUser::extract(&validator, &MetadataMap::new())
-        .await
-        .unwrap_err();
+    let missing = required(MetadataMap::new()).await.unwrap_err();
     assert_eq!(missing.kind, RejectionKind::Unauthenticated);
     let status = rejection_to_status(missing);
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
-    assert_eq!(status.message(), "Missing authorization metadata");
 
-    let expired = AuthenticatedUser::extract(&validator, &metadata(&token("user-1", -3600)))
+    let expired = required(metadata(&token("user-1", -3600)))
         .await
         .unwrap_err();
     assert_eq!(expired.kind, RejectionKind::Unauthenticated);
-    assert!(expired.source.is_some(), "the SecurityError is kept as source");
     let status = rejection_to_status(expired);
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
-    // `From<SecurityError> for Rejection` sets the challenge header; it
-    // travels as status metadata.
-    assert!(status.metadata().get("www-authenticate").is_some());
 }

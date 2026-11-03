@@ -15,6 +15,7 @@ mod fixtures;
 mod layers;
 mod lifecycle;
 mod live_config;
+mod peer_addr;
 mod proxy_routes;
 mod scope;
 mod streaming_meta;

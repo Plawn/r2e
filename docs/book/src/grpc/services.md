@@ -121,7 +121,7 @@ The macro produces:
 
 - A wrapper struct `__R2eGrpc_<Name>` that holds an `Arc` to the service core
 - An `#[async_trait]` implementation of the tonic service trait (e.g., `Greeter`)
-- A `GrpcService` trait implementation that wires everything into the builder (no state generic — it constructs from the `BeanContext` and exposes `add_to_routes(Routes, &Arc<BeanContext>)`; each registered service folds into a single `tonic::service::Routes` collection, drained once by the `GrpcServer` plugin at serve time)
+- A `GrpcService<S, W>` implementation that wires everything into the builder (generic over the application state `S`, with an inference-only witness `W` like `Controller<S, W>`; it constructs the core from the `BeanContext` and exposes `add_to_routes(Routes, &S, &Arc<BeanContext>)`; each registered service folds into a single `tonic::service::Routes` collection, drained once by the `GrpcServer` plugin at serve time)
 
 Each method goes through the pipeline: core construction via `ContextConstruct` (`from_context` pulls each `#[inject]` field by type from the resolved bean graph, once at registration), interceptor wrapping, then the method body.
 
@@ -320,7 +320,7 @@ AppBuilder::new()
 
 ## Requirements
 
-- gRPC service structs must **not** have struct-level `#[inject(identity)]` fields — the core is built from the bean context via `ContextConstruct`, which has no request to extract identity from (use param-level identity once macro support lands)
+- Struct-level `#[inject(identity)]` / `#[inject(request)]` fields are extracted per call from the call head (see [Guards and Identity](./guards-and-identity.md)); the core itself is built once from the bean context via `ContextConstruct`
 - The `GrpcServer` plugin must be installed before `build_state()`
 - Proto files are compiled at build time — changes to `.proto` files require a `cargo build`
 
@@ -371,9 +371,10 @@ See [CLI Reference](../reference/cli-reference.md) for full details.
 | Decorator | Description |
 |-----------|-------------|
 | `#[intercept(...)]` | Interceptors (impl and method level) |
-| `#[roles(...)]` / `#[all_roles(...)]` | Role guards (impl and method level); the method needs an `#[inject(identity)]` parameter |
+| `#[roles(...)]` / `#[all_roles(...)]` | Role guards (impl and method level); the service needs a struct-level identity or the method an `#[inject(identity)]` parameter |
 | `#[guard(...)]` | Any `Guard<I>` (impl and method level) — the same guards as HTTP |
-| `#[inject(identity)]` | Identity method parameter (`AuthenticatedUser` / `Option<AuthenticatedUser>`) from `authorization` metadata |
+| `#[inject(identity)]` | Identity struct field or method parameter (`AuthenticatedUser` / `Option<AuthenticatedUser>`) from `authorization` metadata, through the HTTP extractor contract |
+| `#[inject(request)]` | Request-scoped struct field (`HeaderMap`, `Uri`, `ConnectInfo<SocketAddr>`, any `FromRequestParts`) |
 
 Rejections become `tonic::Status` by kind. See [Guards and Identity](./guards-and-identity.md).
 

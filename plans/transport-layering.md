@@ -135,6 +135,35 @@ façade-binding block.
 
 ## 3. Level 2 — one request head, one identity contract (product, core break)
 
+**Status: DONE (2026-11-03).** Task #1213, branch `task/transport-layering-l2`
+(stacked on L1).
+
+Exit-criteria outcome: generated code builds every `GuardContext` through
+`GuardContext::from_parts` (HTTP, MCP, gRPC; struct literals survive only in
+tests). `grep GrpcIdentity` is not empty but only names the deprecated
+empty stub (compile-time migration: its sealed supertrait carries a
+`#[diagnostic::on_unimplemented]`, so an old impl fails with an E0277 naming
+the migration page even under `#[allow(deprecated)]`, next to the "not a
+member of trait" errors and the deprecation warning), the changelogs and
+`docs/migration/grpc-identity.md`. example-grpc exposes
+`AccountGreeter` (struct-level `AuthenticatedUser`, `#[roles]`, a
+`#[request_helper]`), a server stream whose head is extracted before it
+opens, and head/`ConnectInfo`/`Query` services. The missing-validator
+trybuild case now fails at `register_grpc_service` through the
+`GrpcService<S, W>` witness (stderr re-blessed). HTTP and MCP suites
+unchanged. Deviations: item 4 uses `Arrival::ExtractHere` against the
+wrapper's state (not `FromDeposit`); the URI comes from a
+`CaptureMethodPath` routing layer (tonic trait methods do not see it) with
+a `/<service>/<PascalCase(fn)>` fallback; the head deposits no
+`MetadataMap` (an extractor builds `MetadataMap::from_headers(parts.headers.clone())`
+itself) and inserts `ConnectInfo` only when none is there; HTTP guards keep
+reading the peer address snapshotted before extraction; `#[anonymous]` stays disallowed on
+gRPC (use `Option<I>`); the identity rejection is now the HTTP one
+(`Unauthorized`, no `www-authenticate` — the `AuthenticatedUser` `HttpError`
+rejection follow-up); r2e-core change is additive (`ModuleEndpoints<T, W>`
+witness), no core break. The transport-adapters §6 reversal is in its
+Decisions log.
+
 **Goal.** `#[inject(identity)]`, `#[inject(request)]`, struct-level identity and
 every `FromRequestPartsVia` extractor work on **every** transport the same
 way; a `GuardContext` is built by one function. Moving a service from HTTP
@@ -200,6 +229,71 @@ suites unchanged.
 sessions, plus one release PR.
 
 ## 4. Level 3 — neutral operations exposed on several transports (product decision)
+
+**Status: NEXT — decided 2026-11-03, to run in a fresh session.** The user
+decided level 3 goes ahead: 3a first; 3b after its own design round; 3c only
+if the explicit registration pair reads badly in a real app. This block is
+the handoff; the rest of §4 is the design as written before levels 1–2.
+
+- *Prerequisites.* #132 (level 1) merged; #133 (level 2) merged; release PR
+  cut with `scripts/bump-version.sh` (`r2e-grpc breaking`, `r2e-security
+  breaking`, `r2e-macros breaking --no-propagate` + patch re-pins on
+  `r2e-core`/`r2e-executor`/`r2e-openapi`/`r2e`; façade `r2e` 0.11.0);
+  `scripts/smoke-registry.sh` green after it. Check `git log master` and
+  the crates' `CHANGELOG.md` before starting — do not assume.
+- *Method.* As #1212/#1213: one Tasker ticket (label `macros`, `breaking`
+  for 3a), one branch off `master`, implementation by an Opus subagent,
+  full verification (r2e-macros, r2e-compile-tests, r2e-mcp, r2e-grpc,
+  example-app/-mcp/-grpc, llm-doctests, `clippy --workspace --tests -D
+  warnings`, `check-versions`/`check-dep-boundary`/`check-source-boundary`/
+  `check-llm-docs`), codex gpt-6-astra review loop to `VERDICT: MERGE`.
+  Never `cargo fmt --all`; no version change in the feature PR.
+- *Where the shared pieces live (after levels 1–2).* `r2e-macros/src/parsing/
+  member.rs` (one `MemberDef`/`parse_member`/`MemberRules`),
+  `codegen/decorators.rs` (`MemberDecoSets`), `codegen/identity_path.rs`
+  (`bind_facade`, `Arrival`, `guard_identity`), `codegen/registration.rs`
+  (`DepsFold`, `Witness`), `r2e-core/src/decorators/guards.rs`
+  (`GuardContext::from_parts`), `r2e-grpc/src/head.rs`. The three impl
+  macros still have separate codegen roots (`codegen/handlers.rs`,
+  `mcp_codegen/`, `grpc_codegen/`): 3a merges the HTTP and MCP ones.
+- *The blocker 3a removes.* One type = one `EndpointDeps` impl
+  (`docs/claude/transport-adapters.md` §4): the merged macro folds one
+  `EndpointDeps` over every HTTP and MCP site and emits both
+  `Controller<S, W>` and `McpService<S, W>`. Registration stays explicit
+  per transport. `#[mcp_routes]` becomes an alias of the merged macro for
+  one release, then is removed (façade minor, `Breaking` entry in
+  `r2e-macros`/`r2e-mcp`/`r2e` changelogs, migration page if more than a
+  rename).
+- *Design notes carried from level 2.* (1) `#[grpc_routes]` rewrites
+  `Self::<Assoc>` in moved method bodies (`parsing/grpc_routes_parsing.rs`,
+  `substitute_self_assoc`); it took three review passes to cover and has
+  documented residual limits. If 3a re-homes gRPC methods too, keep user
+  methods inside a macro-generated trait impl carrying the associated types
+  so the compiler resolves `Self::X` — do not extend the rewrite.
+  (2) Every state-generic registration trait carries its own inference-only
+  witness `W` (`Controller`, `McpService`, `GrpcService`) and every fold
+  layer threads it (`ModuleControllers<T, WC>`, `ModuleEndpoints<T, WE>`,
+  `ModuleList` `((WC, WE), WR)`); a fourth transport adds a channel. 3c is
+  the point to collapse them — not before. (3) Tasker #1214 (one
+  config-error report formatter) is grouped with 3a: the first adapter that
+  would otherwise copy the banner uses the shared formatter instead.
+- *Follow-ups carried, not blocking 3a.* `GrpcIdentity` deprecated stub:
+  remove at the `r2e-grpc` release after the one that ships #1213
+  (`Breaking` entry, migration page already exists). `AuthenticatedUser`'s
+  rejection is `HttpError`, so a validator failure drops `www-authenticate`
+  on HTTP and on gRPC (metadata). `#[anonymous]` stays disallowed on gRPC
+  (`Option<I>` instead). Level-1 review follow-ups in §2 (hidden decorator
+  item-name collision; `Self` in HTTP decorator expressions). `#[mcp_routes]`
+  deliberate drifts in `r2e-macros/CHANGELOG.md` (#1212).
+- *Exit criteria for 3a (to confirm in the ticket).* One impl carrying
+  `#[get]`/`#[post]` and `#[tool]`/`#[resource]`/`#[prompt]` members
+  compiles and registers on both transports with one identity/guard
+  declaration; HTTP-only and MCP-only impls keep their generated items
+  byte-for-byte (`cargo expand` diff); `#[mcp_routes]` alias emits a
+  deprecation; one example (`example-mcp` or a blumana-survey-shaped
+  service) exposes the same operation on both; compile tests for a member
+  kind mixed into the wrong attribute; `llm/*.md` + book + changelogs
+  updated; no existing `.stderr` re-blessed without a stated reason.
 
 **Goal.** The thing the user actually asked for: one type, one member body,
 exposed on HTTP and MCP (and, within limits, gRPC) without rewriting it, and
