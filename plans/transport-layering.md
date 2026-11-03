@@ -71,6 +71,26 @@ controller set — `MemberDecoSets` — for MCP and gRPC; the flat
 same per-call decorator overhead — so the shared `DecoSet` layout won on
 code size).** Task #1212, branch `task/transport-layering-l1`.
 
+Exit-criteria outcome: suites green, no `.stderr` re-blessed (one new fail
+case `mcp_empty_service_uninferable_guard`), same façade-binding block in
+`cargo expand`. The line-count criterion was **not met**: `mcp_codegen` +
+`grpc_codegen` went from 2110 to 1879 lines (−11 %, not −33 %). The remainder
+is wire-specific by construction — MCP tool/resource/prompt argument
+classification, completion wiring, JSON-schema emission; the tonic trait
+impl and status projection on gRPC — and moving it to the shared layer would
+only relocate it. The criterion is retired rather than chased.
+
+Review follow-ups (codex, 2026-11-03) recorded here, not fixed in Level 1:
+
+- Hidden decorator item names concatenate `<Ctrl>_<fn>` with `_`, so
+  `A_b`/`c` and `A`/`b_c` collide. Pre-existing on HTTP, gRPC, pre-auth and
+  scheduled sets (`generate_named_deco_items`); fix once for all kinds with
+  a length-prefixed or hashed separator.
+- HTTP decorator sets are still built by free functions, so `Self` in a
+  `#[routes]` decorator expression does not resolve — only MCP/gRPC sets are
+  owner-scoped (`impl <Ctrl> { fn __r2e_… }`). Scope the HTTP sets the same
+  way when the HTTP emitter is touched next.
+
 **Goal.** A new adapter is "a parser for its own attributes + an emitter";
 the loop, the identity path and the decorator storage are written once.
 

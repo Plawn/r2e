@@ -56,6 +56,11 @@ references.
    service) plus one `DecoSet` per member (kind `"{adapter}Deco"`, field
    `__deco_<fn>`) through `generate_named_deco_items` — gRPC uses
    `"Grpc"`, MCP `"Mcp"` (HTTP routes keep `"Deco"`, scheduled `"Sched"`).
+   Every site is validated with `spec_type_of` before anything is emitted
+   (one `compile_error!` per bad site, controller sites included on a
+   service without members), and the constructors are associated functions
+   of the service type (`<Ctrl>::__r2e_mcpdeco_<Ctrl>_<fn>`), so a decorator
+   expression may name `Self` — HTTP sets are still free functions.
    The wrapper declares `field_decls()`, registration initializes
    `field_inits()` from the `BeanContext`, and the invoke code reads
    `ctrl_guards(base)` / `member_guards(i, base)` / `intercepts(i, base)`
