@@ -46,12 +46,13 @@ pub mod error;
 mod global;
 pub mod guard;
 pub mod handler;
+mod identity;
 mod pagination;
-mod request_log;
 pub mod params;
 pub mod plugin;
 pub mod progress;
 pub mod registry;
+mod request_log;
 pub mod resource_updates;
 pub mod result;
 pub mod route;
@@ -76,6 +77,7 @@ pub use dynamic::{
 pub use elicitation::{ElicitError, Elicited, McpClient};
 pub use error::McpError;
 pub use global::{McpRegistry, RegistryEdit};
+pub use identity::McpCaller;
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
 #[doc(hidden)]
@@ -100,11 +102,11 @@ pub use session::{
 /// list entry (`ToolRoute::meta`, `#[tool(meta = …)]`, `DynamicTool::meta`).
 /// Build one with [`meta!`].
 pub use rmcp::model::MetaObject;
-/// The author of a [`PromptMessage`] (`user` / `assistant`).
-pub use rmcp::model::Role as PromptMessageRole;
 /// An MCP protocol revision (`ProtocolVersion::V_2025_11_25`, …), for
 /// [`McpServer::max_protocol_version`].
 pub use rmcp::model::ProtocolVersion;
+/// The author of a [`PromptMessage`] (`user` / `assistant`).
+pub use rmcp::model::Role as PromptMessageRole;
 
 /// Build a [`MetaObject`] from a JSON object literal (`serde_json::json!`
 /// syntax, braces required):
@@ -239,6 +241,10 @@ pub mod __macro_support {
     pub use crate::elicitation::McpClient;
     pub use crate::error::McpError;
     pub use crate::guard::member_guard_context;
+    pub use crate::identity::{
+        deposit_request_data, request_data, CallerProbe, CallerViaIdentity, CallerViaNone,
+        CallerViaRoles, RequestScope,
+    };
     pub use crate::params::private::Sealed as ObjectParamsSeal;
     pub use crate::params::{
         empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,

@@ -31,6 +31,7 @@ use super::shim::{
 };
 use super::validator::{McpTokenValidator, ScopePolicy};
 use super::wellknown::{prm_json, prm_routes};
+use crate::session::SessionBindings;
 
 /// Everything the plugin's `build` knows that the auth assembly needs.
 pub(crate) struct AuthInputs<'a> {
@@ -49,6 +50,9 @@ pub(crate) struct AuthInputs<'a> {
     pub allowed_origins: &'a [String],
     /// `McpServer::with_token_validator` override.
     pub validator_override: Option<McpTokenValidator>,
+    /// Session id → session, shared with the identity layer (whichever of
+    /// the two learns the subject binds the session).
+    pub bindings: SessionBindings,
 }
 
 /// What [`build_auth`] hands back to the plugin.
@@ -64,6 +68,8 @@ pub(crate) struct AuthArtifacts {
     /// PRM + (optionally) shim routes, merged NEXT TO the MCP service —
     /// never behind the auth layer.
     pub extra_routes: Routes,
+    /// The `WWW-Authenticate` challenges, for the identity layer's 401s.
+    pub challenges: Challenges,
 }
 
 /// Canonicalise a resource URI (RFC 8707): `url::Url` lowercases the
@@ -244,19 +250,21 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         realm = %basic.realm(),
         "MCP HTTP Basic auth enabled (no OAuth issuer configured)"
     );
+    let challenges = Challenges {
+        resource_metadata_url: None,
+        basic_realm: Some(basic.realm().clone()),
+    };
     let layer = McpAuthLayer::new(AuthState {
         validator: slot.clone(),
         oauth: false,
-        challenges: Challenges {
-            resource_metadata_url: None,
-            basic_realm: Some(basic.realm().clone()),
-        },
+        challenges: challenges.clone(),
         basic: Some(basic),
         required_scopes,
         allowed_origins: allowed_origins(inputs),
-        bindings: Default::default(),
+        bindings: inputs.bindings.clone(),
     });
     AuthArtifacts {
+        challenges,
         layer,
         validator: McpTokenValidator::disabled(),
         slot,
@@ -534,17 +542,18 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     let slot: Arc<OnceLock<McpTokenValidator>> = Arc::new(OnceLock::new());
     let required_scopes: Arc<[String]> = cfg.required_scopes.clone().unwrap_or_default().into();
     let basic_enabled = basic.is_some();
+    let challenges = Challenges {
+        resource_metadata_url: Some(resource_metadata_url.as_str().into()),
+        basic_realm: basic.as_ref().map(|b| b.realm().clone()),
+    };
     let layer = McpAuthLayer::new(AuthState {
         validator: slot.clone(),
         oauth: true,
-        challenges: Challenges {
-            resource_metadata_url: Some(resource_metadata_url.as_str().into()),
-            basic_realm: basic.as_ref().map(|b| b.realm().clone()),
-        },
+        challenges: challenges.clone(),
         basic,
         required_scopes,
         allowed_origins: allowed_origins(&inputs),
-        bindings: Default::default(),
+        bindings: inputs.bindings.clone(),
     });
 
     // ── Well-known routes (PRM + optional DCR shim) ─────────────────────────
@@ -666,6 +675,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         validator,
         slot,
         extra_routes,
+        challenges,
     })
 }
 

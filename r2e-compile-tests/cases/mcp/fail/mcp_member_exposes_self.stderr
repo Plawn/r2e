@@ -1,0 +1,7 @@
+error: #[tool] methods cannot expose `Self` in their return type
+
+       #[tool] methods run on the generated request façade, where `Self` no longer refers to the controller. Name the controller type explicitly instead of using `Self`.
+  --> cases/mcp/fail/mcp_member_exposes_self.rs:12:33
+   |
+12 |     async fn clone_me(&self) -> Self {
+   |                                 ^^^^

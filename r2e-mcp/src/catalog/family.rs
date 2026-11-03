@@ -4,9 +4,9 @@ use std::sync::Arc;
 use rmcp::model::{Prompt, Resource, ResourceTemplate, Tool};
 use rmcp::service::{RequestContext, RoleServer};
 
-use super::principal_of;
+use super::caller_of;
 use super::view::{Member, PrivateMembers, SessionView};
-use crate::auth::tools::{requirements_visible, ToolRequirements};
+use crate::auth::tools::{visible_to, ToolRequirements};
 use crate::pagination::ListKey;
 use crate::route::{PromptRoute, ResourceRoute, ToolRoute};
 use crate::uri_template::UriTemplate;
@@ -76,11 +76,11 @@ impl<R, W: Clone> Family<R, W> {
         if !self.filter {
             return self.list.clone();
         }
-        let principal = principal_of(context);
+        let caller = caller_of(context);
         self.list
             .iter()
             .zip(self.reqs.iter())
-            .filter(|(_, req)| requirements_visible(principal, req))
+            .filter(|(_, req)| visible_to(caller.as_ref(), req))
             .map(|(wire, _)| wire.clone())
             .collect()
     }
@@ -96,14 +96,13 @@ impl<R, W: Clone> Family<R, W> {
     ) where
         W: ListKey,
     {
-        let principal = principal_of(context);
+        let caller = caller_of(context);
         out.extend(
             self.list
                 .iter()
                 .zip(self.reqs.iter())
                 .filter(|(wire, req)| {
-                    !shadowed(wire.list_key())
-                        && (!self.filter || requirements_visible(principal, req))
+                    !shadowed(wire.list_key()) && (!self.filter || visible_to(caller.as_ref(), req))
                 })
                 .map(|(wire, _)| wire.clone()),
         );
@@ -204,11 +203,11 @@ impl TemplateFamily {
         if !self.filter {
             return self.list.clone();
         }
-        let principal = principal_of(context);
+        let caller = caller_of(context);
         self.list
             .iter()
             .zip(self.reqs.iter())
-            .filter(|(_, req)| requirements_visible(principal, req))
+            .filter(|(_, req)| visible_to(caller.as_ref(), req))
             .map(|(wire, _)| wire.clone())
             .collect()
     }
@@ -220,14 +219,14 @@ impl TemplateFamily {
         out: &mut Vec<ResourceTemplate>,
         shadowed: impl Fn(&str) -> bool,
     ) {
-        let principal = principal_of(context);
+        let caller = caller_of(context);
         out.extend(
             self.list
                 .iter()
                 .zip(self.reqs.iter())
                 .filter(|(wire, req)| {
                     !shadowed(&wire.uri_template)
-                        && (!self.filter || requirements_visible(principal, req))
+                        && (!self.filter || visible_to(caller.as_ref(), req))
                 })
                 .map(|(wire, _)| wire.clone()),
         );

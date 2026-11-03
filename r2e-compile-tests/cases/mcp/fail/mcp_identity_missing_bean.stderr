@@ -27,7 +27,7 @@ help: the following other types implement trait `HasBean<T, Idx>`
    = note: 1 redundant requirement hidden
    = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `HasBean<Arc<JwtClaimsValidator>, There<_>>`
    = note: required for `r2e::prelude::AuthenticatedUser` to implement `FromRequestPartsVia<BeanState<HCons<ShutdownToken, HNil>>, ViaBean<There<_>>>`
-note: required for `WhoAmITools` to implement `McpService<BeanState<HCons<ShutdownToken, HNil>>, (ViaBean<There<_>>,)>`
+note: required for `WhoAmITools` to implement `McpService<BeanState<HCons<ShutdownToken, HNil>>, ((), ViaBean<There<_>>)>`
   --> cases/mcp/fail/mcp_identity_missing_bean.rs:13:1
    |
 13 | #[mcp_routes]

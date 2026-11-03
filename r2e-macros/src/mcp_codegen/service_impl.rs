@@ -1,7 +1,7 @@
 //! Generate `impl McpService<S, W>` and `impl EndpointDeps` for the controller.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote, quote_spanned};
+use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool};
@@ -48,12 +48,14 @@ pub fn generate_endpoint_deps_impl(def: &McpRoutesImplDef) -> TokenStream {
 /// Generate the state-generic `impl McpService<__R2eS, W> for ControllerName`.
 ///
 /// Mirrors the `Controller<S, W>` impl `#[routes]` emits: the impl is generic
-/// over the state `__R2eS` plus one opaque marker `__R2eMp<Fn>` per member
-/// that declares an `#[inject(identity)]` parameter, bound
+/// over the state `__R2eS`, the request-data marker `__R2eMd` (bound
+/// `__R2eRequestData_<Name><__R2eMd>: RequestData<__R2eS>` — the struct's
+/// `#[inject(identity)]` / `#[inject(request)]` fields, extracted once per
+/// HTTP request) plus one opaque marker `__R2eMp<Fn>` per member that
+/// declares an `#[inject(identity)]` parameter, bound
 /// `<declared ty>: FromRequestPartsVia<__R2eS, __R2eMp<Fn>>`. The markers are
 /// folded into the witness `W` (E0207 forbids leaving them unconstrained on
-/// the impl), so `register_mcp_service::<Svc>()` infers them; a service
-/// without identity members implements `McpService<__R2eS, ()>`.
+/// the impl), so `register_mcp_service::<Svc>()` infers them.
 pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> TokenStream {
     let krate = r2e_core_path();
     let mcp = r2e_mcp_path();
@@ -69,7 +71,12 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
     // `#[config_section]` keys (from the `#[controller]`-generated meta
     // module) plus every decorator spec's declared keys. Reported at
     // `register_mcp_service()`, the MCP peer of `register_controller()`.
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
+    let super::ControllerItems {
+        meta_mod,
+        data_name,
+        data_marker,
+        ..
+    } = super::controller_items(controller_name);
     let decorator_config_stmts =
         crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
 
@@ -92,13 +99,49 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
             }
         })
         .collect();
-    // One shared copy of the state for every member that extracts an
-    // identity from it; each call clones the `Arc`, not the state.
-    let state_share = if sites.is_empty() {
-        quote! { let _ = __state; }
-    } else {
-        quote! {
-            let __r2e_state = ::std::sync::Arc::new(::core::clone::Clone::clone(__state));
+    // One shared copy of the state: the once-per-request extraction of the
+    // struct's request scope runs against it, and so does every member that
+    // extracts a parameter identity; each call clones the `Arc`, not the
+    // state. Unused (and dropped) when the service has neither.
+    let state_share = quote! {
+        let __r2e_state = ::std::sync::Arc::new(::core::clone::Clone::clone(__state));
+        let _ = &__r2e_state;
+    };
+
+    // The struct's request scope, extracted ONCE per HTTP request by the
+    // endpoint layer — the HTTP handler's `RequestData::extract` call, run
+    // before any JSON-RPC message of the request is dispatched, so a
+    // required identity fails the whole request closed (401) exactly like
+    // an HTTP route. The extracted data is deposited in the parts for the
+    // members to bind their façade from; the subject (and roles, when the
+    // identity type carries them) is reported back for session binding and
+    // list filtering. Skipped entirely for a service without request scope.
+    let request_scope = quote! {
+        if #meta_mod::HAS_REQUEST_SCOPE {
+            let __s = ::std::sync::Arc::clone(&__r2e_state);
+            __routes.request_scope = ::core::option::Option::Some(
+                #mcp::__macro_support::RequestScope::new(move |__parts| {
+                    let __s = ::std::sync::Arc::clone(&__s);
+                    ::std::boxed::Box::pin(async move {
+                        let __data = <#data_name<#data_marker> as
+                            #krate::web::extract::RequestData<__R2eS>>::extract(
+                                __parts,
+                                &*__s,
+                            )
+                            .await?;
+                        let __caller = {
+                            #[allow(unused_imports)]
+                            use #mcp::__macro_support::{
+                                CallerViaIdentity as _, CallerViaNone as _, CallerViaRoles as _,
+                            };
+                            (&&#mcp::__macro_support::CallerProbe::<#meta_mod::IdentityType>::new())
+                                .caller(#meta_mod::request_identity(&__data))
+                        };
+                        #mcp::__macro_support::deposit_request_data(__parts, __data);
+                        ::core::result::Result::Ok(__caller)
+                    })
+                }),
+            );
         }
     };
 
@@ -115,10 +158,17 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
         .collect();
 
     quote! {
-        impl<__R2eS, #(#markers),*>
-            #mcp::__macro_support::McpService<__R2eS, (#(#markers,)*)> for #controller_name
+        impl<__R2eS, #data_marker, #(#markers),*>
+            #mcp::__macro_support::McpService<__R2eS, (#data_marker, #(#markers,)*)>
+            for #controller_name
         where
             __R2eS: ::core::clone::Clone
+                + ::core::marker::Send
+                + ::core::marker::Sync
+                + 'static,
+            #data_marker: ::core::marker::Send + ::core::marker::Sync + 'static,
+            #data_name<#data_marker>: #krate::web::extract::RequestData<__R2eS>
+                + ::core::clone::Clone
                 + ::core::marker::Send
                 + ::core::marker::Sync
                 + 'static,
@@ -144,12 +194,14 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -
             ) -> #mcp::__macro_support::McpRoutes {
                 #state_share
                 let __wrapper = ::std::sync::Arc::new(#wrapper_name {
-                    core:
+                    core: ::std::sync::Arc::new(
                         <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
+                    ),
                     #(#deco_field_inits,)*
                 });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();
                 #uses_session
+                #request_scope
                 #(#member_pushes)*
                 __routes
             }
@@ -169,19 +221,24 @@ pub(super) struct InvokeCall {
 
 pub(super) fn invoke_call(member: &McpTool) -> InvokeCall {
     let invoke_name = super::invoke_ident(member.kind, &member.name);
+    // The request-data marker is not inferable from the call either: it is
+    // the impl's own generic, named on every invoke.
+    let md = crate::codegen::handlers::data_marker();
     match super::identity_site(member) {
         Some(site) => {
             let marker = &site.marker;
             InvokeCall {
                 outer: quote! { let __s = ::std::sync::Arc::clone(&__r2e_state); },
                 inner: quote! { let __s = ::std::sync::Arc::clone(&__s); },
-                call: quote! { __w.#invoke_name::<__R2eS, #marker>(__call, &*__s).await },
+                call: quote! {
+                    __w.#invoke_name::<#md, __R2eS, #marker>(__call, &*__s).await
+                },
             }
         }
         None => InvokeCall {
             outer: quote! {},
             inner: quote! {},
-            call: quote! { __w.#invoke_name(__call).await },
+            call: quote! { __w.#invoke_name::<#md>(__call).await },
         },
     }
 }

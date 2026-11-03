@@ -38,14 +38,17 @@ pub fn generate_invoke_impl(def: &McpRoutesImplDef, deco: &McpDecoLayout) -> Tok
 
 /// One member's invocation method. Body order:
 /// scope check (`check_access`, only when the member declares scopes) →
-/// identity extraction (`FromRequestPartsVia` against the state — generic
-/// over the state and the member's marker, both supplied by `routes()` —
-/// before guards so `#[roles]` never sees a half-authenticated call) → guard
-/// checks
-/// → params deserialization (tools/prompts) → method call
-/// (interceptor-wrapped, arguments in original positional order) → the
-/// family's result conversion (`IntoToolResult` / `IntoResourceResult` /
-/// `IntoPromptResult` / `IntoCompletion`).
+/// façade binding (the struct's request scope — `#[inject(identity)]` /
+/// `#[inject(request)]` fields — was extracted once per HTTP request by the
+/// endpoint layer and deposited in the parts; a service without request
+/// scope builds the empty data by hand) → parameter identity extraction
+/// (`FromRequestPartsVia` against the state — generic over the state and
+/// the member's marker, both supplied by `routes()`) → guard checks (over
+/// the parameter identity, else the struct identity read off the façade,
+/// like HTTP) → params deserialization (tools/prompts) → method call on the
+/// façade (interceptor-wrapped, arguments in original positional order) →
+/// the family's result conversion (`IntoToolResult` / `IntoResourceResult`
+/// / `IntoPromptResult` / `IntoCompletion`).
 fn generate_invoke_method(
     def: &McpRoutesImplDef,
     tool: &McpTool,
@@ -61,6 +64,12 @@ fn generate_invoke_method(
     let controller_name_str = def.controller_name.to_string();
     let fn_name_str = fn_name.to_string();
     let tool_name_str = tool.tool_name();
+    let super::ControllerItems {
+        meta_mod,
+        data_name,
+        data_marker,
+        ..
+    } = super::controller_items(&def.controller_name);
 
     // --- scope requirements prologue ---------------------------------------
     // Emitted only when the member declares scopes: `check_access` runs
@@ -81,7 +90,51 @@ fn generate_invoke_method(
         quote! {}
     };
 
-    // --- identity extraction ---------------------------------------------
+    // --- façade binding -----------------------------------------------------
+    // The struct's request scope follows the HTTP contract to the letter:
+    // the `#[controller]`-generated `__R2eRequestData_<Name>` was extracted
+    // ONCE per HTTP request by the endpoint layer (`routes()` hands it the
+    // extraction closure) and travels in the parts' extensions, so every
+    // member of every JSON-RPC message in that request binds the same
+    // façade (`bind_request`, the HTTP handler's own call) from a clone of
+    // it. A service without request-scoped fields never pays the lookup:
+    // `unscoped_request_data` builds the empty data by hand, which also
+    // keeps hand-built calls (tests, adapters) working for such services.
+    let missing_scope = format!(
+        "{} `{}`: the request-scoped fields of `{}` were not extracted (the call did not \
+         come through the MCP endpoint)",
+        kind_str, tool_name_str, controller_name_str,
+    );
+    let facade_stmts = quote! {
+        let __data: #data_name<#data_marker> =
+            match #meta_mod::unscoped_request_data::<#data_marker>() {
+                ::core::option::Option::Some(__d) => __d,
+                ::core::option::Option::None => {
+                    match #mcp::__macro_support::request_data::<#data_name<#data_marker>>(
+                        __call.parts.as_deref(),
+                    ) {
+                        ::core::option::Option::Some(__d) => __d,
+                        ::core::option::Option::None => {
+                            return ::core::result::Result::Err(
+                                #mcp::__macro_support::McpError::Internal(
+                                    ::std::string::String::from(#missing_scope),
+                                ),
+                            );
+                        }
+                    }
+                }
+            };
+        let __facade = #meta_mod::bind_request(::std::sync::Arc::clone(&self.core), __data);
+        let __ctrl = &__facade;
+    };
+    let data_bound = quote! {
+        #data_name<#data_marker>: ::core::clone::Clone
+            + ::core::marker::Send
+            + ::core::marker::Sync
+            + 'static,
+    };
+
+    // --- parameter identity extraction ------------------------------------
     // The HTTP identity contract: the declared type (`I` or `Option<I>`) is
     // extracted through `FromRequestPartsVia<S, M>` against the application
     // state, from an owned copy of the transport request's parts (an extractor
@@ -98,10 +151,11 @@ fn generate_invoke_method(
             let marker = &site.marker;
             let declared_ty = &site.declared_ty;
             (
-                quote! { <__R2eS, #marker> },
+                quote! { <#data_marker, __R2eS, #marker> },
                 quote! { , __state: &__R2eS },
                 quote! {
                     where
+                        #data_bound
                         __R2eS: ::core::marker::Send + ::core::marker::Sync,
                         #declared_ty: #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>,
                 },
@@ -128,7 +182,12 @@ fn generate_invoke_method(
                 },
             )
         }
-        None => (quote! {}, quote! {}, quote! {}, quote! {}),
+        None => (
+            quote! { <#data_marker> },
+            quote! {},
+            quote! { where #data_bound },
+            quote! {},
+        ),
     };
 
     // --- guard checks ------------------------------------------------------
@@ -137,12 +196,13 @@ fn generate_invoke_method(
     let has_member_guards = !member_deco.guard_fields.is_empty();
     let has_guards = has_controller_guards || has_member_guards;
     let guard_stmts = if has_guards {
+        // A parameter identity wins; otherwise the struct identity is read
+        // off the façade (`None` typed to the controller's `IdentityType`
+        // when it declares none) — the HTTP handler's own three cases.
         let identity_ref = match identity_param {
             Some(p) if p.is_optional => quote! { __identity.as_ref() },
             Some(_) => quote! { ::core::option::Option::Some(&__identity) },
-            None => quote! {
-                ::core::option::Option::<&#mcp::__macro_support::NoIdentity>::None
-            },
+            None => quote! { #meta_mod::guard_identity(__ctrl) },
         };
         let controller_checks: Vec<TokenStream> = deco
             .controller_guard_fields
@@ -315,7 +375,7 @@ fn generate_invoke_method(
         })
         .collect();
 
-    let method_call = quote! { __core.#fn_name(#(#call_args),*).await };
+    let method_call = quote! { __ctrl.#fn_name(#(#call_args),*).await };
 
     // Impl-level products live once on the wrapper and precede the member's
     // own products. References are borrowed for the duration of this invoke;
@@ -400,11 +460,11 @@ fn generate_invoke_method(
         #where_clause
         {
             #scope_check
+            #facade_stmts
             #identity_stmts
             #guard_stmts
             #params_stmts
             #saved_call_fields
-            let __core = &self.core;
             let __result = { #body };
             #convert
         }

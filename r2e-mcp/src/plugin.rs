@@ -21,10 +21,13 @@ use crate::config::McpConfig;
 use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
 use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
+use crate::identity::{IdentityState, McpIdentityLayer, RequestScope};
 use crate::registry::McpServiceRegistry;
 use crate::request_log::McpRequestLog;
 use crate::resource_updates::McpResourceUpdates;
-use crate::session::{erase_init, McpSessionInit, McpSessions, SessionInitFn, TrackSessionId};
+use crate::session::{
+    erase_init, McpSessionInit, McpSessions, SessionBindings, SessionInitFn, TrackSessionId,
+};
 
 /// Resolves the `session_init` hook bean from the built graph (`None` = no
 /// such bean).
@@ -492,14 +495,18 @@ impl Plugin for McpServer {
             .and_then(|c| c.try_get::<String>("r2e.profile"))
             .unwrap_or_default();
         let auth_cfg = self.auth.or(cfg.auth);
-        // Member-list visibility filtering: on by default when auth is
-        // enabled (`mcp.auth.filter-members: false` opts out); meaningless —
-        // and off — without auth (no principal to filter against).
+        // Member-list visibility filtering: on by default whenever the
+        // endpoint knows its caller — `mcp.auth` (`mcp.auth.filter-members:
+        // false` opts out) or, below, a service's struct-level identity;
+        // meaningless — and off — with neither (nothing to filter against).
         let filter_members = auth_cfg
             .as_ref()
-            .is_some_and(|auth| auth.filter_members.unwrap_or(true));
+            .map(|auth| auth.filter_members.unwrap_or(true));
         let auth_enabled = auth_cfg.is_some();
-        let (auth_layer, provided_validator, auth_slot, auth_routes) = match auth_cfg {
+        // Session id → session, shared by the auth layer and the identity
+        // layer: whichever learns the caller's subject binds the session.
+        let bindings = SessionBindings::default();
+        let (auth_layer, provided_validator, auth_slot, auth_routes, challenges) = match auth_cfg {
             Some(auth) => {
                 let artifacts = build_auth(AuthInputs {
                     cfg: auth,
@@ -516,6 +523,7 @@ impl Plugin for McpServer {
                         .and_then(|c| c.try_get::<u16>("server.port")),
                     allowed_origins: &allowed_origins,
                     validator_override: self.token_validator,
+                    bindings: bindings.clone(),
                 })
                 .await?;
                 (
@@ -523,9 +531,10 @@ impl Plugin for McpServer {
                     artifacts.validator,
                     Some(artifacts.slot),
                     Some(artifacts.extra_routes),
+                    Some(artifacts.challenges),
                 )
             }
-            None => (None, McpTokenValidator::disabled(), None, None),
+            None => (None, McpTokenValidator::disabled(), None, None, None),
         };
         // The layer reads the validator through the slot, filled from the
         // BEAN CONTEXT after the graph resolves: a test-pinned validator
@@ -623,7 +632,24 @@ impl Plugin for McpServer {
         ctx.after_routes(move |routes: &mut RoutesContext| {
             // No service registered is a valid deployment: every member then
             // comes from the global registry (or a session), after boot.
-            let services = registry.take().unwrap_or_default();
+            let mut services = registry.take().unwrap_or_default();
+            // The services' struct-level request scopes run in one layer on
+            // the endpoint, before any message is dispatched — the catalog
+            // only dispatches.
+            let scopes: Vec<RequestScope> = services
+                .iter_mut()
+                .filter_map(|service| service.routes.request_scope.take())
+                .collect();
+            // A struct-level identity is a caller to filter lists against,
+            // exactly like an `mcp.auth` principal.
+            let filter_members = filter_members.unwrap_or(!scopes.is_empty());
+            let identity_layer = (!scopes.is_empty()).then(|| {
+                McpIdentityLayer::new(IdentityState {
+                    scopes,
+                    bindings: bindings.clone(),
+                    challenges: challenges.clone(),
+                })
+            });
             if services.is_empty() {
                 tracing::info!(
                     "no MCP service registered (`.register_mcp_service::<T>()`); \
@@ -698,10 +724,16 @@ impl Plugin for McpServer {
             // rejections and their status); it taps the body rather than
             // reading it, so a request rejected before rmcp reads the body
             // (auth, rmcp's header checks) never has it buffered.
+            //
+            // The identity layer (the services' struct-level
+            // `#[inject(identity)]` / `#[inject(request)]` extraction) sits
+            // INSIDE the auth layer: an `McpPrincipal` identity reads the
+            // principal the auth layer deposited.
             let service = tower::ServiceBuilder::new()
                 .layer(cors)
                 .layer(request_log)
                 .option_layer(auth_layer)
+                .option_layer(identity_layer)
                 .layer(TrackSessionId)
                 .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);

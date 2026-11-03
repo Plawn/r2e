@@ -11,6 +11,7 @@ mod basic;
 mod completion;
 mod config;
 mod discovery;
+mod endpoint;
 mod identity;
 mod keycloak;
 mod layer;

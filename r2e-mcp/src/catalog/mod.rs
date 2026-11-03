@@ -25,7 +25,7 @@ use rmcp::model::{
 };
 use rmcp::service::{RequestContext, RoleServer};
 
-use crate::auth::McpPrincipal;
+pub(crate) use crate::identity::{caller_in, Caller};
 use crate::registry::RegisteredMcpService;
 use crate::route::{McpGroup, ToolRoute};
 
@@ -53,14 +53,11 @@ pub(crate) struct CatalogOptions {
     pub stateful: bool,
 }
 
-/// The auth layer's principal, carried in the HTTP request parts that the
-/// transport copies into the request extensions.
-pub(crate) fn principal_in(parts: Option<&Parts>) -> Option<&McpPrincipal> {
-    parts.and_then(|parts| parts.extensions.get::<McpPrincipal>())
-}
-
-fn principal_of(context: &RequestContext<RoleServer>) -> Option<&McpPrincipal> {
-    principal_in(context.extensions.get::<Parts>())
+/// The caller of a JSON-RPC message: the `mcp.auth` principal or a
+/// service's struct identity, from the HTTP request parts the transport
+/// copies into the request extensions.
+pub(crate) fn caller_of(context: &RequestContext<RoleServer>) -> Option<Caller<'_>> {
+    caller_in(context.extensions.get::<Parts>())
 }
 
 /// What a dynamic member is validated against: the catalog's keys, group

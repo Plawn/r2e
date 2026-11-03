@@ -98,34 +98,53 @@ struct LongDocs;
 
 #[mcp_routes]
 impl LongDocs {
-    #[tool(read_only, idempotent, description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size.")]
+    #[tool(
+        read_only,
+        idempotent,
+        description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size."
+    )]
     async fn add(&self, Params(p): Params<Operands>) -> Json<Sum> {
         Json(Sum { value: p.a + p.b })
     }
 
-    #[tool(read_only, description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size.")]
+    #[tool(
+        read_only,
+        description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size."
+    )]
     async fn sub(&self, Params(p): Params<Operands>) -> Json<Sum> {
         Json(Sum { value: p.a - p.b })
     }
 
-    #[tool(read_only, description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size.")]
+    #[tool(
+        read_only,
+        description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size."
+    )]
     async fn mul(&self, Params(p): Params<Operands>) -> Json<Sum> {
         Json(Sum { value: p.a * p.b })
     }
 
-    #[tool(read_only, description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size.")]
+    #[tool(
+        read_only,
+        description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size."
+    )]
     async fn div(&self, Params(p): Params<Operands>) -> Json<Sum> {
         Json(Sum { value: p.a / p.b })
     }
 
-    #[tool(read_only, description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size.")]
+    #[tool(
+        read_only,
+        description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size."
+    )]
     async fn min(&self, Params(p): Params<Operands>) -> Json<Sum> {
         Json(Sum {
             value: p.a.min(p.b),
         })
     }
 
-    #[tool(read_only, description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size.")]
+    #[tool(
+        read_only,
+        description = "Perform the operation and return its result. This description is deliberately long: it is the payload a per-request `String` clone would copy, so the guard below can tell a borrowed literal from an owned one by weight alone rather than by counting allocations of an incidental size."
+    )]
     async fn max(&self, Params(p): Params<Operands>) -> Json<Sum> {
         Json(Sum {
             value: p.a.max(p.b),
@@ -141,8 +160,10 @@ fn context(rt: &r2e_core::rt::Runtime) -> Arc<BeanContext> {
 
 /// The `Vec<Tool>` the handler builds once at boot and clones per
 /// `tools/list`. No member declares an identity, so any state type
-/// satisfies the service — `()` stands in for the app state.
-fn wire_list<S: McpService<()>>(ctx: &Arc<BeanContext>) -> Vec<Tool> {
+/// satisfies the service — `()` stands in for the app state; the witness
+/// `W` (the request-data marker plus one marker per identity member) is
+/// inferred like `register_mcp_service` infers it.
+fn wire_list<S: McpService<(), W>, W>(ctx: &Arc<BeanContext>) -> Vec<Tool> {
     let routes = S::routes(&(), ctx);
     assert_eq!(routes.tools.len(), TOOLS);
     routes.tools.iter().map(|t| t.to_rmcp_tool()).collect()
@@ -155,7 +176,7 @@ fn wire_list<S: McpService<()>>(ctx: &Arc<BeanContext>) -> Vec<Tool> {
 fn cloning_the_tools_list_allocates_only_the_vec() {
     let rt = runtime();
     let ctx = context(&rt);
-    let list = wire_list::<ShortDocs>(&ctx);
+    let list = wire_list::<ShortDocs, _>(&ctx);
 
     // Warm up (the first clone may touch a lazily-initialised allocator bin).
     drop(list.clone());
@@ -184,8 +205,8 @@ fn the_clone_cost_does_not_scale_with_the_description_length() {
     let rt = runtime();
     let ctx = context(&rt);
 
-    let short = wire_list::<ShortDocs>(&ctx);
-    let long = wire_list::<LongDocs>(&ctx);
+    let short = wire_list::<ShortDocs, _>(&ctx);
+    let long = wire_list::<LongDocs, _>(&ctx);
     assert_eq!(
         long[0].description.as_deref(),
         Some(LONG),
@@ -210,7 +231,7 @@ fn macro_emitted_tool_metadata_is_borrowed() {
     let rt = runtime();
     let ctx = context(&rt);
 
-    for tool in wire_list::<LongDocs>(&ctx) {
+    for tool in wire_list::<LongDocs, _>(&ctx) {
         assert!(
             matches!(tool.name, Cow::Borrowed(_)),
             "tool name `{}` is owned",

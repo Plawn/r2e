@@ -879,7 +879,8 @@ impl AdminTools {
   principal's roles — identical semantics to HTTP routes.
 - `tools/list` is filtered by the caller's scopes/roles by default
   (`mcp.auth.filter-members: false` lists everything; invocation checks still
-  apply).
+  apply). The filter is also on when a service declares a struct-level
+  identity (below): that identity is the caller the lists are filtered for.
 - `#[inject(identity)]` reads the caller — see **Identity** below.
 
 ### Identity
@@ -938,6 +939,82 @@ impl AccountTools {
   extensions with `call.identity::<T>()` (the shared `Arc<T>` first, then a
   plain `T`) or `call.extension::<McpPrincipal>()`; `#[inject(identity)]` does
   not go through these.
+
+#### Struct-level identity: one caller for the whole endpoint
+
+A parameter identity is per member. When *every* member of a service needs the
+caller — an application identity resolved from a session cookie, an API key, a
+header the gateway sets — declare it once on the struct, exactly as on an HTTP
+controller. `#[inject(identity)]` and `#[inject(request)]` fields on an
+`#[mcp_routes]` service follow the `#[controller]` contract: same field
+attributes, same extractors, same `#[anonymous]`-less fail-closed rule, same
+`#[request_helper]` methods, and the members read them as `self.<field>`.
+
+```rust
+#[controller]
+pub struct SurveyTools {
+    #[inject] surveys: SurveyService,
+    #[inject(identity)] user: AppUser,           // the app's FromRequestParts type
+    #[inject(request)] headers: HeaderMap,       // any other request-scoped extractor
+}
+
+#[mcp_routes]
+impl SurveyTools {
+    #[tool]
+    async fn mine(&self) -> Vec<Survey> {
+        self.surveys.owned_by(&self.user.id).await
+    }
+
+    #[tool]
+    #[roles("admin")]                            // the struct identity's roles
+    async fn purge(&self) -> String { self.tag("purged") }
+
+    #[request_helper]
+    fn tag(&self, what: &str) -> String {
+        format!("{what} by {} ({:?})", self.user.id, self.headers.get("x-request-id"))
+    }
+}
+```
+
+What differs from a parameter identity is *where* the extraction runs, and
+that is the point:
+
+- **The endpoint fails closed, as a whole.** The request-scoped fields are
+  extracted **once per HTTP request**, in a layer on `/mcp` that runs before
+  rmcp parses the body — before `initialize`, before the session is created,
+  before any JSON-RPC message is dispatched. A request the extractor rejects
+  is answered with the extractor's **HTTP** rejection (a `401` with the
+  app's body, not a JSON-RPC error inside a `200`), and no session is opened
+  for it. An `Option<T>` identity admits the anonymous request with `None`.
+- **Every registered service's scope must pass.** Services sharing the
+  endpoint each contribute their scope; all of them run on every request,
+  whichever member the message targets. Two services wanting different
+  callers on one endpoint is a design to avoid, not a feature: declare the
+  identity where it belongs, or use `Option<T>`.
+- **CORS preflight is skipped** (`OPTIONS` carries no credentials by design).
+- **Members run on the request façade**, like HTTP routes: `self.user` is the
+  field, `#[request_helper]` methods see it too, and `Self` in a member body
+  names the façade — an associated item of the service is named through the
+  service type (`SurveyTools::CONST`), and a member cannot expose `Self` in
+  its signature (compile error).
+- **Roles and visibility.** `#[roles]`/`#[all_roles]` on a member check the
+  struct identity (it must implement `RoleBasedIdentity`; an `Identity` alone
+  is a subject without roles, and a plain `FromRequestParts` type is neither,
+  so roles on its members never hold). The member lists hide what the caller
+  cannot invoke, as under `mcp.auth`.
+- **Sessions are bound to the subject.** When the identity has a subject
+  (`Identity`), a session opened by one subject is `404 Not Found` for
+  another — the same binding `mcp.auth` applies to its principal, never both.
+- **With `mcp.auth`**: the auth layer runs first and the struct identity may
+  be `McpPrincipal` (the deposited principal, no second validation; sessions
+  bound once, by the auth layer). An app identity rejected with a bare `401`
+  gets the `WWW-Authenticate` challenge of `mcp.auth` appended, so an OAuth
+  client still discovers the authorization server from that rejection.
+- **Cost.** One extraction per HTTP request; each member binds its façade from
+  the deposited data (a clone of the request-scoped fields — they must be
+  `Clone`, checked at `.register_mcp_service::<Svc>()`), plus the usual `Arc`
+  clone of the core. A service without request-scoped fields contributes no
+  layer and pays nothing.
 
 ### Configuration reference
 

@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
+  `Clone` bound `#[controller]` puts on the generated request-data type, so a
+  controller with a non-`Clone` request-scoped field keeps compiling and only
+  a consumer that clones the data (`#[mcp_routes]`) sees the missing `Clone`.
+
 ## [0.9.1] - 2026-11-01
 
 ### Added
