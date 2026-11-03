@@ -40,12 +40,18 @@ or assert on the `Unauthenticated` message.
 1. **A custom `GrpcIdentity` impl.** It no longer compiles:
 
    ```text
+   error[E0277]: `GrpcIdentity` was removed (r2e-grpc 0.10): implement `FromRequestPartsVia` /
+                 `FromRequestParts` for `ApiKeyUser` instead
+     = note: see docs/migration/grpc-identity.md
    error[E0437]: type `Spec` is not a member of trait `GrpcIdentity`
    error[E0407]: method `extract` is not a member of trait `GrpcIdentity`
    warning: use of deprecated trait `r2e::prelude::GrpcIdentity`: `GrpcIdentity` was removed:
             implement `FromRequestPartsVia` (or `FromRequestParts`) for the identity type
             instead — the validator becomes a bean. See docs/migration/grpc-identity.md
    ```
+
+   The E0277 comes from an unsatisfiable sealed supertrait of the stub, so it
+   names this page even when `#[allow(deprecated)]` silences the warning.
 
    Move the extraction to the HTTP contract. The metadata are the headers of
    the head, so `metadata.get("x-api-key")` becomes

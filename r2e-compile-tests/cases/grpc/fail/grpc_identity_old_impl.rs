@@ -1,7 +1,8 @@
 //! `GrpcIdentity` was removed (#1213): the trait left behind is an empty
-//! `#[deprecated]` stub, so an old impl fails to build — its items are not
-//! members of the trait — and the deprecation note names the migration page
-//! (`docs/migration/grpc-identity.md`).
+//! `#[deprecated]` stub over an unsatisfiable sealed supertrait, so an old
+//! impl fails to build — its items are not members of the trait, the
+//! supertrait error (E0277) names the migration page, and so does the
+//! deprecation note (`docs/migration/grpc-identity.md`).
 
 use r2e::prelude::*;
 use r2e::r2e_grpc::tonic::metadata::MetadataMap;

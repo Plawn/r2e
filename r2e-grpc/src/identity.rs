@@ -29,13 +29,28 @@ use crate::status::rejection_to_status;
 /// application state — the validator is a bean. This empty trait is kept for
 /// one release so an old `impl GrpcIdentity for …` fails to build pointing
 /// at the migration guide, `docs/migration/grpc-identity.md`.
+///
+/// Its sealed supertrait has no impls, so any impl fails with an E0277
+/// naming the page — even under `#[allow(deprecated)]`, where the
+/// deprecation note is silenced.
 #[deprecated(
     since = "0.10.0",
     note = "`GrpcIdentity` was removed: implement `FromRequestPartsVia` (or `FromRequestParts`) \
             for the identity type instead — the validator becomes a bean. \
             See docs/migration/grpc-identity.md"
 )]
-pub trait GrpcIdentity {}
+pub trait GrpcIdentity: sealed::__GrpcIdentityRemoved {}
+
+mod sealed {
+    /// Unsatisfiable on purpose: no type implements it, and it cannot be
+    /// named outside this crate, so `impl GrpcIdentity for T` never builds.
+    #[doc(hidden)]
+    #[diagnostic::on_unimplemented(
+        message = "`GrpcIdentity` was removed (r2e-grpc 0.10): implement `FromRequestPartsVia` / `FromRequestParts` for `{Self}` instead",
+        note = "see docs/migration/grpc-identity.md"
+    )]
+    pub trait __GrpcIdentityRemoved {}
+}
 
 /// Extract and validate a JWT from gRPC metadata.
 ///

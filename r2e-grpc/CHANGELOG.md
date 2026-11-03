@@ -21,8 +21,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   removed: an `#[inject(identity)]` type is extracted through
   `FromRequestPartsVia<S, M>` (or `FromRequestParts`) against the app state,
   and its validator is a bean. The trait left behind is an empty
-  `#[deprecated]` stub, so an old `impl GrpcIdentity for …` fails to build
-  with a note naming `docs/migration/grpc-identity.md`.
+  `#[deprecated]` stub over an unsatisfiable sealed supertrait, so an old
+  `impl GrpcIdentity for …` fails to build with an E0277 naming
+  `docs/migration/grpc-identity.md` — even under `#[allow(deprecated)]`.
 - `GrpcService<S, W>` is generic over the application state `S` and an
   inference-only witness `W` (like `McpService<S, W>`); `add_to_routes` takes
   `(routes, state: &S, ctx)`. A missing extractor bean (the

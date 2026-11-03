@@ -182,6 +182,7 @@ references.
   and every extractor — identity, `#[inject(request)]` fields, custom
   `FromRequestPartsVia` types — rides the HTTP contract. `GrpcIdentity` /
   `JwtIdentitySpec` / `guard_context` were removed (compile-time migration:
-  a deprecated empty `GrpcIdentity` stub names `docs/migration/grpc-identity.md`).
+  a deprecated `GrpcIdentity` stub over an unsatisfiable sealed supertrait
+  fails any impl with an E0277 naming `docs/migration/grpc-identity.md`).
   The bullet still holds for a future wire with no HTTP head.
 
