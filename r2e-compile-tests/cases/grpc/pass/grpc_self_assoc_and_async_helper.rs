@@ -7,7 +7,8 @@
 //! The rewrite reaches turbofish arguments (`::wrap::<Self::WatchStream>`),
 //! macro arguments (`dbg!`, `matches!`, including a guarded pattern that
 //! only the token-level fallback handles), struct literals and patterns
-//! (tuple-struct, struct, unit).
+//! (tuple-struct, struct, unit), and stops at nested items: a local `impl`
+//! with its own `type WatchStream` keeps its own `Self::WatchStream`.
 //! An `async` `#[request_helper]` with `&self` is a façade helper, not an rpc.
 
 use r2e::prelude::*;
@@ -38,6 +39,21 @@ impl WatchService {
         let (tx, rx) = r2e::rt::sync::mpsc::channel(1);
         let _ = tx.try_send(Ok(ping::PingReply { msg }));
         let stream: Self::WatchStream = dbg!(Self::WatchStream::new(rx));
+
+        // A nested impl introduces its own `Self`: not rewritten.
+        trait Local {
+            type WatchStream;
+            fn get() -> Self::WatchStream;
+        }
+        struct Here;
+        impl Local for Here {
+            type WatchStream = u8;
+            fn get() -> Self::WatchStream {
+                7
+            }
+        }
+        let _: u8 = <Here as Local>::get();
+
         Ok(r2e::r2e_grpc::tonic::Response::new(stream))
     }
 

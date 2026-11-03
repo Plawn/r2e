@@ -220,6 +220,11 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
 ///   rewrite of the `Self :: X` prefix — the expression-form declared path
 ///   (or `<Declared>`) before a `::`, the declared type otherwise — which can
 ///   mis-handle a generic declared type used as a bare value in such a body.
+///
+/// Items nested in the body (`impl`, `trait`, `fn`, `struct`, …) are not
+/// entered: each introduces its own `Self` (or cannot name the outer one),
+/// so the outer impl's associated types do not apply there. Closures and
+/// (async) blocks are entered.
 fn substitute_self_assoc(
     mut method: syn::ImplItemFn,
     assoc_types: &[syn::ImplItemType],
@@ -473,6 +478,10 @@ fn substitute_self_assoc(
                 Err(_) => self.tokens(std::mem::take(&mut mac.tokens)),
             };
         }
+
+        /// A nested item has its own `Self` (impl, trait) or cannot name the
+        /// outer one (fn, struct, const, …): not entered.
+        fn visit_item_mut(&mut self, _item: &mut syn::Item) {}
     }
 
     Subst { assoc: assoc_types }.visit_impl_item_fn_mut(&mut method);

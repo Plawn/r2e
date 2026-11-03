@@ -44,7 +44,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   struct literals, patterns, turbofish arguments and macro arguments; a
   macro body that is not an expression list gets a token-level rewrite), or
   as the qualified `<Declared>::..` in expression position when the declared
-  type is not a plain path), with the whole head
+  type is not a plain path; items nested in the method body — a local
+  `impl`/`trait` with its own `Self` — are left alone), with the whole head
   extracted before a stream opens. A guard requiring an identity is accepted
   when either the struct or the method provides one.
 - `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /
