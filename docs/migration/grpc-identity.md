@@ -27,10 +27,12 @@ or assert on the `Unauthenticated` message.
 | `impl GrpcIdentity for MyIdentity { type Spec; fn spec(); fn extract(&Product, &MetadataMap) }` | `impl FromRequestParts<S>` (or a bean-backed `FromRequestPartsVia<S, ViaBean<I>>`) for `MyIdentity` — the HTTP extractor contract; the validator is a bean |
 | `r2e_security::grpc::JwtIdentitySpec`, `impl GrpcIdentity for AuthenticatedUser` | removed — `AuthenticatedUser` uses its HTTP `FromRequestPartsVia` impl (`Arc<JwtClaimsValidator>` bean) |
 | Identity only as a method parameter; a struct-level `#[inject(identity)]` field was a compile error | struct-level `#[inject(identity)]` and `#[inject(request)]` fields work (the method runs on the request façade); parameters keep working |
-| `r2e_grpc::guard_context(&request, method, controller, identity)` | `r2e_grpc::into_head(request, fallback_uri, deposit_metadata)` then `GuardContext::from_parts(&parts, method, controller, identity, PathParams::EMPTY)` |
+| `r2e_grpc::guard_context(&request, method, controller, identity)` | `r2e_grpc::into_head(request, fallback_uri)` then `GuardContext::from_parts(&parts, method, controller, identity, PathParams::EMPTY)` |
 | `GrpcService { fn add_to_routes(routes, ctx) }` | `GrpcService<S, W = ()> { fn add_to_routes(routes, state: &S, ctx) }` |
 | validator dep checked through `EndpointDeps` | checked through the witness `W` of `GrpcService<S, W>` at `register_grpc_service` |
-| missing bearer: `Unauthenticated`, message `"Missing authorization metadata"`, `www-authenticate` metadata | `Unauthenticated`, message `"Unauthorized"`, no `www-authenticate` metadata (the HTTP extractor's projection) |
+| missing credentials (no/undecodable `authorization`, non-Bearer scheme): `Unauthenticated`, message `"Missing authorization metadata"` (or the encoding/scheme message), no `www-authenticate` | `Unauthenticated`, message `"Unauthorized"`, no `www-authenticate` |
+| validator failure (bad/expired token): `Unauthenticated`, `"Unauthorized"`, `www-authenticate: Bearer` metadata | `Unauthenticated`, `"Unauthorized"`, **no** `www-authenticate` (the HTTP extractor's `HttpError` projection); a JWKS outage stays `Unavailable` |
+| identity extractors could read the call's `MetadataMap` | no `MetadataMap` in the head's extensions: build `MetadataMap::from_headers(parts.headers.clone())` where needed (the headers *are* the metadata) |
 | server-streaming rpcs (`type XStream`) were not forwarded by `#[grpc_routes]` | associated types are forwarded; the identity and guards run before the stream opens |
 
 ## Step by step
@@ -179,9 +181,10 @@ or assert on the `Unauthenticated` message.
    Tests that drive `add_to_routes` directly pass `builder.state()`.
 
 6. **Status messages.** A client or test asserting on the `Unauthenticated`
-   message of a missing or invalid bearer now sees the HTTP extractor's
-   public message (`"Unauthorized"`), and the response carries no
-   `www-authenticate` metadata (the same open follow-up as HTTP: the
+   message of *missing credentials* now sees the HTTP extractor's public
+   message (`"Unauthorized"` instead of `"Missing authorization metadata"`);
+   a *validator failure* keeps `"Unauthorized"` but loses its
+   `www-authenticate: Bearer` metadata (the same open follow-up as HTTP: the
    `AuthenticatedUser` extractor rejects with `HttpError`). Status codes are
    unchanged.
 
@@ -194,7 +197,9 @@ or assert on the `Unauthenticated` message.
   `extract_jwt_claims_from_metadata`, `GrpcIdentityExtractor`, and
   `JwtClaimsValidatorLike` (implemented by `JwtClaimsValidator` under
   `r2e-security`'s `grpc` feature).
-- HTTP-only extractors (`Query<T>`, `Path<T>`) compile on gRPC services and
-  fail per call as a `Status` (by rejection kind), never a panic.
+- HTTP-only extractors (`Query<T>`, `Path<T>`) compile on gRPC services; the
+  outcome depends on the head and the target type (`Query<T>` sees an empty
+  query string, `Path<T>` tonic's `{*rest}` capture), and a rejection is a
+  `Status` by kind, never a panic.
 
 Design record: `plans/transport-layering.md` §3. User guide: `llm/grpc.md`.

@@ -138,15 +138,10 @@ fn generate_method_impl(
     };
 
     // --- head --------------------------------------------------------------
-    // The metadata map is deposited in the extensions only when something may
-    // read it (the struct request scope or an identity parameter): it costs
-    // one header-map clone.
-    let has_identity_param = method.member.identity_param.is_some();
     let head = quote! {
         let (mut __parts, __msg) = #grpc_krate::__macro_support::into_head(
             request,
             || #grpc_krate::__macro_support::fallback_method_path(#service_name, #proto_method),
-            #meta_mod::HAS_REQUEST_SCOPE || #has_identity_param,
         );
     };
 

@@ -115,7 +115,6 @@ fn head(request: Request<()>) -> Parts {
     into_head(
         request,
         || r2e_grpc::__macro_support::fallback_method_path("greeter.Greeter", "SayHello"),
-        false,
     )
     .0
 }

@@ -313,11 +313,17 @@ let claims = extract_jwt_claims_from_metadata(request.metadata(), &self.jwt_vali
   service mixing public and protected methods uses `Option<I>` (field or
   parameter).
 - **No path parameters** — `method` is always `POST`, `uri` is the method path,
-  `path_params` is empty. HTTP-only extractors (`Query<T>`, `Path<T>`) compile
-  but fail per call as a `Status` (`INVALID_ARGUMENT`), never a panic.
+  `path_params` is empty. HTTP-only extractors (`Query<T>`, `Path<T>`) compile;
+  the outcome depends on the head and the target type (`Query<T>` sees an
+  empty query string — an all-optional `T` succeeds, a required field is
+  `INVALID_ARGUMENT`; `Path<T>` sees tonic's `{*rest}` capture), never a panic.
+- **No `MetadataMap` in the head** — the headers are the metadata; an
+  extractor wanting the tonic view builds
+  `MetadataMap::from_headers(parts.headers.clone())`.
 - **No `www-authenticate` metadata** on an identity rejection — the
   `AuthenticatedUser` extractor rejects with an `HttpError`, which carries no
-  challenge header (same as HTTP today).
+  challenge header (same as HTTP today; before 0.10 a *validator* failure
+  carried `www-authenticate: Bearer`, missing credentials never did).
 
 ## Next steps
 

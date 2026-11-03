@@ -31,18 +31,21 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `ModuleGrpcServices` implements `ModuleEndpoints<T, (W0, ..)>`.
 - `guard_context(&tonic::Request, ..)` is removed: guards see a
   `GuardContext::from_parts` built over the per-call head.
-- A missing or invalid bearer on an `AuthenticatedUser` identity answers
+- Missing credentials on an `AuthenticatedUser` identity answer
   `Unauthenticated` with the HTTP extractor's message (`"Unauthorized"`,
-  previously `"Missing authorization metadata"` / the validator message) and
-  no `www-authenticate` metadata, like the HTTP extractor (known follow-up).
+  previously `"Missing authorization metadata"`); a validator failure keeps
+  `"Unauthorized"` but no longer carries `www-authenticate: Bearer` metadata
+  (the HTTP extractor rejects with `HttpError` — known follow-up).
 
 ### Added
 
 - `head` module: `into_head` / `from_head` turn a `tonic::Request` into an
   `http::request::Parts` head (POST, `/<service>/<method>` uri, metadata moved
-  into the headers without copying, extensions moved, `ConnectInfo` from the
-  peer address, the `MetadataMap` deposited in the extensions on request) and
-  back; `CaptureMethodPath` is the routing layer that records the real
+  into the headers without copying, extensions moved — caller-owned entries
+  kept —, `ConnectInfo` from the peer address unless one is already there) and
+  back; no `MetadataMap` is deposited (an extractor wanting the tonic view
+  builds `MetadataMap::from_headers(parts.headers.clone())`, paying the clone
+  only where used); `CaptureMethodPath` is the routing layer that records the real
   method path (`MethodPath`). `#[grpc_routes]` services are wrapped in it.
 - Struct-level `#[inject(identity)]` / `#[inject(request)]` fields and server
   streaming rpcs on `#[grpc_routes]` services (see `r2e-macros`).

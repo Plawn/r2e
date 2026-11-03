@@ -16,7 +16,12 @@
 //! | `uri` | the call's method path, `/<package.Service>/<Method>` (captured by [`CaptureMethodPath`], which `#[grpc_routes]` wraps every service in) |
 //! | `version` | `HTTP/2.0` |
 //! | `headers` | the request metadata, moved without a copy ([`MetadataMap::into_headers`]) — `headers.get("x-tenant-id")` reads a metadata key, and the `authorization` header an HTTP identity extractor reads is the gRPC `authorization` metadata |
-//! | `extensions` | the request extensions (moved), plus [`ConnectInfo`] built from [`tonic::Request::remote_addr`] and — when the service extracts anything — a copy of the [`MetadataMap`] for extractors that want the tonic view |
+//! | `extensions` | the request extensions (moved, caller-owned entries included), plus [`ConnectInfo`] built from [`tonic::Request::remote_addr`] when no `ConnectInfo<SocketAddr>` is there already (a server layer or interceptor may have deposited one) |
+//!
+//! No [`MetadataMap`] is deposited: an extractor that wants the tonic view
+//! builds it from the head itself —
+//! `MetadataMap::from_headers(parts.headers.clone())` — so the header-map
+//! clone is paid only where it is used.
 //!
 //! Extractors may mutate the head (insert extensions, …): [`from_head`]
 //! rebuilds the tonic request from the head as the extractors left it.
@@ -38,15 +43,9 @@ pub struct MethodPath(pub Uri);
 /// The metadata becomes the head's headers and the extensions move over —
 /// no copy. `method_path` is called only when the request does not carry a
 /// [`MethodPath`] (a call that did not come through [`CaptureMethodPath`],
-/// e.g. a test invoking the service directly). With `deposit_metadata`, a
-/// copy of the metadata is also deposited in the extensions as a
-/// [`MetadataMap`] (one header-map clone; the generated code asks for it only
-/// when the service runs an extractor).
-pub fn into_head<T>(
-    request: tonic::Request<T>,
-    method_path: impl FnOnce() -> Uri,
-    deposit_metadata: bool,
-) -> (Parts, T) {
+/// e.g. a test invoking the service directly). A [`ConnectInfo`] from the
+/// peer address is added only when the extensions carry none.
+pub fn into_head<T>(request: tonic::Request<T>, method_path: impl FnOnce() -> Uri) -> (Parts, T) {
     let remote_addr: Option<SocketAddr> = request.remote_addr();
     let (metadata, extensions, message) = request.into_parts();
     let (mut parts, ()) = http::Request::new(()).into_parts();
@@ -57,24 +56,19 @@ pub fn into_head<T>(
         Some(MethodPath(uri)) => uri,
         None => method_path(),
     };
-    if let Some(addr) = remote_addr {
+    if let Some(addr) = remote_addr
+        && parts.extensions.get::<ConnectInfo<SocketAddr>>().is_none()
+    {
         parts.extensions.insert(ConnectInfo(addr));
-    }
-    if deposit_metadata {
-        parts.extensions.insert(metadata.clone());
     }
     parts.headers = metadata.into_headers();
     (parts, message)
 }
 
 /// Rebuild the tonic request from a head (as the extractors left it) and the
-/// message taken apart by [`into_head`].
-///
-/// The headers are the source of truth for the metadata; the deposited
-/// [`MetadataMap`] copy, if any, is dropped so the user method never sees a
-/// stale duplicate.
-pub fn from_head<T>(mut parts: Parts, message: T) -> tonic::Request<T> {
-    parts.extensions.remove::<MetadataMap>();
+/// message taken apart by [`into_head`]. The headers become the metadata;
+/// the extensions are moved back untouched.
+pub fn from_head<T>(parts: Parts, message: T) -> tonic::Request<T> {
     tonic::Request::from_parts(
         MetadataMap::from_headers(parts.headers),
         parts.extensions,

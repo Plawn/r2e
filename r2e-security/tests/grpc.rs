@@ -109,7 +109,6 @@ fn head(metadata: MetadataMap) -> r2e_core::http::Parts {
     into_head(
         request,
         || "/greeter.Greeter/SayHello".parse().unwrap(),
-        false,
     )
     .0
 }
