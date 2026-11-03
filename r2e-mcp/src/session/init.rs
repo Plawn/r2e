@@ -8,6 +8,7 @@ use r2e_core::http::Parts;
 use super::id::SessionId;
 use crate::auth::McpPrincipal;
 use crate::error::McpError;
+use crate::identity::caller_in;
 use crate::route::{identity_in, PromptRoute, ResourceRoute, ToolRoute};
 
 /// A batch of session changes, applied atomically (all or nothing).
@@ -89,14 +90,17 @@ impl SessionInit {
         self.extension_ref::<McpPrincipal>()
     }
 
-    /// The caller's subject (`sub` claim), when authenticated.
+    /// The caller's subject (`sub` claim), when authenticated — by the
+    /// `mcp.auth` principal or a service's struct-level identity.
     pub fn subject(&self) -> Option<&str> {
-        self.principal().map(|p| p.user.sub.as_str())
+        caller_in(self.parts.as_deref()).map(|c| c.sub)
     }
 
-    /// Whether the authenticated caller holds `role`.
+    /// Whether the authenticated caller holds `role` (the `mcp.auth`
+    /// principal's roles, or a service's struct-level
+    /// [`RoleBasedIdentity`](r2e_security::RoleBasedIdentity)).
     pub fn has_role(&self, role: &str) -> bool {
-        self.principal().is_some_and(|p| p.user.has_role(role))
+        caller_in(self.parts.as_deref()).is_some_and(|c| c.has_role(role))
     }
 
     /// Whether the caller's token carries `scope`.

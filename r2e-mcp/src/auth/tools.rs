@@ -10,6 +10,7 @@ use r2e_core::http::Extensions;
 
 use super::validator::McpPrincipal;
 use crate::error::McpError;
+use crate::identity::Caller;
 
 /// The authorization requirements of one tool, emitted by `#[mcp_routes]`
 /// from `#[tool(scopes/any_scopes)]` + `#[roles]`/`#[all_roles]`.
@@ -58,9 +59,36 @@ impl ToolRequirements {
     }
 
     pub(crate) fn roles_ok(&self, principal: &McpPrincipal) -> bool {
-        let user = &principal.user;
-        (self.roles.is_empty() || self.roles.iter().any(|r| user.has_role(r)))
-            && self.all_roles.iter().all(|r| user.has_role(r))
+        self.roles_held(|r| principal.user.has_role(r))
+    }
+
+    /// Whether the role requirements are met by a caller holding the roles
+    /// `has` accepts.
+    pub(crate) fn roles_held(&self, has: impl Fn(&str) -> bool) -> bool {
+        (self.roles.is_empty() || self.roles.iter().any(|r| has(r)))
+            && self.all_roles.iter().all(|r| has(r))
+    }
+
+    /// Whether the requirements declare any role.
+    pub(crate) fn needs_roles(&self) -> bool {
+        !self.roles.is_empty() || !self.all_roles.is_empty()
+    }
+
+    /// Whether the requirements declare any scope.
+    pub(crate) fn needs_scopes(&self) -> bool {
+        !self.scopes.is_empty() || !self.any_scopes.is_empty()
+    }
+
+    /// Whether `caller` satisfies every requirement: scopes against the
+    /// `mcp.auth` principal (a caller without one — a struct identity on a
+    /// request the auth layer did not see — holds no scope), roles against
+    /// whichever identity the caller came from.
+    pub(crate) fn satisfied_by_caller(&self, caller: &Caller<'_>) -> bool {
+        let scopes_ok = !self.needs_scopes()
+            || caller.principal.is_some_and(|principal| {
+                self.missing_scopes(principal).is_empty() && self.any_scope_ok(principal)
+            });
+        scopes_ok && self.roles_held(|r| caller.has_role(r))
     }
 
     /// Whether the principal satisfies every requirement (scopes AND
@@ -124,6 +152,18 @@ pub fn requirements_visible(principal: Option<&McpPrincipal>, req: &ToolRequirem
     }
     match principal {
         Some(principal) => req.satisfied_by(principal),
+        None => false,
+    }
+}
+
+/// [`requirements_visible`] over the caller the catalog resolves (the
+/// `mcp.auth` principal or a service's struct identity).
+pub(crate) fn visible_to(caller: Option<&Caller<'_>>, req: &ToolRequirements) -> bool {
+    if req.is_empty() {
+        return true;
+    }
+    match caller {
+        Some(caller) => req.satisfied_by_caller(caller),
         None => false,
     }
 }

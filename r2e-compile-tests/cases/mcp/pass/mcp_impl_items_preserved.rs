@@ -14,9 +14,12 @@ impl PreservedImpl {
         Self::LABEL
     }
 
+    // A member runs on the request façade (like an HTTP route), so an
+    // associated item of the controller is named through the controller
+    // type, not `Self`.
     #[tool]
     async fn ping(&self) -> String {
-        Self::Helper().to_string()
+        PreservedImpl::Helper().to_string()
     }
 }
 

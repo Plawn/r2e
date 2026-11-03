@@ -28,7 +28,7 @@ use rmcp::model::MetaObject;
 use schemars::JsonSchema;
 
 use crate::auth::tools::{check_access, ToolRequirements};
-use crate::catalog::principal_in;
+use crate::catalog::caller_in;
 use crate::error::McpError;
 use crate::params::{
     empty_object_schema, prompt_arguments_from_schema, schema_object_for, ToolParams,
@@ -86,15 +86,15 @@ fn check_member_access(
     req: &ToolRequirements,
 ) -> Result<(), McpError> {
     check_access(parts.map(|p| &p.extensions), kind, name, req)?;
-    if req.roles.is_empty() && req.all_roles.is_empty() {
+    if !req.needs_roles() {
         return Ok(());
     }
-    let Some(principal) = principal_in(parts) else {
+    let Some(caller) = caller_in(parts) else {
         return Err(McpError::Unauthorized(format!(
             "{kind} `{name}` requires an authenticated caller"
         )));
     };
-    if req.roles_ok(principal) {
+    if req.roles_held(|r| caller.has_role(r)) {
         Ok(())
     } else {
         Err(McpError::Forbidden(format!(

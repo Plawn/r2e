@@ -15,6 +15,50 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `#[mcp_routes]` members now run on the request façade, exactly like
+  `#[routes]` handlers (#1210). In a member body `Self` names the façade:
+  name an associated item of the service through the service type
+  (`MyTools::HELPER()`, not `Self::HELPER()`), and a member whose signature
+  exposes `Self` (`-> Self`, `Option<Self>`, …) is a compile error naming the
+  rule. Members that only use `self.<field>` and `self.<method>()` are
+  unaffected.
+- The `McpService<S, W>` witness `W` starts with the request-data marker: a
+  service without identity is `McpService<S, ((),)>`, no longer
+  `McpService<S, ()>`. `.register_mcp_service::<Svc>()` infers it; only
+  hand-written bounds (`S: McpService<State, ()>`) need to become generic
+  over `W` (`S: McpService<State, W>, W`).
+
+### Added
+
+- **Struct-level identity: one caller for the whole endpoint** (#1210).
+  `#[inject(identity)]` and `#[inject(request)]` *fields* on an
+  `#[mcp_routes]` service follow the `#[controller]` contract (same
+  attributes, same extractors, `#[request_helper]`, `self.<field>` in every
+  member) and are extracted **once per HTTP request** in a layer on `/mcp`,
+  before rmcp parses the body: the endpoint fails closed as a whole —
+  `initialize` included, no session opened — with the extractor's own HTTP
+  rejection; `Option<T>` admits anonymous requests with `None`. Every
+  registered service's scope runs on every request; `OPTIONS` is skipped.
+  - `#[roles]`/`#[all_roles]` on a member check the struct identity
+    (`RoleBasedIdentity`); the member lists are filtered for it, as under
+    `mcp.auth` (`mcp.auth.filter-members` keeps its meaning when `mcp.auth`
+    is on).
+  - A session is bound to the struct identity's subject (`Identity`): another
+    subject presenting it gets `404 Not Found`, as with the `mcp.auth`
+    principal — never both bindings on one request.
+  - Under `mcp.auth` the field may be `McpPrincipal` (the deposited
+    principal, validated once). An app identity's bare `401` gets the
+    `mcp.auth` `WWW-Authenticate` challenge appended.
+  - Request-scoped field types must be `Clone` (each member binds its façade
+    from the deposited data); the check lands at
+    `.register_mcp_service::<Svc>()`.
+  - Internals, `#[doc(hidden)]` under `__macro_support`: `RequestScope`,
+    `deposit_request_data`/`request_data`, `CallerProbe` and `McpCaller`.
+  - Docs: `docs/features/25-mcp.md` § Identity → *Struct-level identity*,
+    `llm/mcp-server.md`.
+
 ### Fixed
 
 - More `mcp.*` keys fail fast at boot instead of misbehaving at request time

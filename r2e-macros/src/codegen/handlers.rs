@@ -62,7 +62,7 @@ pub(crate) fn state_generic() -> syn::Ident {
 
 /// The marker generic carried by the request-data extractor (a tuple of
 /// per-field `FromRequestPartsVia` markers, opaque to `#[routes]`).
-pub(super) fn data_marker() -> syn::Ident {
+pub(crate) fn data_marker() -> syn::Ident {
     format_ident!("__R2eMd")
 }
 
@@ -159,7 +159,10 @@ impl<'a> RequestParams<'a> {
             .into_iter()
             .filter(|(i, _)| !excluded.contains(&Some(*i)))
             .collect();
-        Self { params, last_consumes_body }
+        Self {
+            params,
+            last_consumes_body,
+        }
     }
 
     /// A verb route: everything but `#[managed]` params and the identity.
@@ -202,10 +205,11 @@ impl<'a> RequestParams<'a> {
 /// Check if a type is a known Axum wrapper (Json, Query, Path, Form).
 fn is_wrapper_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last() {
-            let ident = segment.ident.to_string();
-            return matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form");
-        }
+        && let Some(segment) = type_path.path.segments.last()
+    {
+        let ident = segment.ident.to_string();
+        return matches!(ident.as_str(), "Json" | "Query" | "Path" | "Form");
+    }
     false
 }
 
@@ -240,8 +244,11 @@ impl Projection {
             syn::ReturnType::Type(_, ty) => {
                 if !contains_impl_trait(ty) {
                     Self::Probe(ty.clone())
-                } else if let Some(err) = result_error_type(ty).filter(|e| !contains_impl_trait(e)) {
-                    Self::Probe(Box::new(syn::parse_quote! { ::core::result::Result<(), #err> }))
+                } else if let Some(err) = result_error_type(ty).filter(|e| !contains_impl_trait(e))
+                {
+                    Self::Probe(Box::new(
+                        syn::parse_quote! { ::core::result::Result<(), #err> },
+                    ))
                 } else {
                     Self::Default
                 }
@@ -267,7 +274,12 @@ impl Projection {
 
     /// A `return <projected response>;` statement for a `Rejection` expression.
     /// `state` is an expression of type `&S` (`S: BeanLookup`).
-    fn return_stmt(&self, krate: &TokenStream, rejection: TokenStream, state: &TokenStream) -> TokenStream {
+    fn return_stmt(
+        &self,
+        krate: &TokenStream,
+        rejection: TokenStream,
+        state: &TokenStream,
+    ) -> TokenStream {
         match self {
             Self::Probe(ty) => quote! {
                 {
@@ -307,7 +319,12 @@ fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
     if tp.qself.is_some() {
         return None;
     }
-    let names: Vec<String> = tp.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let names: Vec<String> = tp
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
     let names: Vec<&str> = names.iter().map(String::as_str).collect();
     if !matches!(
         names.as_slice(),
@@ -315,7 +332,14 @@ fn result_error_type(ty: &syn::Type) -> Option<&syn::Type> {
     ) {
         return None;
     }
-    if tp.path.segments.iter().rev().skip(1).any(|s| !s.arguments.is_none()) {
+    if tp
+        .path
+        .segments
+        .iter()
+        .rev()
+        .skip(1)
+        .any(|s| !s.arguments.is_none())
+    {
         return None;
     }
     let syn::PathArguments::AngleBracketed(args) = &tp.path.segments.last()?.arguments else {
@@ -611,9 +635,10 @@ fn collect_pat_idents(pat: &syn::Pat, out: &mut Vec<String>) {
             let mut name = ident.ident.to_string();
             if name != "_" {
                 if let Some(stripped) = name.strip_prefix('_')
-                    && !stripped.is_empty() {
-                        name = stripped.to_string();
-                    }
+                    && !stripped.is_empty()
+                {
+                    name = stripped.to_string();
+                }
                 out.push(name);
             }
         }
@@ -754,7 +779,8 @@ impl<'a> Pipeline<'a> {
     }
 
     fn project(&self, rejection: TokenStream) -> TokenStream {
-        self.projection.return_stmt(&self.krate, rejection, &self.state)
+        self.projection
+            .return_stmt(&self.krate, rejection, &self.state)
     }
 
     /// Split the request, snapshot the peer address.
@@ -1154,9 +1180,7 @@ impl<'a> Pipeline<'a> {
                 }
             })
             .collect();
-        let project = self
-            .projection
-            .return_stmt(krate, quote! { __rej }, state);
+        let project = self.projection.return_stmt(krate, quote! { __rej }, state);
         quote! {
             let __result = #call;
             let __response = #krate::http::response::IntoResponse::into_response(__result);
@@ -1214,7 +1238,11 @@ fn entry_generics(
 
 /// Turbofish naming the entry function's marker generics from inside the
 /// `Controller` impl (where the same idents are the impl's parameters).
-fn entry_turbofish(fn_ident: &syn::Ident, anonymous: bool, has_identity_param: bool) -> TokenStream {
+fn entry_turbofish(
+    fn_ident: &syn::Ident,
+    anonymous: bool,
+    has_identity_param: bool,
+) -> TokenStream {
     let state = state_generic();
     let mut args: Vec<TokenStream> = vec![quote! { #state }];
     if !anonymous {
@@ -1248,7 +1276,14 @@ fn generate_single_handler(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
     let fn_ident = &rm.fn_item.sig.ident;
-    let plan = plan_endpoint(def, fn_ident, &rm.decorators, true, &rm.path, &rm.fn_item.sig);
+    let plan = plan_endpoint(
+        def,
+        fn_ident,
+        &rm.decorators,
+        true,
+        &rm.path,
+        &rm.fn_item.sig,
+    );
     let pipeline = Pipeline::new(
         def,
         fn_ident,
@@ -1394,7 +1429,14 @@ fn generate_sse_handler(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
     let fn_ident = &sm.fn_item.sig.ident;
-    let plan = plan_endpoint(def, fn_ident, &sm.decorators, false, &sm.path, &sm.fn_item.sig);
+    let plan = plan_endpoint(
+        def,
+        fn_ident,
+        &sm.decorators,
+        false,
+        &sm.path,
+        &sm.fn_item.sig,
+    );
     let pipeline = Pipeline::new(
         def,
         fn_ident,
@@ -1501,7 +1543,14 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
     let controller_name = &def.controller_name;
     let fn_ident = &wm.fn_item.sig.ident;
-    let plan = plan_endpoint(def, fn_ident, &wm.decorators, false, &wm.path, &wm.fn_item.sig);
+    let plan = plan_endpoint(
+        def,
+        fn_ident,
+        &wm.decorators,
+        false,
+        &wm.path,
+        &wm.fn_item.sig,
+    );
     let pipeline = Pipeline::new(
         def,
         fn_ident,
@@ -1743,7 +1792,14 @@ fn registration_closure(
 /// Generate the closure registering an HTTP route.
 pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> TokenStream {
     let fn_ident = &rm.fn_item.sig.ident;
-    let plan = plan_endpoint(def, fn_ident, &rm.decorators, true, &rm.path, &rm.fn_item.sig);
+    let plan = plan_endpoint(
+        def,
+        fn_ident,
+        &rm.decorators,
+        true,
+        &rm.path,
+        &rm.fn_item.sig,
+    );
     registration_closure(
         def,
         fn_ident,
@@ -1760,7 +1816,14 @@ pub(super) fn generate_route_closure(def: &RoutesImplDef, rm: &RouteMethod) -> T
 pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> TokenStream {
     let krate = r2e_core_path();
     let fn_ident = &sm.fn_item.sig.ident;
-    let plan = plan_endpoint(def, fn_ident, &sm.decorators, false, &sm.path, &sm.fn_item.sig);
+    let plan = plan_endpoint(
+        def,
+        fn_ident,
+        &sm.decorators,
+        false,
+        &sm.path,
+        &sm.fn_item.sig,
+    );
     registration_closure(
         def,
         fn_ident,
@@ -1777,7 +1840,14 @@ pub(super) fn generate_sse_closure(def: &RoutesImplDef, sm: &SseMethod) -> Token
 pub(super) fn generate_ws_closure(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let krate = r2e_core_path();
     let fn_ident = &wm.fn_item.sig.ident;
-    let plan = plan_endpoint(def, fn_ident, &wm.decorators, false, &wm.path, &wm.fn_item.sig);
+    let plan = plan_endpoint(
+        def,
+        fn_ident,
+        &wm.decorators,
+        false,
+        &wm.path,
+        &wm.fn_item.sig,
+    );
     registration_closure(
         def,
         fn_ident,

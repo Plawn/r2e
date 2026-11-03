@@ -20,6 +20,7 @@ use serde_json::Value;
 use crate::auth::ToolRequirements;
 use crate::elicitation::{ClientChannel, McpClient};
 use crate::error::McpError;
+use crate::identity::RequestScope;
 use crate::progress::Progress;
 use crate::session::{McpSession, SessionId};
 
@@ -630,6 +631,11 @@ pub struct McpRoutes {
     /// its session's member list). Turns on `listChanged` in the advertised
     /// capabilities; rejected at boot under `mcp.stateless`.
     pub uses_session: bool,
+    /// The service's once-per-request extraction of its struct-level
+    /// `#[inject(identity)]` / `#[inject(request)]` fields, run by the
+    /// endpoint layer before any message is dispatched (`None` when the
+    /// service declares no request-scoped field).
+    pub request_scope: Option<RequestScope>,
 }
 
 impl McpRoutes {
