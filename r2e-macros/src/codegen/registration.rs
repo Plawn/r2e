@@ -1,7 +1,7 @@
 //! The registration emitter shared by every endpoint kind: `#[routes]`
 //! (`Controller<S, W>`, `codegen/controller_impl.rs`), `#[mcp_routes]`
 //! (`McpService<S, W>`, `mcp_codegen/service_impl.rs`) and `#[grpc_routes]`
-//! (`GrpcService`, `grpc_codegen/service_impl.rs`).
+//! (`GrpcService<S, W>`, `grpc_codegen/service_impl.rs`).
 //!
 //! Two pieces:
 //!
@@ -9,7 +9,7 @@
 //!   `ContextConstruct::Deps` extended with every decorator site's
 //!   `<Spec as DecoratorSpec>::Deps` (deduplicated by spec type), plus
 //!   transport extras appended through [`DepsFold::append`] (`ManagedDeps` for
-//!   HTTP `#[managed]` params, `GrpcIdentity::Spec` deps for gRPC). Emitted
+//!   HTTP `#[managed]` params). Emitted
 //!   once on the state-independent `EndpointDeps` carrier
 //!   ([`DepsFold::carrier_impl`]), checked by `AllSatisfied` at
 //!   `register_*()` and by `ModuleDepsSatisfied` at `register_module()`.

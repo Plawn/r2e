@@ -1,85 +1,66 @@
-//! Generate `impl GrpcService<T>` for the controller struct.
+//! Generate `impl GrpcService<S, W>` for the controller struct.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 use crate::parsing::grpc_routes_parsing::GrpcRoutesImplDef;
 use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
 
 use crate::codegen::registration::DepsFold;
 
-use super::{site_exprs, unique_identity_types, GrpcDecoSets};
+use super::{controller_items, service_bounds, service_name_expr, site_exprs, witness, GrpcDecoSets};
 
 /// Generate the `EndpointDeps` carrier for the service: the core's
 /// `ContextConstruct::Deps` extended with every guard/interceptor site's
-/// spec deps — the same fold `#[routes]` emits for HTTP controllers — plus
-/// each injected identity type's `GrpcIdentity::Spec` deps (the validator
-/// bean). Checked by `AllSatisfied` at `register_grpc_service()`, so a
-/// missing bean is a compile error at the registration call site.
+/// spec deps — the same fold `#[routes]` emits for HTTP controllers. Checked
+/// by `AllSatisfied` at `register_grpc_service()`, so a missing bean is a
+/// compile error at the registration call site. Identity extractors are not
+/// folded here: their bean deps (the JWT validator) are `FromRequestPartsVia`
+/// bounds on the `GrpcService<S, W>` impl, checked by inferring `W` at the
+/// same call.
 pub fn generate_endpoint_deps_impl(def: &GrpcRoutesImplDef) -> TokenStream {
-    let krate = r2e_core_path();
-    let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
-
-    let mut fold = DepsFold::endpoint(controller_name, site_exprs(def));
-    for ty in unique_identity_types(def) {
-        fold.append(quote! {
-            <<#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec
-                as #krate::DecoratorSpec>::Deps
-        });
-    }
-    fold.carrier_impl(controller_name)
+    DepsFold::endpoint(controller_name, site_exprs(def)).carrier_impl(controller_name)
 }
 
-/// Generate `impl GrpcService for ControllerName`.
+/// Generate `impl<S, W> GrpcService<S, W> for ControllerName`.
+///
+/// Mirrors the `McpService<S, W>` impl `#[mcp_routes]` emits: generic over
+/// the state `__R2eS`, the request-data marker `__R2eMd` (bound
+/// `__R2eRequestData_<Name><__R2eMd>: RequestData<__R2eS>` — the struct's
+/// `#[inject(identity)]` / `#[inject(request)]` fields) plus one opaque
+/// marker `__R2eMp<Fn>` per method that declares an `#[inject(identity)]`
+/// parameter, bound `<declared ty>: FromRequestPartsVia<__R2eS, __R2eMp<Fn>>`.
+/// The markers are folded into the witness `W`, so
+/// `register_grpc_service::<Svc>()` infers them — and fails to compile when
+/// the state cannot satisfy an extractor (e.g. no `Arc<JwtClaimsValidator>`
+/// bean behind `AuthenticatedUser`).
 pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> TokenStream {
     let krate = r2e_core_path();
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
-    let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
+    let items = controller_items(controller_name);
+    let wrapper_name = &items.wrapper_name;
+    let meta_mod = &items.meta_mod;
 
     // Derive the server type path from the trait path.
     // Convention: if trait is `proto::user_service_server::UserService`,
     // the server is `proto::user_service_server::UserServiceServer`.
     let server_path = derive_server_path(service_trait);
+    let service_name = service_name_expr(service_trait);
 
-    // The service name comes from tonic's generated `SERVICE_NAME` const in
-    // the `*_server` module (the trait path's parent) — the fully-qualified
-    // proto name (e.g. "greeter.Greeter"), so logs, the registry, and the
-    // reflection listing all use one naming convention. A single-segment
-    // trait path has no visible parent module; fall back to the bare ident.
-    let service_name = if service_trait.segments.len() >= 2 {
-        let leading = &service_trait.leading_colon;
-        let module_segments: Vec<_> = service_trait
-            .segments
-            .iter()
-            .take(service_trait.segments.len() - 1)
-            .collect();
-        quote! { #leading #(#module_segments)::* ::SERVICE_NAME }
-    } else {
-        let name = service_trait
-            .segments
-            .last()
-            .map(|s| s.ident.to_string())
-            .unwrap_or_default();
-        quote! { #name }
-    };
+    let witness = witness(def);
+    let witness_generics = witness.generics();
+    let witness_tuple = witness.tuple();
+    let bounds = service_bounds(def, &witness);
 
-    // Prebuild every method's guard/interceptor set and identity extractor
-    // from the resolved graph — once, at registration, exactly like route
-    // decorator sets — into the single Arc'd container.
-    let decos_init = if deco.has_any(def) {
+    // Prebuild every method's guard/interceptor set from the resolved graph —
+    // once, at registration, exactly like route decorator sets — into the
+    // single Arc'd container.
+    let decos_init = if deco.has_any() {
         let container = GrpcDecoSets::container_ident(controller_name);
-        let mut field_inits = deco.sets.field_inits();
-        field_inits.extend(GrpcDecoSets::identity_fields(def).map(|(field, ty)| {
-            quote! {
-                #field: #krate::decorators::decorator::build_decorator::<
-                    _,
-                    <#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec,
-                >(<#ty as #grpc_krate::__macro_support::GrpcIdentity>::spec(), __ctx)
-            }
-        }));
+        let field_inits = deco.sets.field_inits();
         quote! {
             __decos: ::std::sync::Arc::new(#container {
                 #(#field_inits,)*
@@ -91,19 +72,11 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
 
     // Aggregated config validation for the service: the core's own
     // `#[config]`/`#[config_section]` keys (from the `#[controller]`-generated
-    // meta module) plus every guard/interceptor spec's and identity spec's
-    // declared keys. Reported at `register_grpc_service()`, the gRPC peer of
+    // meta module) plus every guard/interceptor spec's declared keys.
+    // Reported at `register_grpc_service()`, the gRPC peer of
     // `register_controller()`.
-    let meta_mod = format_ident!("__r2e_meta_{}", controller_name);
-    let mut decorator_config_stmts =
+    let decorator_config_stmts =
         crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
-    decorator_config_stmts.extend(unique_identity_types(def).into_iter().map(|ty| {
-        quote! {
-            __errors.extend(#krate::decorator_config_errors::<
-                <#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec,
-            >(__config));
-        }
-    }));
 
     // Override the trait's `None` default only when the attribute declared a
     // descriptor set (`#[grpc_routes(..., descriptor = <expr>)]`).
@@ -116,7 +89,11 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
     });
 
     quote! {
-        impl #grpc_krate::GrpcService for #controller_name {
+        impl<__R2eS, #witness_generics> #grpc_krate::GrpcService<__R2eS, #witness_tuple>
+            for #controller_name
+        where
+            #bounds
+        {
             fn service_name() -> &'static str {
                 #service_name
             }
@@ -134,15 +111,20 @@ pub fn generate_grpc_service_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) 
 
             fn add_to_routes(
                 __routes: #grpc_krate::tonic::service::Routes,
+                __state: &__R2eS,
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
             ) -> #grpc_krate::tonic::service::Routes {
-                let wrapper = #wrapper_name {
+                let wrapper = #wrapper_name::<__R2eS, #witness_tuple> {
                     core: ::std::sync::Arc::new(
                         <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
                     ),
+                    state: ::std::sync::Arc::new(::core::clone::Clone::clone(__state)),
                     #decos_init
+                    _w: ::core::marker::PhantomData,
                 };
-                __routes.add_service(#server_path::new(wrapper))
+                __routes.add_service(#grpc_krate::__macro_support::CaptureMethodPath(
+                    #server_path::new(wrapper),
+                ))
             }
         }
     }

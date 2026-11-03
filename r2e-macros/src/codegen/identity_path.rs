@@ -1,14 +1,16 @@
 //! The façade-binding emitter shared by every transport that runs members on
-//! a `#[controller]` struct: HTTP handlers (`codegen/handlers.rs`) and MCP
-//! members (`mcp_codegen/tool_impl.rs`).
+//! a `#[controller]` struct: HTTP handlers (`codegen/handlers.rs`), MCP
+//! members (`mcp_codegen/tool_impl.rs`) and gRPC methods
+//! (`grpc_codegen/trait_impl.rs`).
 //!
-//! Both bind the same thing — the `#[controller]`-generated
+//! All three bind the same thing — the `#[controller]`-generated
 //! `__R2eRequestData_<Name>` turned into the per-request façade by
 //! `__r2e_meta_<Name>::bind_request(core, data)`, then `__ctrl = &__facade` —
 //! and differ only in where the request data comes from ([`Arrival`]):
 //!
 //! - HTTP extracts it here, from `__parts` against `__state`
-//!   ([`Arrival::ExtractHere`]);
+//!   ([`Arrival::ExtractHere`]); so does gRPC, from the head the tonic
+//!   wrapper builds per call, against the wrapper's shared state;
 //! - MCP finds it deposited in the call parts' extensions by the endpoint
 //!   layer, or builds it by hand for a service without request scope
 //!   ([`Arrival::FromDeposit`]).
@@ -26,10 +28,13 @@ use quote::quote;
 
 /// Where a member's request-scoped data comes from.
 pub(crate) enum Arrival<'a> {
-    /// HTTP: extracted here through `RequestData<__R2eS>` from `__parts` and
-    /// `__state`; a rejection (bound as `__rej`) runs `on_reject`.
+    /// HTTP and gRPC: extracted here through `RequestData<__R2eS>` from
+    /// `__parts` against `state` (an `&__R2eS` expression: `&__state` in an
+    /// HTTP handler, `&*self.state` in the gRPC wrapper); a rejection (bound
+    /// as `__rej`) runs `on_reject`.
     ExtractHere {
         krate: &'a TokenStream,
+        state: TokenStream,
         on_reject: TokenStream,
     },
     /// MCP: `unscoped_request_data` when the controller has no request scope,
@@ -64,9 +69,13 @@ pub(crate) fn bind_facade(
         data_marker,
     } = names;
     let data = match arrival {
-        Arrival::ExtractHere { krate, on_reject } => quote! {
+        Arrival::ExtractHere {
+            krate,
+            state,
+            on_reject,
+        } => quote! {
             let __data = match <#data_name<#data_marker> as #krate::web::extract::RequestData<__R2eS>>
-                ::extract(&mut __parts, &__state).await
+                ::extract(&mut __parts, #state).await
             {
                 Ok(__d) => __d,
                 Err(__rej) => #on_reject

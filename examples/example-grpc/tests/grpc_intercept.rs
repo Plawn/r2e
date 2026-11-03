@@ -86,7 +86,11 @@ async fn grpc_interceptor_is_built_from_the_bean_graph() {
     // Registration path: the interceptor set is built here, once, from the
     // retained bean graph.
     let routes =
-        TestGreeter::add_to_routes(tonic::service::Routes::default(), builder.bean_context());
+        TestGreeter::add_to_routes(
+            tonic::service::Routes::default(),
+            builder.state(),
+            builder.bean_context(),
+        );
 
     let listener = r2e::rt::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

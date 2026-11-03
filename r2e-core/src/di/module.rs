@@ -273,7 +273,13 @@ impl ModuleEndpointSet for () {
 /// dependency check already happened module-locally at `register_module`
 /// (against [`ModuleScope`]), so requiring the deps to be in the application
 /// state would wrongly reject an endpoint injecting a private module bean.
-pub trait ModuleEndpoints<T: Clone + Send + Sync + 'static> {
+///
+/// `W` is an inference-only witness, like [`ModuleControllers`]' own: a
+/// transport whose endpoints are generic over the state (a gRPC service's
+/// `GrpcService<T, W>`, whose request-scope extractors resolve against `T`)
+/// threads its per-endpoint witnesses through it. `()` for endpoint sets that
+/// need none.
+pub trait ModuleEndpoints<T: Clone + Send + Sync + 'static, W = ()> {
     /// Register every endpoint in the set, in declaration order.
     ///
     /// `module` is the declaring module's type name, carried only so a
@@ -835,12 +841,12 @@ impl<T: Clone + Send + Sync + 'static> ModuleList<T, ()> for TNil {
     }
 }
 
-impl<T, M, Rest, WC, WR> ModuleList<T, (WC, WR)> for TCons<ModEntry<M>, Rest>
+impl<T, M, Rest, WC, WE, WR> ModuleList<T, ((WC, WE), WR)> for TCons<ModEntry<M>, Rest>
 where
     T: Clone + Send + Sync + 'static,
     M: FeatureModule,
     M::Controllers: ModuleControllers<T, WC>,
-    M::Endpoints: ModuleEndpoints<T>,
+    M::Endpoints: ModuleEndpoints<T, WE>,
     Rest: ModuleList<T, WR>,
 {
     fn register_controllers(
@@ -853,7 +859,7 @@ where
             <M::Controllers as ModuleControllers<T, WC>>::register_all(builder, M::PATH_PREFIX)?;
         // Non-HTTP endpoints (gRPC services) register after the controllers of
         // the same module, from the same retained bean context.
-        <M::Endpoints as ModuleEndpoints<T>>::register_all(builder, std::any::type_name::<M>())
+        <M::Endpoints as ModuleEndpoints<T, WE>>::register_all(builder, std::any::type_name::<M>())
     }
 }
 

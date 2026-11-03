@@ -104,13 +104,14 @@ impl EndpointDeps for GreeterService {
     type Deps = r2e::type_list::TNil;
 }
 
-impl GrpcService for GreeterService {
+impl<S: Clone + Send + Sync + 'static> GrpcService<S> for GreeterService {
     fn service_name() -> &'static str {
         proto::greeter::greeter_server::SERVICE_NAME
     }
 
     fn add_to_routes(
         routes: r2e::r2e_grpc::tonic::service::Routes,
+        _state: &S,
         _ctx: &Arc<BeanContext>,
     ) -> r2e::r2e_grpc::tonic::service::Routes {
         routes

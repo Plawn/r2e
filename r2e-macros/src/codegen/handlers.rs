@@ -860,6 +860,7 @@ impl<'a> Pipeline<'a> {
             quote! { __core },
             identity_path::Arrival::ExtractHere {
                 krate: &self.krate,
+                state: quote! { &__state },
                 on_reject: self.project(quote! { __rej }),
             },
         )

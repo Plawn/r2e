@@ -52,15 +52,15 @@ pub struct ModuleGrpcServices<S>(PhantomData<fn() -> S>);
 /// the application-state dependency check (it was already checked against the
 /// module scope at `register_module`), mapping the failure modes onto the boot
 /// error channel.
-fn register_module_service<T, S>(
+fn register_module_service<T, W, S>(
     builder: AppBuilder<T>,
     module: &'static str,
 ) -> Result<AppBuilder<T>, BeanError>
 where
     T: Clone + Send + Sync + 'static,
-    S: GrpcService,
+    S: GrpcService<T, W>,
 {
-    match crate::register_service_unchecked::<T, S>(&builder) {
+    match crate::register_service_unchecked::<T, W, S>(&builder) {
         Ok(()) => Ok(builder),
         Err(RegisterServiceError::Config(source)) => Err(BeanError::EndpointConfig {
             endpoint: std::any::type_name::<S>(),
@@ -83,7 +83,7 @@ impl ModuleEndpointSet for ModuleGrpcServices<()> {
     type Deps = TNil;
 }
 
-impl<T: Clone + Send + Sync + 'static> ModuleEndpoints<T> for ModuleGrpcServices<()> {
+impl<T: Clone + Send + Sync + 'static> ModuleEndpoints<T, ()> for ModuleGrpcServices<()> {
     fn register_all(
         builder: AppBuilder<T>,
         _module: &'static str,
@@ -93,7 +93,7 @@ impl<T: Clone + Send + Sync + 'static> ModuleEndpoints<T> for ModuleGrpcServices
 }
 
 macro_rules! impl_module_grpc_services {
-    ($S0:ident) => {
+    ($S0:ident $W0:ident) => {
         impl<$S0: EndpointDeps> ModuleEndpointSet for ModuleGrpcServices<($S0,)>
         where
             $S0::Deps: TAppend<TNil>,
@@ -101,20 +101,20 @@ macro_rules! impl_module_grpc_services {
             type Deps = <$S0::Deps as TAppend<TNil>>::Output;
         }
 
-        impl<T, $S0> ModuleEndpoints<T> for ModuleGrpcServices<($S0,)>
+        impl<T, $S0, $W0> ModuleEndpoints<T, ($W0,)> for ModuleGrpcServices<($S0,)>
         where
             T: Clone + Send + Sync + 'static,
-            $S0: GrpcService,
+            $S0: GrpcService<T, $W0>,
         {
             fn register_all(
                 builder: AppBuilder<T>,
                 module: &'static str,
             ) -> Result<AppBuilder<T>, BeanError> {
-                register_module_service::<T, $S0>(builder, module)
+                register_module_service::<T, $W0, $S0>(builder, module)
             }
         }
     };
-    ($S0:ident, $($Ss:ident),+) => {
+    ($S0:ident $W0:ident, $($Ss:ident $Ws:ident),+) => {
         impl<$S0: EndpointDeps, $($Ss: EndpointDeps),+> ModuleEndpointSet
             for ModuleGrpcServices<($S0, $($Ss),+)>
         where
@@ -126,24 +126,25 @@ macro_rules! impl_module_grpc_services {
             >>::Output;
         }
 
-        impl<T, $S0, $($Ss),+> ModuleEndpoints<T> for ModuleGrpcServices<($S0, $($Ss),+)>
+        impl<T, $S0, $W0, $($Ss, $Ws),+> ModuleEndpoints<T, ($W0, $($Ws),+)>
+            for ModuleGrpcServices<($S0, $($Ss),+)>
         where
             T: Clone + Send + Sync + 'static,
-            $S0: GrpcService,
-            $($Ss: GrpcService,)+
+            $S0: GrpcService<T, $W0>,
+            $($Ss: GrpcService<T, $Ws>,)+
         {
             fn register_all(
                 builder: AppBuilder<T>,
                 module: &'static str,
             ) -> Result<AppBuilder<T>, BeanError> {
-                let builder = register_module_service::<T, $S0>(builder, module)?;
-                $(let builder = register_module_service::<T, $Ss>(builder, module)?;)+
+                let builder = register_module_service::<T, $W0, $S0>(builder, module)?;
+                $(let builder = register_module_service::<T, $Ws, $Ss>(builder, module)?;)+
                 Ok(builder)
             }
         }
 
-        impl_module_grpc_services!($($Ss),+);
+        impl_module_grpc_services!($($Ss $Ws),+);
     };
 }
 
-impl_module_grpc_services!(S0, S1, S2, S3, S4, S5, S6, S7);
+impl_module_grpc_services!(S0 W0, S1 W1, S2 W2, S3 W3, S4 W4, S5 W5, S6 W6, S7 W7);

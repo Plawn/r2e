@@ -1,12 +1,13 @@
 //! gRPC guard bridge: `Rejection` → `tonic::Status` projection by kind, the
-//! `GuardContext` built from a `tonic::Request`, and a `Guard<I>` check
-//! running end-to-end over request metadata.
+//! `GuardContext` built from a gRPC call head (`into_head` +
+//! `GuardContext::from_parts`, what `#[grpc_routes]` generates), and a
+//! `Guard<I>` check running end-to-end over request metadata.
 
 use std::future::Future;
 
-use r2e_core::http::{HeaderName, HeaderValue, Method, StatusCode};
-use r2e_core::{Guard, GuardContext, Identity, NoIdentity, Rejection, RejectionKind};
-use r2e_grpc::{code_from_status, guard_context, rejection_to_status};
+use r2e_core::http::{HeaderName, HeaderValue, Method, Parts, StatusCode};
+use r2e_core::{Guard, GuardContext, Identity, NoIdentity, PathParams, Rejection, RejectionKind};
+use r2e_grpc::{code_from_status, into_head, rejection_to_status};
 use tonic::{Code, Request};
 
 #[test]
@@ -91,7 +92,7 @@ fn status_only_table() {
     }
 }
 
-// ── GuardContext from a tonic::Request ───────────────────────────────────
+// ── GuardContext from a gRPC call head ───────────────────────────────────
 
 struct TestIdentity {
     sub: String,
@@ -109,18 +110,43 @@ fn request_with(key: &'static str, value: &'static str) -> Request<()> {
     request
 }
 
+/// The head `#[grpc_routes]` builds for a call to `greeter.Greeter/SayHello`.
+fn head(request: Request<()>) -> Parts {
+    into_head(
+        request,
+        || r2e_grpc::__macro_support::fallback_method_path("greeter.Greeter", "SayHello"),
+        false,
+    )
+    .0
+}
+
+fn ctx<'a, I: Identity>(
+    parts: &'a Parts,
+    method_name: &'static str,
+    controller_name: &'static str,
+    identity: Option<&'a I>,
+) -> GuardContext<'a, I> {
+    GuardContext::from_parts(
+        parts,
+        method_name,
+        controller_name,
+        identity,
+        PathParams::EMPTY,
+    )
+}
+
 #[test]
 fn guard_context_exposes_metadata_as_headers() {
-    let request = request_with("x-tenant-id", "acme");
+    let parts = head(request_with("x-tenant-id", "acme"));
     let identity = TestIdentity {
         sub: "user-1".into(),
     };
-    let ctx = guard_context(&request, "say_hello", "Greeter", Some(&identity));
+    let ctx = ctx(&parts, "say_hello", "Greeter", Some(&identity));
 
     assert_eq!(ctx.method_name, "say_hello");
     assert_eq!(ctx.controller_name, "Greeter");
     assert_eq!(*ctx.method, Method::POST);
-    assert_eq!(ctx.uri.path(), "/");
+    assert_eq!(ctx.uri.path(), "/greeter.Greeter/SayHello");
     assert_eq!(
         ctx.headers.get("x-tenant-id").map(|v| v.to_str().unwrap()),
         Some("acme")
@@ -132,8 +158,8 @@ fn guard_context_exposes_metadata_as_headers() {
 
 #[test]
 fn guard_context_without_identity() {
-    let request = Request::new(());
-    let ctx = guard_context::<_, NoIdentity>(&request, "m", "C", None);
+    let parts = head(Request::new(()));
+    let ctx = ctx::<NoIdentity>(&parts, "m", "C", None);
     assert!(ctx.identity.is_none());
     assert!(ctx.headers.is_empty());
 }
@@ -167,15 +193,15 @@ impl<I: Identity> Guard<I> for ApiKeyGuard {
 async fn guard_denial_projects_onto_a_status() {
     let guard = ApiKeyGuard("s3cret");
 
-    let denied = Request::new(());
-    let ctx = guard_context::<_, NoIdentity>(&denied, "m", "C", None);
-    let rejection = Guard::check(&guard, &ctx).await.unwrap_err();
+    let denied = head(Request::new(()));
+    let gctx = ctx::<NoIdentity>(&denied, "m", "C", None);
+    let rejection = Guard::check(&guard, &gctx).await.unwrap_err();
     assert_eq!(rejection.kind, RejectionKind::Forbidden);
     let status = rejection_to_status(rejection);
     assert_eq!(status.code(), Code::PermissionDenied);
     assert!(status.message().contains("x-api-key"), "{status}");
 
-    let allowed = request_with("x-api-key", "s3cret");
-    let ctx = guard_context::<_, NoIdentity>(&allowed, "m", "C", None);
-    Guard::check(&guard, &ctx).await.unwrap();
+    let allowed = head(request_with("x-api-key", "s3cret"));
+    let gctx = ctx::<NoIdentity>(&allowed, "m", "C", None);
+    Guard::check(&guard, &gctx).await.unwrap();
 }

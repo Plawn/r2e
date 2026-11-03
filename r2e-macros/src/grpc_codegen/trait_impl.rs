@@ -1,22 +1,34 @@
 //! Generate the tonic trait implementation for the gRPC wrapper struct.
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 use crate::codegen::decorators::{wrap_with_interceptor_refs, MemberDecoSets};
-use crate::codegen::handlers::qualified_controller_name;
+use crate::codegen::handlers::{identity_marker_for, qualified_controller_name};
+use crate::codegen::identity_path::{self, Arrival, FacadeNames, GuardIdentity};
 use crate::parsing::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 use crate::util::crate_path::{r2e_core_path, r2e_grpc_path};
 
-use super::GrpcDecoSets;
+use super::{
+    controller_items, identity_declared_ty, service_bounds, service_name_expr, witness,
+    ControllerItems, GrpcDecoSets,
+};
 
-/// Generate `#[tonic::async_trait] impl TraitPath for __R2eGrpc<Name>`.
+/// Generate `#[tonic::async_trait] impl TraitPath for __R2eGrpc<Name><S, W>`.
 pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> TokenStream {
     let krate = r2e_core_path();
     let grpc_krate = r2e_grpc_path();
     let controller_name = &def.controller_name;
     let service_trait = &def.service_trait;
-    let wrapper_name = format_ident!("__R2eGrpc{}", controller_name);
+    let items = controller_items(controller_name);
+    let wrapper_name = &items.wrapper_name;
+    let service_name = service_name_expr(service_trait);
+
+    let witness = witness(def);
+    let witness_generics = witness.generics();
+    let witness_tuple = witness.tuple();
+    let bounds = service_bounds(def, &witness);
+    let assoc_types = &def.assoc_types;
 
     let method_impls: Vec<TokenStream> = def
         .methods
@@ -30,23 +42,50 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -
                 &krate,
                 &grpc_krate,
                 controller_name,
+                &items,
+                &service_name,
             )
         })
         .collect();
 
     quote! {
         #[#grpc_krate::tonic::async_trait]
-        impl #service_trait for #wrapper_name {
+        impl<__R2eS, #witness_generics> #service_trait
+            for #wrapper_name<__R2eS, #witness_tuple>
+        where
+            #bounds
+        {
+            #(#assoc_types)*
             #(#method_impls)*
         }
     }
 }
 
+/// The proto method name of a Rust trait method (`say_hello` → `SayHello`):
+/// the request-URI fallback when the call did not come through the
+/// `CaptureMethodPath` layer (a test driving the trait directly).
+fn proto_method_name(fn_name: &str) -> String {
+    fn_name
+        .split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().chain(c).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Generate a single tonic trait method implementation.
 ///
-/// Shape: identity extraction (if the method injects one) → guard checks →
-/// interceptor chain → user method. Identity and guard rejections return
-/// early as a `tonic::Status` (`rejection_to_status`).
+/// Shape: HTTP head from the tonic request → struct request scope + façade
+/// → identity parameter (if the method injects one) → guard checks →
+/// tonic request rebuilt → interceptor chain → user method on the façade.
+/// Extraction and guard rejections return early as a `tonic::Status`
+/// (`rejection_to_status`). Everything runs before the user method, so for a
+/// server-streaming rpc the head is fully extracted before the stream opens.
 ///
 /// Guard scoping mirrors HTTP: the shared controller-level guards are checked
 /// against a controller-scoped `GuardContext` (`method_name = "*"`), then the
@@ -54,6 +93,7 @@ pub fn generate_tonic_trait_impl(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -
 /// A controller-site guard is never checked against the method's own name,
 /// so a stateful impl-level guard (`RateLimit`) keeps one service-wide bucket
 /// and never shares a bucket with a method-level site.
+#[allow(clippy::too_many_arguments)]
 fn generate_method_impl(
     method: &GrpcMethod,
     sets: &MemberDecoSets,
@@ -61,11 +101,14 @@ fn generate_method_impl(
     krate: &TokenStream,
     grpc_krate: &TokenStream,
     controller_name: &syn::Ident,
+    items: &ControllerItems,
+    service_name: &TokenStream,
 ) -> TokenStream {
     let fn_name = &method.member.name;
     let fn_item = &method.member.fn_item;
     let sig = &fn_item.sig;
     let identity_index = method.member.identity_param.as_ref().map(|p| p.index);
+    let meta_mod = &items.meta_mod;
 
     // The request message parameter: the first typed param that is not the
     // identity parameter.
@@ -84,6 +127,7 @@ fn generate_method_impl(
 
     let controller_name_str = controller_name.to_string();
     let fn_name_str = fn_name.to_string();
+    let proto_method = proto_method_name(&fn_name_str);
 
     // Build the request param for the tonic trait signature
     let request_param_tokens = if let Some(pt) = request_param {
@@ -93,35 +137,59 @@ fn generate_method_impl(
         quote! { request: #grpc_krate::tonic::Request<()> }
     };
 
-    // --- identity extraction ---------------------------------------------
-    // The extractor (e.g. the `Arc<JwtClaimsValidator>` bean) was built once
-    // at registration into the container; per call only the metadata lookup
-    // + validation run. A required identity failing is `Unauthenticated`
-    // before any guard sees the call.
-    let identity_stmts = match &method.member.identity_param {
-        Some(p) => {
-            let id_ty = &p.ty;
-            let id_field = GrpcDecoSets::identity_field_ident(fn_name);
-            let (binding_ty, extract_fn) = if p.is_optional {
-                (
-                    quote! { ::core::option::Option<#id_ty> },
-                    quote! { extract_optional },
-                )
-            } else {
-                (quote! { #id_ty }, quote! { extract })
-            };
+    // --- head --------------------------------------------------------------
+    // The metadata map is deposited in the extensions only when something may
+    // read it (the struct request scope or an identity parameter): it costs
+    // one header-map clone.
+    let has_identity_param = method.member.identity_param.is_some();
+    let head = quote! {
+        let (mut __parts, __msg) = #grpc_krate::__macro_support::into_head(
+            request,
+            || #grpc_krate::__macro_support::fallback_method_path(#service_name, #proto_method),
+            #meta_mod::HAS_REQUEST_SCOPE || #has_identity_param,
+        );
+    };
+
+    // --- struct request scope + façade --------------------------------------
+    let reject = quote! {
+        return ::core::result::Result::Err(
+            #grpc_krate::__macro_support::rejection_to_status(__rej),
+        )
+    };
+    let bind = identity_path::bind_facade(
+        &FacadeNames {
+            meta_mod,
+            data_name: &items.data_name,
+            data_marker: &items.data_marker,
+        },
+        quote! { ::std::sync::Arc::clone(&self.core) },
+        Arrival::ExtractHere {
+            krate,
+            state: quote! { &*self.state },
+            on_reject: reject,
+        },
+    );
+
+    // --- identity parameter ------------------------------------------------
+    // The same contract as an HTTP route's identity parameter: extracted
+    // through `FromRequestPartsVia<S, M>` against the state (the validator is
+    // a bean). A required identity failing is `Unauthenticated` before any
+    // guard sees the call.
+    let identity_stmts = match identity_declared_ty(method) {
+        Some(declared_ty) => {
+            let marker = identity_marker_for(fn_name);
             quote! {
-                let __identity: #binding_ty = match
-                    <#id_ty as #grpc_krate::__macro_support::GrpcIdentity>::#extract_fn(
-                        &self.__decos.#id_field,
-                        request.metadata(),
-                    )
+                let __identity: #declared_ty = match <#declared_ty as
+                    #krate::web::extract::FromRequestPartsVia<__R2eS, #marker>>
+                    ::from_request_parts_via(&mut __parts, &*self.state)
                     .await
                 {
                     ::core::result::Result::Ok(__v) => __v,
-                    ::core::result::Result::Err(__rej) => {
+                    ::core::result::Result::Err(__e) => {
                         return ::core::result::Result::Err(
-                            #grpc_krate::__macro_support::rejection_to_status(__rej),
+                            #grpc_krate::__macro_support::rejection_to_status(
+                                ::core::convert::Into::<#krate::Rejection>::into(__e),
+                            ),
                         );
                     }
                 };
@@ -137,11 +205,17 @@ fn generate_method_impl(
     let guard_stmts = if ctrl_guards.is_empty() && method_guards.is_empty() {
         quote! {}
     } else {
-        let identity_ref = match &method.member.identity_param {
-            Some(p) if p.is_optional => quote! { __identity.as_ref() },
-            Some(_) => quote! { ::core::option::Option::Some(&__identity) },
-            None => quote! { ::core::option::Option::<&#krate::NoIdentity>::None },
-        };
+        let binding = syn::Ident::new("__identity", proc_macro2::Span::call_site());
+        let identity_ref = identity_path::guard_identity(
+            meta_mod,
+            match &method.member.identity_param {
+                Some(p) => GuardIdentity::Param {
+                    binding: &binding,
+                    optional: p.is_optional,
+                },
+                None => GuardIdentity::Facade,
+            },
+        );
         // Module-qualified, like HTTP: identically named services in two
         // modules must not share identity-scoped guard state.
         let controller_name_q = qualified_controller_name(controller_name);
@@ -160,15 +234,16 @@ fn generate_method_impl(
                     }
                 }
             });
-            // Scoped: the context borrows `request`, which the user method
-            // then takes by value.
+            // Scoped: the context borrows the head, which is then moved
+            // back into the tonic request the user method takes by value.
             quote! {
                 {
-                    let __gctx = #grpc_krate::__macro_support::guard_context(
-                        &request,
+                    let __gctx = #grpc_krate::__macro_support::GuardContext::from_parts(
+                        &__parts,
                         #method_name,
                         #controller_name_q,
                         #identity_ref,
+                        #grpc_krate::__macro_support::PathParams::EMPTY,
                     );
                     #(#checks)*
                 }
@@ -179,9 +254,10 @@ fn generate_method_impl(
         quote! { #ctrl #own }
     };
 
-    // The core is shared — built once at registration, cloned per call site.
-    let construct_controller = quote! {
-        let __ctrl = ::std::sync::Arc::clone(&self.core);
+    // The tonic request the user method receives: the head (with whatever
+    // extractors left in its extensions) back around the message.
+    let rebuild = quote! {
+        let request = #grpc_krate::__macro_support::from_head(__parts, __msg);
     };
 
     // Build the method call: the identity parameter receives the extracted
@@ -232,9 +308,11 @@ fn generate_method_impl(
 
     quote! {
         async fn #fn_name(&self, #request_param_tokens) #return_type {
+            #head
+            #bind
             #identity_stmts
             #guard_stmts
-            #construct_controller
+            #rebuild
             #body
         }
     }

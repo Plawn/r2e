@@ -1,19 +1,24 @@
 //! Code generation for the `#[grpc_routes]` attribute macro.
 //!
 //! Generates:
-//! - The user's impl block (methods with stripped attributes)
-//! - A wrapper struct `__R2eGrpc<Name>` that holds the shared core and the
-//!   prebuilt per-method guard/interceptor sets + identity extractors
+//! - The user's methods on the request façade `__R2eRequest_<Name>` (generated
+//!   by `#[controller]`), its other helpers on the core
+//! - A wrapper struct `__R2eGrpc<Name><S, W>` that holds the shared core, the
+//!   application state and the prebuilt guard/interceptor sets
 //! - An impl of the tonic-generated trait for the wrapper
-//! - An impl of `GrpcService<T>` for the controller
+//! - An impl of `GrpcService<S, W>` for the controller
 //!
-//! Per call the generated trait method runs: identity extraction
-//! (`GrpcIdentity::extract`, when the method has an `#[inject(identity)]`
-//! parameter) → controller guards (shared set, `"*"` context) → method
-//! guards (method context) → interceptor chain →
-//! user method. A `Rejection` from identity or a guard is projected onto a
+//! Per call the generated trait method runs: build the HTTP head from the
+//! tonic request (`into_head`) → extract the struct's request scope
+//! (`RequestData<S>`: struct-level `#[inject(identity)]` /
+//! `#[inject(request)]`) and bind the façade → extract the method's
+//! `#[inject(identity)]` parameter, if any (`FromRequestPartsVia<S, M>`) →
+//! controller guards (shared set, `"*"` context) → method guards (method
+//! context) → rebuild the tonic request (`from_head`) → interceptor chain →
+//! user method. A `Rejection` from extraction or a guard is projected onto a
 //! `tonic::Status` by kind (`rejection_to_status`) — the gRPC leg of the
-//! #1072 error-projection model.
+//! #1072 error-projection model. The extraction contract is HTTP's: the same
+//! extractor type works on a route, an MCP member and a gRPC method.
 
 mod service_impl;
 mod trait_impl;
@@ -23,15 +28,15 @@ use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::codegen::decorators::{spec_type_of, MemberDecoSets};
-use crate::parsing::grpc_routes_parsing::GrpcRoutesImplDef;
+use crate::codegen::registration::Witness;
+use crate::parsing::grpc_routes_parsing::{GrpcMethod, GrpcRoutesImplDef};
 use crate::util::crate_path::r2e_core_path;
 
 /// The gRPC decorator storage: the shared [`MemberDecoSets`] (controller
-/// set + one set per method, paired positionally with `def.methods`) plus
-/// every method's identity extractor, all in one hidden container struct
-/// behind a single `Arc` on the wrapper (`__decos`) — tonic clones the
-/// service per call, so cloning the wrapper costs one ref-count bump
-/// regardless of how many methods are decorated.
+/// set + one set per method, paired positionally with `def.methods`), all in
+/// one hidden container struct behind a single `Arc` on the wrapper
+/// (`__decos`) — tonic clones the service per call, so cloning the wrapper
+/// costs ref-count bumps regardless of how many methods are decorated.
 pub(crate) struct GrpcDecoSets {
     pub sets: MemberDecoSets,
 }
@@ -42,28 +47,104 @@ impl GrpcDecoSets {
         format_ident!("__R2eGrpcDecos_{}", controller_name)
     }
 
-    /// The container field holding one method's identity extractor
-    /// (`<I as GrpcIdentity>::Spec::Product`).
-    pub fn identity_field_ident(fn_name: &syn::Ident) -> syn::Ident {
-        format_ident!("__id_{}", fn_name)
+    /// Whether the container exists: any prebuilt set.
+    pub fn has_any(&self) -> bool {
+        !self.sets.is_empty()
     }
+}
 
-    /// Whether the container exists: any prebuilt set or an identity
-    /// extractor.
-    pub fn has_any(&self, def: &GrpcRoutesImplDef) -> bool {
-        !self.sets.is_empty() || def.methods.iter().any(|m| m.member.identity_param.is_some())
+/// The names `#[controller]` generates for the struct, which the gRPC codegen
+/// binds against.
+pub(crate) struct ControllerItems {
+    pub meta_mod: syn::Ident,
+    pub data_name: syn::Ident,
+    pub data_marker: syn::Ident,
+    pub facade_name: syn::Ident,
+    pub wrapper_name: syn::Ident,
+}
+
+pub(crate) fn controller_items(controller_name: &syn::Ident) -> ControllerItems {
+    ControllerItems {
+        meta_mod: format_ident!("__r2e_meta_{}", controller_name),
+        data_name: format_ident!("__R2eRequestData_{}", controller_name),
+        data_marker: crate::codegen::handlers::data_marker(),
+        facade_name: format_ident!("__R2eRequest_{}", controller_name),
+        wrapper_name: format_ident!("__R2eGrpc{}", controller_name),
     }
+}
 
-    /// `(container field, identity type)` for every method with an
-    /// `#[inject(identity)]` parameter, in `def.methods` order.
-    pub fn identity_fields(
-        def: &GrpcRoutesImplDef,
-    ) -> impl Iterator<Item = (syn::Ident, &syn::Type)> {
-        def.methods.iter().filter_map(|m| {
-            m.member.identity_param
-                .as_ref()
-                .map(|p| (Self::identity_field_ident(&m.member.name), &p.ty))
-        })
+/// A method's `#[inject(identity)]` parameter type as extracted: `I` or
+/// `Option<I>`.
+pub(crate) fn identity_declared_ty(method: &GrpcMethod) -> Option<TokenStream> {
+    let p = method.member.identity_param.as_ref()?;
+    let ty = &p.ty;
+    Some(if p.is_optional {
+        quote_spanned! {ty.span()=> ::core::option::Option<#ty> }
+    } else {
+        quote! { #ty }
+    })
+}
+
+/// The witness of the service: the request-data marker plus one opaque
+/// marker per method with an identity parameter.
+pub(crate) fn witness(def: &GrpcRoutesImplDef) -> Witness {
+    let mut witness = Witness::new();
+    for m in &def.methods {
+        if let Some(declared_ty) = identity_declared_ty(m) {
+            witness.push_identity(&m.member.name, declared_ty);
+        }
+    }
+    witness
+}
+
+/// The where-clause predicates shared by the tonic trait impl and the
+/// `GrpcService<S, W>` impl.
+pub(crate) fn service_bounds(def: &GrpcRoutesImplDef, witness: &Witness) -> TokenStream {
+    let krate = r2e_core_path();
+    let ControllerItems {
+        data_name,
+        data_marker,
+        ..
+    } = controller_items(&def.controller_name);
+    let data_marker_pred = witness.data_marker_pred();
+    let marker_preds = witness.marker_preds();
+    let identity_bounds = witness.identity_bounds();
+    quote! {
+        __R2eS: ::core::clone::Clone
+            + ::core::marker::Send
+            + ::core::marker::Sync
+            + 'static,
+        #data_marker_pred
+        #data_name<#data_marker>: #krate::web::extract::RequestData<__R2eS>
+            + ::core::marker::Send
+            + ::core::marker::Sync
+            + 'static,
+        #marker_preds
+        #identity_bounds
+    }
+}
+
+/// The fully-qualified proto service name: tonic's generated `SERVICE_NAME`
+/// const in the `*_server` module (the trait path's parent), e.g.
+/// `"greeter.Greeter"`, so logs, the registry, the reflection listing and
+/// the request URI all use one naming convention. A single-segment trait
+/// path has no visible parent module; fall back to the bare ident.
+pub(crate) fn service_name_expr(service_trait: &syn::Path) -> TokenStream {
+    if service_trait.segments.len() >= 2 {
+        let leading = &service_trait.leading_colon;
+        let module_segments: Vec<_> = service_trait
+            .segments
+            .iter()
+            .take(service_trait.segments.len() - 1)
+            .collect();
+        quote! { #leading #(#module_segments)::* ::SERVICE_NAME }
+    } else {
+        let name = service_trait
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .unwrap_or_default();
+        quote! { #name }
     }
 }
 
@@ -84,23 +165,6 @@ pub(crate) fn site_exprs(def: &GrpcRoutesImplDef) -> Vec<&syn::Expr> {
     exprs
 }
 
-/// The distinct identity types injected by the impl's methods, in first-seen
-/// order. Their `GrpcIdentity::Spec` deps join the service's `EndpointDeps`
-/// (and config validation) exactly like decorator specs.
-pub(crate) fn unique_identity_types(def: &GrpcRoutesImplDef) -> Vec<&syn::Type> {
-    let mut seen = std::collections::HashSet::new();
-    let mut types = Vec::new();
-    for m in &def.methods {
-        if let Some(p) = &m.member.identity_param {
-            let ty = &p.ty;
-            if seen.insert(quote!(#ty).to_string()) {
-                types.push(ty);
-            }
-        }
-    }
-    types
-}
-
 /// Build the decorator sets: one shared controller-level set (impl-level
 /// guards + interceptors, built once per service) and one set per method
 /// holding only that method's own sites. Execution order: controller sites
@@ -117,25 +181,22 @@ fn build_deco_sets(def: &GrpcRoutesImplDef) -> GrpcDecoSets {
     }
 }
 
-/// Compile-time identity checks:
-///
-/// - `#[grpc_routes]` has no struct-level identity (gRPC identity is per
-///   method, like MCP) — assert the `#[controller]` meta says so.
-/// - Per guard site, `DecoratorSpec::REQUIRES_IDENTITY` must be satisfiable:
-///   a guard that needs a `Some` identity on a method without an
-///   `#[inject(identity)]` parameter can never pass. Non-inferable specs are
-///   skipped (their spec-type error already fails the build).
+/// Compile-time identity checks: per guard site,
+/// `DecoratorSpec::REQUIRES_IDENTITY` must be satisfiable — a guard that
+/// needs a `Some` identity on a method that has neither an
+/// `#[inject(identity)]` parameter nor a struct-level `#[inject(identity)]`
+/// field can never pass. Non-inferable specs are skipped (their spec-type
+/// error already fails the build).
 fn generate_identity_asserts(def: &GrpcRoutesImplDef) -> TokenStream {
     let krate = r2e_core_path();
     let meta_mod = format_ident!("__r2e_meta_{}", def.controller_name);
-    let mut asserts = vec![quote_spanned! { def.controller_name.span() =>
-        const _: () = ::core::assert!(
-            !#meta_mod::HAS_STRUCT_IDENTITY,
-            "#[grpc_routes] does not support struct-level #[inject(identity)]: gRPC identity is per method; add an `#[inject(identity)]` parameter on the method"
-        );
-    }];
+    let mut asserts = Vec::new();
     for method in &def.methods {
-        let cond = method.member.identity_param.is_some();
+        let cond = if method.member.identity_param.is_some() {
+            quote! { true }
+        } else {
+            quote! { #meta_mod::HAS_STRUCT_IDENTITY }
+        };
         for expr in def
             .controller_guards
             .iter()
@@ -149,7 +210,8 @@ fn generate_identity_asserts(def: &GrpcRoutesImplDef) -> TokenStream {
                 const _: () = ::core::assert!(
                     !<#spec_ty as #krate::DecoratorSpec>::REQUIRES_IDENTITY || #cond,
                     "this #[guard] requires an authenticated identity, but the gRPC method can \
-                     never provide one: add an `#[inject(identity)]` parameter on the method"
+                     never provide one: add a struct-level `#[inject(identity)]` field on the \
+                     #[controller] struct or an `#[inject(identity)]` parameter on the method"
                 );
             });
         }
@@ -179,47 +241,66 @@ pub fn generate(def: &GrpcRoutesImplDef) -> TokenStream {
     }
 }
 
-/// Generate the user's impl block with route attributes stripped.
+/// Emit the user's items: the gRPC methods and `#[request_helper]`s on the
+/// request façade (they run per call on it, like HTTP handlers and MCP
+/// members), every other item on the controller core.
 fn generate_impl_block(def: &GrpcRoutesImplDef) -> TokenStream {
     let controller_name = &def.controller_name;
+    let facade_name = controller_items(controller_name).facade_name;
 
-    let methods: Vec<&syn::ImplItemFn> = def
+    let facade_methods: Vec<TokenStream> = def
         .methods
         .iter()
-        .map(|m| &m.member.fn_item)
-        .chain(def.other_methods.iter())
+        .map(|m| {
+            let mut f = m.member.fn_item.clone();
+            crate::codegen::precise_capture::add_handler_precise_captures(&mut f.sig);
+            quote! { #f }
+        })
+        .chain(def.facade_helpers.iter().map(|f| quote! { #f }))
         .collect();
+    let facade_impl = if facade_methods.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            impl #facade_name {
+                #(#facade_methods)*
+            }
+        }
+    };
+    let other_items = &def.other_items;
+    let core_impl = if other_items.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            impl #controller_name {
+                #(#other_items)*
+            }
+        }
+    };
 
     quote! {
-        impl #controller_name {
-            #(#methods)*
-        }
+        #facade_impl
+        #core_impl
     }
 }
 
-/// Generate the wrapper struct that holds the controller core + the prebuilt
-/// decorator container, plus the container struct itself.
+/// Generate the wrapper struct that holds the controller core, the state and
+/// the prebuilt decorator container, plus the container struct itself.
 ///
 /// The wrapper is what actually implements the tonic trait. The controller
 /// core is built ONCE from the bean graph (`ContextConstruct`) when the
-/// service is registered; requests share it through the `Arc`. Guard /
-/// interceptor sets and identity extractors are built at the same time, from
-/// the same context (`DecoratorSpec::build`) — never per call.
+/// service is registered; requests share it through the `Arc`, and so the
+/// state every call extracts against. Guard / interceptor sets are built at
+/// the same time, from the same context (`DecoratorSpec::build`) — never per
+/// call. The witness `W` is carried as a phantom so the tonic trait impl can
+/// name the markers its extraction bounds need.
 fn generate_wrapper_struct(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> TokenStream {
-    let krate = r2e_core_path();
-    let grpc_krate = crate::util::crate_path::r2e_grpc_path();
     let controller_name = &def.controller_name;
-    let wrapper_name = quote::format_ident!("__R2eGrpc{}", controller_name);
+    let wrapper_name = controller_items(controller_name).wrapper_name;
 
-    let (container_decl, decos_field) = if deco.has_any(def) {
+    let (container_decl, decos_field, decos_clone) = if deco.has_any() {
         let container = GrpcDecoSets::container_ident(controller_name);
-        let mut fields = deco.sets.field_decls();
-        fields.extend(GrpcDecoSets::identity_fields(def).map(|(field, ty)| {
-            quote! {
-                #field: <<#ty as #grpc_krate::__macro_support::GrpcIdentity>::Spec
-                    as #krate::DecoratorSpec>::Product
-            }
-        }));
+        let fields = deco.sets.field_decls();
         (
             quote! {
                 #[allow(non_camel_case_types)]
@@ -229,19 +310,32 @@ fn generate_wrapper_struct(def: &GrpcRoutesImplDef, deco: &GrpcDecoSets) -> Toke
                 }
             },
             quote! { __decos: ::std::sync::Arc<#container>, },
+            quote! { __decos: ::std::sync::Arc::clone(&self.__decos), },
         )
     } else {
-        (quote! {}, quote! {})
+        (quote! {}, quote! {}, quote! {})
     };
 
     quote! {
         #container_decl
 
         #[doc(hidden)]
-        #[derive(Clone)]
-        pub struct #wrapper_name {
+        pub struct #wrapper_name<__R2eS, __R2eW> {
             core: ::std::sync::Arc<#controller_name>,
+            state: ::std::sync::Arc<__R2eS>,
             #decos_field
+            _w: ::core::marker::PhantomData<fn() -> __R2eW>,
+        }
+
+        impl<__R2eS, __R2eW> ::core::clone::Clone for #wrapper_name<__R2eS, __R2eW> {
+            fn clone(&self) -> Self {
+                Self {
+                    core: ::std::sync::Arc::clone(&self.core),
+                    state: ::std::sync::Arc::clone(&self.state),
+                    #decos_clone
+                    _w: ::core::marker::PhantomData,
+                }
+            }
         }
     }
 }

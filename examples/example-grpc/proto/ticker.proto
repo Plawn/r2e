@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package ticker;
+
+// Server streaming: the call head (identity, guards) is extracted before
+// the stream opens.
+service Ticker {
+  rpc Watch (WatchRequest) returns (stream Tick);
+}
+
+message WatchRequest {
+  uint32 count = 1;
+}
+
+message Tick {
+  uint32 seq = 1;
+  string subject = 2;
+}

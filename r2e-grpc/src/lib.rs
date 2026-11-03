@@ -2,10 +2,12 @@
 //!
 //! Provides gRPC service hosting with the same DX as HTTP controllers:
 //! `#[inject]`, `#[config]`, `#[guard]`/`#[roles]`/`#[all_roles]` (the shared
-//! [`Guard<I>`](r2e_core::Guard) family), `#[intercept]`, and
-//! `#[inject(identity)]` parameters ([`GrpcIdentity`]). A guard or identity
-//! [`Rejection`](r2e_core::Rejection) is projected onto a [`tonic::Status`]
-//! by kind ([`rejection_to_status`]).
+//! [`Guard<I>`](r2e_core::Guard) family), `#[intercept]`, and the HTTP
+//! identity contract: struct-level `#[inject(identity)]` /
+//! `#[inject(request)]` fields and `#[inject(identity)]` parameters are
+//! extracted through `FromRequestPartsVia` from the call's request head
+//! ([`head`]). A guard or extractor [`Rejection`](r2e_core::Rejection) is
+//! projected onto a [`tonic::Status`] by kind ([`rejection_to_status`]).
 //!
 //! # Two transport modes
 //!
@@ -25,7 +27,7 @@
 //!     .serve("0.0.0.0:3000")
 //! ```
 
-pub mod guard;
+pub mod head;
 pub mod identity;
 pub mod module;
 pub mod multiplex;
@@ -37,10 +39,12 @@ pub mod status;
 use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
 
-pub use guard::guard_context;
+pub use head::{from_head, into_head, CaptureMethodPath, MethodPath};
+#[allow(deprecated)]
+pub use identity::GrpcIdentity;
 pub use identity::{
-    bearer_token, extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentity,
-    GrpcIdentityExtractor, JwtClaimsValidatorLike,
+    bearer_token, extract_bearer_token, extract_jwt_claims_from_metadata, GrpcIdentityExtractor,
+    JwtClaimsValidatorLike,
 };
 pub use module::ModuleGrpcServices;
 pub use multiplex::{
@@ -85,11 +89,17 @@ macro_rules! include_protos {
 ///
 /// This is the gRPC analog of `register_controller` for HTTP — including the
 /// compile-time dependency check: the service's [`EndpointDeps`] (its core's
-/// `#[inject]` fields plus every `#[intercept(...)]` spec's deps, emitted by
-/// `#[grpc_routes]`) are checked against the application state via
-/// `AllSatisfied`, so a missing bean is a compile error at this call site.
+/// `#[inject]` fields plus every guard/`#[intercept(...)]` spec's deps,
+/// emitted by `#[grpc_routes]`) are checked against the application state
+/// via `AllSatisfied`, so a missing bean is a compile error at this call site.
 ///
-/// `T` and `DepIdx` are inference-only witnesses (the same pattern as
+/// The service's extractors are checked here too, through the
+/// [`GrpcService<T, W>`] bound: the struct's request scope and every
+/// `#[inject(identity)]` parameter must implement `FromRequestPartsVia`
+/// against the application state, exactly as on an HTTP route — a missing
+/// `Arc<JwtClaimsValidator>` bean behind `AuthenticatedUser` fails here.
+///
+/// `W` and `DepIdx` are inference-only witnesses (the same pattern as
 /// [`RegisterController`](r2e_core::RegisterController)): call sites write
 /// `.register_grpc_service::<UserGrpcService>()` and never name them.
 ///
@@ -106,7 +116,7 @@ macro_rules! include_protos {
 ///     .register_grpc_service::<OrderGrpcService>()
 ///     .serve("0.0.0.0:3000")
 /// ```
-pub trait AppBuilderGrpcExt<T, DepIdx>: Sized
+pub trait AppBuilderGrpcExt<T, W, DepIdx>: Sized
 where
     T: Clone + Send + Sync + 'static,
 {
@@ -130,7 +140,7 @@ where
     /// [`try_register_controller`](r2e_core::RegisterController::try_register_controller).
     fn register_grpc_service<S>(self) -> Self
     where
-        S: GrpcService + EndpointDeps,
+        S: GrpcService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>;
 
     /// Register a gRPC service, returning config-validation errors instead of
@@ -149,17 +159,17 @@ where
     /// a misconfigured service).
     fn try_register_grpc_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: GrpcService + EndpointDeps,
+        S: GrpcService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>;
 }
 
-impl<T, DepIdx> AppBuilderGrpcExt<T, DepIdx> for r2e_core::AppBuilder<T>
+impl<T, W, DepIdx> AppBuilderGrpcExt<T, W, DepIdx> for r2e_core::AppBuilder<T>
 where
     T: Clone + Send + Sync + 'static,
 {
     fn register_grpc_service<S>(self) -> Self
     where
-        S: GrpcService + EndpointDeps,
+        S: GrpcService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         self.try_register_grpc_service::<S>().unwrap_or_else(|err| {
@@ -173,10 +183,10 @@ where
 
     fn try_register_grpc_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: GrpcService + EndpointDeps,
+        S: GrpcService<T, W> + EndpointDeps,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
-        match register_service_unchecked::<T, S>(&self) {
+        match register_service_unchecked::<T, W, S>(&self) {
             Ok(()) => Ok(self),
             Err(RegisterServiceError::Config(err)) => Err(err),
             Err(RegisterServiceError::MissingPlugin) => panic!(
@@ -220,12 +230,12 @@ pub(crate) enum RegisterServiceError {
 /// because the two paths check against different scopes. A module service may
 /// inject the module's private beans, which are absent from the application
 /// state `T`.
-pub(crate) fn register_service_unchecked<T, S>(
+pub(crate) fn register_service_unchecked<T, W, S>(
     builder: &r2e_core::AppBuilder<T>,
 ) -> Result<(), RegisterServiceError>
 where
     T: Clone + Send + Sync + 'static,
-    S: GrpcService,
+    S: GrpcService<T, W>,
 {
     // Aggregated config validation, before anything is built — the gRPC
     // peer of the `register_controller` banner. Covers the core's own
@@ -245,7 +255,7 @@ where
 
     registry
         .add_service(S::service_name(), S::file_descriptor_set(), |routes| {
-            S::add_to_routes(routes, builder.bean_context())
+            S::add_to_routes(routes, builder.state(), builder.bean_context())
         })
         .map_err(RegisterServiceError::Duplicate)?;
 
@@ -257,17 +267,19 @@ where
 /// Re-exports for generated code.
 #[doc(hidden)]
 pub mod __macro_support {
-    pub use crate::guard::guard_context;
-    pub use crate::identity::GrpcIdentity;
+    pub use crate::head::{fallback_method_path, from_head, into_head, CaptureMethodPath};
     pub use crate::service::GrpcService;
     pub use crate::status::rejection_to_status;
     pub use r2e_core::ContextConstruct;
-    pub use r2e_core::Identity;
+    pub use r2e_core::{GuardContext, Identity, PathParams};
     pub use tonic;
 }
 
 pub mod prelude {
     //! Re-exports of the most commonly used gRPC types.
+    // The removed trait's stub, kept for one release so an old
+    // `impl GrpcIdentity for …` fails naming the migration guide.
+    #[allow(deprecated)]
     pub use crate::identity::GrpcIdentity;
     pub use crate::module::ModuleGrpcServices;
     pub use crate::server::GrpcServer;

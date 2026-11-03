@@ -1488,17 +1488,24 @@ pub fn derive_from_config_value(input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// The struct must use [`macro@controller`] (for `#[inject]`, `#[config]`,
-/// and the metadata module). The macro generates:
+/// the request scope and the metadata module). The macro generates:
 ///
-/// - A wrapper struct implementing the tonic trait
-/// - An `impl GrpcService<State>` for the controller
+/// - A wrapper struct implementing the tonic trait: per call it builds an
+///   HTTP head (`Parts`) from the tonic request, extracts the struct request
+///   scope (`#[inject(identity)]` / `#[inject(request)]` fields) and any
+///   `#[inject(identity)]` method parameter through the HTTP extractor
+///   contract, runs the guards, then calls the method on the request façade
+///   — all before a server stream opens
+/// - An `impl GrpcService<S, W>` for the controller, generic over the state;
+///   a missing extractor bean is a compile error at `register_grpc_service`
 ///
 /// # Example
 ///
 /// ```ignore
-/// #[controller(state = Services)]
+/// #[controller]
 /// pub struct UserGrpcService {
 ///     #[inject] user_service: UserService,
+///     #[inject(identity)] user: AuthenticatedUser,
 ///     #[config("grpc.max_page_size")] max_page: i64,
 /// }
 ///
