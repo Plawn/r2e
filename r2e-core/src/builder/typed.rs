@@ -129,6 +129,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
+        // Pre-state controller registrations (routes, lifecycle queues and
+        // cores alike) do not survive this transition: the typed builder
+        // starts with empty route/hook queues below, so the per-type core
+        // store must start empty with them. Keeping it would make a type
+        // registered again here look already wired and skip its lifecycle.
+        // Both `build_state()` and `with_state()` come through here.
+        shared.endpoint_cores = Default::default();
 
         let mut builder = Self {
             shared,

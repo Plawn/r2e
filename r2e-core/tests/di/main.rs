@@ -24,5 +24,6 @@ mod option_config;
 mod option_type;
 mod optional;
 mod pinned;
+mod prestate_controller;
 mod producer_attrs;
 mod producers;
