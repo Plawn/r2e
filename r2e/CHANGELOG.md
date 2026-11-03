@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-03
+
 ### Breaking
 
 - gRPC identity (#1213, via `r2e-grpc` / `r2e-security` / `r2e-macros`):

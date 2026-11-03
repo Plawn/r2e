@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-03
+
 ### Changed
 
 - Re-pins `r2e-macros` 0.10.0 (#1213, a codegen-contract break cut with

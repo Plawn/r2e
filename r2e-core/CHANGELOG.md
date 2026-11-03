@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-03
+
 ### Added
 
 - `GuardContext::from_parts(parts, method_name, controller_name, identity,

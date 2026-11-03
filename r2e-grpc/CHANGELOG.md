@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-03
+
 ### Breaking
 
 - gRPC identity rides the HTTP extractor contract (#1213). `GrpcIdentity` is
