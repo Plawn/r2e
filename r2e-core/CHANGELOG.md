@@ -49,13 +49,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Changed
 
-- A controller type registered more than once on one builder (#1215: two
-  prefixed `#[module]` mounts, or HTTP + MCP) used to get one independent core
-  per registration — each constructed, `#[post_construct]`/`#[on_start]`/
-  `#[pre_destroy]` run, consumers and scheduled tasks registered per core —
-  and now gets ONE shared core whose lifecycle, consumers and scheduled tasks
-  are wired once by the first controller registration, while its routes are
-  still mounted on every registration.
+- A controller type registered more than once on one builder (#1215) used to
+  get one independent core per controller registration (e.g. two prefixed
+  `#[module]` mounts) — each constructed, `#[post_construct]`/`#[on_start]`/
+  `#[pre_destroy]` run, consumers and scheduled tasks registered per core.
+  It now gets ONE shared core — also shared with its `register_mcp_service`
+  registration when the type is served on HTTP + MCP — whose lifecycle,
+  consumers and scheduled tasks are wired once by the first controller
+  registration, while its routes are still mounted on every registration.
+  Controller registrations made on the pre-state builder are still discarded
+  at `build_state()`/`with_state()` (routes and hooks, as before), and the
+  core store is now reset with them.
 
 - Every boot-time configuration banner (`=== CONFIGURATION ERRORS … ===`) is
   rendered by one formatter, `#[doc(hidden)] pub`

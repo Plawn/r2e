@@ -320,7 +320,11 @@ record follows it.
   deliberate drifts in `r2e-macros/CHANGELOG.md` (#1212). Wire the builder's
   per-type core store (`endpoint_core_or_insert`) to `register_grpc_service`
   next, so a type served on HTTP and gRPC shares one core as HTTP + MCP do
-  (#1215 fix round 1 left gRPC constructing its own).
+  (#1215 fix round 1 left gRPC constructing its own). Pre-state
+  `register_controller` (hand-written impls on `AppBuilder<NoState>`) is
+  silently discarded at `build_state()` — pre-existing; the per-type core
+  store is reset with it (#1215 fix round 3); consider a compile-time
+  rejection.
 - *Exit criteria for 3a (to confirm in the ticket).* One impl carrying
   `#[get]`/`#[post]` and `#[tool]`/`#[resource]`/`#[prompt]` members
   compiles and registers on both transports with one identity/guard

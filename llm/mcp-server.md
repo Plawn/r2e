@@ -363,10 +363,12 @@ b.plugin(McpServer::new())
   `register_mcp_service` panics at `build()` with a message naming the
   missing `.register_controller::<T>()`.
 - Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
-  transports. The core is shared, but these **decorators** are built **once
-  per transport**: a stateful guard or interceptor (a counter, a rate-limit
-  bucket held in the spec) gets one instance for the HTTP routes and another
-  for the MCP members. Keep shared state in a bean the spec injects.
+  transports. The core is shared (one per type), but these **decorators** are
+  built **once per registration**: once per HTTP mount (each
+  `register_controller`, e.g. two prefixed modules) and once for the
+  `register_mcp_service` registration. A stateful guard or interceptor (a
+  counter, a rate-limit bucket held in the spec) gets one instance per
+  registration. Keep shared state in a bean the spec injects.
 - `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: on a mixed impl
   they wrap the HTTP routes and never the MCP members; on an impl with no HTTP
   route they are a compile error.

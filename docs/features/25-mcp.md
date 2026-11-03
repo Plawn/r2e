@@ -430,10 +430,12 @@ impl MathTools {
   only with `register_mcp_service` fails at `build()` with a panic naming the
   missing `.register_controller::<T>()`.
 - Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
-  both transports. The core is shared, but these **decorators** are built
-  **once per transport**: a stateful guard or interceptor (a rate limiter, a
-  counter) keeps one state for the HTTP routes and a separate one for the MCP
-  members.
+  both transports. The core is shared (one per type), but these
+  **decorators** are built **once per registration**: once per HTTP mount
+  (each `register_controller`, e.g. two prefixed modules) and once for the
+  `register_mcp_service` registration. A stateful guard or interceptor (a rate
+  limiter, a counter) keeps one state per registration; keep shared state in a
+  bean the spec injects.
 - Impl-level `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: they wrap
   the routes, never the MCP members, and are rejected on an impl with no HTTP
   route.

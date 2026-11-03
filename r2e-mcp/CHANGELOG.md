@@ -25,7 +25,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `#[mcp_routes(...)]` to `#[routes(...)]`; silence the warning meanwhile with
   a module/crate-level `#![allow(deprecated)]` (an item-level allow does not
   reach it). Impl-level guards/interceptors of a mixed impl apply to both
-  transports; their decorators are built once per transport. Docs:
+  transports; their decorators are built once per registration (per HTTP
+  mount, once for the MCP service). Docs:
   `docs/features/25-mcp.md` § One type, two transports, `llm/mcp-server.md`.
   - **One core per type.** `register_controller` and `register_mcp_service`
     of the same type share ONE controller core (taken from the builder's

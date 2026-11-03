@@ -206,7 +206,8 @@ references.
   `EndpointDeps` impl and explicit dual registration
   (`register_controller` + `register_mcp_service`). Impl-level
   `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
-  transports; their decorators are built once per transport but both
+  transports; their decorators are built once per registration (per HTTP
+  mount, once for the MCP service) but all
   registrations share ONE controller core per type and builder (fix round 1:
   `AppBuilder::endpoint_core_or_insert`, `McpService::construct` +
   `routes(state, core, ctx)`; lifecycle/background members require
@@ -218,7 +219,9 @@ references.
   Arc<Self>` parameter on `routes`, and `core: __core` instead of
   constructing the core locally. A type registered several times (two
   prefixed module mounts, plus MCP) keeps ONE core whose lifecycle is wired
-  by its first controller registration only (fix round 2). `#[mcp_routes]` became a
+  by its first controller registration only (fix round 2); the store is reset
+  at `build_state()`/`with_state()` with the pre-state controller
+  registrations it would describe (fix round 3). `#[mcp_routes]` became a
   `#[deprecated]` alias through the same dispatcher (removed next minor); an
   empty MCP service is spellable only through it. The macro deprecation lint
   fires at the attribute path: an item-level `#[allow(deprecated)]` on the
