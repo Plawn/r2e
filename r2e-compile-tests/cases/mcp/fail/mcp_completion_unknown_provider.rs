@@ -5,7 +5,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct UnknownProvider {}
 
-#[mcp_routes]
+#[routes]
 impl UnknownProvider {
     /// Broken.
     #[resource(uri = "files://{name}", complete(name = "file_names"))]

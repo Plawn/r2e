@@ -1,0 +1,11 @@
+error: use of deprecated macro `mcp_routes`: renamed to #[routes]; #[routes] now accepts #[tool]/#[resource]/#[prompt]/#[completion] members — see r2e-macros CHANGELOG
+  --> cases/mcp/fail/mcp_routes_deprecated.rs:11:3
+   |
+11 | #[mcp_routes]
+   |   ^^^^^^^^^^
+   |
+note: the lint level is defined here
+  --> cases/mcp/fail/mcp_routes_deprecated.rs:4:9
+   |
+ 4 | #![deny(deprecated)]
+   |         ^^^^^^^^^^

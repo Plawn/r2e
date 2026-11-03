@@ -1,4 +1,4 @@
-//! Decorator expressions on an `#[mcp_routes]` impl are evaluated with the
+//! Decorator expressions on an `#[routes]` impl are evaluated with the
 //! controller in scope: `Self::…` works at both the impl level and the member
 //! level, because the prebuilt sets are constructed by associated functions
 //! of the controller.
@@ -29,7 +29,7 @@ impl SelfScopedTools {
     }
 }
 
-#[mcp_routes]
+#[routes]
 #[guard(AllowAll = Self::make_guard())]
 impl SelfScopedTools {
     #[tool]

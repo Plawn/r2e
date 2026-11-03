@@ -7,7 +7,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct Escapes {}
 
-#[mcp_routes]
+#[routes]
 impl Escapes {
     /// Broken.
     #[tool]

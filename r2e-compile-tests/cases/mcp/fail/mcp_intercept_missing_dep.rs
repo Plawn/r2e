@@ -1,4 +1,4 @@
-//! An `#[intercept(...)]` spec on an `#[mcp_routes]` tool reads a bean the
+//! An `#[intercept(...)]` spec on an `#[routes]` tool reads a bean the
 //! app never provided — must be rejected at `register_mcp_service()`.
 //! MCP interceptor sets are prebuilt from the bean context in `tools()`,
 //! and their `Deps` are folded into `EndpointDeps` exactly like HTTP route
@@ -32,7 +32,7 @@ impl<R: Send> Interceptor<R> for Audit {
 #[controller]
 pub struct PingTools {}
 
-#[mcp_routes]
+#[routes]
 impl PingTools {
     /// Ping.
     #[tool]

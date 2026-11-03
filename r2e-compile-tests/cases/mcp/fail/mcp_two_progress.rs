@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct TwoProgress {}
 
-#[mcp_routes]
+#[routes]
 impl TwoProgress {
     /// Broken.
     #[tool]

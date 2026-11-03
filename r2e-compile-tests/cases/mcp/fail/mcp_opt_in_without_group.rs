@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct OptInTools {}
 
-#[mcp_routes]
+#[routes]
 impl OptInTools {
     /// Broken: `opt_in` on a member without a group.
     #[tool(opt_in)]

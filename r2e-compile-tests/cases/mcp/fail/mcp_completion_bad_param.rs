@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct BadParam {}
 
-#[mcp_routes]
+#[routes]
 impl BadParam {
     /// Completed.
     #[resource(uri = "files://{name}", complete(name = "names"))]

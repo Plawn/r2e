@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct ScalarTools {}
 
-#[mcp_routes]
+#[routes]
 impl ScalarTools {
     #[tool]
     async fn broken(&self, Params(value): Params<u32>) -> String {

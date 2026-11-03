@@ -1,7 +1,7 @@
-//! An impl-level `#[guard(...)]` whose spec type cannot be inferred is
-//! reported even when the `#[mcp_routes]` service has no member to carry it —
-//! the site is never silently dropped.
-
+//! An uninferable impl-level `#[guard(...)]` is reported even on an MCP
+//! service with no member (only the deprecated `#[mcp_routes]` alias spells an
+//! empty one; `#[routes]` reads it as HTTP): never silently dropped.
+#![allow(deprecated)]
 use r2e::prelude::*;
 use r2e::{GuardContext, Identity};
 use std::future::Future;

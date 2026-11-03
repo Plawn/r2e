@@ -1,0 +1,5 @@
+error: `#[tool]` is an MCP member; `#[grpc_routes]` only accepts gRPC members — put it on a `#[routes]` impl
+  --> cases/grpc/fail/grpc_mcp_member_rejected.rs:14:5
+   |
+14 |     #[tool]
+   |     ^^^^^^^

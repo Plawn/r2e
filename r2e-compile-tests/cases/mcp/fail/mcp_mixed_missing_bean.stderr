@@ -1,0 +1,53 @@
+error[E0277]: type `CalcService` was not provided to the AppBuilder
+  --> cases/mcp/fail/mcp_mixed_missing_bean.rs:36:36
+   |
+36 |             .register_controller::<Calc>()
+   |                                    ^^^^ missing `.provide::<CalcService>()` or `.register::<CalcService>()`
+   |
+   = help: the trait `Contains<CalcService, _>` is not implemented for `HNil`
+   = note: every dependency must be provided or registered as a bean before calling `build_state()`
+   = help: the following other types implement trait `Contains<H, Idx>`:
+             `BeanState<L>` implements `Contains<H, Idx>`
+             `HCons<H, T>` implements `Contains<H, Here>`
+             `HCons<X, T>` implements `Contains<H, There<I>>`
+             `TCons<H, T>` implements `Contains<H, Here>`
+             `TCons<X, T>` implements `Contains<H, There<I>>`
+   = note: required for `HCons<ShutdownToken, HNil>` to implement `Contains<CalcService, There<_>>`
+   = note: 1 redundant requirement hidden
+   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `Contains<CalcService, There<_>>`
+   = note: required for `TCons<CalcService, TNil>` to implement `AllSatisfied<BeanState<HCons<ShutdownToken, HNil>>, (There<_>, _)>`
+note: required by a bound in `register_controller`
+  --> $WORKSPACE/r2e-core/src/builder/registration.rs
+   |
+   |     fn register_controller<C>(self) -> Self
+   |        ------------------- required by a bound in this associated function
+...
+   |         C::Deps: AllSatisfied<T, DepIdx>;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RegisterController::register_controller`
+
+error[E0277]: type `CalcService` was not provided to the AppBuilder
+  --> cases/mcp/fail/mcp_mixed_missing_bean.rs:42:37
+   |
+42 |             .register_mcp_service::<Calc>()
+   |                                     ^^^^ missing `.provide::<CalcService>()` or `.register::<CalcService>()`
+   |
+   = help: the trait `Contains<CalcService, _>` is not implemented for `HNil`
+   = note: every dependency must be provided or registered as a bean before calling `build_state()`
+   = help: the following other types implement trait `Contains<H, Idx>`:
+             `BeanState<L>` implements `Contains<H, Idx>`
+             `HCons<H, T>` implements `Contains<H, Here>`
+             `HCons<X, T>` implements `Contains<H, There<I>>`
+             `TCons<H, T>` implements `Contains<H, Here>`
+             `TCons<X, T>` implements `Contains<H, There<I>>`
+   = note: required for `HCons<ShutdownToken, HNil>` to implement `Contains<CalcService, There<_>>`
+   = note: 1 redundant requirement hidden
+   = note: required for `BeanState<HCons<ShutdownToken, HNil>>` to implement `Contains<CalcService, There<_>>`
+   = note: required for `TCons<CalcService, TNil>` to implement `AllSatisfied<BeanState<HCons<ShutdownToken, HNil>>, (There<_>, _)>`
+note: required by a bound in `register_mcp_service`
+  --> $WORKSPACE/r2e-mcp/src/lib.rs
+   |
+   |     fn register_mcp_service<S>(self) -> Self
+   |        -------------------- required by a bound in this associated function
+...
+   |         S::Deps: AllSatisfied<T, DepIdx>;
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `AppBuilderMcpExt::register_mcp_service`

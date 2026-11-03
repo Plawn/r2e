@@ -1,0 +1,5 @@
+error: #[anonymous] is not supported on #[tool]/#[resource]/#[prompt]/#[completion] methods
+  --> cases/mcp/fail/mcp_tool_anonymous_mixed.rs:22:5
+   |
+22 |     #[anonymous]
+   |     ^^^^^^^^^^^^

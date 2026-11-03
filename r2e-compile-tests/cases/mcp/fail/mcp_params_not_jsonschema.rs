@@ -13,7 +13,7 @@ pub struct NoSchema {
 #[controller]
 pub struct SchemaTools {}
 
-#[mcp_routes]
+#[routes]
 impl SchemaTools {
     /// Broken: `NoSchema` does not derive `schemars::JsonSchema`.
     #[tool]

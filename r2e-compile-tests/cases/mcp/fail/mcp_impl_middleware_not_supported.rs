@@ -12,7 +12,7 @@ pub struct Tools;
 
 // MCP tools sit behind one shared transport endpoint: no per-tool (or
 // per-impl) tower stack.
-#[mcp_routes]
+#[routes]
 #[middleware(noop_mw)]
 impl Tools {
     #[tool]

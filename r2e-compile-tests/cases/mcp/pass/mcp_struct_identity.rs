@@ -1,4 +1,4 @@
-//! A struct-level request scope on an `#[mcp_routes]` service: the same
+//! A struct-level request scope on an `#[routes]` service: the same
 //! `#[inject(identity)]` / `#[inject(request)]` fields an HTTP controller
 //! declares, extracted once per HTTP request on the MCP endpoint. Members
 //! read them as `self.<field>` on the request façade; `#[request_helper]`
@@ -16,7 +16,7 @@ pub struct StructIdentityTools {
     headers: HeaderMap,
 }
 
-#[mcp_routes]
+#[routes]
 impl StructIdentityTools {
     #[tool]
     async fn whoami(&self) -> String {
@@ -51,7 +51,7 @@ pub struct OptionalIdentityTools {
     user: Option<AuthenticatedUser>,
 }
 
-#[mcp_routes]
+#[routes]
 impl OptionalIdentityTools {
     #[tool]
     async fn maybe(&self) -> String {

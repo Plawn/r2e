@@ -5,7 +5,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct SessionTools {}
 
-#[mcp_routes]
+#[routes]
 impl SessionTools {
     /// Broken: two session handles.
     #[tool]
