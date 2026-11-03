@@ -26,7 +26,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   an `__core: Arc<Self>` parameter on `routes` and `core: __core` instead of
   constructing the core locally (see the codegen-contract bullet below). Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/
   `#[intercept]` apply to both transports (their decorators built once per
-  transport, over ONE shared core);
+  registration — each `register_controller` mount and the
+  `register_mcp_service` call — over ONE shared core);
   `#[pre_guard]`/`#[middleware]`/`#[layer]` stay HTTP-only. New compile
   errors: `#[get]` + `#[tool]` on one method; `group`/`opt_in` on an impl
   without an MCP member; an MCP marker in `#[grpc_routes]`.

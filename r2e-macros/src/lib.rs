@@ -193,10 +193,11 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// `#[intercept]`, `#[guard]`, `#[roles]` and `#[all_roles]` on the impl
-/// apply to the HTTP routes **and** the MCP members; each transport builds
-/// its own decorator instance once at registration (a stateful guard keeps
-/// one state per transport) over the ONE controller core both registrations
-/// share. `#[pre_guard]`, `#[middleware]` and `#[layer]` are
+/// apply to the HTTP routes **and** the MCP members; each registration builds
+/// its own decorator instance (one per `register_controller` call — e.g.
+/// per prefixed module mount — and one for `register_mcp_service`; a
+/// stateful guard keeps one state per registration) over the ONE controller
+/// core all registrations share. `#[pre_guard]`, `#[middleware]` and `#[layer]` are
 /// HTTP-only: they need at least one HTTP route and never touch MCP members.
 ///
 /// # MCP members

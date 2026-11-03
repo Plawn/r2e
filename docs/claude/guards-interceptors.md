@@ -296,8 +296,10 @@ one per intercepted `#[scheduled]`/`#[consumer]` method).
 **MCP members are a third surface** (#1215). On a `#[routes]` impl that mixes
 HTTP routes and MCP members, the impl-level `#[guard]`/`#[roles]`/
 `#[all_roles]`/`#[intercept]` apply to both transports but are built **once
-per transport**: `Controller::routes` builds the HTTP set, `McpService::routes`
-builds the MCP set (inside the `__R2eMcp<Name>` wrapper). The controller
+per registration**: every `Controller::routes` call (one per
+`register_controller`, e.g. per prefixed module mount) builds an HTTP set,
+`McpService::routes` builds the MCP set (inside the `__R2eMcp<Name>` wrapper),
+all over the one shared core. The controller
 **core** itself is not duplicated — both registrations take it from the
 builder's per-type core store (`endpoint_core_or_insert`). A stateful guard or
 interceptor (rate-limit bucket, counter) therefore gets one instance for the
