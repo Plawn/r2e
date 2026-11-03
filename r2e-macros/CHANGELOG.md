@@ -39,8 +39,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `#[inject(request)]` fields (#1213; the old "identity is per method" refusal
   is gone), `#[request_helper]` fns (sync or `async`) on the façade, and
   associated types of the service trait (server-streaming `type XStream = …;`;
-  `Self::XStream` in a method is rewritten structurally — as a type, or as the
-  qualified `<Declared>::new(..)` in expression position), with the whole head
+  `Self::XStream` in a method is rewritten structurally — as a type, as the
+  declared path in expression form (`Declared::<..>::new(..)`, also in
+  struct literals, patterns, turbofish arguments and macro arguments; a
+  macro body that is not an expression list gets a token-level rewrite), or
+  as the qualified `<Declared>::..` in expression position when the declared
+  type is not a plain path), with the whole head
   extracted before a stream opens. A guard requiring an identity is accepted
   when either the struct or the method provides one.
 - `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /

@@ -197,11 +197,29 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
 /// Rewrite every `Self::<Assoc>` path (one of the impl's associated types)
 /// in `method` to the type the impl declares for it.
 ///
-/// Structural, not token-level: in a type position `Self::X` becomes the
-/// declared type; in an expression or a longer type path, `Self::X::rest`
-/// becomes the qualified path `<Declared>::rest` (`Self::WatchStream::new(rx)`
-/// → `<ReceiverStream<..>>::new(rx)`), which is what keeps generic declared
-/// types parseable in expression position.
+/// Structural, not token-level:
+/// - a type `Self::X` becomes the declared type;
+/// - a longer path `Self::X::rest` outside a type becomes the declared path
+///   in expression form, generics as turbofish
+///   (`Self::WatchStream::new(rx)` → `ReceiverStream::<..>::new(rx)`,
+///   `Self::X::Done { .. }` → `Replies::Done { .. }`), which is valid in an
+///   expression, a struct literal and a pattern alike — so an expression
+///   that a macro expands into a pattern (`matches!`) stays valid too. When
+///   the declared type is not a plain path, an expression gets the
+///   qualified `<Declared>::rest` instead; a struct literal or pattern
+///   (where qualified paths are not stable, `more_qualified_paths`) is left
+///   as written and fails to resolve on the façade (E0223). In a type,
+///   `Self::X::rest` becomes `<Declared>::rest`. The generic arguments kept
+///   in `rest` (`::wrap::<Self::X>`) are visited in turn;
+/// - a bare `Self::X` outside a type becomes the expression-form declared
+///   path (when it is a plain path);
+/// - macro arguments are re-parsed as a comma-separated expression list
+///   (`dbg!(..)`, `vec![..]`, `assert_eq!(..)`, `matches!(x, Self::X::A(_))`)
+///   and rewritten structurally; a macro body that does not parse that way
+///   (`matches!(x, P if guard)`, custom DSLs) falls back to a token-level
+///   rewrite of the `Self :: X` prefix — the expression-form declared path
+///   (or `<Declared>`) before a `::`, the declared type otherwise — which can
+///   mis-handle a generic declared type used as a bare value in such a body.
 fn substitute_self_assoc(
     mut method: syn::ImplItemFn,
     assoc_types: &[syn::ImplItemType],
@@ -216,14 +234,32 @@ fn substitute_self_assoc(
         assoc: &'a [syn::ImplItemType],
     }
 
+    /// Where a `Self::X…` path sits.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Pos {
+        /// A type: `<Declared>::rest`.
+        Type,
+        /// An expression path: the expression-form path, else `<Declared>::rest`.
+        Expr,
+        /// A struct literal or struct / tuple-struct pattern: the
+        /// expression-form path only (qualified paths are unstable there).
+        Literal,
+    }
+
+    /// What a `Self::X…` path was rewritten to.
+    enum Rewritten {
+        /// Nothing to rewrite.
+        No,
+        /// `Self::X::rest` rewritten in place.
+        Done,
+        /// `Self::X` alone: the declared type, for the caller to place.
+        Bare(syn::Type),
+    }
+
     impl Subst<'_> {
         /// `Self::X…` with `X` an associated type of the impl: the declared
-        /// type and the segments after `X`.
-        fn split<'p>(
-            &self,
-            qself: &Option<syn::QSelf>,
-            path: &'p syn::Path,
-        ) -> Option<(&syn::Type, Vec<&'p syn::PathSegment>)> {
+        /// type.
+        fn declared(&self, qself: &Option<syn::QSelf>, path: &syn::Path) -> Option<syn::Type> {
             if qself.is_some() || path.leading_colon.is_some() || path.segments.len() < 2 {
                 return None;
             }
@@ -237,43 +273,208 @@ fn substitute_self_assoc(
                 return None;
             }
             let t = self.assoc.iter().find(|t| t.ident == second.ident)?;
-            Some((&t.ty, segs.collect()))
+            Some(t.ty.clone())
+        }
+
+        /// A plain-path declared type as an expression path (generics as
+        /// turbofish): `Foo<T>` → `Foo::<T>`.
+        fn expr_path(declared: &syn::Type) -> Option<syn::Path> {
+            let syn::Type::Path(tp) = declared else {
+                return None;
+            };
+            if tp.qself.is_some() {
+                return None;
+            }
+            let mut p = tp.path.clone();
+            for seg in p.segments.iter_mut() {
+                if let syn::PathArguments::AngleBracketed(args) = &mut seg.arguments {
+                    args.colon2_token = Some(Default::default());
+                }
+            }
+            Some(p)
+        }
+
+        /// Rewrite `Self::X::rest` in place for its position, then visit
+        /// what `rest` keeps (its generic arguments).
+        fn rewrite(
+            &mut self,
+            qself: &mut Option<syn::QSelf>,
+            path: &mut syn::Path,
+            pos: Pos,
+        ) -> Rewritten {
+            let Some(declared) = self.declared(qself, path) else {
+                return Rewritten::No;
+            };
+            if path.segments.len() == 2 {
+                return Rewritten::Bare(declared);
+            }
+            let rest: syn::punctuated::Punctuated<syn::PathSegment, syn::Token![::]> =
+                path.segments.iter().skip(2).cloned().collect();
+            let plain = if pos == Pos::Type {
+                None
+            } else {
+                Self::expr_path(&declared)
+            };
+            let skip = match plain {
+                Some(mut p) => {
+                    let n = p.segments.len();
+                    p.segments.extend(rest);
+                    *path = p;
+                    n
+                }
+                None if pos == Pos::Literal => return Rewritten::No,
+                None => {
+                    *qself = Some(syn::QSelf {
+                        lt_token: Default::default(),
+                        ty: Box::new(declared),
+                        position: 0,
+                        as_token: None,
+                        gt_token: Default::default(),
+                    });
+                    path.leading_colon = Some(Default::default());
+                    path.segments = rest;
+                    0
+                }
+            };
+            for seg in path.segments.iter_mut().skip(skip) {
+                self.visit_path_segment_mut(seg);
+            }
+            Rewritten::Done
+        }
+
+        /// A path outside a type. `Self::X` alone becomes the declared path
+        /// in expression form (left untouched when the declared type is not
+        /// a plain path). Returns whether the path was a `Self::X…` one.
+        fn path_position(
+            &mut self,
+            qself: &mut Option<syn::QSelf>,
+            path: &mut syn::Path,
+            pos: Pos,
+        ) -> bool {
+            match self.rewrite(qself, path, pos) {
+                Rewritten::No => false,
+                Rewritten::Done => true,
+                Rewritten::Bare(declared) => {
+                    if let Some(p) = Self::expr_path(&declared) {
+                        *path = p;
+                    }
+                    true
+                }
+            }
+        }
+
+        /// Token-level fallback for a macro body that is not an expression
+        /// list.
+        fn tokens(&self, tokens: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+            use proc_macro2::{Group, TokenTree};
+            use quote::ToTokens;
+
+            let trees: Vec<TokenTree> = tokens.into_iter().collect();
+            let mut out = proc_macro2::TokenStream::new();
+            let is_colon2 = |i: usize| {
+                matches!((trees.get(i), trees.get(i + 1)),
+                    (Some(TokenTree::Punct(a)), Some(TokenTree::Punct(b)))
+                        if a.as_char() == ':' && b.as_char() == ':'
+                            && a.spacing() == proc_macro2::Spacing::Joint)
+            };
+            let mut i = 0;
+            while i < trees.len() {
+                if let TokenTree::Ident(id) = &trees[i]
+                    && id == "Self"
+                    && is_colon2(i + 1)
+                    && let Some(TokenTree::Ident(assoc)) = trees.get(i + 3)
+                    && let Some(t) = self.assoc.iter().find(|t| &t.ident == assoc)
+                {
+                    let ty = &t.ty;
+                    if is_colon2(i + 4) {
+                        match Self::expr_path(ty) {
+                            Some(p) => p.to_tokens(&mut out),
+                            None => out.extend(quote::quote!(<#ty>)),
+                        }
+                    } else {
+                        ty.to_tokens(&mut out);
+                    }
+                    i += 4;
+                    continue;
+                }
+                match &trees[i] {
+                    TokenTree::Group(g) => {
+                        let mut ng = Group::new(g.delimiter(), self.tokens(g.stream()));
+                        ng.set_span(g.span());
+                        out.extend([TokenTree::Group(ng)]);
+                    }
+                    tt => out.extend([tt.clone()]),
+                }
+                i += 1;
+            }
+            out
         }
     }
 
     impl VisitMut for Subst<'_> {
         fn visit_type_mut(&mut self, ty: &mut syn::Type) {
-            if let syn::Type::Path(tp) = ty
-                && let Some((declared, rest)) = self.split(&tp.qself, &tp.path)
-            {
-                let declared = declared.clone();
-                *ty = if rest.is_empty() {
-                    declared
-                } else {
-                    syn::parse_quote!(<#declared>#(::#rest)*)
-                };
-                return;
+            if let syn::Type::Path(tp) = ty {
+                match self.rewrite(&mut tp.qself, &mut tp.path, Pos::Type) {
+                    Rewritten::No => {}
+                    Rewritten::Done => return,
+                    Rewritten::Bare(declared) => {
+                        *ty = declared;
+                        return;
+                    }
+                }
             }
             visit_mut::visit_type_mut(self, ty);
         }
 
+        /// Expression paths and unit / path patterns (`Pat::Path` is an
+        /// `ExprPath`).
         fn visit_expr_path_mut(&mut self, e: &mut syn::ExprPath) {
-            if let Some((declared, rest)) = self.split(&e.qself, &e.path)
-                && !rest.is_empty()
-            {
-                let declared = declared.clone();
-                let attrs = std::mem::take(&mut e.attrs);
-                *e = syn::parse_quote!(<#declared>#(::#rest)*);
-                e.attrs = attrs;
-                return;
+            if !self.path_position(&mut e.qself, &mut e.path, Pos::Expr) {
+                visit_mut::visit_expr_path_mut(self, e);
             }
-            visit_mut::visit_expr_path_mut(self, e);
+        }
+
+        fn visit_expr_struct_mut(&mut self, e: &mut syn::ExprStruct) {
+            self.path_position(&mut e.qself, &mut e.path, Pos::Literal);
+            for field in e.fields.iter_mut() {
+                self.visit_field_value_mut(field);
+            }
+            if let Some(rest) = &mut e.rest {
+                self.visit_expr_mut(rest);
+            }
+        }
+
+        fn visit_pat_struct_mut(&mut self, p: &mut syn::PatStruct) {
+            self.path_position(&mut p.qself, &mut p.path, Pos::Literal);
+            for field in p.fields.iter_mut() {
+                self.visit_field_pat_mut(field);
+            }
+        }
+
+        fn visit_pat_tuple_struct_mut(&mut self, p: &mut syn::PatTupleStruct) {
+            self.path_position(&mut p.qself, &mut p.path, Pos::Literal);
+            for elem in p.elems.iter_mut() {
+                self.visit_pat_mut(elem);
+            }
+        }
+
+        fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+            use quote::ToTokens;
+            use syn::parse::Parser;
+
+            let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+            mac.tokens = match parser.parse2(mac.tokens.clone()) {
+                Ok(mut exprs) => {
+                    for expr in exprs.iter_mut() {
+                        self.visit_expr_mut(expr);
+                    }
+                    exprs.into_token_stream()
+                }
+                Err(_) => self.tokens(std::mem::take(&mut mac.tokens)),
+            };
         }
     }
 
-    Subst {
-        assoc: assoc_types,
-    }
-    .visit_impl_item_fn_mut(&mut method);
+    Subst { assoc: assoc_types }.visit_impl_item_fn_mut(&mut method);
     method
 }
