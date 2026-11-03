@@ -21,5 +21,6 @@ mod support;
 
 mod counter;
 
+mod decorators;
 mod lists;
 mod principal;
