@@ -71,10 +71,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
     // A mixed impl validates both transports' sites, in the order the HTTP
     // side folds them, so both registrations report the same keys.
     let decorator_config_stmts = crate::codegen::decorators::decorator_config_key_stmts(
-        def.mixed_http_sites
-            .iter()
-            .flatten()
-            .chain(site_exprs(def)),
+        def.mixed_http_sites.iter().flatten().chain(site_exprs(def)),
     );
 
     let uses_session = def
@@ -149,6 +146,18 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
         })
         .collect();
 
+    // Lifecycle/background members of a mixed impl that only
+    // `register_controller` wires; omitted (trait default `&[]`) otherwise,
+    // which keeps the MCP-only expansion free of it.
+    let needs_controller = if def.controller_hosted_markers.is_empty() {
+        quote! {}
+    } else {
+        let markers = &def.controller_hosted_markers;
+        quote! {
+            const NEEDS_CONTROLLER_REGISTRATION: &'static [&'static str] = &[#(#markers),*];
+        }
+    };
+
     quote! {
         impl<__R2eS, #witness_generics>
             #mcp::__macro_support::McpService<__R2eS, #witness_tuple>
@@ -180,15 +189,23 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
                 __errors
             }
 
+            #needs_controller
+
+            fn construct(
+                _state: &__R2eS,
+                __ctx: &#krate::beans::BeanContext,
+            ) -> Self {
+                <#controller_name as #krate::ContextConstruct>::from_context(__ctx)
+            }
+
             fn routes(
                 __state: &__R2eS,
+                __core: ::std::sync::Arc<Self>,
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
             ) -> #mcp::__macro_support::McpRoutes {
                 #state_share
                 let __wrapper = ::std::sync::Arc::new(#wrapper_name {
-                    core: ::std::sync::Arc::new(
-                        <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
-                    ),
+                    core: __core,
                     #(#deco_field_inits,)*
                 });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();

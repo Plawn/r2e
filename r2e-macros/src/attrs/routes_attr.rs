@@ -45,6 +45,18 @@ const HTTP_SIDE_MARKERS: &[&str] = &[
     "on_start",
 ];
 
+/// HTTP-side markers that `register_controller` alone wires (lifecycle hooks
+/// and background members): a mixed type declaring one must be registered
+/// with `register_controller`, not only with `register_mcp_service`.
+const CONTROLLER_HOSTED_MARKERS: &[&str] = &[
+    "post_construct",
+    "on_start",
+    "pre_destroy",
+    "scheduled",
+    "consumer",
+    "async_exec",
+];
+
 /// Impl-level decorators that only the HTTP pipeline has: never applied to
 /// MCP members of a mixed impl.
 const HTTP_ONLY_IMPL_DECORATORS: &[&str] = &["pre_guard", "middleware", "layer"];
@@ -156,16 +168,28 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl, attr: &str) -> syn::Resul
     // Mixed: split the members off, parse each side with its own parser.
     let mut http_item = item;
     let mut mcp_item = http_item.clone();
-    let (mcp_members, http_items): (Vec<_>, Vec<_>) = std::mem::take(&mut http_item.items)
-        .into_iter()
-        .partition(|impl_item| {
-            matches!(impl_item, syn::ImplItem::Fn(m) if m.attrs.iter().any(mcp_marker))
-        });
+    let (mcp_members, http_items): (Vec<_>, Vec<_>) =
+        std::mem::take(&mut http_item.items).into_iter().partition(
+            |impl_item| matches!(impl_item, syn::ImplItem::Fn(m) if m.attrs.iter().any(mcp_marker)),
+        );
     http_item.items = http_items;
     mcp_item.items = mcp_members;
-    mcp_item
-        .attrs
-        .retain(|a| !HTTP_ONLY_IMPL_DECORATORS.iter().any(|d| a.path().is_ident(d)));
+    mcp_item.attrs.retain(|a| {
+        !HTTP_ONLY_IMPL_DECORATORS
+            .iter()
+            .any(|d| a.path().is_ident(d))
+    });
+
+    let controller_hosted_markers: Vec<String> = CONTROLLER_HOSTED_MARKERS
+        .iter()
+        .filter(|marker| {
+            http_item.items.iter().any(|impl_item| {
+                matches!(impl_item, syn::ImplItem::Fn(m)
+                    if m.attrs.iter().any(|a| a.path().is_ident(marker)))
+            })
+        })
+        .map(|marker| format!("#[{marker}]"))
+        .collect();
 
     let mut http_def = routes_parsing::parse(http_item, true)?;
     let mut mcp_def = mcp_routes_parsing::parse(mcp_item, group)?;
@@ -182,6 +206,7 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl, attr: &str) -> syn::Resul
             .collect(),
     });
     mcp_def.mixed_http_sites = Some(http_sites);
+    mcp_def.controller_hosted_markers = controller_hosted_markers;
 
     let http = codegen::generate(&http_def);
     let mcp = mcp_codegen::generate(&mcp_def);

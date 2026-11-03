@@ -610,6 +610,59 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .and_then(|boxed| boxed.downcast_ref::<D>())
     }
 
+    /// The builder's one runtime core for endpoint type `C`, constructing it
+    /// with `make` on first use (#1215).
+    ///
+    /// Every transport registration of a type goes through this store —
+    /// `register_controller` and `register_mcp_service` today — so a type
+    /// served over several transports has exactly one core whatever the
+    /// registration order: the first registration constructs it, the others
+    /// share the `Arc`. Per builder, not per process (dev-reload rebuilds the
+    /// builder each cycle).
+    #[doc(hidden)]
+    pub fn endpoint_core_or_insert<C>(
+        &mut self,
+        make: impl FnOnce(&T, &crate::beans::BeanContext) -> C,
+    ) -> Arc<C>
+    where
+        C: Send + Sync + 'static,
+    {
+        let id = TypeId::of::<C>();
+        if let Some(core) = self.shared.endpoint_cores.cores.get(&id) {
+            return Arc::clone(core)
+                .downcast::<C>()
+                .unwrap_or_else(|_| unreachable!("endpoint core store is keyed by TypeId"));
+        }
+        let core = Arc::new(make(&self.state, &self.bean_context));
+        self.shared
+            .endpoint_cores
+            .cores
+            .insert(id, Arc::clone(&core) as Arc<dyn Any + Send + Sync>);
+        core
+    }
+
+    /// Record that endpoint type `C`, registered with `registration` (e.g.
+    /// `"register_mcp_service"`), declares members only `register_controller`
+    /// wires (`markers`, e.g. `["#[post_construct]"]`). Building the app
+    /// panics with an actionable message naming the missing
+    /// `.register_controller::<C>()` unless `C` is also registered as a
+    /// controller — in either order. A no-op for an empty `markers`.
+    #[doc(hidden)]
+    pub fn require_controller_registration<C: 'static>(
+        &mut self,
+        registration: &'static str,
+        markers: &'static [&'static str],
+    ) {
+        if !markers.is_empty() {
+            self.shared.endpoint_cores.needs_controller.push((
+                TypeId::of::<C>(),
+                std::any::type_name::<C>(),
+                registration,
+                markers,
+            ));
+        }
+    }
+
     /// Registration backend with all witnesses explicit: the public face is
     /// [`RegisterController::register_controller`](super::RegisterController::register_controller),
     /// which infers `W` (extraction markers) and `DepIdx` (dependency indices).
@@ -722,8 +775,16 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // validation, so configuration errors retain their aggregated report.
         // State-generic controllers construct from the retained bean context
         // (by type); named-state controllers read the typed state.
+        //
+        // The core comes from the builder's per-type store: a type also
+        // registered on another transport (a mixed `#[routes]` impl's MCP
+        // side) shares this one core, whichever registered first.
+        self.shared
+            .endpoint_cores
+            .controllers
+            .insert(TypeId::of::<C>());
+        let core = self.endpoint_core_or_insert::<C>(C::construct);
         let state = &self.state;
-        let core = Arc::new(C::construct(state, &self.bean_context));
 
         // Fill the core's decorator slot from the resolved graph — once, right
         // after construct, before scheduled tasks are built and before any
@@ -975,6 +1036,11 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 
     fn build_inner(mut self) -> BuiltApp<T> {
+        // A type whose controller-hosted members (lifecycle hooks, background
+        // methods) were registered only on another transport fails here, with
+        // every registration done — so the order of the calls never matters.
+        self.shared.endpoint_cores.check_controller_registrations();
+
         let state = self.state;
 
         let mut routes = crate::http::Routes::new();

@@ -166,7 +166,7 @@ where
     /// non-panicking alternative.
     fn register_mcp_service<S>(self) -> Self
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>;
 
     /// Register an MCP service, returning config-validation errors instead
@@ -179,7 +179,7 @@ where
     /// returned and the builder is consumed.
     fn try_register_mcp_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>;
 }
 
@@ -189,7 +189,7 @@ where
 {
     fn register_mcp_service<S>(self) -> Self
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         self.try_register_mcp_service::<S>().unwrap_or_else(|err| {
@@ -204,9 +204,11 @@ where
         })
     }
 
-    fn try_register_mcp_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
+    fn try_register_mcp_service<S>(
+        mut self,
+    ) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         // Aggregated config validation, before anything is built — the MCP
@@ -226,9 +228,17 @@ where
             )
             .clone();
 
+        // The builder's one core for `S`: shared with `register_controller`
+        // when the type is also a controller (a mixed `#[routes]` impl),
+        // whichever of the two registers first.
+        self.require_controller_registration::<S>(
+            "register_mcp_service",
+            S::NEEDS_CONTROLLER_REGISTRATION,
+        );
+        let core = self.endpoint_core_or_insert::<S>(S::construct);
         registry.add_service(
             S::service_name(),
-            S::routes(self.state(), self.bean_context()),
+            S::routes(self.state(), core, self.bean_context()),
         );
 
         tracing::debug!(service = S::service_name(), "Registered MCP service");

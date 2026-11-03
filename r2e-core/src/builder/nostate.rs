@@ -38,6 +38,7 @@ impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
                 stop_handle: None,
                 bean_disposers: Vec::new(),
                 deferred_boot_error: None,
+                endpoint_cores: Default::default(),
                 tracing_layers: Vec::new(),
             },
             state: NoState,

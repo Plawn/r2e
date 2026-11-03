@@ -841,6 +841,48 @@ struct BuilderConfig {
     /// [`PluginSetupContext::tracing_layer`](crate::plugin::PluginSetupContext::tracing_layer);
     /// handed to the subscriber `build_state()` installs.
     tracing_layers: Vec<r2e_tracing::BoxedLayer>,
+    /// The per-type endpoint core store: one runtime core per endpoint type
+    /// per builder, shared by every transport registration of that type.
+    endpoint_cores: EndpointCores,
+}
+
+/// One runtime core per endpoint type per builder (#1215).
+///
+/// A type registered on two transports — a mixed `#[routes]` impl is both a
+/// `Controller` and an `McpService` — must not get two cores: the transport
+/// that registers first constructs it, the other takes the same `Arc`, and
+/// `register_controller` alone fills its decorator slot and queues its
+/// lifecycle hooks. A builder field (not a bean): dev-reload rebuilds the
+/// builder, hence the store, on every cycle.
+#[derive(Default)]
+struct EndpointCores {
+    /// The cores, keyed by the endpoint type's `TypeId`.
+    cores: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    /// Types registered with `register_controller` (directly or through a
+    /// feature module).
+    controllers: std::collections::HashSet<TypeId>,
+    /// Types a non-controller transport registered although they declare
+    /// members only `register_controller` wires: `(type, type name,
+    /// registration call, markers)`. Checked once the routes are assembled.
+    needs_controller: Vec<(TypeId, &'static str, &'static str, &'static [&'static str])>,
+}
+
+impl EndpointCores {
+    /// Panic with an actionable message for the first type that declares
+    /// controller-hosted members but was never registered as a controller.
+    fn check_controller_registrations(&self) {
+        for (id, name, registration, markers) in &self.needs_controller {
+            if !self.controllers.contains(id) {
+                let short = name.rsplit("::").next().unwrap_or(name);
+                panic!(
+                    "`{name}` declares {} members but was only registered with \
+                     `{registration}`; those members are wired by `register_controller` \
+                     alone — add `.register_controller::<{short}>()`",
+                    markers.join("/"),
+                );
+            }
+        }
+    }
 }
 
 impl BuilderConfig {

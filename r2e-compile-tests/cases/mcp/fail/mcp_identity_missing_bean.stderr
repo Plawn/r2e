@@ -40,6 +40,6 @@ note: required by a bound in `register_mcp_service`
    |     fn register_mcp_service<S>(self) -> Self
    |        -------------------- required by a bound in this associated function
    |     where
-   |         S: McpService<T, W> + EndpointDeps,
+   |         S: McpService<T, W> + EndpointDeps + Send + Sync,
    |            ^^^^^^^^^^^^^^^^ required by this bound in `AppBuilderMcpExt::register_mcp_service`
    = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

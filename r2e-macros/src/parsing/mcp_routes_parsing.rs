@@ -216,6 +216,13 @@ pub struct McpRoutesImplDef {
     /// and `McpService::validate_config` covers both site sets. Set by
     /// `attrs::routes_attr`.
     pub mixed_http_sites: Option<Vec<syn::Expr>>,
+    /// On a mixed impl, the lifecycle/background markers its HTTP side
+    /// declares (`#[post_construct]`, `#[scheduled]`, …, each listed once,
+    /// spelled `#[name]`): members only `register_controller` wires. Emitted
+    /// as `McpService::NEEDS_CONTROLLER_REGISTRATION`, so a type registered
+    /// only with `register_mcp_service` fails boot instead of silently
+    /// dropping them. Empty for an MCP-only impl. Set by `attrs::routes_attr`.
+    pub controller_hosted_markers: Vec<String>,
 }
 
 /// The argument keys each member family accepts, for validation and the
@@ -815,6 +822,7 @@ pub fn parse(
         facade_methods,
         impl_block: item,
         mixed_http_sites: None,
+        controller_hosted_markers: Vec::new(),
     })
 }
 
