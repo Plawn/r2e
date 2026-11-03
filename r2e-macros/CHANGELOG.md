@@ -36,6 +36,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   field still compiles on an HTTP controller and only fails where a clone is
   needed).
 
+### Changed
+
+- Internal: the `#[routes]`, `#[mcp_routes]` and `#[grpc_routes]` codegen is
+  consolidated (#1212) — one member model (`parse_member`/`MemberRules`), one
+  decorator storage layout for MCP and gRPC (`MemberDecoSets`), one
+  façade-binding emitter (`identity_path`) and one registration emitter
+  (`registration`: `EndpointDeps` fold + witness). No change to generated
+  behaviour, item names or witness shapes.
+
 ## [0.9.0] - 2026-10-31
 
 ### Breaking

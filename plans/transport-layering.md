@@ -65,6 +65,12 @@ coupling and the only one with no cheap fix.
 
 ## 2. Level 1 — one member model, one decorator layout (tech debt, non-breaking)
 
+**Status: DONE (2026-11-03, layout: `DecoSet` per member + one shared
+controller set — `MemberDecoSets` — for MCP and gRPC; the flat
+`McpDecoLayout` measured identical in the hotpath guard — 5 allocs/call,
+same per-call decorator overhead — so the shared `DecoSet` layout won on
+code size).** Task #1212, branch `task/transport-layering-l1`.
+
 **Goal.** A new adapter is "a parser for its own attributes + an emitter";
 the loop, the identity path and the decorator storage are written once.
 
