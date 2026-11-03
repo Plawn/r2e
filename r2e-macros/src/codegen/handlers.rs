@@ -13,6 +13,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
+use super::identity_path;
 use crate::model::types::*;
 use crate::parsing::routes_parsing::RoutesImplDef;
 use crate::util::crate_path::r2e_core_path;
@@ -843,27 +844,25 @@ impl<'a> Pipeline<'a> {
     /// façade (`__facade`, with `__ctrl: &Façade`), or borrow the core for
     /// `#[anonymous]` endpoints (`__ctrl: &Core`).
     fn bind_receiver(&self) -> TokenStream {
-        let krate = &self.krate;
         let controller_name = &self.def.controller_name;
         if self.plan.anonymous {
-            return quote! {
-                let __ctrl: &#controller_name = &__core;
-            };
+            return identity_path::bind_core(controller_name, quote! { __core });
         }
         let data_name = request_data_ident_for(controller_name);
         let md = data_marker();
-        let meta_mod = &self.meta_mod;
-        let project = self.project(quote! { __rej });
-        quote! {
-            let __data = match <#data_name<#md> as #krate::web::extract::RequestData<__R2eS>>
-                ::extract(&mut __parts, &__state).await
-            {
-                Ok(__d) => __d,
-                Err(__rej) => #project
-            };
-            let __facade = #meta_mod::bind_request(__core, __data);
-            let __ctrl = &__facade;
-        }
+        let names = identity_path::FacadeNames {
+            meta_mod: &self.meta_mod,
+            data_name: &data_name,
+            data_marker: &md,
+        };
+        identity_path::bind_facade(
+            &names,
+            quote! { __core },
+            identity_path::Arrival::ExtractHere {
+                krate: &self.krate,
+                on_reject: self.project(quote! { __rej }),
+            },
+        )
     }
 
     /// Extract the param-level `#[inject(identity)]` (bean-backed, witness in
@@ -945,24 +944,22 @@ impl<'a> Pipeline<'a> {
 
     /// The identity expression of a guard context.
     fn guard_identity_expr(&self) -> TokenStream {
-        let meta_mod = &self.meta_mod;
-        if let Some(id) = self.identity_param {
+        let arg;
+        let source = if let Some(id) = self.identity_param {
             // Case A: param-level identity, already extracted.
-            let arg = format_ident!("__arg_{}", id.index);
-            if id.is_optional {
-                quote! { #arg.as_ref() }
-            } else {
-                quote! { Some(&#arg) }
+            arg = format_ident!("__arg_{}", id.index);
+            identity_path::GuardIdentity::Param {
+                binding: &arg,
+                optional: id.is_optional,
             }
         } else if self.plan.anonymous {
-            // Case C: #[anonymous] — no identity was extracted. Guards still
-            // run (e.g. rate limiting) with `identity: None`, typed to the
-            // controller's `IdentityType` so `GuardContext<I>` stays pinned.
-            quote! { ::core::option::Option::<&#meta_mod::IdentityType>::None }
+            // Case C: #[anonymous] — guards still run (e.g. rate limiting).
+            identity_path::GuardIdentity::Anonymous
         } else {
             // Case B: struct-level identity or no identity, read off the façade.
-            quote! { #meta_mod::guard_identity(__ctrl) }
-        }
+            identity_path::GuardIdentity::Facade
+        };
+        identity_path::guard_identity(&self.meta_mod, source)
     }
 
     /// Request-head bindings (`__method`, `__uri`, `__headers`, `__extensions`:

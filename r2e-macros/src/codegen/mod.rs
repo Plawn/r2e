@@ -15,6 +15,7 @@ pub(crate) mod controller_codegen;
 pub(crate) mod controller_impl;
 pub(crate) mod decorators;
 pub(crate) mod handlers;
+pub(crate) mod identity_path;
 pub(crate) mod precise_capture;
 pub(crate) mod scheduled;
 pub(crate) mod transverse;

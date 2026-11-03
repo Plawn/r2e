@@ -1,11 +1,12 @@
 //! Generate the hidden per-member invocation methods on the wrapper struct.
 
 use proc_macro2::TokenStream;
-use quote::{quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 
 use crate::codegen::decorators::wrap_with_interceptor_refs;
 use crate::codegen::handlers::qualified_controller_name;
+use crate::codegen::identity_path;
 use crate::parsing::mcp_routes_parsing::{McpMemberKind, McpRoutesImplDef, McpTool, McpToolArg};
 use crate::util::crate_path::{r2e_core_path, r2e_mcp_path};
 
@@ -106,28 +107,18 @@ fn generate_invoke_method(
          come through the MCP endpoint)",
         kind_str, tool_name_str, controller_name_str,
     );
-    let facade_stmts = quote! {
-        let __data: #data_name<#data_marker> =
-            match #meta_mod::unscoped_request_data::<#data_marker>() {
-                ::core::option::Option::Some(__d) => __d,
-                ::core::option::Option::None => {
-                    match #mcp::__macro_support::request_data::<#data_name<#data_marker>>(
-                        __call.parts.as_deref(),
-                    ) {
-                        ::core::option::Option::Some(__d) => __d,
-                        ::core::option::Option::None => {
-                            return ::core::result::Result::Err(
-                                #mcp::__macro_support::McpError::Internal(
-                                    ::std::string::String::from(#missing_scope),
-                                ),
-                            );
-                        }
-                    }
-                }
-            };
-        let __facade = #meta_mod::bind_request(::std::sync::Arc::clone(&self.core), __data);
-        let __ctrl = &__facade;
-    };
+    let facade_stmts = identity_path::bind_facade(
+        &identity_path::FacadeNames {
+            meta_mod: &meta_mod,
+            data_name: &data_name,
+            data_marker: &data_marker,
+        },
+        quote! { ::std::sync::Arc::clone(&self.core) },
+        identity_path::Arrival::FromDeposit {
+            mcp,
+            missing: missing_scope,
+        },
+    );
     let data_bound = quote! {
         #data_name<#data_marker>: ::core::clone::Clone
             + ::core::marker::Send
@@ -202,11 +193,17 @@ fn generate_invoke_method(
         // A parameter identity wins; otherwise the struct identity is read
         // off the façade (`None` typed to the controller's `IdentityType`
         // when it declares none) — the HTTP handler's own three cases.
-        let identity_ref = match identity_param {
-            Some(p) if p.is_optional => quote! { __identity.as_ref() },
-            Some(_) => quote! { ::core::option::Option::Some(&__identity) },
-            None => quote! { #meta_mod::guard_identity(__ctrl) },
-        };
+        let identity_binding = format_ident!("__identity");
+        let identity_ref = identity_path::guard_identity(
+            &meta_mod,
+            match identity_param {
+                Some(p) => identity_path::GuardIdentity::Param {
+                    binding: &identity_binding,
+                    optional: p.is_optional,
+                },
+                None => identity_path::GuardIdentity::Facade,
+            },
+        );
         let controller_checks: Vec<TokenStream> = controller_guards
             .iter()
             .map(|place| {
