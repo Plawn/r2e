@@ -134,8 +134,8 @@ impl MemberRules {
             disallowed: GRPC_DISALLOWED_ATTRS,
             markers: &[],
             allow_legacy_identity: true,
-            duplicate_identity: "only one #[inject(identity)] parameter is allowed per gRPC handler"
-                .to_string(),
+            duplicate_identity:
+                "only one #[inject(identity)] parameter is allowed per gRPC handler".to_string(),
         }
     }
 
@@ -204,7 +204,10 @@ pub fn validate_member_attrs(attrs: &[syn::Attribute], rules: &MemberRules) -> s
     if let Some((attr, name)) = find_disallowed(attrs, rules) {
         return Err(syn::Error::new_spanned(
             attr,
-            format!("#[{}] is not supported on {} methods", name, rules.transport),
+            format!(
+                "#[{}] is not supported on {} methods",
+                name, rules.transport
+            ),
         ));
     }
     Ok(())
@@ -256,10 +259,7 @@ fn extract_identity_param(
                 parse_identity_param(pat_type, param_idx, rules.allow_legacy_identity)?
             {
                 if identity_param.is_some() {
-                    return Err(syn::Error::new_spanned(
-                        pat_type,
-                        &rules.duplicate_identity,
-                    ));
+                    return Err(syn::Error::new_spanned(pat_type, &rules.duplicate_identity));
                 }
                 strip_identity_param_attrs(pat_type, rules.allow_legacy_identity);
                 identity_param = Some(identity);
