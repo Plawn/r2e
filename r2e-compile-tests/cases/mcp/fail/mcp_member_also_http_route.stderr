@@ -1,5 +1,0 @@
-error: a method cannot be both #[get] and #[tool] — an HTTP member and an MCP member are separate methods: give each its own method and share the logic through a helper (or a bean)
-  --> cases/mcp/fail/mcp_member_also_http_route.rs:13:5
-   |
-13 |     #[tool]
-   |     ^^^^^^^
