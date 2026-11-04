@@ -64,6 +64,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   the `server.drain-timeout` panic. The output is byte-identical (pinned by
   `r2e-core/tests/config/report.rs`).
 
+- Re-pins `r2e-macros` 0.10.0 (#1213 / #1215, a codegen-contract break cut
+  with `--no-propagate`): a registry build of this crate resolves the one
+  macro crate version matching its codegen contract. No API change.
+
 ## [0.9.1] - 2026-11-01
 
 ### Added

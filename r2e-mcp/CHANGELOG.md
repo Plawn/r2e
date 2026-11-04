@@ -134,6 +134,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `r2e_core::config::ConfigErrorReport` (#1214); the message is
   byte-identical.
 
+- Built against `r2e-security` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.10.0/r2e-security/CHANGELOG.md)).
+
 ## [0.10.0] - 2026-10-31
 
 ### Breaking
