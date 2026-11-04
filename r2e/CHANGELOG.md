@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-04
+
 ### Breaking
 
 - `#[routes]` serves MCP members (#1215, via `r2e-macros` / `r2e-mcp`): an

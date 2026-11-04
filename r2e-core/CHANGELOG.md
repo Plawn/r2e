@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-04
+
 ### Added
 
 - `#[doc(hidden)]` builder hooks for the per-type endpoint core store
