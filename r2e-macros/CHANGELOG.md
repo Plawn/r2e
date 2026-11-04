@@ -30,13 +30,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   type — move the MCP members to their own `#[controller]` type over the same
   beans); `group`/`opt_in` on an impl without an MCP member. An MCP marker in
   `#[grpc_routes]` stays an error.
-  - `#[mcp_routes]` is a `#[deprecated(since = "0.10.0")]` alias of
-    `#[routes]` and is **removed in the next minor**. Migration: rename
-    `#[mcp_routes(...)]` to `#[routes(...)]` (and the import). The lint fires
-    at the attribute path, so an item-level `#[allow(deprecated)]` on the
-    impl does not silence it; use a module- or crate-level
-    `#![allow(deprecated)]`. An empty MCP service (no member) is spellable
-    only through the alias until then.
+  - **`#[mcp_routes]` is removed** (no alias). Migration: rename
+    `#[mcp_routes(...)]` to `#[routes(...)]` — same arguments (`group`,
+    `opt_in`), same members, same generated code; drop any `use
+    r2e_macros::mcp_routes` import (the prelude re-export is gone). An impl
+    with no member reads as HTTP, so an MCP service with no member is no
+    longer expressible: give it a member or delete it.
   - Changed messages: errors that named `#[mcp_routes]` now name `#[routes]`
     (unknown completion provider, generic impl, `opt_in` without `group`),
     and `#[middleware]`/`#[layer]` on an MCP-only impl reads "not supported on
@@ -53,13 +52,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   scope and any identity parameter through the HTTP extractor contract, and
   the controller implements `GrpcService<S, W>`; the identity parameter no
   longer goes through `GrpcIdentity`. Methods run on the request façade, so
-  `Self` in a method signature is rejected (as on `#[routes]` /
-  `#[mcp_routes]`). Needs `r2e-grpc` from the same release.
+  `Self` in a method signature is rejected (as on `#[routes]`). Needs
+  `r2e-grpc` from the same release.
 
 ### Breaking
 
-- `#[mcp_routes]` members run on the generated request façade, like
-  `#[routes]` handlers (#1210): `Self` in a member body names the façade (name
+- MCP members run on the generated request façade, like HTTP handlers
+  (#1210): `Self` in a member body names the façade (name
   associated items through the service type), and `Self` in a member
   signature is rejected with an error naming the rule.
 
@@ -78,7 +77,7 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `impl`/`trait` with its own `Self` — are left alone), with the whole head
   extracted before a stream opens. A guard requiring an identity is accepted
   when either the struct or the method provides one.
-- `#[mcp_routes]` accepts struct-level `#[inject(identity)]` /
+- A `#[routes]` MCP service accepts struct-level `#[inject(identity)]` /
   `#[inject(request)]` fields (#1210), reusing the `#[controller]` items
   (request-data extractor, `bind_request`, façade, `guard_identity`) and
   emitting `McpRoutes::request_scope` when the service has any. The witness
@@ -97,13 +96,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   snapshotted when the request was split: an `#[inject(request)]` extractor
   that removes or replaces `ConnectInfo` does not change what the guards see
   (the pre-auth guards read the same snapshot).
-- Internal: the `#[routes]`, `#[mcp_routes]` and `#[grpc_routes]` codegen is
-  consolidated (#1212) — one member model (`parse_member`/`MemberRules`), one
+- Internal: the HTTP, MCP and gRPC codegen is consolidated (#1212) — one member model (`parse_member`/`MemberRules`), one
   decorator storage layout for MCP and gRPC (`MemberDecoSets`), one
   façade-binding emitter (`identity_path`) and one registration emitter
   (`registration`: `EndpointDeps` fold + witness). Witness shapes and
-  generated behaviour are unchanged, with three deliberate drifts on
-  `#[mcp_routes]`: impl-level guards are now built before impl-level
+  generated behaviour are unchanged, with three deliberate drifts on MCP
+  services: impl-level guards are now built before impl-level
   interceptors (the gRPC order — construction only, the execution order
   is untouched); when one member carries two errors (e.g. an unknown
   attribute and an `#[inject(identity)]` parameter beside a struct-level
@@ -111,11 +109,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   storage is one `__R2eMcpDeco_<Service>_<member>` set per member plus one
   `__R2eMcpCtrlDeco_<Service>_ctrl` set (gRPC: `__R2eGrpcDeco_…` /
   `__R2eGrpcCtrlDeco_…`) instead of one flat product struct.
-- `#[mcp_routes]` and `#[grpc_routes]` decorator expressions can name `Self`
+- MCP and `#[grpc_routes]` decorator expressions can name `Self`
   (`#[guard(AllowAll = Self::make_guard())]`): the prebuilt sets are
   constructed by associated functions of the service type. A non-inferable
   spec is reported at every site, including an impl-level `#[guard]` /
-  `#[intercept]` on a service without members (#1212).
+  `#[intercept]` (#1212).
 
 ## [0.9.0] - 2026-10-31
 

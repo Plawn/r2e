@@ -45,14 +45,13 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
             s.ident == "routes"
                 || s.ident == "bean"
                 || s.ident == "grpc_routes"
-                || s.ident == "mcp_routes"
         })
     });
     let msg = if has_transformer {
         format!(
             "#[{name}] is placed above the transforming macro — attribute macros expand \
              top-down, so the macro below never sees it and the decorator would be silently \
-             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]/#[mcp_routes]."
+             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]."
         )
     } else {
         format!(
@@ -254,7 +253,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - One `EndpointDeps` impl folding every member's decorator dependencies.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    routes_attr::expand(args.into(), input, "routes").into()
+    routes_attr::expand(args.into(), input).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -1586,27 +1585,6 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
         Ok(def) => grpc_codegen::generate(&def).into(),
         Err(err) => err.to_compile_error().into(),
     }
-}
-
-/// **Deprecated** alias of [`macro@routes`], which now accepts `#[tool]`/
-/// `#[resource]`/`#[prompt]`/`#[completion]` members and infers the port
-/// (one type exposes one port: MCP members next to HTTP routes are a
-/// compile error).
-///
-/// `#[mcp_routes(args)]` expands like `#[routes(args)]` with one exception:
-/// an impl with neither an MCP member nor an HTTP route (only plain methods,
-/// lifecycle/background markers, or nothing) is read as an MCP service under
-/// `#[mcp_routes]` (an empty one, or the MCP "not supported" error on a
-/// lifecycle/background marker) but as an HTTP controller under `#[routes]`.
-/// Any other impl expands identically; rename it.
-/// The alias is removed in the next minor release of `r2e-macros`.
-#[deprecated(
-    since = "0.10.0",
-    note = "renamed to #[routes]; #[routes] now accepts #[tool]/#[resource]/#[prompt]/#[completion] members — see r2e-macros CHANGELOG"
-)]
-#[proc_macro_attribute]
-pub fn mcp_routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    routes_attr::expand(args.into(), input, "mcp_routes").into()
 }
 
 /// Marker attribute declaring an MCP tool method inside `#[routes]`.

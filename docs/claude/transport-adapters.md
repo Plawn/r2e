@@ -15,7 +15,7 @@ the decorator machinery (`DecoratorSpec`, `Interceptor<R>`,
 `AllSatisfied`). A transport adapter supplies only what is genuinely
 wire-specific: request extraction, error mapping to the wire's failure
 type, routing syntax, and the serve loop. HTTP (`#[routes]`), gRPC
-(`#[grpc_routes]`), MCP (`#[routes]` MCP members — `#[mcp_routes]` is the deprecated alias — `r2e-mcp`), and scheduled tasks
+(`#[grpc_routes]`), MCP (`#[routes]` MCP members, `r2e-mcp`), and scheduled tasks
 (`#[scheduled]`, timer-driven) are the existing adapters — use them as
 references.
 
@@ -198,12 +198,10 @@ references.
   opt_in)]`); an empty impl reads as HTTP. MCP members next to HTTP routes
   are a compile error naming `docs/features/25-mcp.md` § One port per type:
   each inbound port is its own adapter over shared beans (hexagonal), with
-  its port's native types and its own decorators. `#[mcp_routes]` became a
-  `#[deprecated]` alias through the same dispatcher (removed next minor); an
-  empty MCP service is spellable only through it. The macro deprecation lint
-  fires at the attribute path: an item-level `#[allow(deprecated)]` on the
-  impl does not silence it, a module/crate-level `#![allow(deprecated)]`
-  does. Kept from the level-3a work: the builder's per-type core store
+  its port's native types and its own decorators. `#[mcp_routes]` is
+  removed outright (rename to `#[routes]`; no deprecated alias — the macro
+  surface is kept minimal because agents generate most apps), so an MCP
+  service with no member is not expressible. Kept from the level-3a work: the builder's per-type core store
   (`AppBuilder::endpoint_core_or_insert`, `EndpointCores`) — a type
   registered several times (two prefixed module mounts) keeps ONE core whose
   lifecycle is wired by its first controller registration only, and the

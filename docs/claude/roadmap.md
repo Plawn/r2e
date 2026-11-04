@@ -489,7 +489,7 @@ member lists for tools, resources and prompts. The boot-time `Catalog`
 (immutable, `Arc`) is split from a copy-on-write `SessionView`; sessions that
 never change share one default view, so the hotpath allocation guard is
 unchanged. There are three ways to shape a session's list:
-- groups: `#[mcp_routes(group, opt_in)]` or a per-member `group` override;
+- groups: `#[routes(group, opt_in)]` or a per-member `group` override;
 - the `McpSession` member parameter, which can enable/disable groups and
   add/remove private `DynamicTool`/`DynamicResource`/`DynamicPrompt` members;
 - the `McpServer::session_init::<T: McpSessionInit>()` hook, plus the

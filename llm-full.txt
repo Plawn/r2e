@@ -5986,8 +5986,8 @@ Result<StandardClaims, Status>`.
   `#[routes]` (the SAME impl macro as HTTP — an impl whose methods carry
   `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]` is an MCP service) and
   register it with `.register_mcp_service::<T>()` after `build_state()` (deps
-  and config keys are checked there). `#[mcp_routes]` is a deprecated alias,
-  removed in the next minor.
+  and config keys are checked there). `#[mcp_routes]` (r2e ≤ 0.10) no longer
+  exists: rename it to `#[routes]`, same arguments and members.
 - Install the `McpServer::new()` plugin (endpoint `/mcp` by default);
   everything else is `mcp.*` config, which builder methods override.
 - One marker per method: `#[tool]`, `#[resource(uri = …)]` (fixed URI, no
@@ -6760,7 +6760,7 @@ exhaustive protocol and auth cases live in `r2e-mcp/tests`.
   an `opt_in` member is also uncallable, a filtered one would not be.
 - Do not put HTTP routes and MCP members in the same `#[routes]` impl — it
   is a compile error; write one adapter type per port over a shared bean.
-- Do not write new `#[mcp_routes]` — it is a deprecated alias of `#[routes]`.
+- Do not write `#[mcp_routes]` — it was removed in 0.11; the macro is `#[routes]`.
 
 ---
 

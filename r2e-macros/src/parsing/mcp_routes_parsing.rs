@@ -1,5 +1,4 @@
-//! Parsing for a `#[routes]` impl block with MCP members (the deprecated
-//! `#[mcp_routes]` alias expands through the same path).
+//! Parsing for a `#[routes]` impl block with MCP members.
 //!
 //! `#[routes] impl Name { ... }` turns every `#[tool]`-marked async
 //! `&self` method into an MCP tool, every `#[resource]` method into an MCP
@@ -395,13 +394,8 @@ fn parse_group_name(nested: &syn::meta::ParseNestedMeta) -> syn::Result<String> 
     Ok(name)
 }
 
-/// Parse the `#[routes(group = "...", opt_in)]` arguments. `attr` is the
-/// attribute as written (`routes`, or the deprecated `mcp_routes` alias),
-/// named in the errors.
-pub fn parse_impl_args(
-    args: proc_macro2::TokenStream,
-    attr: &str,
-) -> syn::Result<Option<McpGroupSpec>> {
+/// Parse the `#[routes(group = "...", opt_in)]` arguments.
+pub fn parse_impl_args(args: proc_macro2::TokenStream) -> syn::Result<Option<McpGroupSpec>> {
     if args.is_empty() {
         return Ok(None);
     }
@@ -413,16 +407,16 @@ pub fn parse_impl_args(
         } else if nested.path.is_ident("opt_in") {
             opt_in = parse_flag(&nested)?;
         } else {
-            return Err(nested.error(format!(
-                "unknown #[{attr}] argument; expected `group = \"…\"` and/or `opt_in`"
-            )));
+            return Err(nested.error(
+                "unknown #[routes] argument; expected `group = \"…\"` and/or `opt_in`",
+            ));
         }
         Ok(())
     });
     syn::parse::Parser::parse2(parser, args.clone())?;
     match group {
         Some(name) => Ok(Some(McpGroupSpec { name, opt_in })),
-        None if opt_in => Err(opt_in_without_group(args, attr)),
+        None if opt_in => Err(opt_in_without_group(args, "routes")),
         None => Ok(None),
     }
 }

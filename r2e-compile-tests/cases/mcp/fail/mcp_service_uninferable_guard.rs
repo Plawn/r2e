@@ -1,7 +1,5 @@
-//! An uninferable impl-level `#[guard(...)]` is reported even on an MCP
-//! service with no member (only the deprecated `#[mcp_routes]` alias spells an
-//! empty one; `#[routes]` reads it as HTTP): never silently dropped.
-#![allow(deprecated)]
+//! An uninferable impl-level `#[guard(...)]` on an MCP service is reported,
+//! never silently dropped.
 use r2e::prelude::*;
 use r2e::{GuardContext, Identity};
 use std::future::Future;
@@ -24,10 +22,15 @@ fn make_guard() -> AllowAll {
 }
 
 #[controller]
-pub struct EmptyTools {}
+pub struct EmptyTools;
 
-#[mcp_routes]
+#[routes]
 #[guard(make_guard())]
-impl EmptyTools {}
+impl EmptyTools {
+    #[tool]
+    async fn ping(&self) -> String {
+        "pong".to_string()
+    }
+}
 
 fn main() {}

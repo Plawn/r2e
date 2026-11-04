@@ -14,9 +14,6 @@
 //!
 //! MCP members next to HTTP routes in one impl are a compile error: the MCP
 //! members belong on their own `#[controller]` type over the same beans.
-//!
-//! The deprecated `#[mcp_routes]` alias expands through the same dispatcher;
-//! it keeps its MCP reading of an impl with no member at all.
 
 use proc_macro2::TokenStream;
 
@@ -39,21 +36,20 @@ fn mcp_marker(attr: &syn::Attribute) -> bool {
     MCP_MEMBER_MARKERS.iter().any(|m| attr.path().is_ident(m))
 }
 
-/// Expand `#[routes(args)]` (`attr = "routes"`) or the deprecated
-/// `#[mcp_routes(args)]` alias (`attr = "mcp_routes"`).
-pub fn expand(args: TokenStream, input: proc_macro::TokenStream, attr: &str) -> TokenStream {
+/// Expand `#[routes(args)]`.
+pub fn expand(args: TokenStream, input: proc_macro::TokenStream) -> TokenStream {
     let item = match syn::parse::<syn::ItemImpl>(input) {
         Ok(item) => item,
         Err(err) => return err.to_compile_error(),
     };
-    match expand_impl(args, item, attr) {
+    match expand_impl(args, item) {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     }
 }
 
-fn expand_impl(args: TokenStream, item: syn::ItemImpl, attr: &str) -> syn::Result<TokenStream> {
-    let group = mcp_routes_parsing::parse_impl_args(args.clone(), attr)?;
+fn expand_impl(args: TokenStream, item: syn::ItemImpl) -> syn::Result<TokenStream> {
+    let group = mcp_routes_parsing::parse_impl_args(args.clone())?;
 
     let methods = || {
         item.items.iter().filter_map(|impl_item| match impl_item {
@@ -76,9 +72,7 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl, attr: &str) -> syn::Resul
         ));
     }
 
-    // The alias keeps its MCP-only reading of an impl with no member at all
-    // (an empty service); `#[routes]` keeps its HTTP reading.
-    if !has_http && (first_mcp.is_some() || attr == "mcp_routes") {
+    if !has_http && first_mcp.is_some() {
         let def = mcp_routes_parsing::parse(item, group)?;
         return Ok(mcp_codegen::generate(&def));
     }
@@ -86,10 +80,8 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl, attr: &str) -> syn::Resul
     if group.is_some() {
         return Err(syn::Error::new_spanned(
             &args,
-            format!(
-                "`group`/`opt_in` apply to MCP members — this #[{attr}] impl has no \
-                 #[tool]/#[resource]/#[prompt]/#[completion] member"
-            ),
+            "`group`/`opt_in` apply to MCP members — this #[routes] impl has no \
+             #[tool]/#[resource]/#[prompt]/#[completion] member",
         ));
     }
     let def = routes_parsing::parse(item)?;
