@@ -795,22 +795,30 @@ Kept where the context lives rather than duplicated here:
 - `docs/research/thread-per-core.md` — stall detector, `#[offload]`/
   `#[blocking]`, `threads_per_worker` (none implemented).
 - `plans/transport-layering.md` — share more between `#[routes]` /
-  `#[mcp_routes]` / `#[grpc_routes]`: level 1 one member model + one decorator
-  layout (macros tech debt), level 2 one request head (`Parts`) + one identity
-  contract on gRPC (identity trait removed), level 3 one type on
-  several transports (3a multi-kind impl, 3b neutral operations). Levels 1
-  (#1212, PR #132) and 2 (#1213, PR #133) DONE 2026-11-03; **level 3 is
-  NEXT** (user decision 2026-11-03, fresh session) — the handoff block at the
-  top of plan §4 lists prerequisites, method, shared code locations, carried
-  design notes and 3a exit criteria. Release gate carried from level 2:
-  remove the deprecated `GrpcIdentity` stub (`r2e-grpc/src/identity.rs`) at
-  the `r2e-grpc` release after the one shipping #1213 (`Breaking` entry;
-  `docs/migration/grpc-identity.md` already covers it).
+  `#[mcp_routes]` / `#[grpc_routes]`. Levels 1 (#1212, PR #132) and 2 (#1213,
+  PR #133) merged 2026-11-03; 3a (#1215, PR #136) shipped then **rescoped
+  2026-11-04: one type = one port** (hexagonal doctrine, plan §5). The mixed
+  HTTP + MCP form is removed on the same PR before the single release
+  (3a', handoff in plan §10); 3b (neutral signature) and 3c (single
+  registration) are dropped. Next: 3b' one generation pipeline inside
+  r2e-macros (gRPC joins it, `#[grpc_routes]` kept, `Self::<Assoc>` rewrite
+  retired), 3c' runtime hygiene (gRPC core store, pre-state registration
+  rejection, `www-authenticate`, stub/alias removals at the minor after the
+  release), and **level 4 hexagonal DX**: `From<HttpError> for tonic::Status`,
+  `example-app` as domain/ports/adapters + `llm/hexagonal.md`, an
+  `r2e doctor` transport-leak rule, the inbound adapter catalogue. Tickets:
+  #1215 (3a'), #1216 (3b'), #1217 (3c'), #1218 → #1219 → #1220 (level 4).
 
 ---
 
 ## Decisions log — do NOT re-propose
 
+- **One type = one port (2026-11-04).** Inbound ports (HTTP, MCP, gRPC,
+  consumers) are separate `#[controller]` types over the same beans
+  (hexagonal). The 3a mixed HTTP + MCP impl was removed before release; a
+  `#[tool]` next to a `#[get]` is a compile error. Do not re-propose
+  multi-port types, a neutral member signature (3b) or a single
+  `register_endpoint` (3c). "Unify" means the generator code in r2e-macros.
 - **Qualifiers / named beans: REJECTED.** Newtypes are the chosen pattern for
   same-typed beans (runtime `DuplicateBean` backstop) (the `name = "…"`
   shorthand was removed 2026-08-28).
