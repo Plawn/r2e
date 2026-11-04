@@ -77,7 +77,8 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl) -> syn::Result<TokenStrea
         return Ok(mcp_codegen::generate(&def));
     }
 
-    if group.is_some() {
+    // Any argument — including a parsed-away `opt_in = false` — is MCP-only.
+    if !args.is_empty() {
         return Err(syn::Error::new_spanned(
             &args,
             "`group`/`opt_in` apply to MCP members — this #[routes] impl has no \

@@ -1,0 +1,11 @@
+error: `group`/`opt_in` apply to MCP members — this #[routes] impl has no #[tool]/#[resource]/#[prompt]/#[completion] member
+ --> cases/mcp/fail/mcp_opt_in_false_without_member.rs:9:10
+  |
+9 | #[routes(opt_in = false)]
+  |          ^^^^^^^^^^^^^^
+
+error: `group`/`opt_in` apply to MCP members — this #[routes] impl has no #[tool]/#[resource]/#[prompt]/#[completion] member
+  --> cases/mcp/fail/mcp_opt_in_false_without_member.rs:20:10
+   |
+20 | #[routes(opt_in = false)]
+   |          ^^^^^^^^^^^^^^
