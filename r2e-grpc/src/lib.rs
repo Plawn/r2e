@@ -174,9 +174,12 @@ where
     {
         self.try_register_grpc_service::<S>().unwrap_or_else(|err| {
             panic!(
-                "\n=== CONFIGURATION ERRORS (grpc service: {}) ===\n\n{}\n============================\n",
-                std::any::type_name::<S>(),
-                err
+                "{}",
+                r2e_core::config::ConfigErrorReport::scoped(
+                    "grpc service",
+                    &std::any::type_name::<S>(),
+                    &err
+                )
             )
         })
     }

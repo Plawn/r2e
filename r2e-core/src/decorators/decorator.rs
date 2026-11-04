@@ -65,8 +65,10 @@ impl DecoSlot {
         Self(std::sync::OnceLock::new())
     }
 
-    /// Fill the slot. Later calls are ignored — the first registration wins,
-    /// and a core is only ever registered once.
+    /// Fill the slot. Later calls are ignored. A type has one core per
+    /// builder (shared by every transport and every mount of the type);
+    /// `fill_decos` runs once, on the type's first controller registration,
+    /// even when its routes are mounted several times.
     pub fn fill<T: Send + Sync + 'static>(&self, sets: T) {
         let _ = self.0.set(Box::new(sets));
     }

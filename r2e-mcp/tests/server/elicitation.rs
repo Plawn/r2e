@@ -38,7 +38,7 @@ static SAW_CANCELLED: AtomicBool = AtomicBool::new(false);
 #[controller]
 pub struct AskTools;
 
-#[mcp_routes]
+#[routes]
 impl AskTools {
     #[tool]
     async fn confirm(&self, client: McpClient<'_>) -> Result<String, McpError> {

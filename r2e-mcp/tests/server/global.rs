@@ -28,7 +28,7 @@ pub struct EchoIn {
 #[controller]
 pub struct Base;
 
-#[mcp_routes]
+#[routes]
 impl Base {
     /// Always visible.
     #[tool]
@@ -52,7 +52,7 @@ impl Base {
 #[controller]
 pub struct Hidden;
 
-#[mcp_routes(group = "lab", opt_in)]
+#[routes(group = "lab", opt_in)]
 impl Hidden {
     /// Hidden by default — still owns its name.
     #[tool]

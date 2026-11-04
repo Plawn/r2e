@@ -1,5 +1,5 @@
 //! Shared fixtures for the `auth` target: a scope/role-annotated
-//! `#[mcp_routes]` service, offline boot helpers (pinned TestJwt validator +
+//! `#[routes]` service, offline boot helpers (pinned TestJwt validator +
 //! `discovery: off` → zero network I/O), and bearer-aware HTTP helpers.
 
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub const DEAD_JWKS: &str = "http://127.0.0.1:1/jwks";
 #[controller]
 pub struct SecuredTools {}
 
-#[mcp_routes]
+#[routes]
 impl SecuredTools {
     /// No requirements: callable by anyone the layer lets through.
     #[tool]

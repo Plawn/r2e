@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct SelfTools;
 
-#[mcp_routes]
+#[routes]
 impl SelfTools {
     #[tool]
     async fn clone_me(&self) -> Self {

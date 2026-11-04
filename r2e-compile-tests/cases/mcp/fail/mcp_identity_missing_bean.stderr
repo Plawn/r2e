@@ -30,8 +30,8 @@ help: the following other types implement trait `HasBean<T, Idx>`
 note: required for `WhoAmITools` to implement `McpService<BeanState<HCons<ShutdownToken, HNil>>, ((), ViaBean<There<_>>)>`
   --> cases/mcp/fail/mcp_identity_missing_bean.rs:13:1
    |
-13 | #[mcp_routes]
-   | ^^^^^^^^^^^^^ unsatisfied trait bound introduced here
+13 | #[routes]
+   | ^^^^^^^^^ unsatisfied trait bound introduced here
 14 | impl WhoAmITools {
    |      ^^^^^^^^^^^
 note: required by a bound in `register_mcp_service`
@@ -40,6 +40,6 @@ note: required by a bound in `register_mcp_service`
    |     fn register_mcp_service<S>(self) -> Self
    |        -------------------- required by a bound in this associated function
    |     where
-   |         S: McpService<T, W> + EndpointDeps,
+   |         S: McpService<T, W> + EndpointDeps + Send + Sync,
    |            ^^^^^^^^^^^^^^^^ required by this bound in `AppBuilderMcpExt::register_mcp_service`
-   = note: this error originates in the attribute macro `mcp_routes` (in Nightly builds, run with -Z macro-backtrace for more info)
+   = note: this error originates in the attribute macro `routes` (in Nightly builds, run with -Z macro-backtrace for more info)

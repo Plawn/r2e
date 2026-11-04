@@ -1,4 +1,4 @@
-//! Code generation for the `#[mcp_routes]` attribute macro.
+//! Code generation for a `#[routes]` impl block with MCP members.
 //!
 //! Generates:
 //! - The user's impl, split exactly like `#[routes]` splits an HTTP
@@ -138,7 +138,7 @@ fn build_deco_sets(def: &McpRoutesImplDef) -> MemberDecoSets {
     )
 }
 
-/// Main entry point: generate all code for an `#[mcp_routes]` impl block.
+/// Main entry point: generate the MCP code of a `#[routes]` impl block.
 pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     let deco = build_deco_sets(def);
     let impl_block = generate_impl_block(def);

@@ -14,7 +14,7 @@ use crate::support::{self, McpResponse};
 #[controller]
 pub struct ProgressTools;
 
-#[mcp_routes]
+#[routes]
 impl ProgressTools {
     /// Reports 1, 2, 2 (dropped: not increasing), 1.5 (dropped), 3 of 3.
     #[tool]

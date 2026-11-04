@@ -53,7 +53,7 @@ impl<R: Send> Interceptor<R> for Through {
 #[controller]
 struct Plain;
 
-#[mcp_routes]
+#[routes]
 impl Plain {
     #[tool]
     async fn ping(&self) -> &'static str {
@@ -64,7 +64,7 @@ impl Plain {
 #[controller]
 struct Decorated;
 
-#[mcp_routes]
+#[routes]
 #[guard(Pass)]
 #[intercept(Through)]
 impl Decorated {
@@ -86,7 +86,7 @@ fn context(rt: &r2e_core::rt::Runtime) -> Arc<BeanContext> {
 /// route (no transport: the measurement is the generated invoke path).
 fn cost_per_call<S: McpService<(), W>, W>(rt: &r2e_core::rt::Runtime) -> Alloc {
     let ctx = context(rt);
-    let routes = S::routes(&(), &ctx);
+    let routes = S::routes(&(), Arc::new(S::construct(&(), &ctx)), &ctx);
     assert_eq!(routes.tools.len(), 1);
     let invoke = routes.tools[0].invoke.clone();
     steady_state(50, || {
@@ -102,7 +102,7 @@ fn cost_per_call<S: McpService<(), W>, W>(rt: &r2e_core::rt::Runtime) -> Alloc {
 fn time_per_call<S: McpService<(), W>, W>(rt: &r2e_core::rt::Runtime) -> std::time::Duration {
     const N: u32 = 20_000;
     let ctx = context(rt);
-    let routes = S::routes(&(), &ctx);
+    let routes = S::routes(&(), Arc::new(S::construct(&(), &ctx)), &ctx);
     let invoke = routes.tools[0].invoke.clone();
     let start = std::time::Instant::now();
     rt.block_on(async {

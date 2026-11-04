@@ -1,3 +1,6 @@
+//! Non-member items of a `#[routes]` MCP service impl (consts, plain fns)
+//! are preserved by the expansion.
+
 #![deny(non_snake_case)]
 
 use r2e::prelude::*;
@@ -5,12 +8,12 @@ use r2e::prelude::*;
 #[controller]
 pub struct PreservedImpl;
 
-#[mcp_routes]
+#[routes]
 #[allow(non_snake_case)]
 impl PreservedImpl {
     const LABEL: &'static str = "preserved";
 
-    fn Helper() -> &'static str {
+    pub fn Helper() -> &'static str {
         Self::LABEL
     }
 

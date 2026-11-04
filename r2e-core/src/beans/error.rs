@@ -181,18 +181,14 @@ impl fmt::Display for BeanError {
             BeanError::ConfigLoad { context, source } => {
                 write!(f, "{context}: {source}")
             }
-            BeanError::ControllerConfig { controller, source } => {
-                write!(
-                    f,
-                    "\n=== CONFIGURATION ERRORS (controller: {controller}) ===\n\n{source}\n============================\n"
-                )
-            }
-            BeanError::EndpointConfig { endpoint, source } => {
-                write!(
-                    f,
-                    "\n=== CONFIGURATION ERRORS (endpoint: {endpoint}) ===\n\n{source}\n============================\n"
-                )
-            }
+            BeanError::ControllerConfig { controller, source } => fmt::Display::fmt(
+                &crate::config::ConfigErrorReport::scoped("controller", controller, source),
+                f,
+            ),
+            BeanError::EndpointConfig { endpoint, source } => fmt::Display::fmt(
+                &crate::config::ConfigErrorReport::scoped("endpoint", endpoint, source),
+                f,
+            ),
             BeanError::MissingTransportPlugin {
                 endpoint,
                 module,

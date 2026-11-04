@@ -1,4 +1,4 @@
-//! The [`McpService`] trait — what `#[mcp_routes]` implements.
+//! The [`McpService`] trait — what `#[routes]` implements.
 
 use std::sync::Arc;
 
@@ -9,12 +9,19 @@ use crate::route::McpRoutes;
 
 /// Trait for MCP tool services that can be registered with the R2E builder.
 ///
-/// Implement this trait (typically via the `#[mcp_routes]` macro) to expose a
+/// Implement this trait (typically via the `#[routes]` macro) to expose a
 /// type's `#[tool]`/`#[resource]`/`#[prompt]` methods over the MCP
 /// endpoint. The service core is constructed from the resolved bean graph by
-/// type (see [`ContextConstruct`](r2e_core::ContextConstruct)) — once, at
-/// registration; each route's dispatch closure clones an `Arc` of it per
-/// call.
+/// type (see [`ContextConstruct`](r2e_core::ContextConstruct)) — once per
+/// builder, at registration; each route's dispatch closure clones an `Arc`
+/// of it per call.
+///
+/// # One core per type
+///
+/// `register_mcp_service` takes the service core from the builder's per-type
+/// core store, constructing it through [`construct`](Self::construct) on
+/// first use — the same store `register_controller` uses — so a service type
+/// registered more than once still has exactly **one** runtime core.
 ///
 /// Services accumulate into the
 /// [`McpServiceRegistry`](crate::registry::McpServiceRegistry), which the
@@ -49,9 +56,13 @@ use crate::route::McpRoutes;
 /// {
 ///     fn service_name() -> &'static str { "MathTools" }
 ///
-///     fn routes(state: &__R2eS, ctx: &Arc<BeanContext>) -> McpRoutes {
+///     fn construct(_state: &__R2eS, ctx: &BeanContext) -> Self {
+///         <MathTools as ContextConstruct>::from_context(ctx)
+///     }
+///
+///     fn routes(state: &__R2eS, core: Arc<Self>, ctx: &Arc<BeanContext>) -> McpRoutes {
 ///         let wrapper = Arc::new(__R2eMcpMathTools {
-///             core: <MathTools as ContextConstruct>::from_context(ctx),
+///             core, // the builder's one core for MathTools
 ///             // plus prebuilt interceptor/guard products when decorated
 ///         });
 ///         // the state is shared (one Arc) by the members that extract an
@@ -79,10 +90,20 @@ pub trait McpService<T: Clone + Send + Sync + 'static, W = ()>: 'static {
         Vec::new()
     }
 
-    /// Build this service's routes (tools, resources, prompts) from the
-    /// resolved bean graph — one wrapper core, one set of prebuilt
+    /// Build the service core from the resolved bean graph — the
+    /// [`Controller::construct`](r2e_core::Controller::construct) peer.
+    /// Called at most once per builder: registration takes the core from the
+    /// builder's per-type store.
+    fn construct(state: &T, ctx: &BeanContext) -> Self
+    where
+        Self: Sized;
+
+    /// Build this service's routes (tools, resources, prompts) around the
+    /// builder's one `core` for this type — one wrapper, one set of prebuilt
     /// decorators, shared by every member's dispatch closure. `state` is the
     /// resolved application state, the second argument of every member's
     /// `#[inject(identity)]` extractor.
-    fn routes(state: &T, ctx: &Arc<BeanContext>) -> McpRoutes;
+    fn routes(state: &T, core: Arc<Self>, ctx: &Arc<BeanContext>) -> McpRoutes
+    where
+        Self: Sized;
 }

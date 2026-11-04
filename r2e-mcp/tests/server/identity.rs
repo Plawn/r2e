@@ -70,7 +70,7 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for AppUser {
 #[controller]
 struct AppIdentityTools;
 
-#[mcp_routes]
+#[routes]
 impl AppIdentityTools {
     /// A required app identity on a tool.
     #[tool]
@@ -175,7 +175,7 @@ async fn an_absent_app_identity_is_none_or_the_extractors_rejection() {
 #[controller]
 struct JwtIdentityTools;
 
-#[mcp_routes]
+#[routes]
 impl JwtIdentityTools {
     /// `AuthenticatedUser` validated by the `JwtClaimsValidator` bean — the
     /// same extractor an HTTP route uses.
@@ -316,7 +316,7 @@ struct StructAppTools {
     headers: HeaderMap,
 }
 
-#[mcp_routes]
+#[routes]
 impl StructAppTools {
     #[tool]
     async fn who(&self) -> String {
@@ -356,7 +356,7 @@ struct OptionalStructTools {
     user: Option<AppUser>,
 }
 
-#[mcp_routes]
+#[routes]
 impl OptionalStructTools {
     #[tool]
     async fn maybe_who(&self) -> String {
@@ -579,7 +579,7 @@ struct SecuredStructTools {
     user: AuthenticatedUser,
 }
 
-#[mcp_routes]
+#[routes]
 impl SecuredStructTools {
     #[tool]
     async fn whoami(&self) -> String {

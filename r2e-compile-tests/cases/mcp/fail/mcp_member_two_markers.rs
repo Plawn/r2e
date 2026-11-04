@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct DoubleTools {}
 
-#[mcp_routes]
+#[routes]
 impl DoubleTools {
     /// Broken: two member markers.
     #[tool]

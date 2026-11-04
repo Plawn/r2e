@@ -17,8 +17,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
-- `#[mcp_routes]` members now run on the request façade, exactly like
-  `#[routes]` handlers (#1210). In a member body `Self` names the façade:
+- MCP services are declared with `#[routes]` (#1215, via `r2e-macros`):
+  an impl whose members are `#[tool]`/`#[resource]`/`#[prompt]`/
+  `#[completion]` is an `McpService`. One type exposes one port: MCP members
+  next to HTTP routes are a compile error — serve HTTP and MCP from two types
+  over the same beans. **`#[mcp_routes]` is removed** (no alias).
+  Migration: rename `#[mcp_routes(...)]` to `#[routes(...)]` — same
+  arguments, same members, same generated code; an MCP service with no
+  member is no longer expressible (an impl with no member reads as HTTP).
+  Docs: `docs/features/25-mcp.md` § One port per type, `llm/mcp-server.md`.
+  - `McpService` trait: new required `fn construct(state: &T, ctx:
+    &BeanContext) -> Self`, and `routes` takes the core —
+    `fn routes(state: &T, core: Arc<Self>, ctx: &Arc<BeanContext>) ->
+    McpRoutes`; the builder takes the core from its per-type core store
+    (constructed through `construct` on first use). `#[routes]` generates
+    both; a hand-written impl moves its `from_context` call into `construct`
+    and uses the `core` argument.
+  - `AppBuilderMcpExt::register_mcp_service` / `try_register_mcp_service`
+    now also require `S: Send + Sync` (the stored core is shared).
+
+- MCP members now run on the request façade, exactly like HTTP handlers
+  (#1210). In a member body `Self` names the façade:
   name an associated item of the service through the service type
   (`MyTools::HELPER()`, not `Self::HELPER()`), and a member whose signature
   exposes `Self` (`-> Self`, `Option<Self>`, …) is a compile error naming the
@@ -33,8 +52,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 ### Added
 
 - **Struct-level identity: one caller for the whole endpoint** (#1210).
-  `#[inject(identity)]` and `#[inject(request)]` *fields* on an
-  `#[mcp_routes]` service follow the `#[controller]` contract (same
+  `#[inject(identity)]` and `#[inject(request)]` *fields* on an MCP
+  service follow the `#[controller]` contract (same
   attributes, same extractors, `#[request_helper]`, `self.<field>` in every
   member) and are extracted **once per HTTP request** in a layer on `/mcp`,
   before rmcp parses the body: the endpoint fails closed as a whole —
@@ -108,6 +127,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   - Boot WARNs when the DCR shim is on and the protected-resource metadata
     advertises no scope, naming `mcp.auth.scopes-supported`: clients then
     pick a scope of their own and the IdP answers `invalid_scope`.
+
+### Changed
+
+- The `register_mcp_service` configuration-error panic renders through
+  `r2e_core::config::ConfigErrorReport` (#1214); the message is
+  byte-identical.
 
 ## [0.10.0] - 2026-10-31
 

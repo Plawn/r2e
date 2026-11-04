@@ -12,7 +12,7 @@ use super::validator::McpPrincipal;
 use crate::error::McpError;
 use crate::identity::Caller;
 
-/// The authorization requirements of one tool, emitted by `#[mcp_routes]`
+/// The authorization requirements of one tool, emitted by `#[routes]`
 /// from `#[tool(scopes/any_scopes)]` + `#[roles]`/`#[all_roles]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ToolRequirements {

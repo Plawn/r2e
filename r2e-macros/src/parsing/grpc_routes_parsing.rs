@@ -143,6 +143,23 @@ pub fn parse(args: GrpcRoutesArgs, item: syn::ItemImpl) -> syn::Result<GrpcRoute
             }
         };
 
+        // MCP members live on `#[routes]`; here the marker would be re-emitted
+        // on a tonic trait method (or silently ignored on a helper).
+        if let Some(attr) = method.attrs.iter().find(|a| {
+            crate::parsing::member::MCP_MEMBER_MARKERS
+                .iter()
+                .any(|m| a.path().is_ident(m))
+        }) {
+            let name = attr.path().get_ident().map(|i| i.to_string()).unwrap_or_default();
+            return Err(syn::Error::new_spanned(
+                attr,
+                format!(
+                    "`#[{name}]` is an MCP member; `#[grpc_routes]` only accepts gRPC members — \
+                     put it on a `#[routes]` impl"
+                ),
+            ));
+        }
+
         // `#[request_helper]` is classified first: a helper may be `async`
         // and take `&self`, which would otherwise read as an rpc.
         if method

@@ -49,7 +49,7 @@ pub struct Sum {
 #[controller]
 struct ShortDocs;
 
-#[mcp_routes]
+#[routes]
 impl ShortDocs {
     /// Add.
     #[tool(read_only, idempotent)]
@@ -96,7 +96,7 @@ impl ShortDocs {
 #[controller]
 struct LongDocs;
 
-#[mcp_routes]
+#[routes]
 impl LongDocs {
     #[tool(
         read_only,
@@ -164,7 +164,7 @@ fn context(rt: &r2e_core::rt::Runtime) -> Arc<BeanContext> {
 /// `W` (the request-data marker plus one marker per identity member) is
 /// inferred like `register_mcp_service` infers it.
 fn wire_list<S: McpService<(), W>, W>(ctx: &Arc<BeanContext>) -> Vec<Tool> {
-    let routes = S::routes(&(), ctx);
+    let routes = S::routes(&(), Arc::new(S::construct(&(), ctx)), ctx);
     assert_eq!(routes.tools.len(), TOOLS);
     routes.tools.iter().map(|t| t.to_rmcp_tool()).collect()
 }

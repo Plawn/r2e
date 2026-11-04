@@ -841,6 +841,26 @@ struct BuilderConfig {
     /// [`PluginSetupContext::tracing_layer`](crate::plugin::PluginSetupContext::tracing_layer);
     /// handed to the subscriber `build_state()` installs.
     tracing_layers: Vec<r2e_tracing::BoxedLayer>,
+    /// The per-type endpoint core store: one runtime core per endpoint type
+    /// per builder, shared by every transport registration of that type.
+    endpoint_cores: EndpointCores,
+}
+
+/// One runtime core per endpoint type per builder (#1215).
+///
+/// A type registered more than once — a controller mounted by two prefixed
+/// modules — must not get two cores: the first registration constructs it,
+/// the others take the same `Arc`, and only the first controller
+/// registration fills its decorator slot and queues its lifecycle hooks. A
+/// builder field (not a bean): dev-reload rebuilds the builder, hence the
+/// store, on every cycle.
+#[derive(Default)]
+struct EndpointCores {
+    /// The cores, keyed by the endpoint type's `TypeId`.
+    cores: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+    /// Types registered with `register_controller` (directly or through a
+    /// feature module).
+    controllers: std::collections::HashSet<TypeId>,
 }
 
 impl BuilderConfig {

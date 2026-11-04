@@ -3,7 +3,7 @@
 //! [`SessionToolset::tool`](crate::SessionToolset::tool)).
 //!
 //! They produce the same [`ToolRoute`] / [`ResourceRoute`] / [`PromptRoute`]
-//! the `#[mcp_routes]` macro emits, with the same dispatch contract: scope
+//! the `#[routes]` macro emits, with the same dispatch contract: scope
 //! AND role requirements are checked before the handler runs, typed
 //! arguments are deserialized through [`ToolParams`], and the handler's
 //! return goes through [`IntoToolResult`] / [`IntoResourceResult`] /

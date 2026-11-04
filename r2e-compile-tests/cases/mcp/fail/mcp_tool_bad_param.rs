@@ -7,7 +7,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct BadTools {}
 
-#[mcp_routes]
+#[routes]
 impl BadTools {
     /// Broken.
     #[tool]

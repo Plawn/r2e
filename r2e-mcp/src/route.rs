@@ -1,4 +1,4 @@
-//! Tool routes: the unit `#[mcp_routes]` compiles each `#[tool]` method into.
+//! Tool routes: the unit `#[routes]` compiles each `#[tool]` method into.
 //!
 //! A [`ToolRoute`] carries the tool's wire metadata (name, description,
 //! schemas, annotations) plus a type-erased [`ToolInvoke`] closure that owns
@@ -27,7 +27,7 @@ use crate::session::{McpSession, SessionId};
 /// A JSON Schema object body (the map under `inputSchema`).
 pub type SchemaObject = serde_json::Map<String, Value>;
 
-/// The member group a route belongs to (`#[mcp_routes(group = "...")]` /
+/// The member group a route belongs to (`#[routes(group = "...")]` /
 /// `#[tool(group = "...")]`).
 ///
 /// Groups are the unit a session switches on and off
@@ -217,7 +217,7 @@ impl ToolAnnotations {
 
 /// One registered MCP tool: wire metadata plus its dispatch closure.
 ///
-/// Produced by the `#[mcp_routes]` macro (one per `#[tool]` method); can also
+/// Produced by the `#[routes]` macro (one per `#[tool]` method); can also
 /// be built by hand, or with [`DynamicTool`](crate::DynamicTool) for members
 /// added to one session at runtime.
 #[derive(Clone)]
@@ -379,7 +379,7 @@ pub type ResourceInvoke = Arc<dyn Fn(ResourceCall) -> ResourceFuture + Send + Sy
 
 /// One registered MCP resource: wire metadata plus its read closure.
 ///
-/// Produced by the `#[mcp_routes]` macro (one per `#[resource]` method); can
+/// Produced by the `#[routes]` macro (one per `#[resource]` method); can
 /// also be built by hand for dynamic resources.
 #[derive(Clone)]
 pub struct ResourceRoute {
@@ -551,7 +551,7 @@ pub struct PromptArgumentDef {
 
 /// One registered MCP prompt: wire metadata plus its expansion closure.
 ///
-/// Produced by the `#[mcp_routes]` macro (one per `#[prompt]` method); can
+/// Produced by the `#[routes]` macro (one per `#[prompt]` method); can
 /// also be built by hand for dynamic prompts.
 #[derive(Clone)]
 pub struct PromptRoute {

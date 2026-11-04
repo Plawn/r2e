@@ -17,6 +17,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `#[doc(hidden)]` builder hooks for the per-type endpoint core store
+  (#1215): `AppBuilder::endpoint_core_or_insert::<C>(make)` returns the one
+  `Arc<C>` core of a type for this builder (constructing it on first use).
+
 - `GuardContext::from_parts(parts, method_name, controller_name, identity,
   path_params)` (#1213): builds the guard context from a request head
   (`peer_addr` read from the `ConnectInfo<SocketAddr>` extension). The one
@@ -38,7 +42,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 - `web::extract::CloneVia<M>` (`#[doc(hidden)]`, #1210): the marker-indexed
   `Clone` bound `#[controller]` puts on the generated request-data type, so a
   controller with a non-`Clone` request-scoped field keeps compiling and only
-  a consumer that clones the data (`#[mcp_routes]`) sees the missing `Clone`.
+  a consumer that clones the data (an MCP service) sees the missing `Clone`.
+
+### Changed
+
+- A controller type registered more than once on one builder (#1215) used to
+  get one independent core per controller registration (e.g. two prefixed
+  `#[module]` mounts) — each constructed, `#[post_construct]`/`#[on_start]`/
+  `#[pre_destroy]` run, consumers and scheduled tasks registered per core.
+  It now gets ONE shared core whose lifecycle,
+  consumers and scheduled tasks are wired once by the first controller
+  registration, while its routes are still mounted on every registration.
+  Controller registrations made on the pre-state builder are still discarded
+  at `build_state()`/`with_state()` (routes and hooks, as before), and the
+  core store is now reset with them.
+
+- Every boot-time configuration banner (`=== CONFIGURATION ERRORS … ===`) is
+  rendered by one formatter, `#[doc(hidden)] pub`
+  `r2e_core::config::ConfigErrorReport` (#1214): `BeanError::ControllerConfig`
+  / `EndpointConfig`, the `register_controller` / `spawn_service` panics and
+  the `server.drain-timeout` panic. The output is byte-identical (pinned by
+  `r2e-core/tests/config/report.rs`).
 
 ## [0.9.1] - 2026-11-01
 

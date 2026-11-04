@@ -1,4 +1,4 @@
-//! On an `#[mcp_routes]` impl every non-inferable decorator spec is reported
+//! On an `#[routes]` impl every non-inferable decorator spec is reported
 //! — impl-level guard and interceptor, member-level guard and interceptor,
 //! across members — exactly once each, not only the first bad site.
 
@@ -44,7 +44,7 @@ fn make_interceptor() -> Through {
 #[controller]
 pub struct EverySiteTools {}
 
-#[mcp_routes]
+#[routes]
 #[guard(make_guard())]
 #[intercept(make_interceptor())]
 impl EverySiteTools {

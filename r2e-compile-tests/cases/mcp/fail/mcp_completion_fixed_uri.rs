@@ -5,7 +5,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct FixedUri {}
 
-#[mcp_routes]
+#[routes]
 impl FixedUri {
     /// Broken.
     #[resource(uri = "files://readme", complete(name = "names"))]

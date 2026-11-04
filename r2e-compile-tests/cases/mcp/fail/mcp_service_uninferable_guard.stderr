@@ -1,5 +1,5 @@
 error: cannot infer the decorator spec type from this expression; name it explicitly: `#[guard(MyGuard = <expr>)]` / `#[intercept(MyInterceptor = <expr>)]`
-  --> cases/mcp/fail/mcp_empty_service_uninferable_guard.rs:30:9
+  --> cases/mcp/fail/mcp_service_uninferable_guard.rs:28:9
    |
-30 | #[guard(make_guard())]
+28 | #[guard(make_guard())]
    |         ^^^^^^^^^^^^

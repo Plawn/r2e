@@ -117,6 +117,9 @@ async fn call_add(app: &TestApp, session: &str, token: Option<&str>) -> Value {
     response_message(response)
 }
 
+/// Two adapters over one `CalcService` bean: the `MathTools` MCP service
+/// (its `add` tool) and the `CalcController` HTTP controller (`GET
+/// /api/calc/add/{a}/{b}`).
 #[r2e::test(app = McpApp)]
 async fn facade_blueprint_serves_http_and_all_mcp_families(app: TestApp) {
     let (session, initialized) = initialize(&app, None).await;

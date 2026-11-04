@@ -19,7 +19,7 @@ use derives::{
     decorator_bean_derive, from_config_value_derive, from_multipart, object_params_derive,
     params_derive, provide_bundle_derive,
 };
-use parsing::{grpc_routes_parsing, mcp_routes_parsing};
+use parsing::grpc_routes_parsing;
 
 /// Safety net for the controller-level decorator family (`#[guard]`,
 /// `#[pre_guard]`, `#[roles]`, `#[all_roles]`, `#[intercept]`): these
@@ -45,14 +45,13 @@ fn deny_decorator_above_impl(name: &str, input: TokenStream) -> TokenStream {
             s.ident == "routes"
                 || s.ident == "bean"
                 || s.ident == "grpc_routes"
-                || s.ident == "mcp_routes"
         })
     });
     let msg = if has_transformer {
         format!(
             "#[{name}] is placed above the transforming macro — attribute macros expand \
              top-down, so the macro below never sees it and the decorator would be silently \
-             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]/#[mcp_routes]."
+             dropped. Move #[{name}] BELOW #[routes]/#[bean]/#[grpc_routes]."
         )
     } else {
         format!(
@@ -153,8 +152,11 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
     controller_attr::expand(args, input)
 }
 
-/// Attribute macro on an `impl` block — generates Axum handlers, route
-/// wiring, and trait impls.
+/// Attribute macro on an `impl` block — generates the members a type serves:
+/// Axum handlers and route wiring for HTTP members, or MCP tools/resources/
+/// prompts for MCP members. One type exposes one port: an MCP member next to
+/// an HTTP route in the same impl is a compile error (see
+/// `docs/features/25-mcp.md` § One port per type).
 ///
 /// Must be placed on an `impl` block whose `Self` type uses [`macro@controller`].
 ///
@@ -163,6 +165,7 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// Inside the impl block you can annotate methods with:
 ///
 /// - **HTTP routes**: [`get`], [`post`], [`put`], [`delete`], [`patch`]
+/// - **MCP members**: [`tool`], [`resource`], [`prompt`], [`completion`]
 /// - **Authorization**: [`roles`]
 /// - **Interceptors**: [`intercept`]
 /// - **Events**: [`consumer`]
@@ -171,7 +174,9 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// - **Rate limiting**: Use `#[guard(RateLimit::per_user(...))]` or `#[pre_guard(RateLimit::global(...))]`
 /// - **Middleware**: [`middleware`]
 ///
-/// # Block-level interceptors
+/// A method is either an HTTP member or an MCP member, never both.
+///
+/// # Block-level decorators
 ///
 /// Place `#[intercept(...)]` on the `impl` block itself to apply an
 /// interceptor to **every** route method:
@@ -188,15 +193,67 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
+/// `#[intercept]`, `#[guard]`, `#[roles]` and `#[all_roles]` on the impl
+/// apply to every member of the impl; each registration builds its own
+/// decorator instance (one per `register_controller` call — e.g. per
+/// prefixed module mount; a stateful guard keeps one state per registration)
+/// over the ONE core all registrations of the type share. `#[pre_guard]`,
+/// `#[middleware]` and `#[layer]` are HTTP-only: they need at least one HTTP
+/// route and are rejected on an MCP impl.
+///
+/// # MCP members — one port per type
+///
+/// `#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` mark
+/// `async fn(&self, ...)` methods as MCP members. An impl with MCP members is
+/// an `McpService` (register it with `register_mcp_service::<T>()`); an MCP
+/// member next to an HTTP route is a compile error — one type exposes one
+/// port, so serve HTTP and MCP from two `#[controller]` types over the same
+/// beans (`docs/features/25-mcp.md` § One port per type). Tool parameters (any order,
+/// each at most once):
+/// - `Params(p): Params<T>` — the deserialized tool arguments (`T:
+///   Deserialize + JsonSchema + ObjectParams`, drives the input schema)
+/// - `#[inject(identity)] user: I` (or `Option<I>`) — the authenticated
+///   caller, read from the transport request extensions
+/// - `call: ToolCall` — raw call metadata (arguments, HTTP parts, request id)
+/// - `cancel: CancelToken` — cancelled on client abort / shutdown
+/// - `session: McpSession` — the caller's session: enable/disable groups,
+///   add/remove session-private members
+///
+/// Groups (per-session visibility): `#[routes(group = "git")]` puts every
+/// MCP member in a group, `#[tool(group = "…")]` / `#[resource(group = "…")]`
+/// / `#[prompt(group = "…")]` overrides it per member, and `opt_in` (which
+/// requires a `group`) hides the group until a session enables it. `group`
+/// and `opt_in` need at least one MCP member.
+///
+/// ```ignore
+/// #[controller]
+/// pub struct MathTools {
+///     #[inject] calc: CalcService,
+/// }
+///
+/// #[routes]
+/// impl MathTools {
+///     /// Add two numbers.
+///     #[tool(name = "add", read_only)]
+///     async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
+///         Json(self.calc.add(p.a, p.b))
+///     }
+/// }
+/// ```
+///
 /// # What is generated
 ///
-/// - The original `impl` block with method bodies wrapped by interceptors.
-/// - Free-standing Axum handler functions (`__r2e_<Name>_<method>`).
-/// - `impl Controller<State> for Name` — route registration, metadata,
-///   consumer registration, and scheduled task definitions.
+/// - The original `impl` block, split by scope: request-scoped members
+///   (routes or MCP members) on the request façade, the rest on the core.
+/// - HTTP impl: free-standing Axum handler functions
+///   (`__r2e_<Name>_<method>`) and `impl Controller<State> for Name` — route
+///   registration, metadata, consumer registration, and scheduled task
+///   definitions.
+/// - MCP impl: `impl McpService<State> for Name`.
+/// - One `EndpointDeps` impl folding every member's decorator dependencies.
 #[proc_macro_attribute]
-pub fn routes(_args: TokenStream, input: TokenStream) -> TokenStream {
-    routes_attr::expand(input)
+pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
+    routes_attr::expand(args.into(), input).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -1530,104 +1587,47 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
     }
 }
 
-/// Attribute macro turning `#[tool]`-marked methods of an impl block into MCP
-/// tools.
-///
-/// The struct must use [`macro@controller`] (for `#[inject]`, `#[config]`,
-/// and the metadata module). Only `#[tool]`-marked `async fn(&self, ...)`
-/// methods become tools; other methods pass through unchanged.
-///
-/// Tool parameters (any order, each at most once):
-/// - `Params(p): Params<T>` — the deserialized tool arguments (`T:
-///   Deserialize + JsonSchema + ObjectParams`, drives the input schema)
-/// - `#[inject(identity)] user: I` (or `Option<I>`) — the authenticated
-///   caller, read from the transport request extensions
-/// - `call: ToolCall` — raw call metadata (arguments, HTTP parts, request id)
-/// - `cancel: CancelToken` — cancelled on client abort / shutdown
-/// - `session: McpSession` — the caller's session: enable/disable groups,
-///   add/remove session-private members
-///
-/// Groups (per-session visibility): `#[mcp_routes(group = "git")]` puts every
-/// member in a group, `#[tool(group = "…")]` / `#[resource(group = "…")]` /
-/// `#[prompt(group = "…")]` overrides it per member, and `opt_in` (which
-/// requires a `group`) hides the group until a session enables it.
-///
-/// Guards (`#[roles]`, `#[all_roles]`, `#[guard]`) and interceptors
-/// (`#[intercept]`) are supported per method and on the impl block (applied
-/// to every tool) — the same `Guard<I>`/`Interceptor` machinery as HTTP
-/// routes, prebuilt once at registration.
-///
-/// # Example
-///
-/// ```ignore
-/// #[controller]
-/// pub struct MathTools {
-///     #[inject] calc: CalcService,
-/// }
-///
-/// #[mcp_routes]
-/// impl MathTools {
-///     /// Add two numbers.
-///     #[tool(name = "add", read_only)]
-///     async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
-///         Json(self.calc.add(p.a, p.b))
-///     }
-/// }
-/// ```
-#[proc_macro_attribute]
-pub fn mcp_routes(args: TokenStream, input: TokenStream) -> TokenStream {
-    let group = match mcp_routes_parsing::parse_impl_args(args.into()) {
-        Ok(group) => group,
-        Err(err) => return err.to_compile_error().into(),
-    };
-    let item = syn::parse_macro_input!(input as syn::ItemImpl);
-    match mcp_routes_parsing::parse(item, group) {
-        Ok(def) => mcp_codegen::generate(&def).into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-/// Marker attribute declaring an MCP tool method inside `#[mcp_routes]`.
+/// Marker attribute declaring an MCP tool method inside `#[routes]`.
 ///
 /// Arguments: `name = "..."`, `title = "..."`, `description = "..."` and the
 /// annotation flags `read_only`, `destructive`, `idempotent`, `open_world`
 /// (bare or `= <bool>`). This is a no-op on its own — it is consumed by
-/// `#[mcp_routes]`.
+/// `#[routes]`.
 #[proc_macro_attribute]
 pub fn tool(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Marker attribute declaring an MCP resource method inside `#[mcp_routes]`.
+/// Marker attribute declaring an MCP resource method inside `#[routes]`.
 ///
 /// Arguments: `uri = "..."` (required), `name = "..."`, `title = "..."`,
 /// `description = "..."`, `mime_type = "..."`, plus `scopes`/`any_scopes`.
-/// This is a no-op on its own — it is consumed by `#[mcp_routes]`.
+/// This is a no-op on its own — it is consumed by `#[routes]`.
 #[proc_macro_attribute]
 pub fn resource(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Marker attribute declaring an MCP prompt method inside `#[mcp_routes]`.
+/// Marker attribute declaring an MCP prompt method inside `#[routes]`.
 ///
 /// Arguments: `name = "..."`, `title = "..."`, `description = "..."`, plus
 /// `scopes`/`any_scopes`. Prompt arguments are derived from the method's
 /// `Params<T>` schema. This is a no-op on its own — it is consumed by
-/// `#[mcp_routes]`.
+/// `#[routes]`.
 #[proc_macro_attribute]
 pub fn prompt(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
 /// Marker attribute declaring an MCP completion provider inside
-/// `#[mcp_routes]`: suggestions for a prompt argument or resource-template
+/// `#[routes]`: suggestions for a prompt argument or resource-template
 /// variable, wired with `#[prompt(complete(arg = "method"))]` /
 /// `#[resource(uri = "…", complete(var = "method"))]`.
 ///
 /// Takes no arguments. The method takes a `Completion` (plus optionally
 /// `#[inject(identity)]` and `CancelToken`) and returns
 /// `impl IntoCompletion` (`Vec<String>`, `Completions`, or a `Result` of
-/// either). This is a no-op on its own — it is consumed by `#[mcp_routes]`.
+/// either). This is a no-op on its own — it is consumed by `#[routes]`.
 #[proc_macro_attribute]
 pub fn completion(_args: TokenStream, input: TokenStream) -> TokenStream {
     input

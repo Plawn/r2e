@@ -13,7 +13,7 @@ use crate::support;
 #[controller]
 pub struct Many;
 
-#[mcp_routes]
+#[routes]
 impl Many {
     /// 1.
     #[tool]
@@ -87,7 +87,7 @@ impl Many {
 #[controller]
 pub struct Toggle;
 
-#[mcp_routes]
+#[routes]
 impl Toggle {
     /// Reveal the `extra` group (mutates the tool list mid-walk).
     #[tool]
@@ -100,7 +100,7 @@ impl Toggle {
 #[controller]
 pub struct Extra;
 
-#[mcp_routes(group = "extra", opt_in)]
+#[routes(group = "extra", opt_in)]
 impl Extra {
     /// Hidden until enabled.
     #[tool]

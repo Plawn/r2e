@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct TwoClients {}
 
-#[mcp_routes]
+#[routes]
 impl TwoClients {
     /// Broken.
     #[tool]

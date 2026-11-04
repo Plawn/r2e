@@ -123,7 +123,7 @@ pub fn mcp_service_rs(facade: bool) -> String {
     let imports = if facade {
         "use r2e::prelude::*;"
     } else {
-        "use r2e_core::prelude::{controller, mcp_routes, tool, ObjectParams};\nuse r2e_mcp::Params;"
+        "use r2e_core::prelude::{controller, routes, tool, ObjectParams};\nuse r2e_mcp::Params;"
     };
     format!(
         "{imports}\n{}",
@@ -139,7 +139,7 @@ pub struct EchoInput {
 #[controller]
 pub struct McpTools;
 
-#[mcp_routes]
+#[routes]
 impl McpTools {
     /// Echo text back to the MCP client.
     #[tool(read_only)]

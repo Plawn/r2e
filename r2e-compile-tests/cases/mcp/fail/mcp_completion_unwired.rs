@@ -5,7 +5,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct Unwired {}
 
-#[mcp_routes]
+#[routes]
 impl Unwired {
     #[completion]
     async fn orphan(&self, _c: Completion) -> Vec<String> {

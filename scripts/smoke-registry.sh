@@ -6,10 +6,10 @@
 # The workspace is always built from source, so a crate that a release left
 # behind on crates.io is invisible to every other check: r2e-core 0.7.0 shipped
 # while r2e-macros stayed at 0.6.0, and every registry build of r2e 0.7/0.8
-# failed on `#[routes]` (E0614) and `#[mcp_routes]` (missing field `meta`)
+# failed on `#[routes]` (E0614) and on its MCP tools (missing field `meta`)
 # although `cargo test --workspace` was green (#1092). This script scaffolds a
 # minimal app in a temporary directory outside the workspace — a validated
-# `#[routes]` handler and an `#[mcp_routes]` tool on the `App` trait — and
+# `#[routes]` handler and a `#[routes]` MCP tool on the `App` trait — and
 # `cargo check`s it with no `[patch]` and no path dependency. release.yml runs
 # it after publishing; run it by hand to reproduce a registry-only failure.
 #
@@ -159,7 +159,7 @@ pub struct AddOut {
 #[controller]
 pub struct MathTools;
 
-#[mcp_routes]
+#[routes]
 impl MathTools {
     /// Add two numbers.
     // The generated `ToolRoute` literal names every field of the r2e-mcp

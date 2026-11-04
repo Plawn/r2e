@@ -31,7 +31,7 @@ A struct-level identity authenticates **every** route by default; mark the publi
 ## Controller Declaration — Two Macros
 
 1. `#[controller(path = "...")]` — a transforming attribute on the struct (no `state` key — controllers are state-generic; optional `tag = "..."` sets the OpenAPI tag, which otherwise defaults to the struct name). It strips request-scoped fields from the physical core struct and generates the metadata module, the request-data extractor, the per-request façade, and the `ContextConstruct` impl (always — the core never holds request-scoped fields).
-2. `#[routes]` on the impl block — generates Axum handler functions and the state-generic `Controller<S, W>` trait impl (`S: Clone + Send + Sync + 'static + BeanLookup`; `W` carries inferred extraction markers). Route methods run on the generated façade.
+2. `#[routes]` on the impl block — generates Axum handler functions and the state-generic `Controller<S, W>` trait impl (`S: Clone + Send + Sync + 'static + BeanLookup`; `W` carries inferred extraction markers). Route methods run on the generated façade. An impl whose members are MCP members (`#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`, #1215) is an `McpService` instead: one type exposes one port, and MCP members next to HTTP routes are a compile error — see `docs/features/25-mcp.md` § One port per type.
 
 ```rust
 #[controller(path = "/users")]

@@ -1,4 +1,4 @@
-//! Per-session member lists: groups (`#[mcp_routes(group, opt_in)]`), the
+//! Per-session member lists: groups (`#[routes(group, opt_in)]`), the
 //! `McpSession` member parameter, session-private `Dynamic*` members,
 //! `McpServer::session_init`, the `McpSessions` bean, and the
 //! `list_changed` capability/notifications.
@@ -34,7 +34,7 @@ pub struct EchoIn {
 #[controller]
 pub struct Toolbox;
 
-#[mcp_routes]
+#[routes]
 impl Toolbox {
     /// Always visible.
     #[tool]
@@ -114,7 +114,7 @@ impl Toolbox {
 #[controller]
 pub struct GitTools;
 
-#[mcp_routes(group = "git", opt_in)]
+#[routes(group = "git", opt_in)]
 impl GitTools {
     /// Working tree status.
     #[tool]
@@ -132,7 +132,7 @@ impl GitTools {
 #[controller]
 pub struct AdminTools;
 
-#[mcp_routes]
+#[routes]
 impl AdminTools {
     /// Per-member group, visible by default.
     #[tool(group = "admin")]

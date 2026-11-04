@@ -10,7 +10,7 @@ use r2e::r2e_mcp::AppBuilderMcpExt;
 #[controller]
 pub struct WhoAmITools {}
 
-#[mcp_routes]
+#[routes]
 impl WhoAmITools {
     /// Who am I?
     #[tool]

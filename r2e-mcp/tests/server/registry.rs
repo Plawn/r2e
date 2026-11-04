@@ -28,7 +28,7 @@ fn stub_tool(name: &'static str) -> ToolRoute {
 #[controller]
 pub struct ScopedWithoutAuth;
 
-#[mcp_routes]
+#[routes]
 impl ScopedWithoutAuth {
     #[tool(scopes = "mcp:read")]
     async fn restricted(&self) -> String {

@@ -37,7 +37,7 @@ async fn disabled_plugin_mounts_nothing_but_registration_still_works() {
 }
 
 /// Every member may come from `McpRegistry` after boot, so an app with no
-/// `#[mcp_routes]` service still mounts the endpoint (empty lists).
+/// `#[routes]` service still mounts the endpoint (empty lists).
 #[r2e_core::test]
 async fn no_registered_service_still_mounts_the_endpoint() {
     let router = AppBuilder::new()

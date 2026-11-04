@@ -1,6 +1,6 @@
 //! The boot-time member catalog and the per-session views derived from it.
 //!
-//! [`Catalog`] is immutable: every `#[mcp_routes]` member of every registered
+//! [`Catalog`] is immutable: every `#[routes]` member of every registered
 //! service, with its group. A [`SessionView`] is what one session serves —
 //! the catalog members of its enabled groups plus its session-private
 //! members — with the wire lists precomputed. Sessions that never reshape

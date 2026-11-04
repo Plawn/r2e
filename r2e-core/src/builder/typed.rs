@@ -129,6 +129,13 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
         // Drop the bean registry since it's been consumed.
         shared.bean_registry = BeanRegistry::new();
+        // Pre-state controller registrations (routes, lifecycle queues and
+        // cores alike) do not survive this transition: the typed builder
+        // starts with empty route/hook queues below, so the per-type core
+        // store must start empty with them. Keeping it would make a type
+        // registered again here look already wired and skip its lifecycle.
+        // Both `build_state()` and `with_state()` come through here.
+        shared.endpoint_cores = Default::default();
 
         let mut builder = Self {
             shared,
@@ -538,9 +545,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     pub(crate) fn spawn_service_impl<C: ServiceComponent>(self) -> Self {
         self.try_spawn_service_impl::<C>().unwrap_or_else(|err| {
             panic!(
-                "\n=== CONFIGURATION ERRORS (service: {}) ===\n\n{}\n============================\n",
-                std::any::type_name::<C>(),
-                err
+                "{}",
+                crate::config::ConfigErrorReport::scoped(
+                    "service",
+                    &std::any::type_name::<C>(),
+                    &err
+                )
             )
         })
     }
@@ -607,6 +617,37 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .and_then(|boxed| boxed.downcast_ref::<D>())
     }
 
+    /// The builder's one runtime core for endpoint type `C`, constructing it
+    /// with `make` on first use (#1215).
+    ///
+    /// Every transport registration of a type goes through this store —
+    /// `register_controller` and `register_mcp_service` today — so a type
+    /// registered several times (a controller mounted by two prefixed
+    /// modules) has exactly one core: the first registration constructs it,
+    /// the others share the `Arc`. Per builder, not per process (dev-reload
+    /// rebuilds the builder each cycle).
+    #[doc(hidden)]
+    pub fn endpoint_core_or_insert<C>(
+        &mut self,
+        make: impl FnOnce(&T, &crate::beans::BeanContext) -> C,
+    ) -> Arc<C>
+    where
+        C: Send + Sync + 'static,
+    {
+        let id = TypeId::of::<C>();
+        if let Some(core) = self.shared.endpoint_cores.cores.get(&id) {
+            return Arc::clone(core)
+                .downcast::<C>()
+                .unwrap_or_else(|_| unreachable!("endpoint core store is keyed by TypeId"));
+        }
+        let core = Arc::new(make(&self.state, &self.bean_context));
+        self.shared
+            .endpoint_cores
+            .cores
+            .insert(id, Arc::clone(&core) as Arc<dyn Any + Send + Sync>);
+        core
+    }
+
     /// Registration backend with all witnesses explicit: the public face is
     /// [`RegisterController::register_controller`](super::RegisterController::register_controller),
     /// which infers `W` (extraction markers) and `DepIdx` (dependency indices).
@@ -655,9 +696,12 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.try_register_controller_unchecked_impl::<C, W>()
             .unwrap_or_else(|err| {
                 panic!(
-                    "\n=== CONFIGURATION ERRORS (controller: {}) ===\n\n{}\n============================\n",
-                    std::any::type_name::<C>(),
-                    err
+                    "{}",
+                    crate::config::ConfigErrorReport::scoped(
+                        "controller",
+                        &std::any::type_name::<C>(),
+                        &err
+                    )
                 )
             })
     }
@@ -716,14 +760,28 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // validation, so configuration errors retain their aggregated report.
         // State-generic controllers construct from the retained bean context
         // (by type); named-state controllers read the typed state.
+        //
+        // The core comes from the builder's per-type store. One type = one
+        // core per builder, so its lifecycle is wired exactly once — by the
+        // FIRST controller registration of the type. A type mounted
+        // several times (two prefixed modules) gets its routes on every
+        // mount, but one `fill_decos`, one `#[post_construct]`/`#[on_start]`/
+        // `#[pre_destroy]` run, one set of scheduled tasks and consumers.
+        let first = self
+            .shared
+            .endpoint_cores
+            .controllers
+            .insert(TypeId::of::<C>());
+        let core = self.endpoint_core_or_insert::<C>(C::construct);
         let state = &self.state;
-        let core = Arc::new(C::construct(state, &self.bean_context));
 
         // Fill the core's decorator slot from the resolved graph — once, right
         // after construct, before scheduled tasks are built and before any
         // consumer or direct call can fire. No-op for controllers without
         // intercepted `#[scheduled]`/`#[consumer]` methods.
-        C::fill_decos(&core, &self.bean_context);
+        if first {
+            C::fill_decos(&core, &self.bean_context);
+        }
 
         let routes = C::routes(state, Arc::clone(&core), &self.bean_context);
         self.routes.push(match prefix {
@@ -731,6 +789,21 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             None => routes,
         });
 
+        if first {
+            self.wire_controller_lifecycle::<C, W>(core);
+        }
+
+        Ok(self)
+    }
+
+    /// Queue the lifecycle and background members of a controller core:
+    /// `#[post_construct]`, `#[on_start]`, scheduled tasks, `#[pre_destroy]`
+    /// and consumers. Called once per type per builder, by its first
+    /// controller registration.
+    fn wire_controller_lifecycle<C, W>(&mut self, core: Arc<C>)
+    where
+        C: Controller<T, W>,
+    {
         // Queue this core's `#[post_construct]` hooks — awaited at startup
         // before consumer registrations (no-op future for controllers without
         // `#[post_construct]`).
@@ -782,7 +855,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         self.consumer_registrations
             .push(Box::new(move |state| C::register_consumers(state, core)));
 
-        Ok(self)
     }
 
     /// Run the bean scheduled-source hooks (queued by `#[bean]` via

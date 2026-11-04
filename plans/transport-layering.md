@@ -1,6 +1,6 @@
 # Roadmap — Transport layering: share more between `#[routes]`, `#[mcp_routes]` and `#[grpc_routes]`
 
-Status: **PROPOSED** 2026-11-03, not yet acknowledged. Written after #1210
+Status: **levels 1–2 MERGED (#132, #133), 3a SHIPPED on PR #136 then RESCOPED 2026-11-04** — one type = one port, mixed form removed before release, 3b/3c dropped, level 4 (hexagonal DX) added; see §5 and the handoff in §10. Written after #1210
 (struct-level identity on MCP services) showed that every identity feature
 lands transport by transport. Follow-up to `docs/claude/transport-adapters.md`,
 whose "wire-specific pieces, kept wire-specific" decision (§6) this plan
@@ -228,12 +228,50 @@ suites unchanged.
 **Size.** Two PRs (core + grpc, then macros + docs + migration), three to four
 sessions, plus one release PR.
 
-## 4. Level 3 — neutral operations exposed on several transports (product decision)
+## 4. Level 3 (as planned 2026-11-03) — SUPERSEDED 2026-11-04, kept as record
 
-**Status: NEXT — decided 2026-11-03, to run in a fresh session.** The user
-decided level 3 goes ahead: 3a first; 3b after its own design round; 3c only
-if the explicit registration pair reads badly in a real app. This block is
-the handoff; the rest of §4 is the design as written before levels 1–2.
+**Status: 3a DONE (Tasker #1215, PR #136, 2026-11-03) and then rescoped: the
+mixed HTTP + MCP form is removed before release; 3b and 3c are dropped.** The
+decision and the new levels are in §5–§7; the 3a handoff and record below are
+kept as written because the release recipe and the shared-code map still hold.
+
+**Status: 3a DONE (Tasker #1215, branch `task/transport-layering-l3a`,
+2026-11-03); 3b NEXT after its own design round; 3c only if the explicit
+registration pair reads badly in a real app.** The user decided level 3 goes
+ahead on 2026-11-03. The handoff block below is kept as written; the 3a
+record follows it.
+
+- *3a as shipped.* `#[routes]` accepts `#[tool]`/`#[resource]`/`#[prompt]`/
+  `#[completion]` members and `#[routes(group, opt_in)]`. A dispatcher
+  (`r2e-macros/src/attrs/routes_attr.rs`) classifies the impl: HTTP-only and
+  MCP-only go through their existing parser + codegen untouched (expand
+  diff: byte-identical on every non-reworked target, except the MCP core-store
+  contract of review fix round 1 — new `construct` fn, `__core: Arc<Self>`
+  on `routes`, `core: __core`); a mixed impl is split
+  by member, each half parsed by its own parser, then the HTTP codegen emits
+  the one façade impl and the one `EndpointDeps` (HTTP + MCP sites), the MCP
+  codegen skips its carrier (`McpRoutesImplDef::mixed_http_sites`), and
+  `validate_config` unions both site sets. Each trait keeps its witness.
+  Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
+  both transports; their decorators are built once per transport, but both
+  registrations share ONE core per type and builder (review fix round 1:
+  core store `endpoint_core_or_insert` in the builder, `McpService::construct`
+  + `routes(state, core, ctx)`, lifecycle/background members require
+  `register_controller` — checked at `build()`); `#[pre_guard]`/`#[middleware]`/
+  `#[layer]` stay HTTP-only (rejected with no HTTP route). `#[get]`+`#[tool]`
+  on one method and an MCP marker in `#[grpc_routes]` are compile errors.
+  `#[mcp_routes]` = `#[deprecated(since = "0.10.0")]` alias through the same
+  dispatcher (dropped by the 3a' rescope, see §5). `example-mcp`'s `MathTools`
+  serves an HTTP route and its tools from one impl.
+- *Learnings.* (1) Split-and-reuse beat merging the parsers: it is what made
+  byte stability free. (2) A proc-macro `#[deprecated]` fires at the
+  attribute path — an item-level `#[allow(deprecated)]` on the impl does NOT
+  silence it; a module/crate-level `#![allow(deprecated)]` does. (3) An
+  empty impl reads as HTTP under `#[routes]`, so an empty MCP service is only
+  spellable through the alias (one compile-fail case stays on it).
+  (4) `scripts/smoke-registry.sh` kept `#[mcp_routes]` until the alias was
+  dropped (it builds against the published crates, which predate MCP
+  members in `#[routes]`; `--patch` is the pre-release check).
 
 - *Prerequisites.* #132 (level 1) merged; #133 (level 2) merged; release PR
   cut with `scripts/bump-version.sh` (`r2e-grpc breaking`, `r2e-security
@@ -284,7 +322,14 @@ the handoff; the rest of §4 is the design as written before levels 1–2.
   on HTTP and on gRPC (metadata). `#[anonymous]` stays disallowed on gRPC
   (`Option<I>` instead). Level-1 review follow-ups in §2 (hidden decorator
   item-name collision; `Self` in HTTP decorator expressions). `#[mcp_routes]`
-  deliberate drifts in `r2e-macros/CHANGELOG.md` (#1212).
+  deliberate drifts in `r2e-macros/CHANGELOG.md` (#1212). Wire the builder's
+  per-type core store (`endpoint_core_or_insert`) to `register_grpc_service`
+  next, so a type served on HTTP and gRPC shares one core as HTTP + MCP do
+  (#1215 fix round 1 left gRPC constructing its own). Pre-state
+  `register_controller` (hand-written impls on `AppBuilder<NoState>`) is
+  silently discarded at `build_state()` — pre-existing; the per-type core
+  store is reset with it (#1215 fix round 3); consider a compile-time
+  rejection.
 - *Exit criteria for 3a (to confirm in the ticket).* One impl carrying
   `#[get]`/`#[post]` and `#[tool]`/`#[resource]`/`#[prompt]` members
   compiles and registers on both transports with one identity/guard
@@ -342,22 +387,263 @@ candidate). Until then: roadmap only.
 **Size.** 3a: one PR after levels 1–2, two sessions. 3b: a design round
 first (`plans/`), then two PRs. 3c: not estimated.
 
-## 5. Order and dependencies
+## 5. Decision 2026-11-04 — one type = one port; unify the generator, not the syntax
+
+Taken after 3a shipped on PR #136 and the call/dependency trees were compared
+(old vs new) in the review session. The user's end goal is **hexagonal**:
+every inbound port is its own adapter over the same beans —
 
 ```
-Level 1 (macros tech debt)  →  Level 2 (one head, one identity contract)  →  3a  →  3b  →  3c
-      non-breaking                 grpc/security/macros minor, core patch      façade minor   additive
+http    → #[controller] + #[routes]      → #[inject] services
+mcp     → #[controller] + #[routes]      → #[inject] services   (its own type)
+grpc    → #[controller] + #[grpc_routes] → #[inject] services
+events  → #[consumer] on a bean          → #[inject] services
 ```
 
-Level 1 is worth doing alone. Level 2 depends on level 1 step 3 (the shared
-identity emitter is what gRPC plugs into). 3a depends on both. 3b depends
-on 3a only for the single-impl ergonomics; it could be prototyped on
-`#[routes]` + `#[mcp_routes]` separately but would then duplicate the
-projection attribute parsing — don't.
+— with Rust's compile-time safety end to end (DI, identity, roles, guard
+deps, error projection) and the least code per adapter. "Unify" meant **the
+code behind port generation**, not letting one type mix ports.
 
-## 6. Not in this plan
+- **One type = one port.** Mixing `#[tool]`/`#[resource]`/`#[prompt]`/
+  `#[completion]` with HTTP route markers in one impl is a **compile error**
+  that names the hexagonal page. The mixed HTTP + MCP form shipped by 3a is
+  **removed before release** (same branch, same PR, squash-merged: it never
+  reaches a changelog).
+- **3b dropped.** A neutral member signature contradicts the doctrine: each
+  port has its native types by construction (`Json`/`Path` vs
+  `Params`/`ToolCall` vs prost), and those types carry schema, content type
+  and streaming semantics that a neutral form would erase.
+- **3c dropped.** Single registration only made sense for multi-port types.
+- **No deprecated alias (user decision 2026-11-04).** `#[mcp_routes]` is
+  removed outright with a migration note in the changelogs (rename to
+  `#[routes]`): R2E apps are mostly generated by agents, which read the
+  current docs, so an alias is code to maintain for nobody. An MCP service
+  with no member is therefore not expressible (an empty impl reads as HTTP).
+- **Kept from 3a** (value independent of mixing): `#[routes]` infers the port
+  from its members (`#[mcp_routes]` removed, see above);
+  the builder's per-type core store (`endpoint_core_or_insert`) — a
+  controller mounted twice (prefixed modules) shares one core and one
+  lifecycle; `McpService::{construct, routes(state, core, ctx)}` — the same
+  shape as `Controller`, which is what 3b' builds on; the identity path and
+  `DepsFold`; #1214.
+- **Cost of the mixed form, measured on the branch, for the record:** 62
+  occurrences of mixed plumbing (`MixedMcp`, `mixed_http_sites`,
+  `facade_methods`, `site_exprs`, `controller_hosted_markers`, the three
+  marker-classification lists) across 11 `r2e-macros` files; 15
+  occurrences of the build-time fail-fast (`NEEDS_CONTROLLER_REGISTRATION`,
+  `require_controller_registration`, `check_controller_registrations`)
+  across 6 files in `r2e-core`/`r2e-mcp`/`r2e-macros`; `routes_attr.rs` 217
+  lines where ~40 do the port dispatch; seven dedicated tests; `example-mcp`
+  as showcase. Per-call cost nil. The recurring cost was the three
+  classification lists (every new `#[routes]` attribute had to be filed),
+  one `EndpointDeps` carrier spanning both ports (inference errors reported
+  on every site), a runtime check that existed only because registration is
+  split across two crates, decorator instances per registration on a shared
+  core, and a showcase that contradicted the doctrine.
 
+## 6. Level 3 rewritten — one port per type, one generation pipeline
+
+**3a' — remove the mixed form** (pre-release, on `task/transport-layering-l3a`,
+Tasker #1215 rescoped). Handoff in §10.
+
+**3b' — parse once, one pipeline** (Tasker #1216; internal tech debt,
+non-breaking, after the release). The generator is unified at the code level: one
+`Vec<MemberDef>` per impl (already parsed by `parsing/member.rs`), one
+codegen pipeline driven by a port description inside `r2e-macros` (rules,
+member emission, service-impl emission), and three implementations —
+HTTP, MCP, gRPC. gRPC joins the pipeline **keeping `#[grpc_routes]` as its
+attribute** (the proto decides the port; nothing to infer) and keeps user
+methods inside a macro-generated trait impl carrying the associated types,
+which retires the `Self::<Assoc>` rewrite (`substitute_self_assoc`). The
+dispatcher in `attrs/routes_attr.rs` shrinks to port detection + the
+mixed-kinds error. Exit criteria: `cargo expand` byte-identical on every
+HTTP and MCP target; no `.stderr` re-blessed without a stated reason; the
+three `*_routes_parsing.rs` files no longer own a member loop. Measured
+starting point (branch, lines): `routes_parsing` 835, `mcp_routes_parsing`
+927, `grpc_routes_parsing` 529, `handlers` 1862, `mcp_codegen/*` 1262,
+`grpc_codegen/*` 802. Evaluate, without promising, whether the per-trait
+witnesses `W` can be collapsed once the pipeline is single.
+
+**3c' — runtime hygiene** (Tasker #1217; the carried follow-ups, grouped;
+patch or `Changed` entries unless noted): wire the per-type core store to
+`register_grpc_service`; reject pre-state `register_controller` at compile
+time instead of discarding it silently at `build_state()`; restore
+`www-authenticate` on validator failure (HTTP and gRPC metadata —
+`AuthenticatedUser`'s rejection is `HttpError`); hidden decorator item
+names `<Ctrl>_<fn>` can collide across modules; `Self` in HTTP decorator
+expressions; remove the `GrpcIdentity` stub at the minor after the release
+(the `#[mcp_routes]` alias was never shipped: removed outright on #136).
+
+## 7. Level 4 — hexagonal DX (the end goal)
+
+Mostly projection, one example and documentation; no macro work.
+
+1. **One domain error projects to every port** (Tasker #1218). `#[derive(ApiError)]` already
+   projects to HTTP and, via `From<HttpError> for McpError` /
+   `From<Rejection> for McpError`, to MCP. gRPC has `rejection_to_status`
+   only: add `From<HttpError> for tonic::Status` (status mapping + message
+   policy as `rejection_to_status`), so a service's `Result<T, AppError>`
+   compiles on all three adapters without glue.
+2. **Reference example + `llm/hexagonal.md`** (Tasker #1219, with item 4). `example-app` restructured as
+   `domain/`, `ports/`, `adapters/{http,mcp,grpc,events}`; one llm topic
+   routed from `llm.txt` (slug added to `TOPICS` in
+   `r2e-cli/src/commands/llm_docs.rs`) and one book chapter. Outbound ports
+   as traits: `Arc<dyn Port>` provided as a bean, swapped with
+   `override_bean` in tests — documented, nothing to build.
+3. **Transport-leak guard** (Tasker #1220). An `r2e doctor` rule (heuristic, say so) that
+   flags `r2e::http`/`Json`/`ToolCall`/`tonic` imports under `domain/` and
+   `services/`. The one point of the doctrine the compiler cannot hold.
+4. **Inbound adapter catalogue** (in #1219). HTTP, MCP, gRPC, `#[consumer]`,
+   `#[scheduled]`: what each injects (identity, request scope, config) and
+   what it projects (errors, responses). A DB queue / outbox adapter is a
+   separate ticket, only on a real need.
+
+## 8. Order and dependencies
+
+```
+3a' remove mixed  →  ONE release (L1 + L2 + 3a' + #1214)  →  3b' pipeline  →  3c' hygiene
+                                                            ↘  level 4 (independent of 3b'; may start right after the release)
+```
+
+The release is the one planned in §4's handoff (r2e-grpc / r2e-security /
+r2e-mcp breaking; r2e-macros breaking `--no-propagate` + patch re-pins;
+façade r2e 0.11.0). Nothing from 3b', 3c' or level 4 waits on it except the
+`GrpcIdentity` stub removal, which needs the deprecation window (the
+`#[mcp_routes]` alias was never shipped: removed outright on #136, §5).
+
+## 9. Not in this plan
+
+- A neutral member signature across ports (3b) and a single
+  `register_endpoint` (3c): dropped 2026-11-04, see §5.
+- One type exposed on two ports: removed 2026-11-04. Two types over the same
+  beans is the supported shape.
 - A second HTTP backend or a `Router` newtype (`plans/axum-containment-roadmap.md` §5.3c stays deferred).
 - Per-transport guard traits (resolved the other way 2026-08-27, see transport-adapters invariants).
 - Generating protos from Rust types for gRPC.
 - The `#[scheduled]` adapter: timer-driven, no request head, no identity; untouched.
+- A DB-queue / outbox inbound adapter without a concrete request.
+
+## 10. Handoff — 3a' then the release (fresh session)
+
+Read this section, `docs/claude/transport-adapters.md`,
+`docs/claude/testing-conventions.md` and the memory file
+`project_transport_layering.md` first. Check `git log master..task/transport-layering-l3a`
+and the four `[Unreleased]` sections before touching anything — do not
+assume the branch is where this text says.
+
+**Ground rules (unchanged from #1212/#1213/#1215).** One ticket (#1215,
+rescoped), the existing branch `task/transport-layering-l3a` off `master`,
+**no worktree**, implementation by an Opus subagent, builds serialized
+(shared target-dir), **never `cargo fmt --all`**, no version change in the
+feature PR, no Claude trailers on commits and no footer on the PR, the user
+merges (squash). Full gate: `cargo test -p r2e-macros -p r2e-compile-tests
+-p r2e-mcp -p r2e-grpc -p r2e-core`, `example-app`/`example-mcp`/
+`example-mcp-oauth`/`example-grpc`, `llm-doctests`, `cargo clippy --workspace
+--tests -D warnings`, `scripts/check-versions.sh`, `check-dep-boundary.sh`,
+`check-source-boundary.sh`, `check-llm-docs.sh --update`; then the codex
+loop (`codex exec -m gpt-6-astra --sandbox workspace-write
+--skip-git-repo-check "$(cat prompt)" < /dev/null`, unsandboxed, background,
+verify the `model:` header) to `VERDICT: MERGE`.
+
+**Step 1 — remove the mixed form (macros).**
+
+- `r2e-macros/src/attrs/routes_attr.rs`: the mixed branch becomes a compile
+  error on the first offending member: *"`#[tool]`, `#[resource]`,
+  `#[prompt]` and `#[completion]` cannot share an impl with HTTP routes: one
+  type exposes one port. Move the MCP members to their own `#[controller]`
+  type over the same beans (docs/features/25-mcp.md § One port per type)."*
+  Keep: HTTP-only → `routes_parsing`, MCP-only → `mcp_routes_parsing`, the
+  "empty impl reads as HTTP" rule. `#[mcp_routes]` is removed outright
+  (user decision, §5): an empty MCP service is no longer spellable — accepted.
+- Delete `MixedMcp`, `mixed_http_sites`, `facade_methods`, `site_exprs`,
+  `controller_hosted_markers`, `HTTP_SIDE_MARKERS`,
+  `CONTROLLER_HOSTED_MARKERS` and every branch keyed on them (11 files:
+  `attrs/routes_attr.rs`, `codegen/{controller_impl,decorators,registration,wrapping}.rs`,
+  `mcp_codegen/{mod,service_impl}.rs`, `grpc_codegen/{mod,service_impl}.rs`,
+  `parsing/{routes_parsing,mcp_routes_parsing}.rs`). Keep whatever
+  `HTTP_ONLY_IMPL_DECORATORS` still serves: an HTTP-only impl decorator
+  (`#[pre_guard]`/`#[middleware]`/`#[layer]`) on an MCP impl must still be
+  rejected (`mcp_impl_middleware_not_supported` stays).
+- Delete `McpService::NEEDS_CONTROLLER_REGISTRATION`,
+  `AppBuilder::require_controller_registration`,
+  `EndpointCores::needs_controller`, `check_controller_registrations`
+  (`r2e-core/src/builder/{mod,typed}.rs`, `r2e-mcp/src/{lib,service}.rs`,
+  `r2e-macros/src/mcp_codegen/service_impl.rs`). Keep
+  `EndpointCores::{cores, controllers}`, `endpoint_core_or_insert`, the
+  `from_pre` store reset, and `McpService::{construct, routes(state, core, ctx)}`
+  (decision: same shape as `Controller`; 3b' relies on one shape per port).
+- Expand-diff gate: HTTP-only and MCP-only targets byte-identical to the
+  current branch head.
+
+**Step 2 — tests.** Delete the HTTP + MCP cases of
+`r2e-mcp/tests/server/single_core.rs` (keep the HTTP twice-mounted ones —
+they pin the shared-core `Changed` entry; move them to `r2e-core/tests/` if
+they no longer need `r2e-mcp`, and drop the `r2e-events` dev-dep if nothing
+else uses it). Compile tests: delete `mcp_mixed_missing_bean`,
+`mcp_mixed_missing_guard_dep`, `mcp_tool_anonymous_mixed`, pass cases
+`mcp_mixed_impl_middleware` and `mcp_mixed_struct_identity`; replace
+`mcp_member_also_http_route` by `mcp_member_in_http_impl` (a `#[tool]` next
+to a `#[get]` member) pinning the new error text; check
+`mcp_uninferable_every_site` and `grpc_mcp_member_rejected` still mean what
+they say. Add nothing else: the MCP-only and HTTP-only suites already cover
+the kept behaviour.
+
+**Step 3 — examples.** `examples/example-mcp/src/app.rs` back to two
+adapters over one service: `CalcController` (`#[controller(path =
+"/api/calc")] #[routes]`, HTTP) and `MathTools` (`#[controller] #[routes]`,
+`#[tool]`s only) both injecting `CalcService`; `ScientificTools` unchanged.
+This is the hexagonal shape in miniature — say so in the file header.
+Check `examples/example-mcp-oauth` for the same pattern.
+
+**Step 4 — docs, so the mixed form never existed.**
+`docs/features/25-mcp.md` (intro sentence, the "one impl may mix" clause;
+the mixed section around the second `MathTools` listing becomes **"One port
+per type"**: the compile error, the two-types shape, why);
+`docs/claude/transport-adapters.md` (mentions of `mixed_http_sites` and
+"a mixed impl is both a `Controller` and an `McpService`");
+`docs/claude/guards-interceptors.md` (decorators "once per registration":
+keep the per-mount HTTP statement, drop the MCP clause);
+`r2e-macros/src/lib.rs` rustdoc of `#[routes]` and `#[mcp_routes]`;
+`llm/mcp-server.md`, `llm/interceptors.md` (the "MCP members of a mixed
+impl" wording), `llm/grpc.md` if it leans on the mixed form, then
+`scripts/check-llm-docs.sh --update` and commit `llm-full.txt`.
+`llm/core-concepts.md` "mixed public/protected controllers" is about
+parameter identity — leave it.
+
+**Step 5 — changelogs, rewritten under `[Unreleased]` (no "added then
+removed" trace).** `r2e-macros` Breaking #1215: `#[routes]` accepts MCP
+members, infers the port, `#[mcp_routes]` removed with a migration note,
+MCP markers next to HTTP routes are a compile error. `r2e-mcp` Breaking: services declared
+with `#[routes]`; `McpService::{construct, routes(state, core, ctx)}`;
+`Send + Sync`; members run on the façade (`Self` rules); witness starts with
+`((),)`; **drop** the shared-core-with-HTTP and fail-fast entries.
+`r2e-core`: keep Added `endpoint_core_or_insert` and the `Changed` entry for
+a twice-registered controller (HTTP-only fact; Changed vs Breaking stays
+the user's call at release); **drop** `require_controller_registration`.
+`r2e-grpc` untouched. Then update Tasker #1215 (description + note) and
+rewrite PR #136's title and body (no footer).
+
+**Step 6 — the release**, once the user has squash-merged #136. Levels 1–2
+were deliberately left unreleased so that 3a' ships in the same release
+(one breaking cycle on r2e-macros / r2e-mcp / r2e instead of two — user
+decision 2026-11-03; the docs-only handoff PR #135 that recorded it was
+closed unmerged, superseded by this section). The recipe was tried on
+2026-11-03 as release PR #134, closed unmerged on purpose (branch
+`release/r2e-0.11.0` kept): propagated `--dry-run` first, then
+`scripts/bump-version.sh --no-propagate` **unsandboxed** with the explicit
+list — `r2e-grpc`, `r2e-security`, `r2e-mcp` breaking; `r2e-macros` breaking
+`--no-propagate` + patch re-pins `r2e-core`/`r2e-executor`/`r2e-openapi`;
+`r2e-oidc`/`r2e-test` carried with hand-written `[Unreleased]` entries
+(wording in commit `5e66ec7d`); façade `r2e` 0.11.0 + `r2e-cli`. With
+`--no-propagate` every carried crate is listed explicitly and counts as
+*requested*, and the script refuses a requested crate with an empty
+`[Unreleased]`: write the hand-written entries (r2e-oidc, r2e-test, and the
+"Re-pins `r2e-macros` …" lines of r2e-core / r2e-executor / r2e-openapi)
+before running it. `scripts/smoke-registry.sh` already spells `#[routes]`:
+its registry mode only passes once the release is published. Open
+`release: …` (no footer); the user merges; run
+`scripts/smoke-registry.sh`. Record the outcome in
+`project_release_pipeline` and `project_transport_layering`.
+
+**Then** 3b' (#1216), 3c' (#1217) and level 4 (#1218 → #1219 → #1220) are
+their own tickets and branches — not on this branch.

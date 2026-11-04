@@ -6,7 +6,7 @@ use r2e::prelude::*;
 #[controller]
 pub struct UrilessTools {}
 
-#[mcp_routes]
+#[routes]
 impl UrilessTools {
     /// Broken: no `uri`.
     #[resource]

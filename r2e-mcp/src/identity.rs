@@ -1,4 +1,4 @@
-//! The endpoint-level request scope of `#[mcp_routes]` services: the
+//! The endpoint-level request scope of `#[routes]` services: the
 //! struct's `#[inject(identity)]` / `#[inject(request)]` fields, extracted
 //! ONCE per HTTP request by a tower layer on the MCP endpoint — the MCP
 //! counterpart of the extraction an HTTP handler runs before it binds the
@@ -6,7 +6,7 @@
 //!
 //! The contract is the HTTP one, unchanged: `#[controller]` generates the
 //! request-data type (`__R2eRequestData_<Name>`, one `FromRequestPartsVia`
-//! bound per field) and the façade; `#[mcp_routes]` hands the layer the
+//! bound per field) and the façade; `#[routes]` hands the layer the
 //! `RequestData::extract` call as a [`RequestScope`] closure, and every
 //! member binds its façade from the data the layer deposited in the request
 //! extensions ([`request_data`]). A required identity on a request that

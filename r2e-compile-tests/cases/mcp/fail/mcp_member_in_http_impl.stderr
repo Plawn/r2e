@@ -1,0 +1,5 @@
+error: `#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` cannot share an impl with HTTP routes: one type exposes one port. Move the MCP members to their own `#[controller]` type over the same beans (docs/features/25-mcp.md § One port per type).
+  --> cases/mcp/fail/mcp_member_in_http_impl.rs:17:5
+   |
+17 |     #[tool]
+   |     ^^^^^^^

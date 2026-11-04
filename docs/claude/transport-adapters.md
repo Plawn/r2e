@@ -15,7 +15,7 @@ the decorator machinery (`DecoratorSpec`, `Interceptor<R>`,
 `AllSatisfied`). A transport adapter supplies only what is genuinely
 wire-specific: request extraction, error mapping to the wire's failure
 type, routing syntax, and the serve loop. HTTP (`#[routes]`), gRPC
-(`#[grpc_routes]`), MCP (`#[mcp_routes]`, `r2e-mcp`), and scheduled tasks
+(`#[grpc_routes]`), MCP (`#[routes]` MCP members, `r2e-mcp`), and scheduled tasks
 (`#[scheduled]`, timer-driven) are the existing adapters — use them as
 references.
 
@@ -35,9 +35,18 @@ references.
    `#[controller]` unchanged — that macro owns `#[inject]`/`#[config]` fields
    and emits `ContextConstruct`.
 
-2. **A wrapper struct holding the shared core** — build the core ONCE at
-   registration via `ContextConstruct::from_context(ctx)`, hold it in an
-   `Arc`, clone the `Arc` per call. Never re-resolve beans per request. A
+2. **A wrapper struct holding the shared core** — never construct the core
+   yourself: take it from the builder's per-type core store,
+   `AppBuilder::endpoint_core_or_insert::<C>(make)` (`#[doc(hidden)]`,
+   `r2e-core/src/builder/typed.rs`), so a type registered more than once
+   (two prefixed module mounts) has ONE core — the one its first
+   `register_controller` ran `#[post_construct]` on and filled the
+   `#[consumer]`/`#[scheduled]`/`#[async_exec]` slots of (#1215).
+   MCP: the trait carries `construct(state, ctx)` (the `make`, emitting
+   `ContextConstruct::from_context(ctx)`) and `routes(state, core: Arc<Self>,
+   ctx)` receives the stored core. gRPC does not use the
+   store yet (open follow-up in `plans/transport-layering.md` §4). Hold the
+   core in an `Arc`, clone the `Arc` per call. Never re-resolve beans per request. A
    member that runs on the struct's request scope binds the façade through
    `codegen/identity_path.rs`: `bind_facade(names, core, arrival)` emits
    `let __data = …; let __facade = __r2e_meta_<Name>::bind_request(core,
@@ -79,8 +88,13 @@ references.
    `tuple()` (`(__R2eMd, __R2eMp<Fn>, …)`) and the marker/identity
    predicates — `Controller<S, W>`, `McpService<S, W>` and (since #1213)
    `GrpcService<S, W>` all use it.
-   Constraint: one type = one `EndpointDeps` impl, so a struct cannot be
-   two endpoint kinds at once — share logic through a bean instead.
+   One type = one port = one `EndpointDeps` impl (#1215): `#[routes]`
+   (`attrs/routes_attr.rs`) infers the port from the members — HTTP routes
+   go to the HTTP parser/codegen, MCP members to the MCP one — and MCP
+   members next to HTTP routes are a compile error on the first MCP marker.
+   A new transport gets its own adapter type, never a second carrier on an
+   existing one. gRPC stays a separate macro (`#[grpc_routes]` rejects MCP
+   markers).
 
 5. **A registration extension trait with the compile check** — mirror
    `AppBuilderGrpcExt` (`r2e-grpc/src/lib.rs`): inference witnesses on the
@@ -112,18 +126,18 @@ references.
      through `RequestData<S>` / `FromRequestPartsVia<S, M>` against the
      state, and the validator bean is checked through the witness. MCP rides HTTP, so it reuses the
      **HTTP contract** (#1175): `McpService<T, W>` is state-generic like
-     `Controller<T, W>`, `#[mcp_routes]` emits one
+     `Controller<T, W>`, `#[routes]` emits one
      `FromRequestPartsVia<S, M>` bound per member with an
      `#[inject(identity)]` parameter and folds the markers into the witness
      `W`, which `AppBuilderMcpExt<T, W, DepIdx>` infers at
      `.register_mcp_service::<Svc>()` (missing bean = compile error there).
-     `McpService::routes(state, ctx)` hands the state to every member's
+     `McpService::routes(state, core, ctx)` hands the state to every member's
      extractor, run on an owned copy of the transport request's parts. The
      `mcp.auth` principal is just another extractor (`McpPrincipal`, marker
      `ViaMcpAuth`, `r2e-mcp/src/auth/extract.rs`) — no MCP-only identity
      path. Struct-level request scope (#1210) reuses the `#[controller]`
      items unchanged (`__R2eRequestData_<Name>::extract`, `bind_request`,
-     façade, `guard_identity`): `#[mcp_routes]` only moves the call point —
+     façade, `guard_identity`): the MCP codegen only moves the call point —
      `McpRoutes::request_scope` is a `RequestScope` closure the `McpServer`
      plugin collects into one `McpIdentityLayer` on `/mcp` (runs every
      service's extraction once per HTTP request, deposits the data in the
@@ -156,6 +170,8 @@ references.
 - Interceptors (`Interceptor<R>`) are transport-neutral — `Logged`, `Timed`
   and user interceptors must work on every transport unchanged.
 - Decorators are built at registration, never per request/call.
+- One controller core per type per builder: every transport registration
+  goes through `endpoint_core_or_insert` (MCP and HTTP today; gRPC pending).
 - Every registration path compile-checks `EndpointDeps` via `AllSatisfied`
   (or `ModuleDepsSatisfied` for module scope).
 - Guards: the rule of three was met by MCP (third wire transport,
@@ -174,6 +190,27 @@ references.
   is no longer an option to reach for — build a `GuardContext` instead.
 
 ## Decisions log
+
+- **2026-11-03 (#1215, transport-layering level 3a) — one type = one
+  port.** `#[routes]` accepts MCP members (`#[tool]`/`#[resource]`/
+  `#[prompt]`/`#[completion]`) and infers the port from them: HTTP routes →
+  `Controller`, MCP members → `McpService` (including `#[routes(group,
+  opt_in)]`); an empty impl reads as HTTP. MCP members next to HTTP routes
+  are a compile error naming `docs/features/25-mcp.md` § One port per type:
+  each inbound port is its own adapter over shared beans (hexagonal), with
+  its port's native types and its own decorators. `#[mcp_routes]` is
+  removed outright (rename to `#[routes]`; no deprecated alias — the macro
+  surface is kept minimal because agents generate most apps), so an MCP
+  service with no member is not expressible. Kept from the level-3a work: the builder's per-type core store
+  (`AppBuilder::endpoint_core_or_insert`, `EndpointCores`) — a type
+  registered several times (two prefixed module mounts) keeps ONE core whose
+  lifecycle is wired by its first controller registration only, and the
+  store is reset at `build_state()`/`with_state()` with the pre-state
+  controller registrations it would describe; and the MCP codegen contract
+  `McpService::construct(state, ctx)` + `routes(state, core: Arc<Self>,
+  ctx)`. The HTTP-only expansion is byte-stable; the MCP-only expansion
+  changes by exactly that contract (a `construct` fn, the `__core` parameter
+  and `core: __core`).
 
 - **2026-11-03 (#1213, transport-layering level 2) — reverses §6 bullet 1
   for gRPC.** "Identity extraction stays wire-specific" was right for a wire

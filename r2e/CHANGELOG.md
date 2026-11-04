@@ -17,6 +17,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- `#[routes]` serves MCP members (#1215, via `r2e-macros` / `r2e-mcp`): an
+  impl whose methods carry `#[tool]` / `#[resource]` / `#[prompt]` /
+  `#[completion]` is an `McpService`. One type exposes one port — an MCP
+  member next to an HTTP route in the same impl is a compile error; write one
+  adapter type per port over the shared beans. `#[mcp_routes]` is removed
+  (no alias): rename it to `#[routes]`, same arguments and members. See
+  `docs/features/25-mcp.md` § One port per type.
+
 - gRPC identity (#1213, via `r2e-grpc` / `r2e-security` / `r2e-macros`):
   `GrpcIdentity` and `JwtIdentitySpec` are removed, gRPC `#[inject(identity)]`
   uses the HTTP extractor contract, `GrpcService` is `GrpcService<S, W>`, and

@@ -224,7 +224,7 @@ pub trait RequestData<S>: Sized {
 /// bound names `__M`, so it is not a *trivial* bound: a controller whose
 /// request-scoped field is not `Clone` still compiles — the impl just never
 /// applies — and only a consumer that needs the data cloned (today
-/// `#[mcp_routes]`, which extracts once per HTTP request and hands each
+/// `#[routes]`, which extracts once per HTTP request and hands each
 /// JSON-RPC member a copy) sees the missing `Clone`, at its registration
 /// site. A direct `where <field type>: Clone` would be rejected by rustc at
 /// the `#[controller]` site for every HTTP controller with a non-`Clone`

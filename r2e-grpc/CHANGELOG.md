@@ -51,6 +51,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 - Struct-level `#[inject(identity)]` / `#[inject(request)]` fields and server
   streaming rpcs on `#[grpc_routes]` services (see `r2e-macros`).
 
+### Changed
+
+- The `register_grpc_service` configuration-error panic renders through
+  `r2e_core::config::ConfigErrorReport` (#1214); the message is
+  byte-identical.
+
 ## [0.9.0] - 2026-10-31
 
 ### Changed

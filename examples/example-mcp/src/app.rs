@@ -4,6 +4,12 @@
 // tests use `#[r2e::test(app = McpApp)]`); `app_main!` includes the same file
 // directly in the binary tip crate for production and real Subsecond
 // hot-patching.
+//
+// The hexagonal shape in miniature: one domain service (`CalcService`) and
+// two inbound adapters over it — `CalcController` (the HTTP port) and
+// `MathTools` (the MCP port). One type exposes one port; each adapter keeps
+// its port's native types (`Path`/`Json` vs `Params`/`ToolCall`) and no
+// logic of its own beyond translating to the service.
 
 use std::sync::{Arc, Mutex};
 
@@ -14,10 +20,8 @@ use serde::{Deserialize, Serialize};
 
 // ── Shared domain service ──────────────────────────────────────────────
 //
-// ONE bean serves BOTH transports. `EndpointDeps` is one-per-type, so a
-// single struct cannot carry `#[routes]` and `#[mcp_routes]` at once — the
-// pattern is a shared bean plus two thin adapters (`MathTools` for MCP,
-// `CalcController` for HTTP below).
+// ONE bean serves BOTH ports, through two thin adapters: `MathTools` (MCP)
+// and `CalcController` (HTTP) below.
 
 #[derive(Clone, Default)]
 pub struct CalcService;
@@ -137,7 +141,7 @@ pub struct CalcResult {
     pub value: f64,
 }
 
-// ── MCP service ────────────────────────────────────────────────────────
+// ── MCP adapter ────────────────────────────────────────────────────────
 
 #[controller]
 pub struct MathTools {
@@ -147,7 +151,7 @@ pub struct MathTools {
     log: CallLog,
 }
 
-#[mcp_routes]
+#[routes]
 #[intercept(Logged::info())]
 impl MathTools {
     /// Add two numbers and return their sum.
@@ -244,7 +248,7 @@ impl MathTools {
 #[controller]
 pub struct ScientificTools;
 
-#[mcp_routes(group = "scientific", opt_in)]
+#[routes(group = "scientific", opt_in)]
 impl ScientificTools {
     /// Square root of `x`.
     #[tool(read_only, idempotent)]
@@ -256,7 +260,7 @@ impl ScientificTools {
     }
 }
 
-// ── HTTP controller over the same bean ─────────────────────────────────
+// ── HTTP adapter over the same bean ────────────────────────────────────
 
 #[controller(path = "/api/calc")]
 pub struct CalcController {

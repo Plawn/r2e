@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) server support for R2E.
 //!
-//! Exposes `#[tool]` methods on `#[mcp_routes]` types over MCP's streamable
+//! Exposes `#[tool]` methods on `#[routes]` types over MCP's streamable
 //! HTTP transport, with the same DX as HTTP controllers: `#[inject]`,
 //! `#[config]`, guards (`#[roles]`/`#[guard]` — the SAME `Guard<I>` machinery
 //! HTTP uses), interceptors, typed config, graceful shutdown, sharded
@@ -19,7 +19,7 @@
 //!     #[inject] calc: CalcService,
 //! }
 //!
-//! #[mcp_routes]
+//! #[routes]
 //! impl MathTools {
 //!     /// Add two numbers.
 //!     #[tool(name = "add", read_only)]
@@ -137,7 +137,7 @@ pub use schemars;
 /// The MCP analog of `register_controller` for HTTP — including the
 /// compile-time dependency check: the service's [`EndpointDeps`] (its core's
 /// `#[inject]` fields plus every `#[intercept(...)]`/`#[guard(...)]` spec's
-/// deps, emitted by `#[mcp_routes]`) are checked against the application
+/// deps, emitted by `#[routes]`) are checked against the application
 /// state via `AllSatisfied`, so a missing bean is a compile error at this
 /// call site.
 ///
@@ -166,7 +166,7 @@ where
     /// non-panicking alternative.
     fn register_mcp_service<S>(self) -> Self
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>;
 
     /// Register an MCP service, returning config-validation errors instead
@@ -179,7 +179,7 @@ where
     /// returned and the builder is consumed.
     fn try_register_mcp_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>;
 }
 
@@ -189,21 +189,26 @@ where
 {
     fn register_mcp_service<S>(self) -> Self
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         self.try_register_mcp_service::<S>().unwrap_or_else(|err| {
             panic!(
-                "\n=== CONFIGURATION ERRORS (mcp service: {}) ===\n\n{}\n============================\n",
-                std::any::type_name::<S>(),
-                err
+                "{}",
+                r2e_core::config::ConfigErrorReport::scoped(
+                    "mcp service",
+                    &std::any::type_name::<S>(),
+                    &err
+                )
             )
         })
     }
 
-    fn try_register_mcp_service<S>(self) -> Result<Self, r2e_core::config::ConfigValidationError>
+    fn try_register_mcp_service<S>(
+        mut self,
+    ) -> Result<Self, r2e_core::config::ConfigValidationError>
     where
-        S: McpService<T, W> + EndpointDeps,
+        S: McpService<T, W> + EndpointDeps + Send + Sync,
         S::Deps: AllSatisfied<T, DepIdx>,
     {
         // Aggregated config validation, before anything is built — the MCP
@@ -223,9 +228,11 @@ where
             )
             .clone();
 
+        // The builder's one core for `S` (per-type core store).
+        let core = self.endpoint_core_or_insert::<S>(S::construct);
         registry.add_service(
             S::service_name(),
-            S::routes(self.state(), self.bean_context()),
+            S::routes(self.state(), core, self.bean_context()),
         );
 
         tracing::debug!(service = S::service_name(), "Registered MCP service");

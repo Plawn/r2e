@@ -92,7 +92,8 @@ Semantics:
   rejected as dead configuration.
 - gRPC: `#[grpc_routes]` impl blocks accept `#[intercept]` only; the guard
   family there is a compile error. `#[middleware]`/`#[layer]` are rejected on
-  `#[grpc_routes]` and `#[mcp_routes]` (method and impl level).
+  `#[grpc_routes]` and on MCP members (`#[tool]` & co), at method and impl
+  level.
 
 ### Tower layers: `#[middleware]` / `#[layer]`
 

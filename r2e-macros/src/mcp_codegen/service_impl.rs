@@ -174,15 +174,21 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
                 __errors
             }
 
+            fn construct(
+                _state: &__R2eS,
+                __ctx: &#krate::beans::BeanContext,
+            ) -> Self {
+                <#controller_name as #krate::ContextConstruct>::from_context(__ctx)
+            }
+
             fn routes(
                 __state: &__R2eS,
+                __core: ::std::sync::Arc<Self>,
                 __ctx: &::std::sync::Arc<#krate::beans::BeanContext>,
             ) -> #mcp::__macro_support::McpRoutes {
                 #state_share
                 let __wrapper = ::std::sync::Arc::new(#wrapper_name {
-                    core: ::std::sync::Arc::new(
-                        <#controller_name as #krate::ContextConstruct>::from_context(__ctx),
-                    ),
+                    core: __core,
                     #(#deco_field_inits,)*
                 });
                 let mut __routes = #mcp::__macro_support::McpRoutes::default();

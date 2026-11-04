@@ -13,7 +13,7 @@ pub struct Filter {
 #[controller]
 pub struct ParamTools {}
 
-#[mcp_routes]
+#[routes]
 impl ParamTools {
     /// Broken: resources take no arguments.
     #[resource(uri = "r2e://broken")]

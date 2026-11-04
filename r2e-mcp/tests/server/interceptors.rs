@@ -21,7 +21,7 @@ pub struct WrappedTools {
     log: CallLog,
 }
 
-#[mcp_routes]
+#[routes]
 #[intercept(LogCalls::spec("impl"))]
 impl WrappedTools {
     /// Plain tool — wrapped only by the impl-level interceptor.
@@ -116,7 +116,7 @@ impl Guard<NoIdentity> for TraceControllerGuardReady {
 #[controller]
 pub struct StatefulImplDecorators;
 
-#[mcp_routes]
+#[routes]
 #[guard(TraceControllerGuard)]
 #[intercept(SequencedCalls)]
 impl StatefulImplDecorators {

@@ -446,7 +446,7 @@ async fn dcr_log_line_is_bounded() {
 #[controller]
 pub struct OpenTools;
 
-#[mcp_routes]
+#[routes]
 impl OpenTools {
     /// Echo.
     #[tool]

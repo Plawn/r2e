@@ -269,7 +269,7 @@ fn generate_scoped_deco_items(
 }
 
 /// The decorator storage of an adapter whose members are dispatched by one
-/// hand-written service object (`#[mcp_routes]`, `#[grpc_routes]`): one
+/// hand-written service object (MCP members, `#[grpc_routes]`): one
 /// shared controller-level [`DecoSet`] (`__ctrl`, impl-level guards +
 /// interceptors, built **once per service** — the adapter peer of HTTP's
 /// [`CtrlDecoSet`]) plus one [`DecoSet`] per member (`__deco_<fn>`, that
@@ -885,6 +885,5 @@ pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
         exprs.extend(&wm.member.decorators.guard_fns);
         exprs.extend(&wm.member.decorators.pre_auth_guard_fns);
     }
-
     exprs
 }

@@ -22,7 +22,7 @@ use crate::support;
 #[controller]
 pub struct SessionTools;
 
-#[mcp_routes]
+#[routes]
 impl SessionTools {
     #[tool]
     async fn ping(&self) -> &'static str {
@@ -49,7 +49,7 @@ impl SessionTools {
 #[controller]
 pub struct OpsTools;
 
-#[mcp_routes(group = "ops", opt_in)]
+#[routes(group = "ops", opt_in)]
 impl OpsTools {
     #[tool]
     async fn restart(&self) -> &'static str {
