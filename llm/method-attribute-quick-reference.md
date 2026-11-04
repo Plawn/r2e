@@ -13,7 +13,7 @@ requires: core-concepts
 - Auth markers: `#[anonymous]` per route; `#[roles]`/`#[all_roles]`/`#[guard]`/`#[pre_guard]` on a method or on the impl — only `#[pre_guard]` also covers `#[anonymous]` routes.
 - Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]` (all three on a method or on the impl), `#[managed]` (on a parameter), `#[async_exec]`.
 - Off-request and documentation markers: `#[consumer]`, `#[scheduled]`, `#[request_helper]`, `#[status(N)]` / `#[returns(T)]`.
-- MCP members on the same `#[routes]` impl: `#[tool]`, `#[resource(uri = …)]`, `#[prompt]`, `#[completion]` (see llm/mcp-server.md). One marker per method — an HTTP marker and an MCP marker on one method is a compile error. Impl-level `#[roles]`/`#[all_roles]`/`#[guard]`/`#[intercept]` cover MCP members too (decorators built once per registration — per HTTP mount and once for the MCP service — over the one shared controller core); `#[pre_guard]`/`#[layer]`/`#[middleware]` never do.
+- MCP members (`#[tool]`, `#[resource(uri = …)]`, `#[prompt]`, `#[completion]`, see llm/mcp-server.md) make a `#[routes]` impl an MCP service. One type = one port: an MCP member next to an HTTP route in the same impl is a compile error — write one `#[controller]` type per port over the shared beans. Impl-level `#[roles]`/`#[all_roles]`/`#[guard]`/`#[intercept]` cover MCP members too (decorators built once per registration, over the type's one core); `#[pre_guard]`/`#[layer]`/`#[middleware]` are HTTP-only (a compile error on an MCP service).
 
 | Attribute | Level | Purpose |
 |-----------|-------|---------|
