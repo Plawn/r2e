@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-04
+
 ### Breaking
 
 - `#[routes]` accepts MCP members and infers the port (#1215,

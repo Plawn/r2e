@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-11-04
+
 ### Added
 
 - `#[doc(hidden)]` builder hooks for the per-type endpoint core store
@@ -63,6 +65,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   / `EndpointConfig`, the `register_controller` / `spawn_service` panics and
   the `server.drain-timeout` panic. The output is byte-identical (pinned by
   `r2e-core/tests/config/report.rs`).
+
+- Re-pins `r2e-macros` 0.10.0 (#1213 / #1215, a codegen-contract break cut
+  with `--no-propagate`): a registry build of this crate resolves the one
+  macro crate version matching its codegen contract. No API change.
 
 ## [0.9.1] - 2026-11-01
 

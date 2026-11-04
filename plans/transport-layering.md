@@ -629,7 +629,7 @@ were deliberately left unreleased so that 3a' ships in the same release
 decision 2026-11-03; the docs-only handoff PR #135 that recorded it was
 closed unmerged, superseded by this section). The recipe was tried on
 2026-11-03 as release PR #134, closed unmerged on purpose (branch
-`release/r2e-0.11.0` kept): propagated `--dry-run` first, then
+`archive/release-r2e-0.11.0-pr134`; the real release went out from `release/r2e-0.11.0-l3`): propagated `--dry-run` first, then
 `scripts/bump-version.sh --no-propagate` **unsandboxed** with the explicit
 list — `r2e-grpc`, `r2e-security`, `r2e-mcp` breaking; `r2e-macros` breaking
 `--no-propagate` + patch re-pins `r2e-core`/`r2e-executor`/`r2e-openapi`;

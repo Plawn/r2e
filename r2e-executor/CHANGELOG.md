@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-04
+
+### Changed
+
+- Re-pins `r2e-macros` 0.10.0 (#1213 / #1215, a codegen-contract break cut
+  with `--no-propagate`): a registry build resolves a single macro crate
+  version next to `r2e-core` 0.9.2. No API change.
+
 ## [0.9.0] - 2026-10-31
 
 ### Changed

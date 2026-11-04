@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-04
+
 ### Breaking
 
 - `#[routes]` serves MCP members (#1215, via `r2e-macros` / `r2e-mcp`): an
@@ -30,6 +32,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   uses the HTTP extractor contract, `GrpcService` is `GrpcService<S, W>`, and
   `#[grpc_routes]` services accept struct-level `#[inject(identity)]` /
   `#[inject(request)]` fields. Migration: `docs/migration/grpc-identity.md`.
+
+### Changed
+
+- Built against `r2e-grpc` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-grpc/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-grpc-v0.10.0/r2e-grpc/CHANGELOG.md)).
+- Built against `r2e-security` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.10.0/r2e-security/CHANGELOG.md)).
+- Built against `r2e-macros` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-macros/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-macros-v0.10.0/r2e-macros/CHANGELOG.md)).
+- Built against `r2e-mcp` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-mcp/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-mcp-v0.11.0/r2e-mcp/CHANGELOG.md)).
 
 ## [0.10.0] - 2026-10-31
 
