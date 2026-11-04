@@ -228,13 +228,7 @@ where
             )
             .clone();
 
-        // The builder's one core for `S`: shared with `register_controller`
-        // when the type is also a controller (a mixed `#[routes]` impl),
-        // whichever of the two registers first.
-        self.require_controller_registration::<S>(
-            "register_mcp_service",
-            S::NEEDS_CONTROLLER_REGISTRATION,
-        );
+        // The builder's one core for `S` (per-type core store).
         let core = self.endpoint_core_or_insert::<S>(S::construct);
         registry.add_service(
             S::service_name(),

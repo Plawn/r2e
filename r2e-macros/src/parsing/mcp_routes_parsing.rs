@@ -1,4 +1,4 @@
-//! Parsing for the MCP members of a `#[routes]` impl block (the deprecated
+//! Parsing for a `#[routes]` impl block with MCP members (the deprecated
 //! `#[mcp_routes]` alias expands through the same path).
 //!
 //! `#[routes] impl Name { ... }` turns every `#[tool]`-marked async
@@ -178,8 +178,8 @@ impl McpTool {
     }
 }
 
-/// Parsed representation of the MCP side of a `#[routes] impl Name { ... }`
-/// block.
+/// Parsed representation of a `#[routes] impl Name { ... }` block with MCP
+/// members.
 pub struct McpRoutesImplDef {
     /// The service struct name (e.g., `MathTools`).
     pub controller_name: syn::Ident,
@@ -209,20 +209,6 @@ pub struct McpRoutesImplDef {
     /// other method and associated item in their original order, plus the
     /// passive impl attributes.
     pub impl_block: syn::ItemImpl,
-    /// On a mixed impl (HTTP routes beside the MCP members), the HTTP side's
-    /// decorator sites, in the order `#[routes]` folds them. `Some` switches
-    /// the codegen to the mixed shape: the façade methods and the
-    /// `EndpointDeps` carrier are emitted by the HTTP side (one per type),
-    /// and `McpService::validate_config` covers both site sets. Set by
-    /// `attrs::routes_attr`.
-    pub mixed_http_sites: Option<Vec<syn::Expr>>,
-    /// On a mixed impl, the lifecycle/background markers its HTTP side
-    /// declares (`#[post_construct]`, `#[scheduled]`, …, each listed once,
-    /// spelled `#[name]`): members only `register_controller` wires. Emitted
-    /// as `McpService::NEEDS_CONTROLLER_REGISTRATION`, so a type registered
-    /// only with `register_mcp_service` fails boot instead of silently
-    /// dropping them. Empty for an MCP-only impl. Set by `attrs::routes_attr`.
-    pub controller_hosted_markers: Vec<String>,
 }
 
 /// The argument keys each member family accepts, for validation and the
@@ -593,9 +579,7 @@ fn classify_args(member: &mut MemberDef, kind: McpMemberKind) -> syn::Result<Vec
     Ok(args)
 }
 
-/// Parse the MCP side of a `#[routes] impl Name { ... }` block: the whole
-/// impl when it has no HTTP route, or only its MCP members (split off by
-/// `attrs::routes_attr`) when it mixes both.
+/// Parse a `#[routes] impl Name { ... }` block whose members are MCP members.
 pub fn parse(
     mut item: syn::ItemImpl,
     service_group: Option<McpGroupSpec>,
@@ -821,8 +805,6 @@ pub fn parse(
         members,
         facade_methods,
         impl_block: item,
-        mixed_http_sites: None,
-        controller_hosted_markers: Vec::new(),
     })
 }
 

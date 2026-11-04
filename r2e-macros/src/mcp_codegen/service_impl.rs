@@ -14,7 +14,7 @@ use crate::codegen::registration::{DepsFold, Witness};
 /// Every decorator site expression of the impl block, in dep-fold order:
 /// controller-level interceptors and guards (only meaningful when at least
 /// one member exists), then per-member guards and interceptors.
-pub(crate) fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
+fn site_exprs(def: &McpRoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
     if !def.members.is_empty() {
         exprs.extend(&def.controller_intercepts);
@@ -68,11 +68,8 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
         data_marker,
         ..
     } = super::controller_items(controller_name);
-    // A mixed impl validates both transports' sites, in the order the HTTP
-    // side folds them, so both registrations report the same keys.
-    let decorator_config_stmts = crate::codegen::decorators::decorator_config_key_stmts(
-        def.mixed_http_sites.iter().flatten().chain(site_exprs(def)),
-    );
+    let decorator_config_stmts =
+        crate::codegen::decorators::decorator_config_key_stmts(site_exprs(def));
 
     let uses_session = def
         .uses_session
@@ -146,18 +143,6 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
         })
         .collect();
 
-    // Lifecycle/background members of a mixed impl that only
-    // `register_controller` wires; omitted (trait default `&[]`) otherwise,
-    // which keeps the MCP-only expansion free of it.
-    let needs_controller = if def.controller_hosted_markers.is_empty() {
-        quote! {}
-    } else {
-        let markers = &def.controller_hosted_markers;
-        quote! {
-            const NEEDS_CONTROLLER_REGISTRATION: &'static [&'static str] = &[#(#markers),*];
-        }
-    };
-
     quote! {
         impl<__R2eS, #witness_generics>
             #mcp::__macro_support::McpService<__R2eS, #witness_tuple>
@@ -188,8 +173,6 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
                 #(#decorator_config_stmts)*
                 __errors
             }
-
-            #needs_controller
 
             fn construct(
                 _state: &__R2eS,

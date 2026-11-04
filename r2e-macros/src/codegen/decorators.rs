@@ -685,11 +685,8 @@ pub(crate) struct CtrlDecoSet {
 /// Interceptors need an interceptable method (HTTP route, `#[scheduled]`, or
 /// `#[consumer]`; SSE/WS do not run the interceptor chain) — without one the
 /// family is dropped so no unused product gets built (its deps are not folded
-/// either). Pre-guards are parse-guaranteed to have an HTTP target
+/// either). Guards and pre-guards are parse-guaranteed to have an HTTP target
 /// (`routes_parsing` rejects them otherwise), so they pass through as-is.
-/// Guards are too on an HTTP-only impl; on a mixed impl they may target only
-/// the MCP members (every HTTP route `#[anonymous]`), and are dropped from the
-/// HTTP set then — the MCP side builds its own.
 fn ctrl_family_exprs(def: &RoutesImplDef) -> (&[syn::Expr], &[syn::Expr], &[syn::Expr]) {
     let cd = &def.controller_decorators;
     let intercept_target = !def.route_methods.is_empty()
@@ -700,15 +697,7 @@ fn ctrl_family_exprs(def: &RoutesImplDef) -> (&[syn::Expr], &[syn::Expr], &[syn:
     } else {
         &[]
     };
-    let guard_target = def
-        .route_methods
-        .iter()
-        .map(|m| &m.member)
-        .chain(def.sse_methods.iter().map(|m| &m.member))
-        .chain(def.ws_methods.iter().map(|m| &m.member))
-        .any(|m| !m.decorators.anonymous);
-    let guards: &[syn::Expr] = if guard_target { &cd.guard_fns } else { &[] };
-    (intercepts, guards, &cd.pre_auth_guard_fns)
+    (intercepts, &cd.guard_fns, &cd.pre_auth_guard_fns)
 }
 
 /// Degradation check shared by every per-method emission site (handler +
@@ -864,7 +853,7 @@ pub(crate) fn decorator_config_key_stmts<'a>(
 /// Every decorator site expression of a `#[routes]` block, in the order the
 /// dep fold visits them. Shared by `registration::controller_deps_fold` and the
 /// config-key aggregation so both see exactly the same site set.
-pub(crate) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
+pub(super) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
     let mut exprs: Vec<&syn::Expr> = Vec::new();
 
     // Controller-level sites, gated per family on an applicable target
@@ -896,11 +885,5 @@ pub(crate) fn controller_site_exprs(def: &RoutesImplDef) -> Vec<&syn::Expr> {
         exprs.extend(&wm.member.decorators.guard_fns);
         exprs.extend(&wm.member.decorators.pre_auth_guard_fns);
     }
-    // A mixed impl's MCP sites: one `EndpointDeps` carrier and one config
-    // validation per type, whichever transport registers it.
-    if let Some(mcp) = &def.mcp {
-        exprs.extend(&mcp.site_exprs);
-    }
-
     exprs
 }

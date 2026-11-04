@@ -18,20 +18,10 @@ use crate::route::McpRoutes;
 ///
 /// # One core per type
 ///
-/// A type whose `#[routes]` impl mixes HTTP routes and MCP members is both a
-/// [`Controller`](r2e_core::Controller) and an `McpService`, and it has
-/// exactly **one** runtime core: `register_mcp_service` and
-/// `register_controller` take it from the builder's per-type core store
-/// (whichever registers first constructs it, through its own `construct`),
-/// so a tool sees the state a `#[post_construct]` hook wrote and calls a
-/// `#[scheduled]` method through the interceptors `register_controller`
-/// filled. Lifecycle and background members (`#[post_construct]`,
-/// `#[on_start]`, `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`,
-/// `#[async_exec]`) are wired by `register_controller` only:
-/// [`NEEDS_CONTROLLER_REGISTRATION`](Self::NEEDS_CONTROLLER_REGISTRATION)
-/// lists them, and a type that declares any but is registered only with
-/// `register_mcp_service` fails boot naming the missing
-/// `.register_controller::<Type>()`.
+/// `register_mcp_service` takes the service core from the builder's per-type
+/// core store, constructing it through [`construct`](Self::construct) on
+/// first use — the same store `register_controller` uses — so a service type
+/// registered more than once still has exactly **one** runtime core.
 ///
 /// Services accumulate into the
 /// [`McpServiceRegistry`](crate::registry::McpServiceRegistry), which the
@@ -100,19 +90,10 @@ pub trait McpService<T: Clone + Send + Sync + 'static, W = ()>: 'static {
         Vec::new()
     }
 
-    /// The lifecycle/background markers this type's `#[routes]` impl
-    /// declares (spelled `#[post_construct]`, `#[scheduled]`, …): members
-    /// only `register_controller` wires. Non-empty only on a mixed impl;
-    /// `register_mcp_service` records it, and the build fails with an
-    /// actionable error when the type was never registered with
-    /// `register_controller`. The default is empty.
-    const NEEDS_CONTROLLER_REGISTRATION: &'static [&'static str] = &[];
-
     /// Build the service core from the resolved bean graph — the
     /// [`Controller::construct`](r2e_core::Controller::construct) peer.
     /// Called at most once per builder: registration takes the core from the
-    /// builder's per-type store, so a type registered as both a controller
-    /// and an MCP service shares one core.
+    /// builder's per-type store.
     fn construct(state: &T, ctx: &BeanContext) -> Self
     where
         Self: Sized;

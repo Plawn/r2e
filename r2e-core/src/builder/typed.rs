@@ -622,10 +622,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///
     /// Every transport registration of a type goes through this store —
     /// `register_controller` and `register_mcp_service` today — so a type
-    /// served over several transports has exactly one core whatever the
-    /// registration order: the first registration constructs it, the others
-    /// share the `Arc`. Per builder, not per process (dev-reload rebuilds the
-    /// builder each cycle).
+    /// registered several times (a controller mounted by two prefixed
+    /// modules) has exactly one core: the first registration constructs it,
+    /// the others share the `Arc`. Per builder, not per process (dev-reload
+    /// rebuilds the builder each cycle).
     #[doc(hidden)]
     pub fn endpoint_core_or_insert<C>(
         &mut self,
@@ -646,28 +646,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             .cores
             .insert(id, Arc::clone(&core) as Arc<dyn Any + Send + Sync>);
         core
-    }
-
-    /// Record that endpoint type `C`, registered with `registration` (e.g.
-    /// `"register_mcp_service"`), declares members only `register_controller`
-    /// wires (`markers`, e.g. `["#[post_construct]"]`). Building the app
-    /// panics with an actionable message naming the missing
-    /// `.register_controller::<C>()` unless `C` is also registered as a
-    /// controller — in either order. A no-op for an empty `markers`.
-    #[doc(hidden)]
-    pub fn require_controller_registration<C: 'static>(
-        &mut self,
-        registration: &'static str,
-        markers: &'static [&'static str],
-    ) {
-        if !markers.is_empty() {
-            self.shared.endpoint_cores.needs_controller.push((
-                TypeId::of::<C>(),
-                std::any::type_name::<C>(),
-                registration,
-                markers,
-            ));
-        }
     }
 
     /// Registration backend with all witnesses explicit: the public face is
@@ -783,13 +761,9 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // State-generic controllers construct from the retained bean context
         // (by type); named-state controllers read the typed state.
         //
-        // The core comes from the builder's per-type store: a type also
-        // registered on another transport (a mixed `#[routes]` impl's MCP
-        // side) shares this one core, whichever registered first.
-        //
-        // One type = one core per builder, so its lifecycle is wired exactly
-        // once — by the FIRST controller registration of the type (even when
-        // an MCP registration constructed the core earlier). A type mounted
+        // The core comes from the builder's per-type store. One type = one
+        // core per builder, so its lifecycle is wired exactly once — by the
+        // FIRST controller registration of the type. A type mounted
         // several times (two prefixed modules) gets its routes on every
         // mount, but one `fill_decos`, one `#[post_construct]`/`#[on_start]`/
         // `#[pre_destroy]` run, one set of scheduled tasks and consumers.
@@ -1067,11 +1041,6 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     }
 
     fn build_inner(mut self) -> BuiltApp<T> {
-        // A type whose controller-hosted members (lifecycle hooks, background
-        // methods) were registered only on another transport fails here, with
-        // every registration done — so the order of the calls never matters.
-        self.shared.endpoint_cores.check_controller_registrations();
-
         let state = self.state;
 
         let mut routes = crate::http::Routes::new();

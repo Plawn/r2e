@@ -1,6 +1,4 @@
-//! Code generation for the MCP members of a `#[routes]` impl block (the
-//! whole output of an MCP-only impl; on a mixed impl, everything but the
-//! façade impl and the `EndpointDeps` carrier, which the HTTP side emits).
+//! Code generation for a `#[routes]` impl block with MCP members.
 //!
 //! Generates:
 //! - The user's impl, split exactly like `#[routes]` splits an HTTP
@@ -25,7 +23,7 @@
 //! - An impl of `EndpointDeps` for the controller (compile-time bean check
 //!   at `register_mcp_service()`)
 
-pub(crate) mod service_impl;
+mod service_impl;
 mod tool_impl;
 
 use proc_macro2::TokenStream;
@@ -143,22 +141,11 @@ fn build_deco_sets(def: &McpRoutesImplDef) -> MemberDecoSets {
 /// Main entry point: generate the MCP code of a `#[routes]` impl block.
 pub fn generate(def: &McpRoutesImplDef) -> TokenStream {
     let deco = build_deco_sets(def);
-    // A mixed impl's façade methods and `EndpointDeps` carrier are emitted by
-    // the HTTP side (`codegen::generate`): one of each per type.
-    let mixed = def.mixed_http_sites.is_some();
-    let impl_block = if mixed {
-        quote! {}
-    } else {
-        generate_impl_block(def)
-    };
+    let impl_block = generate_impl_block(def);
     let wrapper = generate_wrapper_struct(def, &deco);
     let invoke_impl = tool_impl::generate_invoke_impl(def, &deco);
     let mcp_service_impl = service_impl::generate_mcp_service_impl(def, &deco);
-    let endpoint_deps_impl = if mixed {
-        quote! {}
-    } else {
-        service_impl::generate_endpoint_deps_impl(def)
-    };
+    let endpoint_deps_impl = service_impl::generate_endpoint_deps_impl(def);
     let deco_items = &deco.items;
 
     quote! {

@@ -146,11 +146,8 @@ impl MemberRules {
     }
 
     /// MCP members of a `#[routes]` impl: guards, roles and interceptors.
-    /// Impl-level, only an impl with no HTTP route is checked against these
-    /// rules (a mixed impl keeps the HTTP-only decorators for its routes).
-    /// `marker` is the
-    /// member family's attribute name (`tool`, `resource`, …), named in the
-    /// duplicate-identity error.
+    /// `marker` is the member family's attribute name (`tool`, `resource`,
+    /// …), named in the duplicate-identity error.
     pub fn mcp(marker: &str) -> Self {
         Self {
             transport: "#[tool]/#[resource]/#[prompt]/#[completion]",

@@ -84,15 +84,6 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         .map(emit_verbatim)
         .collect();
 
-    // A mixed impl's MCP members share the one façade (the MCP side emits no
-    // impl block of its own); they are handlers like the routes above.
-    let mcp_member_fns: Vec<TokenStream> = def
-        .mcp
-        .iter()
-        .flat_map(|mcp| &mcp.facade_methods)
-        .map(emit_handler)
-        .collect();
-
     // ── Core (anonymous) route methods ──
     let anon_route_fns: Vec<TokenStream> = def
         .route_methods
@@ -187,7 +178,6 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
         && sse_fns.is_empty()
         && ws_fns.is_empty()
         && request_helper_fns.is_empty()
-        && mcp_member_fns.is_empty()
     {
         quote! {}
     } else {
@@ -198,7 +188,6 @@ pub fn generate_impl_block(def: &RoutesImplDef) -> TokenStream {
                 #(#sse_fns)*
                 #(#ws_fns)*
                 #(#request_helper_fns)*
-                #(#mcp_member_fns)*
             }
         }
     };
