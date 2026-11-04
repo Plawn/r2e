@@ -19,10 +19,7 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 - `#[doc(hidden)]` builder hooks for the per-type endpoint core store
   (#1215): `AppBuilder::endpoint_core_or_insert::<C>(make)` returns the one
-  `Arc<C>` core of a type for this builder (constructing it on first use);
-  `require_controller_registration::<C>(registration, markers)` records that
-  a transport registration needs a matching `register_controller::<C>()`
-  (checked at `build()`, panic naming the call).
+  `Arc<C>` core of a type for this builder (constructing it on first use).
 
 - `GuardContext::from_parts(parts, method_name, controller_name, identity,
   path_params)` (#1213): builds the guard context from a request head
@@ -53,8 +50,7 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   get one independent core per controller registration (e.g. two prefixed
   `#[module]` mounts) — each constructed, `#[post_construct]`/`#[on_start]`/
   `#[pre_destroy]` run, consumers and scheduled tasks registered per core.
-  It now gets ONE shared core — also shared with its `register_mcp_service`
-  registration when the type is served on HTTP + MCP — whose lifecycle,
+  It now gets ONE shared core whose lifecycle,
   consumers and scheduled tasks are wired once by the first controller
   registration, while its routes are still mounted on every registration.
   Controller registrations made on the pre-state builder are still discarded

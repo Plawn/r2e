@@ -17,36 +17,25 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
-- MCP services are declared with `#[routes]` (#1215, via `r2e-macros`); one
-  impl may also carry HTTP routes, making the type both a `Controller` and an
-  `McpService` (register it with `.register_controller::<T>()` and
-  `.register_mcp_service::<T>()`). `#[mcp_routes]` is a deprecated alias
+- MCP services are declared with `#[routes]` (#1215, via `r2e-macros`):
+  an impl whose members are `#[tool]`/`#[resource]`/`#[prompt]`/
+  `#[completion]` is an `McpService`. One type exposes one port: MCP members
+  next to HTTP routes are a compile error — serve HTTP and MCP from two types
+  over the same beans. `#[mcp_routes]` is a deprecated alias
   (`since = "0.10.0"`), **removed in the next minor**: rename
   `#[mcp_routes(...)]` to `#[routes(...)]`; silence the warning meanwhile with
   a module/crate-level `#![allow(deprecated)]` (an item-level allow does not
-  reach it). Impl-level guards/interceptors of a mixed impl apply to both
-  transports; their decorators are built once per registration (per HTTP
-  mount, once for the MCP service). Docs:
-  `docs/features/25-mcp.md` § One type, two transports, `llm/mcp-server.md`.
-  - **One core per type.** `register_controller` and `register_mcp_service`
-    of the same type share ONE controller core (taken from the builder's
-    per-type core store, in either registration order): MCP members see the
-    beans, the `#[post_construct]` state and the wired
-    `#[consumer]`/`#[scheduled]`/`#[async_exec]` members of the HTTP side.
+  reach it). Docs: `docs/features/25-mcp.md` § One port per type,
+  `llm/mcp-server.md`.
   - `McpService` trait: new required `fn construct(state: &T, ctx:
     &BeanContext) -> Self`, and `routes` takes the core —
     `fn routes(state: &T, core: Arc<Self>, ctx: &Arc<BeanContext>) ->
-    McpRoutes`; new defaulted `const NEEDS_CONTROLLER_REGISTRATION: &'static
-    [&'static str]`. `#[routes]` generates all three; a hand-written impl
-    moves its `from_context` call into `construct` and uses the `core`
-    argument.
+    McpRoutes`; the builder takes the core from its per-type core store
+    (constructed through `construct` on first use). `#[routes]` generates
+    both; a hand-written impl moves its `from_context` call into `construct`
+    and uses the `core` argument.
   - `AppBuilderMcpExt::register_mcp_service` / `try_register_mcp_service`
     now also require `S: Send + Sync` (the stored core is shared).
-  - A mixed impl with lifecycle or background members (`#[post_construct]`,
-    `#[on_start]`, `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`,
-    `#[async_exec]`) registered only with `register_mcp_service` panics at
-    `build()` naming the missing `.register_controller::<T>()` — those
-    members are wired by `register_controller` alone.
 
 - `#[mcp_routes]` members now run on the request façade, exactly like
   `#[routes]` handlers (#1210). In a member body `Self` names the façade:

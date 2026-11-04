@@ -17,20 +17,19 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
-- `#[routes]` accepts MCP members (#1215, transport-layering level 3a):
-  `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]` beside HTTP routes in
-  one impl, plus `#[routes(group = "…", opt_in)]`. A mixed impl emits one
-  façade, one `EndpointDeps` (HTTP + MCP sites) and both `Controller<S, W>`
-  and `McpService<S, W>`, each with its own witness. HTTP-only expansions
-  are unchanged; MCP-only expansions change by exactly a new `construct` fn,
-  an `__core: Arc<Self>` parameter on `routes` and `core: __core` instead of
-  constructing the core locally (see the codegen-contract bullet below). Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/
-  `#[intercept]` apply to both transports (their decorators built once per
-  registration — each `register_controller` mount and the
-  `register_mcp_service` call — over ONE shared core);
-  `#[pre_guard]`/`#[middleware]`/`#[layer]` stay HTTP-only. New compile
-  errors: `#[get]` + `#[tool]` on one method; `group`/`opt_in` on an impl
-  without an MCP member; an MCP marker in `#[grpc_routes]`.
+- `#[routes]` accepts MCP members and infers the port (#1215,
+  transport-layering level 3a): an impl with HTTP routes is a
+  `Controller<S, W>`, an impl with `#[tool]`/`#[resource]`/`#[prompt]`/
+  `#[completion]` members an `McpService<S, W>`, including
+  `#[routes(group = "…", opt_in)]`. HTTP-only expansions are unchanged;
+  MCP-only expansions change by exactly a new `construct` fn, an `__core:
+  Arc<Self>` parameter on `routes` and `core: __core` instead of
+  constructing the core locally (see the codegen-contract bullet below).
+  New compile errors: an MCP marker next to HTTP routes in one impl (one type
+  exposes one port; the error names `docs/features/25-mcp.md` § One port per
+  type — move the MCP members to their own `#[controller]` type over the same
+  beans); `group`/`opt_in` on an impl without an MCP member. An MCP marker in
+  `#[grpc_routes]` stays an error.
   - `#[mcp_routes]` is a `#[deprecated(since = "0.10.0")]` alias of
     `#[routes]` and is **removed in the next minor**. Migration: rename
     `#[mcp_routes(...)]` to `#[routes(...)]` (and the import). The lint fires
@@ -46,10 +45,7 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
     release): the generated `McpService` impl emits `fn construct(state,
     ctx)` (the `ContextConstruct::from_context` call, used by the builder's
     core store) and `routes(state, core: Arc<Self>, ctx)` wraps the core it is
-    handed instead of constructing one. A mixed impl whose HTTP side carries
-    `#[post_construct]`/`#[on_start]`/`#[pre_destroy]`/`#[scheduled]`/
-    `#[consumer]`/`#[async_exec]` also emits `const
-    NEEDS_CONTROLLER_REGISTRATION` listing them (MCP-only impls never do).
+    handed instead of constructing one.
 
 - `#[grpc_routes]` codegen contract (#1213, cut with `--no-propagate`): the
   generated wrapper is `__R2eGrpc<Name><S, W>` holding the state, each call
