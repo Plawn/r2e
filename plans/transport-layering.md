@@ -508,7 +508,8 @@ Mostly projection, one example and documentation; no macro work.
 The release is the one planned in §4's handoff (r2e-grpc / r2e-security /
 r2e-mcp breaking; r2e-macros breaking `--no-propagate` + patch re-pins;
 façade r2e 0.11.0). Nothing from 3b', 3c' or level 4 waits on it except the
-stub/alias removals, which need the deprecation window.
+`GrpcIdentity` stub removal, which needs the deprecation window (the
+`#[mcp_routes]` alias was never shipped: removed outright on #136, §5).
 
 ## 9. Not in this plan
 
@@ -622,15 +623,25 @@ the user's call at release); **drop** `require_controller_registration`.
 `r2e-grpc` untouched. Then update Tasker #1215 (description + note) and
 rewrite PR #136's title and body (no footer).
 
-**Step 6 — the release**, once the user has squash-merged #136. Recipe
-unchanged from §4's handoff: propagated `--dry-run` first, then
+**Step 6 — the release**, once the user has squash-merged #136. Levels 1–2
+were deliberately left unreleased so that 3a' ships in the same release
+(one breaking cycle on r2e-macros / r2e-mcp / r2e instead of two — user
+decision 2026-11-03; the docs-only handoff PR #135 that recorded it was
+closed unmerged, superseded by this section). The recipe was tried on
+2026-11-03 as release PR #134, closed unmerged on purpose (branch
+`release/r2e-0.11.0` kept): propagated `--dry-run` first, then
 `scripts/bump-version.sh --no-propagate` **unsandboxed** with the explicit
 list — `r2e-grpc`, `r2e-security`, `r2e-mcp` breaking; `r2e-macros` breaking
 `--no-propagate` + patch re-pins `r2e-core`/`r2e-executor`/`r2e-openapi`;
 `r2e-oidc`/`r2e-test` carried with hand-written `[Unreleased]` entries
-(wording in commit `5e66ec7d`); façade `r2e` 0.11.0 + `r2e-cli`
-(`scripts/smoke-registry.sh` already spells `#[routes]`: its registry mode
-only passes once the release is published). Open `release: …` (no footer); the user merges; run
+(wording in commit `5e66ec7d`); façade `r2e` 0.11.0 + `r2e-cli`. With
+`--no-propagate` every carried crate is listed explicitly and counts as
+*requested*, and the script refuses a requested crate with an empty
+`[Unreleased]`: write the hand-written entries (r2e-oidc, r2e-test, and the
+"Re-pins `r2e-macros` …" lines of r2e-core / r2e-executor / r2e-openapi)
+before running it. `scripts/smoke-registry.sh` already spells `#[routes]`:
+its registry mode only passes once the release is published. Open
+`release: …` (no footer); the user merges; run
 `scripts/smoke-registry.sh`. Record the outcome in
 `project_release_pipeline` and `project_transport_layering`.
 

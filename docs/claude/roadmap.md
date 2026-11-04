@@ -803,8 +803,9 @@ Kept where the context lives rather than duplicated here:
   registration) are dropped. Next: 3b' one generation pipeline inside
   r2e-macros (gRPC joins it, `#[grpc_routes]` kept, `Self::<Assoc>` rewrite
   retired), 3c' runtime hygiene (gRPC core store, pre-state registration
-  rejection, `www-authenticate`, stub/alias removals at the minor after the
-  release), and **level 4 hexagonal DX**: `From<HttpError> for tonic::Status`,
+  rejection, `www-authenticate`, `GrpcIdentity` stub removal at the minor
+  after the release — `#[mcp_routes]` is already removed outright on #136,
+  no alias), and **level 4 hexagonal DX**: `From<HttpError> for tonic::Status`,
   `example-app` as domain/ports/adapters + `llm/hexagonal.md`, an
   `r2e doctor` transport-leak rule, the inbound adapter catalogue. Tickets:
   #1215 (3a'), #1216 (3b'), #1217 (3c'), #1218 → #1219 → #1220 (level 4).
