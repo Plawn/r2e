@@ -64,16 +64,16 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl, attr: &str) -> syn::Resul
     let first_mcp = methods().flat_map(|m| &m.attrs).find(|a| mcp_marker(a));
     let has_http = methods().flat_map(|m| &m.attrs).any(http_route_marker);
 
-    if let Some(mcp_attr) = first_mcp {
-        if has_http {
-            return Err(syn::Error::new_spanned(
-                mcp_attr,
-                "`#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` cannot share an \
-                 impl with HTTP routes: one type exposes one port. Move the MCP members to \
-                 their own `#[controller]` type over the same beans \
-                 (docs/features/25-mcp.md § One port per type).",
-            ));
-        }
+    if let Some(mcp_attr) = first_mcp
+        && has_http
+    {
+        return Err(syn::Error::new_spanned(
+            mcp_attr,
+            "`#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` cannot share an \
+             impl with HTTP routes: one type exposes one port. Move the MCP members to \
+             their own `#[controller]` type over the same beans \
+             (docs/features/25-mcp.md § One port per type).",
+        ));
     }
 
     // The alias keeps its MCP-only reading of an impl with no member at all
