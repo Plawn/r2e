@@ -193,17 +193,21 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```
 ///
 /// `#[intercept]`, `#[guard]`, `#[roles]` and `#[all_roles]` on the impl
-/// apply to the HTTP routes **and** the MCP members; each registration builds
-/// its own decorator instance (one per `register_controller` call — e.g.
-/// per prefixed module mount — and one for `register_mcp_service`; a
-/// stateful guard keeps one state per registration) over the ONE controller
-/// core all registrations share. `#[pre_guard]`, `#[middleware]` and `#[layer]` are
-/// HTTP-only: they need at least one HTTP route and never touch MCP members.
+/// apply to every member of the impl; each registration builds its own
+/// decorator instance (one per `register_controller` call — e.g. per
+/// prefixed module mount; a stateful guard keeps one state per registration)
+/// over the ONE core all registrations of the type share. `#[pre_guard]`,
+/// `#[middleware]` and `#[layer]` are HTTP-only: they need at least one HTTP
+/// route and are rejected on an MCP impl.
 ///
-/// # MCP members
+/// # MCP members — one port per type
 ///
 /// `#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` mark
-/// `async fn(&self, ...)` methods as MCP members. Tool parameters (any order,
+/// `async fn(&self, ...)` methods as MCP members. An impl with MCP members is
+/// an `McpService` (register it with `register_mcp_service::<T>()`); an MCP
+/// member next to an HTTP route is a compile error — one type exposes one
+/// port, so serve HTTP and MCP from two `#[controller]` types over the same
+/// beans (`docs/features/25-mcp.md` § One port per type). Tool parameters (any order,
 /// each at most once):
 /// - `Params(p): Params<T>` — the deserialized tool arguments (`T:
 ///   Deserialize + JsonSchema + ObjectParams`, drives the input schema)
@@ -221,18 +225,13 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// and `opt_in` need at least one MCP member.
 ///
 /// ```ignore
-/// #[controller(path = "/api/calc")]
+/// #[controller]
 /// pub struct MathTools {
 ///     #[inject] calc: CalcService,
 /// }
 ///
 /// #[routes]
 /// impl MathTools {
-///     #[get("/add/{a}/{b}")]
-///     async fn add_http(&self, Path((a, b)): Path<(f64, f64)>) -> Json<AddOut> {
-///         Json(self.calc.add(a, b))
-///     }
-///
 ///     /// Add two numbers.
 ///     #[tool(name = "add", read_only)]
 ///     async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
@@ -241,23 +240,15 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 /// }
 /// ```
 ///
-/// Registration stays explicit per transport: `register_controller::<T>()`
-/// serves the HTTP members, `register_mcp_service::<T>()` the MCP members.
-/// Both share one core per type and builder. Lifecycle and background members
-/// (`#[post_construct]`, `#[on_start]`, `#[pre_destroy]`, `#[scheduled]`,
-/// `#[consumer]`, `#[async_exec]`) are wired by `register_controller` alone;
-/// registering such a mixed impl only with `register_mcp_service` panics at
-/// `build()`.
-///
 /// # What is generated
 ///
 /// - The original `impl` block, split by scope: request-scoped members
-///   (routes and MCP members) on the request façade, the rest on the core.
-/// - Free-standing Axum handler functions (`__r2e_<Name>_<method>`).
-/// - `impl Controller<State> for Name` (when the impl has an HTTP member) —
-///   route registration, metadata, consumer registration, and scheduled task
+///   (routes or MCP members) on the request façade, the rest on the core.
+/// - HTTP impl: free-standing Axum handler functions
+///   (`__r2e_<Name>_<method>`) and `impl Controller<State> for Name` — route
+///   registration, metadata, consumer registration, and scheduled task
 ///   definitions.
-/// - `impl McpService<State> for Name` (when the impl has an MCP member).
+/// - MCP impl: `impl McpService<State> for Name`.
 /// - One `EndpointDeps` impl folding every member's decorator dependencies.
 #[proc_macro_attribute]
 pub fn routes(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -1596,14 +1587,16 @@ pub fn grpc_routes(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// **Deprecated** alias of [`macro@routes`], which now accepts `#[tool]`/
-/// `#[resource]`/`#[prompt]`/`#[completion]` members (and HTTP routes beside
-/// them on the same impl).
+/// `#[resource]`/`#[prompt]`/`#[completion]` members and infers the port
+/// (one type exposes one port: MCP members next to HTTP routes are a
+/// compile error).
 ///
 /// `#[mcp_routes(args)]` expands like `#[routes(args)]` with one exception:
-/// an impl with neither an MCP member nor an HTTP-side marker (only plain
-/// methods, or nothing) is an empty MCP service under `#[mcp_routes]` but an
-/// empty HTTP controller under `#[routes]`. Any other impl expands
-/// identically; rename it.
+/// an impl with neither an MCP member nor an HTTP route (only plain methods,
+/// lifecycle/background markers, or nothing) is read as an MCP service under
+/// `#[mcp_routes]` (an empty one, or the MCP "not supported" error on a
+/// lifecycle/background marker) but as an HTTP controller under `#[routes]`.
+/// Any other impl expands identically; rename it.
 /// The alias is removed in the next minor release of `r2e-macros`.
 #[deprecated(
     since = "0.10.0",

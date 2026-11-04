@@ -293,19 +293,17 @@ instance per surface (two total) — routes share with routes, transverse method
 share with transverse. `#[bean]` impl-level interceptors are unchanged (still
 one per intercepted `#[scheduled]`/`#[consumer]` method).
 
-**MCP members are a third surface** (#1215). On a `#[routes]` impl that mixes
-HTTP routes and MCP members, the impl-level `#[guard]`/`#[roles]`/
-`#[all_roles]`/`#[intercept]` apply to both transports but are built **once
-per registration**: every `Controller::routes` call (one per
-`register_controller`, e.g. per prefixed module mount) builds an HTTP set,
-`McpService::routes` builds the MCP set (inside the `__R2eMcp<Name>` wrapper),
-all over the one shared core. The controller
-**core** itself is not duplicated — both registrations take it from the
-builder's per-type core store (`endpoint_core_or_insert`). A stateful guard or
-interceptor (rate-limit bucket, counter) therefore gets one instance for the
-HTTP routes and another for the MCP members — keep cross-transport state in a
-bean the spec injects. `#[pre_guard]`/`#[middleware]`/`#[layer]` are
-HTTP-only and never reach the MCP members.
+**MCP services follow the same rule** (#1215). A `#[routes]` impl exposes one
+port (MCP members next to HTTP routes are a compile error), so an MCP service's
+impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` are built once
+per `McpService::routes` call (inside the `__R2eMcp<Name>` wrapper), and an HTTP
+controller's once per `Controller::routes` call — one per `register_controller`,
+e.g. per prefixed module mount. The **core** itself is not duplicated: every
+registration takes it from the builder's per-type core store
+(`endpoint_core_or_insert`). A stateful guard or interceptor (rate-limit
+bucket, counter) therefore gets one instance per mount — keep shared state in a
+bean the spec injects. `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only
+and rejected on an MCP impl.
 
 5. Original method body
 
@@ -539,7 +537,7 @@ is skipped — `Routes::fallback` takes no per-route layers. Impl-level layer
 values are evaluated once per controller in the router body
 (`let __r2e_ctrl_layer_i = ..;`) and cloned onto each route; only per-route
 `MethodRoutes::layer` is used, never `Routes::layer`/`route_layer`.
-`#[grpc_routes]` still rejects both attributes; MCP members reject them at method level, and at impl level when the `#[routes]` impl has no HTTP route. On a mixed `#[routes]` impl (HTTP routes + MCP members, #1215) they wrap the HTTP routes only — the split hands the MCP side the impl attributes minus `#[pre_guard]`/`#[middleware]`/`#[layer]`.
+`#[grpc_routes]` still rejects both attributes; MCP members reject them at method and impl level. Impl-level layers apply per HTTP mount: each `register_controller` (e.g. two prefixed modules) evaluates them in its own router body.
 
 ### Ordering
 

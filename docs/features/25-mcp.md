@@ -15,7 +15,7 @@ results.
 
 ## TL;DR
 
-Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[routes]` turn plain async methods into tools (one impl may mix them with HTTP routes; `#[mcp_routes]` is a deprecated alias, removed in the next minor): `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — raw wire escape hatches are re-exported by R2E, so user code never imports rmcp directly. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
+Expose MCP tools to agents (Claude, MCP Inspector) with the full R2E runtime behind them. `#[controller]` + `#[routes]` turn plain async methods into tools (one type exposes one port: HTTP routes and MCP members live on separate types over the same beans; `#[mcp_routes]` is a deprecated alias, removed in the next minor): `#[tool(read_only)] async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut>` — the `schemars` schema of `AddIn` becomes the `inputSchema` (doc comments → descriptions), `Json<T>` returns are dual-encoded (`structuredContent` + text) and advertise an `outputSchema`. Guards and interceptors are the SAME machinery as HTTP (`#[guard(...)]` reads real transport headers; `#[intercept(...)]` specs are prebuilt from the bean graph), and a missing bean is a compile error at `.register_mcp_service::<T>()`. Setup is one line: `.plugin(McpServer::new())` mounts the streamable-HTTP endpoint at `/mcp` (config `mcp.*`), shares one session map across SO_REUSEPORT workers, and terminates live SSE streams on graceful shutdown. rmcp is the wire only — raw wire escape hatches are re-exported by R2E, so user code never imports rmcp directly. Requires feature `mcp`. Domain failures return `McpError::tool(...)` → `isError: true` results the agent can read; set `mcp.allowed-hosts` behind a proxy (loopback-only `Host` allowlist by default). Auth: two YAML keys (`mcp.auth.issuer` + `server.public-url`) make the endpoint an OAuth 2.1 resource server for any OIDC IdP — JWKS-backed JWT validation, RFC 9728 protected-resource metadata + `WWW-Authenticate` challenges, and (with `public-client-id`) a static DCR shim for IdPs without dynamic client registration (Keycloak, Google, Entra, Okta); per-tool `#[tool(scopes = ...)]` + shared `#[roles]` guards, `tools/list` filtered to what the caller can invoke, and a no-Docker test fast path (`TestJwt::for_resource` + `pin_mcp_validator`, feature `mcp-testing`).
 
 ## Quick start
 
@@ -391,63 +391,70 @@ decorators remain one built product per member. The generated service uses one
 Arc containing the core and all decorator products, with no nested Arc or
 per-member decorator container.
 
-## One type, two transports
+## One port per type
 
-One `#[routes]` impl may mix HTTP routes and MCP members (#1215). The type is
-then both a `Controller` and an `McpService` — one façade, one `EndpointDeps`
-folding both transports' dependencies — and is registered on each transport
-explicitly:
+A `#[routes]` impl exposes exactly one port, inferred from its members: HTTP
+routes make it a `Controller`, `#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`
+members make it an `McpService`. An MCP member next to an HTTP route is a
+compile error on the first MCP marker:
+
+```text
+`#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` cannot share an impl
+with HTTP routes: one type exposes one port. Move the MCP members to their own
+`#[controller]` type over the same beans (docs/features/25-mcp.md § One port per type).
+```
+
+To serve the same capability over HTTP and MCP, write one adapter per port over
+the same beans. The logic lives in the bean; each adapter only translates its
+port's native types (`Path`/`Json` on HTTP, `Params`/`ToolCall` on MCP) into a
+call on it:
 
 ```rust
 #[derive(Clone, Default)]
-pub struct CalcService;
+pub struct CalcService;                       // the domain service: all the logic
 
 #[controller(path = "/api/calc")]
+pub struct CalcController { #[inject] calc: CalcService }
+
+#[routes]
+impl CalcController {                         // HTTP adapter
+    #[get("/add/{a}/{b}")]
+    async fn add(&self, Path((a, b)): Path<(f64, f64)>) -> Json<CalcResult> {
+        Json(CalcResult { result: self.calc.add(a, b) })
+    }
+}
+
+#[controller]
 pub struct MathTools { #[inject] calc: CalcService }
 
 #[routes]
-#[intercept(Logged::info())]                 // applies to the route AND the tool
-impl MathTools {
-    #[get("/add/{a}/{b}")]
-    async fn add_route(&self, Path((a, b)): Path<(f64, f64)>) -> Json<CalcResult> { ... }
-
+impl MathTools {                              // MCP adapter
     #[tool(read_only)]
-    async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> { ... }
+    async fn add(&self, Params(p): Params<AddIn>) -> Json<AddOut> {
+        Json(AddOut { sum: self.calc.add(p.a, p.b) })
+    }
 }
 
 // AppBuilder
-.register_controller::<MathTools>()
+.register_controller::<CalcController>()
 .register_mcp_service::<MathTools>()
 ```
 
-- Both registrations share **one controller core** per type and builder,
-  whatever their order: the HTTP routes and the MCP members see the same
-  injected beans, whatever `#[post_construct]` wrote, and the same wired
-  `#[consumer]`/`#[scheduled]`/`#[async_exec]` members.
-- Lifecycle and background members (`#[post_construct]`, `#[on_start]`,
-  `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`, `#[async_exec]`) are wired
-  by `register_controller` only. A mixed type that has them but is registered
-  only with `register_mcp_service` fails at `build()` with a panic naming the
-  missing `.register_controller::<T>()`.
-- Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to
-  both transports. The core is shared (one per type), but these
-  **decorators** are built **once per registration**: once per HTTP mount
-  (each `register_controller`, e.g. two prefixed modules) and once for the
-  `register_mcp_service` registration. A stateful guard or interceptor (a rate
-  limiter, a counter) keeps one state per registration; keep shared state in a
-  bean the spec injects.
-- Impl-level `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: they wrap
-  the routes, never the MCP members, and are rejected on an impl with no HTTP
-  route.
-- A method is either an HTTP member or an MCP member: `#[get]` + `#[tool]` on
-  one method is a compile error — share the logic through a helper or a bean.
-- `#[routes(group = "…", opt_in)]` applies to the MCP members; without an MCP
-  member it is a compile error.
-- A missing bean fails at each registration call that needs it.
+Why: this is the hexagonal shape. Each inbound port is its own adapter, so each
+keeps its port's native types, its own decorators and its own failure
+semantics (HTTP statuses vs `isError` tool results), and neither leaks into the
+other; the domain stays in the beans both adapters inject. A type registered
+more than once on its port still has one core (the builder's per-type core
+store).
 
-`examples/example-mcp` is the worked example (a mixed `#[routes]` impl, guards,
-interceptors, `TestApp` e2e tests). A shared bean plus two separate adapter
-types still works when the two surfaces should not share a struct.
+- Impl-level `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only and are
+  rejected on an MCP impl.
+- `#[routes(group = "…", opt_in)]` applies to MCP members; on an impl without
+  one it is a compile error.
+
+`examples/example-mcp` is the worked example (an HTTP controller and MCP
+services over one `CalcService` bean, guards, interceptors, `TestApp` e2e
+tests).
 
 ## Dynamic members (per-session lists)
 

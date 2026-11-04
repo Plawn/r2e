@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp
-tokens: ~9400
+tokens: ~9100
 requires: guards, security
 ---
 
@@ -43,10 +43,10 @@ requires: guards, security
   last-event-id` and expose `mcp-session-id, www-authenticate`.
 - A duplicate tool name, fixed resource URI, URI template or prompt name across
   services is a **boot panic**.
-- One `#[routes]` impl may mix HTTP routes and MCP members: the type is then
-  both a `Controller` and an `McpService` — register it with BOTH
-  `register_controller::<T>()` and `register_mcp_service::<T>()`. A method is
-  one member (`#[get]` + `#[tool]` on one method is a compile error).
+- One type exposes one port: a `#[routes]` impl with MCP members is an
+  `McpService`, one with HTTP routes a `Controller`, and MCP members next to
+  HTTP routes are a compile error. Serve both ports with two adapter types over
+  the same beans (see "One port per type").
 - Per-session lists: `#[routes(group = "git", opt_in)]` hides a service
   until a session enables it; a member parameter `session: McpSession` lets a
   tool `enable_group`/`add_tool(DynamicTool::…)`; `McpServer::session_init::<T>()`
@@ -310,11 +310,13 @@ custom guards/interceptors do NOT run — guard and rate-limit the
 Sampling, roots and logging (deprecated by SEP-2577) are NOT implemented — no
 API, no capability.
 
-### One type, two transports
+### One port per type
 
-A `#[routes]` impl can carry HTTP routes AND MCP members. The type is both a
-`Controller` and an `McpService`, with ONE dependency carrier folding both
-transports' decorator sites (a missing bean fails both registrations):
+A `#[routes]` impl exposes ONE port, inferred from its members. MCP members
+(`#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`) next to HTTP routes are a
+compile error. To expose the same capability over HTTP and MCP, write one
+adapter type per port over the same bean — the bean holds the logic, each
+adapter keeps its port's native types:
 
 ```rust
 use r2e::prelude::*;
@@ -323,20 +325,27 @@ use r2e::prelude::*;
 pub struct Operands { pub a: f64, pub b: f64 }
 
 #[controller(path = "/api/calc")]
-pub struct Calc {
+pub struct CalcController {                // HTTP adapter
     #[inject] calc: CalcService,
 }
 
 #[routes]
-#[intercept(Logged::info())]               // impl-level: wraps the route AND the tool
-impl Calc {
+impl CalcController {
     /// `GET /api/calc/add/{a}/{b}`
     #[get("/add/{a}/{b}")]
-    async fn add_route(&self, Path((a, b)): Path<(f64, f64)>) -> String {
+    async fn add(&self, Path((a, b)): Path<(f64, f64)>) -> String {
         self.calc.add(a, b).to_string()
     }
+}
 
-    /// Add two numbers.                   // the MCP twin: a separate method
+#[controller]
+pub struct CalcTools {                     // MCP adapter
+    #[inject] calc: CalcService,
+}
+
+#[routes]
+impl CalcTools {
+    /// Add two numbers.
     #[tool(read_only)]
     async fn add(&self, Params(p): Params<Operands>) -> String {
         self.calc.add(p.a, p.b).to_string()
@@ -347,35 +356,18 @@ impl Calc {
 # let b = b.register::<CalcService>();
 b.plugin(McpServer::new())
     .build_state().await
-    .register_controller::<Calc>()         // the HTTP routes
-    .register_mcp_service::<Calc>()        // the MCP members
+    .register_controller::<CalcController>()   // the HTTP port
+    .register_mcp_service::<CalcTools>()       // the MCP port
 # }
 # fn main() {}
 ```
 
-- Both registrations share **one controller core** per type and builder
-  (in either order): the HTTP routes and the MCP members see the same
-  injected beans, the same state written by `#[post_construct]`, and the same
-  wired `#[consumer]`/`#[scheduled]`/`#[async_exec]` members.
-- Lifecycle and background members (`#[post_construct]`, `#[on_start]`,
-  `#[pre_destroy]`, `#[scheduled]`, `#[consumer]`, `#[async_exec]`) are wired
-  by `register_controller` alone: registering such a mixed type only with
-  `register_mcp_service` panics at `build()` with a message naming the
-  missing `.register_controller::<T>()`.
-- Impl-level `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
-  transports. The core is shared (one per type), but these **decorators** are
-  built **once per registration**: once per HTTP mount (each
-  `register_controller`, e.g. two prefixed modules) and once for the
-  `register_mcp_service` registration. A stateful guard or interceptor (a
-  counter, a rate-limit bucket held in the spec) gets one instance per
-  registration. Keep shared state in a bean the spec injects.
-- `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: on a mixed impl
-  they wrap the HTTP routes and never the MCP members; on an impl with no HTTP
-  route they are a compile error.
-- `#[routes(group = "…", opt_in)]` applies to the MCP members only (compile
-  error on an impl with no MCP member).
-- The struct-level request scope (`#[inject(identity)]`/`#[inject(request)]`)
-  is shared: each transport extracts it from its own HTTP request.
+- Each adapter has its own decorators: `#[guard]`/`#[roles]`/`#[intercept]`
+  on `CalcTools` apply to its MCP members only. Keep shared state in a bean.
+- `#[pre_guard]`/`#[middleware]`/`#[layer]` are HTTP-only: a compile error on
+  an MCP impl.
+- `#[routes(group = "…", opt_in)]` applies to MCP members only (compile error
+  on an impl with no MCP member).
 
 Config under `mcp.*` (all optional; builder methods override config):
 `path` (default `/mcp`), `enabled` (true), `name`/`version`/`instructions`,
@@ -793,9 +785,6 @@ exhaustive protocol and auth cases live in `r2e-mcp/tests`.
   strings.
 - Do not try to hide a tool by filtering `tools/list` yourself — use a group;
   an `opt_in` member is also uncallable, a filtered one would not be.
-- Do not put `#[get]` (or any HTTP marker) and `#[tool]` on the same method —
-  give each transport its own method over a shared helper or bean.
-- Do not register a mixed `#[routes]` type with only one of
-  `register_controller` / `register_mcp_service`: each registers its own
-  transport's members only.
+- Do not put HTTP routes and MCP members in the same `#[routes]` impl — it
+  is a compile error; write one adapter type per port over a shared bean.
 - Do not write new `#[mcp_routes]` — it is a deprecated alias of `#[routes]`.

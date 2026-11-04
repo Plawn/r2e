@@ -38,16 +38,13 @@ references.
 2. **A wrapper struct holding the shared core** — never construct the core
    yourself: take it from the builder's per-type core store,
    `AppBuilder::endpoint_core_or_insert::<C>(make)` (`#[doc(hidden)]`,
-   `r2e-core/src/builder/typed.rs`), so a type registered on several
-   transports has ONE core whatever the registration order — the one
+   `r2e-core/src/builder/typed.rs`), so a type registered more than once
+   (two prefixed module mounts) has ONE core — the one its first
    `register_controller` ran `#[post_construct]` on and filled the
-   `#[consumer]`/`#[scheduled]`/`#[async_exec]` slots of (#1215 fix round 1).
+   `#[consumer]`/`#[scheduled]`/`#[async_exec]` slots of (#1215).
    MCP: the trait carries `construct(state, ctx)` (the `make`, emitting
    `ContextConstruct::from_context(ctx)`) and `routes(state, core: Arc<Self>,
-   ctx)` receives the stored core. Lifecycle/background members are wired by
-   `register_controller` alone, so an adapter registering a type that has them
-   calls `require_controller_registration::<C>(name, markers)`; `build()`
-   panics when no `register_controller::<C>()` followed. gRPC does not use the
+   ctx)` receives the stored core. gRPC does not use the
    store yet (open follow-up in `plans/transport-layering.md` §4). Hold the
    core in an `Arc`, clone the `Arc` per call. Never re-resolve beans per request. A
    member that runs on the struct's request scope binds the façade through
@@ -91,17 +88,12 @@ references.
    `tuple()` (`(__R2eMd, __R2eMp<Fn>, …)`) and the marker/identity
    predicates — `Controller<S, W>`, `McpService<S, W>` and (since #1213)
    `GrpcService<S, W>` all use it.
-   One type = one `EndpointDeps` impl folding **every** transport's sites
-   (#1215): a type that is several endpoint kinds at once gets a single
-   carrier whose `Deps` covers all of them, and each transport trait keeps
-   its own witness. Today the only multi-transport impl is `#[routes]` with
-   MCP members (`attrs/routes_attr.rs` splits the impl by member, parses each
-   side with its own parser, then the HTTP codegen emits the one façade impl
-   and the one carrier from `controller_site_exprs` + the MCP `site_exprs`;
-   the MCP codegen skips its own carrier when `mixed_http_sites` is set, and
-   `validate_config` unions both site sets). A new transport that wants to
-   share a type with HTTP joins that dispatcher rather than emitting a
-   second carrier. gRPC stays a separate macro (`#[grpc_routes]` rejects MCP
+   One type = one port = one `EndpointDeps` impl (#1215): `#[routes]`
+   (`attrs/routes_attr.rs`) infers the port from the members — HTTP routes
+   go to the HTTP parser/codegen, MCP members to the MCP one — and MCP
+   members next to HTTP routes are a compile error on the first MCP marker.
+   A new transport gets its own adapter type, never a second carrier on an
+   existing one. gRPC stays a separate macro (`#[grpc_routes]` rejects MCP
    markers).
 
 5. **A registration extension trait with the compile check** — mirror
@@ -199,34 +191,28 @@ references.
 
 ## Decisions log
 
-- **2026-11-03 (#1215, transport-layering level 3a) — reverses the §4
-  "one type = one endpoint kind" constraint.** `#[routes]` accepts MCP
-  members (`#[tool]`/`#[resource]`/`#[prompt]`/`#[completion]`) beside HTTP
-  routes; a mixed impl is both a `Controller` and an `McpService` with ONE
-  `EndpointDeps` impl and explicit dual registration
-  (`register_controller` + `register_mcp_service`). Impl-level
-  `#[guard]`/`#[roles]`/`#[all_roles]`/`#[intercept]` apply to both
-  transports; their decorators are built once per registration (per HTTP
-  mount, once for the MCP service) but all
-  registrations share ONE controller core per type and builder (fix round 1:
-  `AppBuilder::endpoint_core_or_insert`, `McpService::construct` +
-  `routes(state, core, ctx)`; lifecycle/background members require
-  `register_controller`, checked at `build()`); `#[pre_guard]`/
-  `#[middleware]`/`#[layer]` stay HTTP-only. Implemented by splitting the
-  impl and reusing each transport's parser unchanged (no merged parser), so
-  the HTTP-only expansion is byte-stable and the MCP-only expansion changes
-  by exactly the core-store contract: a new `construct` fn, an `__core:
-  Arc<Self>` parameter on `routes`, and `core: __core` instead of
-  constructing the core locally. A type registered several times (two
-  prefixed module mounts, plus MCP) keeps ONE core whose lifecycle is wired
-  by its first controller registration only (fix round 2); the store is reset
-  at `build_state()`/`with_state()` with the pre-state controller
-  registrations it would describe (fix round 3). `#[mcp_routes]` became a
+- **2026-11-03 (#1215, transport-layering level 3a) — one type = one
+  port.** `#[routes]` accepts MCP members (`#[tool]`/`#[resource]`/
+  `#[prompt]`/`#[completion]`) and infers the port from them: HTTP routes →
+  `Controller`, MCP members → `McpService` (including `#[routes(group,
+  opt_in)]`); an empty impl reads as HTTP. MCP members next to HTTP routes
+  are a compile error naming `docs/features/25-mcp.md` § One port per type:
+  each inbound port is its own adapter over shared beans (hexagonal), with
+  its port's native types and its own decorators. `#[mcp_routes]` became a
   `#[deprecated]` alias through the same dispatcher (removed next minor); an
   empty MCP service is spellable only through it. The macro deprecation lint
   fires at the attribute path: an item-level `#[allow(deprecated)]` on the
   impl does not silence it, a module/crate-level `#![allow(deprecated)]`
-  does.
+  does. Kept from the level-3a work: the builder's per-type core store
+  (`AppBuilder::endpoint_core_or_insert`, `EndpointCores`) — a type
+  registered several times (two prefixed module mounts) keeps ONE core whose
+  lifecycle is wired by its first controller registration only, and the
+  store is reset at `build_state()`/`with_state()` with the pre-state
+  controller registrations it would describe; and the MCP codegen contract
+  `McpService::construct(state, ctx)` + `routes(state, core: Arc<Self>,
+  ctx)`. The HTTP-only expansion is byte-stable; the MCP-only expansion
+  changes by exactly that contract (a `construct` fn, the `__core` parameter
+  and `core: __core`).
 
 - **2026-11-03 (#1213, transport-layering level 2) — reverses §6 bullet 1
   for gRPC.** "Identity extraction stays wire-specific" was right for a wire
