@@ -154,8 +154,10 @@ pub fn controller(args: TokenStream, input: TokenStream) -> TokenStream {
 }
 
 /// Attribute macro on an `impl` block — generates the members a type serves:
-/// Axum handlers and route wiring for HTTP members, MCP tools/resources/
-/// prompts for MCP members, or both on one impl.
+/// Axum handlers and route wiring for HTTP members, or MCP tools/resources/
+/// prompts for MCP members. One type exposes one port: an MCP member next to
+/// an HTTP route in the same impl is a compile error (see
+/// `docs/features/25-mcp.md` § One port per type).
 ///
 /// Must be placed on an `impl` block whose `Self` type uses [`macro@controller`].
 ///

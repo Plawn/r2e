@@ -380,7 +380,8 @@ tests/
 ## r2e-mcp — MCP server
 
 MCP (Model Context Protocol) tools over rmcp's streamable-HTTP transport,
-dispatched by R2E (`#[routes]` + `#[tool]`, mixable with HTTP routes in one impl; guards/interceptors shared
+dispatched by R2E (`#[routes]` + `#[tool]`; one type = one port, MCP members
+live on their own type next to the HTTP controller; guards/interceptors shared
 with HTTP).
 
 ```
@@ -567,10 +568,10 @@ tests/
 
 ### example-mcp — MCP server demo
 
-One `#[routes]` impl serving two transports: `MathTools` carries an HTTP route
-(`GET /api/calc/add/{a}/{b}`) and MCP tools with guards + interceptors;
-`ScientificTools` is an opt-in group. `tests/mcp_e2e.rs`
-drives the full MCP session dance through `TestApp`.
+One `CalcService` bean behind two adapters (one type per port): `CalcController`
+serves HTTP (`GET /api/calc/add/{a}/{b}`), `MathTools` serves MCP tools with
+guards + interceptors, and `ScientificTools` is an opt-in group.
+`tests/mcp_e2e.rs` drives the full MCP session dance through `TestApp`.
 
 ### example-postgres — Database integration
 
