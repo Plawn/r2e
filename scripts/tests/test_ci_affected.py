@@ -40,6 +40,7 @@ class SelectionTests(unittest.TestCase):
             package("leaf", deps=["external"]),
             package("r2e-core", deps=["leaf", {"name": "devtools", "optional": True}]),
             package("r2e-compile-tests", deps=[{"name": "r2e-core", "kind": "dev"}]),
+            package("r2e-mcp", deps=["r2e-core"]),
             package("app", "examples/app", ["r2e-core"]),
             package("unrelated"), package("devtools"),
         )
@@ -49,9 +50,10 @@ class SelectionTests(unittest.TestCase):
 
     def test_transitive_consumers_and_special_legs(self):
         result = self.select(["leaf/src/lib.rs"])
-        self.assertEqual(result["packages"], ["app", "leaf", "r2e-compile-tests", "r2e-core"])
+        self.assertEqual(result["packages"], ["app", "leaf", "r2e-compile-tests", "r2e-core", "r2e-mcp"])
         self.assertTrue(result["dev_reload"])
         self.assertTrue(result["compile_tests"])
+        self.assertTrue(result["mcp_loopback"])
         self.assertFalse(result["full"])
 
     def test_optional_target_build_dev_and_renamed_dependencies(self):
@@ -73,12 +75,16 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result["packages"], ["app"])
         self.assertFalse(result["dev_reload"])
         self.assertFalse(result["compile_tests"])
+        self.assertFalse(result["mcp_loopback"])
+
+    def test_mcp_change_enables_the_loopback_leg(self):
+        self.assertTrue(self.select(["r2e-mcp/src/lib.rs"])["mcp_loopback"])
 
     def test_lock_only_transitive_upgrade(self):
         old = lock(("external", "1", ["transitive 1"]), ("transitive", "1", []))
         new = lock(("external", "1", ["transitive 2"]), ("transitive", "2", []))
         result = self.select(["Cargo.lock"], {"Cargo.lock": old}, {"Cargo.lock": new})
-        self.assertEqual(result["packages"], ["app", "leaf", "r2e-compile-tests", "r2e-core"])
+        self.assertEqual(result["packages"], ["app", "leaf", "r2e-compile-tests", "r2e-core", "r2e-mcp"])
         self.assertFalse(result["full"])
 
     def test_removed_lock_dependency_uses_old_edges(self):

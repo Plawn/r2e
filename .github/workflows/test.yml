@@ -122,6 +122,17 @@ jobs:
         if: fromJSON(env.CI_PLAN).dev_reload
         run: cargo test -p r2e-core --features dev-reload --test dev_reload
 
+      # `loopback` (r2e-mcp) is off by default: it compiles rmcp's client
+      # role and a second inbound transport on the MCP port, with its own
+      # test module (`tests/server/loopback.rs`) and facade feature.
+      - name: cargo test -p r2e-mcp --features loopback,testing --test server
+        if: fromJSON(env.CI_PLAN).mcp_loopback
+        run: cargo test -p r2e-mcp --features loopback,testing --test server
+
+      - name: cargo check -p r2e --features mcp-loopback
+        if: fromJSON(env.CI_PLAN).mcp_loopback
+        run: cargo check -p r2e --features mcp-loopback
+
       # Excluded from `--workspace` above; its own leg so a trybuild
       # `.stderr` drift is named in the job summary rather than buried.
       - name: compile-tests (trybuild)

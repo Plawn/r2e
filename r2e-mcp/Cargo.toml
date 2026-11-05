@@ -16,6 +16,10 @@ default = []
 # Test helpers (`r2e_mcp::testing`): pin a TestJwt-backed validator so an
 # authenticated MCP app boots with zero network I/O.
 testing = ["dep:r2e-test"]
+# In-process (loopback) transport (`r2e_mcp::loopback::McpLoopback`): open
+# MCP sessions on the mounted endpoint without the network stack. rmcp's
+# `client` role only adds `tokio-stream`, already in the graph — no new crate.
+loopback = ["rmcp/client", "dep:futures-util", "dep:futures-channel"]
 
 [dependencies]
 r2e-core = { workspace = true }
@@ -39,6 +43,9 @@ http-body = { workspace = true }
 # `default-features = false`: rmcp's default `macros` feature is deliberately
 # unused — R2E dispatches tools itself (#[routes] MCP members), rmcp is the wire only.
 rmcp = { workspace = true }
+# `loopback` only: the in-memory channels (`Sink` senders) + `StreamExt::map`.
+futures-channel = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

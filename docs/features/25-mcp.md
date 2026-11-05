@@ -456,6 +456,86 @@ store).
 services over one `CalcService` bean, guards, interceptors, `TestApp` e2e
 tests).
 
+### Transports: one port, two ways in
+
+The MCP port is served by inbound transports over the same endpoint (one
+catalog, one `McpSessions`, one `McpRegistry`, the same guards and
+interceptors):
+
+| Transport | Crate feature | Opens a session by | Identity |
+|---|---|---|---|
+| Streamable HTTP (default) | `mcp` | `POST {mcp.path}` + `initialize` | `mcp.auth` bearer / Basic, struct-level `#[inject(identity)]` per request |
+| In-process loopback | `mcp-loopback` (r2e-mcp `loopback`) | `McpLoopback::connect(id, identity)` | resolved once at connect, carried by every message |
+
+The loopback transport is for code running *inside* the app that needs to call
+its own tools as an MCP client — an agent loop, one session per agent thread —
+without the network stack. The feature compiles rmcp's client role (no new
+crate; HTTP-only apps do not pay for it) and the plugin provides the
+`McpLoopback` bean (`#[inject] loopback: McpLoopback`):
+
+```rust
+use r2e::prelude::*;
+use r2e::r2e_mcp::{CallToolRequestParams, LoopbackIdentity, McpLoopback};
+
+async fn agent_turn(loopback: &McpLoopback, user: AuthenticatedUser)
+    -> Result<CallToolResult, Box<dyn std::error::Error>>
+{
+    let me = McpPrincipal::trusted(user, ["mcp:read".to_string()]);
+    let session = loopback
+        .connect("agent-thread-42", LoopbackIdentity::Principal(me))
+        .await?;
+    let result = session.call_tool(CallToolRequestParams::new("add")).await?;
+    session.close().await;
+    Ok(result)
+}
+```
+
+`LoopbackSession` derefs to rmcp's `RunningService<RoleClient, ()>`
+(`list_all_tools`, `call_tool`, `read_resource`, `get_prompt`, …);
+`close()` ends the server side gracefully, dropping it does too.
+
+A loopback session **is** a session: the chosen id is what
+`ToolCall::session_id()` reports and `McpSessions::get(id)` finds; guards,
+`#[roles]`, `#[tool(scopes)]`, `McpSessionInit`, session-private members and
+`notify_list_changed` apply unchanged. Loopback ids never reach HTTP's session
+table (to HTTP a loopback id is an unknown id, 404, once a request gets as far
+as the session lookup — `mcp.auth`, request scopes and the transport's own
+request validation still answer first), and app shutdown cancels loopback
+sessions with the HTTP ones.
+
+**Identity at connect.** `connect` takes a `LoopbackIdentity`, resolved once
+into the same request parts the HTTP path hands to members (`POST {mcp.path}`,
+`Mcp-Session-Id: {id}`):
+
+- `Anonymous` — no identity. Refused (`Unauthorized`) when `mcp.auth` is on,
+  like an HTTP request without credentials.
+- `Bearer(token)` — validated by the plugin's `McpTokenValidator` (same
+  `required-scopes` floor as HTTP). Without `mcp.auth` the plugin validates
+  nothing and deposits no principal; the session is anonymous unless a
+  service's own struct-level identity scope authenticates the forwarded
+  header. Either way the parts carry
+  `Authorization: Bearer {token}` (a token that is not a valid header value
+  is `Unauthorized`).
+- `Principal(McpPrincipal::trusted(user, scopes))` — the caller already
+  resolved the user (the agent loop knows whose thread it runs); the process
+  vouches for it (`token_hash` is `0`). Members see it as `McpPrincipal`
+  through `#[inject(identity)]`, the session binds to its `sub`
+  (`McpSessions::for_subject`), `#[roles]` and scopes apply as to a bearer.
+
+Then every service's struct-level request scope runs on those parts, exactly
+like the HTTP identity layer: an `#[inject(identity)]` / `#[inject(request)]`
+field reading a header the loopback request does not carry rejects the connect
+with `LoopbackError::Rejected(status, body)` — that identity is HTTP-only;
+keep it on the HTTP adapter or make the field `Option<…>`.
+
+Other errors: `NotMounted` (`mcp.enabled = false`, connect before the Routes
+stage ran, or the router was dropped), `Stateless` (`mcp.stateless = true`
+keeps no sessions), `InvalidSessionId` (empty or not header-safe),
+`SessionInUse` (a live session holds the id; it is free again the moment that
+session is closed, dropped or its connect cancelled — an `McpSession` handle
+still held by the app does not keep it), `Handshake` (the `initialize`
+exchange failed).
+
 ## Dynamic members (per-session lists)
 
 By default every session sees the same list, fixed at boot (modulo the
@@ -766,6 +846,12 @@ empty priming event when parsing. Stateful mode requires the `initialize` →
 `stateless: true` + `json-response: true` skips sessions entirely and answers
 plain JSON. See `examples/example-mcp/tests/mcp_e2e.rs` for a complete
 harness.
+
+With feature `mcp-loopback`, drive the server as a real MCP client instead:
+read the `McpLoopback` bean (`app.bean_context().try_get::<McpLoopback>()`
+before `build()`), connect after the router is built and call
+`list_all_tools` / `call_tool` on the session — no envelopes, no SSE parsing
+(see "Transports" above; `r2e-mcp/tests/server/loopback.rs` is the reference).
 
 ## Auth — OAuth 2.1 resource server (`mcp.auth.*`)
 

@@ -44,15 +44,55 @@ impl Default for McpSessions {
     }
 }
 
+/// Drop the entries whose session is gone: the state was freed, or its
+/// connection ended ([`SessionState::close`]) while a handle still holds it.
+fn prune(live: &mut Vec<Weak<SessionState>>) {
+    live.retain(|s| s.upgrade().is_some_and(|s| !s.is_closed()));
+}
+
 impl McpSessions {
+    /// Idempotent: a state already listed (a loopback session is claimed
+    /// at connect, then `initialize` registers again) is not listed twice.
+    /// A closed state (its connection ended before `initialize` got here)
+    /// is never listed.
     pub(crate) fn register(&self, state: &Arc<SessionState>) {
         let mut live = self
             .inner
             .live
             .lock()
             .expect("MCP session registry poisoned");
-        live.retain(|s| s.strong_count() > 0);
+        prune(&mut live);
+        if state.is_closed() {
+            return;
+        }
+        let weak = Arc::downgrade(state);
+        if !live.iter().any(|s| Weak::ptr_eq(s, &weak)) {
+            live.push(weak);
+        }
+    }
+
+    /// Register `state` under `id` unless a live session already carries
+    /// that id — one lock, so two concurrent claims of the same id cannot
+    /// both succeed. A closed session (its connection ended, a handle may
+    /// still hold its state) does not count. Returns whether the claim went
+    /// through.
+    #[cfg(feature = "loopback")]
+    pub(crate) fn claim(&self, id: &str, state: &Arc<SessionState>) -> bool {
+        let mut live = self
+            .inner
+            .live
+            .lock()
+            .expect("MCP session registry poisoned");
+        prune(&mut live);
+        let taken = live
+            .iter()
+            .filter_map(Weak::upgrade)
+            .any(|s| s.id().is_some_and(|existing| existing == id));
+        if taken {
+            return false;
+        }
         live.push(Arc::downgrade(state));
+        true
     }
 
     pub(crate) fn subscribe_changes(&self) -> broadcast::Receiver<Changed> {
@@ -77,7 +117,7 @@ impl McpSessions {
             .live
             .lock()
             .expect("MCP session registry poisoned");
-        live.retain(|s| s.strong_count() > 0);
+        prune(&mut live);
         live.iter().filter_map(Weak::upgrade).collect()
     }
 

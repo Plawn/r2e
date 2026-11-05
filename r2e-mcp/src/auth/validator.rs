@@ -42,6 +42,17 @@ pub struct McpPrincipal {
 }
 
 impl McpPrincipal {
+    /// A principal the process vouches for (no token was validated): the
+    /// loopback transport's trusted identity. `token_hash` is `0` — there
+    /// is no token to correlate.
+    pub fn trusted(user: AuthenticatedUser, scopes: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            user: Arc::new(user),
+            scopes: scopes.into_iter().collect(),
+            token_hash: 0,
+        }
+    }
+
     /// Whether the caller holds `scope`.
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)

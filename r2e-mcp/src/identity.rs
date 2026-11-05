@@ -221,11 +221,27 @@ pub(crate) struct McpIdentityLayer {
 }
 
 impl McpIdentityLayer {
-    pub(crate) fn new(state: IdentityState) -> Self {
-        McpIdentityLayer {
-            state: Arc::new(state),
+    pub(crate) fn new(state: Arc<IdentityState>) -> Self {
+        McpIdentityLayer { state }
+    }
+}
+
+/// Run every registered service's request scope over `parts`: the first
+/// caller found wins; the first rejection stops the run. Shared by the HTTP
+/// layer and the loopback transport (which runs it once, at connect, over
+/// the parts it synthesizes for the session).
+pub(crate) async fn run_scopes(
+    scopes: &[RequestScope],
+    parts: &mut Parts,
+) -> Result<Option<McpCaller>, Rejection> {
+    let mut caller: Option<McpCaller> = None;
+    for scope in scopes {
+        let found = scope.run(parts).await?;
+        if caller.is_none() {
+            caller = found;
         }
     }
+    Ok(caller)
 }
 
 impl<S> Layer<S> for McpIdentityLayer {
@@ -255,7 +271,7 @@ fn session_not_found() -> Response {
 
 /// Render a scope's rejection: the extractor's own response, plus the
 /// `mcp.auth` challenges on a 401 that carries none.
-fn rejected(rejection: Rejection, challenges: Option<&Challenges>) -> Response {
+pub(crate) fn rejected(rejection: Rejection, challenges: Option<&Challenges>) -> Response {
     let mut response = rejection.into_http_response();
     if response.status() == StatusCode::UNAUTHORIZED
         && !response.headers().contains_key(header::WWW_AUTHENTICATE)
@@ -299,24 +315,17 @@ where
 
         Box::pin(async move {
             let (mut parts, body) = req.into_parts();
-            let mut caller: Option<McpCaller> = None;
-            for scope in &state.scopes {
-                match scope.run(&mut parts).await {
-                    Ok(found) => {
-                        if caller.is_none() {
-                            caller = found;
-                        }
-                    }
-                    Err(rejection) => {
-                        let response = rejected(rejection, state.challenges.as_ref());
-                        tracing::debug!(
-                            status = response.status().as_u16(),
-                            "MCP request rejected by a service's request scope"
-                        );
-                        return Ok(response);
-                    }
+            let caller = match run_scopes(&state.scopes, &mut parts).await {
+                Ok(caller) => caller,
+                Err(rejection) => {
+                    let response = rejected(rejection, state.challenges.as_ref());
+                    tracing::debug!(
+                        status = response.status().as_u16(),
+                        "MCP request rejected by a service's request scope"
+                    );
+                    return Ok(response);
                 }
-            }
+            };
 
             // Session ↔ subject binding, when the `mcp.auth` layer did not
             // already do it for its principal.

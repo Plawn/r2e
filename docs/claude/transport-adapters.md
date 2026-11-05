@@ -191,6 +191,35 @@ references.
 
 ## Decisions log
 
+- **2026-11-05 (#1076) — loopback = a second inbound transport on the MCP
+  port, not a feature of its own.** `r2e-mcp` feature `loopback` (facade
+  `mcp-loopback`; rmcp `client` role, no new crate) adds `McpLoopback`, a
+  bean the plugin provides (5th `Provided` element under the feature) and
+  mounts in `after_routes` next to the HTTP service. `connect(id, identity)`
+  resolves the identity ONCE into synthesized `http::request::Parts`
+  (`POST {mcp.path}`, `Mcp-Session-Id`, `Authorization: Bearer …` for a
+  bearer whether or not `mcp.auth` is on, the principal deposited in the
+  extensions) through the same helpers the HTTP
+  layers use (`check_required_scopes`/`deposit_principal`, `run_scopes`),
+  claims the id in `McpSessions`, then serves `R2eMcpHandler` over two
+  in-memory channels (`SinkStreamTransport`), cloning the parts into every
+  message's extensions so `prepare()`/`caller_in()` run byte-for-byte the
+  HTTP path. Identities: `Anonymous`, `Bearer` (plugin validator), trusted
+  `Principal` (`McpPrincipal::trusted`). Rejected: a transport-neutral "call
+  context" (a second identity mechanism next to `Parts`), and a loopback
+  that bypasses guards/scopes (the point is parity). The bean holds the
+  wiring weakly — the HTTP service factory owns it — because the request
+  scopes capture the state and the bean lives in it (a strong reference
+  would be a state ↔ router cycle). Liveness ≠ ownership: `McpSessions`
+  and `SessionBindings` hold `Weak<SessionState>`, but an `McpSession`
+  handle is a strong one, so a *closed* flag on `SessionState` (set by
+  `LoopbackSession::close`/`Drop`, by the server task's exit on every path,
+  and by the `Pending` guard when a connect is cancelled or fails its
+  handshake after claiming the id) is what frees an id — never the
+  allocation going away. Follow-ups: an `r2e-test` in-process MCP client
+  over this bean; HTTP session idle timeout / `with_session_manager`
+  (#692).
+
 - **2026-11-03 (#1215, transport-layering level 3a) — one type = one
   port.** `#[routes]` accepts MCP members (`#[tool]`/`#[resource]`/
   `#[prompt]`/`#[completion]`) and infers the port from them: HTTP routes →

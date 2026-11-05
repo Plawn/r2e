@@ -22,6 +22,8 @@ use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
 use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::identity::{IdentityState, McpIdentityLayer, RequestScope};
+#[cfg(feature = "loopback")]
+use crate::loopback::{LoopbackAuth, LoopbackWiring, McpLoopback};
 use crate::registry::McpServiceRegistry;
 use crate::request_log::McpRequestLog;
 use crate::resource_updates::McpResourceUpdates;
@@ -379,11 +381,24 @@ impl Plugin for McpServer {
     /// [`McpSessions`] reaches every live MCP session (push list changes
     /// from a consumer, an admin endpoint, …); [`McpRegistry`] adds and
     /// removes the members every session serves, after boot.
+    ///
+    /// Feature `loopback` adds [`McpLoopback`] (in-process sessions on this
+    /// same endpoint) as a fifth element; the tuple is never named by
+    /// consumers (`#[inject]` resolves each bean by type).
+    #[cfg(not(feature = "loopback"))]
     type Provided = (
         McpTokenValidator,
         McpResourceUpdates,
         McpSessions,
         McpRegistry,
+    );
+    #[cfg(feature = "loopback")]
+    type Provided = (
+        McpTokenValidator,
+        McpResourceUpdates,
+        McpSessions,
+        McpRegistry,
+        McpLoopback,
     );
     type Deps = ();
     type Config = McpConfig;
@@ -411,11 +426,13 @@ impl Plugin for McpServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         if !ctx.enabled() {
             tracing::info!("MCP server disabled (mcp.enabled = false); endpoint not mounted");
-            return Ok((
+            return Ok(provided(
                 McpTokenValidator::disabled(),
                 self.resource_updates,
                 McpSessions::default(),
                 McpRegistry::default(),
+                #[cfg(feature = "loopback")]
+                McpLoopback::unmounted(),
             ));
         }
         let cfg = config.unwrap_or_default();
@@ -506,7 +523,8 @@ impl Plugin for McpServer {
         // Session id → session, shared by the auth layer and the identity
         // layer: whichever learns the caller's subject binds the session.
         let bindings = SessionBindings::default();
-        let (auth_layer, provided_validator, auth_slot, auth_routes, challenges) = match auth_cfg {
+        let (auth_layer, provided_validator, auth_slot, auth_routes, challenges, required_scopes) =
+            match auth_cfg {
             Some(auth) => {
                 let artifacts = build_auth(AuthInputs {
                     cfg: auth,
@@ -532,10 +550,24 @@ impl Plugin for McpServer {
                     Some(artifacts.slot),
                     Some(artifacts.extra_routes),
                     Some(artifacts.challenges),
+                    Some(artifacts.required_scopes),
                 )
             }
-            None => (None, McpTokenValidator::disabled(), None, None, None),
+            None => (None, McpTokenValidator::disabled(), None, None, None, None),
         };
+        // A loopback connect presenting a bearer token validates it through
+        // the SAME slot the HTTP layer reads (pinned validators included) and
+        // under the same `mcp.auth.required-scopes`.
+        #[cfg(feature = "loopback")]
+        let loopback_auth = auth_slot
+            .clone()
+            .zip(required_scopes)
+            .map(|(slot, required_scopes)| LoopbackAuth {
+                slot,
+                required_scopes,
+            });
+        #[cfg(not(feature = "loopback"))]
+        let _ = required_scopes;
         // The layer reads the validator through the slot, filled from the
         // BEAN CONTEXT after the graph resolves: a test-pinned validator
         // (`override_bean`) is resolved, not captured (plugins.md
@@ -629,6 +661,12 @@ impl Plugin for McpServer {
         let resource_updates = self.resource_updates.clone();
         let sessions_fallback = sessions.clone();
         let members_fallback = members.clone();
+        // The loopback bean is provided now and wired in `after_routes`,
+        // once the endpoint exists: a `connect` before that is `NotMounted`.
+        #[cfg(feature = "loopback")]
+        let loopback = McpLoopback::unmounted();
+        #[cfg(feature = "loopback")]
+        let loopback_bean = loopback.clone();
         ctx.after_routes(move |routes: &mut RoutesContext| {
             // No service registered is a valid deployment: every member then
             // comes from the global registry (or a session), after boot.
@@ -643,13 +681,19 @@ impl Plugin for McpServer {
             // A struct-level identity is a caller to filter lists against,
             // exactly like an `mcp.auth` principal.
             let filter_members = filter_members.unwrap_or(!scopes.is_empty());
-            let identity_layer = (!scopes.is_empty()).then(|| {
-                McpIdentityLayer::new(IdentityState {
+            // Shared by the HTTP identity layer and (feature `loopback`)
+            // the in-process connect path: one resolution of the services'
+            // request scopes, two inbound transports.
+            let identity_state = (!scopes.is_empty()).then(|| {
+                Arc::new(IdentityState {
                     scopes,
                     bindings: bindings.clone(),
                     challenges: challenges.clone(),
                 })
             });
+            let identity_layer = identity_state.clone().map(McpIdentityLayer::new);
+            #[cfg(not(feature = "loopback"))]
+            let _ = identity_state;
             if services.is_empty() {
                 tracing::info!(
                     "no MCP service registered (`.register_mcp_service::<T>()`); \
@@ -687,6 +731,19 @@ impl Plugin for McpServer {
                 page_size,
                 supported_versions,
             });
+            // The router owns the wiring (below, through the service
+            // factory); the bean only holds a weak handle, so dropping the
+            // router releases the state the request scopes capture.
+            #[cfg(feature = "loopback")]
+            let loopback_mount = loopback.mount(LoopbackWiring {
+                endpoint: Arc::clone(&endpoint),
+                path: path.clone(),
+                stateless,
+                identity: identity_state,
+                auth: loopback_auth,
+                bindings: bindings.clone(),
+                shutdown: mcp_cancel.clone(),
+            });
             let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite
             // the fields we own (all pub).
@@ -710,7 +767,11 @@ impl Plugin for McpServer {
                 limit: transport_config.max_request_body_bytes,
             };
             let service = StreamableHttpService::new(
-                move || Ok(R2eMcpHandler::new(Arc::clone(&endpoint))),
+                move || {
+                    #[cfg(feature = "loopback")]
+                    let _owned_by_the_router = &loopback_mount;
+                    Ok(R2eMcpHandler::new(Arc::clone(&endpoint)))
+                },
                 session_manager,
                 transport_config,
             );
@@ -744,6 +805,32 @@ impl Plugin for McpServer {
             });
         });
 
-        Ok((provided_validator, self.resource_updates, sessions, members))
+        Ok(provided(
+            provided_validator,
+            self.resource_updates,
+            sessions,
+            members,
+            #[cfg(feature = "loopback")]
+            loopback_bean,
+        ))
     }
+}
+
+/// The `Provided` tuple at both return sites, so the feature-gated fifth
+/// element is spelled once.
+fn provided(
+    validator: McpTokenValidator,
+    updates: McpResourceUpdates,
+    sessions: McpSessions,
+    members: McpRegistry,
+    #[cfg(feature = "loopback")] loopback: McpLoopback,
+) -> <McpServer as Plugin>::Provided {
+    (
+        validator,
+        updates,
+        sessions,
+        members,
+        #[cfg(feature = "loopback")]
+        loopback,
+    )
 }

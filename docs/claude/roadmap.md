@@ -80,14 +80,11 @@ promise.
 - **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
   half was absorbed by W10; what remains is a pass over which concern lives in
   which crate/macro (core vs http vs macros vs integrations).
-- **One config-error report format** — Tasker #1214 (low). The
-  `=== CONFIGURATION ERRORS (<scope>) ===` banner is hand-copied at seven
-  sites (`r2e-core` beans/error.rs ×2, builder/typed.rs ×2, runtime/drain.rs;
-  `r2e-mcp/src/lib.rs`; `r2e-grpc/src/lib.rs`) and every new transport
-  adapter copies it again. One formatter in `r2e-core` (a `Display` type or
-  `format_config_errors(scope, body)`), reused by all sites, byte-identical
-  output, patch bumps. Group with transport-layering level 3a (the first
-  adapter that would otherwise copy it).
+- ~~**One config-error report format** — Tasker #1214~~ — SHIPPED
+  2026-11-04 on PR #136 (with transport-layering 3a'): one formatter in
+  `r2e-core` replaces the seven hand-copied
+  `=== CONFIGURATION ERRORS (<scope>) ===` banners (r2e-core, r2e-mcp,
+  r2e-grpc); released in r2e 0.11.0. Ticket closed.
 
 ## W13 — Live config × dev-reload — remainder
 
@@ -416,7 +413,8 @@ dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
 
 P1 (server core) shipped on `feat/mcp-server`: `r2e-mcp` crate + `McpServer`
 plugin (streamable HTTP, shared sessions across SO_REUSEPORT workers,
-shutdown-token relay), `#[mcp_routes]` + `#[tool]` (schemars schemas, guards
+shutdown-token relay), `#[mcp_routes]` (since r2e-mcp 0.11.0 / 2026-11-04:
+`#[routes]`, port inferred from the members) + `#[tool]` (schemars schemas, guards
 SHARED with HTTP via `Guard<I>`, prebuilt interceptors, `EndpointDeps` compile
 check), example-mcp, full test target + compile-fail cases. References:
 `docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
@@ -551,11 +549,28 @@ on members (`#[tool(meta = meta!(..))]`), `mcp.auth.basic`, and
 release; `r2e-core` stays 0.6.x): endpoint always
 mounted, every family always advertised, `Provided` 4-tuple,
 `McpSessionError` → `McpMemberError` (alias kept) —
-`docs/migration/mcp-registry.md`. Out of scope and still open: loopback
-in-memory session, idle timeout / SessionManager (#692).
+`docs/migration/mcp-registry.md`.
+
+**Loopback transport (Tasker #1076, the last plexus-migration blocker, branch
+`task/mcp-loopback`, 2026-11-05) — IMPLEMENTED, in review (additive:
+`r2e-mcp` 0.11.1 + facade patch at release):** `r2e-mcp` feature `loopback`
+(facade `mcp-loopback`, rmcp `client` role, no new crate) adds the
+`McpLoopback` bean — a second inbound transport on the MCP port.
+`connect(id, LoopbackIdentity::{Anonymous, Bearer, Principal})` resolves the
+identity once into synthesized `Parts` (bearer through the plugin validator
++ `required-scopes`; `McpPrincipal::trusted` for a caller that already
+resolved the user; struct-level request scopes run on the parts) and serves
+the unchanged `R2eMcpHandler` over in-memory channels, so the session is a
+real one (`McpSessions`, `ToolCall::session_id`, guards/roles/scopes,
+`McpSessionInit`, session-private members). Design record:
+`docs/claude/transport-adapters.md` § Decisions log (2026-11-05). Follow-ups
+(own tickets): an `r2e-test` in-process MCP client over the bean (W6
+testing DX); HTTP session idle timeout / `with_session_manager` (#692) —
+NOT part of #1076 any more.
 
 **MCP mount stage + identity contract (Tasker #1175, branch
-`feat/mcp-routes-stage-identity`, 2026-10-26) — DONE, unreleased:**
+`feat/mcp-routes-stage-identity`, 2026-10-26) — SHIPPED, released as
+r2e-mcp 0.10.0 (2026-11-02, ticket closed):**
 `McpServer` mounts `/mcp` + the well-known routes in the Routes stage
 (`after_routes` + `register_routes`), so app Graph layers (HttpTrace,
 metrics, app CORS/auth/rate-limit) wrap the endpoint — app gateway plugins
@@ -751,7 +766,7 @@ data-catalog); if the r2e plugins cannot reproduce the app's current CORS
 or `TraceLayer` span/log shape, that delta comes back here as a framework
 finding.
 
-## Tracing — one path through the builder — SHIPPED 2026-10-31 (release pending)
+## Tracing — one path through the builder — SHIPPED 2026-10-31, released as r2e 0.10.0
 
 Branch `task/tracing-single-path` (after the extraction PRs #119–#122). The
 process-global subscriber now has exactly one install path: `build_state()` /
@@ -775,8 +790,10 @@ factory (`set_console_factory`, PR #122). Replacements: `Suppress` (a layer;
 `Observability` writes `trace_id`/`span_id` with `OtelIds`), `tracing.console:
 false` + a contributed console layer. Release: r2e-core 0.9.0 (breaking) +
 r2e-macros 0.9.0 (syntax break, propagates) batched with r2e 0.10.0 /
-r2e-observability 0.9.0; new crate r2e-tracing 0.1.0. Record:
-`docs/claude/subsystems.md` § Tracing.
+r2e-observability 0.9.0; new crate r2e-tracing 0.1.0 — all tagged
+(`r2e-core-v0.9.0`, `r2e-tracing-v0.1.0`, then r2e-tracing 0.1.1). The
+downstream defects of the new interface were triaged as Tasker #1192 (closed
+2026-11-02). Record: `docs/claude/subsystems.md` § Tracing.
 
 ## Open items tracked in their own docs
 
@@ -792,23 +809,73 @@ Kept where the context lives rather than duplicated here:
   tests + throughput bench.
 - `docs/research/HANDOFF-perf-tpc.md` — Linux benchmark run, proxy-mesh push
   gate, tunnel `copy_bidirectional` (543).
+
+## Standalone Tasker tickets (target `r2e`, open as of 2026-11-05)
+
+Not part of a workstream above; Tasker is the record, this list is the
+pointer. Verified against Tasker on 2026-11-05 (the five tickets released in
+r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
+
+- **#1076 (high)** — MCP loopback transport: implemented on
+  `task/mcp-loopback` (2026-11-05, see W16); closes on release. The HTTP
+  idle timeout / `with_session_manager` half moves to its own ticket (#692).
+- **#1181 (medium)** — `#[scheduled(config = "…", default = "…")]`: cadence
+  read from a config key (`ScheduleConfig: FromConfigValue`, absent → default,
+  present-but-invalid → boot error), on `#[routes]` controllers and `#[bean]`
+  impls. Origin: close-the-loop `PullSweep::poll_sources` working around it
+  with `schedule_task_with`.
+- **#1173 (low)** — `AuthenticatedUser` extractor drops `WWW-Authenticate`
+  on 401 since #1072. Same defect as the `www-authenticate` item of #1217;
+  closes with that commit.
+- **#768 (low, idea)** — r2e-observability sqlx spans + app span helpers;
+  measure the appetite first.
 - `docs/research/thread-per-core.md` — stall detector, `#[offload]`/
   `#[blocking]`, `threads_per_worker` (none implemented).
 - `plans/transport-layering.md` — share more between `#[routes]` /
-  `#[mcp_routes]` / `#[grpc_routes]`. Levels 1 (#1212, PR #132) and 2 (#1213,
-  PR #133) merged 2026-11-03; 3a (#1215, PR #136) shipped then **rescoped
-  2026-11-04: one type = one port** (hexagonal doctrine, plan §5). The mixed
-  HTTP + MCP form is removed on the same PR before the single release
-  (3a', handoff in plan §10); 3b (neutral signature) and 3c (single
-  registration) are dropped. Next: 3b' one generation pipeline inside
-  r2e-macros (gRPC joins it, `#[grpc_routes]` kept, `Self::<Assoc>` rewrite
-  retired), 3c' runtime hygiene (gRPC core store, pre-state registration
-  rejection, `www-authenticate`, `GrpcIdentity` stub removal at the minor
-  after the release — `#[mcp_routes]` is already removed outright on #136,
-  no alias), and **level 4 hexagonal DX**: `From<HttpError> for tonic::Status`,
-  `example-app` as domain/ports/adapters + `llm/hexagonal.md`, an
-  `r2e doctor` transport-leak rule, the inbound adapter catalogue. Tickets:
-  #1215 (3a'), #1216 (3b'), #1217 (3c'), #1218 → #1219 → #1220 (level 4).
+  `#[grpc_routes]` (and the former `#[mcp_routes]`). **Levels 1 + 2 + 3a'
+  RELEASED 2026-11-04 as r2e 0.11.0** (#1212 PR #132, #1213 PR #133, #1215
+  PR #136, #1214 banner formatter; release PR #138, merge `2294b763`, tags
+  `r2e-v0.11.0` / `r2e-mcp-v0.11.0` / `r2e-grpc-v0.10.0` /
+  `r2e-security-v0.10.0` / `r2e-macros-v0.10.0`, …). Doctrine since
+  2026-11-04: **one type = one port** (plan §5) — the mixed HTTP + MCP form
+  never shipped, `#[mcp_routes]` was removed outright (no alias), 3b
+  (neutral signature) and 3c (single registration) are dropped. The release
+  carries every user-facing break of the workstream; what follows is
+  non-breaking by design (plan §8), each ticket on its own branch from
+  master, nothing started as of 2026-11-04:
+  - **#1218 Hexagonal DX 1** (small, no dependency, **start here**):
+    `From<HttpError> for tonic::Status` in r2e-grpc with the
+    `rejection_to_status` policy, so a `#[derive(ApiError)]` domain error is
+    consumed as is by an HTTP handler, a `#[tool]` and a `#[grpc_routes]`
+    method; one-line notes in `llm/error-handling.md` + `llm/grpc.md`.
+  - **#1216 3b'** (large, no dependency): one generation pipeline inside
+    r2e-macros over the shared `Vec<MemberDef>` (port description + three
+    implementations HTTP/MCP/gRPC); gRPC joins it keeping `#[grpc_routes]`
+    (user methods inside a generated trait impl carrying the assoc types, so
+    `substitute_self_assoc` goes away); the three `*_routes_parsing.rs` lose
+    their member loops. Oracle: `cargo expand` byte-identical on example-app /
+    example-mcp / example-grpc. Patch of r2e-macros, no `Breaking` entry.
+  - **#1217 3c'** (medium, six independent items = six commits): gRPC core
+    store through `endpoint_core_or_insert`; compile-time rejection of
+    `register_controller` on the pre-state builder (silently discarded at
+    `build_state()` today); `www-authenticate` restored on validator failure
+    (HTTP + gRPC metadata, open since #1072); hidden deco item names
+    `<Ctrl>_<fn>` colliding across modules; `Self` unscoped in HTTP deco
+    expressions; `GrpcIdentity` stub removal — a `Breaking` entry of
+    r2e-grpc, **only at its next minor** (deprecation window). The ticket's
+    item 6 still names the `#[mcp_routes]` alias: obsolete, nothing to
+    remove there.
+  - **#1219 Hexagonal DX 2** (medium, after #1218): example-app as
+    domain/ports/adapters{http,mcp,grpc,events}/services, outbound ports as
+    `Arc<dyn Port>` beans swapped with `override_bean` in a test,
+    `llm/hexagonal.md` (routed from `llm.txt`, slug in `TOPICS`, doctested),
+    book chapter, inbound adapter catalogue (what each adapter injects and
+    projects, incl. the one-port-per-type compile error). No DB queue/outbox.
+  - **#1220 Hexagonal DX 3** (small, after #1219): `r2e doctor` rule against
+    transport types leaking into `domain/` and `services/` (heuristic on
+    `r2e::http` / `Json` / `ToolCall` / `tonic` imports).
+  Recommended order: #1218 → #1216 (with #1217 items landing in parallel as
+  single commits) → #1219 → #1220.
 
 ---
 

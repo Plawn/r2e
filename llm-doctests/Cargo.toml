@@ -26,7 +26,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
-r2e = {workspace = true, features = ["full", "sqlx-sqlite", "sqlx-postgres", "diesel-sqlite", "diesel-postgres", "tenant-sqlx", "tenant-diesel", "mcp-testing", "test-util", "metrics-facade"]}
+r2e = {workspace = true, features = ["full", "sqlx-sqlite", "sqlx-postgres", "diesel-sqlite", "diesel-postgres", "tenant-sqlx", "tenant-diesel", "mcp-testing", "mcp-loopback", "test-util", "metrics-facade"]}
 r2e-test = {workspace = true, features = ["ws"]}
 r2e-devservices = {workspace = true, features = ["postgres", "redis", "openfga", "keycloak"]}
 # `r2e-openfga` directly, not via the facade's `openfga` feature: that feature

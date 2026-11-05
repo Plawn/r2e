@@ -47,6 +47,8 @@ mod global;
 pub mod guard;
 pub mod handler;
 mod identity;
+#[cfg(feature = "loopback")]
+pub mod loopback;
 mod pagination;
 pub mod params;
 pub mod plugin;
@@ -78,6 +80,10 @@ pub use elicitation::{ElicitError, Elicited, McpClient};
 pub use error::McpError;
 pub use global::{McpRegistry, RegistryEdit};
 pub use identity::McpCaller;
+#[cfg(feature = "loopback")]
+pub use loopback::{
+    CallToolRequestParams, LoopbackError, LoopbackIdentity, LoopbackSession, McpLoopback,
+};
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;
 #[doc(hidden)]
@@ -314,4 +320,6 @@ pub mod prelude {
         SessionToolset,
     };
     pub use crate::{meta, AppBuilderMcpExt, MetaObject};
+    #[cfg(feature = "loopback")]
+    pub use crate::loopback::{LoopbackError, LoopbackIdentity, LoopbackSession, McpLoopback};
 }
