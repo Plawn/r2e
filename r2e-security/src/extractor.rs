@@ -3,7 +3,7 @@ use std::sync::Arc;
 use r2e_core::http::header::{Parts, AUTHORIZATION};
 use r2e_core::type_list::HasBean;
 use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
-use r2e_core::StandardClaims;
+use r2e_core::{Rejection, StandardClaims};
 use tracing::{debug, warn};
 
 use crate::error::SecurityError;
@@ -62,13 +62,14 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 ///     Arc<JwtClaimsValidator>: FromRef<S>,
 ///     SqlitePool: FromRef<S>,
 /// {
-///     type Rejection = r2e_core::HttpError;
+///     type Rejection = r2e_core::Rejection;
 ///
 ///     async fn from_request_parts(
 ///         parts: &mut Parts,
 ///         state: &S,
 ///     ) -> Result<Self, Self::Rejection> {
-///         // 1. Validate JWT and get claims
+///         // 1. Validate JWT and get claims (a failure keeps its
+///         //    `WWW-Authenticate` challenge on the rejection)
 ///         let claims = extract_jwt_claims(parts, state).await?;
 ///         let sub = claims.sub.clone();
 ///
@@ -80,7 +81,7 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 ///         let profile = sqlx::query_as!(UserProfile, "SELECT * FROM users WHERE sub = ?", sub)
 ///             .fetch_one(&pool)
 ///             .await
-///             .map_err(|e| r2e_core::HttpError::internal(e.to_string()))?;
+///             .map_err(|e| r2e_core::Rejection::internal(e.to_string()))?;
 ///
 ///         Ok(DbUser { claims: authenticated, profile })
 ///     }
@@ -103,7 +104,7 @@ pub fn extract_bearer_token_from_parts(parts: &Parts) -> Result<&str, SecurityEr
 pub async fn extract_jwt_claims<S, I>(
     parts: &Parts,
     state: &S,
-) -> Result<StandardClaims, r2e_core::HttpError>
+) -> Result<StandardClaims, Rejection>
 where
     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
 {
@@ -117,7 +118,7 @@ where
 pub async fn extract_jwt_claims_as<S, I, C>(
     parts: &Parts,
     state: &S,
-) -> Result<C, r2e_core::HttpError>
+) -> Result<C, Rejection>
 where
     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
     C: JwtClaimSet,
@@ -127,7 +128,7 @@ where
 
     let claims = validator.validate_as(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
-        r2e_core::HttpError::from(e)
+        Rejection::from(e)
     })?;
 
     debug!(uri = %parts.uri, "JWT claims extracted");
@@ -152,7 +153,7 @@ where
 ///     S: Send + Sync,
 ///     Arc<JwtValidator<MyIdentityBuilder>>: FromRef<S>,
 /// {
-///     type Rejection = r2e_core::HttpError;
+///     type Rejection = r2e_core::Rejection;
 ///
 ///     async fn from_request_parts(
 ///         parts: &mut Parts,
@@ -165,7 +166,7 @@ where
 pub async fn extract_jwt_identity<S, B, I>(
     parts: &Parts,
     state: &S,
-) -> Result<B::Identity, r2e_core::HttpError>
+) -> Result<B::Identity, Rejection>
 where
     S: HasBean<Arc<JwtValidator<B>>, I> + Send + Sync,
     B: IdentityBuilder + 'static,
@@ -175,7 +176,7 @@ where
 
     let identity = validator.validate(token).await.map_err(|e| {
         warn!(uri = %parts.uri, error = %e, "JWT validation failed");
-        r2e_core::HttpError::from(e)
+        Rejection::from(e)
     })?;
 
     debug!(uri = %parts.uri, "Authenticated request");
@@ -199,7 +200,7 @@ where
     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
     I: Send + Sync,
 {
-    type Rejection = r2e_core::HttpError;
+    type Rejection = Rejection;
 
     async fn from_request_parts_via(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let claims = extract_jwt_claims(parts, state).await?;
@@ -214,7 +215,8 @@ where
 ///
 /// - No `Authorization` header → `Ok(None)`
 /// - Valid JWT → `Ok(Some(user))`
-/// - Invalid/expired JWT → `Err(HttpError::Unauthorized)`
+/// - Invalid/expired JWT → `Err(Rejection)` (`Unauthenticated`, with its
+///   `WWW-Authenticate: Bearer error="invalid_token"` challenge)
 ///
 /// # Example
 ///
@@ -235,7 +237,7 @@ where
     S: HasBean<Arc<JwtClaimsValidator>, I> + Send + Sync,
     I: Send + Sync,
 {
-    type Rejection = r2e_core::HttpError;
+    type Rejection = Rejection;
 
     async fn from_request_parts_via(
         parts: &mut Parts,

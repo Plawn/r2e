@@ -15,6 +15,18 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- A struct-level identity rejected with a 401 that already carries a `Bearer`
+  challenge (`AuthenticatedUser` since #1173) gets `resource_metadata="…"`
+  merged into that challenge (RFC 9728 §5.1) instead of being left without
+  the PRM URL; the `mcp.auth` Bearer / Basic challenges are only appended
+  when the rejection carries none of that scheme. The values are parsed as
+  RFC 9110 challenge lists first (several challenges in one value, quoted
+  commas, case-insensitive scheme and parameter names, whitespace around
+  `=`), so a `Bearer …, Basic …` value is completed on the Bearer and the
+  Basic is not duplicated.
+
 ### Added
 
 - Feature `loopback` (#1076): an in-process transport on the MCP endpoint.

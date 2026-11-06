@@ -31,7 +31,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use r2e_core::http::header::{self, HeaderValue};
+use r2e_core::http::header::{self, HeaderMap, HeaderValue};
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{
     Extensions, IntoHttpResponse, Method, Parts, Request, Response, StatusCode,
@@ -269,19 +269,14 @@ pub(crate) struct McpIdentityService<S> {
     state: Arc<IdentityState>,
 }
 
-/// Render a scope's rejection: the extractor's own response, plus the
-/// `mcp.auth` challenges on a 401 that carries none.
+/// Render a scope's rejection: the extractor's own response, completed with
+/// the `mcp.auth` challenges on a 401 (see [`Challenges::complete_unauthorized`]).
 pub(crate) fn rejected(rejection: Rejection, challenges: Option<&Challenges>) -> Response {
     let mut response = rejection.into_http_response();
     if response.status() == StatusCode::UNAUTHORIZED
-        && !response.headers().contains_key(header::WWW_AUTHENTICATE)
         && let Some(challenges) = challenges
     {
-        for value in challenges.unauthorized_values() {
-            response
-                .headers_mut()
-                .append(header::WWW_AUTHENTICATE, value);
-        }
+        challenges.complete_unauthorized(response.headers_mut());
     }
     response
         .extensions_mut()
@@ -383,19 +378,60 @@ where
     }
 }
 
-/// `WWW-Authenticate` values for a plain 401 (no OAuth error code).
 impl Challenges {
-    pub(crate) fn unauthorized_values(&self) -> Vec<HeaderValue> {
-        let mut values = Vec::with_capacity(2);
-        if let Some(url) = &self.resource_metadata_url {
-            values.push(crate::auth::error::www_authenticate(&[(
-                "resource_metadata",
-                url,
-            )]));
+    /// Complete the `WWW-Authenticate` challenges of a 401 rendered by an
+    /// identity extractor so an MCP client still finds the resource metadata
+    /// (RFC 9728 §5.1). The values are parsed into individual challenges
+    /// (RFC 9110 §11.6.1: several may share one value, commas inside quoted
+    /// strings do not split) and re-emitted one per value, in order: every
+    /// `Bearer` challenge (e.g. `AuthenticatedUser`'s `Bearer
+    /// error="invalid_token", …`) gains a `resource_metadata` parameter unless
+    /// it names one (case-insensitive); with no `Bearer` challenge at all,
+    /// `Bearer resource_metadata="…"` is appended. The `Basic` challenge is
+    /// appended unless one is already there, whichever value carried it.
+    pub(crate) fn complete_unauthorized(&self, headers: &mut HeaderMap) {
+        use crate::auth::error::{basic_challenge, parse_challenges, Challenge};
+
+        let mut values: Vec<HeaderValue> = Vec::new();
+        let mut has_bearer = false;
+        let mut has_basic = false;
+        for value in headers.get_all(header::WWW_AUTHENTICATE) {
+            let Some(challenges) = parse_challenges(value) else {
+                // Not visible ASCII: nothing to complete, keep it as is.
+                values.push(value.clone());
+                continue;
+            };
+            for mut challenge in challenges {
+                if challenge.scheme_is("Bearer") {
+                    has_bearer = true;
+                    if let Some(url) = &self.resource_metadata_url
+                        && !challenge.has_param("resource_metadata")
+                    {
+                        challenge.push_quoted("resource_metadata", url);
+                    }
+                }
+                has_basic |= challenge.scheme_is("Basic");
+                values.push(challenge.render());
+            }
         }
-        if let Some(realm) = &self.basic_realm {
-            values.push(crate::auth::error::basic_challenge(realm));
+        if let Some(url) = &self.resource_metadata_url
+            && !has_bearer
+        {
+            let mut bearer = Challenge {
+                scheme: "Bearer".to_owned(),
+                params: Vec::new(),
+            };
+            bearer.push_quoted("resource_metadata", url);
+            values.push(bearer.render());
         }
-        values
+        if let Some(realm) = &self.basic_realm
+            && !has_basic
+        {
+            values.push(basic_challenge(realm));
+        }
+        headers.remove(header::WWW_AUTHENTICATE);
+        for value in values {
+            headers.append(header::WWW_AUTHENTICATE, value);
+        }
     }
 }

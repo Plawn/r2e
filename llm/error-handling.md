@@ -111,8 +111,9 @@ never trips clippy's `result_large_err` / `large_enum_variant`. Never
 Faults reach the hub through std `From`, implemented in the crate that owns the
 fault: `JsonRejection` / `PathRejection` / `QueryRejection` / `FormRejection`,
 `ParamError` (by `location`), `HttpError`, `GuardError` (kind from the status,
-status kept), `SecurityError` (401 + `WWW-Authenticate: Bearer`, or 503 for a
-JWKS failure), `RolesDenied` (r2e-security), `RateLimited` (r2e-rate-limit,
+status kept), `SecurityError` (401 + `WWW-Authenticate: Bearer` — bare without
+credentials, `error="invalid_token"` for a refused token — or 503 for a JWKS
+failure), `RolesDenied` (r2e-security), `RateLimited` (r2e-rate-limit,
 sets `Retry-After`), `FgaDenied` (r2e-openfga), `TenantError` (r2e-tenant; use
 `into_rejection(statuses)` to keep configured statuses), garde `Report`,
 `Response` (→ `Opaque`). Build one directly with `Rejection::new(kind, msg)`,

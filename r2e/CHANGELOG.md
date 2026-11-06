@@ -15,6 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Re-exported `r2e-security` 0.11.0 (#1173): `extract_jwt_claims*` /
+  `extract_jwt_identity` return `Rejection`, identity extractors declare
+  `type Rejection = Rejection` (see `r2e-security/CHANGELOG.md`).
+
+### Fixed
+
+- `AuthenticatedUser` 401s carry `WWW-Authenticate` again (RFC 6750 §3),
+  through error-envelope projection, gRPC metadata and MCP (#1173).
+
 ### Added
 
 - Feature `mcp-loopback` (= `mcp` + `r2e-mcp/loopback`, #1076): in-process

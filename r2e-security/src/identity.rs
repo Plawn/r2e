@@ -106,7 +106,7 @@ macro_rules! impl_claims_identity_extractor {
             $claims: $crate::JwtClaimSet,
             $identity: $crate::FromValidatedJwtClaims<S, $claims>,
         {
-            type Rejection = $crate::__macro_support::HttpError;
+            type Rejection = $crate::__macro_support::Rejection;
 
             async fn from_request_parts_via(
                 parts: &mut $crate::__macro_support::http::header::Parts,
@@ -117,6 +117,7 @@ macro_rules! impl_claims_identity_extractor {
                     claims, state,
                 )
                 .await
+                .map_err($crate::__macro_support::Rejection::from)
             }
         }
 
@@ -133,7 +134,7 @@ macro_rules! impl_claims_identity_extractor {
             $claims: $crate::JwtClaimSet,
             $identity: $crate::FromValidatedJwtClaims<S, $claims>,
         {
-            type Rejection = $crate::__macro_support::HttpError;
+            type Rejection = $crate::__macro_support::Rejection;
 
             async fn from_request_parts_via(
                 parts: &mut $crate::__macro_support::http::header::Parts,

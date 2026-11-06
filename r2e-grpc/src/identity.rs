@@ -15,7 +15,8 @@
 
 use std::sync::Arc;
 
-use r2e_core::{Rejection, StandardClaims};
+use r2e_core::http::header::{HeaderValue, WWW_AUTHENTICATE};
+use r2e_core::{Rejection, RejectionKind, StandardClaims};
 use tonic::metadata::MetadataMap;
 use tonic::Status;
 
@@ -57,44 +58,57 @@ mod sealed {
 /// Looks for the `authorization` metadata key with a `Bearer ` prefix,
 /// then validates the token using the provided `JwtClaimsValidator`.
 ///
-/// Returns the validated [`StandardClaims`], or a `Status::unauthenticated` error.
+/// Returns the validated [`StandardClaims`], or a `Status::unauthenticated`
+/// error carrying the RFC 6750 challenge as `www-authenticate` metadata —
+/// bare `Bearer` when the call presented no bearer token,
+/// `Bearer error="invalid_token"` when the validator refused one.
 pub async fn extract_jwt_claims_from_metadata<V: JwtClaimsValidatorLike>(
     metadata: &MetadataMap,
     validator: &V,
 ) -> Result<StandardClaims, Status> {
     let token = extract_bearer_token(metadata)?;
-    validator
-        .validate(token)
-        .await
-        .map_err(|e| Status::unauthenticated(format!("JWT validation failed: {e}")))
+    validator.validate(token).await.map_err(|e| {
+        rejection_to_status(
+            Rejection::new(
+                RejectionKind::Unauthenticated,
+                format!("JWT validation failed: {e}"),
+            )
+            .header(WWW_AUTHENTICATE, HeaderValue::from_static(INVALID_TOKEN_CHALLENGE)),
+        )
+    })
+}
+
+/// `WWW-Authenticate` value of a 401 whose request presented no Bearer
+/// credentials (RFC 6750 §3: no error code without a token).
+const BEARER_CHALLENGE: &str = "Bearer";
+
+/// `WWW-Authenticate` value of a 401 whose Bearer token was refused.
+const INVALID_TOKEN_CHALLENGE: &str =
+    r#"Bearer error="invalid_token", error_description="The access token is invalid""#;
+
+fn unauthenticated(message: &'static str) -> Rejection {
+    Rejection::new(RejectionKind::Unauthenticated, message)
+        .header(WWW_AUTHENTICATE, HeaderValue::from_static(BEARER_CHALLENGE))
 }
 
 /// Extract the bearer token string from gRPC metadata as a typed
-/// [`Rejection`] (`Unauthenticated` kind) — the form a hand-written
-/// extractor over a [`MetadataMap`] uses.
+/// [`Rejection`] (`Unauthenticated` kind, with a `WWW-Authenticate: Bearer`
+/// header) — the form a hand-written extractor over a [`MetadataMap`] uses.
 ///
 /// Returns the token without the `Bearer ` prefix.
 pub fn bearer_token(metadata: &MetadataMap) -> Result<&str, Rejection> {
     let auth_header = metadata
         .get("authorization")
-        .ok_or_else(|| Rejection::new(r2e_core::RejectionKind::Unauthenticated, "Missing authorization metadata"))?;
+        .ok_or_else(|| unauthenticated("Missing authorization metadata"))?;
 
-    let auth_str = auth_header.to_str().map_err(|_| {
-        Rejection::new(
-            r2e_core::RejectionKind::Unauthenticated,
-            "Invalid authorization metadata encoding",
-        )
-    })?;
+    let auth_str = auth_header
+        .to_str()
+        .map_err(|_| unauthenticated("Invalid authorization metadata encoding"))?;
 
     auth_str
         .strip_prefix("Bearer ")
         .or_else(|| auth_str.strip_prefix("bearer "))
-        .ok_or_else(|| {
-            Rejection::new(
-                r2e_core::RejectionKind::Unauthenticated,
-                "Authorization must use Bearer scheme",
-            )
-        })
+        .ok_or_else(|| unauthenticated("Authorization must use Bearer scheme"))
 }
 
 /// Extract the bearer token string from gRPC metadata.

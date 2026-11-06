@@ -85,6 +85,19 @@ async fn expired_token_is_unauthenticated() {
         status.message().contains("JWT validation failed"),
         "{status}"
     );
+    assert_eq!(
+        www_authenticate(&status),
+        Some(r#"Bearer error="invalid_token", error_description="The access token is invalid""#)
+    );
+}
+
+/// The `www-authenticate` metadata of a status (#1173: the HTTP challenge
+/// crosses onto the gRPC wire as trailing metadata).
+fn www_authenticate(status: &tonic::Status) -> Option<&str> {
+    status
+        .metadata()
+        .get("www-authenticate")
+        .map(|v| v.to_str().unwrap())
 }
 
 // ── AuthenticatedUser over a gRPC call head ────────────────────────────
@@ -157,6 +170,7 @@ async fn identity_rejections_project_onto_unauthenticated_statuses() {
     assert_eq!(missing.kind, RejectionKind::Unauthenticated);
     let status = rejection_to_status(missing);
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    assert_eq!(www_authenticate(&status), Some("Bearer"));
 
     let expired = required(metadata(&token("user-1", -3600)))
         .await
@@ -164,4 +178,8 @@ async fn identity_rejections_project_onto_unauthenticated_statuses() {
     assert_eq!(expired.kind, RejectionKind::Unauthenticated);
     let status = rejection_to_status(expired);
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    assert_eq!(
+        www_authenticate(&status),
+        Some(r#"Bearer error="invalid_token", error_description="The access token expired""#)
+    );
 }

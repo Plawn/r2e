@@ -142,6 +142,114 @@ fn quote(value: &str) -> String {
     out
 }
 
+/// One challenge of a `WWW-Authenticate` field (RFC 9110 §11.6.1): the
+/// scheme and its parameters, each kept verbatim (`name=value`, quoted or
+/// not, or a token68) so completing a challenge never rewrites what the
+/// extractor chose to advertise.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Challenge {
+    pub scheme: String,
+    pub params: Vec<String>,
+}
+
+impl Challenge {
+    /// Whether this challenge uses `scheme` (case-insensitive, RFC 9110 §11.1).
+    pub(crate) fn scheme_is(&self, scheme: &str) -> bool {
+        self.scheme.eq_ignore_ascii_case(scheme)
+    }
+
+    /// Whether a parameter named `name` is present (names are
+    /// case-insensitive and may be padded around `=`, RFC 9110 §11.2).
+    pub(crate) fn has_param(&self, name: &str) -> bool {
+        self.params.iter().any(|param| {
+            param
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case(name))
+        })
+    }
+
+    /// Append `name="value"` (RFC 9110 quoted-string escaping).
+    pub(crate) fn push_quoted(&mut self, name: &str, value: &str) {
+        self.params.push(format!("{name}={}", quote(value)));
+    }
+
+    /// The challenge as one `WWW-Authenticate` value.
+    pub(crate) fn render(&self) -> HeaderValue {
+        let text = if self.params.is_empty() {
+            self.scheme.clone()
+        } else {
+            format!("{} {}", self.scheme, self.params.join(", "))
+        };
+        // Every piece came out of a header value (or `quote`), so the text is
+        // visible ASCII; the fallback is unreachable in practice.
+        HeaderValue::from_str(&text).unwrap_or_else(|_| HeaderValue::from_static("Bearer"))
+    }
+}
+
+/// Split a `WWW-Authenticate` value into its challenges.
+///
+/// Commas inside quoted strings (and `\"` escapes) do not split. A
+/// comma-separated item is an `auth-param` when its first token is followed
+/// by `=` (`realm="x"`, `realm = "x"`, `realm\t="x"`) and then belongs to the
+/// current challenge; any other item starts a new challenge (`Bearer
+/// realm="x"`, `Negotiate abc==`). An item that cannot belong to a challenge
+/// (a parameter before any scheme) is kept as an opaque challenge so nothing
+/// is dropped. `None` when the value is not visible ASCII.
+pub(crate) fn parse_challenges(value: &HeaderValue) -> Option<Vec<Challenge>> {
+    let text = value.to_str().ok()?;
+    let mut challenges: Vec<Challenge> = Vec::new();
+    for item in split_unquoted_commas(text) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let (head, rest) = item
+            .split_once(|c: char| c.is_ascii_whitespace())
+            .map_or((item, ""), |(head, rest)| (head, rest.trim()));
+        if head.contains('=') || rest.starts_with('=') {
+            match challenges.last_mut() {
+                Some(current) => current.params.push(item.to_owned()),
+                None => challenges.push(Challenge {
+                    scheme: item.to_owned(),
+                    params: Vec::new(),
+                }),
+            }
+            continue;
+        }
+        let mut challenge = Challenge {
+            scheme: head.to_owned(),
+            params: Vec::new(),
+        };
+        if !rest.is_empty() {
+            challenge.params.push(rest.to_owned());
+        }
+        challenges.push(challenge);
+    }
+    Some(challenges)
+}
+
+/// Split on the commas that sit outside quoted strings.
+fn split_unquoted_commas(text: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for (index, ch) in text.char_indices() {
+        match ch {
+            _ if escaped => escaped = false,
+            '\\' if in_quotes => escaped = true,
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                items.push(&text[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(&text[start..]);
+    items
+}
+
 /// Build a `WWW-Authenticate: Bearer …` header value.
 ///
 /// Every parameter value goes through RFC 9110 quoted-string escaping.

@@ -824,9 +824,12 @@ r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
   present-but-invalid → boot error), on `#[routes]` controllers and `#[bean]`
   impls. Origin: close-the-loop `PullSweep::poll_sources` working around it
   with `schedule_task_with`.
-- **#1173 (low)** — `AuthenticatedUser` extractor drops `WWW-Authenticate`
-  on 401 since #1072. Same defect as the `www-authenticate` item of #1217;
-  closes with that commit.
+- **#1173 (low)** — DONE 2026-11-06 (`task/1173-www-authenticate`):
+  `AuthenticatedUser` / `impl_claims_identity_extractor!` reject with
+  `Rejection` carrying the RFC 6750 challenge from `SecurityError::challenge()`
+  (HTTP, projection, gRPC metadata; MCP merges `resource_metadata` into it).
+  Breaking for r2e-security (`extract_jwt_claims*` return `Rejection`). This
+  also covers the `www-authenticate` item of #1217.
 - **#768 (low, idea)** — r2e-observability sqlx spans + app span helpers;
   measure the appetite first.
 - `docs/research/thread-per-core.md` — stall detector, `#[offload]`/
@@ -858,8 +861,9 @@ r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
   - **#1217 3c'** (medium, six independent items = six commits): gRPC core
     store through `endpoint_core_or_insert`; compile-time rejection of
     `register_controller` on the pre-state builder (silently discarded at
-    `build_state()` today); `www-authenticate` restored on validator failure
-    (HTTP + gRPC metadata, open since #1072); hidden deco item names
+    `build_state()` today); ~~`www-authenticate` restored on validator failure
+    (HTTP + gRPC metadata, open since #1072)~~ — shipped under #1173
+    (2026-11-06); hidden deco item names
     `<Ctrl>_<fn>` colliding across modules; `Self` unscoped in HTTP deco
     expressions; `GrpcIdentity` stub removal — a `Breaking` entry of
     r2e-grpc, **only at its next minor** (deprecation window). The ticket's
