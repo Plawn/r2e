@@ -33,6 +33,10 @@ requires: core-concepts
   `extra` map.
 - For your own claim struct, implement `JwtClaimSet` and pass it as the second
   type parameter: `impl_claims_identity_extractor!(TenantUser, claims = TenantClaims)`.
+- An identity failure is a `Rejection` (401, `WWW-Authenticate: Bearer`, plus
+  `error="invalid_token", error_description="…"` when a token was presented —
+  RFC 6750 §3) that keeps its header through any error envelope; never rebuild
+  the 401 by hand. `from_jwt_claims` itself returns `HttpError`.
 
 Requires feature: `security`
 

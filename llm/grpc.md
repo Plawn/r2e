@@ -1,7 +1,7 @@
 ---
 topic: grpc
 features: grpc
-tokens: ~2700
+tokens: ~2800
 requires: core-concepts, modules
 ---
 
@@ -221,9 +221,11 @@ depends on the head and the target type — `Query<T>` deserializes an empty
 query string (a `T` whose fields are all optional/defaulted succeeds, a
 required field is an `INVALID_ARGUMENT`), `Path<T>` sees the `{*rest}`
 capture tonic's `Routes` installs — never a panic; a
-rejection becomes a `Status` by kind. Message of a missing/invalid bearer:
-`UNAUTHENTICATED` / `"Unauthorized"` (the HTTP extractor's), without
-`www-authenticate` metadata.
+rejection becomes a `Status` by kind, its headers becoming metadata. A
+missing/invalid bearer: `UNAUTHENTICATED` / `"Unauthorized"` (the HTTP
+extractor's) with `www-authenticate` metadata — `Bearer` when no credentials
+were sent, `Bearer error="invalid_token", error_description="…"` when the
+token was refused (RFC 6750 §3).
 
 Manual claims: `r2e_grpc::bearer_token(metadata) -> Result<&str, Rejection>`,
 `extract_jwt_claims_from_metadata(metadata, &validator).await ->
