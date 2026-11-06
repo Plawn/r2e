@@ -71,7 +71,7 @@ pub use auth::{
     McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements,
     ViaMcpAuth,
 };
-pub use config::McpConfig;
+pub use config::{McpConfig, McpSessionConfig};
 pub use dynamic::{
     DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
     NoParams, WithParams,

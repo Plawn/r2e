@@ -106,6 +106,18 @@ pub const RMCP_NOISE: &[(&str, &str)] = &[
 /// built and shared: the sharded server clones the router per SO_REUSEPORT
 /// worker, so every worker serves the same session map and schema cache.
 ///
+/// # Session lifetime
+///
+/// rmcp's session manager owns the transport worker of every HTTP session:
+/// it ends a session on `DELETE`, on shutdown, and after
+/// `mcp.session.idle-timeout-secs` without JSON-RPC traffic
+/// ([`with_session_idle_timeout`](Self::with_session_idle_timeout); `0` =
+/// never). A later request carrying the dead `Mcp-Session-Id` is answered
+/// `404`. `McpSessions` and the auth layer's session bindings only observe
+/// sessions through weak references and are pruned once the worker is gone;
+/// they never keep a session alive. Loopback sessions have no worker and no
+/// idle timeout.
+///
 /// # Shutdown
 ///
 /// The transport holds a dedicated [`CancelToken`] relayed from the app
@@ -128,6 +140,7 @@ pub struct McpServer {
     allowed_origins: Option<Vec<String>>,
     max_request_body_bytes: Option<u64>,
     elicitation_timeout: Option<Duration>,
+    session_idle_timeout: Option<Duration>,
     page_size: Option<u32>,
     cors_allowed_origins: Option<Vec<String>>,
     auth: Option<McpAuthConfig>,
@@ -224,6 +237,16 @@ impl McpServer {
     /// answer (overrides `mcp.elicitation-timeout-secs`; default 5 minutes).
     pub fn with_elicitation_timeout(mut self, timeout: Duration) -> Self {
         self.elicitation_timeout = Some(timeout);
+        self
+    }
+
+    /// Close an HTTP session after `timeout` without JSON-RPC traffic
+    /// (overrides `mcp.session.idle-timeout-secs`; `Duration::ZERO` = never;
+    /// default rmcp's 5 minutes). SSE keep-alive pings do not count as
+    /// traffic, so a tool call that stays silent longer than this is cut.
+    /// No effect on loopback sessions.
+    pub fn with_session_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.session_idle_timeout = Some(timeout);
         self
     }
 
@@ -479,6 +502,12 @@ impl Plugin for McpServer {
             .elicitation_timeout
             .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
             .unwrap_or(DEFAULT_ELICITATION_TIMEOUT);
+        // `None` leaves rmcp's default (300 s); `Some(ZERO)` = never.
+        let configured_idle = cfg
+            .session
+            .and_then(|session| session.idle_timeout_secs)
+            .map(Duration::from_secs);
+        let session_idle_timeout = self.session_idle_timeout.or(configured_idle);
         let page_size = self
             .page_size
             .or(cfg.page_size)
@@ -744,9 +773,17 @@ impl Plugin for McpServer {
                 bindings: bindings.clone(),
                 shutdown: mcp_cancel.clone(),
             });
-            let session_manager = Arc::new(LocalSessionManager::default());
             // #[non_exhaustive] upstream: start from Default and overwrite
             // the fields we own (all pub).
+            let mut session_manager = LocalSessionManager::default();
+            match session_idle_timeout {
+                Some(idle) if idle.is_zero() => {
+                    session_manager.session_config.keep_alive = None;
+                }
+                Some(idle) => session_manager.session_config.keep_alive = Some(idle),
+                None => {}
+            }
+            let session_manager = Arc::new(session_manager);
             let mut transport_config = StreamableHttpServerConfig::default();
             transport_config.sse_keep_alive = sse_keep_alive;
             // rmcp's "legacy session mode" = MCP sessions (pre-2026-07-28

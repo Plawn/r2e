@@ -32,6 +32,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   (no token; `token_hash` is `0`).
 - `r2e_mcp::CallToolRequestParams` re-export (feature `loopback`) for
   loopback callers.
+- `mcp.session.idle-timeout-secs` / `McpServer::with_session_idle_timeout`
+  (#1244): the Streamable HTTP session idle timeout (rmcp's
+  `SessionConfig::keep_alive`, previously hard-wired to 300 s; `0` = never),
+  so a tool call that stays silent longer than 5 minutes is no longer cut
+  mid-flight. New `McpSessionConfig` section type. Loopback sessions are
+  unaffected. Docs: `docs/features/25-mcp.md` § Configuration.
 
 ## [0.11.0] - 2026-11-04
 

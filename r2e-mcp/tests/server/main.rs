@@ -27,4 +27,5 @@ mod registry;
 mod rejection;
 mod resources;
 mod schema;
+mod sessions;
 mod wire_golden;

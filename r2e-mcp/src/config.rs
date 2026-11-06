@@ -21,6 +21,8 @@ use r2e_core::prelude::ConfigProperties;
 ///   max-request-body-bytes: 4194304
 ///   elicitation-timeout-secs: 300  # how long `McpClient::elicit` waits
 ///   page-size: 100           # paginate the */list results (unset/0 = one page)
+///   session:
+///     idle-timeout-secs: 300 # close an HTTP session idle this long (0 = never)
 /// ```
 ///
 /// Precedence for each knob: **programmatic builder setting
@@ -78,6 +80,10 @@ pub struct McpConfig {
     /// `nextCursor` for the rest. Unset or `0` = every list in one page.
     #[config(key = "page-size")]
     pub page_size: Option<u32>,
+    /// Session knobs of the Streamable HTTP transport. See
+    /// [`McpSessionConfig`].
+    #[config(section)]
+    pub session: Option<McpSessionConfig>,
     /// Browser CORS policy for the MCP endpoint.
     #[config(section)]
     pub cors: Option<McpCorsConfig>,
@@ -85,6 +91,19 @@ pub struct McpConfig {
     /// unauthenticated endpoint). See [`McpAuthConfig`].
     #[config(section)]
     pub auth: Option<McpAuthConfig>,
+}
+
+/// Typed view of the `mcp.session.*` section (Streamable HTTP transport only;
+/// a loopback session has no transport worker and no idle timeout).
+#[derive(ConfigProperties, Clone, Debug, Default)]
+pub struct McpSessionConfig {
+    /// Close an HTTP session after this many seconds without JSON-RPC traffic
+    /// in either direction; `0` = never. Default: rmcp's 300 s. SSE keep-alive
+    /// pings (`sse-keep-alive-secs`) are not traffic and do not reset the
+    /// timer, so a tool call that stays silent longer than this is cut: set
+    /// it above the longest expected call, or `0`.
+    #[config(key = "idle-timeout-secs")]
+    pub idle_timeout_secs: Option<u64>,
 }
 
 /// Typed view of the `mcp.cors.*` section.

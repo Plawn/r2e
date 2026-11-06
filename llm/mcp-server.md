@@ -377,6 +377,9 @@ rmcp-known revision; else `server/discover`, `initialize` and the `_meta`
 version gate (-32022) stop at that revision; unknown values fail at boot;
 builder `McpServer::max_protocol_version(ProtocolVersion::V_2025_11_25)`),
 `elicitation-timeout-secs` (300),
+`session.idle-timeout-secs` (300; 0 = never; an HTTP session idle this long
+is closed and its next request answered 404 — SSE pings do not count, so set it
+above the longest tool call; builder `McpServer::with_session_idle_timeout`),
 `page-size` (unset/0 = unpaginated; else `*/list` pages + `nextCursor`, a
 stale or replayed cursor → -32602),
 `allowed-hosts` (DNS-rebinding

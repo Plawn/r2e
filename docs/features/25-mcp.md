@@ -743,6 +743,8 @@ mcp:
   max-protocol-version: "2025-11-25" # cap the MCP revisions served (default: all known)
   elicitation-timeout-secs: 300 # how long an elicitation waits for the user
   page-size: 100              # paginate the */list results (unset/0 = one page)
+  session:
+    idle-timeout-secs: 300    # close an HTTP session idle this long (0 = never)
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
   allowed-origins: []         # reject browser requests from other Origins
   cors:
@@ -806,6 +808,18 @@ included. An app that sets `tracing.enabled: false` and builds its own
 subscriber adds the same layers itself
 (`.with(r2e::Suppress::error(target, message))` for each `RMCP_NOISE` entry).
 The rule goes away once the upstream fix is R2E's minimum rmcp.
+
+**Session idle timeout.** rmcp's session worker ends an HTTP session after
+`mcp.session.idle-timeout-secs` (or `McpServer::with_session_idle_timeout`)
+without JSON-RPC traffic in either direction; the default is rmcp's 300 s and
+`0` means never. SSE keep-alive pings are not traffic and do not reset the
+timer, so a tool call that stays silent longer than the timeout is cut
+mid-flight and the client's next request on that `Mcp-Session-Id` is answered
+`404`: set the timeout above your longest tool call, or `0` and rely on
+`DELETE` / shutdown to end sessions. `McpSessions` and the auth layer's
+session bindings only observe sessions through weak references and are pruned
+once the worker is gone. Loopback sessions have no transport worker and no
+idle timeout.
 
 **Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
 `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`
