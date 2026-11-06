@@ -15,6 +15,28 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `extractor::extract_jwt_claims`, `extract_jwt_claims_as` and
+  `extract_jwt_identity` return `Result<_, r2e_core::Rejection>` instead of
+  `Result<_, HttpError>` (#1173), and the `FromRequestPartsVia` /
+  `OptionalFromRequestPartsVia` impls of `AuthenticatedUser` and of every
+  `impl_claims_identity_extractor!` identity declare `type Rejection =
+  Rejection`. A `?` into an `HttpError`-returning function still compiles
+  (`From<Rejection> for HttpError`); code matching on the `HttpError` variants
+  of these results switches to `rejection.kind` / `rejection.status`.
+  `FromValidatedJwtClaims::from_jwt_claims` keeps returning `HttpError`.
+
+### Fixed
+
+- `AuthenticatedUser` (and every `impl_claims_identity_extractor!` identity)
+  carries `WWW-Authenticate` on its 401 again (#1173, lost since #1072): a
+  bare `Bearer` when no credentials were presented, `Bearer
+  error="invalid_token", error_description="…"` when a token was refused
+  (RFC 6750 §3) — `SecurityError::challenge()` is the single source. The
+  header rides the `Rejection`, so it survives `#[routes]` projection through
+  any error envelope and reaches gRPC metadata through `rejection_to_status`.
+
 ## [0.10.0] - 2026-11-04
 
 ### Breaking

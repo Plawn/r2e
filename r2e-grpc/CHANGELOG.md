@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `bearer_token` and `extract_jwt_claims_from_metadata` rejections carry
+  `www-authenticate` metadata (#1173): `Bearer` when the metadata is missing
+  or not a Bearer scheme, `Bearer error="invalid_token", …` when the
+  validator refuses the token — the same challenge `AuthenticatedUser` puts
+  on a `#[grpc_routes]` identity failure.
+
 ## [0.10.0] - 2026-11-04
 
 ### Breaking
