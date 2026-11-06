@@ -1,13 +1,14 @@
 # R2E Roadmap
 
-Status: **LIVE WORKING BACKLOG**. Only still-open work lives here — shipped
-workstreams (DI/builder refactor, testing DX, plugin DX/DI overhaul, EventBus
-perf W8, App-trait canonicalization W9, bean/controller unification W10,
-OpenFGA schema-first W12 phases 1–3, …) were pruned on 2026-07-23 after
-verifying each claim against the code; their record lives in the reference
+Status: **LIVE WORKING BACKLOG** — only still-open work and the decisions log
+live here. Shipped workstreams (what landed, when, what was deferred and why)
+are recorded in `docs/claude/roadmap-archive.md`, one section per workstream
+(W2 real-app audit, W13 live config, W14 tenancy, W15 factory-first plugins,
+W16 MCP P1–P5, W17 data-catalog sprints, tracing single path); the reference
 docs (`plugins.md`, `beans-di.md`, `guards-interceptors.md`, `executor.md`,
-`subsystems.md`, `di-builder-refactor.md`, `eventbus-perf.md`, `llm.txt`) and
-in this file's git history.
+`subsystems.md`, `di-builder-refactor.md`, `eventbus-perf.md`, `llm.txt`)
+stay authoritative for how things work today. When a workstream ships, move
+its narrative to the archive and leave only the open remainder here.
 
 ## North star
 
@@ -19,24 +20,6 @@ whenever a real app drops to raw axum or hand-rolls infrastructure, that is a
 framework bug to record here.
 
 ---
-
-## W2 — Framework gaps found in real apps → tracked in Tasker #635
-
-Evidence base: the 2026-07-10 audit of two production-bound apps built on
-pre-refactor R2E — **threaty** (~44K LOC, deep user: 20 controllers, ~101
-routes, 138 injections, 48 path-parameterized guards, 3 custom
-`Plugin`s) and **patina** (~23K LOC, shallow user: hand-built 10-field
-state, registry-proxy core written as a raw axum fallback handler). Both leak
-out of the framework at the same seams.
-
-Tracked as umbrella task **#635 "R2E framework gaps from real-app audit
-(threaty + patina)"** (target `r2e`), one sub-task per gap: EventBus↔SSE
-bridge, proxy/streaming catch-all path, dynamic scheduled tasks, first-class
-multipart, config-derive expressiveness, serve lifecycle / awaited drain,
-auth-required without a phantom identity field, AI-facing DX. Full evidence
-per gap in the Tasker sub-tasks and in this file's git history (`6d880f6`).
-**All 8 sub-tasks and the umbrella #635 are CLOSED** (verified 2026-08-13) —
-kept here only as the pointer to the evidence base.
 
 ## W4 — Plugin serve-path e2e audit — OPEN
 
@@ -56,15 +39,10 @@ promise.
 - Dev services for the remaining backends: **Kafka, RabbitMQ, Pulsar**
   (crate `r2e-devservices`, same workspace-session/Ryuk lifecycle as the
   shipped `DevPostgres`/`DevRedis`/`DevOpenFga`).
-- ~~Demo dev-services usage in `example-postgres`~~ — SHIPPED 2026-07-23
-  (`examples/example-postgres/tests/postgres_test.rs`: `DevPostgres::shared()`
-  + isolated per-test database + `override_config_value("database.url", …)`).
-- ~~Demo module-to-module composition (`imports(module(…))`) in an example
-  app~~ — SHIPPED 2026-07-23 (`example-app` `OrderModule` imports
-  `module(UserModule)`; `OrderService` injects the exported `UserService`;
-  `tests/app/order_module.rs` proves the cross-module reach-across at runtime).
 - `r2e doctor` check for missing dev-service config (deliberately NOT
   auto-sniffing config — implicitness hides failures).
+- **`r2e-test` in-process MCP client over the `McpLoopback` bean** (Tasker
+  #1245, follow-up of the loopback transport #1076).
 - **Phase 3 (`r2e test --watch`): deferred, NOT approved** — do not start
   without an explicit user go.
 
@@ -80,133 +58,43 @@ promise.
 - **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
   half was absorbed by W10; what remains is a pass over which concern lives in
   which crate/macro (core vs http vs macros vs integrations).
-- ~~**One config-error report format** — Tasker #1214~~ — SHIPPED
-  2026-11-04 on PR #136 (with transport-layering 3a'): one formatter in
-  `r2e-core` replaces the seven hand-copied
-  `=== CONFIGURATION ERRORS (<scope>) ===` banners (r2e-core, r2e-mcp,
-  r2e-grpc); released in r2e 0.11.0. Ticket closed.
 
 ## W13 — Live config × dev-reload — remainder
 
-Shipped: `#[secret]` → `#[live_config]` rename + field injection on every host
-(beans, decorator beans, background services, `#[bean]`/`#[producer]` params,
-controllers), the rotation fix, and Phases 0–4 of the dev-reload × config
-workstream — stable `LiveConfigRegistry` identity carried across hot patches
-with a differential re-seed (B1/B3), `config_derived` never-pin set so typed
-`ConfigProperties` beans refresh (B2), `ConfigKeyKind::{Required, Optional,
-Section, Live}` with live keys out of the per-bean fingerprint (B5) and
-`Section` keys hashing their whole prefix subtree, `ContextConstruct::
-config_keys()` requalified as introspection-only (B6), and a boot-time WARN for
-dead live keys. Reference: `docs/claude/dev-reload-config-semantics.md`.
-
-Shipped 2026-08-13 (the three remaining tech-debt items):
-
-- ~~**`bg_service_derive.rs` / `decorator_bean_derive.rs` emit no
-  `config_keys()`.**~~ Both derives emit them now. The design question ("where
-  does the declaration land for hosts that are not `Bean`s") resolved to *the
-  host that owns the site aggregates*: `DecoratorSpec::config_keys()` folded
-  into `Controller::validate_config` (`#[routes]`), into `Bean::config_keys()`
-  (`#[bean]` intercept sites — those also reach the fingerprint), and into the
-  new `GrpcService::validate_config` (`#[grpc_routes]`);
-  `ServiceComponent::config_keys()` validated at `spawn_service` and, for
-  `#[producer(start)]` outputs, during graph resolution. Shared bridge:
-  `config::validate_declared_keys`. Closes Tasker #682 — a missing decorator
-  `#[config]` key is now part of the aggregated startup report, never a
-  fail-late panic in `build_decorator`.
-- ~~**`#[derive(BackgroundService)]` config/live deps unchecked at compile
-  time.**~~ `ServiceComponent` declares `type Deps` (BREAKING for hand-written
-  impls) and `spawn_service` moved onto the `SpawnService` extension trait
-  (prelude) so the witness is inferred — a service reading an absent bean is a
-  compile error again.
-- **B4 — half-fixed.** The real robustness gap (a watch that *ends* is never
-  restarted, in prod as much as under `r2e dev`) is closed: watch tasks run
-  under `config::supervise_config_watch` — `Err` restarts with capped
-  exponential backoff, `Ok(())` is a documented "done, don't call me again",
-  and the shutdown token is raced at every point of the cycle: before an
-  attempt, **during** the in-flight `watch` future (`biased` select), and
-  during the retry sleep — a provider whose `watch` never resolves cannot hold
-  a graceful drain open. The dev-cycle re-spawn half is
-  **deliberately deferred with a written design** (see
-  `dev-reload-config-semantics.md` § "B4 — watch supervision"): it is not a
-  correctness gap (one carried registry), Subsecond cannot patch a parked
-  future anyway, and a correct re-spawn needs serve-token capture + per-cycle
-  child tokens + provider dedup, testable only by serving across two cycles.
-
-Audit follow-ups shipped 2026-08-13 (review of the above):
-
-- **`#[producer(start)]` bypassed `ServiceComponent::Deps`.** The producer only
-  demanded its own parameters, so a produced service reading an unprovided bean
-  compiled and panicked in `from_context` at startup. `#[producer]` now folds
-  `<Output as ServiceComponent>::Deps` into the producer's `Producer`/
-  `Registrable` `Deps` via `TAppend` — compile error at `build_state()`.
-  Covered by a trybuild fail + pass pair (`cases/executor/…`).
-- **Producer-service and bean config errors are one report.** The service half
-  used to `?` out several statements before the bean keys were checked;
-  `BeanRegistry::validate_all_config` merges required bean keys, required
-  service keys and declared service sections into a single
-  `BeanError::MissingConfigKeys`. Side effect: config errors now precede
-  missing-dependency errors in `resolve()`.
-- **`#[config_section]` no longer fails late on late-built hosts.**
-  `DecoratorSpec::config_sections()` and `ServiceComponent::config_sections()`
-  return `Vec<SectionValidator>` (`SectionValidator::of::<C>(prefix)`, wrapping
-  the same `validate_section::<C>` the controller meta module uses), run by
-  `decorator_config_errors`, `try_spawn_service` and `validate_all_config`. A
-  decorator/service section is now walked in full (missing nested keys, type
-  mismatches, garde) at startup instead of panicking at construction.
-  **Residual gap:** an `#[intercept]` site on a `#[bean]`'s
-  `#[scheduled]`/`#[consumer]` method folds only the spec's `config_keys()`
-  into the host `Bean::config_keys()`; that spec's *sections* are still
-  validated when the decorator slot is filled inside `resolve()` — the same
-  phase as a bean's own `#[config_section]` field, i.e. inside `build_state()`
-  but not part of the aggregated report.
-- **`try_register_grpc_service`** added (non-panicking peer of
-  `try_register_controller`); `register_grpc_service` delegates to it.
-
-Remaining:
+Shipped work (rename to `#[live_config]`, dev-reload phases 0–4, the three
+tech-debt items and the audit follow-ups of 2026-08-13): archive § W13.
+Reference: `docs/claude/dev-reload-config-semantics.md`.
 
 - **Undeclared keys in hand-written beans stay stale on reuse.** A bean reading
   `config.get("x")` without listing `"x"` in `config_keys()` keeps a stable
   fingerprint and is reused with the old value. Documented and intended (declare
   the key, or use `#[config]`); listed here only so it is not "rediscovered" as
   a bug.
+- **Residual gap of the `#[config_section]` validation:** an `#[intercept]`
+  site on a `#[bean]`'s `#[scheduled]`/`#[consumer]` method folds only the
+  spec's `config_keys()` into the host `Bean::config_keys()`; that spec's
+  *sections* are still validated when the decorator slot is filled inside
+  `resolve()` — inside `build_state()` but not part of the aggregated report.
+- **B4 dev-cycle watch re-spawn: deliberately deferred with a written design**
+  (`dev-reload-config-semantics.md` § "B4 — watch supervision"): not a
+  correctness gap (one carried registry); a correct re-spawn needs serve-token
+  capture + per-cycle child tokens + provider dedup.
 
-## W14 — Multi-tenant bean routing — SHIPPED 2026-08-14
+## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
 
-Closes the last root-`todo` item ("avoir une feature pour router différents bean
-en fonction du tenant, type plusieurs DB — infra générique puis implem
-spécifique db"). Crate `r2e-tenant` (feature `tenant`, in `full`) + the
-`tenant` feature on both data backends. Reference: `docs/features/24-tenancy.md`
-(user guide), `docs/claude/subsystems.md` § Multi-tenancy (internals),
-`examples/example-multi-tenant-db` (end-to-end).
+Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed
+`FgaClient` with write-through invalidation, `OpenFga` plugin owning the store
+lifecycle at boot). Reference: `docs/features/23-openfga.md`.
 
-Shipped:
+Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
+existing store's model into a local `.fga`), plus tuple seed fixtures for
+dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
 
-- **Generic infra.** `TenantResolver` / `SyncTenantResolver` (SPI #1) with
-  built-ins (`HeaderTenantResolver`, `PathTenantResolver`,
-  `ExtensionTenantResolver`, `FnTenantResolver`); `TenantSource<T>` (SPI #2)
-  with `TenantContext` cascade (`ctx.get::<U>()` resolves U **for the same
-  tenant**, single-flighted, cycle-detected with a named chain);
-  `Tenanted<T>` — single-flight create, no failure caching, bounded negative
-  cache, `create-timeout`, idle/LRU sweep with `dispose`, drain on shutdown,
-  `metrics()`/`stats()`/`evict()`/`invalidate()`/`preload()`.
-- **Compile-checked wiring.** `Tenant<T>` / `TenantId` are `FromRequestPartsVia`
-  + `ViaBean` (never axum `FromRequestParts` — pinned by
-  `assert_unambiguous_extractor` probes), so a missing `Tenancy` / `PerTenant`
-  plugin is a compile error at `register_controllers`, not a 500 on the first
-  request from the first tenant. Compile-fail cases in
-  `r2e-compile-tests/cases/tenancy/fail/`.
-- **DB-specific impl.** `tenant-sqlx` / `tenant-diesel`: `TenantPools<..>`,
-  `PoolSource` (tenant → DSN → pool), `TenantTx` — a `#[managed]` transaction on
-  the requesting tenant's pool needing **no** controller field, because
-  `TenantPool`'s `TxSource::Deps` list `TenantRouter` + `TenantPools<..>`.
-- **`TenantId` parsed, never deserialized** — no `Deserialize` impl, so a value
-  that picks a database/schema/bucket cannot arrive in a request body and skip
-  validation.
-- Config `tenancy.*` (precedence: `PerTenant` builder > file > default),
-  `TenantError` → one status per failure mode (400/404/503/504/500, the
-  request-driven three configurable), `tenancy.enabled: false` boots inert
-  rather than requiring code deletion, test helpers `.as_tenant()` /
-  `.as_tenant_user()`.
+## W14 — Multi-tenant bean routing — remainder
+
+Shipped 2026-08-14 (crate `r2e-tenant`, `tenant` feature on both data
+backends, audit fixes): archive § W14. Reference: `docs/features/24-tenancy.md`
+(user guide), `docs/claude/subsystems.md` § Multi-tenancy (internals).
 
 Deferred, with the reason (do not re-propose without addressing it):
 
@@ -227,14 +115,6 @@ Deferred, with the reason (do not re-propose without addressing it):
   `TenantId` fields do not appear in the spec. Pre-existing gap, not
   tenancy-specific.
 - **No CLI surface** (`r2e generate` scaffolding for a resolver/source).
-
-### Audit status
-
-An external read-only review of `f41d015` (2026-08-14) is recorded verbatim in
-`docs/claude/w14-tenancy-audit.md`, with its triage/fix status at the top.
-Findings 1/4/9, 2/5/6, 7 and 8 were addressed on 2026-08-14. Finding 3 is an
-accepted, documented limitation: concurrent-root cascade cycles end at
-`create-timeout` (504), or hang when the timeout is disabled.
 
 ### Remaining DX frictions observed while building W14
 
@@ -293,77 +173,11 @@ Accepted limitations and remaining frictions from the external audit:
   `TenantSource::create` receives `&TenantId`; custom directory code pays an
   avoidable clone/signature mismatch.
 
-## W15 — Factory-first plugins — SHIPPED 2026-08-15
+## W15 — Factory-first plugins — remainder
 
-`Plugin` fully integrated into DI: a plugin IS one async fallible
-factory for its `Provided` tuple, executed inside `build_state()` as a bean
-graph node (topologically after `Deps`, config guaranteed loaded).
-`install`/`configure` deleted; optional `setup()` remains the rare pre-graph
-hook. Reference: `docs/claude/plugins.md` (authoritative, fully rewritten).
-
-Shipped:
-
-- **New trait surface**: `build(self, deps, config, &mut PluginBuildContext)
-  -> Result<Provided, PluginBuildError>`; `Err` → `BeanError::PluginBuild`.
-  `PluginInstallContext` → `PluginSetupContext` (loses `config()`/
-  `config_get`/`run_post_construct`). `GraphHandle` (Late-backed handle on the
-  final `Arc<BeanContext>`) for post-boot resolution (used by `Tenanted<T>`).
-- **Two orders, documented**: build execution = topo order; effect application
-  (`add_layer`/`wrap_router`/`on_serve`/…) = install order. `<prefix>.enabled=
-  false` drops the **surface** lane only (layers, routes, serve hooks); the
-  **cleanup** lane (`on_shutdown`/`on_shutdown_async`) still applies, so a
-  plugin disposes of whatever its `build` constructed. `build` always runs
-  (return a disabled variant). Config section parsed even when disabled.
-- **Strict registration**: plugin beans collide with app `.provide()` or a
-  double install → `DuplicateBean` at boot. Pin-before-install wins;
-  all-pinned skips `build` only for a plugin that opts in with
-  `const SKIP_BUILD_WHEN_ALL_PINNED: bool = true` (default `false` — effects
-  are not beans and cannot be pinned); partial pin always runs it, and the
-  effects then resolve their beans from the graph, not from what `build` made.
-- **All 10 in-tree plugins migrated.** OpenFga is the flagship: `Late<GrpcBackend>`,
-  `LazyBackend`, `PostConstruct` boot smuggle, `NotReady` (→ `Disabled`), and
-  the "install after load_config" panic all deleted. Tenancy/PerTenant build
-  directly wired (no `unwired()`/`wire()`). Executor now honors `executor.*`
-  regardless of `.plugin()`/`load_config()` order (killed the example-app
-  latent bug; assertion test in example-app/tests/app/app.rs).
-- `Late<T>` remains public as a de-emphasized escape hatch.
-
-Post-audit hardening (same branch): setup context lost every surface-effect
-*sugar* — no `add_layer`/`wrap_router`/`on_serve`/shutdown hooks, so a disabled
-plugin can no longer mount a route through sugar; the raw `add_deferred` escape
-hatch remains and is documented as unconditional (it hands out the full
-`DeferredContext`, which the framework cannot gate — that is the caveat, not an
-oversight); the router's graph `Arc` now rides the request future *and* the
-response body (tower's `oneshot` drops the service before the first poll, hyper
-drops the head while the body streams); **tracked work owns the graph while it
-runs** — `ServeContext::track` now takes the *future* (breaking; it spawns and
-wraps) and `spawn_service` / the scheduler driver / the QUIC drain go through
-the same `ServiceHandles::spawn_owning`, so an elapsed `shutdown_grace_period`
-or a dropped `run()` future (hot patch) — the paths where nothing joins the
-handle — still leave the task with a live graph — plus **`run()` now cancels the
-shutdown token and drains the tracked handles on the abort paths too** (a
-startup-hook `Err`, a serve error: `prepared.rs::abort_started_work`), so a task
-that waits on the token is no longer stranded with its port and its graph; plus
-`PreparedApp` holds a strong `Arc` for the whole serving lifecycle (shutdown
-hooks, in-flight WebSocket sessions);
-`with_state(())` + `.plugin()` is a documented `debug!`
-no-op instead of a `debug_assert`; shutdown hooks split off from the surface
-lane so a disabled plugin still disposes; Prometheus no longer installs the
-global recorder when disabled; Scheduler **and** PerTenant effects resolve their
-beans from the graph at apply time (partial pins); dev-reload seeds
-`forced_rebuild` with volatile (plugin) nodes so their dependents cannot keep a
-previous cycle's instance.
-
-Residual (accepted caveat): a WebSocket session is not part of graceful drain —
-on upgrade hyper's `UpgradeableConnection` hands the IO off and returns
-`Ready(Ok(()))`, so the connection counts as finished and axum's detached
-`on_upgrade` task is unwatched. Sessions keep graph access for the whole of
-`run()` (the serve-scope `Arc`), but a session still alive *after* `run()`
-returns has none. In a normal binary the runtime is dropped right after, taking
-those tasks with it; an embedder that keeps the runtime alive past `run()` must
-resolve what a session needs before its socket loop. Rejected fix: inserting the
-`Arc` into request extensions so the generated `on_upgrade` closure could
-capture it — a boxed insert on *every* request to serve the WS-only case.
+Shipped 2026-08-15 (plugin = one async fallible factory inside `build_state()`,
+post-audit hardening, the WebSocket drain caveat): archive § W15. Reference:
+`docs/claude/plugins.md`.
 
 Deferred: per-plugin effect caching under dev-reload (volatile nodes rebuild
 every hot-patch cycle — matches the old fresh-install-per-cycle semantics);
@@ -399,363 +213,34 @@ Known dev-reload gaps (diagnosed, not fixed — `r2e dev` only, all pre-existing
    volatile fix above closes the plugin-bean shape of this; a bean carrying a
    raw `GraphHandle` obtained by other means is still exposed.
 
-## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
+## W16 — MCP server (r2e-mcp) — remainder
 
-Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed
-`FgaClient` with write-through invalidation, `OpenFga` plugin owning the store
-lifecycle at boot). Reference: `docs/features/23-openfga.md`.
-
-Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
-existing store's model into a local `.fga`), plus tuple seed fixtures for
-dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
-
-## W16 — MCP server (r2e-mcp) — P1+P2+P3 SHIPPED 2026-08-27
-
-P1 (server core) shipped on `feat/mcp-server`: `r2e-mcp` crate + `McpServer`
-plugin (streamable HTTP, shared sessions across SO_REUSEPORT workers,
-shutdown-token relay), `#[mcp_routes]` (since r2e-mcp 0.11.0 / 2026-11-04:
-`#[routes]`, port inferred from the members) + `#[tool]` (schemars schemas, guards
-SHARED with HTTP via `Guard<I>`, prebuilt interceptors, `EndpointDeps` compile
-check), example-mcp, full test target + compile-fail cases. References:
+P1–P3 (server core, OAuth 2.1 resource server, providers/dev + per-session
+members), P5 (`McpRegistry`), the mount-stage/identity contract (#1175) and
+the loopback transport (#1076) are shipped: archive § W16. References:
 `docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
-(guards rule-of-three reversal).
+(adapter internals + decisions log).
 
-P2 (auth) shipped on the same branch: IdP-agnostic OAuth 2.1 resource server
-(`mcp.auth.*`) — jwt backend over discovery (RFC 8414 incl. path-insertion,
-TTL + stale-if-error), `McpAuthLayer` (401/403/503 + exact `WWW-Authenticate`
-challenges), RFC 9728 protected-resource metadata, static DCR shim
-(`public-client-id` + redirect allowlist + mirrored AS metadata), per-tool
-`#[tool(scopes/any_scopes)]` + shared `#[roles]` guards + `tools/list`
-filtering, `ScopePolicy` (scope/scp/permissions ladder, Keycloak realm/client
-roles), `server.public-url` convention key, `TestJwt::for_resource` +
-`TokenBuilder::{scopes,audiences,realm_roles,client_roles}` +
-`pin_mcp_validator` (feature `testing` / facade `mcp-testing`), r2e-security
-`audiences`/`skip_audience_validation`/`with_leeway`. Auth test target (96
-tests: 94 normal + 2 Docker-gated) + example-mcp auth e2e; provider matrix +
-Keycloak walkthrough in `docs/features/25-mcp.md`.
+- **P4 — protocol gaps: MRTR open.** Progress, live elicitation (MCP sessions
+  only), `completion/complete` and list pagination shipped 2026-09-26; MRTR
+  (required for 2026 sessionless clients) is the remainder. SEP-2577-deprecated
+  sampling, roots and logging are deliberately NOT implemented. Plan:
+  `plans/w16-p4-mcp-protocol-gaps.md`.
+- **Awaiting release:** loopback transport #1076 (PR #139, `2656fe5e`) and the
+  HTTP session idle timeout + `McpSessionStore` #1244 (PR #140, `fe4b4516`),
+  both merged 2026-11-06, additive → `r2e-mcp` 0.11.1 at the next release;
+  close both tickets then.
+- `McpSessions::each`/bulk ops and per-tenant filtering, if a real app asks
+  for them.
+- Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
+  tickets" below.
 
-P3 (providers & dev) shipped on the same branch, in chunks:
+## W17 — data-catalog audit — remainder
 
-- SHIPPED 2026-08-27 (chunk 5): MCP **resources + prompts** — `#[resource]` /
-  `#[prompt]` markers on `#[mcp_routes]` methods, `McpService::routes(ctx)
-  -> McpRoutes { tools, resources, prompts }` (since #1175:
-  `McpService<T, W>::routes(state, ctx)`) (breaking, replaces `tools()`;
-  `McpRoutes::from_tools` for hand-built services), one wrapper/deco-set
-  build per service, duplicate resource URI / prompt name across services =
-  boot panic. v1 = fixed URIs (no templates); resources take no `Params<T>`
-  (compile error); prompt arguments derived from the Params schema.
-  `IntoResourceResult` (String/&str/Json honoring the declared MIME) +
-  `IntoPromptResult` (String → one `user` message; doc text as description).
-  Errors stay JSON-RPC on these families: `Tool` degrades to `-32603`,
-  unknown URI = `-32002` RESOURCE_NOT_FOUND, unknown prompt = `-32602`;
-  scope/guard filtering + denials uniform with tools. Capabilities advertised
-  only when a family is non-empty. Tests: server target (resources/prompts
-  modules), auth filtering/denials, 3 compile-fail cases, example-mcp e2e.
-- SHIPPED 2026-08-27: the `introspection` (RFC 7662) + `userinfo` (Google)
-  validation backends (`token-validation: introspection|userinfo`,
-  opaque-token cache `opaque-cache-ttl-secs`/`opaque-cache-max-entries`,
-  `r2e_mcp::auth::{IntrospectionBackend, UserinfoBackend}`) and the
-  authorize-redirect shim (`extra-authorize-params` → mirror rewrites
-  `authorization_endpoint` to `{mcp.path}/oauth/authorize`, 302 to the IdP,
-  server params win; requires the DCR shim, boot error otherwise); r2e-oidc
-  RFC 8707 `resource` support (the form value must equal the configured
-  audience; invalid or unowned URI = 400 `invalid_target`; `scope`
-  pass-through already existed);
-  `DevKeycloak` (r2e-devservices feature `keycloak`: `start-dev
-  --import-realm`, bundled `r2e-mcp` realm with audience-mapped `mcp` scope,
-  `password_token`/`client_token`/`admin_token`; realm JSON is part of the
-  shared-container identity — copy sources are digested, no discriminator
-  needed) + Docker-gated e2e in `r2e-mcp/tests/auth/keycloak.rs`. Two fixes
-  the real container surfaced: a full realm import creates ONLY the client
-  scopes listed in the JSON (Keycloak's built-ins `basic` → `sub` and
-  `roles` → `realm_access` must be defined explicitly or tokens carry
-  neither), and r2e-security narrowed `Validation.algorithms` to the token's
-  algorithm at decode — jsonwebtoken 10 rejects any list mixing key families
-  (RS256+ES256 default) once the key is known (`InvalidAlgorithm` on every
-  token).
-
-SHIPPED 2026-08-28: the remaining MCP audit follow-ups — targeted
-struct-level identity diagnostic; sealed derive-only `ObjectParams` marker;
-full, idempotent `r2e add mcp` source/config scaffold; RFC 6570 resource
-templates with captured `ResourceCall::variables`; `McpResourceUpdates` plus
-legacy `resources/subscribe` and current `subscriptions/listen`; and r2e-oidc
-public clients with a Docker-free, one-time Authorization Code + PKCE S256
-flow.
-
-SHIPPED 2026-09-26 (branch feat/mcp-dynamic-session-members): per-session
-member lists for tools, resources and prompts. The boot-time `Catalog`
-(immutable, `Arc`) is split from a copy-on-write `SessionView`; sessions that
-never change share one default view, so the hotpath allocation guard is
-unchanged. There are three ways to shape a session's list:
-- groups: `#[routes(group, opt_in)]` or a per-member `group` override;
-- the `McpSession` member parameter, which can enable/disable groups and
-  add/remove private `DynamicTool`/`DynamicResource`/`DynamicPrompt` members;
-- the `McpServer::session_init::<T: McpSessionInit>()` hook, plus the
-  plugin-provided `McpSessions` bean (`for_subject`/`all`).
-
-Locked decisions:
-- A hidden member answers like an unknown one (fail-closed; no enumeration
-  oracle).
-- `get_tool` stays catalog-wide, because rmcp caches it per name; visibility
-  is enforced in `call_tool`.
-- A private member cannot shadow any catalog name.
-- `listChanged: true` on all three families as soon as dynamism is used.
-- Under `mcp.stateless`, a member taking `McpSession` is a boot panic.
-- A session binds to the `sub` of its `initialize`. Under `mcp.auth` the
-  auth layer refuses another subject on every method with rmcp's own 404
-  (see follow-up (a)); the handler's `-32600` "belongs to another
-  principal" stays as a backstop.
-- A session is persistent and registered with `McpSessions` in `initialize`.
-  Under stateful serving, rmcp only hands the handshake to a handler it built
-  for a new or restored session, so no `Mcp-Session-Id` header check is needed.
-
-BREAKING: new pub fields on hand-built literals:
-- `group` on `ToolRoute`/`ResourceRoute`/`PromptRoute`;
-- `session` on `ToolCall`/`ResourceCall`/`PromptCall`;
-- `uses_session` on `McpRoutes`.
-
-Also, `McpServer::Provided` gains `McpSessions`.
-
-Follow-ups:
-- (a) SHIPPED 2026-09-26: the session ↔ principal binding lives in
-  `auth/layer.rs`. A session-less request carries a `SessionLink` in its
-  extensions; `initialize` deposits the new `SessionState` there, and the
-  layer keys it by the response's `Mcp-Session-Id` in `SessionBindings`
-  (weak entries, pruned on insert, shared across workers). A foreign subject
-  presenting that id on POST, SSE `GET` or `DELETE` gets rmcp's exact
-  `404 Not Found: Session not found` (no existence oracle; a foreign
-  `DELETE` used to close the victim's session). Unknown ids pass through
-  (rmcp answers 404). Without `mcp.auth` there is no subject to bind.
-- (c) NOT FEASIBLE on rmcp 3.1: `StreamableHttpService<S, M>` requires
-  `S: ServerHandler`, not `Service<RoleServer>`, so a `Service` wrapper
-  running `prepare` in `handle_request` cannot be mounted, and a
-  `ServerHandler` wrapper would have to re-delegate every method anyway.
-  The per-method `prepare` calls stay; with (a) its binding check is a
-  backstop only. Revisit if rmcp loosens the bound.
-- (b) `McpSessions::each`/bulk ops and per-tenant filtering, if a real app
-  asks for them.
-
-**P4 — protocol gaps (IN PROGRESS 2026-09-26; progress + live elicitation + completion + pagination shipped; MRTR open):** progress, elicitation
-(live = MCP sessions only; MRTR — required for 2026 sessionless clients — later), `completion/complete`, list pagination. SEP-2577-deprecated
-sampling, roots and logging are deliberately NOT implemented. Plan:
-`plans/w16-p4-mcp-protocol-gaps.md`.
-
-**P5 — plexus prerequisites (task #1073, branch `feat/mcp-1073`, 2026-10-11):**
-`McpRegistry` (endpoint-wide dynamic members, precedence catalog >
-session-private > registry, request-time merge so a change is O(registry)
-not O(sessions × members), one `list_changed` per touched family), `_meta`
-on members (`#[tool(meta = meta!(..))]`), `mcp.auth.basic`, and
-`ToolCall::session_id()`. Breaking (`r2e-mcp` 0.7.0 + `r2e` 0.7.0 at
-release; `r2e-core` stays 0.6.x): endpoint always
-mounted, every family always advertised, `Provided` 4-tuple,
-`McpSessionError` → `McpMemberError` (alias kept) —
-`docs/migration/mcp-registry.md`.
-
-**Loopback transport (Tasker #1076, the last plexus-migration blocker, branch
-`task/mcp-loopback`, 2026-11-05) — IMPLEMENTED, in review (additive:
-`r2e-mcp` 0.11.1 + facade patch at release):** `r2e-mcp` feature `loopback`
-(facade `mcp-loopback`, rmcp `client` role, no new crate) adds the
-`McpLoopback` bean — a second inbound transport on the MCP port.
-`connect(id, LoopbackIdentity::{Anonymous, Bearer, Principal})` resolves the
-identity once into synthesized `Parts` (bearer through the plugin validator
-+ `required-scopes`; `McpPrincipal::trusted` for a caller that already
-resolved the user; struct-level request scopes run on the parts) and serves
-the unchanged `R2eMcpHandler` over in-memory channels, so the session is a
-real one (`McpSessions`, `ToolCall::session_id`, guards/roles/scopes,
-`McpSessionInit`, session-private members). Design record:
-`docs/claude/transport-adapters.md` § Decisions log (2026-11-05). Follow-ups
-(own tickets): an `r2e-test` in-process MCP client over the bean (W6
-testing DX); HTTP session idle timeout / `with_session_manager` (#692) —
-NOT part of #1076 any more.
-
-**MCP mount stage + identity contract (Tasker #1175, branch
-`feat/mcp-routes-stage-identity`, 2026-10-26) — SHIPPED, released as
-r2e-mcp 0.10.0 (2026-11-02, ticket closed):**
-`McpServer` mounts `/mcp` + the well-known routes in the Routes stage
-(`after_routes` + `register_routes`), so app Graph layers (HttpTrace,
-metrics, app CORS/auth/rate-limit) wrap the endpoint — app gateway plugins
-that re-wrapped it become deletable. `#[inject(identity)]` on MCP members
-goes through `FromRequestPartsVia` on a state-generic `McpService<T, W>`
-(witness fold like `Controller<T, W>`; missing bean = compile error at
-`register_mcp_service`); `McpPrincipal` extractor under marker `ViaMcpAuth`
-+ `Identity`/`RoleBasedIdentity`. Breaking `r2e-mcp` and `r2e-macros`
-codegen; the macros bump **propagates** (the expansion reaches apps through
-the `r2e-core` prelude, a patch re-pin would break apps still on `r2e-mcp`
-0.9) — `docs/migration/mcp-identity.md`.
-
-## W17 — data-catalog audit: builder-glue elimination — SHIPPED (2026-08-31)
-
-**All 6 sprints landed on `task/w17-sprints`, one commit per sprint**
-(F1–F14 covered; F13 got its explicit go): `2d247d4` (S1: F1/F7b/F7c/F8),
-`02aa047` (S2: F4/F9), `fe80e8c` (S3: F6/F3), `8e026b9` (S4: F2/F14/F5),
-`d7fe7e4` (S5: F10/F11/F7a/F12, closes Tasker #1002), `607a695` (S6: F13,
-`docs/claude/metrics-stacks.md`). Workspace suite green. **Still open:**
-the per-sprint re-audit of data-catalog (which lines does it delete?) was
-not run — do it app-side together with the follow-ups below.
-
-Evidence base: audit of **blumana/data-catalog** (Axum→R2E migration, pinned
-at `915199c` = current master; `default-features = false` + `utils, openapi,
-grpc, grpc-reflection, multipart`; Doris/MySQL + Postgres on sqlx 0.8, tonic
-gRPC multiplexed, 9 background services, SSE). The business code lands
-cleanly on modules/producers/controllers/`#[grpc_routes]`; nearly all
-remaining friction is **glue around the builder**: `src/app.rs` (224 lines),
-`src/env.rs` (hand-rolled config validation + tracing), `src/background.rs`
-(9 thin service adapters), `tests/common/mod.rs` (a `macro_rules! assemble!`
-duplicating the app blueprint). Per the north star, those four files
-shrinking is the success metric — re-audit them after every sprint below.
-
-Stale app-side notes were verified **already fixed at HEAD** and are NOT
-findings: module gRPC surface (`grpc_services(...)` exists), `Option<T>` +
-YAML `null` (`get_opt`), TestApp lifecycle hooks, `#[sse]` keep-alive default
-(codegen emits `SseKeepAlive::default()`, identical to the app's hand-rolled
-version). The app also still names axum directly in `catalog-core`
-(`impl IntoResponse` + `from_fn`/`MatchedPath`) although
-`impl_into_response!` and the prelude now cover both — app-side fix, tracked
-in §W17 follow-ups, not a framework gap.
-
-### Findings
-
-Sizes: S ≈ within one session alongside others, M ≈ one focused session,
-L ≈ needs a design pass first.
-
-- **F1 — `load_config` panics on missing keys (S).** The app reimplements
-  `ConfigProperties::from_config` + `validate_section::<Settings>()` in
-  `env.rs` (`build_settings`) purely to get a boot error listing *all*
-  missing keys instead of a panic. `load_config`
-  (`r2e-core/src/builder/nostate.rs:398`) already routes a missing/malformed
-  config *file* through `record_boot_error` → `try_build_state()`; do the
-  same for typed-section validation failures. No new API.
-- **F2 — `App::Env` provisioning is one line per field (M).** Nine
-  `.provide(env.x)` calls plus the `override_config(env.config)`-before-
-  `load_config` ordering constraint. Proposal: `#[derive(ProvideBundle)]` +
-  `.provide_all(env)` — each field becomes a provision; an `R2eConfig` field
-  acts as `override_config`. Compile-time provision list grows exactly as if
-  written out by hand.
-- **F3 — no framework "once per process" under `r2e dev` (M).** The app
-  hand-rolls `booted: Arc<AtomicBool>` + `first_boot` to guard
-  `recover_interrupted_runs` and 9 × `spawn_service` across hot patches.
-  The cycle machinery exists (`r2e-core/src/runtime/dev.rs`,
-  `hot_reload_loop_active`); expose it: `.on_start_once(...)` /
-  `#[on_start(once)]`, and state (or enforce) the `spawn_service`
-  idempotence contract under hot patches in
-  `docs/claude/dev-reload-config-semantics.md`.
-- **F4 — no injectable app shutdown token (M).** The app provides a
-  `tokio_util::CancellationToken` bean, cancels it in
-  `on_drain(|_| shutdown.cancel())`, and every SSE handler hand-writes
-  `take_until(shutdown.cancelled_owned())`. The framework already owns this
-  token (`ServeContext::shutdown_token()`,
-  `r2e-core/src/builder/mod.rs:313`) but it is not a bean. Proposal: a
-  framework-provided `rt::ShutdownToken` bean (child of the app token),
-  `#[inject]`-able; `#[sse]` streams terminate on it by default. NOT an
-  ambient-bean exception: modules still list it in `imports(...)` exactly
-  like the app's hand-rolled token today.
-- ~~**F5 — `app_main!` has no `tracing` knob (S).**~~ — SUPERSEDED 2026-10-31
-  by "Tracing — one path through the builder" below: the knob was added, then
-  removed with every other install path (`tracing.enabled: false` is the opt-out;
-  `App::setup` logs are buffered and replayed). Original finding kept for history: `#[r2e::main(tracing =
-  false)]` exists but `app_main!` (`r2e/src/lib.rs:146-158`) does not, so an
-  app owning its subscriber (dotenv + custom formatting in `AppEnv::
-  bootstrap`) writes main by hand and `include!`s `app.rs` twice (the
-  `#[global_allocator]` must live in the bin). Add the knob; longer term let
-  `App::setup` own tracing (`init_tracing_with_config` is already
-  idempotent, `r2e-core/src/runtime/layers.rs:26` — init after `setup`, skip
-  if a global subscriber is set).
-- **F6 — `BackgroundService` rigidity (M).** `background.rs` = 9 adapter
-  structs whose only job is cloning `#[inject]` fields into a catalog-core
-  worker, because the derive rejects non-bean fields
-  (`r2e-macros/src/derives/bg_service_derive.rs:75`, `allow_default:
-  false`). `#[producer(start)]` already covers "build the worker in a
-  producer, start its output" — the app didn't find it (discoverability:
-  llm.txt + migration docs). Remaining real gaps: (1) an opt-in
-  `fn enabled(&self) -> bool` on the service — registration and config
-  validation stay unconditional, only `run()` is skipped with a framework
-  log (the app's 3 conditional services register-then-early-return today);
-  (2) confirm the derive + `ServiceComponent` impl story works from a shared
-  crate on featureless `r2e`.
-- **F7 — config-section gaps (3 × S).**
-  - **F7a** `.provide(Settings)` (test path, no `load_config`) does not
-    register `#[config(section)]` children → `InfraModule` carries three
-    `Arc<XxxSettings>` producers only for tests. Add
-    `provide_config(settings)` that also runs `register_children`.
-  - **F7b** Two same-typed `#[config(section)]` fields (`database` /
-    `run_database: DatabaseSettings`) silently collide — last wins
-    (`config_derive.rs:732-750`). Make it a compile error (newtypes are the
-    sanctioned answer, per the decisions log).
-  - **F7c** Manual `Default` impls duplicate `#[config(default = …)]` —
-    emit `impl Default` from the derive (opt-in or automatic).
-- **F8 — producer ergonomics (S).** (1) Ordering-only dependency edges are
-  spelled as unused params (`create_doris_db(settings, _instance_guard:
-  InstanceGuard)`) → `#[producer(after(InstanceGuard))]`. (2)
-  `anyhow::Result<T>` silently defeats Result detection
-  (`type_utils::is_result_like` is path-textual) → emit a targeted error
-  ("spell `Result<T, E>` literally") instead of misclassifying.
-- **F9 — `+ use<>` is a hand-written trap (S/M).** Three handlers document
-  it as load-bearing (`routes/metrics.rs`, `routes/runs.rs`,
-  `routes/datasets/export.rs`, E0521). `#[routes]` re-emits signatures — it
-  can append `+ use<>` to return-position `impl Trait` lacking a use-clause
-  (edition-2024 guard).
-- **F10 — extractor rejections + `Params` parity (S + M) — `Params` half
-  tracked as Tasker #1002 (target r2e, medium).** Only `JsonRejection` is
-  re-exported (`r2e-http/src/lib.rs:57`); the app reaches through
-  `axum_compat` for `QueryRejection` (`routes/clean.rs`). Re-export
-  `QueryRejection`/`PathRejection`/`FormRejection`. Separately,
-  `#[derive(Params)]` is unadoptable for any already-shipped API (five query
-  structs stayed on `Query<T>`, two of them in catalog-core). Per #1002 the
-  contract is: (1) the derive READS the existing `#[serde(rename_all)]` /
-  `#[serde(rename)]` attributes — no competing `#[params(...)]` spelling,
-  so an existing struct migrates untouched; (2) the 400-rejection body
-  format is an app-level typed-config enum (`Json` default, `PlainText` =
-  `Query<T>` compat), resolved at app construction, never per struct; (3)
-  llm.txt gains an explicit "migrating `Query<T>` → `Params`" paragraph;
-  (4) tests: camelCase + per-field rename under both spellings, both
-  rejection bodies. The five data-catalog structs are the real-world cases.
-- **F11 — OpenAPI tag welded to the struct name (S).** Splitting
-  `ConnectorsController` would change the published spec. Add
-  `#[controller(path = "…", tag = "…")]`.
-- **F12 — no path-nesting seam (M, design first).** `IconController`
-  hardcodes absolute paths. `register_module_at("/prefix")` or
-  `#[module(prefix = "…")]`; must compose with OpenAPI paths and
-  `r2e routes`.
-- **F13 — Prometheus stack mismatch (L, lowest priority).** The plugin is
-  `prometheus`-crate-based and owns `/metrics`; the app is on `metrics` +
-  `metrics-exporter-prometheus` and hand-writes the `http_metrics`
-  middleware + endpoint. Options: `Prometheus::layer_only()` (HTTP tracking
-  without the endpoint) and/or a `metrics`-recorder backend. It is a stack
-  choice — do not start without an explicit go.
-- **F14 — test assembly duplicates the blueprint (M).** `assemble!` exists
-  because `AppBuilder<P>` is unnameable mid-chain and `App::build` does
-  prod-only work (advisory lock, recovery, 9 spawns). Two levers: (1)
-  `#[module(modules(A, B, C))]` aggregation — one `register_module` shared
-  by app and tests; (2) a profile-driven service gate (`services.enabled:
-  false` in `application-test.yaml` — explicit config, consistent with the
-  "dev services are explicit" decision; registration/validation stay
-  unconditional per F6). Largely falls out of F2/F3/F4/F6.
-
-### Sprint plan — one coherent bundle per session
-
-Each sprint = implement + tests + `llm.txt` + doc updates, then **re-audit
-data-catalog** (which lines does it delete?) before starting the next.
-
-1. **Sprint 1 — boot errors & config correctness: F1, F7b, F7c, F8.**
-   All in the config/boot error surface; every item kills a documented trap
-   in `MIGRATION_R2E.md`. Deletes `build_settings()` from `env.rs`.
-2. **Sprint 2 — shutdown token & SSE/handler codegen: F4, F9.**
-   `rt::ShutdownToken` bean + `#[sse]` default termination + auto
-   `+ use<>`. Deletes the token bean, the `on_drain` wiring, and three
-   `take_until` blocks; unlocks `#[sse]` adoption.
-3. **Sprint 3 — background services & once-semantics: F6, F3.**
-   `enabled` gate, `#[producer(start)]` discoverability (llm.txt), shared-
-   crate derive check, `on_start_once` + hot-patch contract. Deletes most of
-   `background.rs` and the `booted`/`first_boot` machinery.
-4. **Sprint 4 — builder & test assembly: F2, F14, F5.**
-   `ProvideBundle`, module aggregation, profile service gate, `app_main!`
-   tracing knob. Deletes `assemble!` and halves `app.rs`; `main.rs` becomes
-   the macro one-liner.
-5. **Sprint 5 — HTTP & OpenAPI polish: F10, F11, F7a, F12.**
-   Rejection re-exports + `Params` parity (closes Tasker #1002; its
-   acceptance criteria are the sprint's), controller `tag`,
-   `provide_config`, nesting seam (F12 needs its short design note first).
-6. **Sprint 6 — optional, explicit go required: F13.**
+All six sprints (F1–F14) shipped 2026-08-31 (findings, sizes and sprint plan:
+archive § W17; metrics stacks: `docs/claude/metrics-stacks.md`). **Still
+open:** the per-sprint re-audit of data-catalog (which lines does it delete?)
+was not run — do it app-side together with the follow-ups below.
 
 App-side follow-ups (no framework change, hand to data-catalog): move
 `CatalogServiceImpl` into a module via `grpc_services(...)`, drop `axum`
@@ -765,35 +250,6 @@ The CORS/Tracing plugin migration lives in Tasker #1001 (target
 data-catalog); if the r2e plugins cannot reproduce the app's current CORS
 or `TraceLayer` span/log shape, that delta comes back here as a framework
 finding.
-
-## Tracing — one path through the builder — SHIPPED 2026-10-31, released as r2e 0.10.0
-
-Branch `task/tracing-single-path` (after the extraction PRs #119–#122). The
-process-global subscriber now has exactly one install path: `build_state()` /
-`try_build_state()` / `with_state()` install it first thing from the loaded
-`tracing:` section (new keys `tracing.enabled`, `tracing.console`; `tracing.json.*`
-is a nested section of `TracingConfig`) plus the layers contributed with
-`AppBuilder::tracing_layer` / `PluginSetupContext::tracing_layer`. Entry points
-(`launch*`, `app_main!`/`launch!` incl. dev-reload, `TestApp::boot*`) call
-`capture_boot_logs()` before `App::setup` and the buffer is replayed at install
-(stderr if the boot dies first); `TestApp` thus honours `application-test.yaml`.
-`#[r2e::main]`/`#[r2e::test]`/`#[r2e::test_suite]` are runtime-only. Removed (all
-compile-time migration errors, `docs/migration/tracing-single-path.md`):
-`init_tracing*`, `ensure_tracing_installed`, the `Tracing`/`ConfiguredTracing`
-plugins, `LaunchOptions.tracing`, `tracing = …` macro arguments, and the
-never-published process-global registries of the extraction phases — the
-late-layer slot (`contribute_layer`/`late_layers`/`NotWired`), noise rules
-(`suppress_error`/`NoiseRule`), field enrichers (`add_enricher`), the console
-factory (`set_console_factory`, PR #122). Replacements: `Suppress` (a layer;
-`McpServer` contributes one per `RMCP_NOISE` entry, which closes the #1185
-`UpstreamNoise` / noise-registry design), `LogFields` (span extension;
-`Observability` writes `trace_id`/`span_id` with `OtelIds`), `tracing.console:
-false` + a contributed console layer. Release: r2e-core 0.9.0 (breaking) +
-r2e-macros 0.9.0 (syntax break, propagates) batched with r2e 0.10.0 /
-r2e-observability 0.9.0; new crate r2e-tracing 0.1.0 — all tagged
-(`r2e-core-v0.9.0`, `r2e-tracing-v0.1.0`, then r2e-tracing 0.1.1). The
-downstream defects of the new interface were triaged as Tasker #1192 (closed
-2026-11-02). Record: `docs/claude/subsystems.md` § Tracing.
 
 ## Open items tracked in their own docs
 
@@ -810,17 +266,20 @@ Kept where the context lives rather than duplicated here:
 - `docs/research/HANDOFF-perf-tpc.md` — Linux benchmark run, proxy-mesh push
   gate, tunnel `copy_bidirectional` (543).
 
-## Standalone Tasker tickets (target `r2e`, open as of 2026-11-05)
+## Standalone Tasker tickets (target `r2e`, open as of 2026-11-06)
 
 Not part of a workstream above; Tasker is the record, this list is the
-pointer. Verified against Tasker on 2026-11-05 (the five tickets released in
-r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
+pointer. Verified against Tasker on 2026-11-06 (the five tickets released in
+r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed on 2026-11-05).
+"Merged" below means on `master`, unreleased: the ticket closes with the
+release that ships it.
 
-- **#1076 (high)** — MCP loopback transport: implemented on
-  `task/mcp-loopback` (2026-11-05, see W16); closes on release. The HTTP
-  idle timeout / `with_session_manager` half moves to its own ticket (#692).
-- **#1181 (medium)** — DONE 2026-11-06 (`task/1181-scheduled-from-method`)
-  as `#[scheduled(schedule = "method")]`: a plain **sync** `&self ->
+- **#1076 (high)** — MCP loopback transport: MERGED 2026-11-06 via PR #139
+  (`2656fe5e`, see W16); closes on release (`r2e-mcp` 0.11.1). The HTTP
+  session idle timeout + `McpSessionStore` landed as **#1244** (PR #140,
+  `fe4b4516`, same release); `with_session_manager` was dropped.
+- **#1181 (medium)** — MERGED 2026-11-06 via PR #142 (`4afb694d`; ships
+  with the next `r2e-macros` release) as `#[scheduled(schedule = "method")]`: a plain **sync** `&self ->
   ScheduleConfig` method on the same impl block provides the cadence, called
   once at registration (controllers and `#[bean]` impls). The cadence comes
   from a `#[config("…")] cadence: ScheduleConfig` field (absent → boot config
@@ -832,7 +291,8 @@ r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
   `schedule_task_with` workaround in `ctl-api/src/controllers/sweep.rs`.
   Follow-ups (not V1): live cadence re-evaluation per re-arm (driver change),
   `Option<ScheduleConfig>` → `None` disables the job.
-- **#1173 (low)** — DONE 2026-11-06 (`task/1173-www-authenticate`):
+- **#1173 (low)** — MERGED 2026-11-06 via PR #141 (`9c3281de`, ticket
+  closed; the r2e-security break ships with the next release):
   `AuthenticatedUser` / `impl_claims_identity_extractor!` reject with
   `Rejection` carrying the RFC 6750 challenge from `SecurityError::challenge()`
   (HTTP, projection, gRPC metadata; MCP merges `resource_metadata` into it).
