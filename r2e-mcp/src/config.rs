@@ -23,6 +23,7 @@ use r2e_core::prelude::ConfigProperties;
 ///   page-size: 100           # paginate the */list results (unset/0 = one page)
 ///   session:
 ///     idle-timeout-secs: 300 # close an HTTP session idle this long (0 = never)
+///     store-ttl-secs: 1800   # lifetime of a persisted session, re-armed at half-life
 /// ```
 ///
 /// Precedence for each knob: **programmatic builder setting
@@ -104,6 +105,12 @@ pub struct McpSessionConfig {
     /// it above the longest expected call, or `0`.
     #[config(key = "idle-timeout-secs")]
     pub idle_timeout_secs: Option<u64>,
+    /// Lifetime of a session record in the
+    /// [`McpSessionStore`](crate::McpSessionStore), in seconds: written at
+    /// `initialize`, re-armed on the first request past half of it. Default
+    /// 1800; `0` is a boot error. Ignored when no store is set.
+    #[config(key = "store-ttl-secs")]
+    pub store_ttl_secs: Option<u64>,
 }
 
 /// Typed view of the `mcp.cors.*` section.

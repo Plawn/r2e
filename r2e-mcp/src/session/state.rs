@@ -1,10 +1,12 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::Duration;
 
 use r2e_core::http::Parts;
+use r2e_core::rt;
 use r2e_core::rt::sync::OnceCell;
-use rmcp::model::{Prompt, Resource, ResourceTemplate, Tool};
+use rmcp::model::{InitializeRequestParams, Prompt, Resource, ResourceTemplate, Tool};
 use rmcp::service::{Peer, RequestContext, RoleServer};
 
 use super::error::McpMemberError;
@@ -46,6 +48,16 @@ pub(crate) struct SessionState {
     /// [`McpSession`](super::McpSession) handle keeps the allocation alive,
     /// so the id is reusable the moment the connection ends.
     closed: AtomicBool,
+    /// Set when rmcp rebuilt this session from an [`McpSessionStore`](super::McpSessionStore)
+    /// record instead of a client `initialize`.
+    restored: AtomicBool,
+    /// Set once `initialize` succeeded (negotiation included): only then is
+    /// the session worth a store record — rmcp persists a session whatever
+    /// the handshake answered.
+    initialized: AtomicBool,
+    /// When the session record was last written (or scheduled); `None`
+    /// until the handshake is persisted. Drives the half-life re-arm.
+    last_persisted: Mutex<Option<rt::Instant>>,
 }
 
 impl SessionState {
@@ -62,7 +74,48 @@ impl SessionState {
             init: OnceCell::new(),
             persistent: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            restored: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
+            last_persisted: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn mark_restored(&self) {
+        self.restored.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_restored(&self) -> bool {
+        self.restored.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn mark_initialized(&self) {
+        self.initialized.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_initialized(&self) -> bool {
+        self.initialized.load(Ordering::Acquire)
+    }
+
+    /// Record that the session record is being written now.
+    pub(crate) fn mark_persisted(&self) {
+        *self
+            .last_persisted
+            .lock()
+            .expect("MCP session persistence clock poisoned") = Some(rt::Instant::now());
+    }
+
+    /// Time since the record was last written; `None` when never.
+    pub(crate) fn persisted_since(&self) -> Option<Duration> {
+        self.last_persisted
+            .lock()
+            .expect("MCP session persistence clock poisoned")
+            .map(|at| at.elapsed())
+    }
+
+    /// The client's handshake parameters, once `initialize` stored them on
+    /// the peer.
+    pub(crate) fn peer_info(&self) -> Option<Arc<InitializeRequestParams>> {
+        self.peer.get().and_then(|peer| peer.peer_info())
     }
 
     /// Mark the connection behind this state as ended (idempotent). The
@@ -268,6 +321,7 @@ impl SessionState {
                 let init = SessionInit {
                     parts: parts.cloned().map(Arc::new),
                     persistent: self.is_persistent(),
+                    restored: self.is_restored(),
                     session_id: self.id().cloned(),
                 };
                 let toolset = hook(init).await?;

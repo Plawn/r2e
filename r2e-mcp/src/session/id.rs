@@ -5,10 +5,12 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 
-use r2e_core::http::{Request, Response};
+use r2e_core::http::{Request, Response, StatusCode};
 use tower::{Layer, Service};
 
 use super::state::SessionState;
+use crate::identity::caller_in_extensions;
+use crate::request_log::AuthOutcome;
 
 /// The transport-assigned identifier of an MCP session — the value of the
 /// `Mcp-Session-Id` header under streamable HTTP.
@@ -80,10 +82,11 @@ impl fmt::Debug for SessionId {
     }
 }
 
-/// Deposited by the auth layer in the extensions of a request that carries
-/// no `Mcp-Session-Id`: if it turns out to be an `initialize` that opens a
-/// session, the handler hands the new session back through it, and the
-/// layer keys it by the id rmcp puts in the response header.
+/// Deposited by the auth layer (or [`TrackSessionId`]) in the extensions of
+/// a request that carries no `Mcp-Session-Id`: if it turns out to be an
+/// `initialize` that opens a session, the handler hands the new session back
+/// through it, the layer keys it by the id rmcp puts in the response header,
+/// and the session store adapter reads its subject when rmcp persists it.
 #[derive(Clone, Default)]
 pub(crate) struct SessionLink(Arc<Mutex<Option<Weak<SessionState>>>>);
 
@@ -96,7 +99,7 @@ impl SessionLink {
         self.0.lock().expect("MCP session link poisoned").take()
     }
 
-    fn peek(&self) -> Option<Arc<SessionState>> {
+    pub(crate) fn peek(&self) -> Option<Arc<SessionState>> {
         self.0
             .lock()
             .expect("MCP session link poisoned")
@@ -108,24 +111,65 @@ impl SessionLink {
 /// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
 pub(crate) const SESSION_ID_HEADER: &str = "mcp-session-id";
 
+/// rmcp's answer to an unknown or terminated session, byte for byte — what
+/// the auth and identity layers answer a foreign subject with, so a refused
+/// replay is indistinguishable from an unknown id.
+pub(crate) fn session_not_found() -> Response {
+    let mut response = Response::new("Not Found: Session not found".into());
+    *response.status_mut() = StatusCode::NOT_FOUND;
+    response
+}
+
+/// What the session store adapter needs to know about the HTTP request
+/// rmcp is serving when it calls `load` / `store` / `delete`: the caller
+/// (owner check) and, for a request that may open a session, the link the
+/// handler hands the new session back through.
+pub(crate) struct ReqScope {
+    pub(crate) caller: Option<String>,
+    pub(crate) link: Option<SessionLink>,
+}
+
+r2e_core::rt::task_local! {
+    /// Opened by [`TrackSessionId`] around the transport service call: rmcp
+    /// handles a request — restore, handshake persistence, deletion
+    /// included — inside that future, so the adapter reads it from any
+    /// frame below.
+    pub(crate) static REQ_SCOPE: ReqScope;
+}
+
 /// Innermost middleware on the MCP endpoint: when a request without an
 /// `Mcp-Session-Id` turns out to open a session, attach the id rmcp minted
 /// (response header) to the session the handler linked — so
 /// [`McpSessions::get`](super::McpSessions::get) and [`McpSession::id`](super::McpSession::id) work from the moment the
 /// `initialize` response is on its way, not only from the client's next
 /// request. Reuses the [`SessionLink`] the auth layer deposited, if any.
+/// Every call also runs inside a [`REQ_SCOPE`] carrying the caller and that
+/// link, for the session store adapter.
+///
+/// It is also the owner check's second half: the auth and identity layers
+/// refuse a foreign caller *before* the call when the session is bound on
+/// this instance, but a session rmcp is restoring from the store is bound
+/// only once its handshake replays — a request that arrived meanwhile was
+/// let through on an unknown id. So after the call, a request that named a
+/// session now bound to someone else gets the same 404, whatever rmcp
+/// answered.
 ///
 /// A hand-written tower layer (not a `Routes` middleware) because it sits in
 /// the `ServiceBuilder` stack around rmcp's transport service, between the
 /// auth layer and the service itself.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct TrackSessionId;
+#[derive(Clone)]
+pub(crate) struct TrackSessionId {
+    pub(crate) bindings: SessionBindings,
+}
 
 impl<S> Layer<S> for TrackSessionId {
     type Service = TrackSessionIdService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        TrackSessionIdService { inner }
+        TrackSessionIdService {
+            inner,
+            bindings: self.bindings.clone(),
+        }
     }
 }
 
@@ -133,6 +177,7 @@ impl<S> Layer<S> for TrackSessionId {
 #[derive(Clone)]
 pub(crate) struct TrackSessionIdService<S> {
     inner: S,
+    bindings: SessionBindings,
 }
 
 impl<S> Service<Request> for TrackSessionIdService<S>
@@ -149,24 +194,51 @@ where
     }
 
     fn call(&mut self, mut req: Request) -> Self::Future {
-        if req.headers().contains_key(SESSION_ID_HEADER) {
-            return Box::pin(self.inner.call(req));
-        }
-        let link = match req.extensions().get::<SessionLink>() {
-            Some(link) => link.clone(),
-            None => {
-                let link = SessionLink::default();
-                req.extensions_mut().insert(link.clone());
-                link
-            }
+        let caller = caller_in_extensions(req.extensions()).map(|c| c.sub.to_owned());
+        let presented = req
+            .headers()
+            .get(SESSION_ID_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let link = if presented.is_some() {
+            None
+        } else {
+            Some(match req.extensions().get::<SessionLink>() {
+                Some(link) => link.clone(),
+                None => {
+                    let link = SessionLink::default();
+                    req.extensions_mut().insert(link.clone());
+                    link
+                }
+            })
         };
-        let fut = self.inner.call(req);
+        let scope = ReqScope {
+            caller: caller.clone(),
+            link: link.clone(),
+        };
+        let bindings = self.bindings.clone();
+        let fut = REQ_SCOPE.scope(scope, self.inner.call(req));
         Box::pin(async move {
             let response = fut.await?;
-            if let Some(id) = response
-                .headers()
-                .get(SESSION_ID_HEADER)
-                .and_then(|v| v.to_str().ok())
+            if let Some(id) = &presented
+                && !bindings.admits(id, caller.as_deref())
+            {
+                tracing::warn!(
+                    caller = ?caller,
+                    "MCP session restored for another principal while this request was \
+                     in flight; response withheld"
+                );
+                let mut response = session_not_found();
+                response
+                    .extensions_mut()
+                    .insert(AuthOutcome("session_mismatch"));
+                return Ok(response);
+            }
+            if let Some(link) = link
+                && let Some(id) = response
+                    .headers()
+                    .get(SESSION_ID_HEADER)
+                    .and_then(|v| v.to_str().ok())
                 && let Some(state) = link.peek()
             {
                 state.set_id(id);
@@ -193,10 +265,12 @@ impl SessionBindings {
         map.insert(id.into(), state);
     }
 
-    /// Whether `subject` may use the session `id`. `false` only when a live
-    /// session with that id is bound to another subject; an unknown id
-    /// passes (rmcp answers 404, or the handler binds a restored session).
-    pub(crate) fn admits(&self, id: &str, subject: &str) -> bool {
+    /// Whether `subject` (`None` = no caller) may use the session `id`:
+    /// exact equality with the subject a live session with that id is bound
+    /// to, as [`SessionState::bind`] — an anonymous session is not admitted
+    /// to an authenticated caller, nor the reverse. An unknown id passes
+    /// (rmcp answers 404, or the handler binds a restored session).
+    pub(crate) fn admits(&self, id: &str, subject: Option<&str>) -> bool {
         let state = self
             .0
             .lock()
@@ -204,8 +278,8 @@ impl SessionBindings {
             .get(id)
             .and_then(Weak::upgrade)
             .filter(|s| !s.is_closed());
-        match state.as_deref().and_then(SessionState::subject) {
-            Some(bound) => bound == subject,
+        match state.as_deref() {
+            Some(state) => state.subject() == subject,
             None => true,
         }
     }

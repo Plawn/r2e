@@ -38,6 +38,20 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   so a tool call that stays silent longer than 5 minutes is no longer cut
   mid-flight. New `McpSessionConfig` section type. Loopback sessions are
   unaffected. Docs: `docs/features/25-mcp.md` § Configuration.
+- `McpSessionStore` (#1244): pluggable persistence of Streamable HTTP
+  sessions, so an `Mcp-Session-Id` survives a restart, an idle eviction or a
+  hop to another instance behind a load balancer. `load`/`store`/`delete`
+  over opaque bytes with a TTL (`McpSessionStoreError`,
+  `McpSessionStoreFuture`); set with `McpServer::with_session_store` or an
+  `Arc<dyn McpSessionStore>` bean; `InMemoryMcpSessionStore` for dev/tests.
+  The handshake and the owning subject are written at `initialize` and
+  re-armed at half-life of `mcp.session.store-ttl-secs`
+  (`McpServer::with_session_store_ttl`, default 1800; `0` and `stateless` +
+  store are boot errors). A restored session runs `McpSessionInit` again
+  with `SessionInit::is_restored()`; only the subject that opened it can
+  restore or delete it (rmcp's `404` otherwise, no oracle). Loopback
+  sessions are never written. Docs: `docs/features/25-mcp.md` § "Session
+  persistence".
 
 ## [0.11.0] - 2026-11-04
 

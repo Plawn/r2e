@@ -33,7 +33,9 @@ use std::task::{Context, Poll};
 
 use r2e_core::http::header::{self, HeaderValue};
 use r2e_core::http::response::IntoResponse;
-use r2e_core::http::{IntoHttpResponse, Method, Parts, Request, Response, StatusCode};
+use r2e_core::http::{
+    Extensions, IntoHttpResponse, Method, Parts, Request, Response, StatusCode,
+};
 use r2e_core::{Identity, Rejection};
 use r2e_security::RoleBasedIdentity;
 use tower::{Layer, Service};
@@ -41,7 +43,7 @@ use tower::{Layer, Service};
 use crate::auth::error::Challenges;
 use crate::auth::McpPrincipal;
 use crate::request_log::AuthOutcome;
-use crate::session::{SessionBindings, SessionLink, SESSION_ID_HEADER};
+use crate::session::{session_not_found, SessionBindings, SessionLink, SESSION_ID_HEADER};
 
 /// The subject and roles the request scope of a service reports back,
 /// deposited in the request extensions for session binding, pagination
@@ -181,7 +183,12 @@ impl Caller<'_> {
 /// The caller carried by the HTTP request parts the transport copies into
 /// each JSON-RPC message's extensions.
 pub(crate) fn caller_in(parts: Option<&Parts>) -> Option<Caller<'_>> {
-    let extensions = &parts?.extensions;
+    caller_in_extensions(&parts?.extensions)
+}
+
+/// [`caller_in`] over bare request extensions (the HTTP layers see a
+/// `Request`, not its `Parts`).
+pub(crate) fn caller_in_extensions(extensions: &Extensions) -> Option<Caller<'_>> {
     if let Some(principal) = extensions.get::<McpPrincipal>() {
         return Some(Caller {
             sub: &principal.user.sub,
@@ -262,13 +269,6 @@ pub(crate) struct McpIdentityService<S> {
     state: Arc<IdentityState>,
 }
 
-/// rmcp's answer to an unknown or terminated session, byte for byte.
-fn session_not_found() -> Response {
-    let mut response = Response::new("Not Found: Session not found".into());
-    *response.status_mut() = StatusCode::NOT_FOUND;
-    response
-}
-
 /// Render a scope's rejection: the extractor's own response, plus the
 /// `mcp.auth` challenges on a 401 that carries none.
 pub(crate) fn rejected(rejection: Rejection, challenges: Option<&Challenges>) -> Response {
@@ -328,34 +328,38 @@ where
             };
 
             // Session ↔ subject binding, when the `mcp.auth` layer did not
-            // already do it for its principal.
+            // already do it for its principal. Checked for every caller,
+            // the absent one included: a session bound to a subject is not
+            // admitted to an anonymous request, nor an anonymous session to
+            // an authenticated one.
             let authenticated = parts.extensions.get::<McpPrincipal>().is_some();
             let mut link = None;
-            if let Some(caller) = &caller {
-                if !authenticated {
-                    match parts.headers.get(SESSION_ID_HEADER) {
-                        Some(id) => {
-                            let id = id.to_str().unwrap_or_default();
-                            if !state.bindings.admits(id, &caller.sub) {
-                                tracing::warn!(
-                                    caller = %caller.sub,
-                                    "MCP session id presented by a different caller; \
-                                     request refused"
-                                );
-                                let mut response = session_not_found();
-                                response
-                                    .extensions_mut()
-                                    .insert(AuthOutcome("session_mismatch"));
-                                return Ok(response);
-                            }
-                        }
-                        None => {
-                            let fresh = SessionLink::default();
-                            parts.extensions.insert(fresh.clone());
-                            link = Some(fresh);
+            if !authenticated {
+                match parts.headers.get(SESSION_ID_HEADER) {
+                    Some(id) => {
+                        let id = id.to_str().unwrap_or_default();
+                        let subject = caller.as_ref().map(|c| c.sub.as_str());
+                        if !state.bindings.admits(id, subject) {
+                            tracing::warn!(
+                                caller = ?subject,
+                                "MCP session id presented by a different caller; \
+                                 request refused"
+                            );
+                            let mut response = session_not_found();
+                            response
+                                .extensions_mut()
+                                .insert(AuthOutcome("session_mismatch"));
+                            return Ok(response);
                         }
                     }
+                    None => {
+                        let fresh = SessionLink::default();
+                        parts.extensions.insert(fresh.clone());
+                        link = Some(fresh);
+                    }
                 }
+            }
+            if let Some(caller) = &caller {
                 parts.extensions.insert(caller.clone());
             }
 

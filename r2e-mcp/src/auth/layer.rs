@@ -34,7 +34,7 @@ use super::error::{
 };
 use super::validator::{McpPrincipal, McpTokenValidator};
 use crate::request_log::AuthOutcome;
-use crate::session::{SessionBindings, SessionLink};
+use crate::session::{session_not_found, SessionBindings, SessionLink};
 
 /// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
 const SESSION_ID: &str = crate::session::SESSION_ID_HEADER;
@@ -108,13 +108,6 @@ pub(crate) fn origin_allowed(allowed: &[String], origin: &str) -> bool {
             entry == origin
         }
     })
-}
-
-/// rmcp's answer to an unknown or terminated session, byte for byte.
-fn session_not_found() -> Response {
-    let mut response = Response::new("Not Found: Session not found".into());
-    *response.status_mut() = StatusCode::NOT_FOUND;
-    response
 }
 
 /// Run the pre-call checks; `Ok` carries what to insert into extensions.
@@ -270,7 +263,7 @@ where
                     let link = match req.headers().get(SESSION_ID) {
                         Some(id) => {
                             let id = id.to_str().unwrap_or_default();
-                            if !state.bindings.admits(id, &principal.user.sub) {
+                            if !state.bindings.admits(id, Some(&principal.user.sub)) {
                                 tracing::warn!(
                                     caller = %principal.user.sub,
                                     "MCP session id presented by a different principal; \

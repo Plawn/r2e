@@ -2,12 +2,19 @@
 //! that opened it, private `Dynamic*` members keep their scope/role gates,
 //! and `session_init` / `McpSessions` see the authenticated identity.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
 use r2e_core::http::{Body, Routes, StatusCode};
 use r2e_core::prelude::*;
+use r2e_core::rt;
+use r2e_core::rt::sync::Notify;
 use r2e_core::AppBuilder;
 use r2e_mcp::{
-    AppBuilderMcpExt, DynamicTool, McpError, McpServer, McpSession, McpSessionInit, McpSessions,
-    SessionInit, SessionToolset, ToolCall,
+    AppBuilderMcpExt, DynamicTool, InMemoryMcpSessionStore, McpError, McpServer, McpSession,
+    McpSessionInit, McpSessionStore, McpSessionStoreFuture, McpSessions, SessionInit,
+    SessionToolset, ToolCall,
 };
 use serde_json::json;
 
@@ -315,4 +322,212 @@ async fn sessions_bean_finds_sessions_by_subject() {
     assert!(tools.contains(&"restart".to_string()), "{tools:?}");
     let tools = tool_names(&tools_list_auth(&router, "/mcp", &a1, &alice).await);
     assert!(!tools.contains(&"restart".to_string()), "{tools:?}");
+}
+
+// ── Persisted sessions keep their owner ────────────────────────────────────
+
+/// Two instances sharing one session store, both under the same OAuth
+/// config: the second restores a session the first opened.
+async fn pair(store: &InMemoryMcpSessionStore) -> (Routes, Routes, McpSessions) {
+    let (a, _) = app_with(McpServer::new().with_session_store(store.clone())).await;
+    let (b, sessions_b) = app_with(McpServer::new().with_session_store(store.clone())).await;
+    (a, b, sessions_b)
+}
+
+/// rmcp serialises the restores of one id and keeps the outcome of the
+/// last one for the requests that were waiting on it; the entry is removed
+/// by a spawned task (`PendingRestoreGuard`), one scheduler tick after the
+/// answer went out. A request landing in that tick reads the stale
+/// outcome. Let it pass before the next attempt on the same id.
+async fn past_rmcp_restore_window() {
+    rt::sleep(Duration::from_millis(20)).await;
+}
+
+/// A store whose `load` can be held until released: a restore "in flight".
+#[derive(Clone, Default)]
+struct HeldLoads {
+    inner: InMemoryMcpSessionStore,
+    hold: Arc<AtomicBool>,
+    entered: Arc<AtomicUsize>,
+    release: Arc<Notify>,
+}
+
+impl McpSessionStore for HeldLoads {
+    fn load(&self, id: &str) -> McpSessionStoreFuture<'_, Option<Vec<u8>>> {
+        let id = id.to_owned();
+        Box::pin(async move {
+            if self.hold.load(Ordering::SeqCst) {
+                self.entered.fetch_add(1, Ordering::SeqCst);
+                self.release.notified().await;
+            }
+            self.inner.load(&id).await
+        })
+    }
+
+    fn store(&self, id: &str, record: &[u8], ttl: Duration) -> McpSessionStoreFuture<'_, ()> {
+        self.inner.store(id, record, ttl)
+    }
+
+    fn delete(&self, id: &str) -> McpSessionStoreFuture<'_, ()> {
+        self.inner.delete(id)
+    }
+}
+
+#[r2e_core::test]
+async fn restored_session_keeps_its_owner() {
+    let store = InMemoryMcpSessionStore::new();
+    let (a, b, sessions_b) = pair(&store).await;
+    let alice = token("alice", &[], &[]);
+    let bob = token("bob", &[], &[]);
+    let session = initialize_auth(&a, "/mcp", &alice).await;
+
+    // bob presents alice's id to an instance that has never seen it: the
+    // record is not restored for him, and the answer is rmcp's own
+    // "unknown session" — byte for byte.
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+    let refused = post_auth(&b, "/mcp", Some(&session), &bob, &list).await;
+    let unknown = post_auth(&b, "/mcp", Some("no-such-session"), &bob, &list).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+    assert_eq!(refused.status, unknown.status);
+    assert_eq!(refused.raw_body, unknown.raw_body);
+    assert!(sessions_b.get(&session).is_none());
+
+    // The owner restores it …
+    past_rmcp_restore_window().await;
+    let ok = tools_call_auth(&b, "/mcp", &session, &alice, "ping", json!({})).await;
+    assert_eq!(ok["result"]["content"][0]["text"], "pong", "{ok}");
+    assert_eq!(
+        sessions_b.get(&session).and_then(|s| s.subject().map(str::to_owned)),
+        Some("alice".to_owned())
+    );
+    // … and once live on B, the binding keeps bob out as before.
+    let refused = post_auth(&b, "/mcp", Some(&session), &bob, &list).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+}
+
+#[r2e_core::test]
+async fn foreign_delete_leaves_the_record_intact() {
+    let store = InMemoryMcpSessionStore::new();
+    let (a, b, _) = pair(&store).await;
+    let alice = token("alice", &[], &[]);
+    let session = initialize_auth(&a, "/mcp", &alice).await;
+
+    // bob's DELETE reaches an instance where the session is not live: no
+    // binding to refuse it, and rmcp accepts a DELETE for any id — the
+    // same answer as for an id nobody ever issued — but the record stays,
+    // because it is not his.
+    let bob = format!("Bearer {}", token("bob", &[], &[]));
+    let (status, _, body) =
+        send(&b, "DELETE", "/mcp", &session_headers(&bob, &session), Body::empty()).await;
+    let (unknown_status, _, unknown_body) = send(
+        &b,
+        "DELETE",
+        "/mcp",
+        &session_headers(&bob, "no-such-session"),
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!((status, body), (unknown_status, unknown_body));
+    assert!(store.contains(&session));
+    let ok = tools_call_auth(&b, "/mcp", &session, &alice, "ping", json!({})).await;
+    assert_eq!(ok["result"]["content"][0]["text"], "pong", "{ok}");
+
+    // The owner's DELETE removes the record: no instance restores it any
+    // more. A still serves its own live copy — a DELETE on one instance
+    // does not evict the others (documented limit).
+    let owner = format!("Bearer {alice}");
+    let (status, _, body) =
+        send(&b, "DELETE", "/mcp", &session_headers(&owner, &session), Body::empty()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert!(!store.contains(&session));
+    let list = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/list" });
+    let gone = post_auth(&b, "/mcp", Some(&session), &alice, &list).await;
+    assert_eq!(gone.status, StatusCode::NOT_FOUND, "{}", gone.raw_body);
+    let local = post_auth(&a, "/mcp", Some(&session), &alice, &list).await;
+    assert_eq!(local.status, StatusCode::OK, "{}", local.raw_body);
+}
+
+/// alice's restore is in flight on B when bob presents the same id: rmcp
+/// makes him wait for her restore, then serves him on it — and the layer
+/// withholds that answer, because the session is now bound to alice.
+#[r2e_core::test]
+async fn a_foreign_waiter_on_a_concurrent_restore_is_refused() {
+    let store = HeldLoads::default();
+    let (a, _) = app_with(McpServer::new().with_session_store(store.clone())).await;
+    let (b, sessions_b) = app_with(McpServer::new().with_session_store(store.clone())).await;
+    let alice = token("alice", &[], &[]);
+    let bob = token("bob", &[], &[]);
+    let session = initialize_auth(&a, "/mcp", &alice).await;
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+
+    store.hold.store(true, Ordering::SeqCst);
+    let owner = {
+        let (b, session, alice) = (b.clone(), session.clone(), alice.clone());
+        rt::spawn(async move { tools_call_auth(&b, "/mcp", &session, &alice, "ping", json!({})).await })
+    };
+    for _ in 0..100 {
+        if store.entered.load(Ordering::SeqCst) == 1 {
+            break;
+        }
+        rt::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(store.entered.load(Ordering::SeqCst), 1);
+    let waiter = {
+        let (b, session, bob, list) = (b.clone(), session.clone(), bob.clone(), list.clone());
+        rt::spawn(async move { post_auth(&b, "/mcp", Some(&session), &bob, &list).await })
+    };
+    // Let bob reach rmcp's wait on the pending restore, then let it finish.
+    rt::sleep(Duration::from_millis(20)).await;
+    store.hold.store(false, Ordering::SeqCst);
+    store.release.notify_one();
+
+    let ok = owner.await.unwrap();
+    assert_eq!(ok["result"]["content"][0]["text"], "pong", "{ok}");
+    let refused = waiter.await.unwrap();
+    let unknown = post_auth(&b, "/mcp", Some("no-such-session"), &bob, &list).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+    assert_eq!(refused.raw_body, unknown.raw_body);
+    assert_eq!(
+        sessions_b.get(&session).and_then(|s| s.subject().map(str::to_owned)),
+        Some("alice".to_owned())
+    );
+}
+
+#[r2e_core::test]
+async fn anonymous_and_authenticated_records_do_not_cross() {
+    let store = InMemoryMcpSessionStore::new();
+    // An instance without auth and one with, on the same store.
+    let open = AppBuilder::new()
+        .plugin(McpServer::new().with_session_store(store.clone()))
+        .build_state()
+        .await
+        .register_mcp_service::<SessionTools>()
+        .build();
+    let (secured, _) = app_with(McpServer::new().with_session_store(store.clone())).await;
+    let alice = token("alice", &[], &[]);
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+
+    // A record written with no subject is not restorable by an
+    // authenticated caller — but it is by another open instance …
+    let anonymous = support::initialize(&open, "/mcp").await;
+    let refused = post_auth(&secured, "/mcp", Some(&anonymous), &alice, &list).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+    let open_2 = AppBuilder::new()
+        .plugin(McpServer::new().with_session_store(store.clone()))
+        .build_state()
+        .await
+        .register_mcp_service::<SessionTools>()
+        .build();
+    let restored = support::post(&open_2, "/mcp", Some(&anonymous), &list).await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.raw_body);
+
+    // … and alice's record is not restorable where there is no caller,
+    // while another secured instance restores it for her.
+    let owned = initialize_auth(&secured, "/mcp", &alice).await;
+    let refused = support::post(&open, "/mcp", Some(&owned), &list).await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+    let (secured_2, _) = app_with(McpServer::new().with_session_store(store.clone())).await;
+    let restored = post_auth(&secured_2, "/mcp", Some(&owned), &alice, &list).await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.raw_body);
 }

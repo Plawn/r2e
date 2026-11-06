@@ -716,6 +716,14 @@ impl PackLoader {
   byte-identical to an unknown id (no oracle that the session exists; the
   client recovers by re-initializing). The handler keeps a JSON-RPC `-32600`
   "belongs to another principal" check as a backstop.
+  A session restored from an `McpSessionStore` keeps that binding: the
+  record carries the subject, and an instance that does not hold the session
+  restores it only for the subject that opened it — any other caller gets
+  the same `404`. The match is exact: a session opened anonymously is not
+  restored for an authenticated caller and vice versa, on the endpoint and
+  across instances alike. Only identities that yield a subject (an
+  `AuthenticatedUser`-like JWT identity, `mcp.auth`) bind a session; an app
+  identity without one leaves the session unbound and admitted for any caller.
 - All three families (with `listChanged: true`) and completion are always
   advertised, even when initially empty: `McpRegistry` can add members at any
   time, stateless or not. Changes are pushed to legacy sessions via their
@@ -745,6 +753,7 @@ mcp:
   page-size: 100              # paginate the */list results (unset/0 = one page)
   session:
     idle-timeout-secs: 300    # close an HTTP session idle this long (0 = never)
+    store-ttl-secs: 1800      # lifetime of a persisted session record (needs a store)
   allowed-hosts: [api.example.com]   # DNS-rebinding protection — see below
   allowed-origins: []         # reject browser requests from other Origins
   cors:
@@ -820,6 +829,61 @@ mid-flight and the client's next request on that `Mcp-Session-Id` is answered
 session bindings only observe sessions through weak references and are pruned
 once the worker is gone. Loopback sessions have no transport worker and no
 idle timeout.
+
+**Session persistence (`mcp.session.store-ttl-secs`).** An HTTP session is
+local to the process that opened it: after a restart, a deployment, or on
+another instance behind a load balancer without session affinity, every
+`Mcp-Session-Id` is unknown (`404`) and clients must re-initialize. An
+`McpSessionStore` lets a session outlive its process. The store is an R2E
+trait (`load` / `store` / `delete` over opaque bytes with a TTL; rmcp's own
+session types stay internal), set with `McpServer::with_session_store(..)` or
+provided as an `Arc<dyn McpSessionStore>` bean (the builder wins).
+`InMemoryMcpSessionStore` ships for development and tests; a deployment
+implements the trait over Redis, SQL, … With a store:
+
+- The handshake (`InitializeRequestParams` + the subject) is written at
+  `initialize`, before the client sees its id, with
+  `mcp.session.store-ttl-secs` (`McpServer::with_session_store_ttl`, default
+  30 minutes; `0` is a boot error). A request on an active session past the
+  record's half-life re-arms it, so a session in use never expires in the
+  store; one that goes quiet does, `store-ttl-secs` after its last traffic.
+- A request naming a session this process does not hold — the worker ended on
+  idle timeout, the process restarted, or it is another instance — rebuilds
+  the session from the record: rmcp replays `initialize`, `McpSessionInit`
+  runs again with `SessionInit::is_restored() == true` and the id already
+  known, and `McpSessions` lists it on that instance.
+- The record carries the subject that opened the session, and only that
+  subject restores or deletes it (an anonymous record is not restorable by an
+  authenticated caller, nor the reverse). A foreign caller gets rmcp's
+  `404`, byte-identical to an unknown id; a foreign `DELETE` is answered as
+  usual but leaves the record intact. The owner's `DELETE` removes it.
+- Fail-closed: a `load` error answers `500` (rmcp's own), an unreadable or
+  older-format record is treated as absent (`404`), and a `store` error is
+  logged and keeps the session local to the process. No session logic lives
+  in the HTTP layer: rmcp decides what is served, the store only answers
+  its restore/persist/delete calls, so `406`/`415`/`400` keep their
+  precedence and a stateless-mode request never consults the store (a store
+  with `mcp.stateless = true` is a boot error).
+
+What a restored session keeps: the handshake, the `session_init` toolset
+(recomputed), the owner. What it loses: members added with
+`McpSession::add_*`, resource subscriptions, in-flight elicitations, and the
+SSE event stream (`Last-Event-ID` replay) — the restoring instance starts a
+fresh worker. Loopback sessions are never written. Known limits: two
+instances restoring the same id concurrently each hold a copy that diverges
+from there; a `DELETE` served on one instance does not evict the session an
+other instance already holds (it ends there on idle timeout), and a backend
+`delete` failure leaves only a local tombstone (the record stays restorable
+elsewhere until its TTL); a re-arm write in flight on one instance can outlive
+a `DELETE` served on another (within one instance the write is cancelled).
+Concurrent restores of one id on one instance are serialized by rmcp, which
+has two consequences: a foreign caller whose restore is refused poisons an
+owner's restore waiting on it, plus the one scheduler tick rmcp takes to
+forget the attempt (the owner's next request restores normally); and a
+foreign waiter on a restore that succeeds has its request executed on the
+restored session before its answer is withheld (notifications are delivered,
+and a foreign `DELETE` closes the local copy while the record survives for
+the owner).
 
 **Pagination.** With `mcp.page-size` (or `McpServer::with_page_size`) set,
 `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list`

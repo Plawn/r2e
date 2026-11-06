@@ -28,8 +28,15 @@ use crate::registry::McpServiceRegistry;
 use crate::request_log::McpRequestLog;
 use crate::resource_updates::McpResourceUpdates;
 use crate::session::{
-    erase_init, McpSessionInit, McpSessions, SessionBindings, SessionInitFn, TrackSessionId,
+    erase_init, McpSessionInit, McpSessionStore, McpSessions, SessionBindings, SessionInitFn,
+    SessionPersistence, TrackSessionId, TransportStore,
 };
+
+/// `mcp.session.store-ttl-secs` when unset.
+const DEFAULT_SESSION_STORE_TTL: Duration = Duration::from_secs(30 * 60);
+
+const SESSION_STORE_STATELESS: &str = "McpServer: a session store needs sessions — \
+    `mcp.stateless = true` serves none; drop one of the two";
 
 /// Resolves the `session_init` hook bean from the built graph (`None` = no
 /// such bean).
@@ -118,6 +125,16 @@ pub const RMCP_NOISE: &[(&str, &str)] = &[
 /// they never keep a session alive. Loopback sessions have no worker and no
 /// idle timeout.
 ///
+/// With an [`McpSessionStore`] ([`with_session_store`](Self::with_session_store),
+/// or an `Arc<dyn McpSessionStore>` bean) a session outlives its worker: the
+/// handshake is written at `initialize` and re-armed while the session is
+/// active (`mcp.session.store-ttl-secs`, default 30 minutes), and a request
+/// naming a session this process does not hold — after a restart, an idle
+/// eviction, or on another instance — rebuilds it from the record, bound to
+/// the same subject. Loopback sessions are never written. See the "Session
+/// persistence" section of the MCP feature guide for what a restored
+/// session keeps and loses.
+///
 /// # Shutdown
 ///
 /// The transport holds a dedicated [`CancelToken`] relayed from the app
@@ -141,6 +158,8 @@ pub struct McpServer {
     max_request_body_bytes: Option<u64>,
     elicitation_timeout: Option<Duration>,
     session_idle_timeout: Option<Duration>,
+    session_store: Option<Arc<dyn McpSessionStore>>,
+    session_store_ttl: Option<Duration>,
     page_size: Option<u32>,
     cors_allowed_origins: Option<Vec<String>>,
     auth: Option<McpAuthConfig>,
@@ -247,6 +266,22 @@ impl McpServer {
     /// No effect on loopback sessions.
     pub fn with_session_idle_timeout(mut self, timeout: Duration) -> Self {
         self.session_idle_timeout = Some(timeout);
+        self
+    }
+
+    /// Keep HTTP sessions restorable in `store` (takes precedence over an
+    /// `Arc<dyn McpSessionStore>` bean). Incompatible with
+    /// [`stateless`](Self::stateless): the plugin fails to build.
+    pub fn with_session_store(mut self, store: impl McpSessionStore) -> Self {
+        self.session_store = Some(Arc::new(store));
+        self
+    }
+
+    /// Lifetime of a session record (overrides `mcp.session.store-ttl-secs`;
+    /// default 30 minutes): written at `initialize`, re-armed on the first
+    /// request past half of it. Must be positive. No effect without a store.
+    pub fn with_session_store_ttl(mut self, ttl: Duration) -> Self {
+        self.session_store_ttl = Some(ttl);
         self
     }
 
@@ -502,12 +537,23 @@ impl Plugin for McpServer {
             .elicitation_timeout
             .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
             .unwrap_or(DEFAULT_ELICITATION_TIMEOUT);
+        let session_cfg = cfg.session.unwrap_or_default();
         // `None` leaves rmcp's default (300 s); `Some(ZERO)` = never.
-        let configured_idle = cfg
-            .session
-            .and_then(|session| session.idle_timeout_secs)
-            .map(Duration::from_secs);
-        let session_idle_timeout = self.session_idle_timeout.or(configured_idle);
+        let session_idle_timeout = self
+            .session_idle_timeout
+            .or(session_cfg.idle_timeout_secs.map(Duration::from_secs));
+        let session_store_ttl = self
+            .session_store_ttl
+            .or(session_cfg.store_ttl_secs.map(Duration::from_secs))
+            .unwrap_or(DEFAULT_SESSION_STORE_TTL);
+        if session_store_ttl.is_zero() {
+            return Err("mcp.session.store-ttl-secs (McpServer::with_session_store_ttl) must be > 0: \
+                        a session record needs a lifetime"
+                .into());
+        }
+        if stateless && self.session_store.is_some() {
+            return Err(SESSION_STORE_STATELESS.into());
+        }
         let page_size = self
             .page_size
             .or(cfg.page_size)
@@ -620,16 +666,30 @@ impl Plugin for McpServer {
         let sessions_slot: Arc<OnceLock<McpSessions>> = Arc::new(OnceLock::new());
         let members_slot: Arc<OnceLock<McpRegistry>> = Arc::new(OnceLock::new());
         let init_slot: Arc<OnceLock<SessionInitFn>> = Arc::new(OnceLock::new());
+        // The session store: the builder's, else an `Arc<dyn McpSessionStore>`
+        // bean — resolved from the built graph like the token validator, so a
+        // test-pinned store (`override_bean`) is the one used.
+        let store_slot: Arc<OnceLock<Option<Arc<dyn McpSessionStore>>>> =
+            Arc::new(OnceLock::new());
         {
             let sessions_slot = Arc::clone(&sessions_slot);
             let members_slot = Arc::clone(&members_slot);
             let init_slot = Arc::clone(&init_slot);
+            let store_slot = Arc::clone(&store_slot);
             let fallback = sessions.clone();
             let members_fallback = members.clone();
             let session_init = self.session_init;
+            let session_store = self.session_store;
             ctx.after_build(move |dctx| {
                 let beans = dctx.bean_context();
                 let _ = sessions_slot.set(beans.try_get::<McpSessions>().unwrap_or(fallback));
+                let store = session_store.or_else(|| beans.try_get::<Arc<dyn McpSessionStore>>());
+                // Graph-stage hooks cannot fail: the bean case is a panic,
+                // the builder case a build error (above).
+                if stateless && store.is_some() {
+                    panic!("{SESSION_STORE_STATELESS}");
+                }
+                let _ = store_slot.set(store);
                 let _ =
                     members_slot.set(beans.try_get::<McpRegistry>().unwrap_or(members_fallback));
                 if let Some((type_name, resolve)) = session_init {
@@ -754,6 +814,7 @@ impl Plugin for McpServer {
                 registry: members,
                 updates: resource_updates,
                 sessions,
+                bindings: bindings.clone(),
                 init: init_slot.get().cloned(),
                 shutdown: mcp_cancel.clone(),
                 elicitation_timeout,
@@ -800,6 +861,17 @@ impl Plugin for McpServer {
             if let Some(bytes) = max_request_body_bytes {
                 transport_config.max_request_body_bytes = bytes;
             }
+            // One persistence per process, like the session manager: the
+            // sharded server clones the router per worker.
+            let persistence = store_slot
+                .get()
+                .cloned()
+                .flatten()
+                .map(|store| Arc::new(SessionPersistence::new(store, session_store_ttl)));
+            if let Some(persistence) = &persistence {
+                transport_config.session_store =
+                    Some(Arc::new(TransportStore(Arc::clone(persistence))));
+            }
             let request_log = McpRequestLog {
                 limit: transport_config.max_request_body_bytes,
             };
@@ -807,7 +879,13 @@ impl Plugin for McpServer {
                 move || {
                     #[cfg(feature = "loopback")]
                     let _owned_by_the_router = &loopback_mount;
-                    Ok(R2eMcpHandler::new(Arc::clone(&endpoint)))
+                    Ok(match &persistence {
+                        Some(persistence) => R2eMcpHandler::with_persistence(
+                            Arc::clone(&endpoint),
+                            Arc::clone(persistence),
+                        ),
+                        None => R2eMcpHandler::new(Arc::clone(&endpoint)),
+                    })
                 },
                 session_manager,
                 transport_config,
@@ -832,7 +910,9 @@ impl Plugin for McpServer {
                 .layer(request_log)
                 .option_layer(auth_layer)
                 .option_layer(identity_layer)
-                .layer(TrackSessionId)
+                .layer(TrackSessionId {
+                    bindings: bindings.clone(),
+                })
                 .map_response(r2e_core::http::response::IntoResponse::into_response)
                 .service(service);
             let mounted = Routes::new().route_service(&path, service);

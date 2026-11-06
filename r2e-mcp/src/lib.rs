@@ -100,7 +100,8 @@ pub use route::{
 };
 pub use service::McpService;
 pub use session::{
-    McpMemberError, McpSession, McpSessionError, McpSessionInit, McpSessions, SessionId,
+    InMemoryMcpSessionStore, McpMemberError, McpSession, McpSessionError, McpSessionInit,
+    McpSessionStore, McpSessionStoreError, McpSessionStoreFuture, McpSessions, SessionId,
     SessionInit, SessionToolset,
 };
 

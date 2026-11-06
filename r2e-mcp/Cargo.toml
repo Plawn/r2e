@@ -23,6 +23,8 @@ loopback = ["rmcp/client", "dep:futures-util", "dep:futures-channel"]
 
 [dependencies]
 r2e-core = { workspace = true }
+# Only for the adapter implementing rmcp's `#[async_trait] SessionStore`.
+async-trait = { workspace = true }
 # OAuth resource-server layer (mcp.auth.*): JWT validation, JWKS cache,
 # role extractors and the shared OAuth HTTP client all come from r2e-security.
 r2e-security = { workspace = true }

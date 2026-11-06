@@ -726,6 +726,79 @@ async fn a_session_is_bound_to_the_struct_identitys_subject() {
     assert_eq!(text(&message), "alice", "{message}");
 }
 
+#[controller]
+struct OptionalSecuredTools {
+    #[inject(identity)]
+    user: Option<AuthenticatedUser>,
+}
+
+#[routes]
+impl OptionalSecuredTools {
+    #[tool]
+    async fn maybe_whoami(&self) -> String {
+        self.user
+            .as_ref()
+            .map_or_else(|| "anonymous".to_string(), |u| u.sub.clone())
+    }
+}
+
+/// With an optional struct identity the binding is exact: a session opened
+/// by a subject is a 404 for an anonymous request and for another subject;
+/// an anonymous session is a 404 for any subject. Both 404s are rmcp's own
+/// "unknown session" answer.
+#[r2e_core::test]
+async fn an_optional_struct_identity_binds_the_session_exactly() {
+    let jwt = TestJwt::new();
+    let router = AppBuilder::new()
+        .provide(Arc::new(jwt.claims_validator()))
+        .plugin(McpServer::new())
+        .build_state()
+        .await
+        .register_mcp_service::<OptionalSecuredTools>()
+        .build();
+    let alice = bearer(&jwt, "alice", &[]);
+    let bob = bearer(&jwt, "bob", &[]);
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+    let unknown =
+        support::post_with_headers(&router, "/mcp", Some("no-such-session"), &[], &list).await;
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND, "{}", unknown.raw_body);
+
+    // alice's session: not for an anonymous request, not for bob.
+    let owned =
+        support::initialize_with_headers(&router, "/mcp", &[("authorization", &alice)]).await;
+    for headers in [&[][..], &[("authorization", bob.as_str())][..]] {
+        let refused = support::post_with_headers(&router, "/mcp", Some(&owned), headers, &list).await;
+        assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+        assert_eq!(refused.raw_body, unknown.raw_body);
+    }
+    let message = support::tools_call_with_headers(
+        &router,
+        "/mcp",
+        &owned,
+        &[("authorization", &alice)],
+        "maybe_whoami",
+        json!({}),
+    )
+    .await;
+    assert_eq!(text(&message), "alice", "{message}");
+
+    // An anonymous session: not for alice.
+    let anonymous = support::initialize(&router, "/mcp").await;
+    let refused = support::post_with_headers(
+        &router,
+        "/mcp",
+        Some(&anonymous),
+        &[("authorization", &alice)],
+        &list,
+    )
+    .await;
+    assert_eq!(refused.status, StatusCode::NOT_FOUND, "{}", refused.raw_body);
+    assert_eq!(refused.raw_body, unknown.raw_body);
+    let message =
+        support::tools_call(&router, "/mcp", &anonymous, "maybe_whoami", json!({})).await;
+    assert_eq!(text(&message), "anonymous", "{message}");
+}
+
 // ── What the layer learns from the identity type ───────────────────────────
 
 /// The caller probe picks the richest view the identity type offers, by
