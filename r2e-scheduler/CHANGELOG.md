@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `ScheduleConfig` now derives `Clone`, `Debug`, `PartialEq` and `Eq`, so a
+  `#[config("…")] cadence: ScheduleConfig` field can be handed to
+  `#[scheduled(schedule = "method")]` by value (#1181).
+
 ## [0.9.0] - 2026-10-31
 
 ### Changed

@@ -100,7 +100,7 @@ extra).
 | Your task involves… | Read | features |
 |---|---|---|
 | `EventBus`, `emit` / `subscribe`, request-reply, `#[consumer]`, distributed backends, the EventBus↔SSE bridge | `llm/events.md` | events |
-| `#[scheduled]`, cron / interval, overlap policy, `skip_if`, `SchedulerHandle`, dynamic tasks | `llm/scheduled-tasks.md` | scheduler |
+| `#[scheduled]`, cron / interval, overlap policy, `skip_if`, `schedule = "method"` (cadence from config / a bean), `SchedulerHandle`, dynamic tasks | `llm/scheduled-tasks.md` | scheduler |
 | `PoolExecutor`, `#[async_exec]`, `#[derive(BackgroundService)]`, `spawn_service`, `services.enabled` | `llm/background-work.md` | executor |
 | `r2e::rt` (spawn, sleep, timeout, channels, `select!`), per-worker services, worker scopes / mailboxes / metrics | `llm/runtime-facade.md` | core |
 

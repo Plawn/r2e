@@ -63,6 +63,10 @@ pub(crate) struct ScheduledSourceMethod {
     /// Resolved `skip_if = "..."` predicate (a plain `&self -> bool` method on
     /// the same impl block), checked before every tick.
     pub skip: Option<SkipCall>,
+    /// Resolved `schedule = "..."` cadence provider (a plain sync
+    /// `&self -> ScheduleConfig` method on the same impl block), called once
+    /// at registration in place of a literal `every`/`cron`.
+    pub schedule: Option<syn::Ident>,
 }
 
 /// The per-method type-erased `ScheduledTaskDef` blocks (one per scheduled
@@ -88,7 +92,8 @@ pub(crate) fn scheduled_task_defs(
         .map(|sm| {
             let fn_name = &sm.fn_name;
             let task_name = task_name(&sm.config, owner_name, &fn_name.to_string());
-            let schedule_expr = schedule_config_expr(&sm.config, &sched_krate);
+            let schedule_expr =
+                schedule_config_expr(&sm.config, &sched_krate, instance, sm.schedule.as_ref());
             let overlap_expr = overlap_policy_expr(sm.config.overlap, &sched_krate);
 
             let result_expr = if sm.emitted_async {

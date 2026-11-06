@@ -1142,6 +1142,10 @@ fn generate_transverse(def: &RoutesImplDef, name: &syn::Ident) -> (TokenStream, 
                         &sm.config,
                         def.other_methods.iter(),
                     )?,
+                    schedule: crate::codegen::scheduled::resolve_schedule(
+                        &sm.config,
+                        def.other_methods.iter(),
+                    )?,
                 })
             })
             .collect();

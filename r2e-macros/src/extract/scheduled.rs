@@ -48,6 +48,7 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
             let mut name: Option<String> = None;
             let mut overlap: OverlapMode = OverlapMode::Skip;
             let mut skip_if: Option<syn::LitStr> = None;
+            let mut schedule: Option<syn::LitStr> = None;
 
             attr.parse_nested_meta(|meta| {
                 if meta.path.is_ident("every") {
@@ -104,11 +105,23 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                     }
                     skip_if = Some(lit);
                     Ok(())
+                } else if meta.path.is_ident("schedule") {
+                    let value = meta.value()?;
+                    let lit: syn::LitStr = value.parse()?;
+                    if lit.value().is_empty() {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "`schedule` must name a method on the same impl block, e.g. schedule = \"sync_cadence\"",
+                        ));
+                    }
+                    schedule = Some(lit);
+                    Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `initial_delay`, `name`, `overlap`, or `skip_if`\n\n\
+                        "unknown key in #[scheduled(...)]: expected `every`, `cron`, `schedule`, `initial_delay`, `name`, `overlap`, or `skip_if`\n\n\
                          examples:\n  #[scheduled(every = 30)]\n  #[scheduled(every = \"5m\")]\n  \
                          #[scheduled(cron = \"0 */5 * * * *\")]\n  \
+                         #[scheduled(schedule = \"sync_cadence\")]\n  \
                          #[scheduled(every = \"1h\", initial_delay = \"10s\")]\n  \
                          #[scheduled(every = \"50ms\", overlap = \"concurrent\")]\n  \
                          #[scheduled(every = \"5m\", skip_if = \"maintenance_mode\")]"
@@ -116,13 +129,30 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                 }
             })?;
 
-            if every_ms.is_none() && cron.is_none() {
+            if schedule.is_some() && (every_ms.is_some() || cron.is_some()) {
                 return Err(syn::Error::new_spanned(
                     attr,
-                    "#[scheduled] requires either `every` (interval) or `cron` (expression):\n\
+                    "`schedule` provides the whole cadence — remove `every`/`cron`\n\n\
+                     The named method returns the full `ScheduleConfig` (interval or cron), so a \
+                     literal cadence on the attribute would be ignored.",
+                ));
+            }
+            if schedule.is_some() && initial_delay_ms.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "`initial_delay` cannot be combined with `schedule`\n\n\
+                     The named method returns the full `ScheduleConfig`; return \
+                     `ScheduleConfig::IntervalWithDelay { interval, initial_delay }` from it instead.",
+                ));
+            }
+            if every_ms.is_none() && cron.is_none() && schedule.is_none() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[scheduled] requires `every` (interval), `cron` (expression), or `schedule` (method):\n\
                      \n  #[scheduled(every = 30)]                    — run every 30 seconds\n\
                      \n  #[scheduled(every = \"5m\")]                  — run every 5 minutes\n\
-                     \n  #[scheduled(cron = \"0 */5 * * * *\")]        — cron schedule",
+                     \n  #[scheduled(cron = \"0 */5 * * * *\")]        — cron schedule\n\
+                     \n  #[scheduled(schedule = \"sync_cadence\")]      — cadence from a `&self -> ScheduleConfig` method",
                 ));
             }
             if every_ms.is_some() && cron.is_some() {
@@ -146,6 +176,7 @@ pub fn extract_scheduled(attrs: &[syn::Attribute]) -> syn::Result<Option<Schedul
                 name,
                 overlap,
                 skip_if,
+                schedule,
             }));
         }
     }

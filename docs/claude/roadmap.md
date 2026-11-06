@@ -819,11 +819,19 @@ r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
 - **#1076 (high)** — MCP loopback transport: implemented on
   `task/mcp-loopback` (2026-11-05, see W16); closes on release. The HTTP
   idle timeout / `with_session_manager` half moves to its own ticket (#692).
-- **#1181 (medium)** — `#[scheduled(config = "…", default = "…")]`: cadence
-  read from a config key (`ScheduleConfig: FromConfigValue`, absent → default,
-  present-but-invalid → boot error), on `#[routes]` controllers and `#[bean]`
-  impls. Origin: close-the-loop `PullSweep::poll_sources` working around it
-  with `schedule_task_with`.
+- **#1181 (medium)** — DONE 2026-11-06 (`task/1181-scheduled-from-method`)
+  as `#[scheduled(schedule = "method")]`: a plain **sync** `&self ->
+  ScheduleConfig` method on the same impl block provides the cadence, called
+  once at registration (controllers and `#[bean]` impls). The cadence comes
+  from a `#[config("…")] cadence: ScheduleConfig` field (absent → boot config
+  error or `Option<ScheduleConfig>` + in-code default; invalid → construction
+  fails naming the key), an injected bean, or code. The ticket's original
+  `config = "…", default = "…"` form was **rejected** (second config path —
+  see Decisions log). Additive: `ScheduleConfig` gained `Clone`/`Debug`/
+  `PartialEq`/`Eq`; no version bump. Remaining: close-the-loop replaces its
+  `schedule_task_with` workaround in `ctl-api/src/controllers/sweep.rs`.
+  Follow-ups (not V1): live cadence re-evaluation per re-arm (driver change),
+  `Option<ScheduleConfig>` → `None` disables the job.
 - **#1173 (low)** — DONE 2026-11-06 (`task/1173-www-authenticate`):
   `AuthenticatedUser` / `impl_claims_identity_extractor!` reject with
   `Rejection` carrying the RFC 6750 challenge from `SecurityError::challenge()`
@@ -885,6 +893,15 @@ r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed that day).
 
 ## Decisions log — do NOT re-propose
 
+- **`#[scheduled(config = "…", default = "…")]`: REJECTED (2026-11-06,
+  user decision, #1181).** It would be a second config-reading path next to
+  `#[config]` (own default handling, own boot validation, own `config_keys()`
+  declaration for the dev-reload fingerprint) and only covers "cadence = one
+  key". The shipped form is `#[scheduled(schedule = "method")]` — a sync
+  `&self -> ScheduleConfig` method on the same impl block, evaluated once at
+  registration — which reads the cadence from a `#[config]` field, an
+  injected bean, or code. Defaults live in YAML (`${VAR:1h}`) or in the method
+  (`Option<ScheduleConfig>`). Do not re-propose a config key on the attribute.
 - **One type = one port (2026-11-04).** Inbound ports (HTTP, MCP, gRPC,
   consumers) are separate `#[controller]` types over the same beans
   (hexagonal). The 3a mixed HTTP + MCP impl was removed before release; a

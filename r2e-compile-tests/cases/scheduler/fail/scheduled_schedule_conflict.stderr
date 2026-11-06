@@ -1,0 +1,7 @@
+error: `schedule` provides the whole cadence — remove `every`/`cron`
+
+       The named method returns the full `ScheduleConfig` (interval or cron), so a literal cadence on the attribute would be ignored.
+  --> cases/scheduler/fail/scheduled_schedule_conflict.rs:15:5
+   |
+15 |     #[scheduled(every = "50ms", schedule = "sync_cadence")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

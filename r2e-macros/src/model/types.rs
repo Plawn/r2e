@@ -123,6 +123,15 @@ pub struct ScheduledConfig {
     /// before every tick (Quarkus `skipExecutionIf`). Kept as the literal for
     /// error spans; resolved against the impl block by each host macro.
     pub skip_if: Option<syn::LitStr>,
+    /// Cadence provider from `#[scheduled(schedule = "method")]` — names a
+    /// plain **sync** `&self -> ScheduleConfig` method on the same impl block,
+    /// called once at registration (where the task definition is built), so
+    /// the cadence can come from a `#[config]` field, an injected policy bean,
+    /// or any computation. Mutually exclusive with `every`/`cron`/
+    /// `initial_delay` (the method owns the whole `ScheduleConfig`). Kept as
+    /// the literal for error spans; resolved against the impl block by each
+    /// host macro.
+    pub schedule: Option<syn::LitStr>,
 }
 
 /// Parsed `overlap = "..."` value for `#[scheduled]` — mirrors

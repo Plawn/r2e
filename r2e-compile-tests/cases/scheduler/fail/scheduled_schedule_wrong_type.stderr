@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+  --> cases/scheduler/fail/scheduled_schedule_wrong_type.rs:15:28
+   |
+15 |     #[scheduled(schedule = "sync_cadence")]
+   |                            ^^^^^^^^^^^^^^ expected `ScheduleConfig`, found `String`
+   |
+help: try wrapping the expression in `r2e::prelude::ScheduleConfig::Cron`
+   |
+15 |     #[scheduled(schedule = r2e::prelude::ScheduleConfig::Cron("sync_cadence"))]
+   |                            +++++++++++++++++++++++++++++++++++              +
