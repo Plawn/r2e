@@ -65,6 +65,16 @@ fn extract_bearer_token_missing_header() {
     let err = extract_bearer_token(&metadata).unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
     assert!(err.message().contains("Missing authorization"));
+    assert_eq!(www_authenticate(&err), Some("Bearer"));
+}
+
+/// The `www-authenticate` metadata of a status (#1173, RFC 6750 §3 over
+/// gRPC metadata).
+fn www_authenticate(status: &tonic::Status) -> Option<&str> {
+    status
+        .metadata()
+        .get("www-authenticate")
+        .map(|v| v.to_str().unwrap())
 }
 
 #[test]
@@ -74,6 +84,7 @@ fn extract_bearer_token_not_bearer_scheme() {
     let err = extract_bearer_token(&metadata).unwrap_err();
     assert_eq!(err.code(), tonic::Code::Unauthenticated);
     assert!(err.message().contains("Bearer scheme"));
+    assert_eq!(www_authenticate(&err), Some("Bearer"));
 }
 
 #[r2e_core::test]
@@ -101,6 +112,10 @@ async fn extract_jwt_claims_validation_failure() {
     let status = result.unwrap_err();
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
     assert!(status.message().contains("JWT validation failed"));
+    assert_eq!(
+        www_authenticate(&status),
+        Some(r#"Bearer error="invalid_token", error_description="The access token is invalid""#)
+    );
 }
 
 #[r2e_core::test]

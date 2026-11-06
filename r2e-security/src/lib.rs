@@ -51,6 +51,7 @@ pub mod __macro_support {
     pub use r2e_core::web::extract::{FromRequestPartsVia, OptionalFromRequestPartsVia, ViaBean};
     pub use r2e_core::HttpError;
     pub use r2e_core::Identity;
+    pub use r2e_core::Rejection;
     pub use r2e_core::StandardClaims;
     pub use serde_json;
 }

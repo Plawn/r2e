@@ -157,6 +157,33 @@ impl SecurityError {
             "Unauthorized"
         }
     }
+
+    /// The `WWW-Authenticate` challenge a 401 for this error carries
+    /// (RFC 6750 §3), `None` for a server-side failure (503).
+    ///
+    /// A request that presented no Bearer credentials gets the bare
+    /// `Bearer` challenge — the RFC forbids an error code there. A request
+    /// that presented a token the validator refused gets
+    /// `error="invalid_token"` with a coarse `error_description` (expired vs
+    /// invalid); the detailed cause stays server-side, like
+    /// [`public_message`](Self::public_message).
+    pub fn challenge(&self) -> Option<HeaderValue> {
+        if self.is_server_error() {
+            return None;
+        }
+        Some(HeaderValue::from_static(match self {
+            SecurityError::MissingAuthHeader | SecurityError::InvalidAuthScheme => "Bearer",
+            SecurityError::TokenExpired => {
+                r#"Bearer error="invalid_token", error_description="The access token expired""#
+            }
+            SecurityError::InvalidToken(_)
+            | SecurityError::UnknownKeyId(_)
+            | SecurityError::ValidationFailed(_)
+            | SecurityError::JwksFetchError(_) => {
+                r#"Bearer error="invalid_token", error_description="The access token is invalid""#
+            }
+        }))
+    }
 }
 
 impl IntoHttpResponse for SecurityError {
@@ -182,10 +209,11 @@ impl From<SecurityError> for r2e_core::HttpError {
     }
 }
 
-/// Authentication failures project as `Unauthenticated` (401, with
-/// `WWW-Authenticate: Bearer`); a JWKS outage as `Unavailable` (503). The
-/// client-facing message is [`SecurityError::public_message`] — the detailed
-/// cause travels in [`Rejection::source`] only.
+/// Authentication failures project as `Unauthenticated` (401, with the
+/// `WWW-Authenticate` challenge of [`SecurityError::challenge`]); a JWKS
+/// outage as `Unavailable` (503, no challenge). The client-facing message is
+/// [`SecurityError::public_message`] — the detailed cause travels in
+/// [`Rejection::source`] only.
 impl From<SecurityError> for Rejection {
     fn from(err: SecurityError) -> Self {
         let kind = if err.is_server_error() {
@@ -194,8 +222,8 @@ impl From<SecurityError> for Rejection {
             RejectionKind::Unauthenticated
         };
         let mut rejection = Rejection::new(kind, err.public_message());
-        if kind == RejectionKind::Unauthenticated {
-            rejection = rejection.header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        if let Some(challenge) = err.challenge() {
+            rejection = rejection.header(WWW_AUTHENTICATE, challenge);
         }
         rejection.source(err)
     }

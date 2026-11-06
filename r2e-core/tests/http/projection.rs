@@ -17,7 +17,7 @@ use http_body_util::BodyExt;
 use r2e_core::decorators::guards::PreAuthGuardContext;
 use r2e_core::error::{ErrorSchema, Rejection, RejectionKind};
 use r2e_core::http::extract::{FromRequestParts, Path};
-use r2e_core::http::header::{HeaderValue, Parts, RETRY_AFTER};
+use r2e_core::http::header::{HeaderValue, Parts, RETRY_AFTER, WWW_AUTHENTICATE};
 use r2e_core::http::response::{IntoHttpResponse, IntoResponse};
 use r2e_core::http::Bytes;
 use r2e_core::http::{Body, Json, Response, Routes, StatusCode};
@@ -124,7 +124,8 @@ r2e_core::http::impl_into_response!(PlainErr);
 
 // ── Request-scoped fixtures ────────────────────────────────────────────────
 
-/// Identity from `x-user`; fails with a typed rejection.
+/// Identity from `x-user`; fails with a typed rejection carrying the RFC 6750
+/// challenge, the way `AuthenticatedUser` does (#1173).
 struct Subject(String);
 
 impl Identity for Subject {
@@ -142,7 +143,10 @@ impl<S: Send + Sync> FromRequestParts<S> for Subject {
             .get("x-user")
             .and_then(|value| value.to_str().ok())
             .map(|sub| Subject(sub.to_owned()))
-            .ok_or_else(|| Rejection::new(RejectionKind::Unauthenticated, "who are you?"))
+            .ok_or_else(|| {
+                Rejection::new(RejectionKind::Unauthenticated, "who are you?")
+                    .header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
+            })
     }
 }
 
@@ -370,6 +374,50 @@ async fn identity_failure_projects() {
     .await;
     let json = assert_wire(resp, StatusCode::UNAUTHORIZED, "Unauthenticated").await;
     assert_eq!(json["error"]["message"], "who are you?");
+}
+
+/// #1173: the identity rejection's `WWW-Authenticate` reaches the wire
+/// through every projection door — the return-type envelope, the app-level
+/// envelope and the default `HttpError` rendering.
+#[r2e_core::test]
+async fn identity_challenge_survives_projection() {
+    fn challenge(resp: &Response) -> Option<&str> {
+        resp.headers()
+            .get(WWW_AUTHENTICATE)
+            .and_then(|v| v.to_str().ok())
+    }
+
+    // Route envelope (`Wire`).
+    let resp = raw(
+        router().await,
+        "POST",
+        "/proj/items/7",
+        &[("content-type", "application/json")],
+        Body::from(r#"{"name":"ok"}"#),
+    )
+    .await;
+    assert_eq!(envelope(&resp), Some("wire"));
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(challenge(&resp), Some("Bearer"), "route envelope");
+
+    // App-level envelope (`AppWire`).
+    let resp = raw(
+        router_with_app_envelope().await,
+        "GET",
+        "/proj/plain",
+        &[],
+        Body::empty(),
+    )
+    .await;
+    assert_eq!(envelope(&resp), Some("app"));
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(challenge(&resp), Some("Bearer"), "app envelope");
+
+    // No envelope: default `HttpError` projection.
+    let resp = raw(router().await, "GET", "/proj/plain", &[], Body::empty()).await;
+    assert_eq!(envelope(&resp), None);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(challenge(&resp), Some("Bearer"), "default projection");
 }
 
 #[r2e_core::test]

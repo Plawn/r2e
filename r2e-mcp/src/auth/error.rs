@@ -142,6 +142,41 @@ fn quote(value: &str) -> String {
     out
 }
 
+/// Whether a `WWW-Authenticate` value uses `scheme` (case-insensitive, RFC
+/// 9110 §11.1): the scheme token followed by the end of the value or a space.
+pub(crate) fn scheme_is(value: &HeaderValue, scheme: &str) -> bool {
+    let Ok(text) = value.to_str() else {
+        return false;
+    };
+    match text.get(..scheme.len()) {
+        Some(head) if head.eq_ignore_ascii_case(scheme) => {
+            text[scheme.len()..].is_empty() || text.as_bytes()[scheme.len()] == b' '
+        }
+        _ => false,
+    }
+}
+
+/// A `Bearer` challenge completed with `resource_metadata="url"` (RFC 9728
+/// §5.1) when it does not name one already; `None` for a non-`Bearer` value.
+/// A `Bearer` challenge already naming a `resource_metadata` is returned
+/// unchanged.
+pub(crate) fn with_resource_metadata(value: &HeaderValue, url: &str) -> Option<HeaderValue> {
+    if !scheme_is(value, "Bearer") {
+        return None;
+    }
+    let text = value.to_str().ok()?;
+    if text.contains("resource_metadata=") {
+        return Some(value.clone());
+    }
+    let params = text["Bearer".len()..].trim();
+    let completed = if params.is_empty() {
+        format!("Bearer resource_metadata={}", quote(url))
+    } else {
+        format!("Bearer {params}, resource_metadata={}", quote(url))
+    };
+    Some(HeaderValue::from_str(&completed).unwrap_or_else(|_| value.clone()))
+}
+
 /// Build a `WWW-Authenticate: Bearer …` header value.
 ///
 /// Every parameter value goes through RFC 9110 quoted-string escaping.

@@ -122,28 +122,47 @@ mod rejection {
     use r2e_core::http::StatusCode;
     use r2e_security::error::SecurityError;
 
+    const INVALID_TOKEN: &str =
+        r#"Bearer error="invalid_token", error_description="The access token is invalid""#;
+    const EXPIRED_TOKEN: &str =
+        r#"Bearer error="invalid_token", error_description="The access token expired""#;
+
+    /// RFC 6750 §3: no credentials → a bare `Bearer` challenge; a presented
+    /// but refused token → `error="invalid_token"` with a description.
     #[test]
     fn client_errors_become_unauthenticated_with_a_challenge() {
-        for err in [
-            SecurityError::MissingAuthHeader,
-            SecurityError::InvalidAuthScheme,
-            SecurityError::InvalidToken("bad".into()),
-            SecurityError::TokenExpired,
-            SecurityError::UnknownKeyId("kid".into()),
-            SecurityError::ValidationFailed("aud".into()),
+        for (err, challenge) in [
+            (SecurityError::MissingAuthHeader, "Bearer"),
+            (SecurityError::InvalidAuthScheme, "Bearer"),
+            (SecurityError::InvalidToken("bad".into()), INVALID_TOKEN),
+            (SecurityError::TokenExpired, EXPIRED_TOKEN),
+            (SecurityError::UnknownKeyId("kid".into()), INVALID_TOKEN),
+            (SecurityError::ValidationFailed("aud".into()), INVALID_TOKEN),
         ] {
             let debug = format!("{err:?}");
+            assert_eq!(
+                err.challenge().as_ref().map(|v| v.to_str().unwrap()),
+                Some(challenge),
+                "{debug}"
+            );
             let rejection = Rejection::from(err);
             assert_eq!(rejection.kind, RejectionKind::Unauthenticated, "{debug}");
             assert_eq!(rejection.status, StatusCode::UNAUTHORIZED, "{debug}");
             assert_eq!(rejection.message, "Unauthorized", "{debug}");
             assert_eq!(
                 rejection.headers().get(WWW_AUTHENTICATE).map(|v| v.to_str().unwrap()),
-                Some("Bearer"),
+                Some(challenge),
                 "{debug}"
             );
             assert!(rejection.source.is_some(), "{debug}: source is kept");
         }
+    }
+
+    #[test]
+    fn the_challenge_never_leaks_the_detail() {
+        let rejection = Rejection::from(SecurityError::InvalidToken("secret detail".into()));
+        let challenge = rejection.headers().get(WWW_AUTHENTICATE).unwrap().to_str().unwrap();
+        assert!(!challenge.contains("secret detail"), "{challenge}");
     }
 
     #[test]
@@ -153,6 +172,7 @@ mod rejection {
         assert_eq!(rejection.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(rejection.message, "Service unavailable");
         assert!(rejection.headers().get(WWW_AUTHENTICATE).is_none());
+        assert!(SecurityError::JwksFetchError("timeout".into()).challenge().is_none());
     }
 
     #[test]

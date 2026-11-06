@@ -31,7 +31,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use r2e_core::http::header::{self, HeaderValue};
+use r2e_core::http::header::{self, HeaderMap, HeaderValue};
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{
     Extensions, IntoHttpResponse, Method, Parts, Request, Response, StatusCode,
@@ -269,19 +269,14 @@ pub(crate) struct McpIdentityService<S> {
     state: Arc<IdentityState>,
 }
 
-/// Render a scope's rejection: the extractor's own response, plus the
-/// `mcp.auth` challenges on a 401 that carries none.
+/// Render a scope's rejection: the extractor's own response, completed with
+/// the `mcp.auth` challenges on a 401 (see [`Challenges::complete_unauthorized`]).
 pub(crate) fn rejected(rejection: Rejection, challenges: Option<&Challenges>) -> Response {
     let mut response = rejection.into_http_response();
     if response.status() == StatusCode::UNAUTHORIZED
-        && !response.headers().contains_key(header::WWW_AUTHENTICATE)
         && let Some(challenges) = challenges
     {
-        for value in challenges.unauthorized_values() {
-            response
-                .headers_mut()
-                .append(header::WWW_AUTHENTICATE, value);
-        }
+        challenges.complete_unauthorized(response.headers_mut());
     }
     response
         .extensions_mut()
@@ -383,19 +378,45 @@ where
     }
 }
 
-/// `WWW-Authenticate` values for a plain 401 (no OAuth error code).
 impl Challenges {
-    pub(crate) fn unauthorized_values(&self) -> Vec<HeaderValue> {
-        let mut values = Vec::with_capacity(2);
+    /// Complete the `WWW-Authenticate` challenges of a 401 rendered by an
+    /// identity extractor so an MCP client still finds the resource metadata
+    /// (RFC 9728 §5.1): every `Bearer` challenge already present (e.g.
+    /// `AuthenticatedUser`'s `Bearer error="invalid_token", …`) gains a
+    /// `resource_metadata` parameter unless it names one; with no `Bearer`
+    /// challenge at all, `Bearer resource_metadata="…"` is appended. The
+    /// `Basic` challenge is appended unless one is already there.
+    pub(crate) fn complete_unauthorized(&self, headers: &mut HeaderMap) {
+        let mut values: Vec<HeaderValue> = headers
+            .get_all(header::WWW_AUTHENTICATE)
+            .iter()
+            .cloned()
+            .collect();
         if let Some(url) = &self.resource_metadata_url {
-            values.push(crate::auth::error::www_authenticate(&[(
-                "resource_metadata",
-                url,
-            )]));
+            let mut has_bearer = false;
+            for value in &mut values {
+                if let Some(completed) = crate::auth::error::with_resource_metadata(value, url) {
+                    has_bearer = true;
+                    *value = completed;
+                }
+            }
+            if !has_bearer {
+                values.push(crate::auth::error::www_authenticate(&[(
+                    "resource_metadata",
+                    url,
+                )]));
+            }
         }
-        if let Some(realm) = &self.basic_realm {
+        if let Some(realm) = &self.basic_realm
+            && !values
+                .iter()
+                .any(|value| crate::auth::error::scheme_is(value, "Basic"))
+        {
             values.push(crate::auth::error::basic_challenge(realm));
         }
-        values
+        headers.remove(header::WWW_AUTHENTICATE);
+        for value in values {
+            headers.append(header::WWW_AUTHENTICATE, value);
+        }
     }
 }

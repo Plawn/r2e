@@ -146,7 +146,15 @@ async fn optional_extractor_rejects_invalid_token_when_header_is_present() {
         .err()
         .expect("an invalid token must be rejected");
 
-    assert_eq!(error.status(), r2e_core::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(error.status, r2e_core::http::StatusCode::UNAUTHORIZED);
+    // #1173: the RFC 6750 challenge rides on the rejection.
+    assert_eq!(
+        error
+            .headers()
+            .get(r2e_core::http::header::WWW_AUTHENTICATE)
+            .map(|v| v.to_str().unwrap()),
+        Some(r#"Bearer error="invalid_token", error_description="The access token is invalid""#)
+    );
 }
 
 #[r2e_core::test]
@@ -161,8 +169,8 @@ async fn identity_construction_error_is_propagated() {
     .err()
     .expect("identity construction errors must be propagated");
 
-    assert_eq!(error.status(), r2e_core::http::StatusCode::FORBIDDEN);
-    assert_eq!(error.message(), Some("identity construction rejected"));
+    assert_eq!(error.status, r2e_core::http::StatusCode::FORBIDDEN);
+    assert_eq!(error.message, "identity construction rejected");
 }
 
 /// Bridge-overlap invariant pin: the macro-generated `*Via` impls must be

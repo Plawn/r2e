@@ -8,14 +8,24 @@
 //!   layer (one binding, not two);
 //! * an app-defined struct identity rejected with a bare 401 gets the
 //!   `mcp.auth` challenge appended, so an OAuth client still discovers the
-//!   IdP from a rejection the extractor rendered itself.
+//!   IdP from a rejection the extractor rendered itself;
+//! * a struct identity whose rejection already carries a `Bearer` challenge
+//!   (`AuthenticatedUser`'s RFC 6750 `error="invalid_token"`, #1173) gets
+//!   `resource_metadata` merged into that one challenge (RFC 9728 §5.1) —
+//!   never a second `Bearer` value — and a `Basic` challenge is not
+//!   duplicated.
+
+use std::sync::Arc;
 
 use r2e_core::http::extract::FromRequestParts;
-use r2e_core::http::header::Parts;
+use r2e_core::http::header::{HeaderMap, HeaderValue, Parts, WWW_AUTHENTICATE};
 use r2e_core::http::{Body, Routes, StatusCode};
 use r2e_core::prelude::*;
 use r2e_core::{AppBuilder, Rejection, RejectionKind};
+use r2e_mcp::auth::{McpAuthConfig, McpBasicAuthConfig};
 use r2e_mcp::{AppBuilderMcpExt, McpPrincipal, McpServer};
+use r2e_security::AuthenticatedUser;
+use r2e_test::TestJwt;
 use serde_json::json;
 
 use crate::fixtures::{
@@ -249,4 +259,151 @@ async fn a_rejected_struct_identity_carries_the_auth_challenge() {
     )
     .await;
     assert_eq!(message["result"]["content"][0]["text"], "acme", "{message}");
+}
+
+// ── #1173: challenges already on the rejection are completed, not doubled ──
+
+/// A struct-level `AuthenticatedUser` validated by a bean the auth layer
+/// does not know about: the auth layer accepts the bearer, the scope's
+/// extractor refuses it.
+#[controller]
+struct StrictTools {
+    #[inject(identity)]
+    user: AuthenticatedUser,
+}
+
+#[routes]
+impl StrictTools {
+    #[tool]
+    async fn whoami(&self) -> String {
+        self.user.sub.clone()
+    }
+}
+
+/// An identity rejecting with the bare `Bearer` challenge and an explicit
+/// `Basic` one — the shape of a hand-written extractor advertising both.
+#[derive(Clone)]
+struct Dual(String);
+
+impl<S: Send + Sync> FromRequestParts<S> for Dual {
+    type Rejection = Rejection;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .headers
+            .get("x-dual")
+            .and_then(|v| v.to_str().ok())
+            .map(|t| Dual(t.to_owned()))
+            .ok_or_else(|| {
+                Rejection::new(RejectionKind::Unauthenticated, "missing x-dual header")
+                    .header(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))
+                    .header(
+                        WWW_AUTHENTICATE,
+                        HeaderValue::from_static(r#"Basic realm="legacy""#),
+                    )
+            })
+    }
+}
+
+#[controller]
+struct DualTools {
+    #[inject(identity)]
+    dual: Dual,
+}
+
+#[routes]
+impl DualTools {
+    #[tool]
+    async fn dual(&self) -> String {
+        self.dual.0.clone()
+    }
+}
+
+fn challenges(headers: &HeaderMap) -> Vec<String> {
+    headers
+        .get_all(WWW_AUTHENTICATE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_owned())
+        .collect()
+}
+
+async fn initialize_raw(router: &Routes, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, String) {
+    let mut all = vec![
+        ("content-type", "application/json"),
+        ("accept", "application/json, text/event-stream"),
+    ];
+    all.extend_from_slice(headers);
+    crate::fixtures::send(
+        router,
+        "POST",
+        "/mcp",
+        &all,
+        Body::from(support::initialize_body().to_string()),
+    )
+    .await
+}
+
+#[r2e_core::test]
+async fn an_invalid_token_challenge_from_the_scope_gains_the_resource_metadata() {
+    // The scope's validator is a different TestJwt (other secret): every
+    // bearer the auth layer accepts is `invalid_token` for the scope.
+    let router = AppBuilder::new()
+        .provide(Arc::new(TestJwt::new().claims_validator()))
+        .plugin(
+            McpServer::new()
+                .with_auth(offline_auth())
+                .with_token_validator(pinned(&test_jwt())),
+        )
+        .build_state()
+        .await
+        .register_mcp_service::<StrictTools>()
+        .build();
+    let bearer = format!("Bearer {}", token("alice", &[]));
+
+    let (status, headers, body) = initialize_raw(&router, &[("authorization", &bearer)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(
+        challenges(&headers),
+        vec![format!(
+            "Bearer error=\"invalid_token\", error_description=\"The access token is invalid\", \
+             resource_metadata=\"{PRM_URL}\""
+        )],
+        "one Bearer challenge: the extractor's, completed with the PRM URL"
+    );
+}
+
+#[r2e_core::test]
+async fn bearer_and_basic_challenges_from_the_scope_are_completed_not_duplicated() {
+    let auth = McpAuthConfig {
+        basic: Some(McpBasicAuthConfig {
+            username: "svc".into(),
+            password: "pw".into(),
+            realm: None,
+            roles: None,
+            scopes: None,
+        }),
+        ..offline_auth()
+    };
+    let router = AppBuilder::new()
+        .plugin(
+            McpServer::new()
+                .with_auth(auth)
+                .with_token_validator(pinned(&test_jwt())),
+        )
+        .build_state()
+        .await
+        .register_mcp_service::<DualTools>()
+        .build();
+    let bearer = format!("Bearer {}", token("alice", &[]));
+
+    let (status, headers, body) = initialize_raw(&router, &[("authorization", &bearer)]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    assert_eq!(
+        challenges(&headers),
+        vec![
+            format!("Bearer resource_metadata=\"{PRM_URL}\""),
+            r#"Basic realm="legacy""#.to_string(),
+        ],
+        "the bare Bearer gains the PRM URL; the extractor's Basic wins over mcp.auth's"
+    );
 }
