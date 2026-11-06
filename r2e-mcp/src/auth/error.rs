@@ -189,9 +189,10 @@ impl Challenge {
 /// Split a `WWW-Authenticate` value into its challenges.
 ///
 /// Commas inside quoted strings (and `\"` escapes) do not split. A
-/// comma-separated item whose first word carries no `=` starts a new
-/// challenge (`Bearer realm="x"`, `Negotiate abc==`); any other item is a
-/// parameter of the current one. An item that cannot belong to a challenge
+/// comma-separated item is an `auth-param` when its first token is followed
+/// by `=` (`realm="x"`, `realm = "x"`, `realm\t="x"`) and then belongs to the
+/// current challenge; any other item starts a new challenge (`Bearer
+/// realm="x"`, `Negotiate abc==`). An item that cannot belong to a challenge
 /// (a parameter before any scheme) is kept as an opaque challenge so nothing
 /// is dropped. `None` when the value is not visible ASCII.
 pub(crate) fn parse_challenges(value: &HeaderValue) -> Option<Vec<Challenge>> {
@@ -205,7 +206,7 @@ pub(crate) fn parse_challenges(value: &HeaderValue) -> Option<Vec<Challenge>> {
         let (head, rest) = item
             .split_once(|c: char| c.is_ascii_whitespace())
             .map_or((item, ""), |(head, rest)| (head, rest.trim()));
-        if head.contains('=') {
+        if head.contains('=') || rest.starts_with('=') {
             match challenges.last_mut() {
                 Some(current) => current.params.push(item.to_owned()),
                 None => challenges.push(Challenge {

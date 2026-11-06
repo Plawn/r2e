@@ -23,8 +23,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   the PRM URL; the `mcp.auth` Bearer / Basic challenges are only appended
   when the rejection carries none of that scheme. The values are parsed as
   RFC 9110 challenge lists first (several challenges in one value, quoted
-  commas, case-insensitive scheme and parameter names), so a `Bearer …,
-  Basic …` value is completed on the Bearer and the Basic is not duplicated.
+  commas, case-insensitive scheme and parameter names, whitespace around
+  `=`), so a `Bearer …, Basic …` value is completed on the Bearer and the
+  Basic is not duplicated.
 
 ### Added
 

@@ -491,6 +491,22 @@ async fn challenges_are_parsed_per_rfc_9110_before_completion() {
             vec![r#"Bearer resource_metadata = "https://example.org/meta""#.into(), basic.into()],
         ),
         (
+            "whitespace before = on a later parameter keeps it a parameter",
+            vec![r#"Bearer error="invalid_token", resource_metadata = "https://example.org/meta""#],
+            vec![
+                r#"Bearer error="invalid_token", resource_metadata = "https://example.org/meta""#.into(),
+                basic.into(),
+            ],
+        ),
+        (
+            "a tab before = on a later parameter keeps it a parameter",
+            vec!["Bearer error=\"invalid_token\", realm\t=\"api\""],
+            vec![
+                format!("Bearer error=\"invalid_token\", realm\t=\"api\", {prm}"),
+                basic.into(),
+            ],
+        ),
+        (
             "a quoted comma does not split the challenge",
             vec![r#"Bearer error_description="expired, renew it""#],
             vec![format!("Bearer error_description=\"expired, renew it\", {prm}"), basic.into()],
