@@ -1,7 +1,7 @@
 ---
 topic: scheduled-tasks
 features: scheduler
-tokens: ~3200
+tokens: ~3800
 requires: di-beans, background-work
 ---
 
@@ -14,7 +14,8 @@ requires: di-beans, background-work
 - `#[scheduled]` works the same on `#[routes]` controllers and `#[bean]` impls, and is auto-collected — `register_controller::<C>()` / `.register::<T>()` is the whole registration.
 - Default overlap is `skip` (re-arm on completion, so a job never overlaps itself and `next_run` reads `None` while its tick runs); `overlap = "concurrent"` re-arms at fire time.
 - `skip_if = "method"` names a plain `&self -> bool` method (sync or async) in the SAME impl block — pointing anywhere else, or at a marked method, is a compile error; skipped ticks count in `skip_count`, not `run_count`.
-- `#[scheduled(every = "0s")]` is a compile error (intervals carry a `PositiveDuration`); a schedule may come from config via `ScheduleConfig` (`FromStr`/`FromConfigValue`).
+- `#[scheduled(every = "0s")]` is a compile error (intervals carry a `PositiveDuration`).
+- `schedule = "method"` names a plain **sync** `&self -> ScheduleConfig` method in the SAME impl block, called ONCE at registration — the cadence then comes from a `#[config("…")] cadence: ScheduleConfig` field, an injected bean, or code. It owns the whole `ScheduleConfig`: combining it with `every`/`cron`/`initial_delay`, or naming an `async fn`, is a compile error.
 - `#[bean(lazy)]` + `#[scheduled]`, and `#[scheduled]` + `#[consumer]` on one method, are compile errors.
 - To `#[intercept]` bean `#[scheduled]`/`#[consumer]` methods, `#[bean]` must ALSO annotate the struct (it injects the hidden decorator slot); a sync intercepted method is promoted to `async fn`.
 - `.override_bean(instance)` skips the bean's registration, so it runs **undecorated** and its scheduled tasks are dropped — pin its dependencies instead, or opt in with `.override_bean_decorated(..)` / `svc.decorate(app.bean_context())`.
@@ -97,6 +98,54 @@ alike; the schedule keeps advancing. Skips are counted in
 reflect ticks that actually ran. For a shared/injected condition, `#[inject]`
 the predicate bean and delegate. Dynamic tasks:
 `ScheduledTaskDef::new(..).with_skip_if(|state| async move { ... })`.
+
+Cadence from the bean — `#[scheduled(schedule = "method")]`. `method` names a
+plain **sync** `&self` method returning `ScheduleConfig`, defined in the same
+impl block (same placement rules as `skip_if`; an `async fn`, or a method
+returning anything but `ScheduleConfig`, is a compile error). It is called
+**once, at registration**, when the task definition is built, so the cadence
+can come from a `#[config("…")] cadence: ScheduleConfig` field, an injected
+policy bean, or any computation — no second config path, no `default = …` on
+the attribute: an absent key is a boot config error (put the default in YAML,
+`${INGEST_SCHEDULE:1h}`) or an `Option<ScheduleConfig>` field with an in-code
+fallback; a present-but-invalid value fails construction naming the key. The
+method owns the whole `ScheduleConfig` (interval, interval + initial delay, or
+cron), so `every`/`cron`/`initial_delay` cannot be combined with it.
+`ScheduledJobRegistry` reports the resolved cadence. The method is NOT re-read
+at runtime (changing the key means a restart).
+
+```rust
+#[controller]
+pub struct PullSweep {
+    #[inject] user_service: UserService,
+    #[config("ingest.schedule")] cadence: ScheduleConfig,   // "1h" | 3600 | "0 0 * * * *"
+}
+
+#[routes]
+impl PullSweep {
+    fn ingest_cadence(&self) -> ScheduleConfig { self.cadence.clone() }
+
+    #[scheduled(schedule = "ingest_cadence")]
+    async fn poll_sources(&self) { self.user_service.sync().await; }
+}
+
+// Bean form — optional key with an in-code default.
+#[derive(Clone)]
+pub struct Cleanup { cadence: Option<ScheduleConfig> }
+
+#[bean]
+impl Cleanup {
+    pub fn new(#[config("jobs.cleanup")] cadence: Option<ScheduleConfig>) -> Self { Self { cadence } }
+
+    fn cleanup_cadence(&self) -> ScheduleConfig {
+        self.cadence.clone().unwrap_or_else(|| "1h".parse().expect("valid default"))
+    }
+
+    #[scheduled(schedule = "cleanup_cadence")]
+    async fn purge(&self) {}
+}
+# fn main() {}
+```
 
 `#[scheduled]` also works on **beans** — same attribute, same options, and
 registration is automatic (`.register::<T>()` alone; no extra call — same
@@ -184,7 +233,9 @@ skips its registration → the slot is never filled → it runs **undecorated**
 (and its scheduled tasks are dropped). To keep interceptors active, pin the
 *dependencies* instead and let the graph build the intercepted bean.
 
-Dynamic (config-driven) tasks — post-`build_state()`:
+Dynamic tasks — post-`build_state()`. For a cadence that merely comes from
+config, prefer `#[scheduled(schedule = "method")]` above; reach for dynamic
+tasks when the *set* of tasks is only known at runtime:
 
 ```rust
 # fn __doc<S: Clone + Send + Sync + 'static>(app: AppBuilder<S>, schedule: ScheduleConfig) -> impl Sized {
@@ -229,8 +280,10 @@ command issued from a tick body during shutdown is a no-op, never a deadlock); f
 first, then the driver stops), or a tick factory that panicked (contained; the job
 is disabled); for `resume`, a spent/overflowed schedule. `pause` adds no case of
 its own.
-`ScheduleConfig` implements `FromStr`/`FromConfigValue` — a schedule can come
-from config: `#[config("app.sync.schedule")] schedule: ScheduleConfig`.
+`ScheduleConfig` implements `FromStr`/`FromConfigValue` (plus `Clone`,
+`Debug`, `PartialEq`/`Eq`) — a schedule can come from config:
+`#[config("app.sync.schedule")] schedule: ScheduleConfig`, handed to the task
+via `#[scheduled(schedule = "method")]`.
 Interval variants carry a `PositiveDuration` (a `Duration` guaranteed non-zero;
 `PositiveDuration::from_secs(60).unwrap()` / derefs to `Duration`), so a zero
 interval is unrepresentable; `parse_duration("5m")` returns `PositiveDuration`.

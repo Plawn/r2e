@@ -1,0 +1,7 @@
+error: schedule = "sync_cadence" names an `async fn` — the cadence provider must be sync
+
+       The cadence is resolved once at registration, synchronously, when the task definition is built. Make the method a plain `fn(&self) -> ScheduleConfig`.
+  --> cases/scheduler/fail/scheduled_schedule_async.rs:15:28
+   |
+15 |     #[scheduled(schedule = "sync_cadence")]
+   |                            ^^^^^^^^^^^^^^

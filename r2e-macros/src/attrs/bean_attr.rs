@@ -603,6 +603,10 @@ fn generate(item_impl: &ItemImpl, bean_args: &BeanArgs) -> syn::Result<Generated
                     &sm.config,
                     plain_fns.iter().copied(),
                 )?,
+                schedule: crate::codegen::scheduled::resolve_schedule(
+                    &sm.config,
+                    plain_fns.iter().copied(),
+                )?,
             })
         })
         .collect::<syn::Result<_>>()?;

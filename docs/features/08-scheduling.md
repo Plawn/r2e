@@ -26,6 +26,11 @@ An enum defining when the task executes:
 - `IntervalWithDelay { interval, initial_delay }` — interval with initial delay
 - `Cron(String)` — cron expression
 
+It implements `FromStr` (duration string or cron), `FromConfigValue` (string, or
+integer seconds) and `Clone`, so it can be a `#[config("…")]` field and handed to
+a task with `#[scheduled(schedule = "method")]` (see [Cadence from the
+bean](#cadence-from-the-bean-schedule--method)).
+
 ### CancelToken
 
 `r2e::rt::CancelToken` — the runtime facade wrapper that allows graceful shutdown of scheduled tasks (typically when the server stops). The scheduler manages it for you; `SchedulerHandle` exposes it if you need manual control.
@@ -237,6 +242,74 @@ impl SyncJobs {
 
 Works identically on `#[bean]` scheduled methods. Dynamic tasks use the builder
 form: `ScheduledTaskDef::new(..).with_skip_if(|state| async move { ... })`.
+
+## Cadence from the bean (`schedule = "method"`)
+
+A literal `every`/`cron` is fine for a fixed cadence. When the cadence must come
+from configuration, an injected policy bean, or a computation, let the bean
+provide it: `schedule = "method"` names a plain **sync** `&self` method
+returning `ScheduleConfig`, defined in the **same** impl block:
+
+```rust
+#[controller]
+pub struct PullSweep {
+    #[inject] sources: SourceRepo,
+    #[config("ingest.schedule")] cadence: ScheduleConfig,   // "1h" | 3600 | "0 0 * * * *"
+}
+
+#[routes]
+impl PullSweep {
+    fn ingest_cadence(&self) -> ScheduleConfig {
+        self.cadence.clone()
+    }
+
+    #[scheduled(schedule = "ingest_cadence")]
+    async fn poll_sources(&self) { /* … */ }
+}
+```
+
+- The method is called **once, at registration**, where the task definition is
+  built (the controller core / bean instance is already constructed, so
+  `#[inject]` and `#[config]` fields are available). It is **not** re-evaluated
+  at runtime: a changed key takes effect on restart.
+- It owns the whole `ScheduleConfig` — interval, `IntervalWithDelay`, or cron —
+  so `every`, `cron` and `initial_delay` cannot be combined with it (targeted
+  compile errors). An `async fn`, an unknown name, or a method returning anything
+  but `ScheduleConfig` is a compile error too.
+- There is deliberately no second config path (`config = "…"`, `default = "…"`)
+  on the attribute. Defaults and validation are `#[config]`'s: an absent key is
+  a boot configuration error — put the default in YAML
+  (`ingest.schedule: ${INGEST_SCHEDULE:1h}`) or declare
+  `Option<ScheduleConfig>` and fall back in the method; a present-but-invalid
+  value (`"soon"`) fails construction with the usual
+  `Configuration error … key 'ingest.schedule'` message, never a silent default.
+- `ScheduledJobRegistry` reports the resolved cadence, exactly as for a dynamic
+  task.
+
+Bean form, with an optional key and an in-code default:
+
+```rust
+#[derive(Clone)]
+pub struct Cleanup { cadence: Option<ScheduleConfig> }
+
+#[bean]
+impl Cleanup {
+    pub fn new(#[config("jobs.cleanup")] cadence: Option<ScheduleConfig>) -> Self {
+        Self { cadence }
+    }
+
+    fn cleanup_cadence(&self) -> ScheduleConfig {
+        self.cadence.clone().unwrap_or_else(|| "1h".parse().expect("valid default"))
+    }
+
+    #[scheduled(schedule = "cleanup_cadence")]
+    async fn purge(&self) { /* … */ }
+}
+```
+
+Before this attribute the only way to a config-driven cadence was
+`schedule_task_with` after `build_state()`; that remains the tool when the
+*set* of tasks is only known at runtime.
 
 ## Dedicated pool (config)
 

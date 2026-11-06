@@ -1,7 +1,7 @@
 ---
 topic: method-attribute-quick-reference
 features: core
-tokens: ~800
+tokens: ~900
 requires: core-concepts
 ---
 
@@ -32,7 +32,7 @@ requires: core-concepts
 | `#[layer(expr)]` / `#[layer(\|this: &Self\| expr)]` | method or impl | Tower layer; closure form builds it from the controller core once at registration; impl = every route except `#[fallback]`, outside method layers |
 | `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn `async fn(Request, Next) -> Response`; `state` passes the core as a leading `Arc<Self>` argument; impl = every route except `#[fallback]` |
 | `#[consumer(bus = "field")]` | method | Event consumer |
-| `#[scheduled(every = "5m")]` | method | Scheduled task |
+| `#[scheduled(every = "5m")]` / `#[scheduled(schedule = "method")]` | method | Scheduled task; `schedule` names a sync `&self -> ScheduleConfig` method on the same impl, called once at registration (cadence from `#[config]` / a bean) |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
 | `#[request_helper]` | method | Helper on the per-request façade (reads identity; callable only from routes/SSE/WS) |
 | `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |

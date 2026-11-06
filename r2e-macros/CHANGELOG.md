@@ -15,6 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `#[scheduled(schedule = "method")]` (#1181): the cadence comes from a plain
+  **sync** `&self -> ScheduleConfig` method on the same impl block, called once
+  at registration — read it from a `#[config("…")] cadence: ScheduleConfig`
+  field, an injected bean, or compute it. Works on `#[routes]` controllers and
+  `#[bean]` impls. Mutually exclusive with `every`/`cron`/`initial_delay` (the
+  method owns the whole `ScheduleConfig`); an unknown name, an `async fn`, a
+  method with parameters, or a non-`ScheduleConfig` return is a targeted
+  compile error anchored on the attribute.
+
 ## [0.10.0] - 2026-11-04
 
 ### Breaking

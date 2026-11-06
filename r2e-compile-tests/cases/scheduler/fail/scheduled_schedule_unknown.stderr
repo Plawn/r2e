@@ -1,0 +1,15 @@
+error: schedule = "sync_cadence" does not name a plain method in this impl block
+
+       The cadence provider must be a plain, sync `&self` method returning `ScheduleConfig`, defined in the same impl block as the #[scheduled] method — it cannot carry a route, #[scheduled], #[consumer], #[async_exec], or lifecycle marker.
+
+       example:
+         fn sync_cadence(&self) -> ScheduleConfig { self.cadence.clone() }
+
+         #[scheduled(schedule = "sync_cadence")]
+         async fn sync(&self) { /* ... */ }
+
+       The method is called once at registration; read the cadence from a `#[config("...")] cadence: ScheduleConfig` field, an injected bean, or compute it.
+  --> cases/scheduler/fail/scheduled_schedule_unknown.rs:11:28
+   |
+11 |     #[scheduled(schedule = "sync_cadence")]
+   |                            ^^^^^^^^^^^^^^

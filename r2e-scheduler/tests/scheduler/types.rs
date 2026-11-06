@@ -266,3 +266,20 @@ fn from_config_value_rejects_bad_values() {
     )
     .is_err());
 }
+
+// -- ScheduleConfig is a value type (needed by `#[scheduled(schedule = "method")]`,
+// whose provider hands a `#[config]` field over by `.clone()`) --
+
+#[test]
+fn schedule_config_is_clone_and_eq() {
+    let parsed: ScheduleConfig = "5m".parse().unwrap();
+    let cloned = parsed.clone();
+    assert_eq!(parsed, cloned);
+    assert_eq!(
+        cloned,
+        ScheduleConfig::Interval(r2e_scheduler::PositiveDuration::from_secs(300).unwrap())
+    );
+    let cron: ScheduleConfig = "0 */5 * * * *".parse().unwrap();
+    assert_ne!(parsed, cron);
+    assert_eq!(format!("{:?}", cron), "Cron(\"0 */5 * * * *\")");
+}

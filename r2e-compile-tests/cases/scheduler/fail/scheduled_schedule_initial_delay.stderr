@@ -1,0 +1,7 @@
+error: `initial_delay` cannot be combined with `schedule`
+
+       The named method returns the full `ScheduleConfig`; return `ScheduleConfig::IntervalWithDelay { interval, initial_delay }` from it instead.
+  --> cases/scheduler/fail/scheduled_schedule_initial_delay.rs:15:5
+   |
+15 |     #[scheduled(schedule = "sync_cadence", initial_delay = "10s")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

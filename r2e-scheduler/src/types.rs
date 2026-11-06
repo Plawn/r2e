@@ -28,6 +28,10 @@ pub enum OverlapPolicy {
 }
 
 /// How a scheduled task should be triggered.
+///
+/// `Clone` so a `#[config("…")] cadence: ScheduleConfig` field can be handed
+/// to `#[scheduled(schedule = "method")]` by value from a `&self` method.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ScheduleConfig {
     /// Run at a fixed interval (e.g., every 60 seconds).
     Interval(crate::duration::PositiveDuration),
