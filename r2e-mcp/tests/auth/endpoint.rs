@@ -407,3 +407,128 @@ async fn bearer_and_basic_challenges_from_the_scope_are_completed_not_duplicated
         "the bare Bearer gains the PRM URL; the extractor's Basic wins over mcp.auth's"
     );
 }
+
+/// An identity rejecting with whatever `WWW-Authenticate` values the request
+/// advertises in `x-challenge` headers — drives the RFC 9110 parsing cases.
+#[derive(Clone)]
+struct Advertised;
+
+impl<S: Send + Sync> FromRequestParts<S> for Advertised {
+    type Rejection = Rejection;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let mut rejection = Rejection::new(RejectionKind::Unauthenticated, "advertised");
+        for value in parts.headers.get_all("x-challenge") {
+            rejection = rejection.header(WWW_AUTHENTICATE, value.clone());
+        }
+        Err(rejection)
+    }
+}
+
+#[controller]
+struct AdvertisedTools {
+    #[inject(identity)]
+    advertised: Advertised,
+}
+
+#[routes]
+impl AdvertisedTools {
+    #[tool]
+    async fn never(&self) -> String {
+        String::new()
+    }
+}
+
+#[r2e_core::test]
+async fn challenges_are_parsed_per_rfc_9110_before_completion() {
+    let auth = McpAuthConfig {
+        basic: Some(McpBasicAuthConfig {
+            username: "svc".into(),
+            password: "pw".into(),
+            realm: Some("svc".into()),
+            roles: None,
+            scopes: None,
+        }),
+        ..offline_auth()
+    };
+    let router = AppBuilder::new()
+        .plugin(
+            McpServer::new()
+                .with_auth(auth)
+                .with_token_validator(pinned(&test_jwt())),
+        )
+        .build_state()
+        .await
+        .register_mcp_service::<AdvertisedTools>()
+        .build();
+    let prm = format!("resource_metadata=\"{PRM_URL}\"");
+    let basic = r#"Basic realm="svc", charset="UTF-8""#;
+
+    let cases: Vec<(&str, Vec<&str>, Vec<String>)> = vec![
+        (
+            "two challenges in one value: the Bearer gets the metadata, not the Basic",
+            vec![r#"Bearer error="invalid_token", Basic realm="legacy""#],
+            vec![format!("Bearer error=\"invalid_token\", {prm}"), r#"Basic realm="legacy""#.into()],
+        ),
+        (
+            "same, Basic first",
+            vec![r#"Basic realm="legacy", Bearer realm="api""#],
+            vec![r#"Basic realm="legacy""#.into(), format!("Bearer realm=\"api\", {prm}")],
+        ),
+        (
+            "resource_metadata inside a quoted value is not the parameter",
+            vec![r#"Bearer realm="resource_metadata=legacy""#],
+            vec![format!("Bearer realm=\"resource_metadata=legacy\", {prm}"), basic.into()],
+        ),
+        (
+            "parameter names are case-insensitive",
+            vec![r#"Bearer RESOURCE_METADATA="https://example.org/meta""#],
+            vec![r#"Bearer RESOURCE_METADATA="https://example.org/meta""#.into(), basic.into()],
+        ),
+        (
+            "whitespace around = is accepted",
+            vec![r#"Bearer resource_metadata = "https://example.org/meta""#],
+            vec![r#"Bearer resource_metadata = "https://example.org/meta""#.into(), basic.into()],
+        ),
+        (
+            "a quoted comma does not split the challenge",
+            vec![r#"Bearer error_description="expired, renew it""#],
+            vec![format!("Bearer error_description=\"expired, renew it\", {prm}"), basic.into()],
+        ),
+        (
+            "an escaped quote stays inside the quoted string",
+            vec![r#"Bearer error_description="say \"hi\", ok""#],
+            vec![format!("Bearer error_description=\"say \\\"hi\\\", ok\", {prm}"), basic.into()],
+        ),
+        (
+            "an unknown scheme is kept and both mcp.auth challenges are appended",
+            vec!["Negotiate"],
+            vec!["Negotiate".into(), format!("Bearer {prm}"), basic.into()],
+        ),
+        (
+            "a token68 challenge is a challenge, not a parameter",
+            vec![r#"Bearer realm="api""#, "Negotiate YWJj="],
+            vec![format!("Bearer realm=\"api\", {prm}"), "Negotiate YWJj=".into(), basic.into()],
+        ),
+        (
+            "a parameter before any scheme is kept verbatim",
+            vec![r#"realm="orphan""#],
+            vec![r#"realm="orphan""#.into(), format!("Bearer {prm}"), basic.into()],
+        ),
+        (
+            "scheme matching is case-insensitive",
+            vec!["bearer", r#"BASIC realm="x""#],
+            vec![format!("bearer {prm}"), r#"BASIC realm="x""#.into()],
+        ),
+    ];
+
+    // A bearer the auth layer accepts: the scope's extractor is what rejects.
+    let bearer = format!("Bearer {}", token("alice", &[]));
+    for (case, advertised, expected) in cases {
+        let mut headers: Vec<(&str, &str)> = vec![("authorization", &bearer)];
+        headers.extend(advertised.iter().map(|v| ("x-challenge", *v)));
+        let (status, headers, body) = initialize_raw(&router, &headers).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{case}: {body}");
+        assert_eq!(challenges(&headers), expected, "{case}");
+    }
+}

@@ -381,38 +381,53 @@ where
 impl Challenges {
     /// Complete the `WWW-Authenticate` challenges of a 401 rendered by an
     /// identity extractor so an MCP client still finds the resource metadata
-    /// (RFC 9728 §5.1): every `Bearer` challenge already present (e.g.
-    /// `AuthenticatedUser`'s `Bearer error="invalid_token", …`) gains a
-    /// `resource_metadata` parameter unless it names one; with no `Bearer`
-    /// challenge at all, `Bearer resource_metadata="…"` is appended. The
-    /// `Basic` challenge is appended unless one is already there.
+    /// (RFC 9728 §5.1). The values are parsed into individual challenges
+    /// (RFC 9110 §11.6.1: several may share one value, commas inside quoted
+    /// strings do not split) and re-emitted one per value, in order: every
+    /// `Bearer` challenge (e.g. `AuthenticatedUser`'s `Bearer
+    /// error="invalid_token", …`) gains a `resource_metadata` parameter unless
+    /// it names one (case-insensitive); with no `Bearer` challenge at all,
+    /// `Bearer resource_metadata="…"` is appended. The `Basic` challenge is
+    /// appended unless one is already there, whichever value carried it.
     pub(crate) fn complete_unauthorized(&self, headers: &mut HeaderMap) {
-        let mut values: Vec<HeaderValue> = headers
-            .get_all(header::WWW_AUTHENTICATE)
-            .iter()
-            .cloned()
-            .collect();
-        if let Some(url) = &self.resource_metadata_url {
-            let mut has_bearer = false;
-            for value in &mut values {
-                if let Some(completed) = crate::auth::error::with_resource_metadata(value, url) {
+        use crate::auth::error::{basic_challenge, parse_challenges, Challenge};
+
+        let mut values: Vec<HeaderValue> = Vec::new();
+        let mut has_bearer = false;
+        let mut has_basic = false;
+        for value in headers.get_all(header::WWW_AUTHENTICATE) {
+            let Some(challenges) = parse_challenges(value) else {
+                // Not visible ASCII: nothing to complete, keep it as is.
+                values.push(value.clone());
+                continue;
+            };
+            for mut challenge in challenges {
+                if challenge.scheme_is("Bearer") {
                     has_bearer = true;
-                    *value = completed;
+                    if let Some(url) = &self.resource_metadata_url
+                        && !challenge.has_param("resource_metadata")
+                    {
+                        challenge.push_quoted("resource_metadata", url);
+                    }
                 }
-            }
-            if !has_bearer {
-                values.push(crate::auth::error::www_authenticate(&[(
-                    "resource_metadata",
-                    url,
-                )]));
+                has_basic |= challenge.scheme_is("Basic");
+                values.push(challenge.render());
             }
         }
-        if let Some(realm) = &self.basic_realm
-            && !values
-                .iter()
-                .any(|value| crate::auth::error::scheme_is(value, "Basic"))
+        if let Some(url) = &self.resource_metadata_url
+            && !has_bearer
         {
-            values.push(crate::auth::error::basic_challenge(realm));
+            let mut bearer = Challenge {
+                scheme: "Bearer".to_owned(),
+                params: Vec::new(),
+            };
+            bearer.push_quoted("resource_metadata", url);
+            values.push(bearer.render());
+        }
+        if let Some(realm) = &self.basic_realm
+            && !has_basic
+        {
+            values.push(basic_challenge(realm));
         }
         headers.remove(header::WWW_AUTHENTICATE);
         for value in values {

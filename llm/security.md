@@ -1,7 +1,7 @@
 ---
 topic: security
 features: security
-tokens: ~2200
+tokens: ~2300
 requires: core-concepts
 ---
 
@@ -35,8 +35,12 @@ requires: core-concepts
   type parameter: `impl_claims_identity_extractor!(TenantUser, claims = TenantClaims)`.
 - An identity failure is a `Rejection` (401, `WWW-Authenticate: Bearer`, plus
   `error="invalid_token", error_description="…"` when a token was presented —
-  RFC 6750 §3) that keeps its header through any error envelope; never rebuild
-  the 401 by hand. `from_jwt_claims` itself returns `HttpError`.
+  RFC 6750 §3) that keeps its header through an error envelope (the envelope
+  wins only if its own response sets `WWW-Authenticate`); never rebuild the
+  401 by hand. A custom extractor calling `extract_jwt_claims*` must declare
+  `type Rejection = Rejection`: `?` into `HttpError` compiles but drops the
+  challenge (`HttpError` has no headers). `from_jwt_claims` itself returns
+  `HttpError`.
 
 Requires feature: `security`
 

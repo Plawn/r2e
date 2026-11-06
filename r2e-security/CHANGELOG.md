@@ -23,9 +23,24 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `OptionalFromRequestPartsVia` impls of `AuthenticatedUser` and of every
   `impl_claims_identity_extractor!` identity declare `type Rejection =
   Rejection`. A `?` into an `HttpError`-returning function still compiles
-  (`From<Rejection> for HttpError`); code matching on the `HttpError` variants
-  of these results switches to `rejection.kind` / `rejection.status`.
-  `FromValidatedJwtClaims::from_jwt_claims` keeps returning `HttpError`.
+  (`From<Rejection> for HttpError`) **but drops the challenge again**, since
+  `HttpError` carries no headers: a custom extractor built on these helpers
+  must reject with `Rejection` to keep it —
+
+  ```rust,ignore
+  // before
+  type Rejection = HttpError;
+  async fn from_request_parts(..) -> Result<Self, HttpError> {
+      let claims = extract_jwt_claims(parts, state).await?; // 401, no challenge
+  // after
+  type Rejection = Rejection;
+  async fn from_request_parts(..) -> Result<Self, Rejection> {
+      let claims = extract_jwt_claims(parts, state).await?; // 401 + WWW-Authenticate
+  ```
+
+  Code matching on the `HttpError` variants of these results switches to
+  `rejection.kind` / `rejection.status`. `FromValidatedJwtClaims::from_jwt_claims`
+  keeps returning `HttpError` (it runs after validation; no challenge applies).
 
 ### Fixed
 
@@ -35,7 +50,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   error="invalid_token", error_description="…"` when a token was refused
   (RFC 6750 §3) — `SecurityError::challenge()` is the single source. The
   header rides the `Rejection`, so it survives `#[routes]` projection through
-  any error envelope and reaches gRPC metadata through `rejection_to_status`.
+  an error envelope (unless the envelope's own response sets
+  `WWW-Authenticate`: the envelope wins per header name) and reaches gRPC
+  metadata through `rejection_to_status`.
 
 ## [0.10.0] - 2026-11-04
 
