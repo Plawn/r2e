@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp (`### In-process (loopback) transport`: mcp-loopback)
-tokens: ~10200
+tokens: ~10400
 requires: guards, security
 ---
 
@@ -377,6 +377,20 @@ rmcp-known revision; else `server/discover`, `initialize` and the `_meta`
 version gate (-32022) stop at that revision; unknown values fail at boot;
 builder `McpServer::max_protocol_version(ProtocolVersion::V_2025_11_25)`),
 `elicitation-timeout-secs` (300),
+`session.idle-timeout-secs` (300; 0 = never; an HTTP session idle this long
+is closed and its next request answered 404 — SSE pings do not count, so set it
+above the longest tool call; builder `McpServer::with_session_idle_timeout`),
+`session.store-ttl-secs` (1800; 0 = boot error; only with a session store: an
+`McpSessionStore` — `load`/`store`/`delete` over opaque bytes + TTL — set by
+`McpServer::with_session_store(store)` or provided as an `Arc<dyn
+McpSessionStore>` bean; `InMemoryMcpSessionStore` for dev/tests. The
+handshake + subject is written at `initialize` and re-armed at half-life; a
+request on a session this process does not hold — restart, idle eviction,
+another instance — restores it for the exact same subject only (anonymous
+≠ authenticated; app identities without a subject leave it unbound)
+(`SessionInit::is_restored()` in `McpSessionInit`); dynamic members,
+subscriptions and the SSE stream are lost; stateless + store = boot error;
+builder `McpServer::with_session_store_ttl`),
 `page-size` (unset/0 = unpaginated; else `*/list` pages + `nextCursor`, a
 stale or replayed cursor → -32602),
 `allowed-hosts` (DNS-rebinding

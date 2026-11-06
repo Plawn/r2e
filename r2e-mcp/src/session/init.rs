@@ -75,6 +75,7 @@ impl SessionToolset {
 pub struct SessionInit {
     pub(super) parts: Option<Arc<Parts>>,
     pub(super) persistent: bool,
+    pub(super) restored: bool,
     pub(super) session_id: Option<SessionId>,
 }
 
@@ -138,6 +139,18 @@ impl SessionInit {
     /// cheap, or cache by subject).
     pub fn is_persistent(&self) -> bool {
         self.persistent
+    }
+
+    /// Whether the session was rebuilt from an
+    /// [`McpSessionStore`](crate::McpSessionStore) record (a restart, or a
+    /// request landing on another instance) rather than opened by a client
+    /// `initialize`. The hook runs again on the restoring instance, with
+    /// [`session_id`](Self::session_id) known this time and the first
+    /// request's parts (the one that triggered the restore) — not the
+    /// original handshake's. Whatever the session accumulated on the
+    /// previous instance (`McpSession::add_*`, subscriptions) is gone.
+    pub fn is_restored(&self) -> bool {
+        self.restored
     }
 }
 

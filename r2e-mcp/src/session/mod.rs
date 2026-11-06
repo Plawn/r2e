@@ -17,14 +17,22 @@ mod error;
 mod handle;
 mod id;
 mod init;
+mod persist;
 mod sessions;
 mod state;
+mod store;
 
 pub use error::{McpMemberError, McpSessionError};
 pub use handle::McpSession;
 pub use id::SessionId;
-pub(crate) use id::{SessionBindings, SessionLink, TrackSessionId, SESSION_ID_HEADER};
+pub(crate) use id::{
+    session_not_found, SessionBindings, SessionLink, TrackSessionId, SESSION_ID_HEADER,
+};
 pub(crate) use init::{erase_init, SessionInitFn};
 pub use init::{McpSessionInit, SessionInit, SessionToolset};
+pub(crate) use persist::{SessionPersistence, TransportStore};
 pub use sessions::McpSessions;
 pub(crate) use state::{remove_by, Draft, SessionState};
+pub use store::{
+    InMemoryMcpSessionStore, McpSessionStore, McpSessionStoreError, McpSessionStoreFuture,
+};

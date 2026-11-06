@@ -20,6 +20,7 @@ use rmcp::model::{
     ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
+use rmcp::transport::streamable_http_server::SessionRestoreMarker;
 use serde_json::Value;
 
 use crate::auth::tools::visible_to;
@@ -34,7 +35,8 @@ use crate::route::{
     Completion, CompletionRef, Completions, PromptCall, ResourceCall, ResourceRoute, ToolCall,
 };
 use crate::session::{
-    McpSession, McpSessions, SessionInitFn, SessionLink, SessionState, SESSION_ID_HEADER,
+    McpSession, McpSessions, SessionBindings, SessionId, SessionInitFn, SessionLink,
+    SessionPersistence, SessionState, SESSION_ID_HEADER,
 };
 
 /// Extract the per-call HTTP parts from the request context, by value.
@@ -129,6 +131,10 @@ pub(crate) struct Endpoint {
     pub(crate) registry: McpRegistry,
     pub(crate) updates: McpResourceUpdates,
     pub(crate) sessions: McpSessions,
+    /// Session id → session, the auth/identity layers' ownership check. A
+    /// session rmcp restores from the store is bound here by the handler
+    /// (no `initialize` response carries its id through the layers).
+    pub(crate) bindings: SessionBindings,
     pub(crate) init: Option<SessionInitFn>,
     /// Transport-wide shutdown token (the plugin's `mcp_cancel`): ends the
     /// legacy forwarder task with the sessions it serves.
@@ -149,11 +155,25 @@ pub(crate) struct Endpoint {
 pub(crate) struct R2eMcpHandler {
     endpoint: Arc<Endpoint>,
     state: Arc<SessionState>,
+    /// The session store wiring, on the HTTP transport only (a loopback
+    /// session lives and dies with its process).
+    persistence: Option<Arc<SessionPersistence>>,
     legacy_subscriptions: Arc<RwLock<HashMap<String, Weak<ResourceRoute>>>>,
     /// Whether a forwarder task is currently alive for this session. Reset
     /// by the task itself on exit, so a later `resources/subscribe` starts a
     /// fresh one instead of silently succeeding with nothing delivering.
     legacy_forwarder_alive: Arc<AtomicBool>,
+}
+
+/// rmcp drops the handler when the session ends (`DELETE`, idle eviction,
+/// a failed restore): the state is closed then, so a handle that still
+/// holds it ([`McpSession`](crate::McpSession)) does not keep the id live in
+/// [`McpSessions`](crate::McpSessions) and `SessionBindings` — a same-id
+/// session restored on this instance is the only one found.
+impl Drop for R2eMcpHandler {
+    fn drop(&mut self) {
+        self.state.close();
+    }
 }
 
 impl R2eMcpHandler {
@@ -164,9 +184,22 @@ impl R2eMcpHandler {
                 endpoint.registry.clone(),
             )),
             endpoint,
+            persistence: None,
             legacy_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             legacy_forwarder_alive: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// A handler whose session is kept restorable in an
+    /// [`McpSessionStore`](crate::McpSessionStore): the HTTP factory's
+    /// constructor when a store is set.
+    pub(crate) fn with_persistence(
+        endpoint: Arc<Endpoint>,
+        persistence: Arc<SessionPersistence>,
+    ) -> Self {
+        let mut handler = Self::new(endpoint);
+        handler.persistence = Some(persistence);
+        handler
     }
 
     /// The session this handler serves (a loopback connect names and claims
@@ -211,6 +244,19 @@ impl R2eMcpHandler {
                 .ensure_init(hook, parts)
                 .await
                 .map_err(McpError::into_error_data)?;
+        }
+        // An active session stays restorable: re-arm its record once per
+        // half-life. Only after the handshake was persisted (`None` before
+        // — a restore replay reaches here before the peer info exists).
+        if let Some(persistence) = &self.persistence
+            && self.state.is_persistent()
+            && let Some(id) = self.state.id()
+            && self
+                .state
+                .persisted_since()
+                .is_some_and(|since| since >= persistence.ttl() / 2)
+        {
+            persistence.touch(id, &self.state);
         }
         Ok(())
     }
@@ -351,16 +397,36 @@ impl ServerHandler for R2eMcpHandler {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<InitializeResult, ErrorData> {
+        // rmcp replays the handshake of a session it restored from the
+        // store with the restoring request's parts and this marker.
+        let restored = context
+            .extensions
+            .get::<SessionRestoreMarker>()
+            .map(|marker| SessionId::from(&*marker.id));
         if self.state.open() {
             self.endpoint.sessions.register(&self.state);
-            // Under `mcp.auth`, let the layer key this session by the id
-            // rmcp is about to assign (see `SessionBindings`).
-            if let Some(link) = context
-                .extensions
-                .get::<Parts>()
-                .and_then(|parts| parts.extensions.get::<SessionLink>())
-            {
-                link.set(&self.state);
+            match &restored {
+                // The layers never saw an `initialize` response for this
+                // id: bind it here, before the request that triggered the
+                // restore (or a concurrent one) is served.
+                Some(id) => {
+                    self.state.set_id(id);
+                    self.state.mark_restored();
+                    self.endpoint
+                        .bindings
+                        .insert(id, Arc::downgrade(&self.state));
+                }
+                // Under `mcp.auth`, let the layer key this session by the
+                // id rmcp is about to assign (see `SessionBindings`).
+                None => {
+                    if let Some(link) = context
+                        .extensions
+                        .get::<Parts>()
+                        .and_then(|parts| parts.extensions.get::<SessionLink>())
+                    {
+                        link.set(&self.state);
+                    }
+                }
             }
         }
         self.prepare(&context).await?;
@@ -368,6 +434,14 @@ impl ServerHandler for R2eMcpHandler {
         // still has a handshake, else the newest supported one that does.
         let info = self.negotiate_initialize(&request)?;
         context.peer.set_peer_info(request);
+        // Only a completed handshake is worth a record: rmcp persists the
+        // session right after this returns whatever it answered, and the
+        // adapter checks this flag. A fresh session is written there; a
+        // restored one re-arms its record now (the peer info exists).
+        self.state.mark_initialized();
+        if let (Some(persistence), Some(id)) = (&self.persistence, &restored) {
+            persistence.touch(id, &self.state);
+        }
         Ok(info)
     }
 

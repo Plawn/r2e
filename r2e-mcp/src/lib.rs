@@ -71,7 +71,7 @@ pub use auth::{
     McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements,
     ViaMcpAuth,
 };
-pub use config::McpConfig;
+pub use config::{McpConfig, McpSessionConfig};
 pub use dynamic::{
     DynamicPrompt, DynamicPromptHandler, DynamicResource, DynamicTool, DynamicToolHandler,
     NoParams, WithParams,
@@ -100,7 +100,8 @@ pub use route::{
 };
 pub use service::McpService;
 pub use session::{
-    McpMemberError, McpSession, McpSessionError, McpSessionInit, McpSessions, SessionId,
+    InMemoryMcpSessionStore, McpMemberError, McpSession, McpSessionError, McpSessionInit,
+    McpSessionStore, McpSessionStoreError, McpSessionStoreFuture, McpSessions, SessionId,
     SessionInit, SessionToolset,
 };
 
