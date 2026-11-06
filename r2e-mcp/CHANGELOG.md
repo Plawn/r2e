@@ -15,6 +15,24 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- Feature `loopback` (#1076): an in-process transport on the MCP endpoint.
+  The plugin provides the `McpLoopback` bean; `connect(session_id,
+  LoopbackIdentity)` opens a real session (same handler, catalog,
+  `McpSessions`, guards, roles, scopes, `McpSessionInit`) and returns a
+  `LoopbackSession` (derefs to rmcp's `RunningService<RoleClient, ()>`).
+  Identities: `Anonymous`, `Bearer` (validated by the plugin's
+  `McpTokenValidator`, `required-scopes` applied) and a trusted `Principal`;
+  struct-level request scopes run on the synthesized request. Errors are
+  `LoopbackError`. Compiles rmcp's `client` role — no new crate — and is off
+  by default. `McpServer::Provided` gains a 5th element (`McpLoopback`) under
+  the feature only.
+- `McpPrincipal::trusted(user, scopes)`: a principal the process vouches for
+  (no token; `token_hash` is `0`).
+- `r2e_mcp::CallToolRequestParams` re-export (feature `loopback`) for
+  loopback callers.
+
 ## [0.11.0] - 2026-11-04
 
 ### Breaking

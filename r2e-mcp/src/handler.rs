@@ -169,6 +169,13 @@ impl R2eMcpHandler {
         }
     }
 
+    /// The session this handler serves (a loopback connect names and claims
+    /// it before the first message).
+    #[cfg(feature = "loopback")]
+    pub(crate) fn state(&self) -> &Arc<SessionState> {
+        &self.state
+    }
+
     /// Per-request session bookkeeping, before any member resolution:
     ///
     /// 1. capture the peer (the `list_changed` channel);

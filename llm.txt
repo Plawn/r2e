@@ -115,7 +115,7 @@ extra).
 | embedded static files, SPA fallback | `llm/static-files.md` | static |
 | OpenAPI 3.1 generation, Swagger UI, `schemars` | `llm/openapi.md` | openapi |
 | gRPC services, `#[grpc_routes]`, multiplexed / separate port, gRPC-Web | `llm/grpc.md` | grpc |
-| MCP server: `#[routes]` MCP members (one type = one port: MCP members and HTTP routes on separate types), `#[routes(group, opt_in)]`, `#[tool]` / `#[resource]` / `#[prompt]`, `mcp.*` config, MCP OAuth resource server | `llm/mcp-server.md` | mcp |
+| MCP server: `#[routes]` MCP members (one type = one port: MCP members and HTTP routes on separate types), `#[routes(group, opt_in)]`, `#[tool]` / `#[resource]` / `#[prompt]`, `mcp.*` config, MCP OAuth resource server, in-process loopback transport (`McpLoopback`, feature `mcp-loopback`) | `llm/mcp-server.md` | mcp |
 
 ### Observability & operations
 

@@ -23,7 +23,9 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use r2e_core::http::response::IntoResponse;
-use r2e_core::http::{HeaderMap, Method, Request, Response, StatusCode, AUTHORIZATION};
+use r2e_core::http::{
+    Extensions, HeaderMap, Method, Request, Response, StatusCode, AUTHORIZATION,
+};
 use tower::{Layer, Service};
 
 use super::basic::{basic_credentials, BasicCredentials};
@@ -164,19 +166,43 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
         }
     };
 
-    let missing: Vec<String> = state
-        .required_scopes
+    check_required_scopes(&principal, &state.required_scopes)?;
+
+    Ok(principal)
+}
+
+/// Server-wide `mcp.auth.required-scopes`: every one must be granted to the
+/// principal. Shared by the HTTP layer and the loopback transport so a
+/// session opened in-process meets exactly the policy an HTTP one does.
+pub(crate) fn check_required_scopes(
+    principal: &McpPrincipal,
+    required: &[String],
+) -> Result<(), McpAuthError> {
+    let missing: Vec<String> = required
         .iter()
         .filter(|s| !principal.has_scope(s))
         .cloned()
         .collect();
-    if !missing.is_empty() {
-        return Err(AuthFailure::from(McpAuthError::InsufficientScope {
-            missing,
-        }));
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(McpAuthError::InsufficientScope { missing })
     }
+}
 
-    Ok(principal)
+/// Deposit the authenticated principal in the request extensions — what
+/// rmcp copies into each JSON-RPC message's `RequestContext.extensions`, so
+/// tools read it via `ToolCall.parts` / identity params
+/// (`#[inject(identity)] McpPrincipal`, marker `ViaMcpAuth`).
+///
+/// Two extensions, ONE `AuthenticatedUser`: the identity is deposited as
+/// `Arc<AuthenticatedUser>` — a refcount bump, not a second copy of the
+/// claims tree — and the principal holds the same `Arc`. Extracting the
+/// principal clones `Arc`s; `ToolCall::identity::<T>()` materializes an
+/// owned `T` only when a member asks for one by hand.
+pub(crate) fn deposit_principal(extensions: &mut Extensions, principal: McpPrincipal) {
+    extensions.insert(Arc::clone(&principal.user));
+    extensions.insert(principal);
 }
 
 /// Log a rejection with its cause — never the token or credentials.
@@ -265,19 +291,7 @@ where
                         }
                     };
 
-                    // rmcp copies `http::request::Parts` extensions into each
-                    // JSON-RPC message's `RequestContext.extensions`, so tools
-                    // read these via `ToolCall.parts` / identity params
-                    // (`#[inject(identity)] McpPrincipal`, marker `ViaMcpAuth`).
-                    //
-                    // Two extensions, ONE `AuthenticatedUser`: the identity is
-                    // deposited as `Arc<AuthenticatedUser>` — a refcount bump,
-                    // not a second copy of the claims tree — and the principal
-                    // holds the same `Arc`. Extracting the principal clones
-                    // `Arc`s; `ToolCall::identity::<T>()` materializes an owned
-                    // `T` only when a member asks for one by hand.
-                    req.extensions_mut().insert(Arc::clone(&principal.user));
-                    req.extensions_mut().insert(principal);
+                    deposit_principal(req.extensions_mut(), principal);
                     let mut response = inner.call(req).await?.into_response();
                     response
                         .extensions_mut()

@@ -70,6 +70,9 @@ pub(crate) struct AuthArtifacts {
     pub extra_routes: Routes,
     /// The `WWW-Authenticate` challenges, for the identity layer's 401s.
     pub challenges: Challenges,
+    /// `mcp.auth.required-scopes`, as the layer enforces them — shared with
+    /// the loopback transport so an in-process connect meets the same policy.
+    pub required_scopes: Arc<[String]>,
 }
 
 /// Canonicalise a resource URI (RFC 8707): `url::Url` lowercases the
@@ -259,7 +262,7 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         oauth: false,
         challenges: challenges.clone(),
         basic: Some(basic),
-        required_scopes,
+        required_scopes: required_scopes.clone(),
         allowed_origins: allowed_origins(inputs),
         bindings: inputs.bindings.clone(),
     });
@@ -269,6 +272,7 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         validator: McpTokenValidator::disabled(),
         slot,
         extra_routes: Routes::new(),
+        required_scopes,
     }
 }
 
@@ -551,7 +555,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         oauth: true,
         challenges: challenges.clone(),
         basic,
-        required_scopes,
+        required_scopes: required_scopes.clone(),
         allowed_origins: allowed_origins(&inputs),
         bindings: inputs.bindings.clone(),
     });
@@ -676,6 +680,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         slot,
         extra_routes,
         challenges,
+        required_scopes,
     })
 }
 

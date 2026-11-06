@@ -40,6 +40,7 @@ def plan(packages=(), *, full=False, reason):
         "packages": packages,
         "dev_reload": full or "r2e-core" in packages,
         "compile_tests": full or "r2e-compile-tests" in packages,
+        "mcp_loopback": full or "r2e-mcp" in packages,
         "reason": reason,
     }
 

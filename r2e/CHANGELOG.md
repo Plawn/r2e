@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- Feature `mcp-loopback` (= `mcp` + `r2e-mcp/loopback`, #1076): in-process
+  MCP sessions on the mounted endpoint through the `McpLoopback` bean
+  (`docs/features/25-mcp.md` § Transports, `llm/mcp-server.md`).
+
 ## [0.11.0] - 2026-11-04
 
 ### Breaking

@@ -6125,6 +6125,8 @@ name = "r2e-mcp"
 version = "0.11.0"
 dependencies = [
  "base64 0.22.1",
+ "futures-channel",
+ "futures-util",
  "http-body",
  "http-body-util",
  "percent-encoding",

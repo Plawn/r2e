@@ -67,6 +67,8 @@ mcp = ["dep:r2e-mcp"]
 # MCP test helpers (`r2e::r2e_mcp::testing::pin_mcp_validator`). Dev-graph
 # only (pulls r2e-test) — enable it from [dev-dependencies], not [dependencies].
 mcp-testing = ["mcp", "r2e-mcp/testing"]
+# In-process MCP sessions on the mounted endpoint (`r2e_mcp::loopback`).
+mcp-loopback = ["mcp", "r2e-mcp/loopback"]
 grpc-reflection = ["grpc", "r2e-grpc/reflection"]
 grpc-web = ["grpc", "r2e-grpc/web"]
 static = ["dep:r2e-static"]

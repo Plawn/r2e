@@ -180,14 +180,16 @@ where
 /// check on every method (POST, the standalone SSE `GET`, `DELETE`).
 ///
 /// Entries are weak: a session closed by `DELETE` or expired by rmcp drops
-/// its handler, and the entry is pruned on the next insert.
+/// its handler, and the entry is pruned on the next insert. A state marked
+/// [closed](SessionState::close) (a loopback connection that ended while a
+/// handle still holds it) counts as gone too.
 #[derive(Clone, Default)]
 pub(crate) struct SessionBindings(Arc<Mutex<HashMap<Box<str>, Weak<SessionState>>>>);
 
 impl SessionBindings {
     pub(crate) fn insert(&self, id: &str, state: Weak<SessionState>) {
         let mut map = self.0.lock().expect("MCP session bindings poisoned");
-        map.retain(|_, s| s.strong_count() > 0);
+        map.retain(|_, s| s.upgrade().is_some_and(|s| !s.is_closed()));
         map.insert(id.into(), state);
     }
 
@@ -200,7 +202,8 @@ impl SessionBindings {
             .lock()
             .expect("MCP session bindings poisoned")
             .get(id)
-            .and_then(Weak::upgrade);
+            .and_then(Weak::upgrade)
+            .filter(|s| !s.is_closed());
         match state.as_deref().and_then(SessionState::subject) {
             Some(bound) => bound == subject,
             None => true,

@@ -40,6 +40,12 @@ pub(crate) struct SessionState {
     /// Set by `initialize` under stateful serving: rmcp only delivers the
     /// handshake to a handler it created for a new (or restored) session.
     persistent: AtomicBool,
+    /// Set once the transport connection behind this state is gone (a
+    /// loopback session closed, dropped or cancelled mid-handshake). The
+    /// registries treat a closed state as absent even while an
+    /// [`McpSession`](super::McpSession) handle keeps the allocation alive,
+    /// so the id is reusable the moment the connection ends.
+    closed: AtomicBool,
 }
 
 impl SessionState {
@@ -55,7 +61,19 @@ impl SessionState {
             subject: OnceLock::new(),
             init: OnceCell::new(),
             persistent: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
         }
+    }
+
+    /// Mark the connection behind this state as ended (idempotent). The
+    /// session registries stop listing it and its id becomes claimable.
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    /// Whether [`close`](Self::close) ran.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 
     pub(crate) fn catalog(&self) -> &Catalog {

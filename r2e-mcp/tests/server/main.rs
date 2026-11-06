@@ -15,6 +15,8 @@ mod global;
 mod identity;
 mod interceptors;
 mod lifecycle;
+#[cfg(feature = "loopback")]
+mod loopback;
 mod mount;
 mod pagination;
 mod plugin;
