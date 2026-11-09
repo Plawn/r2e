@@ -1,7 +1,7 @@
 ---
 topic: configuration
 features: core
-tokens: ~4200
+tokens: ~4600
 requires: di-beans
 ---
 
@@ -38,6 +38,10 @@ requires: di-beans
   only logs a `WARN`.
 - `#[config(derive_default)]` emits `Default` from the declared defaults; a required
   field in such a struct is a compile error.
+- A plugin reads its own section through `type Config` + `CONFIG_PREFIX` (builder
+  field > file > default, merged in `build`); never read `b.r2e_config()` mid-chain
+  to construct one. `cors.*` (`Cors::new()`), `trace.*` (`HttpTrace::new()`) and
+  `openapi.*` (`OpenApiPlugin::default()`) are the builtin examples.
 
 ### Files & resolution order (lowest → highest)
 
@@ -364,3 +368,32 @@ default `30s`) — HTTP drain budget at shutdown; `.drain_timeout(d)` /
 (default `true`). `server.quic.*` — HTTP/3. `services.enabled` (default `true`)
 — global background-service switch; `false` keeps every `ServiceComponent` out
 of `run()` while leaving registration and config validation untouched.
+
+`cors.*` — read by `Cors::new()` (`r2e::prelude`): `enabled` (default `true`),
+`allowed-origins` (list: `"*"`, `scheme://host`, `scheme://host:port` or
+`scheme://host:*` for any port; every entry is validated at boot and a malformed
+one fails the boot), `allowed-methods` / `allowed-headers` (lists; unset = any),
+`expose-headers`, `allow-credentials` (`true` cannot be combined with `*` origins
+or unset methods/headers — tower-http would panic per request, so it is a boot
+error), `max-age` (duration: `7200` or `"2h"`). Precedence: builder setter
+(`Cors::permissive()` = `allowed_origins(["*"])`) > file > `default_origin(s)`;
+nothing set is permissive under the `dev` profile with a warning and a boot error
+elsewhere (fail-closed, like auth). Kebab keys are not addressable via `R2E_`,
+and a `${VAR}` placeholder is one list entry, not a comma-separated list — list
+several origins in YAML.
+
+`openapi.*` — read by `OpenApiPlugin::default()` (feature `openapi`): `enabled`
+(default `true`; `false` removes `/openapi.json` and `/docs`), `title`
+(default `"API"`), `version` (default `"0.0.0"`), `description`, `docs-ui`
+(default `false`). `OpenApiPlugin::new(OpenApiConfig)` keeps title / version /
+docs-ui explicit; its unset `description` falls through to the file.
+
+```yaml
+cors:
+  allowed-origins: [https://app.example.com, "http://localhost:*"]
+  max-age: 2h
+openapi:
+  title: My API
+  version: 1.2.0
+  docs-ui: true
+```

@@ -988,17 +988,18 @@ impl<T: Clone + Send + Sync + 'static, P, R, Mods> AppBuilder<T, P, R, Mods> {
         self
     }
     /// Returns a reference to the loaded [`R2eConfig`](crate::config::R2eConfig),
-    /// if any.
+    /// if any — available after `load_config` / `override_config`.
     ///
-    /// Available after `load_config` (or `with_config`). Plugins install **before**
-    /// `build_state()`, so this is the accessor a config-driven plugin
-    /// constructor reads from:
-    ///
-    /// ```ignore
-    /// let b = AppBuilder::new().load_config::<AppConfig>();
-    /// let cors = MyCors::from_config(b.r2e_config().unwrap());
-    /// b.plugin(cors).build_state().await
-    /// ```
+    /// This is the **non-DI** read of the config (tests, `main`, a value needed
+    /// before the graph exists). It is *not* how a plugin gets its settings: a
+    /// plugin whose behaviour depends on config declares `type Config` (a
+    /// `ConfigProperties` struct) + `CONFIG_PREFIX` and merges builder field >
+    /// file > default inside `build`, where the section is handed to it
+    /// already loaded — so `.plugin()` and `load_config()` can be called in
+    /// any order. Never cut the builder chain to read this and construct a
+    /// plugin from it; `Cors::new()` (`cors.*`), `HttpTrace::new()`
+    /// (`trace.*`) and `OpenApiPlugin::default()` (`openapi.*`) show the
+    /// pattern. See `docs/claude/plugins.md` § Typed Config.
     pub fn r2e_config(&self) -> Option<&crate::config::R2eConfig> {
         self.shared.config.as_ref()
     }

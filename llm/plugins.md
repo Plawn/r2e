@@ -1,7 +1,7 @@
 ---
 topic: plugins
 features: core
-tokens: ~2900
+tokens: ~3000
 requires: di-beans
 ---
 
@@ -41,6 +41,14 @@ requires: di-beans
 - Ship endpoints with `type Controllers = (..)`; contribute a health probe by
   putting `HealthRegistry` in `Deps` (which makes installing `AdvancedHealth` a
   compile-time requirement).
+- **Behaviour that depends on config goes through `type Config`** (a
+  `ConfigProperties` struct) + `CONFIG_PREFIX`: the section arrives in `build`
+  already loaded, merged as builder field > file > default. Never read
+  `b.r2e_config()` mid-chain to construct a plugin — that splits the builder
+  and breaks "install order is irrelevant". Builtins on this contract:
+  `Cors::new()` (`cors.*`), `HttpTrace::new()` (`trace.*`),
+  `OpenApiPlugin::default()` (`openapi.*`); `Config = ()` is only for plugins
+  with nothing to configure (`Health`, `NormalizePath`, `DevReload`).
 
 There is exactly **one** plugin kind (`Plugin`) and **one** install call
 (`.plugin(p)`, always before `build_state()`). A plugin IS one async, fallible
@@ -56,7 +64,8 @@ impl Plugin for MyPlugin {
     type Provided = (MyHandle,);          // tuple of beans; each becomes its own bean
     type Deps = (SqlitePool,);            // ANY bean (.provide()-d or .register()-ed),
                                           // verified at build_state(), order-independent
-    type Config = ();                     // or a ConfigProperties struct + CONFIG_PREFIX
+    type Config = ();                     // a ConfigProperties struct + CONFIG_PREFIX whenever
+                                          // behaviour depends on config (builder > file > default)
     type Controllers = ();                // or a tuple of #[controller] types the plugin ships
 
     async fn build(self, (pool,): Self::Deps, _config: Option<()>,

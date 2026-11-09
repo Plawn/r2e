@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Generate an OpenAPI 3.1.0 spec from controller route metadata and serve a built-in docs UI. Enable the `openapi` feature (plus `schemars`), then add `.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "0.1.0").with_docs_ui(true)))` before `build_state()`. The `#[routes]` macro emits a `RouteInfo` per route (path, method, params, roles, request/response schemas). Serves `GET /openapi.json` and `GET /docs`.
+Generate an OpenAPI 3.1.0 spec from controller route metadata and serve a built-in docs UI. Enable the `openapi` feature (plus `schemars`), then add `.plugin(OpenApiPlugin::default())` before `build_state()` and describe the API in the `openapi:` section (`title`, `version`, `description`, `docs-ui`, `enabled`) — or `.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "0.1.0").with_docs_ui(true)))` to set them in code. The `#[routes]` macro emits a `RouteInfo` per route (path, method, params, roles, request/response schemas). Serves `GET /openapi.json` and `GET /docs`.
 
 
 ## Objective
@@ -23,6 +23,8 @@ Configuration for the specification: title, version, description, documentation 
 
 A plugin that reads the collected `RouteInfo` set in a **Routes**-stage effect (so it sees every controller regardless of install order), builds the spec, and serves `GET /openapi.json` and optionally `GET /docs`.
 
+It is on the standard typed-config contract (`type Config = OpenApiPluginConfig`, prefix `openapi`): `OpenApiPlugin::default()` is entirely file-driven, `OpenApiPlugin::new(config)` keeps title / version / docs-ui explicit (builder > file; `description` falls through to the file when unset). `openapi.enabled: false` mounts neither route.
+
 ## Usage
 
 ### 1. Add the dependency
@@ -35,22 +37,44 @@ schemars = "1"
 
 ### 2. Configure and register
 
+File-driven (the usual form):
+
+```yaml
+# application.yaml
+openapi:
+  enabled: true                 # false → neither /openapi.json nor /docs (prod)
+  title: Mon API
+  version: 0.1.0
+  description: Description de mon API
+  docs-ui: true                 # default false
+```
+
 ```rust
-use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
+use r2e::r2e_openapi::OpenApiPlugin;
 
 AppBuilder::new()
+    .load_config::<()>()
     .register::<UserService>()      // register the beans your controllers inject
-    .plugin(OpenApiPlugin::new(
-        OpenApiConfig::new("Mon API", "0.1.0")
-            .with_description("Description de mon API")
-            .with_docs_ui(true),
-    ))
+    .plugin(OpenApiPlugin::default()) // reads `openapi.*`
     .build_state()                  // no type args — the state is the inferred HList
     .await
     .register_controllers::<(UserController, ConfigController)>()
     .serve("0.0.0.0:3000")
     .await
     .unwrap();
+```
+
+In code (needed for schema extras — `with_schema`, overrides — which have no
+file form; title / version / docs-ui set here win over the file):
+
+```rust
+use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
+
+    .plugin(OpenApiPlugin::new(
+        OpenApiConfig::new("Mon API", "0.1.0")
+            .with_description("Description de mon API")
+            .with_docs_ui(true),
+    ))
 ```
 
 ### 3. Generated endpoints
@@ -251,6 +275,9 @@ let config = OpenApiConfig::new("Titre", "1.0.0")
 | `with_schema_registry(registry)` | Merge a pre-built `SchemaRegistry` |
 | `with_schema_override(name, json)` | Override an auto-generated schema |
 | `with_error_schema::<E>()` | Document errors with envelope `E` (the plugin sets it from `ErrorProjector`) |
+
+`OpenApiPluginConfig` is the typed `openapi.*` section (`title`, `version`,
+`description`, `docs_ui`) the plugin merges under an explicit `OpenApiConfig`.
 
 ### Schema precedence
 

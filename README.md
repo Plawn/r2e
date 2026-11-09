@@ -485,7 +485,7 @@ R2E ships with built-in plugins. There is one plugin kind and one install call â
 | Plugin | Description |
 |--------|-------------|
 | `Health` | `GET /health` returning 200 "OK" |
-| `Cors::permissive()` | Permissive CORS headers (or `Cors::custom(layer)` for a custom `CorsLayer`) |
+| `Cors::new()` | CORS from `cors.*` (`allowed-origins` incl. `scheme://host:*`, methods, headers, credentials, `max-age`), `.default_origin(..)` below the file; `Cors::permissive()` for `*`, `Cors::custom(layer)` for your own `CorsLayer` |
 | `Tracing` | Installs the log **subscriber** (`tracing_subscriber::fmt`). Redundant under `r2e::launch` / `#[r2e::main]`, which install it already |
 | `HttpTrace::new()` | Per-request span + summary line, request ids, path exclusions (`trace.*`) |
 | `NormalizePath` | Trailing-slash normalization (install order irrelevant) |

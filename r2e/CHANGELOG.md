@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `Cors::new()` reads the `cors.*` section and `OpenApiPlugin::default()` the
+  `openapi.*` section (#1288, see `r2e-core` / `r2e-openapi` changelogs);
+  `r2e::http::layers::{validate_origin, origin_allowed, allow_origins}` share
+  the origin grammar with r2e-mcp.
+
 ### Breaking
 
 - Re-exported `r2e-security` 0.11.0 (#1173): `extract_jwt_claims*` /

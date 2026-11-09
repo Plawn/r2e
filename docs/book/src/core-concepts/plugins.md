@@ -10,7 +10,7 @@ Install plugins with `.plugin(p)` on the builder — **always before**
 ```rust
 AppBuilder::new()
     .plugin(Health)
-    .plugin(Cors::permissive())
+    .plugin(Cors::new().default_origin("http://localhost:5173")) // reads `cors.*`
     .plugin(HttpTrace::new())
     .plugin(NormalizePath)
     .build_state()
@@ -25,8 +25,9 @@ AppBuilder::new()
 | Plugin | Description |
 |--------|-------------|
 | `Health` | `GET /health` returning 200 "OK" |
-| `Cors::permissive()` | Permissive CORS headers |
-| `Cors::new(layer)` | Custom CORS configuration |
+| `Cors::new()` | CORS from the `cors.*` section (`allowed-origins`, methods, headers, credentials, `max-age`); `.default_origin(..)` applies when the section is absent; fail-closed outside `dev` when nothing sets origins |
+| `Cors::permissive()` | Permissive CORS headers (`*`), ignoring the file |
+| `Cors::custom(layer)` | Your own `CorsLayer` |
 | `HttpTrace::new()` | Per-request span + summary line, request ids, exclusions (`trace.*` keys) |
 | `HttpTrace::builder()…build()` | Same, configured in code (a builder knob beats the YAML) |
 | `NormalizePath` | Trailing-slash normalization |

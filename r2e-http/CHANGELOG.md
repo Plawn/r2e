@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `layers::validate_origin`, `layers::origin_allowed` and
+  `layers::allow_origins` (#1288): one origin grammar (`*`, `scheme://host`,
+  `scheme://host:port`, `scheme://host:*`) and matcher shared by the `Cors`
+  plugin and r2e-mcp's `mcp.allowed-origins` / `mcp.cors.allowed-origins`.
+
 ## [0.7.0] - 2026-10-25
 
 ### Breaking

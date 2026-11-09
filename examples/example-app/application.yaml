@@ -6,3 +6,16 @@ app:
   name: "R2E Example App"
   greeting: "Welcome to R2E!"
   version: "0.1.0"
+
+# Browser CORS policy (builtin `Cors` plugin). `*` or exact origins;
+# `scheme://host:*` accepts any port on that host.
+cors:
+  allowed-origins:
+    - http://localhost:3000
+    - http://localhost:*
+  max-age: 2h
+
+# `OpenApiPlugin` reads this section; `OpenApiPlugin::new(..)` in app.rs keeps
+# title/version/docs-ui explicit, so only `description` would fall through here.
+openapi:
+  docs-ui: true

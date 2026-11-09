@@ -353,6 +353,17 @@ release that ships it.
 
 ## Decisions log — do NOT re-propose
 
+- **No closure-based config path on the builder (2026-11-09, #1288).**
+  `plugin_with(|cfg| plugin)`, `apply(|b| ..)`-for-config or any
+  "read `r2e_config()` mid-chain to construct a plugin" API: REJECTED. A
+  plugin whose behaviour depends on config declares `type Config` +
+  `CONFIG_PREFIX` and merges builder field > file > default in `build`, where
+  the section arrives already loaded — the contract that keeps `.plugin()`
+  order irrelevant. `r2e_config()` is a non-DI read (tests, `main`) only.
+  #1288 put the two stragglers (`Cors` → `cors.*`, `OpenApiPlugin` →
+  `openapi.*`) on the contract and rewrote the docs that taught the chain
+  split. A list value from a single `${VAR}` (comma split) is a separate
+  ticket if ever wanted; today `${VAR}` is one entry.
 - **`#[scheduled(config = "…", default = "…")]`: REJECTED (2026-11-06,
   user decision, #1181).** It would be a second config-reading path next to
   `#[config]` (own default handling, own boot validation, own `config_keys()`

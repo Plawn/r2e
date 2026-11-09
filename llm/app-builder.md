@@ -1,7 +1,7 @@
 ---
 topic: app-builder
 features: core
-tokens: ~2100
+tokens: ~2200
 requires: di-beans
 ---
 
@@ -49,11 +49,11 @@ AppBuilder::new()
     .plugin(Scheduler)                          // scheduler runtime
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
     .plugin(Health)
-    .plugin(Cors::permissive())
+    .plugin(Cors::new().default_origin("http://localhost:5173")) // `cors.*` wins; the default applies when the section is absent
     .plugin(HttpTrace::new())                   // per-request span + summary line (`trace.*`)
     .tracing_layer(r2e::Suppress::error("dep::conn", "reset")) // build_state() installs the subscriber from `tracing:`
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
-    .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
+    .plugin(OpenApiPlugin::default())           // reads `openapi.*` (title/version/description/docs-ui); or ::new(OpenApiConfig) in code
     .provide(bean)                              // constructed values
     .provide_all(env)                           // every field of a #[derive(ProvideBundle)] struct
     .register::<CreatePool>()                   // beans / producers (one unified method)

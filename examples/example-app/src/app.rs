@@ -160,7 +160,8 @@ impl App for ExampleApp {
             .plugin(Health)
             .plugin(RequestIdPlugin)
             .plugin(SecureHeaders::default())
-            .plugin(Cors::permissive())
+            // Reads `cors.*`; the default origin only applies when the section is absent.
+            .plugin(Cors::new().default_origin("http://localhost:3000"))
             .plugin(Observability::new(
                 ObservabilityConfig::new("r2e-example")
                     .with_service_version("0.1.0")

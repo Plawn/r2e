@@ -404,3 +404,40 @@ async fn unresolvable_resource_is_a_boot_error() {
         .register_mcp_service::<fixtures::SecuredTools>()
         .build();
 }
+
+// ── Origin allowlists share the `cors.*` grammar ───────────────────────────
+
+/// A malformed `mcp.allowed-origins` entry used to boot and never match
+/// (403 on every browser request); it is now a boot error naming the entry.
+#[r2e_core::test]
+#[should_panic(expected = "mcp.allowed-origins: entry rejected")]
+async fn malformed_allowed_origin_is_a_boot_error() {
+    let _ = AppBuilder::new()
+        .override_config_value("mcp.allowed-origins", "http://localhost:5173/")
+        .load_config::<()>()
+        .plugin(McpServer::new())
+        .build_state()
+        .await;
+}
+
+/// Same grammar, same check, for the CORS reply list.
+#[r2e_core::test]
+#[should_panic(expected = "mcp.cors.allowed-origins: entry rejected")]
+async fn malformed_cors_origin_is_a_boot_error() {
+    let _ = AppBuilder::new()
+        .plugin(McpServer::new().with_cors_allowed_origins(["app.example.com"]))
+        .build_state()
+        .await;
+}
+
+/// The wildcard form stays accepted on both lists.
+#[r2e_core::test]
+async fn port_wildcard_origins_boot() {
+    let _ = AppBuilder::new()
+        .override_config_value("mcp.allowed-origins", "http://localhost:*")
+        .override_config_value("mcp.cors.allowed-origins", "https://[::1]:*")
+        .load_config::<()>()
+        .plugin(McpServer::new())
+        .build_state()
+        .await;
+}

@@ -158,7 +158,7 @@ pub fn app_rs(opts: &ProjectOptions) -> String {
     let mut imports = String::from("use r2e::prelude::*;\n");
 
     if opts.openapi {
-        imports.push_str("use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};\n");
+        imports.push_str("use r2e::r2e_openapi::OpenApiPlugin;\n");
     }
     if opts.scheduler {
         imports.push_str("use r2e::r2e_scheduler::Scheduler;\n");
@@ -262,10 +262,8 @@ async fn jwt_validator(
     lines.push("            .plugin(HttpTrace::new())".to_string());
 
     if opts.openapi {
-        lines.push(
-            "            .plugin(OpenApiPlugin::new(OpenApiConfig::new(\"API\", \"0.1.0\").with_docs_ui(true)))"
-                .to_string(),
-        );
+        // Reads the `openapi:` section of application.yaml.
+        lines.push("            .plugin(OpenApiPlugin::default())".to_string());
     }
 
     lines.push("            .try_build_state()".to_string());
@@ -405,6 +403,12 @@ server:
 
     if opts.grpc {
         yaml.push_str("\ngrpc:\n  port: 50051\n");
+    }
+
+    if opts.openapi {
+        yaml.push_str(&format!(
+            "\n# Read by OpenApiPlugin::default()\nopenapi:\n  title: \"{name}\"\n  version: \"0.1.0\"\n  docs-ui: true   # Swagger UI at /docs\n"
+        ));
     }
 
     yaml
