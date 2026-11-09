@@ -346,7 +346,9 @@ impl Plugin for Prometheus {
                 );
             });
         }
-        ctx.add_layer(move |router| router.layer(PrometheusLayer::new(metrics_config)));
+        ctx.add_layer_in(r2e_core::LayerSlot::Metrics, move |router| {
+            router.layer(PrometheusLayer::new(metrics_config))
+        });
 
         Ok((PrometheusRegistry,))
     }

@@ -379,7 +379,7 @@ impl Plugin for HttpTrace {
         }
 
         let make_span = self.make_span;
-        ctx.add_layer(move |router| match make_span {
+        ctx.add_layer_in(crate::plugin::LayerSlot::Trace, move |router| match make_span {
             Some(make_span) => router.layer(HttpTraceLayer::from_shared(settings, make_span)),
             None => router.layer(HttpTraceLayer::new(settings)),
         });

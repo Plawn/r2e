@@ -93,7 +93,10 @@ async fn builds_run_in_topo_order_effects_apply_in_install_order() {
 
 #[allow(clippy::too_many_arguments)]
 fn make_deferred_context<'a>(
-    layers: &'a mut Vec<Box<dyn FnOnce(r2e_core::http::Routes) -> r2e_core::http::Routes + Send>>,
+    layers: &'a mut Vec<(
+        r2e_core::LayerSlot,
+        Box<dyn FnOnce(r2e_core::http::Routes) -> r2e_core::http::Routes + Send>,
+    )>,
     router_wraps: &'a mut Vec<
         Box<dyn FnOnce(r2e_core::http::Routes) -> r2e_core::http::Routes + Send>,
     >,

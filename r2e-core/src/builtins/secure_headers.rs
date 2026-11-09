@@ -68,7 +68,9 @@ impl Plugin for SecureHeaders {
         ctx: &mut crate::plugin::PluginBuildContext,
     ) -> Result<Self::Provided, crate::plugin::PluginBuildError> {
         let headers = self.headers;
-        ctx.add_layer(move |mut router| {
+        // Response-header policy: in the `Cors` band so the headers also land
+        // on a preflight answer and on a rejection from an `Auth` gate.
+        ctx.add_layer_in(crate::plugin::LayerSlot::Cors, move |mut router| {
             for (name, value) in headers {
                 router = router.layer(crate::http::layers::set_header::SetResponseHeaderLayer::overriding(
                     name, value,

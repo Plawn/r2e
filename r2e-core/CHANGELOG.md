@@ -15,7 +15,31 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+Migration guide: [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
+
+- **Layer bands (#1299).** The position of an HTTP layer is decided by the
+  band it declares — `LayerSlot::{Trace, Metrics, Cors, Auth, App}`, outer to
+  inner — instead of the order of the `.plugin(..)` calls; install order only
+  applies inside a band. Built-ins declare theirs: `HttpTrace` and
+  `RequestIdPlugin` → `Trace`, `Cors` and `SecureHeaders` → `Cors`. Nothing
+  stops compiling, but stacks change:
+  - `AppBuilder::with_layer` / `with_layer_fn` are now `LayerSlot::App`, the
+    **innermost** band — they used to end up outside every plugin layer. A
+    hand-built CORS layer must move to `with_layer_in(LayerSlot::Cors, ..)`.
+  - Routes added by a `with_layer_fn` closure (`nest`/`merge`) are now wrapped
+    by the layers of the four outer bands, auth gates included.
+  - A plugin's `ctx.add_layer(..)` is `LayerSlot::App`: inside tracing,
+    metrics, CORS and auth gates whatever the install order.
+  - `DeferredContext.layers` (`#[doc(hidden)]`) is now
+    `Vec<(LayerSlot, LayerFn)>`.
+
 ### Added
+
+- `LayerSlot` (crate root, `plugin`, prelude), `PluginBuildContext::add_layer_in`,
+  `DeferredContext::add_layer_in`, `AppBuilder::with_layer_in` /
+  `with_layer_fn_in` (#1299): declare the band of a layer.
 
 - `HttpTrace` carries the request context (#1290): `with_request(|span,
   state| ..)` and `with_request_state::<T, _>(|span, slot| ..)` (crate root

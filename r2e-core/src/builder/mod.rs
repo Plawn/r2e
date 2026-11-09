@@ -756,7 +756,9 @@ pub struct NoState;
 /// Shared configuration that is independent of the application state type.
 struct BuilderConfig {
     config: Option<crate::config::R2eConfig>,
-    custom_layers: Vec<LayerFn>,
+    /// HTTP layers with their band; `build()` applies them sorted by band
+    /// (stable, so install order holds within a band). See `LayerSlot`.
+    custom_layers: Vec<(crate::plugin::LayerSlot, LayerFn)>,
     /// Transport-level router transforms, applied OUTERMOST — after
     /// `custom_layers` and both catch-panic slots. The wrapped service sees
     /// every request before any HTTP middleware; the inner HTTP router keeps

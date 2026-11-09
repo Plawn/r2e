@@ -334,7 +334,7 @@ impl Plugin for MetricsFacade {
             exclude_paths,
             ..MetricsConfig::default()
         };
-        ctx.add_layer(move |router| {
+        ctx.add_layer_in(r2e_core::LayerSlot::Metrics, move |router| {
             router.layer(HttpMetricsLayer::with_recorder(layer_config, recorder))
         });
 

@@ -121,7 +121,8 @@ pub use crate::di::module::FeatureModule;
 pub use crate::di::scheduled_source::ScheduledSource;
 pub use crate::error::{ErrorSchema, HttpError, HttpErrorExt, Rejection, RejectionKind};
 pub use crate::plugin::{
-    GraphHandle, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext,
+    GraphHandle, LayerSlot, Plugin, PluginBuildContext, PluginBuildError, PluginSetupContext,
+    RoutesContext,
 };
 pub use crate::runtime::http_trace::{
     with_request, with_request_state, MakeRequestSpan, RequestOutcome, RequestSpan, SpanState,

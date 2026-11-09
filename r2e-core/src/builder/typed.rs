@@ -245,13 +245,34 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// AppBuilder::new()
     ///     .with_layer(TimeoutLayer::new(Duration::from_secs(30)))
     /// ```
-    pub fn with_layer<L>(mut self, layer: L) -> Self
+    ///
+    /// The layer lands in the default [`LayerSlot::App`](crate::plugin::LayerSlot)
+    /// band: inside every plugin layer of the `Trace`, `Metrics`, `Cors` and
+    /// `Auth` bands, whatever the call order. Use
+    /// [`with_layer_in`](Self::with_layer_in) to pick another band.
+    pub fn with_layer<L>(self, layer: L) -> Self
+    where
+        L: crate::http::routing::RouteLayer,
+    {
+        self.with_layer_in(crate::plugin::LayerSlot::App, layer)
+    }
+
+    /// [`with_layer`](Self::with_layer) in a given band — see
+    /// [`LayerSlot`](crate::plugin::LayerSlot). Use it for an app-level layer
+    /// whose position matters: a hand-built CORS layer goes in
+    /// `LayerSlot::Cors` so it stays outside any auth gate.
+    ///
+    /// ```ignore
+    /// AppBuilder::new()
+    ///     .with_layer_in(LayerSlot::Cors, my_cors_layer)
+    /// ```
+    pub fn with_layer_in<L>(mut self, slot: crate::plugin::LayerSlot, layer: L) -> Self
     where
         L: crate::http::routing::RouteLayer,
     {
         self.shared
             .custom_layers
-            .push(Box::new(move |routes| routes.layer(layer)));
+            .push((slot, Box::new(move |routes| routes.layer(layer))));
         self
     }
 
@@ -269,11 +290,25 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     ///         routes.layer(some_complex_layer)
     ///     })
     /// ```
-    pub fn with_layer_fn<F>(mut self, f: F) -> Self
+    ///
+    /// Runs in the default [`LayerSlot::App`](crate::plugin::LayerSlot) band:
+    /// routes the closure adds (`routes.nest(..)`, `routes.merge(..)`) are
+    /// wrapped by the layers of the outer bands (trace, metrics, CORS, auth
+    /// gates), not by the `App` layers registered before it.
+    pub fn with_layer_fn<F>(self, f: F) -> Self
     where
         F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
     {
-        self.shared.custom_layers.push(Box::new(f));
+        self.with_layer_fn_in(crate::plugin::LayerSlot::App, f)
+    }
+
+    /// [`with_layer_fn`](Self::with_layer_fn) in a given band — see
+    /// [`LayerSlot`](crate::plugin::LayerSlot).
+    pub fn with_layer_fn_in<F>(mut self, slot: crate::plugin::LayerSlot, f: F) -> Self
+    where
+        F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
+    {
+        self.shared.custom_layers.push((slot, Box::new(f)));
         self
     }
 
@@ -1113,10 +1148,15 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
             projector.clone(),
         ));
 
-        // Apply layers (in registration order). Layers added via
-        // `Routes::layer` run after routing, so they observe `MatchedPath`
+        // Apply layers band by band, innermost first (`App` … `Trace`); the
+        // sort is stable, so registration order holds within a band (later =
+        // outer). A layer's position is thus a property of what it *is*, not
+        // of where the app wrote `.plugin(..)` — see `LayerSlot`. Layers added
+        // via `Routes::layer` run after routing, so they observe `MatchedPath`
         // (and any controller `#[fallback]`) on the routed request.
-        for layer_fn in self.shared.custom_layers {
+        let mut layers = self.shared.custom_layers;
+        layers.sort_by_key(|(slot, _)| slot.rank());
+        for (_, layer_fn) in layers {
             app = layer_fn(app);
         }
 

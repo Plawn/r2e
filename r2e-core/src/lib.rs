@@ -79,8 +79,8 @@ pub use error::{
     ErrorProjector, ErrorSchema, ErrorSchemaInfo, HttpError, HttpErrorExt, Rejection, RejectionKind,
 };
 pub use plugin::{
-    DeferredAction, DeferredContext, GraphHandle, Plugin, PluginBuildContext, PluginBuildError,
-    PluginInstall, PluginSetupContext, RoutesContext,
+    DeferredAction, DeferredContext, GraphHandle, LayerSlot, Plugin, PluginBuildContext,
+    PluginBuildError, PluginInstall, PluginSetupContext, RoutesContext,
 };
 pub use r2e_tracing;
 pub use r2e_tracing::{

@@ -12,7 +12,7 @@
 //!
 //! | Stage | Registered with | Applied |
 //! |---|---|---|
-//! | **Graph** | [`add_layer`](PluginBuildContext::add_layer), [`after_build`](PluginBuildContext::after_build), [`on_serve`](PluginBuildContext::on_serve), [`store_data`](PluginBuildContext::store_data) | inside `build_state()`, right after the graph resolves |
+//! | **Graph** | [`add_layer`](PluginBuildContext::add_layer) / [`add_layer_in`](PluginBuildContext::add_layer_in), [`after_build`](PluginBuildContext::after_build), [`on_serve`](PluginBuildContext::on_serve), [`store_data`](PluginBuildContext::store_data) | inside `build_state()`, right after the graph resolves |
 //! | **Routes** | [`after_routes`](PluginBuildContext::after_routes) | in `build()`, after **every** controller (app, module, plugin) is registered |
 //! | **Finalize** | [`wrap_router`](PluginBuildContext::wrap_router) | in `build()`, outermost, after the whole HTTP stack is assembled |
 //!
@@ -47,7 +47,7 @@ mod graph_handle;
 mod install;
 
 pub use contexts::{PluginBuildContext, PluginSetupContext, RoutesContext};
-pub use deferred::{AsyncShutdownHook, DeferredAction, DeferredContext};
+pub use deferred::{AsyncShutdownHook, DeferredAction, DeferredContext, LayerSlot};
 pub use graph_handle::GraphHandle;
 pub use install::{plugin_action_name, Plugin, PluginBuildError, PluginInstall, PluginOut};
 
