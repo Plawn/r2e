@@ -31,9 +31,10 @@ use crate::runtime::http_trace::{HttpTraceLayer, HttpTraceSettings, MakeRequestS
 /// this file section > [preset](HttpTrace::preset) > built-in default**.
 #[derive(r2e_macros::ConfigProperties, Clone, Debug, Default)]
 pub struct HttpTraceConfig {
-    /// Path prefixes excluded from tracing entirely — no span, no summary
-    /// event, no request id. Matched against the raw request path **and** the
-    /// bounded route label, like `prometheus.exclude-paths`.
+    /// Path prefixes excluded from tracing — no span, no summary event, no
+    /// request context. The request id is still resolved and echoed (it is
+    /// governed by `request-id` alone). Matched against the raw request path
+    /// **and** the bounded route label, like `prometheus.exclude-paths`.
     ///
     /// Default: `["/health", "/metrics"]` — probe and scrape traffic is the
     /// number-one reason request logging gets turned off. An app that mounts

@@ -302,12 +302,15 @@ each request logs.
 - Request id: reuses an existing `RequestId` extension, else an inbound
   `x-request-id`, else mints a UUID v4 (`fresh_request_id`, shared with
   `RequestIdPlugin`); publishes it as both the extension and the request header
-  and echoes it on the response. Installing `RequestIdPlugin` too, in either
-  order, is harmless.
+  and echoes it on the response — **on excluded paths too** (#1290: the id is
+  governed by `trace.request-id` alone, so `/health` answers `x-request-id`
+  with `HttpTrace` alone). Installing `RequestIdPlugin` too, in either order,
+  is harmless and no longer needed for probes.
 - Exclusions: prefix match on the raw path **or** the route label, via the
   shared `r2e_core::http::labels::path_excluded` (same helper as
-  `prometheus.exclude-paths`). An excluded request gets no span, no event, no
-  request id — untouched pass-through. Default `["/health", "/metrics"]`.
+  `prometheus.exclude-paths`). An excluded request gets no span, no event and
+  no request context (it keeps its request id). Default
+  `["/health", "/metrics"]`.
 - Config: `HttpTraceConfig` (`ConfigProperties`, kebab keys), section `trace`,
   gate `trace.enabled` (false = no layer at all). Precedence per knob:
   **explicit builder setting > app `trace:` section > `HttpTrace::preset(cfg)` >
@@ -328,6 +331,20 @@ each request logs.
   since span fields are write-only and the span maker is a shared `Arc`. Field
   *names* stay static (tracing callsite metadata) — deliberately not
   generalized; the app's own `MakeRequestSpan` declares them.
+- Request context (#1290): the layer scopes a task-local
+  `Arc<RequestContext { span, state }>` around **every poll** of the inner
+  future (`LocalKey::sync_scope` — one `Arc` clone per poll, nothing on the
+  excluded path). `with_request(|&Span, Option<&SpanState>|) -> Option<R>` and
+  `with_request_state::<T, R>(|&Span, &T|) -> Option<R>` read it from any call
+  depth with **no HTTP type in the signature** — a bean records `session_id`
+  on the *request* span (not `Span::current()`, which is whatever nested span
+  is entered) and writes into the `make_state` slot. `None` outside a request
+  (scheduled job, consumer), on an excluded path, when the layer is off, on a
+  slot-type mismatch, and in a task spawned from the handler — a task-local
+  does not cross `rt::spawn`, deliberately: the span would outlive its
+  summary. `RequestSpan`/`SpanState` extractors stay for handler-level use.
+  This is what lets an app drop its own `task_local!` + wrapper layer
+  (blumana `http_stack!`).
 - Tests: `r2e-core/tests/http/http_trace.rs`.
 
 ## Observability (r2e-observability)

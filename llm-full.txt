@@ -7069,8 +7069,8 @@ portable. R2E's `prometheus` registry is never installed in this mode, and
 - Configure with the `trace:` YAML section or `HttpTrace::builder()`; a builder
   knob beats the file, and `HttpTrace::preset(cfg)` is the shared-baseline lane
   that the file beats. `trace.enabled: false` removes the layer entirely.
-- `HttpTrace` resolves/echoes `x-request-id` itself; `RequestIdPlugin` is
-  redundant with it but harmless in either order.
+- `HttpTrace` resolves/echoes `x-request-id` itself — on excluded paths too;
+  `RequestIdPlugin` is redundant with it but harmless in either order.
 - Custom span shape: implement `MakeRequestSpan` and pass it to
   `HttpTrace::builder().make_span(..)` — exclusions, request id, timing and the
   summary stay with the layer.
@@ -7078,6 +7078,10 @@ portable. R2E's `prometheus` registry is never installed in this mode, and
   `record` domain fields the span shape declared `Empty` (`session_id`, …); a
   `MakeRequestSpan::make_state` slot (`SpanState`) carries values written
   during the request to `on_response` for a custom summary line.
+- From a bean/service (no HTTP type in the signature): `with_request(|span,
+  state| ..)` / `with_request_state::<T, _>(|span, slot| ..)` return `None`
+  outside a traced request. Never write your own `task_local!` + wrapper
+  layer for this.
 - Enable feature `observability` and install
   `Observability::new(ObservabilityConfig::new("my-service"))`; it replaces
   `HttpTrace` (it installs the same layer with an OTel span shape) — never
@@ -7149,7 +7153,8 @@ ERROR r2e::http: request completed status=503 latency_ms=12.0
 The span is **entered for the whole handler future**, so every line the handler
 logs inherits `route` and `request_id`. `latency_ms` stops at the response head
 (a streamed body is not counted — that is why the Prometheus layer keeps its own
-timer). An excluded path gets no span, no event and no request id.
+timer). An excluded path gets no span, no event and no request context; it
+still answers with `x-request-id` (unless `trace.request-id: false`).
 
 ### Enriching the request span with domain fields
 
@@ -7226,6 +7231,32 @@ impl MakeRequestSpan for AppSpan {
 b.plugin(HttpTrace::builder().make_span(AppSpan).build())
 # }
 ```
+
+A **service** reaches the same span and slot without any HTTP type in its
+signature — the layer scopes them around the handler future:
+
+```rust
+use std::sync::Mutex;
+
+#[derive(Default)]
+struct Facts {
+    session_id: Mutex<Option<String>>,
+}
+
+fn remember_session(id: &str) {
+    // `None` (closure not run) outside a traced request: scheduled job,
+    // consumer, excluded path, `trace.enabled: false`, or a spawned task.
+    with_request_state(|span, facts: &Facts| {
+        span.record("session_id", id); // the *request* span, whatever span is entered
+        *facts.session_id.lock().unwrap() = Some(id.to_owned());
+    });
+}
+# fn main() {}
+```
+
+`with_request(|span, state| ..)` is the untyped form (`state` is the
+`Option<&SpanState>`; `None` under the default span shape). The context does
+not follow `rt::spawn` — capture what the task needs before spawning.
 
 ### JSON log lines (flat)
 
