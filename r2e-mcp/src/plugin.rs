@@ -5,6 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use r2e_core::beans::BeanContext;
+use r2e_core::config::Layered;
 use r2e_core::http::Routes;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError, PluginSetupContext, RoutesContext};
 use r2e_core::rt::CancelToken;
@@ -145,24 +146,15 @@ pub const RMCP_NOISE: &[(&str, &str)] = &[
 pub struct McpServer {
     registry: McpServiceRegistry,
     resource_updates: McpResourceUpdates,
-    path: Option<String>,
-    name: Option<String>,
-    version: Option<String>,
-    instructions: Option<String>,
-    sse_keep_alive_secs: Option<u64>,
-    json_response: Option<bool>,
-    stateless: Option<bool>,
-    max_protocol_version: Option<ProtocolVersion>,
-    allowed_hosts: Option<Vec<String>>,
-    allowed_origins: Option<Vec<String>>,
-    max_request_body_bytes: Option<u64>,
+    /// Every knob the `mcp.*` section also carries: builder setter > file >
+    /// preset, merged in `build`.
+    cfg: Layered<McpConfig>,
+    // Builder-only precision: the section counts whole seconds, these setters
+    // take a `Duration`. Set, they outrank every tier of `cfg`.
     elicitation_timeout: Option<Duration>,
     session_idle_timeout: Option<Duration>,
-    session_store: Option<Arc<dyn McpSessionStore>>,
     session_store_ttl: Option<Duration>,
-    page_size: Option<u32>,
-    cors_allowed_origins: Option<Vec<String>>,
-    auth: Option<McpAuthConfig>,
+    session_store: Option<Arc<dyn McpSessionStore>>,
     token_validator: Option<McpTokenValidator>,
     /// Resolves the [`McpSessionInit`] bean once the graph is built.
     session_init: Option<(&'static str, ResolveInit)>,
@@ -174,45 +166,56 @@ impl McpServer {
         Self::default()
     }
 
+    /// Create the plugin from a shared baseline: `config` sits **below** the
+    /// `mcp.*` section, so the app's file overrides it key by key, and the
+    /// builder setters override both. An `auth` section is one value — the
+    /// file's `mcp.auth` replaces the preset's whole, never merges into it.
+    pub fn preset(config: McpConfig) -> Self {
+        Self {
+            cfg: Layered::with_preset(config),
+            ..Self::default()
+        }
+    }
+
     /// Override the endpoint path (default `/mcp`).
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
-        self.path = Some(path.into());
+        self.cfg.set(|c| c.path = Some(path.into()));
         self
     }
 
     /// Override the advertised server name.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
+        self.cfg.set(|c| c.name = Some(name.into()));
         self
     }
 
     /// Override the advertised server version.
     pub fn with_version(mut self, version: impl Into<String>) -> Self {
-        self.version = Some(version.into());
+        self.cfg.set(|c| c.version = Some(version.into()));
         self
     }
 
     /// Set the usage instructions advertised to clients.
     pub fn with_instructions(mut self, instructions: impl Into<String>) -> Self {
-        self.instructions = Some(instructions.into());
+        self.cfg.set(|c| c.instructions = Some(instructions.into()));
         self
     }
 
     /// SSE keep-alive ping interval in seconds (`0` disables pings).
     pub fn with_sse_keep_alive_secs(mut self, secs: u64) -> Self {
-        self.sse_keep_alive_secs = Some(secs);
+        self.cfg.set(|c| c.sse_keep_alive_secs = Some(secs));
         self
     }
 
     /// Prefer `application/json` responses (stateless mode only).
     pub fn json_response(mut self, enabled: bool) -> Self {
-        self.json_response = Some(enabled);
+        self.cfg.set(|c| c.json_response = Some(enabled));
         self
     }
 
     /// Serve statelessly (no MCP sessions).
     pub fn stateless(mut self, enabled: bool) -> Self {
-        self.stateless = Some(enabled);
+        self.cfg.set(|c| c.stateless = Some(enabled));
         self
     }
 
@@ -223,7 +226,8 @@ impl McpServer {
     /// `version` must be one of [`ProtocolVersion::KNOWN_VERSIONS`]; boot
     /// fails otherwise. Independent of [`stateless`](Self::stateless).
     pub fn max_protocol_version(mut self, version: ProtocolVersion) -> Self {
-        self.max_protocol_version = Some(version);
+        self.cfg
+            .set(|c| c.max_protocol_version = Some(version.as_str().to_string()));
         self
     }
 
@@ -233,7 +237,8 @@ impl McpServer {
         mut self,
         hosts: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.allowed_hosts = Some(hosts.into_iter().map(Into::into).collect());
+        let hosts = hosts.into_iter().map(Into::into).collect();
+        self.cfg.set(|c| c.allowed_hosts = Some(hosts));
         self
     }
 
@@ -243,13 +248,14 @@ impl McpServer {
         mut self,
         origins: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.allowed_origins = Some(origins.into_iter().map(Into::into).collect());
+        let origins = origins.into_iter().map(Into::into).collect();
+        self.cfg.set(|c| c.allowed_origins = Some(origins));
         self
     }
 
     /// Maximum POST body size in bytes (default 4 MiB).
     pub fn with_max_request_body_bytes(mut self, bytes: u64) -> Self {
-        self.max_request_body_bytes = Some(bytes);
+        self.cfg.set(|c| c.max_request_body_bytes = Some(bytes));
         self
     }
 
@@ -289,7 +295,7 @@ impl McpServer {
     /// Maximum entries per `*/list` page (overrides `mcp.page-size`); `0`
     /// serves every list in one page (the default).
     pub fn with_page_size(mut self, page_size: u32) -> Self {
-        self.page_size = Some(page_size);
+        self.cfg.set(|c| c.page_size = Some(page_size));
         self
     }
 
@@ -300,14 +306,16 @@ impl McpServer {
         mut self,
         origins: impl IntoIterator<Item = impl Into<String>>,
     ) -> Self {
-        self.cors_allowed_origins = Some(origins.into_iter().map(Into::into).collect());
+        let origins = origins.into_iter().map(Into::into).collect();
+        self.cfg
+            .set(|c| c.cors.get_or_insert_with(Default::default).allowed_origins = Some(origins));
         self
     }
 
     /// Enable the OAuth resource-server layer programmatically (overrides
     /// the `mcp.auth` file section entirely when set).
     pub fn with_auth(mut self, auth: McpAuthConfig) -> Self {
-        self.auth = Some(auth);
+        self.cfg.set(|c| c.auth = Some(auth));
         self
     }
 
@@ -507,47 +515,34 @@ impl Plugin for McpServer {
                 McpLoopback::unmounted(),
             ));
         }
-        let cfg = config.unwrap_or_default();
+        // Precedence: builder override > file config > preset > default.
+        let cfg = self.cfg.resolve(config);
 
-        // Precedence: builder override > file config > default.
-        let path = self.path.or(cfg.path).unwrap_or_else(|| "/mcp".to_string());
+        let path = cfg.path.unwrap_or_else(|| "/mcp".to_string());
         validate_path(&path)?;
         let identity = ServerIdentity {
-            name: self
+            name: cfg
                 .name
-                .or(cfg.name)
                 .unwrap_or_else(|| env!("CARGO_PKG_NAME").to_string()),
-            version: self
+            version: cfg
                 .version
-                .or(cfg.version)
                 .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string()),
-            instructions: self.instructions.or(cfg.instructions),
+            instructions: cfg.instructions,
         };
-        let sse_keep_alive = match self.sse_keep_alive_secs.or(cfg.sse_keep_alive_secs) {
+        let sse_keep_alive = match cfg.sse_keep_alive_secs {
             Some(0) => None,
             Some(secs) => Some(Duration::from_secs(secs)),
             None => Some(Duration::from_secs(15)),
         };
-        let json_response = self.json_response.or(cfg.json_response).unwrap_or(false);
-        let stateless = self.stateless.or(cfg.stateless).unwrap_or(false);
-        let supported_versions = supported_protocol_versions(
-            self.max_protocol_version
-                .as_ref()
-                .map(|v| v.as_str().to_string())
-                .or(cfg.max_protocol_version)
-                .as_deref(),
-        )?;
-        let allowed_hosts = self.allowed_hosts.or(cfg.allowed_hosts);
+        let json_response = cfg.json_response.unwrap_or(false);
+        let stateless = cfg.stateless.unwrap_or(false);
+        let supported_versions =
+            supported_protocol_versions(cfg.max_protocol_version.as_deref())?;
+        let allowed_hosts = cfg.allowed_hosts;
         validate_allowed_hosts(allowed_hosts.as_deref())?;
-        let allowed_origins = self
-            .allowed_origins
-            .or(cfg.allowed_origins)
-            .unwrap_or_default();
+        let allowed_origins = cfg.allowed_origins.unwrap_or_default();
         validate_origins("mcp.allowed-origins", &allowed_origins)?;
-        let max_request_body_bytes = self
-            .max_request_body_bytes
-            .or(cfg.max_request_body_bytes)
-            .map(|b| b as usize);
+        let max_request_body_bytes = cfg.max_request_body_bytes.map(|b| b as usize);
         let elicitation_timeout = self
             .elicitation_timeout
             .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
@@ -569,9 +564,8 @@ impl Plugin for McpServer {
         if stateless && self.session_store.is_some() {
             return Err(SESSION_STORE_STATELESS.into());
         }
-        let page_size = self
+        let page_size = cfg
             .page_size
-            .or(cfg.page_size)
             .filter(|&size| size > 0)
             .map(|size| size as usize);
 
@@ -601,7 +595,7 @@ impl Plugin for McpServer {
             .config_raw()
             .and_then(|c| c.try_get::<String>("r2e.profile"))
             .unwrap_or_default();
-        let auth_cfg = self.auth.or(cfg.auth);
+        let auth_cfg = cfg.auth;
         // Member-list visibility filtering: on by default whenever the
         // endpoint knows its caller — `mcp.auth` (`mcp.auth.filter-members:
         // false` opts out) or, below, a service's struct-level identity;
@@ -718,9 +712,9 @@ impl Plugin for McpServer {
                 }
             });
         }
-        let cors_origins = self
-            .cors_allowed_origins
-            .or(cfg.cors.and_then(|c| c.allowed_origins))
+        let cors_origins = cfg
+            .cors
+            .and_then(|c| c.allowed_origins)
             .unwrap_or_else(|| default_cors_origins(&profile));
         validate_origins("mcp.cors.allowed-origins", &cors_origins)?;
         let cors = cors_layer(cors_origins);

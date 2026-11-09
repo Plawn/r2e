@@ -54,8 +54,8 @@ Three modes, one crate:
 `expose_endpoint` exists both as a builder setting
 (`Prometheus::builder().without_endpoint()`, or the shorthand
 `Prometheus::layer_only()`) and as a config key (`prometheus.expose_endpoint`),
-resolved by `resolve_expose_endpoint` with the crate-wide precedence rule
-**builder setting > file config > default**, default `true`. Both spellings
+merged by `Layered<PrometheusConfig>` with the crate-wide precedence rule
+**builder setting > file config > preset > default**, default `true`. Both spellings
 because every other knob of this plugin already has both (`endpoint`,
 `namespace`, `buckets`, `exclude_paths`), and endpoint ownership is exactly the
 kind of thing an ops profile wants to flip without a rebuild.

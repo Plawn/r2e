@@ -1,7 +1,8 @@
 //! The `Cors` plugin: CORS headers driven by the `cors.*` section.
 //!
-//! Like every configurable plugin, it declares `type Config` and merges in
-//! `build`: **builder setter > file (`cors.*`) > default**. The section is
+//! Like every configurable plugin, it declares `type Config` and merges the
+//! tiers through [`Layered`]: **builder setter > file (`cors.*`) > preset
+//! ([`Cors::preset`], `default_origin`) > default**. The section is
 //! loaded inside `build_state()`, so `.plugin(Cors::new())` goes anywhere in
 //! the chain, before or after `load_config()` — never read
 //! `AppBuilder::r2e_config()` mid-chain to construct it.
@@ -26,6 +27,7 @@
 
 use std::time::Duration;
 
+use crate::config::Layered;
 use crate::http::header::HeaderName;
 use crate::http::layers::cors::{self, CorsLayer};
 use crate::http::layers::{allow_origins, validate_origin};
@@ -63,6 +65,8 @@ pub struct CorsConfig {
 ///   section; the builder setters below override the file, and
 ///   [`default_origin`](Self::default_origin) supplies the fallback used when
 ///   neither sets `allowed-origins`.
+/// - [`Cors::preset(config)`]: same, starting from a shared [`CorsConfig`]
+///   baseline that the file overrides key by key.
 /// - [`Cors::permissive()`]: any origin, method and header — a development
 ///   preset (`allowed_origins(["*"])`, so it wins over the file).
 /// - [`Cors::custom(layer)`]: a hand-built [`CorsLayer`], escape hatch; the
@@ -81,13 +85,7 @@ pub struct CorsConfig {
 /// ```
 pub struct Cors {
     fixed: Option<CorsLayer>,
-    allowed_origins: Option<Vec<String>>,
-    default_origins: Option<Vec<String>>,
-    allowed_methods: Option<Vec<String>>,
-    allowed_headers: Option<Vec<String>>,
-    expose_headers: Option<Vec<String>>,
-    allow_credentials: Option<bool>,
-    max_age: Option<Duration>,
+    cfg: Layered<CorsConfig>,
 }
 
 impl Default for Cors {
@@ -102,13 +100,18 @@ impl Cors {
     pub fn new() -> Self {
         Self {
             fixed: None,
-            allowed_origins: None,
-            default_origins: None,
-            allowed_methods: None,
-            allowed_headers: None,
-            expose_headers: None,
-            allow_credentials: None,
-            max_age: None,
+            cfg: Layered::new(),
+        }
+    }
+
+    /// A CORS plugin whose defaults come from `config` — a shared baseline
+    /// (a company-wide CORS policy, say) that sits **below** the `cors.*`
+    /// section: the app's file overrides it key by key, and the builder
+    /// setters override both.
+    pub fn preset(config: CorsConfig) -> Self {
+        Self {
+            fixed: None,
+            cfg: Layered::with_preset(config),
         }
     }
 
@@ -134,13 +137,16 @@ impl Cors {
         self.default_origins([origin])
     }
 
-    /// Fallback origins, see [`default_origin`](Self::default_origin).
+    /// Fallback origins, see [`default_origin`](Self::default_origin). The
+    /// preset tier of `allowed-origins`: it replaces the one a
+    /// [`preset`](Self::preset) carried.
     pub fn default_origins<I, S>(mut self, origins: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.default_origins = Some(origins.into_iter().map(Into::into).collect());
+        let origins = origins.into_iter().map(Into::into).collect();
+        self.cfg.set_preset(|c| c.allowed_origins = Some(origins));
         self
     }
 
@@ -150,7 +156,8 @@ impl Cors {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_origins = Some(origins.into_iter().map(Into::into).collect());
+        let origins = origins.into_iter().map(Into::into).collect();
+        self.cfg.set(|c| c.allowed_origins = Some(origins));
         self
     }
 
@@ -160,7 +167,8 @@ impl Cors {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_methods = Some(methods.into_iter().map(Into::into).collect());
+        let methods = methods.into_iter().map(Into::into).collect();
+        self.cfg.set(|c| c.allowed_methods = Some(methods));
         self
     }
 
@@ -170,7 +178,8 @@ impl Cors {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.allowed_headers = Some(headers.into_iter().map(Into::into).collect());
+        let headers = headers.into_iter().map(Into::into).collect();
+        self.cfg.set(|c| c.allowed_headers = Some(headers));
         self
     }
 
@@ -180,25 +189,26 @@ impl Cors {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.expose_headers = Some(headers.into_iter().map(Into::into).collect());
+        let headers = headers.into_iter().map(Into::into).collect();
+        self.cfg.set(|c| c.expose_headers = Some(headers));
         self
     }
 
     /// Explicit `Access-Control-Allow-Credentials` — overrides
     /// `cors.allow-credentials`.
     pub fn allow_credentials(mut self, allow: bool) -> Self {
-        self.allow_credentials = Some(allow);
+        self.cfg.set(|c| c.allow_credentials = Some(allow));
         self
     }
 
     /// Explicit preflight `max-age` — overrides `cors.max-age`.
     pub fn max_age(mut self, max_age: Duration) -> Self {
-        self.max_age = Some(max_age);
+        self.cfg.set(|c| c.max_age = Some(max_age));
         self
     }
 
-    /// The effective settings: builder > `file` > defaults, every tier
-    /// validated. `profile` drives the no-origins fallback (`dev` →
+    /// The effective settings: builder > `file` > preset > defaults, validated
+    /// once merged. `profile` drives the no-origins fallback (`dev` →
     /// permissive, anything else → error).
     ///
     /// Exposed for tests; `build` is this plus `ctx.add_layer`.
@@ -208,14 +218,9 @@ impl Cors {
         file: Option<CorsConfig>,
         profile: &str,
     ) -> Result<CorsSettings, PluginBuildError> {
-        let file = file.unwrap_or_default();
+        let cfg = self.cfg.clone().resolve(file);
 
-        let origins = match self
-            .allowed_origins
-            .clone()
-            .or(file.allowed_origins)
-            .or_else(|| self.default_origins.clone())
-        {
+        let origins = match cfg.allowed_origins {
             Some(origins) => origins,
             None if profile == "dev" => {
                 tracing::warn!(
@@ -245,29 +250,20 @@ impl Cors {
         }
         let any_origin = origins.iter().any(|o| o == "*");
 
-        let methods = self
+        let methods = cfg
             .allowed_methods
-            .clone()
-            .or(file.allowed_methods)
             .map(|names| parse_methods(&names))
             .transpose()?;
-        let headers = self
+        let headers = cfg
             .allowed_headers
-            .clone()
-            .or(file.allowed_headers)
             .map(|names| parse_headers("allowed-headers", &names))
             .transpose()?;
-        let expose = self
+        let expose = cfg
             .expose_headers
-            .clone()
-            .or(file.expose_headers)
             .map(|names| parse_headers("expose-headers", &names))
             .transpose()?;
-        let allow_credentials = self
-            .allow_credentials
-            .or(file.allow_credentials)
-            .unwrap_or(false);
-        let max_age = self.max_age.or(file.max_age);
+        let allow_credentials = cfg.allow_credentials.unwrap_or(false);
+        let max_age = cfg.max_age;
 
         if allow_credentials {
             // tower-http panics at request time on these combinations

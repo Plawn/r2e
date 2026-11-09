@@ -36,6 +36,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{OnceLock, RwLock};
 
+use r2e_core::config::Layered;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
 use r2e_core::prelude::ConfigProperties;
 use r2e_core::Plugin;
@@ -200,7 +201,7 @@ fn status_label(status: u16) -> Cow<'static, str> {
 /// ```
 ///
 /// Precedence per knob: **programmatic builder setting > file config >
-/// default**, like [`crate::PrometheusConfig`]. There is no `endpoint` key: the
+/// preset > default**, like [`crate::PrometheusConfig`]. There is no `endpoint` key: the
 /// application owns the scrape endpoint on this path.
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct MetricsFacadeConfig {
@@ -227,8 +228,7 @@ pub struct MetricsFacadeConfig {
 /// ```
 #[derive(Default)]
 pub struct MetricsFacade {
-    namespace: Option<String>,
-    exclude_paths: Option<Vec<String>>,
+    cfg: Layered<MetricsFacadeConfig>,
 }
 
 impl MetricsFacade {
@@ -236,6 +236,12 @@ impl MetricsFacade {
     /// excluded).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Defaults that sit **below** the `metrics.*` section: the app's file
+    /// overrides them key by key.
+    pub fn preset(config: MetricsFacadeConfig) -> Self {
+        MetricsFacadeBuilder::default().preset(config).build()
     }
 
     /// Builder for namespace / exclusions.
@@ -247,36 +253,49 @@ impl MetricsFacade {
 /// Builder for [`MetricsFacade`].
 #[derive(Default)]
 pub struct MetricsFacadeBuilder {
-    namespace: Option<String>,
-    exclude_paths: Vec<String>,
+    cfg: Layered<MetricsFacadeConfig>,
 }
 
 impl MetricsFacadeBuilder {
+    /// Defaults below the `metrics.*` section — see [`MetricsFacade::preset`].
+    pub fn preset(mut self, config: MetricsFacadeConfig) -> Self {
+        self.cfg.replace_preset(config);
+        self
+    }
+
     /// Prefix every metric name with `<namespace>_`.
     pub fn namespace(mut self, namespace: &str) -> Self {
-        self.namespace = Some(namespace.to_string());
+        self.cfg.set(|c| c.namespace = Some(namespace.to_string()));
         self
     }
 
     /// Exclude paths from metrics tracking. See
     /// [`crate::PrometheusBuilder::exclude_paths`] for the matching semantics.
     pub fn exclude_paths(mut self, paths: &[&str]) -> Self {
-        self.exclude_paths = paths.iter().map(|s| s.to_string()).collect();
+        self.cfg
+            .set(|c| c.exclude_paths = Some(paths.iter().map(|s| s.to_string()).collect()));
         self
     }
 
     /// Add a single excluded path.
     pub fn exclude_path(mut self, path: &str) -> Self {
-        self.exclude_paths.push(path.to_string());
+        self.cfg.set(|c| {
+            c.exclude_paths
+                .get_or_insert_with(Vec::new)
+                .push(path.to_string());
+        });
         self
     }
 
     /// Build the plugin. Unset knobs stay `None` so file config can supply them.
-    pub fn build(self) -> MetricsFacade {
-        MetricsFacade {
-            namespace: self.namespace,
-            exclude_paths: (!self.exclude_paths.is_empty()).then_some(self.exclude_paths),
-        }
+    pub fn build(mut self) -> MetricsFacade {
+        // An empty exclusion list is "not set": the file still supplies one.
+        self.cfg.set(|c| {
+            if c.exclude_paths.as_ref().is_some_and(Vec::is_empty) {
+                c.exclude_paths = None;
+            }
+        });
+        MetricsFacade { cfg: self.cfg }
     }
 }
 
@@ -304,12 +323,9 @@ impl Plugin for MetricsFacade {
             return Ok(());
         }
 
-        let file = config.unwrap_or_default();
-        let namespace = self.namespace.or(file.namespace);
-        let exclude_paths = self
-            .exclude_paths
-            .or(file.exclude_paths)
-            .unwrap_or_default();
+        let cfg = self.cfg.resolve(config);
+        let namespace = cfg.namespace;
+        let exclude_paths = cfg.exclude_paths.unwrap_or_default();
 
         let recorder = MetricsFacadeRecorder::new(namespace.as_deref());
         recorder.describe();

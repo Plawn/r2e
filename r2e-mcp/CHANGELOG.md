@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `McpServer::preset(McpConfig)` (#1291): a library's defaults for the `mcp.*`
+  section, below the application file, itself below the builder setters. The
+  plugin resolves the three tiers through `r2e_core::config::Layered`
+  (`mcp.auth`, a section with required keys, is taken whole from the highest
+  tier that sets it — as before); observable precedence of the existing
+  setters is unchanged.
+
 ### Changed
 
 - `mcp.allowed-origins` and `mcp.cors.allowed-origins` use the origin grammar
