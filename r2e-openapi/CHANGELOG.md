@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `OpenApiPlugin` is on the typed-config contract (#1288): `type Config =
+  OpenApiPluginConfig`, prefix `openapi` — `title`, `version`, `description`,
+  `docs-ui`, plus `openapi.enabled` (`false` mounts neither `/openapi.json`
+  nor `/docs`). `OpenApiPlugin::default()` is file-driven;
+  `OpenApiPlugin::new(config)` keeps title / version / docs-ui explicit and
+  lets an unset `description` fall through to the file.
+
 ## [0.9.1] - 2026-11-04
 
 ### Changed

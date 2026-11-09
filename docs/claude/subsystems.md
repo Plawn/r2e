@@ -12,7 +12,7 @@ AppBuilder::new()
     .plugin(Executor)                      // required by Scheduler (ticks run on the pool)
     .plugin(Scheduler)                     // scheduler runtime
     .plugin(Health)                        // /health → 200 "OK"
-    .plugin(Cors::permissive())            // or Cors::custom(layer)
+    .plugin(Cors::new().default_origin("http://localhost:5173")) // reads `cors.*`; or Cors::permissive() / Cors::custom(layer)
     .plugin(HttpTrace::new())              // per-request span + summary line (trace.* keys)
     // subscriber: installed by the entry point; .plugin(Tracing) only if you opted it out
     // or: .plugin(Tracing::configured(config))     // with TracingConfig (format, ansi, etc.)
@@ -57,7 +57,7 @@ AppBuilder::new()
 
 `.drain_timeout(Duration)` — maximum time for the HTTP drain itself (in-flight requests finishing after the listener stopped accepting), measured from cancellation. **Default 30s** (`runtime::drain::DEFAULT_DRAIN_TIMEOUT`); the `server.drain-timeout` config key sets it without code, and the builder call wins over the key. `.drain_timeout_unbounded()` is the only way back to the plain-axum unbounded drain. On overflow the remaining connections are abandoned with a `warn!` and shutdown continues to the tracked-handle join and the `on_stop` hooks. Applied per worker under sharded serving. See `docs/features/22-serve-lifecycle.md`.
 
-`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. `build_state()` reads the `tracing:` section from it to install the subscriber.
+`.r2e_config()` — returns `Option<&R2eConfig>`, available after `load_config()`. A non-DI read (tests, `main`); `build_state()` reads the `tracing:` section from it to install the subscriber. Not a plugin-construction hook: a config-driven plugin declares `type Config` + `CONFIG_PREFIX` and receives its section in `build` (`docs/claude/plugins.md` § Typed Config).
 
 `.tracing_layer(layer)` — contributes a `tracing_subscriber::Layer<Registry>` to the subscriber `build_state()` installs (same verb as `PluginSetupContext::tracing_layer`; tower's `.add_layer` is unrelated). See the tracing section below.
 

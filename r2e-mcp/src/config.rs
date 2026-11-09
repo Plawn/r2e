@@ -66,7 +66,8 @@ pub struct McpConfig {
     #[config(key = "allowed-hosts")]
     pub allowed_hosts: Option<Vec<String>>,
     /// Browser origins accepted in the `Origin` header (empty = validation
-    /// off).
+    /// off). Exact origins or `scheme://host:*` (any port) — the grammar
+    /// shared with `cors.allowed-origins`; a malformed entry fails the boot.
     #[config(key = "allowed-origins")]
     pub allowed_origins: Option<Vec<String>>,
     /// Maximum POST body size in bytes (default 4 MiB).
@@ -123,7 +124,8 @@ pub struct McpSessionConfig {
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct McpCorsConfig {
     /// Origins granted CORS access to the MCP endpoint. Entries are exact
-    /// origins, or `host:*` to accept any port on that host.
+    /// origins, or `scheme://host:*` to accept any port on that host
+    /// (validated at boot, same grammar as `cors.allowed-origins`).
     #[config(key = "allowed-origins")]
     pub allowed_origins: Option<Vec<String>>,
 }

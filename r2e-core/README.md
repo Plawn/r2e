@@ -81,7 +81,8 @@ mark public exceptions with `#[anonymous]` (fail-closed, @PermitAll-style).
 |--------|-------------|
 | `Health` | `GET /health` → 200 "OK" |
 | `AdvancedHealth` | JSON health with liveness/readiness probes |
-| `Cors::permissive()` | Permissive CORS headers |
+| `Cors::new()` | CORS from the `cors.*` section (+ `.default_origin(..)` fallback) |
+| `Cors::permissive()` | Permissive CORS headers (`*`) |
 | `Cors::custom(layer)` | Custom CORS configuration |
 | `Tracing` | Installs the global `tracing` subscriber (per-request spans are `HttpTrace`'s job) |
 | `NormalizePath` | Trailing-slash normalization |

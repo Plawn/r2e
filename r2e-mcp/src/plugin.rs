@@ -237,7 +237,8 @@ impl McpServer {
         self
     }
 
-    /// Browser origins accepted in the `Origin` header.
+    /// Browser origins accepted in the `Origin` header. Entries are exact
+    /// origins or `scheme://host:*` (any port); validated at boot.
     pub fn with_allowed_origins(
         mut self,
         origins: impl IntoIterator<Item = impl Into<String>>,
@@ -293,8 +294,8 @@ impl McpServer {
     }
 
     /// Origins granted CORS access to the MCP endpoint (overrides
-    /// `mcp.cors.allowed-origins`). Entries are exact origins or `host:*`
-    /// for any port.
+    /// `mcp.cors.allowed-origins`). Entries are exact origins or
+    /// `scheme://host:*` for any port; validated at boot.
     pub fn with_cors_allowed_origins(
         mut self,
         origins: impl IntoIterator<Item = impl Into<String>>,
@@ -377,6 +378,19 @@ fn supported_protocol_versions(
 /// entry: rmcp reads an EMPTY list as "Host check off", so `[]` (or a
 /// `${VAR}` that resolved to nothing) would silently drop the DNS-rebinding
 /// protection instead of tightening it.
+/// Every origin allowlist entry must parse under the shared grammar
+/// (`r2e_core::http::layers::validate_origin`): a malformed entry
+/// (`http://app.example.com/`, a bare hostname) would otherwise boot fine
+/// and never match — a 403 on every browser request, or a CORS allowlist that
+/// silently grants nothing.
+fn validate_origins(key: &str, origins: &[String]) -> Result<(), PluginBuildError> {
+    for origin in origins {
+        r2e_core::http::layers::validate_origin(origin)
+            .map_err(|why| -> PluginBuildError { format!("{key}: entry rejected — {why}").into() })?;
+    }
+    Ok(())
+}
+
 fn validate_allowed_hosts(hosts: Option<&[String]>) -> Result<(), PluginBuildError> {
     let Some(hosts) = hosts else {
         return Ok(());
@@ -529,6 +543,7 @@ impl Plugin for McpServer {
             .allowed_origins
             .or(cfg.allowed_origins)
             .unwrap_or_default();
+        validate_origins("mcp.allowed-origins", &allowed_origins)?;
         let max_request_body_bytes = self
             .max_request_body_bytes
             .or(cfg.max_request_body_bytes)
@@ -703,11 +718,12 @@ impl Plugin for McpServer {
                 }
             });
         }
-        let cors = cors_layer(
-            self.cors_allowed_origins
-                .or(cfg.cors.and_then(|c| c.allowed_origins))
-                .unwrap_or_else(|| default_cors_origins(&profile)),
-        );
+        let cors_origins = self
+            .cors_allowed_origins
+            .or(cfg.cors.and_then(|c| c.allowed_origins))
+            .unwrap_or_else(|| default_cors_origins(&profile));
+        validate_origins("mcp.cors.allowed-origins", &cors_origins)?;
+        let cors = cors_layer(cors_origins);
 
         // Dedicated transport token, relayed from the app shutdown token at
         // serve time (`docs/claude/plugins.md` shutdown-token pattern):

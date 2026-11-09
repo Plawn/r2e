@@ -1,7 +1,7 @@
 ---
 topic: openapi
 features: openapi
-tokens: ~2000
+tokens: ~2200
 requires: core-concepts
 ---
 
@@ -10,7 +10,7 @@ requires: core-concepts
 ### TL;DR
 
 - Requires feature `openapi`; add `schemars = "1"` and derive `JsonSchema` on request/response types.
-- Install `.plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0.0")))` — install order is irrelevant; `.with_docs_ui(true)` serves `/docs`, the spec is at `/openapi.json`.
+- Install `.plugin(OpenApiPlugin::default())` and describe the API in `openapi:` (`title`, `version`, `description`, `docs-ui`), or `.plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0.0").with_docs_ui(true)))` to set them in code (builder > file; `description` falls through to the file). Install order is irrelevant; `docs-ui: true` serves `/docs`, the spec is at `/openapi.json`; `openapi.enabled: false` removes both routes.
 - Bodies are documented through two traits the framework implements for its own types: the body parameter's `RequestBodySchema` (`Json<T>`, `Form<T>`, `Bytes`, `String`, `Multipart`, `TypedMultipart<T>`) and the return type's `ResponseBodySchema` (`Json<T>`, `String`, `Html<T>`, `Bytes`, `Vec<u8>`, `()`, `StatusCode`, `Redirect`, `Sse<S>`; `Result<T, E>` and `(StatusCode, T)` tuples delegate to `T`). Custom extractors / response types implement the trait; `#[status(N)]` / `#[returns(T)]` override; doc comments become summary/description.
 - A body-position parameter or a return type without the trait (an `impl Trait` return, a `Json<T>` whose `T` lacks `JsonSchema`) is documented without a body and warned about once at boot; read the warnings programmatically with `r2e::r2e_openapi::spec_warnings(&routes)`.
 - The tag defaults to the controller struct name; `#[controller(tag = "...")]` merges several controllers under one tag.
@@ -19,14 +19,32 @@ Requires feature: `openapi`. Generates OpenAPI 3.1.0; users add `schemars = "1"`
 and derive `JsonSchema` on request/response types.
 
 ```rust
+use r2e::r2e_openapi::OpenApiPlugin;
+
+# fn __doc(b: AppBuilder) -> impl Sized {
+b.plugin(OpenApiPlugin::default())   // reads `openapi.*`; install order irrelevant — the spec is built from a Routes-stage effect
+# }
+```
+
+```yaml
+openapi:
+  enabled: true          # false removes /openapi.json and /docs (prod)
+  title: My API
+  version: 1.0.0
+  description: API description
+  docs-ui: true          # serves /docs (default false)
+```
+
+Schema extras (`with_schema::<T>()`, overrides, `with_error_schema`) are code-only:
+`OpenApiPlugin::new(OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true).with_schema::<Ws>())`
+— explicit title/version/docs_ui win over the file, `description` falls through
+when unset.
+
+```rust
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 # fn __doc(b: AppBuilder) -> impl Sized {
-b.plugin(OpenApiPlugin::new(
-    OpenApiConfig::new("My API", "1.0.0")
-        .with_description("API description")
-        .with_docs_ui(true),               // serves /docs
-))   // install order irrelevant — the spec is built from a Routes-stage effect
+b.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true)))
 # }
 ```
 

@@ -22,6 +22,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
+use r2e_core::http::layers::origin_allowed;
 use r2e_core::http::response::IntoResponse;
 use r2e_core::http::{
     Extensions, HeaderMap, Method, Request, Response, StatusCode, AUTHORIZATION,
@@ -94,20 +95,6 @@ impl<S> Layer<S> for McpAuthLayer {
 pub struct McpAuthService<S> {
     inner: S,
     state: Arc<AuthState>,
-}
-
-/// Origin matching: exact match, or a `:*` suffix wildcard matching any port
-/// (`http://localhost:*`).
-pub(crate) fn origin_allowed(allowed: &[String], origin: &str) -> bool {
-    allowed.iter().any(|entry| {
-        if let Some(prefix) = entry.strip_suffix(":*") {
-            origin.strip_prefix(prefix).is_some_and(|rest| {
-                rest.starts_with(':') && rest[1..].chars().all(|c| c.is_ascii_digit())
-            })
-        } else {
-            entry == origin
-        }
-    })
 }
 
 /// Run the pre-call checks; `Ok` carries what to insert into extensions.

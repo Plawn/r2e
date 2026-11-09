@@ -15,6 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `mcp.allowed-origins` and `mcp.cors.allowed-origins` use the origin grammar
+  and matcher shared with the `Cors` plugin
+  (`r2e_http::layers::{validate_origin, origin_allowed, allow_origins}`,
+  #1288). Every entry is validated at boot: a malformed origin (path, query,
+  missing scheme, empty host, non-numeric port) is a `PluginBuildError`
+  naming the key instead of an entry that silently never matches. Valid
+  configurations behave as before; `scheme://host:` (empty port) no longer
+  matches `scheme://host:*`.
+
 ### Fixed
 
 - A struct-level identity rejected with a 401 that already carries a `Bearer`

@@ -21,7 +21,7 @@ use super::basic::BasicCredentials;
 use super::config::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
 use super::discovery::{DiscoveryClient, OAuthServerMetadata};
 use super::error::Challenges;
-use super::layer::{origin_allowed, AuthState, McpAuthLayer};
+use super::layer::{AuthState, McpAuthLayer};
 use super::opaque::{
     IntrospectionBackend, UserinfoBackend, DEFAULT_OPAQUE_CACHE_MAX_ENTRIES,
     DEFAULT_OPAQUE_CACHE_TTL_SECS,
@@ -684,22 +684,20 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     })
 }
 
-/// The CORS layer for the MCP endpoint — applied whether auth is on or off
+/// The CORS layer for the MCP endpoint (origin grammar shared with the HTTP
+/// `Cors` plugin: `r2e_core::http::layers`) — applied whether auth is on or off
 /// (browser MCP clients need it either way), outermost of the MCP service
 /// stack (app Graph layers still wrap it) so even a 401 carries CORS headers and `expose_headers` lets the browser read the
 /// `WWW-Authenticate` challenge and the session id.
 pub(crate) fn cors_layer(origins: Vec<String>) -> r2e_core::http::layers::cors::CorsLayer {
     use r2e_core::http::header::{HeaderName, AUTHORIZATION, CONTENT_TYPE, WWW_AUTHENTICATE};
-    use r2e_core::http::layers::cors::{AllowOrigin, CorsLayer};
+    use r2e_core::http::layers::allow_origins;
+    use r2e_core::http::layers::cors::CorsLayer;
     use r2e_core::http::Method;
 
     let session_id = HeaderName::from_static("mcp-session-id");
     CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(move |origin, _| {
-            origin
-                .to_str()
-                .is_ok_and(|origin| origin_allowed(&origins, origin))
-        }))
+        .allow_origin(allow_origins(&origins))
         .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_headers([
             AUTHORIZATION,

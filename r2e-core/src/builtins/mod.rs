@@ -7,7 +7,7 @@
 //! ```ignore
 //! AppBuilder::new()
 //!     .plugin(HttpTrace::new())
-//!     .plugin(Cors::permissive())
+//!     .plugin(Cors::new().default_origin("http://localhost:5173")) // reads `cors.*`
 //!     .plugin(Health)
 //!     .build_state()
 //!     .await
@@ -15,56 +15,16 @@
 //!     .await;
 //! ```
 
+pub mod cors;
 pub mod health;
 pub mod http_trace;
 pub mod request_id;
 pub mod secure_headers;
 
 use crate::plugin::{Plugin, PluginBuildContext, PluginBuildError};
-use crate::http::layers::cors::CorsLayer;
 
+pub use cors::{Cors, CorsConfig};
 pub use http_trace::{HttpTrace, HttpTraceBuilder, HttpTraceConfig};
-
-/// CORS plugin.
-///
-/// Use [`Cors::permissive()`] for a development-friendly configuration that
-/// allows any origin, method, and header. Use [`Cors::custom()`] for a
-/// production-ready configuration with a specific `CorsLayer`.
-pub struct Cors {
-    layer: CorsLayer,
-}
-
-impl Cors {
-    /// Create a permissive CORS plugin (any origin, method, header).
-    pub fn permissive() -> Self {
-        Self {
-            layer: crate::runtime::layers::default_cors(),
-        }
-    }
-
-    /// Create a CORS plugin with a custom `CorsLayer`.
-    pub fn custom(layer: CorsLayer) -> Self {
-        Self { layer }
-    }
-}
-
-impl Plugin for Cors {
-    type Provided = ();
-    type Deps = ();
-    type Config = ();
-    type Controllers = ();
-
-    async fn build(
-        self,
-        _deps: Self::Deps,
-        _config: Option<Self::Config>,
-        ctx: &mut PluginBuildContext,
-    ) -> Result<Self::Provided, PluginBuildError> {
-        let layer = self.layer;
-        ctx.add_layer(move |router| router.layer(layer));
-        Ok(())
-    }
-}
 
 // ── Removed tracing plugins (migration diagnostics) ─────────────────────────
 

@@ -608,7 +608,8 @@ Reads an entire struct from `R2eConfig` at request time. Type must implement `Co
 |---|---|
 | 1–2 isolated values from different sections | `#[config("full.key")]` |
 | Typed config section (registered via `load_config`) | `#[inject]` on the config type |
-| Config needed outside DI (main, tests) | `ConfigProperties::from_config()` |
+| Config needed outside DI (main, tests) | `ConfigProperties::from_config()` / `AppBuilder::r2e_config()` |
+| Plugin behaviour driven by config | `type Config` + `CONFIG_PREFIX` on the plugin (`docs/claude/plugins.md` § Typed Config) — never `r2e_config()` mid-chain |
 
 ### In controllers
 
@@ -806,6 +807,32 @@ This is the fix for apps hand-rolling a `build_settings()` helper purely to get
 | `server.quic.cert` | `String` | — | PEM certificate chain path (required with `quic.port`) |
 | `server.quic.key` | `String` | — | PEM private key path (required with `quic.port`) |
 | `server.quic.alt_svc_max_age` | `u32` | `3600` | Alt-Svc header max-age in seconds |
+
+### CORS (`Cors::new()`, r2e-core builtin)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cors.enabled` | `bool` | `true` | `false` installs no CORS layer at all (also skips `Cors::custom(layer)`). |
+| `cors.allowed-origins` | `Vec<String>` | — | `"*"`, `scheme://host`, `scheme://host:port` or `scheme://host:*` (any port on that host; IPv6 brackets allowed). Every entry is validated at boot (`r2e_http::layers::validate_origin`); a malformed one (path, query, missing scheme, empty host, bad port) fails the boot naming it. Tier: builder setter (`allowed_origins(..)`, `permissive()` = `["*"]`) > this key > `default_origin(s)`. Nothing set: permissive + `warn!` under profile `dev`, boot error otherwise. An empty list is always an error. `${VAR}` = one entry (no comma split). |
+| `cors.allowed-methods` | `Vec<String>` | any | HTTP methods (case-insensitive, parsed with `Method::from_bytes`); invalid → boot error. |
+| `cors.allowed-headers` | `Vec<String>` | any | Request header names (`HeaderName`); invalid → boot error. |
+| `cors.expose-headers` | `Vec<String>` | — | `Access-Control-Expose-Headers`. |
+| `cors.allow-credentials` | `bool` | `false` | `true` with `*` origins, or with unset methods / headers, is a boot error (tower-http panics at request time on that combination). |
+| `cors.max-age` | `Duration` | — | `Access-Control-Max-Age`; integer seconds or `"2h"`. Kebab keys → not addressable via `R2E_`. |
+
+The same origin grammar and matcher (`r2e_http::layers::{validate_origin,
+origin_allowed, allow_origins}`) back `mcp.allowed-origins` and
+`mcp.cors.allowed-origins`.
+
+### OpenAPI (`OpenApiPlugin`, r2e-openapi)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `openapi.enabled` | `bool` | `true` | `false` mounts neither `/openapi.json` nor `/docs` (hide the spec in prod). |
+| `openapi.title` | `String` | `"API"` | `info.title`; `OpenApiPlugin::new(cfg)` wins. |
+| `openapi.version` | `String` | `"0.0.0"` | `info.version`; `new(cfg)` wins. |
+| `openapi.description` | `String` | — | `info.description`; used when `new(cfg)` left it unset. |
+| `openapi.docs-ui` | `bool` | `false` | Serve Swagger UI at `/docs`; `new(cfg)` wins (its `docs_ui` is explicit, default `false`). |
 
 ### Background services
 

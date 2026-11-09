@@ -15,6 +15,25 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `Cors` is on the typed-config contract (#1288): `type Config = CorsConfig`,
+  prefix `cors` — `allowed-origins` (`*`, `scheme://host`, `scheme://host:port`,
+  `scheme://host:*`), `allowed-methods`, `allowed-headers`, `expose-headers`,
+  `allow-credentials`, `max-age`, plus `cors.enabled`. `Cors::new()` reads the
+  section; `default_origin(s)` is a tier below the file; builder setters
+  (`allowed_origins`, `allowed_methods`, `allowed_headers`, `expose_headers`,
+  `allow_credentials`, `max_age`) win over it. Every origin is validated at
+  boot and a malformed entry fails the boot naming it; nothing configured is
+  permissive (with a warning) under the `dev` profile and a boot error
+  elsewhere; `allow-credentials` with `*` origins or unset methods/headers is
+  a boot error instead of a per-request tower-http panic. `Cors::permissive()`
+  (= `allowed_origins(["*"])`) and `Cors::custom(layer)` are unchanged; the
+  module moved to `builtins::cors` (`Cors`/`CorsConfig` re-exported from
+  `builtins` and the prelude).
+- `AppBuilder::r2e_config()` docs no longer teach reading the config mid-chain
+  to construct a plugin: a config-driven plugin declares `type Config`.
+
 ## [0.9.2] - 2026-11-04
 
 ### Added

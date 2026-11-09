@@ -20,7 +20,7 @@ requires: app-builder, dev-experience
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
 | `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |
-| `.r2e_config()` | builder/app | Borrow the loaded `R2eConfig` (available right after `load_config`, so config-driven plugin constructors can read it before `.plugin(..)`) |
+| `.r2e_config()` | builder/app | Borrow the loaded `R2eConfig` for a **non-DI** read (tests, `main`). NOT for building plugins: a config-driven plugin declares `type Config` + `CONFIG_PREFIX` and receives the section in `build` (`Cors::new()` ← `cors.*`, `OpenApiPlugin::default()` ← `openapi.*`) — never cut the chain to read it before `.plugin(..)` |
 | `.override_config(cfg)` | builder | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
 | `.provide(value)` | builder | Provide a constructed bean |
 | `.register::<T>()` | builder | Register a Bean / AsyncBean / Producer |

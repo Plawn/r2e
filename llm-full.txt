@@ -1279,6 +1279,14 @@ A newtype is typed, compiler-checked, and works at **every** injection site
 - Ship endpoints with `type Controllers = (..)`; contribute a health probe by
   putting `HealthRegistry` in `Deps` (which makes installing `AdvancedHealth` a
   compile-time requirement).
+- **Behaviour that depends on config goes through `type Config`** (a
+  `ConfigProperties` struct) + `CONFIG_PREFIX`: the section arrives in `build`
+  already loaded, merged as builder field > file > default. Never read
+  `b.r2e_config()` mid-chain to construct a plugin — that splits the builder
+  and breaks "install order is irrelevant". Builtins on this contract:
+  `Cors::new()` (`cors.*`), `HttpTrace::new()` (`trace.*`),
+  `OpenApiPlugin::default()` (`openapi.*`); `Config = ()` is only for plugins
+  with nothing to configure (`Health`, `NormalizePath`, `DevReload`).
 
 There is exactly **one** plugin kind (`Plugin`) and **one** install call
 (`.plugin(p)`, always before `build_state()`). A plugin IS one async, fallible
@@ -1294,7 +1302,8 @@ impl Plugin for MyPlugin {
     type Provided = (MyHandle,);          // tuple of beans; each becomes its own bean
     type Deps = (SqlitePool,);            // ANY bean (.provide()-d or .register()-ed),
                                           // verified at build_state(), order-independent
-    type Config = ();                     // or a ConfigProperties struct + CONFIG_PREFIX
+    type Config = ();                     // a ConfigProperties struct + CONFIG_PREFIX whenever
+                                          // behaviour depends on config (builder > file > default)
     type Controllers = ();                // or a tuple of #[controller] types the plugin ships
 
     async fn build(self, (pool,): Self::Deps, _config: Option<()>,
@@ -1846,11 +1855,11 @@ AppBuilder::new()
     .plugin(Scheduler)                          // scheduler runtime
     .plugin(GrpcServer::on_port("0.0.0.0:50051"))
     .plugin(Health)
-    .plugin(Cors::permissive())
+    .plugin(Cors::new().default_origin("http://localhost:5173")) // `cors.*` wins; the default applies when the section is absent
     .plugin(HttpTrace::new())                   // per-request span + summary line (`trace.*`)
     .tracing_layer(r2e::Suppress::error("dep::conn", "reset")) // build_state() installs the subscriber from `tracing:`
     .plugin(NormalizePath)                      // order irrelevant (Finalize stage)
-    .plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0").with_docs_ui(true)))
+    .plugin(OpenApiPlugin::default())           // reads `openapi.*` (title/version/description/docs-ui); or ::new(OpenApiConfig) in code
     .provide(bean)                              // constructed values
     .provide_all(env)                           // every field of a #[derive(ProvideBundle)] struct
     .register::<CreatePool>()                   // beans / producers (one unified method)
@@ -1977,6 +1986,10 @@ pub fn from_token(token: CancelToken) -> Self;            // for `.override_bean
   only logs a `WARN`.
 - `#[config(derive_default)]` emits `Default` from the declared defaults; a required
   field in such a struct is a compile error.
+- A plugin reads its own section through `type Config` + `CONFIG_PREFIX` (builder
+  field > file > default, merged in `build`); never read `b.r2e_config()` mid-chain
+  to construct one. `cors.*` (`Cors::new()`), `trace.*` (`HttpTrace::new()`) and
+  `openapi.*` (`OpenApiPlugin::default()`) are the builtin examples.
 
 ### Files & resolution order (lowest → highest)
 
@@ -2304,6 +2317,35 @@ default `30s`) — HTTP drain budget at shutdown; `.drain_timeout(d)` /
 — global background-service switch; `false` keeps every `ServiceComponent` out
 of `run()` while leaving registration and config validation untouched.
 
+`cors.*` — read by `Cors::new()` (`r2e::prelude`): `enabled` (default `true`),
+`allowed-origins` (list: `"*"`, `scheme://host`, `scheme://host:port` or
+`scheme://host:*` for any port; every entry is validated at boot and a malformed
+one fails the boot), `allowed-methods` / `allowed-headers` (lists; unset = any),
+`expose-headers`, `allow-credentials` (`true` cannot be combined with `*` origins
+or unset methods/headers — tower-http would panic per request, so it is a boot
+error), `max-age` (duration: `7200` or `"2h"`). Precedence: builder setter
+(`Cors::permissive()` = `allowed_origins(["*"])`) > file > `default_origin(s)`;
+nothing set is permissive under the `dev` profile with a warning and a boot error
+elsewhere (fail-closed, like auth). Kebab keys are not addressable via `R2E_`,
+and a `${VAR}` placeholder is one list entry, not a comma-separated list — list
+several origins in YAML.
+
+`openapi.*` — read by `OpenApiPlugin::default()` (feature `openapi`): `enabled`
+(default `true`; `false` removes `/openapi.json` and `/docs`), `title`
+(default `"API"`), `version` (default `"0.0.0"`), `description`, `docs-ui`
+(default `false`). `OpenApiPlugin::new(OpenApiConfig)` keeps title / version /
+docs-ui explicit; its unset `description` falls through to the file.
+
+```yaml
+cors:
+  allowed-origins: [https://app.example.com, "http://localhost:*"]
+  max-age: 2h
+openapi:
+  title: My API
+  version: 1.2.0
+  docs-ui: true
+```
+
 ---
 
 ## Validation
@@ -2536,7 +2578,7 @@ Alongside `&self`:
 | `.with_config_provider(p)` | builder | Register an external `ConfigProvider` before `load_config` |
 | `.load_config::<C>()` | builder | Load YAML+env; auto-register `C`'s sections as beans (sole disk-reading config registration point) |
 | `.provide_config(c)` | builder | Provide a typed config value already in hand + register its nested sections as beans |
-| `.r2e_config()` | builder/app | Borrow the loaded `R2eConfig` (available right after `load_config`, so config-driven plugin constructors can read it before `.plugin(..)`) |
+| `.r2e_config()` | builder/app | Borrow the loaded `R2eConfig` for a **non-DI** read (tests, `main`). NOT for building plugins: a config-driven plugin declares `type Config` + `CONFIG_PREFIX` and receives the section in `build` (`Cors::new()` ← `cors.*`, `OpenApiPlugin::default()` ← `openapi.*`) — never cut the chain to read it before `.plugin(..)` |
 | `.override_config(cfg)` | builder | Test harness: stash an in-memory `R2eConfig` the next `load_config` uses instead of disk (`override_config_value` still wins) |
 | `.provide(value)` | builder | Provide a constructed bean |
 | `.register::<T>()` | builder | Register a Bean / AsyncBean / Producer |
@@ -5682,7 +5724,7 @@ EmbeddedFrontend::builder::<Assets>()
 ### TL;DR
 
 - Requires feature `openapi`; add `schemars = "1"` and derive `JsonSchema` on request/response types.
-- Install `.plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0.0")))` — install order is irrelevant; `.with_docs_ui(true)` serves `/docs`, the spec is at `/openapi.json`.
+- Install `.plugin(OpenApiPlugin::default())` and describe the API in `openapi:` (`title`, `version`, `description`, `docs-ui`), or `.plugin(OpenApiPlugin::new(OpenApiConfig::new("API", "1.0.0").with_docs_ui(true)))` to set them in code (builder > file; `description` falls through to the file). Install order is irrelevant; `docs-ui: true` serves `/docs`, the spec is at `/openapi.json`; `openapi.enabled: false` removes both routes.
 - Bodies are documented through two traits the framework implements for its own types: the body parameter's `RequestBodySchema` (`Json<T>`, `Form<T>`, `Bytes`, `String`, `Multipart`, `TypedMultipart<T>`) and the return type's `ResponseBodySchema` (`Json<T>`, `String`, `Html<T>`, `Bytes`, `Vec<u8>`, `()`, `StatusCode`, `Redirect`, `Sse<S>`; `Result<T, E>` and `(StatusCode, T)` tuples delegate to `T`). Custom extractors / response types implement the trait; `#[status(N)]` / `#[returns(T)]` override; doc comments become summary/description.
 - A body-position parameter or a return type without the trait (an `impl Trait` return, a `Json<T>` whose `T` lacks `JsonSchema`) is documented without a body and warned about once at boot; read the warnings programmatically with `r2e::r2e_openapi::spec_warnings(&routes)`.
 - The tag defaults to the controller struct name; `#[controller(tag = "...")]` merges several controllers under one tag.
@@ -5691,14 +5733,32 @@ Requires feature: `openapi`. Generates OpenAPI 3.1.0; users add `schemars = "1"`
 and derive `JsonSchema` on request/response types.
 
 ```rust
+use r2e::r2e_openapi::OpenApiPlugin;
+
+# fn __doc(b: AppBuilder) -> impl Sized {
+b.plugin(OpenApiPlugin::default())   // reads `openapi.*`; install order irrelevant — the spec is built from a Routes-stage effect
+# }
+```
+
+```yaml
+openapi:
+  enabled: true          # false removes /openapi.json and /docs (prod)
+  title: My API
+  version: 1.0.0
+  description: API description
+  docs-ui: true          # serves /docs (default false)
+```
+
+Schema extras (`with_schema::<T>()`, overrides, `with_error_schema`) are code-only:
+`OpenApiPlugin::new(OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true).with_schema::<Ws>())`
+— explicit title/version/docs_ui win over the file, `description` falls through
+when unset.
+
+```rust
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
 # fn __doc(b: AppBuilder) -> impl Sized {
-b.plugin(OpenApiPlugin::new(
-    OpenApiConfig::new("My API", "1.0.0")
-        .with_description("API description")
-        .with_docs_ui(true),               // serves /docs
-))   // install order irrelevant — the spec is built from a Routes-stage effect
+b.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "1.0.0").with_docs_ui(true)))
 # }
 ```
 

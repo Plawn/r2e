@@ -159,7 +159,8 @@ src/
   beans/                    DI system: Bean, AsyncBean, Producer, BeanContext, BeanRegistry, graph resolve
   builder/                  AppBuilder fluent API (provide, register, when, build_state, register_controller(s), serve)
   builtins/
-    mod.rs                  Built-in plugins: Health, AdvancedHealth, Cors, DevReload, NormalizePath; hidden compile-error shims for the removed Tracing / ConfiguredTracing plugins
+    mod.rs                  Built-in plugins: Health, AdvancedHealth, DevReload, NormalizePath; hidden compile-error shims for the removed Tracing / ConfiguredTracing plugins
+    cors.rs                 Cors plugin + CorsConfig (`cors.*`): origin grammar validated at boot, builder > file > default_origin, fail-closed outside dev
     health.rs               HealthIndicator trait, HealthBuilder, HealthState, /health endpoints
     http_trace.rs           HttpTrace plugin + HttpTraceBuilder + HttpTraceConfig (`trace.*`)
     request_id.rs           RequestId extractor and RequestIdPlugin

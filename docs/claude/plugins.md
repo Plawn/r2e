@@ -318,6 +318,18 @@ To silence an effect-carrying plugin in a test, disable it
   plugin instance travels there by value.
 - Raw access: `ctx.config_raw() -> Option<&R2eConfig>` for plugins without a
   typed section.
+- **The rule (#1288, 2026-11-09):** any plugin whose behaviour depends on
+  config declares `type Config` + `CONFIG_PREFIX`. `Config = ()` is only for
+  plugins with nothing to configure (`Health`, `NormalizePath`, `DevReload`,
+  `RequestIdPlugin`). Builtins on the contract: `Cors` (`cors.*`, with a
+  `default_origin(s)` tier below the file, fail-closed outside `dev` when
+  nothing sets origins), `HttpTrace` (`trace.*`, `preset` tier),
+  `OpenApiPlugin` (`openapi.*`, `::default()` file-driven / `::new(cfg)`
+  explicit), `Prometheus`, `McpServer`, `Tenancy`. Reading
+  `AppBuilder::r2e_config()` mid-chain to construct a plugin is the
+  anti-pattern this rule replaces: it splits the builder in two and breaks
+  "install order is irrelevant" (downstream apps had four diverging
+  `cors_plugin(config)` helpers because the docs once taught it).
 
 ### `PluginBuildContext` — effects + graph access
 
