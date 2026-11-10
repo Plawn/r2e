@@ -15,6 +15,16 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- Request ids are minted with `uuid`'s `fast-rng` feature (a thread-local
+  CSPRNG, reseeded from the OS) instead of one OS entropy call per id:
+  `HttpTrace` / `RequestIdPlugin` spend ~60 ns instead of ~730 ns on a request
+  that carries no inbound `x-request-id` — excluded paths (`/health`,
+  `/metrics`) included since 0.10.0. Ids keep the same shape (UUID v4). Apps
+  that did not already have `rand` in their tree gain it as a transitive
+  dependency.
+
 ## [0.10.0] - 2026-11-10
 
 ### Breaking

@@ -42,7 +42,10 @@ form_urlencoded = {workspace = true}
 serde_yaml = {workspace = true}
 serde_path_to_error = {workspace = true}
 dotenvy = {workspace = true}
-uuid = {workspace = true}
+# `fast-rng`: request ids are minted per request (`fresh_request_id`); the
+# default `v4` path asks the OS for entropy on every id (~700 ns), the
+# thread-local CSPRNG behind `fast-rng` does it in ~10 ns.
+uuid = {workspace = true, features = ["fast-rng"]}
 dashmap = {workspace = true}
 arc-swap = "1"
 bytes = {workspace = true}
