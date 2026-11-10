@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-10
+
 ### Breaking
 
 Migration guide: [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
@@ -88,6 +90,10 @@ Migration guide: [`docs/migration/layer-slots.md`](../docs/migration/layer-slots
   `/health` only answered with an id when `RequestIdPlugin` was installed as
   well; the id is now governed by `trace.request-id` alone. Excluded requests
   still get no span, no summary event and no request context.
+
+### Changed
+
+- Built against `r2e-macros` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-macros/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-macros-v0.11.0/r2e-macros/CHANGELOG.md)).
 
 ## [0.9.2] - 2026-11-04
 

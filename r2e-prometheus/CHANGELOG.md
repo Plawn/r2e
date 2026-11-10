@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-10
+
 ### Added
 
 - `Prometheus::preset(PrometheusConfig)` / `PrometheusBuilder::preset` and
@@ -36,6 +38,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   precedence is unchanged. The `#[doc(hidden)]` helpers moved with it:
   `resolve_expose_endpoint` is gone and `resolve_config` takes the merged
   `PrometheusConfig`.
+
+### Changed
+
+- Built against `r2e-core` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.10.0/r2e-core/CHANGELOG.md)).
 
 ## [0.9.0] - 2026-10-31
 

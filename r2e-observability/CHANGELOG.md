@@ -15,11 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-10
+
 ### Changed
 
 - The plugin's request-trace layer is declared in `LayerSlot::Trace`
   (#1299): outermost whatever the install order. See
   [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
+
+### Changed
+
+- Built against `r2e-core` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.10.0/r2e-core/CHANGELOG.md)).
 
 ## [0.9.0] - 2026-10-31
 

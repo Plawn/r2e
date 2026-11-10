@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-10
+
 ### Fixed
 
 - `bearer_token` and `extract_jwt_claims_from_metadata` rejections carry
@@ -22,6 +24,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   or not a Bearer scheme, `Bearer error="invalid_token", …` when the
   validator refuses the token — the same challenge `AuthenticatedUser` puts
   on a `#[grpc_routes]` identity failure.
+
+### Changed
+
+- Built against `r2e-core` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.10.0/r2e-core/CHANGELOG.md)).
 
 ## [0.10.0] - 2026-11-04
 

@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-10
+
 ### Breaking
 
 - `#[derive(ConfigProperties)]` codegen contract (#1291; needs
