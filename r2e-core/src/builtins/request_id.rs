@@ -140,7 +140,9 @@ impl Plugin for RequestIdPlugin {
         _config: Option<Self::Config>,
         ctx: &mut crate::plugin::PluginBuildContext,
     ) -> Result<Self::Provided, crate::plugin::PluginBuildError> {
-        ctx.add_layer(|routes| routes.middleware_fn(request_id_middleware));
+        ctx.add_layer_in(crate::plugin::LayerSlot::Trace, |routes| {
+            routes.middleware_fn(request_id_middleware)
+        });
         Ok(())
     }
 }

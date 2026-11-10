@@ -88,8 +88,11 @@ Two orders coexist (documented, deliberate):
 - **effect application order = install order**, *within a stage*: `.plugin(A)`
   before `.plugin(B)` ⇒ A's Graph effects apply before B's, A's Routes effects
   before B's, A's Finalize wrap before B's — regardless of which built first.
-  For layers and wraps "before" means **inner**: the later install ends up
-  outside the earlier one.
+  For wraps "before" means **inner**: the later install ends up outside the
+  earlier one.
+- **layers are the exception: band first, install order second.** A layer
+  declares the band it belongs to (`LayerSlot`, below); the band decides its
+  position and install order only breaks ties *inside* a band.
 
 The concrete assembly order inside `build()` (`typed.rs::build_inner`) is:
 
@@ -99,7 +102,11 @@ controller routes (app + module + plugin)
   → .with_state(state)
   → ROUTES effects            (routers merged here, so they get the layers below)
   → catch_panic_layer         (always — INNERMOST, below every `add_layer`)
-  → Graph `add_layer`s        (install order, later = outer)
+  → layers, band `App`        (`add_layer`, `with_layer[_fn]`; install order, later = outer)
+  → layers, band `Auth`       (gates that reject before a handler)
+  → layers, band `Cors`       (`Cors`, `SecureHeaders`)
+  → layers, band `Metrics`    (`Prometheus`, `MetricsFacade`)
+  → layers, band `Trace`      (`HttpTrace`, `RequestIdPlugin`, `Observability`)
   → NormalizePath (if any)
   → catch_panic_layer         (always — outermost last-resort net)
   → FINALIZE `wrap_router`s   (install order, later = outer)
@@ -123,6 +130,42 @@ Which stage do I want?
   *complete* route table: OpenAPI spec generation, a route dump, a router
   mounted from route metadata. `after_routes` hands you a `RoutesContext`; see
   below.
+
+### Layer bands (`LayerSlot`, #1299)
+
+The position of an HTTP layer used to be the position of its `.plugin(..)`
+call, which made the stack a property of every app's `main` (the same four
+plugins, four different orders, and a gate installed after `Cors` answered
+`401`s without CORS headers). A layer now declares what it **is**:
+
+| Band (outer → inner) | For | Declared by |
+|---|---|---|
+| `Trace` | request id, request span, summary line | `HttpTrace`, `RequestIdPlugin`, `Observability` |
+| `Metrics` | RED metrics — inside the span, outside everything that answers early | `Prometheus`, `MetricsFacade` |
+| `Cors` | cross-origin + response-header policy | `Cors`, `SecureHeaders` |
+| `Auth` | layers rejecting before a handler runs (API-key / OAuth gates) | app and downstream plugins |
+| `App` | everything else — the default | `add_layer`, `with_layer`, `with_layer_fn` |
+
+- `ctx.add_layer_in(LayerSlot::Auth, |routes| ..)` on `PluginBuildContext`
+  (and `DeferredContext`); `AppBuilder::with_layer_in` / `with_layer_fn_in` for
+  an app-level layer. `add_layer` / `with_layer` / `with_layer_fn` are
+  `LayerSlot::App`.
+- Storage is `Vec<(LayerSlot, LayerFn)>`; `build_inner` stable-sorts it by
+  band rank (`App` first = innermost) before applying, so install order is
+  preserved inside a band and nowhere else.
+- The enum is closed and `#[non_exhaustive]`: a band is a shared contract, not
+  a priority number. **Do not add a numeric priority or a "before/after
+  plugin X" API** — that reintroduces the per-app ordering problem. A new
+  band is a deliberate `r2e-core` change.
+- Not bands: the two `catch_panic_layer`s, `NormalizePath`, Finalize
+  `wrap_router`s — fixed positions, unchanged.
+- Consequences worth knowing: `Prometheus` counts CORS preflights and gate
+  rejections (it sits outside both); a `with_layer_fn` closure that *adds*
+  routes (`nest`/`merge`) gets them wrapped by the four outer bands; a
+  per-route `#[layer(..)]` is unaffected (it is inside the route).
+
+Tests: `r2e-core/tests/http/layer_slots.rs`. Migration:
+`docs/migration/layer-slots.md`.
 
 **`add_layer` wraps, it never mounts.** `Routes::layer` only wraps the routes
 (and fallback) that exist when it is called, so a `.route(..)` / `.merge(..)` /
@@ -376,7 +419,8 @@ Owned by the factory future (`'static`, no lifetime param):
 | `enabled()` | — | `<prefix>.enabled` gate (default true) — check it, return a disabled variant |
 | `graph() -> GraphHandle` | — | cheap cloneable **weak** handle on the **final** resolved graph (fills at the end of a successful `build_state()`; for request-time lookups, e.g. `Tenanted<T>`'s cascade) |
 | `config_raw()` | — | the loaded `R2eConfig`, if any |
-| `add_layer(f)` | Graph | router layer, plain closure (applied inside-out, install order) |
+| `add_layer(f)` | Graph | router layer, plain closure, in the default `LayerSlot::App` band (innermost; install order within the band) |
+| `add_layer_in(slot, f)` | Graph | same, in a declared band — the band, not the `.plugin()` order, decides the position (see "Layer bands") |
 | `store_data(d)` | Graph | type-keyed plugin data for cross-plugin coordination (`app.get_plugin_data::<T>()`, `RoutesContext::take_data`) |
 | `on_serve(f)` | Graph | `FnOnce(ServeContext)` at serve time (spawn servers, start tasks) |
 | `on_serve_each_cycle(f)` | Graph | same, but **also runs on `r2e dev` hot-patch cycles** (plain `on_serve` is skipped there). For transports that own a port: a patch drops the previous `run()`, which cancels that cycle's shutdown token (tracked tasks stop cooperatively — they are detached, not aborted), so the port must be re-served each cycle — bind via `ServeContext::bind_tcp(owner, addr)` (async; dev listener store keyed by `(owner, addr)`: same socket across cycles, no sharing with HTTP) and serve through `BoundListener::into_incoming(shutdown)`, whose stream stops before any accept once shutdown or the next cycle's handover fires and then releases the socket; the next cycle's `bind_tcp` waits for that release (5 s bound, then warns and proceeds). Must be safe to re-run. |

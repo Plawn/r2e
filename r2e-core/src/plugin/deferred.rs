@@ -65,13 +65,76 @@ impl DeferredAction {
 pub type AsyncShutdownHook =
     Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
+/// The band an HTTP layer sits in — what decides its position in the stack,
+/// instead of the order of the `.plugin()` calls.
+///
+/// Bands, from the **outside in**:
+///
+/// ```text
+/// Trace  >  Metrics  >  Cors  >  Auth  >  App  >  (catch-panic)  >  routes
+/// ```
+///
+/// - [`Trace`](Self::Trace) — request id, request span, summary line. Outermost
+///   so every response, whoever produced it, is logged with its id.
+/// - [`Metrics`](Self::Metrics) — RED metrics. Inside the trace so its work is
+///   in the span, outside everything that can answer early: a CORS preflight
+///   and a gate's `401` are counted.
+/// - [`Cors`](Self::Cors) — cross-origin and response-header policy. Outside
+///   authentication: a preflight carries no credentials, and a `401` needs
+///   its CORS headers for the browser to show it to the caller.
+/// - [`Auth`](Self::Auth) — layers that reject a request before it reaches a
+///   route (an API-key or OAuth gate).
+/// - [`App`](Self::App) — everything else, and the default: what
+///   [`add_layer`](crate::PluginBuildContext::add_layer) and
+///   [`AppBuilder::with_layer`](crate::AppBuilder::with_layer) use.
+///
+/// **Within** a band the install order still applies (later = outer), so two
+/// layers of the same band keep the relative position they always had.
+///
+/// The list is closed on purpose: a band is a contract every plugin author
+/// shares, not a number to tune. Pick the band that says what the layer *is*;
+/// a layer that fits none of the first four is an `App` layer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LayerSlot {
+    /// Request id, request span, access log — outermost.
+    Trace,
+    /// HTTP metrics.
+    Metrics,
+    /// CORS and response-header policy.
+    Cors,
+    /// Layers that authenticate or reject before routing reaches a handler.
+    Auth,
+    /// The default band — innermost, right above the routes.
+    #[default]
+    App,
+}
+
+impl LayerSlot {
+    /// Application rank: layers are applied in ascending order, so the lowest
+    /// rank is the innermost.
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            LayerSlot::App => 0,
+            LayerSlot::Auth => 1,
+            LayerSlot::Cors => 2,
+            LayerSlot::Metrics => 3,
+            LayerSlot::Trace => 4,
+        }
+    }
+}
+
 /// Context for executing a deferred action.
 ///
 /// Provides access to builder internals that deferred actions may need to modify.
 pub struct DeferredContext<'a> {
-    /// Layers to apply to the router.
+    /// Layers to apply to the router, each with its band.
     #[doc(hidden)]
-    pub layers: &'a mut Vec<Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>>,
+    #[allow(clippy::type_complexity)]
+    pub layers: &'a mut Vec<(
+        LayerSlot,
+        Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>,
+    )>,
     /// Transport-level router transforms, applied outermost (after layers and
     /// the catch-panic layer). See [`DeferredContext::wrap_router`].
     #[doc(hidden)]
@@ -152,12 +215,21 @@ impl DeferredContext<'_> {
         self.config
     }
 
-    /// Add a layer to the router.
+    /// Add a layer to the router, in the default [`LayerSlot::App`] band.
     pub fn add_layer(
         &mut self,
         layer: Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>,
     ) {
-        self.layers.push(layer);
+        self.add_layer_in(LayerSlot::App, layer);
+    }
+
+    /// Add a layer to the router in the given band — see [`LayerSlot`].
+    pub fn add_layer_in(
+        &mut self,
+        slot: LayerSlot,
+        layer: Box<dyn FnOnce(crate::http::Routes) -> crate::http::Routes + Send>,
+    ) {
+        self.layers.push((slot, layer));
     }
 
     /// Add a transport-level router transform, applied **outermost** — after
