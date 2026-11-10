@@ -14,6 +14,7 @@ mod fallback;
 mod health;
 mod http_trace;
 mod json;
+mod layer_slots;
 mod managed;
 #[cfg(feature = "multipart")]
 mod multipart;

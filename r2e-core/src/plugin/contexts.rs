@@ -414,15 +414,39 @@ impl PluginBuildContext {
 
     // ── Effect sugar (mirrors `DeferredContext`) ────────────────────────────
 
-    /// **Graph stage.** Add a layer to the router. Applied after graph
-    /// resolution; dropped when the plugin is disabled.
+    /// **Graph stage.** Add a layer to the router, in the default
+    /// [`LayerSlot::App`] band (innermost; install order within the band).
+    /// Dropped when the plugin is disabled.
+    ///
+    /// A layer whose position matters — tracing, metrics, CORS, an auth gate —
+    /// declares its band with [`add_layer_in`](Self::add_layer_in) instead of
+    /// relying on where the app wrote `.plugin(..)`.
     pub fn add_layer<F>(&mut self, layer: F)
+    where
+        F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
+    {
+        self.add_layer_in(super::LayerSlot::App, layer);
+    }
+
+    /// **Graph stage.** Add a layer to the router in the given band. The band
+    /// decides the layer's position whatever the plugin install order; see
+    /// [`LayerSlot`](super::LayerSlot) for the bands and why they are ordered
+    /// that way. Dropped when the plugin is disabled.
+    ///
+    /// ```ignore
+    /// // An API-key gate: inside CORS (a 401 keeps its CORS headers, a
+    /// // preflight never reaches it), outside the app's own layers.
+    /// ctx.add_layer_in(LayerSlot::Auth, move |routes| {
+    ///     routes.middleware_fn_with_state(gate, authenticate)
+    /// });
+    /// ```
+    pub fn add_layer_in<F>(&mut self, slot: super::LayerSlot, layer: F)
     where
         F: FnOnce(crate::http::Routes) -> crate::http::Routes + Send + 'static,
     {
         self.effects
             .surface
-            .push(Box::new(move |dctx| dctx.add_layer(Box::new(layer))));
+            .push(Box::new(move |dctx| dctx.add_layer_in(slot, Box::new(layer))));
     }
 
     /// **Finalize stage.** Add a transport-level router transform applied

@@ -11,6 +11,11 @@
 //! exclusions, request-id handling and summary event of this layer. That is
 //! what makes it **one** span per request instead of the historical
 //! tower-http span + OTel span pair.
+//!
+//! The layer also carries the **request context**: while the handler future is
+//! polled, the request span and its [`SpanState`] slot sit in a task-local, so
+//! [`with_request`] / [`with_request_state`] reach them from any service on the
+//! call path — no HTTP type in the signature, no second plugin to install.
 
 use std::{
     any::Any,
@@ -55,8 +60,8 @@ static X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
 /// }
 /// ```
 ///
-/// Excluded paths are a pure pass-through: no span, no extension — like
-/// [`RequestId`](crate::builtins::request_id::RequestId). The infallible
+/// Excluded paths get no span and no extension (only the request id, when
+/// `trace.request-id` is on). The infallible
 /// extractor below falls back to [`tracing::Span::none()`] in that case, so
 /// `record` degrades to a no-op instead of a failure.
 #[derive(Clone, Debug)]
@@ -95,6 +100,77 @@ impl<S: Send + Sync> crate::http::extract::FromRequestParts<S> for RequestSpan {
             .cloned()
             .unwrap_or_else(|| RequestSpan(tracing::Span::none())))
     }
+}
+
+/// What the layer shares with the code running inside a traced request.
+struct RequestContext {
+    span: tracing::Span,
+    state: Option<SpanState>,
+}
+
+crate::rt::task_local! {
+    static REQUEST_CONTEXT: Arc<RequestContext>;
+}
+
+/// Run `f` against the current request's span and its [`SpanState`] slot, from
+/// anywhere inside a traced request — a service, a repository, a helper —
+/// without threading [`RequestSpan`] or any HTTP type down the call stack.
+///
+/// ```ignore
+/// // In a bean, three calls below the handler:
+/// with_request(|span, _state| {
+///     span.record("order_id", tracing::field::display(order_id));
+/// });
+/// ```
+///
+/// Record on the span handed to `f`, **not** on `Span::current()`: the caller
+/// is usually inside nested spans (`#[instrument]`, an interceptor) that never
+/// declared the field. A field recorded here — one the app's
+/// [`MakeRequestSpan::make_span`] declared `Empty` — shows on every later line
+/// of the request and on its summary.
+///
+/// Returns `None`, without calling `f`, when no request context is in scope:
+///
+/// - outside a request (a scheduled job, a consumer, a unit test);
+/// - on a path excluded by `trace.exclude-paths`, or with `trace.enabled =
+///   false` — no span was built;
+/// - in a task **spawned** from the handler (`rt::spawn`, `#[async_exec]`):
+///   the context lives exactly as long as the handler future, like the span.
+///   Clone what the task needs before spawning
+///   ([`SpanState::get_arc`], `span.clone()`).
+///
+/// That is what makes `record_*` helpers safe to call from code shared with
+/// background work. `state` is `None` when the span maker allocated no slot
+/// (the default one does not).
+pub fn with_request<R>(f: impl FnOnce(&tracing::Span, Option<&SpanState>) -> R) -> Option<R> {
+    REQUEST_CONTEXT
+        .try_with(|context| f(&context.span, context.state.as_ref()))
+        .ok()
+}
+
+/// [`with_request`], narrowed to the type the app's
+/// [`MakeRequestSpan::make_state`] put in the slot.
+///
+/// ```ignore
+/// #[derive(Default)]
+/// struct Facts { order_id: Mutex<Option<Uuid>> }
+///
+/// with_request_state(|span, facts: &Facts| {
+///     span.record("order_id", tracing::field::display(id));  // every later line
+///     *facts.order_id.lock().unwrap() = Some(id);            // read in on_response
+/// });
+/// ```
+///
+/// `None` in every case [`with_request`] returns `None`, and when the slot is
+/// empty or holds another type — never a panic.
+pub fn with_request_state<T: Any, R>(f: impl FnOnce(&tracing::Span, &T) -> R) -> Option<R> {
+    REQUEST_CONTEXT
+        .try_with(|context| {
+            let state = context.state.as_ref()?.get::<T>()?;
+            Some(f(&context.span, state))
+        })
+        .ok()
+        .flatten()
 }
 
 /// Type-erased per-request state of a [`MakeRequestSpan`] — the channel between
@@ -465,15 +541,13 @@ impl<S: Clone, M: ?Sized> Clone for HttpTraceService<S, M> {
 
 /// Per-request state kept by the response future for a **traced** request.
 struct Traced<M: ?Sized> {
-    span: tracing::Span,
+    /// The span and the [`MakeRequestSpan::make_state`] slot (the same `Arc`
+    /// published as the request extension, read back in `on_response`) —
+    /// shared with the handler through the request-context task-local.
+    context: Arc<RequestContext>,
     make_span: Arc<M>,
     settings: Arc<HttpTraceSettings>,
     start: Instant,
-    /// The id to echo back as `x-request-id`, when `trace.request-id` is on.
-    request_id: Option<HeaderValue>,
-    /// The [`MakeRequestSpan::make_state`] slot — the same `Arc` published as
-    /// the request extension, read back in `on_response`.
-    state: Option<SpanState>,
     /// Raw path/query, captured only when the matching knob is on so an
     /// excluded-by-default secret never even reaches the future.
     path: Option<String>,
@@ -496,27 +570,31 @@ where
     fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
         // 1. Exclusions — prefix match on the raw path OR the bounded route
         //    label, the same semantics as `prometheus.exclude-paths`. An
-        //    excluded request is passed through untouched: no span, no event,
-        //    no request id, so handler logs under `/health` are not even
-        //    decorated.
+        //    excluded request gets no span, no event and no request context,
+        //    so handler logs under `/health` are not decorated.
         let matched_path = req.extensions().get::<MatchedPath>().cloned();
         let label = route_label(matched_path.as_ref());
-        if path_excluded(req.uri().path(), label, &self.settings.exclude_paths) {
-            return HttpTraceResponseFuture {
-                inner: self.inner.call(req),
-                traced: None,
-            };
-        }
+        let excluded = path_excluded(req.uri().path(), label, &self.settings.exclude_paths);
 
-        // 2. Request id: reuse whatever already resolved one (`RequestIdPlugin`
-        //    installed outside us), else the inbound header, else mint. The
-        //    resolved id goes back on the *request* as both the extension and
-        //    the header, so a `RequestIdPlugin` installed inside us agrees
-        //    instead of minting a second id — install order does not matter.
+        // 2. Request id — on excluded paths too: a probe still answers with an
+        //    id the orchestrator can quote. Reuse whatever already resolved one
+        //    (`RequestIdPlugin` installed outside us), else the inbound header,
+        //    else mint. The resolved id goes back on the *request* as both the
+        //    extension and the header, so a `RequestIdPlugin` installed inside
+        //    us agrees instead of minting a second id — install order does not
+        //    matter.
         let request_id = self
             .settings
             .request_id
             .then(|| resolve_request_id(&mut req));
+
+        if excluded {
+            return HttpTraceResponseFuture {
+                inner: self.inner.call(req),
+                request_id: request_id.map(|(_, header)| header),
+                traced: None,
+            };
+        }
 
         // 3. Build the span from the R2E-owned view of the request head.
         let peer_addr = req
@@ -564,13 +642,12 @@ where
 
         HttpTraceResponseFuture {
             inner: self.inner.call(req),
+            request_id: request_id.map(|(_, header)| header),
             traced: Some(Traced {
-                span,
+                context: Arc::new(RequestContext { span, state }),
                 make_span: Arc::clone(&self.make_span),
                 settings: Arc::clone(&self.settings),
                 start: Instant::now(),
-                request_id: request_id.map(|(_, header)| header),
-                state,
                 path,
                 query,
             }),
@@ -608,7 +685,10 @@ pin_project! {
     pub struct HttpTraceResponseFuture<F, M: ?Sized> {
         #[pin]
         inner: F,
-        // `None` for an excluded request — a pure pass-through.
+        // The id to echo back as `x-request-id`, when `trace.request-id` is
+        // on — excluded requests included.
+        request_id: Option<HeaderValue>,
+        // `None` for an excluded request: no span, no summary, no context.
         traced: Option<Traced<M>>,
     }
 }
@@ -623,14 +703,22 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         let Some(traced) = this.traced.as_mut() else {
-            return this.inner.poll(cx);
+            let mut result = std::task::ready!(this.inner.poll(cx));
+            echo_request_id(&mut result, this.request_id.as_ref());
+            return Poll::Ready(result);
         };
 
         // The span is entered for the whole handler future — that is what puts
-        // `request_id` / `route` on every log line the handler emits.
+        // `request_id` / `route` on every log line the handler emits — and the
+        // request context is in scope for exactly the same polls, which is
+        // what `with_request` reads. Both are per-poll guards: nothing leaks
+        // to the next task this worker thread runs.
         let mut result = {
-            let _enter = traced.span.enter();
-            match this.inner.poll(cx) {
+            let _enter = traced.context.span.enter();
+            let inner = this.inner;
+            let polled =
+                REQUEST_CONTEXT.sync_scope(Arc::clone(&traced.context), || inner.poll(cx));
+            match polled {
                 Poll::Ready(result) => result,
                 Poll::Pending => return Poll::Pending,
             }
@@ -643,16 +731,22 @@ where
             query: traced.query.as_deref(),
             emit_summary: traced.settings.summary,
         };
-        traced
-            .make_span
-            .on_response(&traced.span, &outcome, traced.state.as_ref());
+        traced.make_span.on_response(
+            &traced.context.span,
+            &outcome,
+            traced.context.state.as_ref(),
+        );
 
-        if let (Ok(response), Some(id)) = (result.as_mut(), traced.request_id.as_ref()) {
-            response
-                .headers_mut()
-                .insert(X_REQUEST_ID.clone(), id.clone());
-        }
-
+        echo_request_id(&mut result, this.request_id.as_ref());
         Poll::Ready(result)
+    }
+}
+
+/// Echo the resolved id back as the `x-request-id` response header.
+fn echo_request_id<B, E>(result: &mut Result<Response<B>, E>, id: Option<&HeaderValue>) {
+    if let (Ok(response), Some(id)) = (result.as_mut(), id) {
+        response
+            .headers_mut()
+            .insert(X_REQUEST_ID.clone(), id.clone());
     }
 }

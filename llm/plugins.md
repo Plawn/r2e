@@ -1,7 +1,7 @@
 ---
 topic: plugins
 features: core
-tokens: ~3100
+tokens: ~3500
 requires: di-beans
 ---
 
@@ -107,13 +107,42 @@ builds themselves run in dependency order):
 
 | Stage | Registered with | When it applies |
 |---|---|---|
-| Graph | `add_layer`, `after_build`, `store_data`, `on_serve`, `on_serve_each_cycle` | during `build_state()` / router assembly; a later `add_layer` is the outer one |
+| Graph | `add_layer`, `add_layer_in`, `after_build`, `store_data`, `on_serve`, `on_serve_each_cycle` | during `build_state()` / router assembly; a layer's position comes from its **band** (below), install order only within a band |
 | Routes | `after_routes(FnOnce(&mut RoutesContext))` | in `build()`, once **every** controller (app, module and plugin-shipped) is registered — so install order is irrelevant |
 | Finalize | `wrap_router` | last, outermost (transport-level wrappers) |
 
 `RoutesContext` gives `routes() -> &[RouteInfo]` (the collected route registry —
 what `OpenApiPlugin` reads), `register_routes(Routes)`, `bean_context()`,
 `config()`, `take_data::<D>()`. Nothing has to be "installed last" any more.
+
+**Layer bands.** An HTTP layer's position is decided by the band it declares,
+not by where the app wrote `.plugin(..)`. From the outside in:
+`LayerSlot::Trace` > `Metrics` > `Cors` > `Auth` > `App`.
+
+| Band | Put there | Built-ins |
+|---|---|---|
+| `Trace` | request id, request span, access log | `HttpTrace`, `RequestIdPlugin`, `Observability` |
+| `Metrics` | HTTP metrics | `Prometheus`, `MetricsFacade` |
+| `Cors` | CORS, response-header policy | `Cors`, `SecureHeaders` |
+| `Auth` | a gate that rejects before the handler (API key, OAuth) | — |
+| `App` | everything else (default) | `add_layer`, `with_layer`, `with_layer_fn` |
+
+```rust,ignore
+// In Plugin::build — an API-key gate. Inside CORS (its 401 keeps the CORS
+// headers, a preflight never reaches it), inside trace + metrics (the 401 is
+// logged and counted), whatever the install order.
+ctx.add_layer_in(LayerSlot::Auth, move |routes| {
+    routes.middleware_fn_with_state(gate, authenticate)
+});
+
+// App-level layer in a band (hand-built CORS layer, …):
+AppBuilder::new().with_layer_in(LayerSlot::Cors, my_cors_layer)
+```
+
+`ctx.add_layer(f)` is `add_layer_in(LayerSlot::App, f)`. Within one band a
+later install is the outer one. The list of bands is closed: there is no
+numeric priority and no "before plugin X" — pick the band that says what the
+layer is. `LayerSlot` is in the prelude.
 
 Disabling drops all three **surface** stages (`add_layer`, `after_routes`,
 `wrap_router`, `on_serve`, `store_data`, `after_build`) but NOT the cleanup hooks

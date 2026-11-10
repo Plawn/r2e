@@ -25,6 +25,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Changed
 
+- `Prometheus` and `MetricsFacade` declare their layer in
+  `LayerSlot::Metrics` (#1299): the metrics layer sits right inside the
+  request trace and outside CORS and auth gates, whatever the install order.
+  CORS preflights and gate rejections (`401`/`403`) are now counted — they
+  were invisible when the plugin was installed first. See
+  [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
 - Both plugins resolve builder > file > preset through
   `r2e_core::config::Layered` instead of per-knob chains; observable
   precedence is unchanged. The `#[doc(hidden)]` helpers moved with it:

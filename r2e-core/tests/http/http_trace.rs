@@ -158,18 +158,36 @@ async fn the_request_id_plugin_agrees_in_either_install_order() {
 // ── Exclusions ─────────────────────────────────────────────────────────────
 
 #[r2e_core::test(flavor = "current_thread")]
-async fn excluded_raw_paths_get_no_span_no_event_and_no_request_id() {
+async fn excluded_raw_paths_get_no_span_and_no_event() {
     // `/health` is the built-in default exclusion.
     let router = app(HttpTrace::new(), NO_CONFIG).await;
     let (capture, response) = drive(router, "/health", &[]).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response.headers().get("x-request-id").is_none(),
-        "an excluded request is a pure pass-through"
-    );
     assert!(capture.spans().iter().all(|s| s.name != "request"));
     assert!(capture.summaries().is_empty());
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn an_excluded_path_still_answers_with_a_request_id() {
+    // `HttpTrace` alone — no `RequestIdPlugin` — and a probe still gets an id
+    // the orchestrator can quote.
+    let router = app(HttpTrace::new(), NO_CONFIG).await;
+    let (_, minted) = drive(router.clone(), "/health", &[]).await;
+    let id = minted.headers().get("x-request-id").expect("minted id");
+    assert!(!id.is_empty());
+
+    let (_, echoed) = drive(router, "/health", &[("x-request-id", "probe-1")]).await;
+    assert_eq!(echoed.headers().get("x-request-id").unwrap(), "probe-1");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn request_id_off_also_silences_excluded_paths() {
+    let yaml = "trace:\n  request-id: false\n";
+    let router = app(HttpTrace::new(), yaml).await;
+    let (_, response) = drive(router, "/health", &[]).await;
+
+    assert!(response.headers().get("x-request-id").is_none());
 }
 
 #[r2e_core::test(flavor = "current_thread")]
@@ -180,7 +198,6 @@ async fn the_exclusion_prefix_also_matches_the_route_label() {
     let (capture, response) = drive(router, "/users/7", &[]).await;
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(response.headers().get("x-request-id").is_none());
     assert!(capture.spans().iter().all(|s| s.name != "request"));
     assert!(capture.summaries().is_empty());
 }
@@ -234,7 +251,9 @@ async fn record_path_puts_the_path_on_the_event_only() {
 // ── Enrichment channel ─────────────────────────────────────────────────────
 
 use r2e_core::web::request_head::RequestHead;
-use r2e_core::{MakeRequestSpan, RequestOutcome, RequestSpan, SpanState};
+use r2e_core::{
+    with_request_state, MakeRequestSpan, RequestOutcome, RequestSpan, SpanState,
+};
 
 use crate::support::body_string;
 
@@ -382,6 +401,164 @@ async fn an_excluded_request_publishes_no_request_span_extension() {
     let (_, response) = drive(router, "/health", &[]).await;
 
     assert_eq!(body_string(response).await, "no-span");
+}
+
+// ── Request context (`with_request`) ───────────────────────────────────────
+
+/// Stands for a bean deep in the call stack: no HTTP type in the signature.
+mod service {
+    use super::Facts;
+    use r2e_core::runtime::http_trace::{with_request, with_request_state};
+
+    pub fn record_session(id: &str) -> bool {
+        // Called from inside a nested span that never declared `session_id`:
+        // recording on `Span::current()` would be lost.
+        tracing::info_span!("inner").in_scope(|| {
+            with_request_state(|span, facts: &Facts| {
+                span.record("session_id", id);
+                *facts.0.lock().unwrap() = Some(id.to_owned());
+            })
+            .is_some()
+        })
+    }
+
+    pub fn in_request() -> bool {
+        with_request(|_, _| ()).is_some()
+    }
+
+    pub fn has_state() -> Option<bool> {
+        with_request(|_, state| state.is_some())
+    }
+}
+
+fn context_routes<T: Clone + Send + Sync + 'static>() -> Routes<T> {
+    fn flag(on: bool) -> &'static str {
+        if on {
+            "yes"
+        } else {
+            "no"
+        }
+    }
+
+    Routes::new()
+        .route(
+            "/session",
+            get(|_: T, _: Request| async {
+                // Across an await point: the context is re-scoped on every poll.
+                r2e_core::rt::yield_now().await;
+                flag(service::record_session("sess-77"))
+            }),
+        )
+        .route(
+            "/probe",
+            get(|_: T, _: Request| async { flag(service::in_request()) }),
+        )
+        .route(
+            "/health",
+            get(|_: T, _: Request| async { flag(service::in_request()) }),
+        )
+        .route(
+            "/state",
+            get(|_: T, _: Request| async {
+                match service::has_state() {
+                    Some(true) => "state",
+                    Some(false) => "no-state",
+                    None => "no-request",
+                }
+            }),
+        )
+        .route(
+            "/wrong-type",
+            get(|_: T, _: Request| async {
+                flag(with_request_state(|_, _: &String| ()).is_some())
+            }),
+        )
+        .route(
+            "/spawned",
+            get(|_: T, _: Request| async {
+                let seen = r2e_core::rt::spawn(async { service::in_request() })
+                    .await
+                    .expect("spawned task");
+                flag(seen)
+            }),
+        )
+}
+
+async fn context_app(plugin: HttpTrace) -> Routes {
+    AppBuilder::new()
+        .override_config(R2eConfig::from_yaml_str(NO_CONFIG).expect("valid yaml"))
+        .load_config::<()>()
+        .plugin(plugin)
+        .build_state()
+        .await
+        .merge_router(context_routes())
+        .build()
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_service_records_on_the_request_span_without_an_http_type() {
+    let plugin = HttpTrace::builder().make_span(EnrichedSpan).build();
+    let (capture, response) = drive(context_app(plugin).await, "/session", &[]).await;
+
+    assert_eq!(body_string(response).await, "yes");
+    assert_eq!(
+        capture.request_span().field("session_id"),
+        Some("sess-77"),
+        "the record must land on the request span, not on the nested one"
+    );
+    let summaries = capture.summaries();
+    assert_eq!(summaries.len(), 1, "{summaries:?}");
+    assert_eq!(summaries[0].field("session_id"), Some("sess-77"));
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn with_request_sees_the_span_under_the_default_span_maker() {
+    let router = context_app(HttpTrace::new()).await;
+
+    let (_, probe) = drive(router.clone(), "/probe", &[]).await;
+    assert_eq!(body_string(probe).await, "yes");
+    // The default maker allocates no slot: the span is there, the state is not.
+    let (_, state) = drive(router, "/state", &[]).await;
+    assert_eq!(body_string(state).await, "no-state");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn with_request_state_is_none_for_another_type() {
+    let plugin = HttpTrace::builder().make_span(EnrichedSpan).build();
+    let (_, response) = drive(context_app(plugin).await, "/wrong-type", &[]).await;
+
+    assert_eq!(body_string(response).await, "no");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn an_excluded_path_has_no_request_context() {
+    let (_, response) = drive(context_app(HttpTrace::new()).await, "/health", &[]).await;
+
+    assert_eq!(body_string(response).await, "no");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_spawned_task_does_not_inherit_the_request_context() {
+    let (_, response) = drive(context_app(HttpTrace::new()).await, "/spawned", &[]).await;
+
+    assert_eq!(body_string(response).await, "no");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn with_request_is_none_outside_a_request() {
+    // Scheduled jobs and consumers call the same services.
+    assert!(!service::in_request());
+    assert!(with_request_state(|_, _: &Facts| ()).is_none());
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn the_request_context_does_not_outlive_the_request() {
+    let router = context_app(HttpTrace::new()).await;
+    let (_, response) = drive(router, "/probe", &[]).await;
+    assert_eq!(body_string(response).await, "yes");
+
+    // Same task, right after the response: nothing left behind.
+    assert!(!service::in_request());
 }
 
 // ── Gate + precedence ──────────────────────────────────────────────────────

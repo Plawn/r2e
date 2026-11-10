@@ -15,8 +15,41 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+Migration guide: [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
+
+- **Layer bands (#1299).** The position of an HTTP layer is decided by the
+  band it declares — `LayerSlot::{Trace, Metrics, Cors, Auth, App}`, outer to
+  inner — instead of the order of the `.plugin(..)` calls; install order only
+  applies inside a band. Built-ins declare theirs: `HttpTrace` and
+  `RequestIdPlugin` → `Trace`, `Cors` and `SecureHeaders` → `Cors`. Nothing
+  stops compiling, but stacks change:
+  - `AppBuilder::with_layer` / `with_layer_fn` are now `LayerSlot::App`, the
+    **innermost** band — they used to end up outside every plugin layer. A
+    hand-built CORS layer must move to `with_layer_in(LayerSlot::Cors, ..)`.
+  - Routes added by a `with_layer_fn` closure (`nest`/`merge`) are now wrapped
+    by the layers of the four outer bands, auth gates included.
+  - A plugin's `ctx.add_layer(..)` is `LayerSlot::App`: inside tracing,
+    metrics, CORS and auth gates whatever the install order.
+  - `DeferredContext.layers` (`#[doc(hidden)]`) is now
+    `Vec<(LayerSlot, LayerFn)>`.
+
 ### Added
 
+- `LayerSlot` (crate root, `plugin`, prelude), `PluginBuildContext::add_layer_in`,
+  `DeferredContext::add_layer_in`, `AppBuilder::with_layer_in` /
+  `with_layer_fn_in` (#1299): declare the band of a layer.
+
+- `HttpTrace` carries the request context (#1290): `with_request(|span,
+  state| ..)` and `with_request_state::<T, _>(|span, slot| ..)` (crate root
+  and prelude) give any code running under a traced request — a bean, a
+  repository, no HTTP type in the signature — the **request** span and the
+  `MakeRequestSpan::make_state` slot. They return `None` outside a request,
+  on an excluded path, with `trace.enabled: false`, on a slot-type mismatch
+  and in a task spawned from the handler. An app no longer needs its own
+  `task_local!` and wrapper layer to record `session_id`-style fields from
+  deep in the call stack.
 - `Layered<C>` + derived overlay (#1291): the builder > file > preset
   precedence of a config-driven plugin is one type instead of a hand-written
   `.or(file.x).or(preset.x)` chain per knob. `ConfigProperties` gains two
@@ -47,6 +80,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `builtins` and the prelude).
 - `AppBuilder::r2e_config()` docs no longer teach reading the config mid-chain
   to construct a plugin: a config-driven plugin declares `type Config`.
+
+### Changed
+
+- `HttpTrace` resolves and echoes `x-request-id` on **excluded** paths too
+  (#1290). An excluded request used to be an untouched pass-through, so
+  `/health` only answered with an id when `RequestIdPlugin` was installed as
+  well; the id is now governed by `trace.request-id` alone. Excluded requests
+  still get no span, no summary event and no request context.
 
 ## [0.9.2] - 2026-11-04
 

@@ -390,7 +390,7 @@ impl Plugin for Cors {
                 self.resolve_settings(config, &profile)?.layer()
             }
         };
-        ctx.add_layer(move |router| router.layer(layer));
+        ctx.add_layer_in(crate::plugin::LayerSlot::Cors, move |router| router.layer(layer));
         Ok(())
     }
 }

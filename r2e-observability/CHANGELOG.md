@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The plugin's request-trace layer is declared in `LayerSlot::Trace`
+  (#1299): outermost whatever the install order. See
+  [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
+
 ## [0.9.0] - 2026-10-31
 
 ### Breaking

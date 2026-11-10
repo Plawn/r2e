@@ -242,7 +242,7 @@ impl Plugin for Observability {
 
         if trace_enabled {
             let make_span = OtelRequestSpan::new(std::sync::Arc::clone(&settings.capture_headers));
-            ctx.add_layer(move |router| {
+            ctx.add_layer_in(r2e_core::LayerSlot::Trace, move |router| {
                 router.layer(r2e_core::HttpTraceLayer::with_make_span(
                     settings, make_span,
                 ))
