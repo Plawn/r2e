@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-10
+
 ### Breaking
 
 - `extractor::extract_jwt_claims`, `extract_jwt_claims_as` and
@@ -53,6 +55,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   an error envelope (unless the envelope's own response sets
   `WWW-Authenticate`: the envelope wins per header name) and reaches gRPC
   metadata through `rejection_to_status`.
+
+### Changed
+
+- Built against `r2e-core` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.10.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-grpc` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-grpc/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-grpc-v0.11.0/r2e-grpc/CHANGELOG.md)).
 
 ## [0.10.0] - 2026-11-04
 

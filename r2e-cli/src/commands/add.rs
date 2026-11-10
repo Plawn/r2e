@@ -6,7 +6,7 @@ use std::path::Path;
 /// `scripts/bump-version.sh` when the facade moves and checked by
 /// `scripts/check-versions.sh`.
 #[doc(hidden)]
-pub const R2E_DEP_VERSION: &str = "0.11";
+pub const R2E_DEP_VERSION: &str = "0.12";
 
 const KNOWN_EXTENSIONS: &[(&str, &str)] = &[
     ("security", "r2e-security"),

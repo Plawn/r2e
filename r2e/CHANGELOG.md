@@ -15,29 +15,68 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-10
+
+### Breaking
+
+- Re-exported `r2e-core` 0.10.0 — layer bands (#1299): an HTTP layer's
+  position is decided by its `LayerSlot` (`Trace`, `Metrics`, `Cors`, `Auth`,
+  `App`, outer to inner), no longer by the `.plugin(..)` order. Nothing stops
+  compiling but stacks change: `with_layer` / `with_layer_fn` are now the
+  innermost band, so a hand-built CORS layer must move to
+  `with_layer_in(LayerSlot::Cors, ..)`. Migration guide:
+  [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
+- Re-exported `r2e-security` 0.11.0 (#1173): `extract_jwt_claims*` /
+  `extract_jwt_identity` return `Rejection`, identity extractors declare
+  `type Rejection = Rejection` (see `r2e-security/CHANGELOG.md`).
+
 ### Added
 
 - `Cors::new()` reads the `cors.*` section and `OpenApiPlugin::default()` the
   `openapi.*` section (#1288, see `r2e-core` / `r2e-openapi` changelogs);
   `r2e::http::layers::{validate_origin, origin_allowed, allow_origins}` share
   the origin grammar with r2e-mcp.
-
-### Breaking
-
-- Re-exported `r2e-security` 0.11.0 (#1173): `extract_jwt_claims*` /
-  `extract_jwt_identity` return `Rejection`, identity extractors declare
-  `type Rejection = Rejection` (see `r2e-security/CHANGELOG.md`).
+- `Layered<C>` + derived `ConfigProperties::overlay` (#1291): one builder >
+  file > preset precedence type for config-driven plugins; `preset(..)` on
+  `Cors`, `McpServer`, `Prometheus` and `MetricsFacade`.
+- `with_request` / `with_request_state` (#1290): the traced request's span and
+  `MakeRequestSpan` state from anywhere under the request.
+- `#[scheduled(schedule = "method")]` (#1181): the cadence comes from a sync
+  `&self -> ScheduleConfig` method of the bean or controller.
+- Feature `mcp-loopback` (= `mcp` + `r2e-mcp/loopback`, #1076): in-process
+  MCP sessions on the mounted endpoint through the `McpLoopback` bean
+  (`docs/features/25-mcp.md` § Transports, `llm/mcp-server.md`).
 
 ### Fixed
 
 - `AuthenticatedUser` 401s carry `WWW-Authenticate` again (RFC 6750 §3),
   through error-envelope projection, gRPC metadata and MCP (#1173).
 
-### Added
+### Changed
 
-- Feature `mcp-loopback` (= `mcp` + `r2e-mcp/loopback`, #1076): in-process
-  MCP sessions on the mounted endpoint through the `McpLoopback` bean
-  (`docs/features/25-mcp.md` § Transports, `llm/mcp-server.md`).
+- Built against `r2e-core` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.10.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-macros` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-macros/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-macros-v0.11.0/r2e-macros/CHANGELOG.md)).
+- Built against `r2e-security` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.11.0/r2e-security/CHANGELOG.md)).
+- Built against `r2e-data-diesel` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-data-diesel/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-data-diesel-v0.10.0/r2e-data/backends/diesel/CHANGELOG.md)).
+- Built against `r2e-data-sqlx` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-data-sqlx/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-data-sqlx-v0.10.0/r2e-data/backends/sqlx/CHANGELOG.md)).
+- Built against `r2e-events` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-events/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-events-v0.10.0/r2e-events/CHANGELOG.md)).
+- Built against `r2e-events-iggy` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-events-iggy/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-events-iggy-v0.10.0/r2e-events/backends/iggy/CHANGELOG.md)).
+- Built against `r2e-events-kafka` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-events-kafka/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-events-kafka-v0.10.0/r2e-events/backends/kafka/CHANGELOG.md)).
+- Built against `r2e-events-pulsar` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-events-pulsar/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-events-pulsar-v0.10.0/r2e-events/backends/pulsar/CHANGELOG.md)).
+- Built against `r2e-events-rabbitmq` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-events-rabbitmq/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-events-rabbitmq-v0.10.0/r2e-events/backends/rabbitmq/CHANGELOG.md)).
+- Built against `r2e-executor` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-executor/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-executor-v0.10.0/r2e-executor/CHANGELOG.md)).
+- Built against `r2e-grpc` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-grpc/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-grpc-v0.11.0/r2e-grpc/CHANGELOG.md)).
+- Built against `r2e-mcp` 0.12.0 — its breaking changes surface through this crate's re-exports (see [`r2e-mcp/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-mcp-v0.12.0/r2e-mcp/CHANGELOG.md)).
+- Built against `r2e-observability` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-observability/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-observability-v0.10.0/r2e-observability/CHANGELOG.md)).
+- Built against `r2e-oidc` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-oidc/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-oidc-v0.11.0/r2e-oidc/CHANGELOG.md)).
+- Built against `r2e-openapi` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-openapi/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-openapi-v0.10.0/r2e-openapi/CHANGELOG.md)).
+- Built against `r2e-openfga` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-openfga/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-openfga-v0.10.0/r2e-openfga/CHANGELOG.md)).
+- Built against `r2e-prometheus` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-prometheus/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-prometheus-v0.10.0/r2e-prometheus/CHANGELOG.md)).
+- Built against `r2e-rate-limit` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-rate-limit/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-rate-limit-v0.10.0/r2e-rate-limit/CHANGELOG.md)).
+- Built against `r2e-scheduler` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-scheduler/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-scheduler-v0.10.0/r2e-scheduler/CHANGELOG.md)).
+- Built against `r2e-static` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-static/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-static-v0.10.0/r2e-static/CHANGELOG.md)).
+- Built against `r2e-tenant` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-tenant/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-tenant-v0.10.0/r2e-tenant/CHANGELOG.md)).
+- Built against `r2e-utils` 0.10.0 — its breaking changes surface through this crate's re-exports (see [`r2e-utils/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-utils-v0.10.0/r2e-utils/CHANGELOG.md)).
 
 ## [0.11.0] - 2026-11-04
 

@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-10
+
 ### Added
 
 - `layers::validate_origin`, `layers::origin_allowed` and
