@@ -17,8 +17,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
-- `#[derive(ConfigProperties)]` codegen contract (#1291, cut with
-  `--no-propagate`; needs `r2e-core` from the same release): a struct derive
+- `#[derive(ConfigProperties)]` codegen contract (#1291; needs
+  `r2e-core` 0.10.0, released alongside — its consumers break with it): a struct derive
   now emits `const LAYERABLE` and `fn overlay` into the `ConfigProperties`
   impl. The macro syntax is unchanged, but the generated impl does not compile
   against an `r2e-core` whose trait lacks those items — never a patch bump.

@@ -15,29 +15,40 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Re-exported `r2e-core` 0.10.0 — layer bands (#1299): an HTTP layer's
+  position is decided by its `LayerSlot` (`Trace`, `Metrics`, `Cors`, `Auth`,
+  `App`, outer to inner), no longer by the `.plugin(..)` order. Nothing stops
+  compiling but stacks change: `with_layer` / `with_layer_fn` are now the
+  innermost band, so a hand-built CORS layer must move to
+  `with_layer_in(LayerSlot::Cors, ..)`. Migration guide:
+  [`docs/migration/layer-slots.md`](../docs/migration/layer-slots.md).
+- Re-exported `r2e-security` 0.11.0 (#1173): `extract_jwt_claims*` /
+  `extract_jwt_identity` return `Rejection`, identity extractors declare
+  `type Rejection = Rejection` (see `r2e-security/CHANGELOG.md`).
+
 ### Added
 
 - `Cors::new()` reads the `cors.*` section and `OpenApiPlugin::default()` the
   `openapi.*` section (#1288, see `r2e-core` / `r2e-openapi` changelogs);
   `r2e::http::layers::{validate_origin, origin_allowed, allow_origins}` share
   the origin grammar with r2e-mcp.
-
-### Breaking
-
-- Re-exported `r2e-security` 0.11.0 (#1173): `extract_jwt_claims*` /
-  `extract_jwt_identity` return `Rejection`, identity extractors declare
-  `type Rejection = Rejection` (see `r2e-security/CHANGELOG.md`).
+- `Layered<C>` + derived `ConfigProperties::overlay` (#1291): one builder >
+  file > preset precedence type for config-driven plugins; `preset(..)` on
+  `Cors`, `McpServer`, `Prometheus` and `MetricsFacade`.
+- `with_request` / `with_request_state` (#1290): the traced request's span and
+  `MakeRequestSpan` state from anywhere under the request.
+- `#[scheduled(schedule = "method")]` (#1181): the cadence comes from a sync
+  `&self -> ScheduleConfig` method of the bean or controller.
+- Feature `mcp-loopback` (= `mcp` + `r2e-mcp/loopback`, #1076): in-process
+  MCP sessions on the mounted endpoint through the `McpLoopback` bean
+  (`docs/features/25-mcp.md` § Transports, `llm/mcp-server.md`).
 
 ### Fixed
 
 - `AuthenticatedUser` 401s carry `WWW-Authenticate` again (RFC 6750 §3),
   through error-envelope projection, gRPC metadata and MCP (#1173).
-
-### Added
-
-- Feature `mcp-loopback` (= `mcp` + `r2e-mcp/loopback`, #1076): in-process
-  MCP sessions on the mounted endpoint through the `McpLoopback` bean
-  (`docs/features/25-mcp.md` § Transports, `llm/mcp-server.md`).
 
 ## [0.11.0] - 2026-11-04
 
