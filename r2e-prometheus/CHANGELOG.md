@@ -15,6 +15,22 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `Prometheus::preset(PrometheusConfig)` / `PrometheusBuilder::preset` and
+  `MetricsFacade::preset(MetricsFacadeConfig)` /
+  `MetricsFacadeBuilder::preset` (#1291): a library's defaults for the
+  `prometheus.*` section, below the application file, itself below the
+  builder setters.
+
+### Changed
+
+- Both plugins resolve builder > file > preset through
+  `r2e_core::config::Layered` instead of per-knob chains; observable
+  precedence is unchanged. The `#[doc(hidden)]` helpers moved with it:
+  `resolve_expose_endpoint` is gone and `resolve_config` takes the merged
+  `PrometheusConfig`.
+
 ## [0.9.0] - 2026-10-31
 
 ### Changed

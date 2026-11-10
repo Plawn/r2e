@@ -1,7 +1,7 @@
 ---
 topic: plugins
 features: core
-tokens: ~3000
+tokens: ~3100
 requires: di-beans
 ---
 
@@ -43,7 +43,11 @@ requires: di-beans
   compile-time requirement).
 - **Behaviour that depends on config goes through `type Config`** (a
   `ConfigProperties` struct) + `CONFIG_PREFIX`: the section arrives in `build`
-  already loaded, merged as builder field > file > default. Never read
+  already loaded, merged as builder setter > file > preset > default — hold a
+  `r2e::config::Layered<Config>` (setters call `cfg.set(|c| c.x = Some(v))`,
+  `build` calls `self.cfg.resolve(config)`) instead of hand-writing
+  `.or(file.x)` per knob; every field of such a `Config` is an `Option` (or a
+  nested section), or `Layered` refuses to compile. Never read
   `b.r2e_config()` mid-chain to construct a plugin — that splits the builder
   and breaks "install order is irrelevant". Builtins on this contract:
   `Cors::new()` (`cors.*`), `HttpTrace::new()` (`trace.*`),

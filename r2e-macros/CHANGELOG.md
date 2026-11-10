@@ -15,6 +15,20 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `#[derive(ConfigProperties)]` codegen contract (#1291, cut with
+  `--no-propagate`; needs `r2e-core` from the same release): a struct derive
+  now emits `const LAYERABLE` and `fn overlay` into the `ConfigProperties`
+  impl. The macro syntax is unchanged, but the generated impl does not compile
+  against an `r2e-core` whose trait lacks those items — never a patch bump.
+  `overlay` merges field by field (`Option<T>` → `self.f.or(under.f)`,
+  required `#[config(section)]` → recursive, optional section → recursive when
+  its type is layerable and replaced whole otherwise, any other field →
+  `self.f`); `LAYERABLE` is `true` when every non-skipped field is an `Option`
+  or a required section whose type is layerable. Enum derives keep the trait
+  defaults.
+
 ### Added
 
 - `#[scheduled(schedule = "method")]` (#1181): the cadence comes from a plain

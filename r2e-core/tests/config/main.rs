@@ -9,6 +9,7 @@ mod core;
 mod de;
 mod env;
 mod errors;
+mod layered;
 mod live_config;
 mod loader;
 mod properties;

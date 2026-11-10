@@ -2,6 +2,7 @@ use r2e_core::http::{Body, Request, StatusCode};
 use r2e_core::type_list::BeanAccess;
 use r2e_core::{AppBuilder, R2eConfig};
 use r2e_prometheus::prometheus::IntCounter;
+use r2e_core::config::Layered;
 use r2e_prometheus::{resolve_config, Prometheus, PrometheusConfig, PrometheusRegistry};
 use tower::ServiceExt;
 
@@ -72,71 +73,69 @@ async fn registry_bean_can_register_at_runtime() {
 
 // ── Typed config: precedence + loading + validation (Phase 4) ────────────────
 
+fn file_config() -> PrometheusConfig {
+    PrometheusConfig {
+        endpoint: Some("/file".into()),
+        expose_endpoint: Some(true),
+        namespace: Some("file_ns".into()),
+        buckets: Some(vec![9.0]),
+        exclude_paths: Some(vec!["/file-skip".into()]),
+    }
+}
+
 #[test]
 fn resolve_config_builder_setting_wins_over_file() {
     // Every knob is set by BOTH the builder and file config; the builder wins.
-    let (endpoint, cfg) = resolve_config(
-        Some("/builder".into()),
-        Some("builder_ns".into()),
-        Some(vec![1.0, 2.0]),
-        Some(vec!["/builder-skip".into()]),
-        Some(PrometheusConfig {
-            endpoint: Some("/file".into()),
-            expose_endpoint: None,
-            namespace: Some("file_ns".into()),
-            buckets: Some(vec![9.0]),
-            exclude_paths: Some(vec!["/file-skip".into()]),
-        }),
-    );
+    let mut builder = Layered::<PrometheusConfig>::new();
+    builder.set(|c| {
+        c.endpoint = Some("/builder".into());
+        c.expose_endpoint = Some(false);
+        c.namespace = Some("builder_ns".into());
+        c.buckets = Some(vec![1.0, 2.0]);
+        c.exclude_paths = Some(vec!["/builder-skip".into()]);
+    });
+    let (endpoint, expose, cfg) = resolve_config(builder.resolve(Some(file_config())));
     assert_eq!(endpoint, "/builder");
+    assert!(!expose);
     assert_eq!(cfg.namespace.as_deref(), Some("builder_ns"));
     assert_eq!(cfg.buckets, vec![1.0, 2.0]);
     assert_eq!(cfg.exclude_paths, vec!["/builder-skip".to_string()]);
 }
 
 #[test]
-fn resolve_config_file_wins_over_default() {
-    // Builder set nothing; file config supplies every knob.
-    let (endpoint, cfg) = resolve_config(
-        None,
-        None,
-        None,
-        None,
-        Some(PrometheusConfig {
-            endpoint: Some("/file".into()),
-            expose_endpoint: None,
-            namespace: Some("file_ns".into()),
-            buckets: Some(vec![0.5, 1.5]),
-            exclude_paths: Some(vec!["/file-skip".into()]),
-        }),
-    );
+fn resolve_config_file_wins_over_preset_and_default() {
+    // Builder set nothing; the file supplies every knob, over the preset.
+    let preset = PrometheusConfig {
+        endpoint: Some("/preset".into()),
+        expose_endpoint: Some(false),
+        namespace: Some("preset_ns".into()),
+        ..PrometheusConfig::default()
+    };
+    let (endpoint, expose, cfg) =
+        resolve_config(Layered::with_preset(preset.clone()).resolve(Some(file_config())));
     assert_eq!(endpoint, "/file");
+    assert!(expose);
     assert_eq!(cfg.namespace.as_deref(), Some("file_ns"));
-    assert_eq!(cfg.buckets, vec![0.5, 1.5]);
+    assert_eq!(cfg.buckets, vec![9.0]);
     assert_eq!(cfg.exclude_paths, vec!["/file-skip".to_string()]);
+
+    // No file: the preset supplies what it set, defaults the rest.
+    let (endpoint, expose, cfg) = resolve_config(Layered::with_preset(preset).resolve(None));
+    assert_eq!(endpoint, "/preset");
+    assert!(!expose);
+    assert_eq!(cfg.namespace.as_deref(), Some("preset_ns"));
+    assert!(cfg.exclude_paths.is_empty());
 }
 
 #[test]
 fn resolve_config_falls_back_to_defaults() {
     // Neither builder nor file set anything → built-in defaults.
-    let (endpoint, cfg) = resolve_config(None, None, None, None, None);
+    let (endpoint, expose, cfg) = resolve_config(PrometheusConfig::default());
     assert_eq!(endpoint, "/metrics");
+    assert!(expose, "the endpoint is mounted by default");
     assert_eq!(cfg.namespace, None);
     assert!(cfg.exclude_paths.is_empty());
     assert!(!cfg.buckets.is_empty(), "default buckets are populated");
-}
-
-#[test]
-fn resolve_expose_endpoint_precedence() {
-    use r2e_prometheus::resolve_expose_endpoint;
-
-    // Builder setting wins over file config, in both directions.
-    assert!(!resolve_expose_endpoint(Some(false), Some(true)));
-    assert!(resolve_expose_endpoint(Some(true), Some(false)));
-    // File config drives it when the builder said nothing.
-    assert!(!resolve_expose_endpoint(None, Some(false)));
-    // Default: the endpoint is mounted (unchanged behavior).
-    assert!(resolve_expose_endpoint(None, None));
 }
 
 async fn status_of(router: r2e_core::http::Routes, path: &str) -> StatusCode {

@@ -93,6 +93,7 @@ pub use worker::WorkerCollector;
 
 use handler::metrics_handler;
 use r2e_core::http::routing::get;
+use r2e_core::config::Layered;
 use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
 use r2e_core::prelude::ConfigProperties;
 use r2e_core::Plugin;
@@ -115,7 +116,7 @@ use r2e_core::Plugin;
 /// ```
 ///
 /// Precedence for each knob: **programmatic builder setting > this file config >
-/// default**.
+/// preset ([`Prometheus::preset`]) > default**.
 #[derive(ConfigProperties, Clone, Debug, Default)]
 pub struct PrometheusConfig {
     /// Metrics endpoint path (default `/metrics`).
@@ -214,14 +215,8 @@ impl PrometheusRegistry {
 ///     .build())
 /// ```
 pub struct Prometheus {
-    // Programmatic overrides. `None` means "not set by the builder" — the value
-    // falls through to file config, then the default. This lets the builder
-    // take precedence over file config only where it was explicitly set.
-    endpoint: Option<String>,
-    expose_endpoint: Option<bool>,
-    namespace: Option<String>,
-    buckets: Option<Vec<f64>>,
-    exclude_paths: Option<Vec<String>>,
+    // builder setter > `prometheus.*` > preset > default, merged in `build`.
+    cfg: Layered<PrometheusConfig>,
     collectors: Vec<Box<dyn prometheus::core::Collector>>,
 }
 
@@ -232,14 +227,15 @@ impl Prometheus {
     /// precedence over a `prometheus.endpoint` file value. To let file config
     /// drive the endpoint, use [`Prometheus::builder`] without `.endpoint(..)`.
     pub fn new(endpoint: &str) -> Self {
-        Self {
-            endpoint: Some(endpoint.to_string()),
-            expose_endpoint: None,
-            namespace: None,
-            buckets: None,
-            exclude_paths: None,
-            collectors: Vec::new(),
-        }
+        PrometheusBuilder::default().endpoint(endpoint).build()
+    }
+
+    /// A Prometheus plugin whose defaults come from `config` — a shared
+    /// baseline that sits **below** the `prometheus.*` section: the app's
+    /// file overrides it key by key. Use
+    /// [`PrometheusBuilder::preset`] to combine it with builder settings.
+    pub fn preset(config: PrometheusConfig) -> Self {
+        PrometheusBuilder::default().preset(config).build()
     }
 
     /// HTTP tracking **without** the `/metrics` endpoint.
@@ -266,45 +262,26 @@ impl Prometheus {
     }
 }
 
-/// Merge programmatic builder settings (highest precedence), the loaded file
-/// [`PrometheusConfig`] section, and built-in defaults into the effective
-/// endpoint + [`MetricsConfig`].
+/// Turn the merged [`PrometheusConfig`] ([`Layered::resolve`]: builder > file
+/// > preset) into the effective endpoint, whether it is mounted, and the
+/// [`MetricsConfig`], applying the built-in defaults.
 ///
-/// Resolve whether the `/metrics` endpoint is mounted: builder setting first,
-/// then `prometheus.expose_endpoint`, then `true`.
-///
-/// Exposed (hidden) so the precedence contract can be unit-tested.
+/// Exposed (hidden) so the defaults can be unit-tested without the global
+/// metrics singleton.
 #[doc(hidden)]
-pub fn resolve_expose_endpoint(builder: Option<bool>, file: Option<bool>) -> bool {
-    builder.or(file).unwrap_or(true)
-}
-
-/// Exposed (hidden) so the precedence contract can be unit-tested without the
-/// global metrics singleton.
-#[doc(hidden)]
-pub fn resolve_config(
-    endpoint: Option<String>,
-    namespace: Option<String>,
-    buckets: Option<Vec<f64>>,
-    exclude_paths: Option<Vec<String>>,
-    file: Option<PrometheusConfig>,
-) -> (String, MetricsConfig) {
-    let file = file.unwrap_or_default();
-    let endpoint = endpoint
-        .or(file.endpoint)
-        .unwrap_or_else(|| "/metrics".to_string());
+pub fn resolve_config(merged: PrometheusConfig) -> (String, bool, MetricsConfig) {
+    let endpoint = merged.endpoint.unwrap_or_else(|| "/metrics".to_string());
+    let expose_endpoint = merged.expose_endpoint.unwrap_or(true);
 
     let mut config = MetricsConfig::default();
-    if let Some(ns) = namespace.or(file.namespace) {
-        config.namespace = Some(ns);
+    config.namespace = merged.namespace;
+    if let Some(buckets) = merged.buckets {
+        config.buckets = buckets;
     }
-    if let Some(b) = buckets.or(file.buckets) {
-        config.buckets = b;
+    if let Some(exclude_paths) = merged.exclude_paths {
+        config.exclude_paths = exclude_paths;
     }
-    if let Some(ep) = exclude_paths.or(file.exclude_paths) {
-        config.exclude_paths = ep;
-    }
-    (endpoint, config)
+    (endpoint, expose_endpoint, config)
 }
 
 impl Plugin for Prometheus {
@@ -320,20 +297,8 @@ impl Plugin for Prometheus {
         config: Option<Self::Config>,
         ctx: &mut PluginBuildContext,
     ) -> Result<Self::Provided, PluginBuildError> {
-        let Prometheus {
-            endpoint,
-            expose_endpoint,
-            namespace,
-            buckets,
-            exclude_paths,
-            collectors,
-        } = self;
-        let expose_endpoint = resolve_expose_endpoint(
-            expose_endpoint,
-            config.as_ref().and_then(|c| c.expose_endpoint),
-        );
-        let (endpoint, metrics_config) =
-            resolve_config(endpoint, namespace, buckets, exclude_paths, config);
+        let Prometheus { cfg, collectors } = self;
+        let (endpoint, expose_endpoint, metrics_config) = resolve_config(cfg.resolve(config));
 
         // `build` runs even when the plugin is disabled (the `PrometheusRegistry`
         // bean is in the compile-time provision list), but its *side effects*
@@ -387,21 +352,30 @@ impl Plugin for Prometheus {
     }
 }
 
+fn unset_empty_exclusions(config: &mut PrometheusConfig) {
+    if config.exclude_paths.as_ref().is_some_and(Vec::is_empty) {
+        config.exclude_paths = None;
+    }
+}
+
 /// Builder for configuring Prometheus plugin.
 #[derive(Default)]
 pub struct PrometheusBuilder {
-    endpoint: Option<String>,
-    expose_endpoint: Option<bool>,
-    namespace: Option<String>,
-    buckets: Option<Vec<f64>>,
-    exclude_paths: Vec<String>,
+    cfg: Layered<PrometheusConfig>,
     collectors: Vec<Box<dyn prometheus::core::Collector>>,
 }
 
 impl PrometheusBuilder {
+    /// Defaults that sit **below** the `prometheus.*` section (and below
+    /// every setter of this builder) — see [`Prometheus::preset`].
+    pub fn preset(mut self, config: PrometheusConfig) -> Self {
+        self.cfg.replace_preset(config);
+        self
+    }
+
     /// Set the metrics endpoint path (default: "/metrics").
     pub fn endpoint(mut self, endpoint: &str) -> Self {
-        self.endpoint = Some(endpoint.to_string());
+        self.cfg.set(|c| c.endpoint = Some(endpoint.to_string()));
         self
     }
 
@@ -410,19 +384,19 @@ impl PrometheusBuilder {
     /// Overrides `prometheus.expose_endpoint` from file config, like every
     /// other builder setting. See [`Prometheus::layer_only`].
     pub fn without_endpoint(mut self) -> Self {
-        self.expose_endpoint = Some(false);
+        self.cfg.set(|c| c.expose_endpoint = Some(false));
         self
     }
 
     /// Set a namespace prefix for all metrics (e.g., "myapp" -> "myapp_http_requests_total").
     pub fn namespace(mut self, namespace: &str) -> Self {
-        self.namespace = Some(namespace.to_string());
+        self.cfg.set(|c| c.namespace = Some(namespace.to_string()));
         self
     }
 
     /// Set custom histogram buckets for request duration.
     pub fn buckets(mut self, buckets: &[f64]) -> Self {
-        self.buckets = Some(buckets.to_vec());
+        self.cfg.set(|c| c.buckets = Some(buckets.to_vec()));
         self
     }
 
@@ -432,7 +406,8 @@ impl PrometheusBuilder {
     /// (`/users/5`) and the route-template label the request would be
     /// recorded under (`/users/{id}`), so either spelling works.
     pub fn exclude_paths(mut self, paths: &[&str]) -> Self {
-        self.exclude_paths = paths.iter().map(|s| s.to_string()).collect();
+        self.cfg
+            .set(|c| c.exclude_paths = Some(paths.iter().map(|s| s.to_string()).collect()));
         self
     }
 
@@ -440,7 +415,11 @@ impl PrometheusBuilder {
     ///
     /// See [`Self::exclude_paths`] for the matching semantics.
     pub fn exclude_path(mut self, path: &str) -> Self {
-        self.exclude_paths.push(path.to_string());
+        self.cfg.set(|c| {
+            c.exclude_paths
+                .get_or_insert_with(Vec::new)
+                .push(path.to_string());
+        });
         self
     }
 
@@ -476,13 +455,12 @@ impl PrometheusBuilder {
     /// Builder settings left unset stay `None` so file config (then defaults)
     /// can supply them; settings that were called take precedence over file
     /// config.
-    pub fn build(self) -> Prometheus {
+    pub fn build(mut self) -> Prometheus {
+        // An empty exclusion list is "not set", as it always was: the file
+        // (then the preset) still supplies one.
+        self.cfg.set(unset_empty_exclusions);
         Prometheus {
-            endpoint: self.endpoint,
-            expose_endpoint: self.expose_endpoint,
-            namespace: self.namespace,
-            buckets: self.buckets,
-            exclude_paths: (!self.exclude_paths.is_empty()).then_some(self.exclude_paths),
+            cfg: self.cfg,
             collectors: self.collectors,
         }
     }

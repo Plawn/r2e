@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use crate::config::Layered;
 use crate::plugin::{Plugin, PluginBuildContext, PluginBuildError};
 use crate::runtime::http_trace::{HttpTraceLayer, HttpTraceSettings, MakeRequestSpan};
 
@@ -119,8 +120,7 @@ pub struct HttpTraceConfig {
 /// [`HttpTraceConfig`], section `trace`, gate `trace.enabled` (disabled = no
 /// layer at all: no span, no event, no request id).
 pub struct HttpTrace {
-    builder: HttpTraceConfig,
-    preset: Option<HttpTraceConfig>,
+    cfg: Layered<HttpTraceConfig>,
     make_span: Option<Arc<dyn MakeRequestSpan>>,
 }
 
@@ -136,8 +136,7 @@ impl HttpTrace {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            builder: HttpTraceConfig::default(),
-            preset: None,
+            cfg: Layered::new(),
             make_span: None,
         }
     }
@@ -174,8 +173,7 @@ impl HttpTrace {
     #[must_use]
     pub fn preset(config: HttpTraceConfig) -> Self {
         Self {
-            builder: HttpTraceConfig::default(),
-            preset: Some(config),
+            cfg: Layered::with_preset(config),
             make_span: None,
         }
     }
@@ -185,8 +183,7 @@ impl HttpTrace {
 /// app's `trace:` section — it is the "I mean exactly this" lane.
 #[derive(Default)]
 pub struct HttpTraceBuilder {
-    config: HttpTraceConfig,
-    preset: Option<HttpTraceConfig>,
+    cfg: Layered<HttpTraceConfig>,
     make_span: Option<Arc<dyn MakeRequestSpan>>,
 }
 
@@ -197,10 +194,11 @@ impl HttpTraceBuilder {
     /// exactly what you list.
     #[must_use]
     pub fn exclude_path(mut self, prefix: impl Into<String>) -> Self {
-        self.config
-            .exclude_paths
-            .get_or_insert_with(Vec::new)
-            .push(prefix.into());
+        self.cfg.set(|c| {
+            c.exclude_paths
+                .get_or_insert_with(Vec::new)
+                .push(prefix.into());
+        });
         self
     }
 
@@ -211,38 +209,39 @@ impl HttpTraceBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.config.exclude_paths = Some(prefixes.into_iter().map(Into::into).collect());
+        self.cfg.set(|c| c.exclude_paths = Some(prefixes.into_iter().map(Into::into).collect()));
         self
     }
 
     /// Resolve/echo a request id (default `true`).
     #[must_use]
     pub fn request_id(mut self, enabled: bool) -> Self {
-        self.config.request_id = Some(enabled);
+        self.cfg.set(|c| c.request_id = Some(enabled));
         self
     }
 
     /// Put the raw request path on the summary event (default `false`).
     #[must_use]
     pub fn record_path(mut self, enabled: bool) -> Self {
-        self.config.record_path = Some(enabled);
+        self.cfg.set(|c| c.record_path = Some(enabled));
         self
     }
 
     /// Put the raw query string on the summary event (default `false`).
     #[must_use]
     pub fn record_query(mut self, enabled: bool) -> Self {
-        self.config.record_query = Some(enabled);
+        self.cfg.set(|c| c.record_query = Some(enabled));
         self
     }
 
     /// Record one inbound header on the span (repeatable).
     #[must_use]
     pub fn capture_header(mut self, name: impl Into<String>) -> Self {
-        self.config
-            .capture_headers
-            .get_or_insert_with(Vec::new)
-            .push(name.into());
+        self.cfg.set(|c| {
+            c.capture_headers
+                .get_or_insert_with(Vec::new)
+                .push(name.into());
+        });
         self
     }
 
@@ -253,21 +252,21 @@ impl HttpTraceBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.config.capture_headers = Some(names.into_iter().map(Into::into).collect());
+        self.cfg.set(|c| c.capture_headers = Some(names.into_iter().map(Into::into).collect()));
         self
     }
 
     /// Emit the `request completed` summary event (default `true`).
     #[must_use]
     pub fn summary(mut self, enabled: bool) -> Self {
-        self.config.summary = Some(enabled);
+        self.cfg.set(|c| c.summary = Some(enabled));
         self
     }
 
     /// Also emit a `request started` event at DEBUG (default `false`).
     #[must_use]
     pub fn request_event(mut self, enabled: bool) -> Self {
-        self.config.request_event = Some(enabled);
+        self.cfg.set(|c| c.request_event = Some(enabled));
         self
     }
 
@@ -282,7 +281,7 @@ impl HttpTraceBuilder {
     /// Defaults contributed by a shared baseline — see [`HttpTrace::preset`].
     #[must_use]
     pub fn preset(mut self, config: HttpTraceConfig) -> Self {
-        self.preset = Some(config);
+        self.cfg.replace_preset(config);
         self
     }
 
@@ -290,8 +289,7 @@ impl HttpTraceBuilder {
     #[must_use]
     pub fn build(self) -> HttpTrace {
         HttpTrace {
-            builder: self.config,
-            preset: self.preset,
+            cfg: self.cfg,
             make_span: self.make_span,
         }
     }
@@ -300,40 +298,40 @@ impl HttpTraceBuilder {
 /// The built-in `exclude-paths` default.
 pub const DEFAULT_EXCLUDE_PATHS: [&str; 2] = ["/health", "/metrics"];
 
-/// Merge the three configuration sources into the effective
-/// [`HttpTraceSettings`].
+/// Merge the three configuration sources — **builder > file > preset** — and
+/// apply the built-in defaults.
 ///
-/// Precedence per knob: `builder` > `file` > `preset` > built-in default.
-/// Header names are validated here so an invalid one is a boot error rather
-/// than a silent per-request skip.
-///
-/// Exposed (hidden) so the precedence contract can be unit-tested.
+/// Kept with this signature for `r2e-observability`, which resolves the same
+/// section from its own plugin; the merge itself is [`Layered::resolve`].
 #[doc(hidden)]
 pub fn resolve_settings(
     builder: HttpTraceConfig,
     file: Option<HttpTraceConfig>,
     preset: Option<HttpTraceConfig>,
 ) -> Result<HttpTraceSettings, PluginBuildError> {
-    let file = file.unwrap_or_default();
-    let preset = preset.unwrap_or_default();
+    let mut cfg = Layered::with_explicit(builder);
+    if let Some(preset) = preset {
+        cfg.replace_preset(preset);
+    }
+    settings_from(cfg.resolve(file))
+}
 
-    let exclude_paths = builder
-        .exclude_paths
-        .or(file.exclude_paths)
-        .or(preset.exclude_paths)
-        .unwrap_or_else(|| {
-            DEFAULT_EXCLUDE_PATHS
-                .iter()
-                .map(|p| (*p).to_string())
-                .collect()
-        });
+/// Turn the merged [`HttpTraceConfig`] into the effective
+/// [`HttpTraceSettings`], applying the built-in defaults.
+///
+/// Header names are validated here so an invalid one is a boot error rather
+/// than a silent per-request skip.
+fn settings_from(config: HttpTraceConfig) -> Result<HttpTraceSettings, PluginBuildError> {
+    let exclude_paths = config.exclude_paths.unwrap_or_else(|| {
+        DEFAULT_EXCLUDE_PATHS
+            .iter()
+            .map(|p| (*p).to_string())
+            .collect()
+    });
 
-    let capture_headers = builder
+    let capture_headers = config
         .capture_headers
-        .or(file.capture_headers)
-        .or(preset.capture_headers)
-        .unwrap_or_default();
-    let capture_headers = capture_headers
+        .unwrap_or_default()
         .into_iter()
         .map(|name| {
             crate::http::HeaderName::try_from(name.as_str()).map_err(|_| -> PluginBuildError {
@@ -344,32 +342,12 @@ pub fn resolve_settings(
 
     Ok(HttpTraceSettings {
         exclude_paths: Arc::from(exclude_paths),
-        request_id: builder
-            .request_id
-            .or(file.request_id)
-            .or(preset.request_id)
-            .unwrap_or(true),
-        record_path: builder
-            .record_path
-            .or(file.record_path)
-            .or(preset.record_path)
-            .unwrap_or(false),
-        record_query: builder
-            .record_query
-            .or(file.record_query)
-            .or(preset.record_query)
-            .unwrap_or(false),
+        request_id: config.request_id.unwrap_or(true),
+        record_path: config.record_path.unwrap_or(false),
+        record_query: config.record_query.unwrap_or(false),
         capture_headers: Arc::from(capture_headers),
-        summary: builder
-            .summary
-            .or(file.summary)
-            .or(preset.summary)
-            .unwrap_or(true),
-        request_event: builder
-            .request_event
-            .or(file.request_event)
-            .or(preset.request_event)
-            .unwrap_or(false),
+        summary: config.summary.unwrap_or(true),
+        request_event: config.request_event.unwrap_or(false),
     })
 }
 
@@ -389,7 +367,7 @@ impl Plugin for HttpTrace {
         // Resolved (and header names validated) even when disabled: a typo in
         // `trace.capture-headers` should not lie dormant until someone flips
         // `trace.enabled` back on in production.
-        let settings = resolve_settings(self.builder, config, self.preset)?;
+        let settings = settings_from(self.cfg.resolve(config))?;
 
         if !ctx.enabled() {
             tracing::debug!(

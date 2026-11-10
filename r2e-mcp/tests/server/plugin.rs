@@ -4,7 +4,7 @@
 use r2e_core::config::ConfigValue;
 use r2e_core::http::StatusCode;
 use r2e_core::{AppBuilder, R2eConfig};
-use r2e_mcp::{AppBuilderMcpExt, McpServer};
+use r2e_mcp::{AppBuilderMcpExt, McpConfig, McpServer};
 use serde_json::json;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
@@ -87,6 +87,64 @@ async fn builder_path_overrides_config_path() {
     support::initialize(&router, "/from-builder").await;
     let miss = support::post(&router, "/from-config", None, &support::initialize_body()).await;
     assert_eq!(miss.status, StatusCode::NOT_FOUND);
+}
+
+/// Boots the fixture service behind `plugin` and returns the router.
+async fn router_with(yaml: &str, plugin: McpServer) -> r2e_core::http::Routes {
+    AppBuilder::new()
+        .override_config(config(yaml))
+        .load_config::<()>()
+        .plugin(plugin)
+        .provide(Calc)
+        .provide(CallLog::default())
+        .build_state()
+        .await
+        .register_mcp_service::<FixtureTools>()
+        .build()
+}
+
+fn preset_path(path: &str) -> McpConfig {
+    McpConfig {
+        path: Some(path.into()),
+        ..Default::default()
+    }
+}
+
+#[r2e_core::test]
+async fn preset_path_applies_when_the_file_is_silent() {
+    let router = router_with("app:\n  name: x\n", McpServer::preset(preset_path("/preset"))).await;
+
+    support::initialize(&router, "/preset").await;
+    let miss = support::post(&router, "/mcp", None, &support::initialize_body()).await;
+    assert_eq!(miss.status, StatusCode::NOT_FOUND);
+}
+
+#[r2e_core::test]
+async fn file_path_overrides_the_preset() {
+    let router = router_with(
+        "mcp:\n  path: /from-config\n",
+        McpServer::preset(preset_path("/preset")),
+    )
+    .await;
+
+    support::initialize(&router, "/from-config").await;
+    let miss = support::post(&router, "/preset", None, &support::initialize_body()).await;
+    assert_eq!(miss.status, StatusCode::NOT_FOUND);
+}
+
+#[r2e_core::test]
+async fn builder_path_overrides_file_and_preset() {
+    let router = router_with(
+        "mcp:\n  path: /from-config\n",
+        McpServer::preset(preset_path("/preset")).with_path("/from-builder"),
+    )
+    .await;
+
+    support::initialize(&router, "/from-builder").await;
+    for other in ["/from-config", "/preset"] {
+        let miss = support::post(&router, other, None, &support::initialize_body()).await;
+        assert_eq!(miss.status, StatusCode::NOT_FOUND);
+    }
 }
 
 #[r2e_core::test]

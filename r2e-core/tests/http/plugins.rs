@@ -448,6 +448,38 @@ fn resolver_precedence_builder_file_default() {
 }
 
 #[test]
+fn resolver_preset_sits_below_the_file_key_by_key() {
+    let baseline = CorsConfig {
+        allowed_origins: Some(vec!["https://baseline".into()]),
+        allowed_methods: Some(vec!["GET".into()]),
+        max_age: Some(Duration::from_secs(60)),
+        ..CorsConfig::default()
+    };
+
+    let s = Cors::preset(baseline.clone()).resolve_settings(None, "prod").unwrap();
+    assert_eq!(origins(&s), ["https://baseline"]);
+    assert_eq!(s.max_age, Some(Duration::from_secs(60)));
+
+    // The file overrides the keys it sets and only those.
+    let s = Cors::preset(baseline.clone())
+        .resolve_settings(file(&["https://file"]), "prod")
+        .unwrap();
+    assert_eq!(origins(&s), ["https://file"]);
+    assert_eq!(s.methods.as_deref().map(<[_]>::len), Some(1));
+    assert_eq!(s.max_age, Some(Duration::from_secs(60)));
+
+    // A builder setter beats both; `default_origin` stays in the preset tier.
+    let plugin = Cors::preset(baseline)
+        .default_origin("https://fallback")
+        .max_age(Duration::from_secs(5));
+    let s = plugin.resolve_settings(None, "prod").unwrap();
+    assert_eq!(origins(&s), ["https://fallback"]);
+    assert_eq!(s.max_age, Some(Duration::from_secs(5)));
+    let s = plugin.resolve_settings(file(&["https://file"]), "prod").unwrap();
+    assert_eq!(origins(&s), ["https://file"]);
+}
+
+#[test]
 fn resolver_builder_fields_override_file_fields_individually() {
     let plugin = Cors::new().max_age(Duration::from_secs(10));
     let cfg = CorsConfig {

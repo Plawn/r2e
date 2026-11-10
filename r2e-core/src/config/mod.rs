@@ -1,5 +1,6 @@
 mod de;
 mod loader;
+pub mod layered;
 pub mod registry;
 mod runtime;
 pub mod secrets;
@@ -13,6 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+pub use layered::Layered;
 pub use registry::{register_section, registered_sections, RegisteredSection};
 pub use runtime::{
     supervise_config_watch, supervise_config_watch_with_backoff, ConfigProvider,

@@ -948,9 +948,81 @@ fn generate_struct(input: &DeriveInput, data: &syn::DataStruct) -> syn::Result<T
         acc
     };
 
+    // `overlay` — field-wise merge, and `LAYERABLE` — whether every field can
+    // express "unset" (see the trait docs). Map-valued sections are plain
+    // values here: an `Option<HashMap<..>>` is replaced wholesale like any
+    // other `Option`, a bare map has no "unset".
+    let overlay_inits: Vec<TokenStream2> = field_infos
+        .iter()
+        .map(|f| {
+            let field_name = &f.name;
+            let deep = f.is_section && !f.is_map_section;
+            match (f.is_option, deep) {
+                (true, true) => {
+                    let section_ty = option_inner_type(&f.ty).cloned().unwrap_or_else(|| f.ty.clone());
+                    quote! {
+                        #field_name: match (self.#field_name, __under.#field_name) {
+                            (::std::option::Option::Some(__a), ::std::option::Option::Some(__b)) => {
+                                // A section that cannot express "unset" per
+                                // field (required keys, a tagged enum) is one
+                                // value: the upper one replaces the lower.
+                                ::std::option::Option::Some(
+                                    if <#section_ty as #krate::config::ConfigProperties>::LAYERABLE {
+                                        #krate::config::ConfigProperties::overlay(__a, __b)
+                                    } else {
+                                        __a
+                                    },
+                                )
+                            }
+                            (__a, __b) => __a.or(__b),
+                        }
+                    }
+                }
+                (true, false) => quote! {
+                    #field_name: self.#field_name.or(__under.#field_name)
+                },
+                (false, true) => quote! {
+                    #field_name: #krate::config::ConfigProperties::overlay(
+                        self.#field_name,
+                        __under.#field_name,
+                    )
+                },
+                (false, false) => quote! { #field_name: self.#field_name },
+            }
+        })
+        .collect();
+
+    let layerable_terms: Vec<TokenStream2> = field_infos
+        .iter()
+        .filter(|f| !f.is_skip)
+        .map(|f| {
+            let deep = f.is_section && !f.is_map_section;
+            if f.is_option {
+                // `None` is the "unset" state — for an optional section too,
+                // whatever its type (see the `overlay` arm above).
+                quote! { true }
+            } else if deep {
+                let section_ty = &f.ty;
+                quote! { <#section_ty as #krate::config::ConfigProperties>::LAYERABLE }
+            } else {
+                quote! { false }
+            }
+        })
+        .collect();
+
     Ok(quote! {
         impl #krate::config::typed::ConfigProperties for #name {
             type Children = #children_type;
+
+            const LAYERABLE: bool = true #(&& #layerable_terms)*;
+
+            fn overlay(self, __under: Self) -> Self {
+                // Read even when no field consults it (all-plain structs).
+                let _ = &__under;
+                Self {
+                    #(#overlay_inits,)*
+                }
+            }
 
             fn properties_metadata(__prefix: Option<&str>) -> Vec<#krate::config::typed::PropertyMeta> {
                 vec![
