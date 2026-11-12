@@ -21,7 +21,7 @@ framework bug to record here.
 
 ---
 
-## W4 — Plugin serve-path e2e audit — OPEN
+## W4 — Plugin serve-path e2e audit — OPEN (Tasker #1365)
 
 The item-12 failure mode (gRPC `serve()` silently unwired) generalized: verify
 every plugin's serve-time promise through the real `build_state → serve()`
@@ -30,21 +30,17 @@ One e2e test per plugin, in the spirit of `example-grpc/tests/grpc_serve.rs`.
 The plugin `enabled` gate widens the surface: a disabled plugin's serve
 promise must also be verified as *absent*.
 
-Current state: each plugin crate has unit/integration tests, but none of them
-boots the plugin through `build_state → serve()` and asserts the wire-level
-promise.
+Current state (checked against the code 2026-11-12): no plugin crate boots its
+own plugin through `build_state → serve()`. What exists is indirect:
 
-## W6 — Testing DX follow-ups — OPEN
+- `example-app/tests` (real boot through `TestApp::boot`) asserts `/health`,
+  `/openapi.json`, `/docs` and the scheduler on the wire.
+- `r2e-core/tests/plugin/enabled.rs` covers the `enabled` gate generically
+  (inert variant, effects dropped, disposal) with test plugins.
 
-- Dev services for the remaining backends: **Kafka, RabbitMQ, Pulsar**
-  (crate `r2e-devservices`, same workspace-session/Ryuk lifecycle as the
-  shipped `DevPostgres`/`DevRedis`/`DevOpenFga`).
-- `r2e doctor` check for missing dev-service config (deliberately NOT
-  auto-sniffing config — implicitness hides failures).
-- **`r2e-test` in-process MCP client over the `McpLoopback` bean** (Tasker
-  #1245, follow-up of the loopback transport #1076).
-- **Phase 3 (`r2e test --watch`): deferred, NOT approved** — do not start
-  without an explicit user go.
+Still missing: a wire-level test for **prometheus** (`/metrics` is only named
+in an `exclude_paths` list), **observability**, **oidc** and **static**, and
+the *absent when disabled* assertion for every real plugin.
 
 ## W11 — Carried from the root `todo` file — remainder
 
@@ -52,8 +48,9 @@ promise.
   (one serve path, `r2e_http::server::serve`) and B (tower-http behind
   `r2e_http::layers`) and C (`Routes<S>` replaces `Router`, breaking) shipped
   2026-10-25, released as r2e 0.9.0 / r2e-core 0.8.0 / r2e-http 0.7.0
-  (PR #113). Optional follow-up: `hyper_util` `auto::Builder` tuning in
-  `r2e-http/src/server.rs`. A backend swap (ntex/tako/xitca) is explicitly
+  (PR #113). Optional follow-up: `hyper_util` `auto::Builder` tuning —
+  `r2e-http/src/server.rs` still serves through `axum::serve`, so tuning
+  means owning the accept loop there first. A backend swap (ntex/tako/xitca) is explicitly
   NOT on the roadmap; its trigger is written in that file (§3 phase D).
 - **Responsibility-boundaries audit (remainder)** — the scheduled/consumer
   half was absorbed by W10; what remains is a pass over which concern lives in
@@ -80,7 +77,7 @@ Reference: `docs/claude/dev-reload-config-semantics.md`.
   correctness gap (one carried registry); a correct re-spawn needs serve-token
   capture + per-cycle child tokens + provider dedup.
 
-## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority
+## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority (Tasker #1366)
 
 Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed
 `FgaClient` with write-through invalidation, `OpenFga` plugin owning the store
@@ -223,14 +220,16 @@ the loopback transport (#1076) are shipped: archive § W16. References:
 
 - **P4 — protocol gaps: done.** Progress, live elicitation, `completion/complete`
   and list pagination shipped 2026-09-26; MRTR (SEP-2322, elicitation for
-  sessionless 2026-07-28 clients) on `feat/mcp-mrtr` (2026-11-12): keyed
-  `McpClient::elicit(key, …)` (breaking), opt-in through
+  sessionless 2026-07-28 clients) merged 2026-11-12 via PR #151 (`7a46300f`):
+  keyed `McpClient::elicit(key, …)` (breaking), opt-in through
   `mcp.request-state-key`. SEP-2577-deprecated sampling, roots and logging are
   deliberately NOT implemented. Plan: `plans/w16-p4-mcp-protocol-gaps.md`.
-- **Awaiting release:** loopback transport #1076 (PR #139, `2656fe5e`) and the
-  HTTP session idle timeout + `McpSessionStore` #1244 (PR #140, `fe4b4516`),
-  both merged 2026-11-06, additive → `r2e-mcp` 0.11.1 at the next release;
-  close both tickets then.
+- **Awaiting release:** MRTR only — a breaking bump of `r2e-mcp`
+  (`bump-version.sh r2e-mcp breaking`, propagates to `r2e`). The loopback
+  transport #1076 and the session idle timeout + `McpSessionStore` #1244
+  shipped in `r2e-mcp` 0.12.0 (2026-11-10); both tickets are closed.
+- `r2e-test` in-process MCP client: Tasker #1245 (see "Standalone Tasker
+  tickets" below).
 - `McpSessions::each`/bulk ops and per-tenant filtering, if a real app asks
   for them.
 - Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
@@ -251,38 +250,30 @@ Kept where the context lives rather than duplicated here:
 - `docs/research/HANDOFF-perf-tpc.md` — Linux benchmark run, proxy-mesh push
   gate, tunnel `copy_bidirectional` (543).
 
-## Standalone Tasker tickets (target `r2e`, open as of 2026-11-06)
+## Standalone Tasker tickets (target `r2e`, open as of 2026-11-12)
 
 Not part of a workstream above; Tasker is the record, this list is the
-pointer. Verified against Tasker on 2026-11-06 (the five tickets released in
-r2e 0.11.0 — #1204, #1206, #1210, #1212, #1213 — were closed on 2026-11-05).
-"Merged" below means on `master`, unreleased: the ticket closes with the
-release that ships it.
+pointer. Verified against Tasker and the code on 2026-11-12 (master
+`1676ab0c`). r2e 0.12.0 (2026-11-10, PR #149) released #1076, #1244, #1181,
+#1173, #1288, #1290, #1291 and #1299 — all closed. "Merged" below means on
+`master`, unreleased: the ticket closes with the release that ships it.
 
-- **#1076 (high)** — MCP loopback transport: MERGED 2026-11-06 via PR #139
-  (`2656fe5e`, see W16); closes on release (`r2e-mcp` 0.11.1). The HTTP
-  session idle timeout + `McpSessionStore` landed as **#1244** (PR #140,
-  `fe4b4516`, same release); `with_session_manager` was dropped.
-- **#1181 (medium)** — MERGED 2026-11-06 via PR #142 (`4afb694d`; ships
-  with the next `r2e-macros` release) as `#[scheduled(schedule = "method")]`: a plain **sync** `&self ->
-  ScheduleConfig` method on the same impl block provides the cadence, called
-  once at registration (controllers and `#[bean]` impls). The cadence comes
-  from a `#[config("…")] cadence: ScheduleConfig` field (absent → boot config
-  error or `Option<ScheduleConfig>` + in-code default; invalid → construction
-  fails naming the key), an injected bean, or code. The ticket's original
-  `config = "…", default = "…"` form was **rejected** (second config path —
-  see Decisions log). Additive: `ScheduleConfig` gained `Clone`/`Debug`/
-  `PartialEq`/`Eq`; no version bump. Remaining: close-the-loop replaces its
-  `schedule_task_with` workaround in `ctl-api/src/controllers/sweep.rs`.
-  Follow-ups (not V1): live cadence re-evaluation per re-arm (driver change),
-  `Option<ScheduleConfig>` → `None` disables the job.
-- **#1173 (low)** — MERGED 2026-11-06 via PR #141 (`9c3281de`, ticket
-  closed; the r2e-security break ships with the next release):
-  `AuthenticatedUser` / `impl_claims_identity_extractor!` reject with
-  `Rejection` carrying the RFC 6750 challenge from `SecurityError::challenge()`
-  (HTTP, projection, gRPC metadata; MCP merges `resource_metadata` into it).
-  Breaking for r2e-security (`extract_jwt_claims*` return `Rejection`). This
-  also covers the `www-authenticate` item of #1217.
+- **Next release (nothing cut yet):** `r2e-mcp` breaking (MRTR, PR #151 →
+  propagates to `r2e`), `r2e-macros` + `r2e-openapi` patch (#1272), `r2e-core`
+  patch (request ids on `uuid` `fast-rng`, PR #150).
+- **#1272 (medium)** — MERGED 2026-11-12 via PR #152 (`1676ab0c`):
+  `RouteInfo` matches the runtime (one path parameter per placeholder of the
+  full template, 200 as the default status for every verb). Generated specs
+  change for a `POST`/`DELETE` that relied on the old 201/204 default. Closes
+  with the next `r2e-macros` release.
+- **#1245 (medium)** — `r2e-test` in-process MCP client over the
+  `McpLoopback` bean (`TestApp::mcp()`), follow-up of the loopback transport
+  #1076; nothing started. The only survivor of the dropped W6.
+- **#1181 follow-ups** (ticket closed, released in `r2e-macros` 0.11.0):
+  close-the-loop still has to replace its `schedule_task_with` workaround in
+  `ctl-api/src/controllers/sweep.rs` (app side). Not V1: live cadence
+  re-evaluation per re-arm (driver change), `Option<ScheduleConfig>` → `None`
+  disables the job.
 - **#768 (low, idea)** — r2e-observability sqlx spans + app span helpers;
   measure the appetite first.
 - `docs/research/thread-per-core.md` — stall detector, `#[offload]`/
@@ -311,17 +302,15 @@ release that ships it.
     `substitute_self_assoc` goes away); the three `*_routes_parsing.rs` lose
     their member loops. Oracle: `cargo expand` byte-identical on example-app /
     example-mcp / example-grpc. Patch of r2e-macros, no `Breaking` entry.
-  - **#1217 3c'** (medium, six independent items = six commits): gRPC core
-    store through `endpoint_core_or_insert`; compile-time rejection of
+  - **#1217 3c'** (low, five independent items = five commits; ticket
+    refreshed 2026-11-12): gRPC core store through `endpoint_core_or_insert`
+    (only r2e-core and r2e-mcp call it today); compile-time rejection of
     `register_controller` on the pre-state builder (silently discarded at
-    `build_state()` today); ~~`www-authenticate` restored on validator failure
-    (HTTP + gRPC metadata, open since #1072)~~ — shipped under #1173
-    (2026-11-06); hidden deco item names
-    `<Ctrl>_<fn>` colliding across modules; `Self` unscoped in HTTP deco
-    expressions; `GrpcIdentity` stub removal — a `Breaking` entry of
-    r2e-grpc, **only at its next minor** (deprecation window). The ticket's
-    item 6 still names the `#[mcp_routes]` alias: obsolete, nothing to
-    remove there.
+    `build_state()` today); hidden deco item names `<Ctrl>_<fn>` colliding
+    across modules; `Self` unscoped in HTTP deco expressions; `GrpcIdentity`
+    stub removal — a `Breaking` entry of r2e-grpc. The stub survived
+    r2e-grpc 0.11.0, so it goes with the next breaking minor of r2e-grpc.
+    The former `www-authenticate` item shipped under #1173.
   - **#1219 Hexagonal DX 2** (medium, after #1218): example-app as
     domain/ports/adapters{http,mcp,grpc,events}/services, outbound ports as
     `Arc<dyn Port>` beans swapped with `override_bean` in a test,
@@ -338,6 +327,11 @@ release that ships it.
 
 ## Decisions log — do NOT re-propose
 
+- **W6 testing-DX follow-ups: DROPPED (2026-11-12, user decision).** No dev
+  services for Kafka / RabbitMQ / Pulsar (the generic `DevService` covers
+  them), no `r2e doctor` check for missing dev-service config, no
+  `r2e test --watch` (Phase 3, never approved). The shipped part is in the
+  archive § W6; the in-process MCP test client lives on as Tasker #1245.
 - **No closure-based config path on the builder (2026-11-09, #1288).**
   `plugin_with(|cfg| plugin)`, `apply(|b| ..)`-for-config or any
   "read `r2e_config()` mid-chain to construct a plugin" API: REJECTED. A
