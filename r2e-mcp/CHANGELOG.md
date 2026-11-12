@@ -15,6 +15,35 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `McpClient::elicit` takes a key before the message:
+  `client.elicit::<T>("confirm", "Really?")`. The key names the question
+  within the call, which is what lets a sessionless client answer it on a
+  retry (see *Added*). Migration: add a constant, distinct key at each
+  `elicit` site (`format!("item-{id}")` inside a loop). `elicit_url` is
+  unchanged — its `elicitation_id` is the key.
+- `ElicitError` has a new variant, `InputRequired`; exhaustive matches need an
+  arm (propagate it).
+
+### Added
+
+- Multi-round-trip requests (MRTR, SEP-2322): elicitation for sessionless
+  2026-07-28 clients, on tools, prompts and resource reads. An unanswered
+  `elicit` answers the call with `input_required` (questions by key + a sealed
+  `requestState`); the client retries with `inputResponses` and the member
+  runs again from the top. Nothing is stored server-side; the state is signed,
+  expires after `mcp.elicitation-timeout-secs` and is bound to the caller, the
+  member and its arguments. Opt-in: `mcp.request-state-key` (≥ 32 bytes, boot
+  error otherwise) or `McpServer::with_request_state_key`; without a key these
+  clients keep getting `ElicitError::NoChannel`. `mcp.mrtr-max-rounds`
+  (default 10) caps the rounds of one call. Session-based clients keep the
+  live path.
+
+### Changed
+
+- `rmcp` 3.8 → 3.9.
+
 ## [0.12.0] - 2026-11-10
 
 ### Added

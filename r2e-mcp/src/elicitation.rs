@@ -1,16 +1,20 @@
 //! Elicitation (`elicitation/create`): the [`McpClient`] a member takes as a
 //! parameter to ask the user for input in the middle of a call.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use r2e_core::rt::CancelToken;
-use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema};
+use rmcp::model::{
+    ClientCapabilities, ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationSchema,
+};
 use rmcp::service::{ElicitationMode, Peer, RoleServer, ServiceError};
 use serde::de::DeserializeOwned;
 
 use crate::error::McpError;
+use crate::mrtr::Round;
 
 /// Default `mcp.elicitation-timeout-secs`: how long a member waits for the
 /// user's answer.
@@ -27,12 +31,43 @@ pub struct ClientChannel {
 
 struct Channel {
     peer: Peer<RoleServer>,
-    /// A legacy MCP session: the client's answer POST reaches this peer.
-    /// Sessionless requests (`mcp.stateless`, 2026-07-28 per-request
-    /// negotiation) are served over a one-shot transport that drops it.
-    live: bool,
+    back: Back,
     timeout: Duration,
     cancel: CancelToken,
+}
+
+/// How a question reaches the user. Picked per call, from what the client
+/// negotiated — never by the member.
+pub(crate) enum Back {
+    /// No way back: a sessionless request before 2026-07-28
+    /// (`mcp.stateless`), or a 2026-07-28 one while `mcp.request-state-key`
+    /// is not set.
+    None,
+    /// A legacy MCP session: `elicitation/create` rides the call's SSE
+    /// stream and the client's answer POST reaches this peer.
+    Live,
+    /// Protocol 2026-07-28: the call ends with the questions and the client
+    /// retries it with the answers (see [`crate::mrtr`]).
+    Rounds {
+        round: Arc<Round>,
+        /// What the client advertised on this request.
+        modes: HashSet<ElicitationMode>,
+    },
+}
+
+/// The elicitation modes `capabilities` advertise (rmcp's rule: a bare
+/// `elicitation: {}` means form).
+pub(crate) fn advertised_modes(capabilities: Option<&ClientCapabilities>) -> HashSet<ElicitationMode> {
+    let mut modes = HashSet::new();
+    if let Some(elicitation) = capabilities.and_then(|c| c.elicitation.as_ref()) {
+        if elicitation.form.is_some() || elicitation.url.is_none() {
+            modes.insert(ElicitationMode::Form);
+        }
+        if elicitation.url.is_some() {
+            modes.insert(ElicitationMode::Url);
+        }
+    }
+    modes
 }
 
 impl ClientChannel {
@@ -43,14 +78,14 @@ impl ClientChannel {
 
     pub(crate) fn new(
         peer: &Peer<RoleServer>,
-        live: bool,
+        back: Back,
         timeout: Duration,
         cancel: &CancelToken,
     ) -> Self {
         ClientChannel {
             inner: Some(Arc::new(Channel {
                 peer: peer.clone(),
-                live,
+                back,
                 timeout,
                 cancel: cancel.clone(),
             })),
@@ -61,7 +96,14 @@ impl ClientChannel {
 impl fmt::Debug for ClientChannel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClientChannel")
-            .field("live", &self.inner.as_ref().is_some_and(|c| c.live))
+            .field(
+                "back",
+                &match self.inner.as_ref().map(|c| &c.back) {
+                    Some(Back::Live) => "live",
+                    Some(Back::Rounds { .. }) => "rounds",
+                    Some(Back::None) | None => "none",
+                },
+            )
             .finish_non_exhaustive()
     }
 }
@@ -74,13 +116,29 @@ impl fmt::Debug for ClientChannel {
 /// ([`ToolCall::client`](crate::ToolCall::client)).
 ///
 /// The lifetime ties it to the call: a request to the client is only
-/// deliverable while the call is in flight (it rides the call's own SSE
-/// stream), so an `McpClient` cannot be moved into a spawned task.
+/// deliverable while the call is in flight, so an `McpClient` cannot be
+/// moved into a spawned task.
 ///
-/// Live elicitation needs an MCP session (the client's answer arrives on a
-/// separate POST routed by `Mcp-Session-Id`). Under `mcp.stateless`, and for
-/// sessionless 2026-07-28 clients, every request fails fast with
-/// [`ElicitError::NoChannel`] instead of hanging.
+/// # Two ways to the user, one API
+///
+/// The transport is picked per call from what the client negotiated:
+///
+/// - **Live** (an MCP session, protocol up to 2025-11-25):
+///   `elicitation/create` rides the call's own SSE stream and the member
+///   waits for the answer.
+/// - **Rounds** (protocol 2026-07-28, sessionless — MRTR): the first
+///   unanswered [`elicit`](Self::elicit) returns
+///   [`ElicitError::InputRequired`]; propagate it with `?`. The call ends
+///   with the question, the client retries the same request with the
+///   answer, and the member **runs again from the top** — `elicit` now
+///   returns that answer. Requires `mcp.request-state-key`; without it a
+///   2026-07-28 client gets [`ElicitError::NoChannel`].
+///
+/// Because a member may run several times for one call, **ask first, act
+/// after**: anything done before the last `elicit` is redone on every round.
+/// The key identifies a question within the call: use a distinct, stable one
+/// per `elicit` site (a loop asks under `format!("item-{id}")`, not under
+/// one key).
 #[derive(Clone, Copy)]
 pub struct McpClient<'a> {
     channel: &'a ClientChannel,
@@ -93,23 +151,15 @@ impl<'a> McpClient<'a> {
     }
 
     /// Whether [`elicit`](Self::elicit) can reach the user: the call has a
-    /// live back channel and the client advertised form elicitation.
+    /// way back and the client advertised form elicitation.
     pub fn supports_elicitation(&self) -> bool {
-        self.live().is_some_and(|c| {
-            c.peer
-                .supported_elicitation_modes()
-                .contains(&ElicitationMode::Form)
-        })
+        self.channel_for(ElicitationMode::Form).is_ok()
     }
 
     /// Whether [`elicit_url`](Self::elicit_url) can reach the user: the call
-    /// has a live back channel and the client advertised URL elicitation.
+    /// has a way back and the client advertised URL elicitation.
     pub fn supports_url_elicitation(&self) -> bool {
-        self.live().is_some_and(|c| {
-            c.peer
-                .supported_elicitation_modes()
-                .contains(&ElicitationMode::Url)
-        })
+        self.channel_for(ElicitationMode::Url).is_ok()
     }
 
     /// Ask the user to fill in a `T` (form-mode elicitation).
@@ -119,9 +169,19 @@ impl<'a> McpClient<'a> {
     /// enum), anything else fails with [`ElicitError::InvalidSchema`] before
     /// anything is sent.
     ///
-    /// Waits at most `mcp.elicitation-timeout-secs` (default 300) and stops
-    /// early when the call is cancelled.
-    pub async fn elicit<T>(&self, message: impl Into<String>) -> Result<Elicited<T>, ElicitError>
+    /// `key` names this question within the call (see the type docs): it is
+    /// how a retried call finds the answer the client brings back. A live
+    /// session does not need it, but the member cannot know which transport
+    /// it is served on.
+    ///
+    /// Live, waits at most `mcp.elicitation-timeout-secs` (default 300) and
+    /// stops early when the call is cancelled; in rounds, the same setting
+    /// bounds how long the client has to retry.
+    pub async fn elicit<T>(
+        &self,
+        key: &str,
+        message: impl Into<String>,
+    ) -> Result<Elicited<T>, ElicitError>
     where
         T: DeserializeOwned + schemars::JsonSchema,
     {
@@ -131,16 +191,17 @@ impl<'a> McpClient<'a> {
                 std::any::type_name::<T>()
             ))
         })?;
-        let channel = self.channel_for(ElicitationMode::Form)?;
-        let result = send(
-            channel,
-            ElicitRequestParams::FormElicitationParams {
-                meta: None,
-                message: message.into(),
-                requested_schema,
-            },
-        )
-        .await?;
+        let result = self
+            .ask(
+                ElicitationMode::Form,
+                key,
+                ElicitRequestParams::FormElicitationParams {
+                    meta: None,
+                    message: message.into(),
+                    requested_schema,
+                },
+            )
+            .await?;
         match result.action {
             ElicitationAction::Accept => {
                 let content = result.content.ok_or_else(|| {
@@ -160,9 +221,10 @@ impl<'a> McpClient<'a> {
     /// elicitation: OAuth consent, payment, …) and wait for them to
     /// acknowledge it.
     ///
-    /// `elicitation_id` identifies this interaction to the client. `Accept`
-    /// only means the user agreed to open the URL — confirm the outcome
-    /// server-side.
+    /// `elicitation_id` identifies this interaction to the client, and is
+    /// the question's key within the call (see [`elicit`](Self::elicit)).
+    /// `Accept` only means the user agreed to open the URL — confirm the
+    /// outcome server-side.
     pub async fn elicit_url(
         &self,
         message: impl Into<String>,
@@ -172,17 +234,19 @@ impl<'a> McpClient<'a> {
         let url = url.into();
         url::Url::parse(&url)
             .map_err(|err| ElicitError::InvalidSchema(format!("invalid URL `{url}`: {err}")))?;
-        let channel = self.channel_for(ElicitationMode::Url)?;
-        let result = send(
-            channel,
-            ElicitRequestParams::UrlElicitationParams {
-                meta: None,
-                message: message.into(),
-                url,
-                elicitation_id: elicitation_id.into(),
-            },
-        )
-        .await?;
+        let elicitation_id = elicitation_id.into();
+        let result = self
+            .ask(
+                ElicitationMode::Url,
+                &elicitation_id.clone(),
+                ElicitRequestParams::UrlElicitationParams {
+                    meta: None,
+                    message: message.into(),
+                    url,
+                    elicitation_id,
+                },
+            )
+            .await?;
         Ok(match result.action {
             ElicitationAction::Accept => Elicited::Accept(()),
             ElicitationAction::Decline => Elicited::Decline,
@@ -190,16 +254,38 @@ impl<'a> McpClient<'a> {
         })
     }
 
-    fn live(&self) -> Option<&'a Channel> {
-        self.channel.inner.as_deref().filter(|c| c.live)
-    }
-
+    /// The channel, once it is known to carry `mode` to the user.
     fn channel_for(&self, mode: ElicitationMode) -> Result<&'a Channel, ElicitError> {
-        let channel = self.live().ok_or(ElicitError::NoChannel)?;
-        if !channel.peer.supported_elicitation_modes().contains(&mode) {
+        let channel = self.channel.inner.as_deref().ok_or(ElicitError::NoChannel)?;
+        let advertised = match &channel.back {
+            Back::None => return Err(ElicitError::NoChannel),
+            Back::Live => channel.peer.supported_elicitation_modes().contains(&mode),
+            Back::Rounds { modes, .. } => modes.contains(&mode),
+        };
+        if !advertised {
             return Err(ElicitError::Unsupported);
         }
         Ok(channel)
+    }
+
+    async fn ask(
+        &self,
+        mode: ElicitationMode,
+        key: &str,
+        params: ElicitRequestParams,
+    ) -> Result<ElicitResult, ElicitError> {
+        let channel = self.channel_for(mode)?;
+        match &channel.back {
+            Back::Rounds { round, .. } => match round.answer(key) {
+                Some(answer) => serde_json::from_value(answer.clone())
+                    .map_err(|err| ElicitError::InvalidResponse(err.to_string())),
+                None => {
+                    round.ask(key, params);
+                    Err(ElicitError::InputRequired)
+                }
+            },
+            _ => send(channel, params).await,
+        }
     }
 }
 
@@ -247,9 +333,15 @@ pub enum Elicited<T> {
 pub enum ElicitError {
     /// The client did not advertise this elicitation mode.
     Unsupported,
-    /// No back channel to the client: no MCP session (`mcp.stateless`, a
-    /// sessionless 2026-07-28 client) or a hand-built call.
+    /// No way back to the client: a sessionless request before 2026-07-28
+    /// (`mcp.stateless`), a 2026-07-28 client while `mcp.request-state-key`
+    /// is not set, or a hand-built call.
     NoChannel,
+    /// Rounds only (protocol 2026-07-28): the question is recorded and the
+    /// call must end here so the client can answer and retry. Propagate it
+    /// (`?`) — whatever the member returns instead is discarded, the client
+    /// gets the question either way.
+    InputRequired,
     /// The user did not answer within `mcp.elicitation-timeout-secs`.
     Timeout,
     /// The call was cancelled while waiting.
@@ -267,8 +359,13 @@ impl fmt::Display for ElicitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ElicitError::Unsupported => f.write_str("the client does not support this elicitation"),
-            ElicitError::NoChannel => {
-                f.write_str("no channel to the client for elicitation (no MCP session)")
+            ElicitError::NoChannel => f.write_str(
+                "no channel to the client for elicitation: no MCP session, and \
+                 `mcp.request-state-key` is not set (it enables elicitation for \
+                 sessionless 2026-07-28 clients)",
+            ),
+            ElicitError::InputRequired => {
+                f.write_str("input required: the client must answer and retry the request")
             }
             ElicitError::Timeout => f.write_str("the user did not answer in time"),
             ElicitError::Cancelled => f.write_str("the call was cancelled during elicitation"),

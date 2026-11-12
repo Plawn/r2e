@@ -420,6 +420,15 @@ the `r2e-core` prelude, a patch re-pin would break apps still on `r2e-mcp`
 the per-sprint re-audit of data-catalog (which lines does it delete?) was
 not run — do it app-side together with the follow-ups below.
 
+App-side follow-ups (no framework change, owned by data-catalog — not on the
+r2e roadmap): move `CatalogServiceImpl` into a module via
+`grpc_services(...)`, drop `axum` from catalog-core (`impl_into_response!` +
+prelude `from_fn`/`MatchedPath`), try `#[sse]`, refresh
+`docs/MIGRATION_R2E.md`. The CORS/Tracing plugin migration lives in Tasker
+#1001 (target data-catalog); if the r2e plugins cannot reproduce the app's
+current CORS or `TraceLayer` span/log shape, that delta is a framework
+finding to file against r2e.
+
 Evidence base: audit of **blumana/data-catalog** (Axum→R2E migration, pinned
 at `915199c` = current master; `default-features = false` + `utils, openapi,
 grpc, grpc-reflection, multipart`; Doris/MySQL + Postgres on sqlx 0.8, tonic

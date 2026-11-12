@@ -20,6 +20,7 @@ use crate::auth::validator::McpTokenValidator;
 use crate::catalog::{Catalog, CatalogOptions, ServerIdentity};
 use crate::config::McpConfig;
 use crate::elicitation::DEFAULT_ELICITATION_TIMEOUT;
+use crate::mrtr::{Mrtr, DEFAULT_MAX_ROUNDS};
 use crate::global::McpRegistry;
 use crate::handler::{Endpoint, R2eMcpHandler};
 use crate::identity::{IdentityState, McpIdentityLayer, RequestScope};
@@ -263,6 +264,15 @@ impl McpServer {
     /// answer (overrides `mcp.elicitation-timeout-secs`; default 5 minutes).
     pub fn with_elicitation_timeout(mut self, timeout: Duration) -> Self {
         self.elicitation_timeout = Some(timeout);
+        self
+    }
+
+    /// The secret signing the MRTR `requestState` (overrides
+    /// `mcp.request-state-key`; at least 32 bytes). Enables
+    /// `McpClient::elicit` for sessionless 2026-07-28 clients.
+    pub fn with_request_state_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        self.cfg.set(|c| c.request_state_key = Some(key));
         self
     }
 
@@ -547,6 +557,19 @@ impl Plugin for McpServer {
             .elicitation_timeout
             .or(cfg.elicitation_timeout_secs.map(Duration::from_secs))
             .unwrap_or(DEFAULT_ELICITATION_TIMEOUT);
+        let mrtr = cfg
+            .request_state_key
+            .as_deref()
+            .map(|key| {
+                Mrtr::new(
+                    key,
+                    cfg.mrtr_max_rounds
+                        .filter(|&rounds| rounds > 0)
+                        .unwrap_or(DEFAULT_MAX_ROUNDS),
+                    elicitation_timeout,
+                )
+            })
+            .transpose()?;
         let session_cfg = cfg.session.unwrap_or_default();
         // `None` leaves rmcp's default (300 s); `Some(ZERO)` = never.
         let session_idle_timeout = self
@@ -828,6 +851,7 @@ impl Plugin for McpServer {
                 init: init_slot.get().cloned(),
                 shutdown: mcp_cancel.clone(),
                 elicitation_timeout,
+                mrtr,
                 page_size,
                 supported_versions,
             });

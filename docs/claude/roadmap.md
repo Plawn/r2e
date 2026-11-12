@@ -221,11 +221,12 @@ the loopback transport (#1076) are shipped: archive § W16. References:
 `docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
 (adapter internals + decisions log).
 
-- **P4 — protocol gaps: MRTR open.** Progress, live elicitation (MCP sessions
-  only), `completion/complete` and list pagination shipped 2026-09-26; MRTR
-  (required for 2026 sessionless clients) is the remainder. SEP-2577-deprecated
-  sampling, roots and logging are deliberately NOT implemented. Plan:
-  `plans/w16-p4-mcp-protocol-gaps.md`.
+- **P4 — protocol gaps: done.** Progress, live elicitation, `completion/complete`
+  and list pagination shipped 2026-09-26; MRTR (SEP-2322, elicitation for
+  sessionless 2026-07-28 clients) on `feat/mcp-mrtr` (2026-11-12): keyed
+  `McpClient::elicit(key, …)` (breaking), opt-in through
+  `mcp.request-state-key`. SEP-2577-deprecated sampling, roots and logging are
+  deliberately NOT implemented. Plan: `plans/w16-p4-mcp-protocol-gaps.md`.
 - **Awaiting release:** loopback transport #1076 (PR #139, `2656fe5e`) and the
   HTTP session idle timeout + `McpSessionStore` #1244 (PR #140, `fe4b4516`),
   both merged 2026-11-06, additive → `r2e-mcp` 0.11.1 at the next release;
@@ -234,22 +235,6 @@ the loopback transport (#1076) are shipped: archive § W16. References:
   for them.
 - Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
   tickets" below.
-
-## W17 — data-catalog audit — remainder
-
-All six sprints (F1–F14) shipped 2026-08-31 (findings, sizes and sprint plan:
-archive § W17; metrics stacks: `docs/claude/metrics-stacks.md`). **Still
-open:** the per-sprint re-audit of data-catalog (which lines does it delete?)
-was not run — do it app-side together with the follow-ups below.
-
-App-side follow-ups (no framework change, hand to data-catalog): move
-`CatalogServiceImpl` into a module via `grpc_services(...)`, drop `axum`
-from catalog-core (`impl_into_response!` + prelude `from_fn`/`MatchedPath`),
-try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above.
-The CORS/Tracing plugin migration lives in Tasker #1001 (target
-data-catalog); if the r2e plugins cannot reproduce the app's current CORS
-or `TraceLayer` span/log shape, that delta comes back here as a framework
-finding.
 
 ## Open items tracked in their own docs
 

@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `mcp`: `McpClient::elicit` takes a key before the message
+  (`client.elicit::<T>("confirm", "Really?")`) and `ElicitError` gains
+  `InputRequired` — see `r2e-mcp`'s changelog. Elicitation now reaches
+  sessionless 2026-07-28 clients once `mcp.request-state-key` is set.
+
 ## [0.12.0] - 2026-11-10
 
 ### Breaking

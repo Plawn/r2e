@@ -1,6 +1,6 @@
 # W16 P4 — MCP protocol gaps (progress, elicitation, completion, pagination)
 
-Status: **§1 Progress DONE** (f065a3e4), **§2a Elicitation DONE** (00010c06), **§3 Completion DONE** (2026-09-26, branch `feat/mcp-dynamic-session-members`; shipped as an owned `Completion` — no lifetime — with public fields, `complete(arg = "fn")` per argument, compile-checked wiring); **§4 Pagination DONE** (fingerprint = hash of the caller's visible keys + subject instead of a view generation: sessionless-safe, per-family invalidation; cursor `v1.<off>.<fp>`, no base64). MRTR (§2c) next, separate PR. Origin:
+Status: **§1 Progress DONE** (f065a3e4), **§2a Elicitation DONE** (00010c06), **§3 Completion DONE** (2026-09-26, branch `feat/mcp-dynamic-session-members`; shipped as an owned `Completion` — no lifetime — with public fields, `complete(arg = "fn")` per argument, compile-checked wiring); **§4 Pagination DONE** (fingerprint = hash of the caller's visible keys + subject instead of a view generation: sessionless-safe, per-family invalidation; cursor `v1.<off>.<fp>`, no base64). **§2c MRTR DONE** (2026-11-12, branch `feat/mcp-mrtr`; deviations in §2c). Origin:
 W16 "what is left" review — `r2e-mcp` answers the member surface (tools /
 resources / templates / prompts / subscriptions / list_changed) but five
 protocol areas are either rmcp's default stub or absent.
@@ -161,8 +161,21 @@ for them.
 
 ### 2c. MRTR (2026-07-28 input-required retries)
 
-Only if 2a's verification shows 2026 peers need it, or once 2026 clients are
-common. Design sketch, not committed:
+**As shipped (2026-11-12, `r2e-mcp/src/mrtr.rs`):** `elicit` gained the `key`
+argument for every client (breaking; one signature for live and rounds). No
+macro change and no new `McpError` variant: the handler keeps the round
+(`Arc<Round>`) aside, runs the member, and a non-empty pending map replaces
+the member's own result ("pending wins" — a member swallowing
+`ElicitError::InputRequired` cannot hide a question). The mode follows the
+request's protocol revision (rmcp refuses a live request on 2026-07-28 and an
+`input_required` result below it); capabilities are read from the request
+`_meta`. The state is `{ round, asked keys, answers }`, sealed with TTL =
+`mcp.elicitation-timeout-secs` and bound (associated data) to method + target
++ subject + canonical arguments; only answers to the previous round's keys are
+read. No `mcp.request-state-key` → MRTR off, `NoChannel` (no ephemeral key, no
+boot error). Loopback is untouched (no elicitation there).
+
+Original sketch:
 
 - Member is re-run from scratch on retry (MRTR's model). `client.elicit::<T>(key, msg)` on retry returns the answer from `input_responses[key]`; on first pass it records an `InputRequest` and **aborts the member** via a sentinel `Err(ElicitError::InputRequired)` that the generated code maps to `CallToolResponse::InputRequired`.
 - Side effects before `elicit` run twice → document: "elicit first, act after". Same contract as rmcp.
