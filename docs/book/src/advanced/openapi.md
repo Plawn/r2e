@@ -81,25 +81,25 @@ Route metadata is automatically collected via `Controller::register_meta()` duri
 | Operation IDs | Handler method names |
 | Request body | The last parameter's `RequestBodySchema` impl (`Json<T>`, `Form<T>`, `Bytes`, `String`, `Multipart`, `TypedMultipart<T>`, custom) |
 | Response body | The return type's `ResponseBodySchema` impl (`Json<T>`, `String`, `Html<T>`, `Bytes`, `()`, `StatusCode`, `Sse<S>`, custom), through `Result<T, E>` and `(StatusCode, T)` |
-| Path/query/header params | `Path`, `Query`, `#[derive(Params)]` |
+| Path/query/header params | The path template's `{placeholders}` (typed by `Path<T>` / `Path<(A, B)>`), `Query`, `#[derive(Params)]` |
 | Required roles | `#[roles("admin", "editor")]` |
 | Summary | First line of `///` doc comment |
 | Description | Remaining lines of `///` doc comment |
 | Deprecated | `#[deprecated]` (standard Rust attribute) |
-| Status codes | Smart defaults (GET→200, POST→201, DELETE→204) or `#[status(N)]` |
+| Status codes | 200, or the status declared with `#[status(N)]` |
 | Error responses | Inferred from the route's `RejectionKind`s × its error envelope's `status_of` — see [Error responses](#error-responses) |
 
 ## Route attributes for OpenAPI
 
-### `#[status(N)]` — Override default status code
+### `#[status(N)]` — Declare the success status code
 
 ```rust
 #[post("/users")]
 #[status(201)]
-async fn create(&self, body: Json<CreateUser>) -> JsonResult<User> { ... }
+async fn create(&self, body: Json<CreateUser>) -> Result<(StatusCode, Json<User>), HttpError> { ... }
 ```
 
-Default status codes: GET/PUT/PATCH → 200, POST → 201, DELETE → 204.
+The documented status is 200 for every HTTP method: that is what a handler returning a plain body answers. `#[status(N)]` does not change the response — use it when the handler itself answers another status (`(StatusCode::CREATED, Json(..))`, `StatusCode::NO_CONTENT`, ...), so the spec matches.
 
 ### `#[returns(T)]` — Explicit response type
 
@@ -307,6 +307,7 @@ impl UserController {
 
     /// Delete a user
     #[delete("/{id}")]
+    #[status(204)]
     #[roles("admin")]
     async fn delete(&self, Path(id): Path<u64>) -> StatusResult {
         self.user_service.delete(id).await?;
@@ -316,9 +317,9 @@ impl UserController {
 ```
 
 This produces a spec with:
-- `POST /users` → 201 with `User` schema, `CreateUser` request body; error responses inferred from the route — 403 (`#[roles]`), 400/413/415/422 (JSON body), 500 — all with the default `ErrorResponse` body
+- `POST /users` → 200 with `User` schema, `CreateUser` request body; error responses inferred from the route — 403 (`#[roles]`), 400/413/415/422 (JSON body), 500 — all with the default `ErrorResponse` body
 - `GET /users` → 200 with `Vec<User>` schema
-- `DELETE /users/{id}` → 204 no body; 400 (`Path`), 403 (`#[roles]`) and 500 error responses
+- `DELETE /users/{id}` → 204 no body (declared with `#[status(204)]`); 400 (`Path`), 403 (`#[roles]`) and 500 error responses
 - Summaries and descriptions from doc comments
 - All schemas under `components/schemas`
 

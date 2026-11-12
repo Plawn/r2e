@@ -384,7 +384,7 @@ mod plugin {
         let spec = spec(router).await;
         let resp = &spec["paths"]["/things/form"]["post"]["responses"];
 
-        assert_eq!(statuses(resp), ["201", "400", "413", "415", "422", "500"]);
+        assert_eq!(statuses(resp), ["200", "400", "413", "415", "422", "500"]);
     }
 
     #[r2e_core::test]

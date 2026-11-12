@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Specs built from `#[routes]` metadata follow the `r2e-macros` fixes of
+  #1272: a tuple `Path<(A, B)>` documents one path parameter per placeholder,
+  and the success status defaults to 200 for every verb (a `DELETE` returning
+  `Json<T>` is documented with its body instead of a body-less 204). No change
+  to the builder itself.
+
 ## [0.10.0] - 2026-11-10
 
 ### Added

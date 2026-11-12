@@ -78,6 +78,12 @@ pub fn generate_controller_impl(def: &RoutesImplDef) -> TokenStream {
     // type inference issues with empty vec![].
     let register_meta_stmts = {
         let mut stmts = Vec::new();
+        if !(route_metadata_items.is_empty()
+            && sse_metadata_items.is_empty()
+            && ws_metadata_items.is_empty())
+        {
+            stmts.push(route_params_helper(&r2e_core_path()));
+        }
         if !route_metadata_items.is_empty() {
             stmts.push(quote! { __registry.extend(vec![#(#route_metadata_items),*]); });
         }
@@ -291,7 +297,8 @@ fn generate_route_metadata(
             }
             let roles: Vec<_> = role_strs.iter().map(|r| quote! { #r.to_string() }).collect();
 
-            let params_expr = params_expr(&rm.member.fn_item.sig, None, &krate);
+            let params_expr =
+                params_expr(&rm.member.fn_item.sig, None, meta_mod, &rm.path, &krate);
             let request = super::handlers::RequestParams::route(rm);
             let extracted = request.owned();
             let body = extract_body_info(&extracted, request.last_consumes_body, &rm.method);
@@ -317,9 +324,11 @@ fn generate_route_metadata(
                 None => quote! { None },
             };
 
-            // Status: #[status(N)] override > default_status_for_method
-            let status_code = rm.member.decorators.status_override
-                .unwrap_or_else(|| default_status_for_method(&rm.method));
+            // Status: what the generated handler answers. It forwards the
+            // user's return value untouched, so that is 200 for every method
+            // unless the handler sets a status itself (`(StatusCode, T)`,
+            // `StatusCode`, …) — which it declares with `#[status(N)]`.
+            let status_code = rm.member.decorators.status_override.unwrap_or(200);
 
             let deprecated = rm.member.deprecated;
 
@@ -573,19 +582,31 @@ fn rejection_kinds_expr(
 
 /// The `RouteInfo.params` expression for a handler signature.
 ///
-/// Two sources, folded into one deduplicated vec: `Path(name): Path<T>`
-/// parameters contribute a path `ParamInfo` literal, and every parameter type
-/// is probed for `ParamsMetadata` so `#[derive(Params)]` structs publish their
-/// own fields.
+/// Path parameters are the **placeholders of the route's full path template**
+/// (`PATH_PREFIX ++ route_path`), one `ParamInfo` each — never the handler's
+/// binding pattern, which is neither unique (`Path((a, b))`) nor required to
+/// match the template. A `Path<T>` extractor only contributes the *types*:
+/// `Path<(A, B)>` (or `Path<A>`) is zipped positionally with the placeholders
+/// when the arities agree, which is the contract axum's `Path` enforces at
+/// runtime. A placeholder no extractor types is documented as a `string`.
+///
+/// Every parameter type is also probed for `ParamsMetadata`, so
+/// `#[derive(Params)]` structs publish their own fields; a path field they
+/// declare wins over the positional typing.
 ///
 /// Shared by verb routes and `#[sse]` / `#[ws]` routes — a streaming route
 /// extracts its parameters exactly like a verb route, so it documents them the
 /// same way. `skip_param` (an index over the *typed* parameters, `&self`
 /// excluded) drops the WS socket parameter, which the upgrade supplies rather
 /// than an extractor.
+///
+/// The expression calls `__r2e_route_params`, emitted once per metadata
+/// function by [`route_params_helper`].
 fn params_expr(
     sig: &syn::Signature,
     skip_param: Option<usize>,
+    meta_mod: &syn::Ident,
+    route_path: &str,
     krate: &TokenStream,
 ) -> TokenStream {
     let params: Vec<&syn::PatType> = sig
@@ -601,7 +622,7 @@ fn params_expr(
         .map(|(_, pt)| pt)
         .collect();
 
-    let path_params = extract_path_params(&params, krate);
+    let path_extractors = path_extractor_types(&params);
 
     // Autoref specialization: for each handler param type, probe for ParamsMetadata.
     // Types implementing ParamsMetadata return their param infos; others return empty vec.
@@ -623,42 +644,94 @@ fn params_expr(
 
     quote! {
         {
-            let mut __p: Vec<#krate::di::meta::ParamInfo> = vec![#(#path_params),*];
+            let mut __p: Vec<#krate::di::meta::ParamInfo> = Vec::new();
             #(#probe_blocks)*
-            // Deduplicate params by (name, location) — possible when
-            // a Params struct includes #[param(path)] fields alongside Path<T>.
-            {
-                let mut seen = ::std::collections::HashSet::new();
-                __p.retain(|p| seen.insert((p.name.clone(), format!("{:?}", p.location))));
-            }
-            __p
+            let __path: String = match #meta_mod::PATH_PREFIX {
+                Some(__prefix) => format!("{}{}", __prefix, #route_path),
+                None => #route_path.to_string(),
+            };
+            __r2e_route_params(&__path, &[#(#path_extractors),*], __p)
         }
     }
 }
 
-/// Extract path parameters from the handler's typed parameters.
-fn extract_path_params(params: &[&syn::PatType], krate: &TokenStream) -> Vec<TokenStream> {
+/// The OpenAPI type strings of each `Path<T>` extractor among the handler's
+/// typed parameters, as `&[&str]` expressions: one entry per element of a
+/// tuple `T`, a single entry otherwise.
+fn path_extractor_types(params: &[&syn::PatType]) -> Vec<TokenStream> {
     params
         .iter()
-        .filter_map(|pt| {
-            let ty = &pt.ty;
-            if type_last_segment_is(ty, "Path")
-                && let syn::Pat::TupleStruct(ts) = pt.pat.as_ref()
-                    && let Some(elem) = ts.elems.first() {
-                        let param_name = quote!(#elem).to_string();
-                        let param_type = infer_path_param_openapi_type(&pt.ty);
-                        return Some(quote! {
-                            #krate::di::meta::ParamInfo {
-                                name: #param_name.to_string(),
-                                location: #krate::di::meta::ParamLocation::Path,
-                                param_type: #param_type.to_string(),
-                                required: true,
-                            }
-                        });
-                    }
-            None
+        .filter(|pt| type_last_segment_is(&pt.ty, "Path"))
+        .map(|pt| {
+            let types: Vec<&'static str> = match unwrap_extractor_inner(&pt.ty) {
+                syn::Type::Tuple(tuple) => tuple.elems.iter().map(type_to_openapi_str).collect(),
+                inner => vec![type_to_openapi_str(&inner)],
+            };
+            quote! { &[#(#types),*] as &[&str] }
         })
         .collect()
+}
+
+/// The `__r2e_route_params` function `params_expr` calls, emitted once at the
+/// top of the generated metadata function.
+///
+/// It lives in the expansion rather than in `r2e-core` so that this crate's
+/// output keeps compiling against every `r2e-core` that pins it (no codegen
+/// contract change).
+fn route_params_helper(krate: &TokenStream) -> TokenStream {
+    quote! {
+        fn __r2e_route_params(
+            __path: &str,
+            __extractors: &[&[&str]],
+            __probed: Vec<#krate::di::meta::ParamInfo>,
+        ) -> Vec<#krate::di::meta::ParamInfo> {
+            use #krate::di::meta::{ParamInfo, ParamLocation};
+            // The template's placeholders, in order: `{name}` / `{*name}`.
+            let mut __names: Vec<&str> = Vec::new();
+            let mut __rest = __path;
+            while let Some(__open) = __rest.find('{') {
+                let __after = &__rest[__open + 1..];
+                let Some(__close) = __after.find('}') else { break };
+                let __name = __after[..__close].trim_start_matches('*');
+                if !__name.is_empty() && !__names.contains(&__name) {
+                    __names.push(__name);
+                }
+                __rest = &__after[__close + 1..];
+            }
+            // `Path<T>` deserializes every placeholder positionally, so only
+            // an extractor of the template's arity can type them.
+            let __types = __extractors.iter().find(|__e| __e.len() == __names.len());
+            let mut __probed: Vec<Option<ParamInfo>> = __probed.into_iter().map(Some).collect();
+            let mut __out: Vec<ParamInfo> = Vec::with_capacity(__names.len() + __probed.len());
+            for (__i, __name) in __names.iter().enumerate() {
+                let __declared = __probed
+                    .iter_mut()
+                    .find(|__p| {
+                        __p.as_ref().is_some_and(|__p| {
+                            __p.name == *__name && __p.location == ParamLocation::Path
+                        })
+                    })
+                    .and_then(Option::take);
+                __out.push(__declared.unwrap_or_else(|| ParamInfo {
+                    name: __name.to_string(),
+                    location: ParamLocation::Path,
+                    param_type: __types.map_or("string", |__t| __t[__i]).to_string(),
+                    required: true,
+                }));
+            }
+            // Everything else the `Params` structs declared, deduplicated by
+            // (name, location).
+            for __p in __probed.into_iter().flatten() {
+                if !__out
+                    .iter()
+                    .any(|__o| __o.name == __p.name && __o.location == __p.location)
+                {
+                    __out.push(__p);
+                }
+            }
+            __out
+        }
+    }
 }
 
 /// Unwrap generic wrapper types to get the inner type for metadata probing.
@@ -676,20 +749,6 @@ fn unwrap_extractor_inner(ty: &syn::Type) -> syn::Type {
     ty.clone()
 }
 
-/// Infer an OpenAPI type string from a `Path<T>` type.
-/// Returns "integer" for integer types, "number" for floats, "boolean" for bool, otherwise "string".
-fn infer_path_param_openapi_type(ty: &syn::Type) -> &'static str {
-    // Extract the inner type from Path<T>
-    if let syn::Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-            && segment.ident == "Path"
-                && let syn::PathArguments::AngleBracketed(ref args) = segment.arguments
-                    && let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return type_to_openapi_str(inner);
-                    }
-    "string"
-}
-
 /// Map a syn::Type to an OpenAPI type string by inspecting the last path segment.
 /// Shared with the `FromMultipart` derive so path params and multipart text
 /// fields classify primitives identically.
@@ -705,18 +764,6 @@ pub(crate) fn type_to_openapi_str(ty: &syn::Type) -> &'static str {
             };
         }
     "string"
-}
-
-/// Determine the default HTTP status code based on the HTTP method.
-fn default_status_for_method(method: &crate::model::route::HttpMethod) -> u16 {
-    match method {
-        crate::model::route::HttpMethod::Get => 200,
-        crate::model::route::HttpMethod::Post => 201,
-        crate::model::route::HttpMethod::Put => 200,
-        crate::model::route::HttpMethod::Delete => 204,
-        crate::model::route::HttpMethod::Patch => 200,
-        crate::model::route::HttpMethod::Any => 200,
-    }
 }
 
 /// Whether a route path contains an axum `{*wildcard}` segment. Such paths
@@ -1406,7 +1453,7 @@ fn emit_streaming_route_info(
 ) -> TokenStream {
     let krate = r2e_core_path();
     let op_id = format!("{}_{}", controller_name, sig.ident);
-    let params_expr = params_expr(sig, ws_param, &krate);
+    let params_expr = params_expr(sig, ws_param, meta_mod, path, &krate);
     let roles_tokens: Vec<_> = roles.iter().map(|r| quote! { #r.to_string() }).collect();
     let kinds_expr = rejection_kinds_expr(static_kinds, anonymous, extracted, meta_mod);
 

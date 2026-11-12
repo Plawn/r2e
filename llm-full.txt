@@ -2590,7 +2590,7 @@ Alongside `&self`:
 | `#[scheduled(every = "5m")]` / `#[scheduled(schedule = "method")]` | method | Scheduled task; `schedule` names a sync `&self -> ScheduleConfig` method on the same impl, called once at registration (cadence from `#[config]` / a bean) |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
 | `#[request_helper]` | method | Helper on the per-request façade (reads identity; callable only from routes/SSE/WS) |
-| `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |
+| `#[status(201)]` / `#[returns(T)]` | method | OpenAPI only: declared success status (default 200 for every verb) / response type |
 | `#[tool]` / `#[resource(uri)]` / `#[prompt]` / `#[completion]` | method | MCP member on a `#[routes]` impl (served by `register_mcp_service`) |
 | `#[routes(group = "g", opt_in)]` | impl | MCP group of the impl's MCP members (compile error without one) |
 
@@ -5797,8 +5797,19 @@ b.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "1.0.0").with_docs_ui(t
 
 Spec at `/openapi.json`. Request and response bodies are documented through
 `RequestBodySchema` / `ResponseBodySchema` (below) — the macro never matches
-type names; `#[status(N)]` / `#[returns(T)]` override; doc comments become
+type names; `#[returns(T)]` overrides; doc comments become
 summary/description.
+
+The documented success status is **200 for every verb** (what a handler
+returning a plain body answers). A handler that answers another status itself
+— `(StatusCode::CREATED, Json(..))`, `StatusCode::NO_CONTENT` — declares it with
+`#[status(N)]`; the attribute never changes the response. A 204 is documented
+without a body.
+
+Path parameters are the `{placeholders}` of the full path template (controller
+prefix included), named after the placeholder; `Path<T>` / `Path<(A, B)>` types
+them positionally, and a `#[derive(Params)]` `#[param(path)]` field of the same
+name wins.
 
 **Error responses** come from what the route can actually fail with. The
 `#[routes]` macro records the route's `RejectionKind`s in
