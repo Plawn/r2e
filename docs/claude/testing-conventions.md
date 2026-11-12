@@ -38,6 +38,9 @@ dev_reload/      # hot-patch cycles, live config, rollback — its OWN target:
                  #   `mark_hot_reload_loop()` is process-global and one-way,
                  #   and would make every serving test in a shared binary skip
                  #   its startup lifecycle
+perf_budget/     # allocation + bean-clone budgets for the request hot path,
+                 #   request scope and the bean graph — its OWN target:
+                 #   `#[global_allocator]` is process-global
 ```
 
 Conventions inside a target:
@@ -49,6 +52,49 @@ Conventions inside a target:
 - Tests that mutate `std::env` share a process now — take
   `crate::support::env_lock()` for the whole test, even when variable names
   don't overlap.
+
+### Performance budgets (`perf_budget`)
+
+`r2e-core/tests/perf_budget/` is the performance non-regression gate. It counts
+what does not depend on the machine — heap allocations (a counting global
+allocator with thread-local counters) and bean clones — and compares each count
+to a named budget constant. Wall-clock time is deliberately not gated: shared CI
+runners are too noisy. Rules:
+
+- Tests there use `#[r2e_core::test(flavor = "current_thread")]`: the counters are
+  thread-local, so the code under test must run on the test's own thread.
+- Prefer a **relative** budget (a controller against a hand-written handler on the
+  same `AppBuilder` stack; N beans against 2N) over an absolute number — it survives
+  dependency upgrades. Mark the absolute ones as such next to the constant.
+- A failure means the change made a request or the graph build more expensive.
+  Remove the cost, or raise the budget in the same PR and justify it in the commit.
+- It does not see CPU cost that allocates nothing — that is the instruction-count
+  gate below.
+
+### Instruction counts (`benches/instructions.rs`)
+
+The CPU half of the gate. `r2e-core/benches/instructions.rs` runs the dispatch
+scenarios and `build_state()` on 16- and 64-bean graphs under Valgrind's Callgrind
+(via `gungraun`), which counts executed instructions: dispatch counts are identical
+from one run of a binary to the next, graph builds move by ~0.05 % (hash seeds).
+`.github/workflows/perf.yml` runs `scripts/perf-instructions.sh <base>` on PRs
+touching `r2e-core` or a crate below it: the PR's benchmark file is measured on the
+base, then on the PR, and the job fails when a benchmark executes more than 2 %
+more instructions (`PERF_INSTRUCTIONS_LIMIT`).
+
+- Linux only (Valgrind). Locally: install `valgrind` and
+  `cargo install gungraun-runner --version <gungraun version in Cargo.lock>`, then
+  `scripts/perf-instructions.sh [<base-ref>]`. The file itself builds on every
+  platform, so `cargo check --all-targets` keeps it compiling.
+- Work to measure goes in a function **called by** the `#[library_benchmark]`
+  function when it needs a closure or an `async` block: Callgrind toggles counting
+  on every symbol matching the benchmark function's name, nested closures included.
+  Setup belongs in the `#[bench::id(setup())]` argument, which is not counted.
+- An accepted regression is explained in the PR and labelled
+  `perf-regression-accepted` (the job then reports without failing).
+- A PR that changes an API the benchmark file uses cannot be compared (the file
+  no longer builds on the base): the job warns and prints the PR's numbers alone.
+- Wall-clock investigation stays with criterion (`benches/controller_dispatch.rs`).
 
 ```bash
 cargo test --workspace                    # all tests
