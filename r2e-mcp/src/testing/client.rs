@@ -145,10 +145,10 @@ impl McpConnect<'_> {
                 // RFC 8707: an MCP token is bound to the endpoint's resource
                 // URI, which is rarely the app-wide test audience. Carry
                 // both, so the token passes whichever one the validator pins.
-                if let Some(resource) = loopback.auth_resource() {
-                    if resource != jwt.audience() {
-                        token = token.audiences(&[jwt.audience(), &resource]);
-                    }
+                if let Some(resource) = loopback.auth_resource()
+                    && resource != jwt.audience()
+                {
+                    token = token.audiences(&[jwt.audience(), &resource]);
                 }
                 if !scopes.is_empty() {
                     token = token.scopes(&scopes);

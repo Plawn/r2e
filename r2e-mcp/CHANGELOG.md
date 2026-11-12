@@ -40,9 +40,30 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   (default 10) caps the rounds of one call. Session-based clients keep the
   live path.
 
+- `r2e_mcp::testing::McpTestClient` (#1245, feature `testing`): an MCP client
+  for `r2e_test::TestApp`. `use r2e_mcp::testing::McpTestExt;` then
+  `app.mcp().await` opens a real session on the mounted endpoint over the
+  loopback transport — no JSON-RPC envelope, no SSE parsing. Identity mirrors
+  HTTP: anonymous by default, `.as_user(sub, roles)` (+ `.with_scopes`) mints
+  a bearer from the app's `TestJwt`, bound to the endpoint's resource URI, and
+  sends it through the real token validator; `.bearer(token)` and
+  `.as_principal(..)` cover the edge cases, `.try_connect()` returns the
+  refusal. Helpers: `list_tools` / `tool_names`, `call_tool::<Out>` (decodes
+  `structuredContent`, else the first text block), `call_tool_text`,
+  `call_tool_raw`, `list_resources`, `list_resource_templates`,
+  `read_resource(_text)`, `list_prompts`, `get_prompt`; failures come back as
+  `McpTestError` (`Rpc` / `Tool` / `Decode` / `Transport`). Server
+  notifications are recorded: `notifications()`, `wait_for(..)`,
+  `wait_for_within(..)` over `McpNotification` (list changes, resource
+  updates, progress).
+- `LoopbackSession<H = ()>`: a loopback session is generic over its rmcp
+  `ClientHandler` (source-compatible — `McpLoopback::connect` still returns
+  `LoopbackSession`).
+
 ### Changed
 
 - `rmcp` 3.8 → 3.9.
+- Feature `testing` now implies `loopback`.
 
 ## [0.12.0] - 2026-11-10
 

@@ -6556,9 +6556,10 @@ protection — REQUIRED behind a proxy/public hostname; default accepts loopback
 `max-request-body-bytes`.
 
 Sharded serving (`server.workers`) shares one session map across workers;
-graceful shutdown terminates live SSE streams. Test over `TestApp`: POST the
+graceful shutdown terminates live SSE streams. Test with `app.mcp()` (feature
+`mcp-testing`, see *Testing* under MCP auth below); raw HTTP is a POST of the
 JSON-RPC envelope to `/mcp` with `accept: application/json, text/event-stream`
-(responses are SSE `data:` events; see `examples/example-mcp/tests/mcp_e2e.rs`).
+(responses are SSE `data:` events).
 
 ### In-process (loopback) transport (feature `mcp-loopback`)
 
@@ -6624,8 +6625,10 @@ async fn run_thread(
   `mcp.auth`, request scopes and the transport's own request validation
   (`Accept`, `Content-Type`) still answer first. App shutdown cancels live
   loopback sessions with the HTTP ones.
-- In tests: `app.bean_context().try_get::<McpLoopback>()` before `build()`,
-  connect after it (the endpoint mounts in the Routes stage).
+- In tests: prefer `app.mcp()` (`r2e::r2e_mcp::testing::McpTestExt`, feature
+  `mcp-testing`), which wraps this transport. By hand:
+  `app.bean_context().try_get::<McpLoopback>()` before `build()`, connect
+  after it (the endpoint mounts in the Routes stage).
 
 ### Dynamic members — per-session lists
 
@@ -7010,8 +7013,51 @@ let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
 # }
 ```
 
-See the authenticated smoke in `examples/example-mcp/tests/mcp_e2e.rs`;
-exhaustive protocol and auth cases live in `r2e-mcp/tests`.
+The same feature gives `TestApp` an MCP client — a real session on the mounted
+endpoint, in process. Use it instead of POSTing JSON-RPC envelopes:
+
+```rust
+use r2e::r2e_mcp::testing::{McpNotification, McpTestError, McpTestExt};
+# async fn __doc(app: r2e_test::TestApp) -> Result<(), McpTestError> {
+let mcp = app.mcp().await;                                   // anonymous session
+let out: serde_json::Value =
+    mcp.call_tool("add", serde_json::json!({ "a": 2.0, "b": 3.0 })).await?;
+let names: Vec<String> = mcp.tool_names().await;
+
+// Same identity as `app.get(..).as_user(..)`: a TestJwt bearer through the
+// real validator, bound to the endpoint's resource (no `for_resource` needed).
+let alice = app.mcp().as_user("alice", &["admin"]).with_scopes(&["mcp:write"]).await;
+let refused = app.mcp().bearer("not-a-token").try_connect().await;   // Result, no panic
+
+// Failures are values.
+match alice.call_tool_text("nope", ()).await {
+    Err(McpTestError::Rpc { code, .. }) => assert_eq!(code, -32601),  // unknown tool
+    other => panic!("{other:?}"),
+}
+
+// Server notifications are recorded (arrival order is not send order).
+alice.wait_for(|n| *n == McpNotification::ToolListChanged).await;    // 5 s, panics
+let seen: Vec<McpNotification> = alice.notifications();
+# Ok(()) }
+```
+
+- `call_tool::<Out>` decodes `structuredContent`, else the first text block;
+  `call_tool_text` joins text blocks; `call_tool_raw` returns the
+  `CallToolResult`. Also `list_tools`, `list_resources`,
+  `list_resource_templates`, `read_resource(_text)`, `list_prompts`,
+  `get_prompt(name, args)`. Arguments: any `Serialize` JSON object, or `()`.
+- `McpTestError`: `Rpc { code, message, data }` (`-32601` unknown tool,
+  `-32602` invalid params, `-32600` + `data: "forbidden"` for a guard / role /
+  scope refusal), `Tool(result)` (`isError: true`), `Decode`, `Transport`.
+- `.as_principal(p)` skips token validation; `.session_id("…")` names the
+  session; `mcp.session()` is the underlying `LoopbackSession`;
+  `wait_for_within(timeout, pred)` returns `None` on timeout.
+- Keep raw HTTP only for the HTTP envelope itself: the 401 +
+  `WWW-Authenticate` challenge, well-known routes, host/origin checks, guards
+  reading transport headers.
+
+See `examples/example-mcp/tests/mcp_e2e.rs`; exhaustive protocol and auth
+cases live in `r2e-mcp/tests`.
 
 ### Do not
 

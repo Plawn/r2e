@@ -13,8 +13,9 @@ description = "MCP (Model Context Protocol) server support for R2E framework"
 
 [features]
 default = []
-# Test helpers (`r2e_mcp::testing`): pin a TestJwt-backed validator so an
-# authenticated MCP app boots with zero network I/O.
+# Test helpers (`r2e_mcp::testing`): `app.mcp()` — an in-process MCP client
+# over the loopback transport — and `pin_mcp_validator`, a TestJwt-backed
+# validator so an authenticated MCP app boots with zero network I/O.
 testing = ["dep:r2e-test", "loopback"]
 # In-process (loopback) transport (`r2e_mcp::loopback::McpLoopback`): open
 # MCP sessions on the mounted endpoint without the network stack. rmcp's
