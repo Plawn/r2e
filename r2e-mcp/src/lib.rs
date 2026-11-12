@@ -42,6 +42,7 @@ mod catalog;
 pub mod config;
 pub mod dynamic;
 pub mod elicitation;
+mod mrtr;
 pub mod error;
 mod global;
 pub mod guard;

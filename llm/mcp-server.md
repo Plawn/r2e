@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp (`### In-process (loopback) transport`: mcp-loopback)
-tokens: ~10400
+tokens: ~10700
 requires: guards, security
 ---
 
@@ -234,7 +234,8 @@ impl Wiper {
         if !client.supports_elicitation() {
             return Err(McpError::tool("this client cannot confirm"));
         }
-        match client.elicit::<Confirm>("Wipe the whole index?").await? {   // ElicitError → tool error via `?`
+        // "confirm" names the question within this call; ElicitError → tool error via `?`
+        match client.elicit::<Confirm>("confirm", "Wipe the whole index?").await? {
             Elicited::Accept(Confirm { confirmed: true }) => Ok("wiped".into()),
             Elicited::Accept(_) | Elicited::Decline | Elicited::Cancel => Ok("kept".into()),
         }
@@ -248,8 +249,22 @@ nothing sent). URL mode: `client.elicit_url(message, url, elicitation_id)` →
 `Elicited<()>`. Waits `mcp.elicitation-timeout-secs` (300) then `Timeout`;
 call cancellation → `Cancelled`. `McpClient` borrows the call — it cannot be
 moved into a spawned task. Live elicitation needs an MCP session: under
-`mcp.stateless` and for sessionless 2026-07-28 clients it fails fast with
-`ElicitError::NoChannel`.
+`mcp.stateless` it fails fast with `ElicitError::NoChannel`.
+
+Sessionless 2026-07-28 clients are served by multi-round-trip requests (MRTR)
+when `mcp.request-state-key` (≥ 32 bytes, else boot error; builder
+`McpServer::with_request_state_key`) is set — without it `elicit` is
+`NoChannel` for them. Same member code, different execution: an unanswered
+`elicit(key, …)` returns `Err(ElicitError::InputRequired)` (propagate it with
+`?`), the call is answered `input_required` with the questions by key, the
+client retries the same request with its answers, and **the member runs again
+from the top** — `elicit(key, …)` then returns the answer. Rules: ask first,
+act after (code before the last `elicit` runs once per round); one distinct
+key per `elicit` site (`format!("item-{id}")` in a loop; `elicit_url` uses its
+`elicitation_id`); to ask several questions in one round call every `elicit`
+before the first `?`. State is signed (not encrypted), bound to
+caller + member + arguments, expires after `mcp.elicitation-timeout-secs`;
+`mcp.mrtr-max-rounds` (10) caps the rounds.
 
 Completion — `completion/complete` for prompt arguments and resource-template
 variables: a `#[completion]` method, wired by `complete(arg = "method")`:
@@ -376,7 +391,8 @@ Config under `mcp.*` (all optional; builder methods override config):
 rmcp-known revision; else `server/discover`, `initialize` and the `_meta`
 version gate (-32022) stop at that revision; unknown values fail at boot;
 builder `McpServer::max_protocol_version(ProtocolVersion::V_2025_11_25)`),
-`elicitation-timeout-secs` (300),
+`elicitation-timeout-secs` (300), `request-state-key` (unset = no MRTR),
+`mrtr-max-rounds` (10),
 `session.idle-timeout-secs` (300; 0 = never; an HTTP session idle this long
 is closed and its next request answered 404 — SSE pings do not count, so set it
 above the longest tool call; builder `McpServer::with_session_idle_timeout`),

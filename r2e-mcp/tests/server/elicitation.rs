@@ -42,7 +42,7 @@ pub struct AskTools;
 impl AskTools {
     #[tool]
     async fn confirm(&self, client: McpClient<'_>) -> Result<String, McpError> {
-        Ok(match client.elicit::<Confirm>("Really?").await? {
+        Ok(match client.elicit::<Confirm>("confirm", "Really?").await? {
             Elicited::Accept(c) => {
                 format!("accept:{}:{}", c.confirmed, c.reason.unwrap_or_default())
             }
@@ -55,7 +55,7 @@ impl AskTools {
     #[tool]
     async fn probe(&self, client: McpClient<'_>) -> String {
         let supported = client.supports_elicitation();
-        match client.elicit::<Confirm>("Probe").await {
+        match client.elicit::<Confirm>("probe", "Probe").await {
             Ok(_) => format!("supported={supported} answered"),
             Err(err) => format!("supported={supported} err={err:?}"),
         }
@@ -63,13 +63,13 @@ impl AskTools {
 
     #[tool]
     async fn nested(&self, client: McpClient<'_>) -> Result<String, McpError> {
-        client.elicit::<Nested>("Nested").await?;
+        client.elicit::<Nested>("nested", "Nested").await?;
         Ok("unreachable".into())
     }
 
     #[tool]
     async fn watch_cancel(&self, client: McpClient<'_>) -> String {
-        if let Err(ElicitError::Cancelled) = client.elicit::<Confirm>("Wait").await {
+        if let Err(ElicitError::Cancelled) = client.elicit::<Confirm>("wait", "Wait").await {
             SAW_CANCELLED.store(true, Ordering::SeqCst);
         }
         "done".into()
@@ -100,7 +100,7 @@ impl AskTools {
 
     #[prompt]
     async fn ask_prompt(&self, client: McpClient<'_>) -> Result<String, McpError> {
-        match client.elicit::<Confirm>("Prompt?").await? {
+        match client.elicit::<Confirm>("prompt", "Prompt?").await? {
             Elicited::Accept(c) => Ok(format!("prompt:{}", c.confirmed)),
             _ => Ok("prompt:none".into()),
         }
@@ -422,7 +422,7 @@ async fn hand_built_calls_have_no_channel() {
     let client = call.client();
     assert!(!client.supports_elicitation());
     assert!(matches!(
-        client.elicit::<Confirm>("x").await,
+        client.elicit::<Confirm>("x", "x").await,
         Err(ElicitError::NoChannel)
     ));
     let err: McpError = ElicitError::NoChannel.into();
@@ -433,7 +433,8 @@ async fn hand_built_calls_have_no_channel() {
 
 /// A 2026-07-28 client negotiates per request, with no session: rmcp serves
 /// it over a one-shot transport that drops the answer POST, so live
-/// elicitation would hang — it fails fast instead (MRTR is the 2026 path).
+/// elicitation would hang — it fails fast instead. MRTR, the 2026 path, is
+/// off until `mcp.request-state-key` is set (see `mrtr.rs`).
 #[r2e_core::test]
 async fn per_request_2026_clients_fail_fast_with_no_channel() {
     let router = app(McpServer::new()).await;

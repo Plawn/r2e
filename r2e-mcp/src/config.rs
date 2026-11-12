@@ -20,6 +20,8 @@ use r2e_core::prelude::ConfigProperties;
 ///   allowed-origins: ["https://claude.ai"]
 ///   max-request-body-bytes: 4194304
 ///   elicitation-timeout-secs: 300  # how long `McpClient::elicit` waits
+///   request-state-key: ${MCP_REQUEST_STATE_KEY}  # ≥ 32 bytes; enables elicitation for 2026-07-28 clients
+///   mrtr-max-rounds: 10      # input rounds one request may take
 ///   page-size: 100           # paginate the */list results (unset/0 = one page)
 ///   session:
 ///     idle-timeout-secs: 300 # close an HTTP session idle this long (0 = never)
@@ -77,6 +79,18 @@ pub struct McpConfig {
     /// answer, in seconds (default 300).
     #[config(key = "elicitation-timeout-secs")]
     pub elicitation_timeout_secs: Option<u64>,
+    /// Secret signing the `requestState` of multi-round-trip requests (MRTR),
+    /// at least 32 bytes. Setting it is what lets `McpClient::elicit` reach
+    /// sessionless 2026-07-28 clients; unset, they get
+    /// `ElicitError::NoChannel`. Every replica behind one endpoint must share
+    /// it. The state is signed, not encrypted: clients can read the answers
+    /// it carries, never forge them.
+    #[config(key = "request-state-key")]
+    pub request_state_key: Option<String>,
+    /// How many times one request may come back for more input before it is
+    /// refused (default 10; unset or `0` = default).
+    #[config(key = "mrtr-max-rounds")]
+    pub mrtr_max_rounds: Option<u32>,
     /// Maximum entries per `tools/list`, `resources/list`,
     /// `resources/templates/list` and `prompts/list` page; clients follow
     /// `nextCursor` for the rest. Unset or `0` = every list in one page.

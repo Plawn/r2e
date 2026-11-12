@@ -221,11 +221,12 @@ the loopback transport (#1076) are shipped: archive § W16. References:
 `docs/features/25-mcp.md` (user guide), `docs/claude/transport-adapters.md`
 (adapter internals + decisions log).
 
-- **P4 — protocol gaps: MRTR open.** Progress, live elicitation (MCP sessions
-  only), `completion/complete` and list pagination shipped 2026-09-26; MRTR
-  (required for 2026 sessionless clients) is the remainder. SEP-2577-deprecated
-  sampling, roots and logging are deliberately NOT implemented. Plan:
-  `plans/w16-p4-mcp-protocol-gaps.md`.
+- **P4 — protocol gaps: done.** Progress, live elicitation, `completion/complete`
+  and list pagination shipped 2026-09-26; MRTR (SEP-2322, elicitation for
+  sessionless 2026-07-28 clients) on `feat/mcp-mrtr` (2026-11-12): keyed
+  `McpClient::elicit(key, …)` (breaking), opt-in through
+  `mcp.request-state-key`. SEP-2577-deprecated sampling, roots and logging are
+  deliberately NOT implemented. Plan: `plans/w16-p4-mcp-protocol-gaps.md`.
 - **Awaiting release:** loopback transport #1076 (PR #139, `2656fe5e`) and the
   HTTP session idle timeout + `McpSessionStore` #1244 (PR #140, `fe4b4516`),
   both merged 2026-11-06, additive → `r2e-mcp` 0.11.1 at the next release;

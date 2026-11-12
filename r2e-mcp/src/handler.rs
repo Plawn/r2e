@@ -14,7 +14,7 @@ use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult, CompletionInfo,
     ErrorCode, ErrorData, GetPromptRequestParams, GetPromptResponse, InitializeRequestParams,
-    InitializeResult, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    InitializeResult, InputRequiredResult, InputResponses, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
     ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
     ReadResourceResponse, ReadResourceResult, Reference, ResourceUpdatedNotificationParam,
     ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
@@ -25,9 +25,10 @@ use serde_json::Value;
 
 use crate::auth::tools::visible_to;
 use crate::catalog::{caller_in, Catalog, Changed};
-use crate::elicitation::ClientChannel;
+use crate::elicitation::{advertised_modes, Back, ClientChannel};
 use crate::error::McpError;
 use crate::global::McpRegistry;
+use crate::mrtr::{self, Mrtr, MrtrCall};
 use crate::pagination::{paginate, ListKey};
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
@@ -60,29 +61,73 @@ struct CallContext {
     channel: ClientChannel,
 }
 
+/// What a call brings for multi-round-trip input (MRTR): who it is for —
+/// the binding of its `requestState` — and the answers of a retry.
+struct Input<'a> {
+    method: &'static str,
+    /// Tool or prompt name, resource URI.
+    target: &'a str,
+    arguments: Option<&'a serde_json::Map<String, Value>>,
+    responses: Option<InputResponses>,
+    state: Option<String>,
+}
+
 impl CallContext {
+    /// The call context, and the MRTR round to close with
+    /// [`Mrtr::finish`] once the member returned (`None` when the call is
+    /// not served in rounds).
     fn new(
         mut context: RequestContext<RoleServer>,
         session: McpSession,
-        elicitation_timeout: Duration,
-    ) -> Self {
+        endpoint: &Endpoint,
+        input: Input<'_>,
+    ) -> Result<(Self, Option<MrtrCall>), ErrorData> {
+        // rmcp refuses a server→client request on 2026-07-28 and an
+        // `input_required` result below it: the revision alone decides.
+        let rounds = context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        let (back, mrtr) = match (rounds, &endpoint.mrtr) {
+            (true, Some(mrtr)) => {
+                let call = mrtr.begin(
+                    mrtr::binding(
+                        input.method,
+                        input.target,
+                        session.subject(),
+                        input.arguments,
+                    ),
+                    input.responses,
+                    input.state.as_deref(),
+                )?;
+                let back = Back::Rounds {
+                    round: Arc::clone(&call.round),
+                    modes: advertised_modes(context.client_capabilities().as_ref()),
+                };
+                (back, Some(call))
+            }
+            // No `mcp.request-state-key`: MRTR is off, `NoChannel`.
+            (true, None) => (Back::None, None),
+            // Only a real session routes the client's answer back to this
+            // peer; sessionless requests fail fast with `NoChannel`.
+            (false, _) if session.is_persistent() => (Back::Live, None),
+            (false, _) => (Back::None, None),
+        };
         let parts = take_parts(&mut context);
         let cancel: CancelToken = context.ct.into();
-        CallContext {
+        let call = CallContext {
             parts,
             request_id: context.id.to_string(),
             progress: Progress::new(context.meta.get_progress_token(), &context.peer),
-            // Only a real session routes the client's answer back to this
-            // peer; sessionless requests fail fast with `NoChannel`.
             channel: ClientChannel::new(
                 &context.peer,
-                session.is_persistent(),
-                elicitation_timeout,
+                back,
+                endpoint.elicitation_timeout,
                 &cancel,
             ),
             cancel,
             session,
-        }
+        };
+        Ok((call, mrtr))
     }
 
     fn tool(self, arguments: Option<serde_json::Map<String, Value>>) -> ToolCall {
@@ -141,12 +186,29 @@ pub(crate) struct Endpoint {
     pub(crate) shutdown: CancelToken,
     /// `mcp.elicitation-timeout-secs`.
     pub(crate) elicitation_timeout: Duration,
+    /// Multi-round-trip input for 2026-07-28 clients; `None` while
+    /// `mcp.request-state-key` is not set.
+    pub(crate) mrtr: Option<Mrtr>,
     /// `mcp.page-size` (`None` = unpaginated lists).
     pub(crate) page_size: Option<usize>,
     /// The protocol revisions advertised and accepted (`server/discover`,
     /// `initialize`, per-request `_meta` gate): rmcp's known list, capped by
     /// `mcp.max-protocol-version`.
     pub(crate) supported_versions: &'static [ProtocolVersion],
+}
+
+impl Endpoint {
+    /// The result that replaces the member's own when it asked the client a
+    /// question this round left unanswered.
+    fn input_required(
+        &self,
+        rounds: Option<MrtrCall>,
+    ) -> Result<Option<InputRequiredResult>, ErrorData> {
+        match (&self.mrtr, rounds) {
+            (Some(mrtr), Some(call)) => mrtr.finish(call),
+            _ => Ok(None),
+        }
+    }
 }
 
 /// The `ServerHandler` handed to rmcp's streamable-HTTP service. rmcp's
@@ -497,10 +559,24 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let call = CallContext::new(context, self.session(), self.endpoint.elicitation_timeout)
-            .tool(request.arguments);
+        let (call, rounds) = CallContext::new(
+            context,
+            self.session(),
+            &self.endpoint,
+            Input {
+                method: "tools/call",
+                target: request.name.as_ref(),
+                arguments: request.arguments.as_ref(),
+                responses: request.input_responses,
+                state: request.request_state,
+            },
+        )?;
 
-        match (route.invoke)(call).await {
+        let outcome = (route.invoke)(call.tool(request.arguments)).await;
+        if let Some(required) = self.endpoint.input_required(rounds)? {
+            return Ok(CallToolResponse::InputRequired(required));
+        }
+        match outcome {
             Ok(result) => Ok(CallToolResponse::Complete(result)),
             Err(err) => err.into_call_result().map(CallToolResponse::Complete),
         }
@@ -547,10 +623,24 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let call = CallContext::new(context, self.session(), self.endpoint.elicitation_timeout)
-            .resource(request.uri, variables);
+        let (call, rounds) = CallContext::new(
+            context,
+            self.session(),
+            &self.endpoint,
+            Input {
+                method: "resources/read",
+                target: request.uri.as_str(),
+                arguments: None,
+                responses: request.input_responses,
+                state: request.request_state,
+            },
+        )?;
 
-        match (route.invoke)(call).await {
+        let outcome = (route.invoke)(call.resource(request.uri, variables)).await;
+        if let Some(required) = self.endpoint.input_required(rounds)? {
+            return Ok(ReadResourceResponse::InputRequired(required));
+        }
+        match outcome {
             Ok(contents) => Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
                 contents,
             ))),
@@ -688,10 +778,24 @@ impl ServerHandler for R2eMcpHandler {
             ));
         };
 
-        let call = CallContext::new(context, self.session(), self.endpoint.elicitation_timeout)
-            .prompt(request.arguments);
+        let (call, rounds) = CallContext::new(
+            context,
+            self.session(),
+            &self.endpoint,
+            Input {
+                method: "prompts/get",
+                target: request.name.as_str(),
+                arguments: request.arguments.as_ref(),
+                responses: request.input_responses,
+                state: request.request_state,
+            },
+        )?;
 
-        match (route.invoke)(call).await {
+        let outcome = (route.invoke)(call.prompt(request.arguments)).await;
+        if let Some(required) = self.endpoint.input_required(rounds)? {
+            return Ok(GetPromptResponse::InputRequired(required));
+        }
+        match outcome {
             Ok(result) => Ok(GetPromptResponse::Complete(result)),
             Err(err) => Err(err.into_error_data()),
         }

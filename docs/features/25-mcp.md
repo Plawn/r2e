@@ -257,14 +257,16 @@ struct Confirm {
 
 #[tool]
 async fn delete_repo(&self, args: Params<Repo>, client: McpClient<'_>) -> Result<String, McpError> {
-    match client.elicit::<Confirm>(format!("Delete {}?", args.0.name)).await? {
+    match client.elicit::<Confirm>("confirm", format!("Delete {}?", args.0.name)).await? {
         Elicited::Accept(Confirm { confirmed: true }) => { /* … */ Ok("deleted".into()) }
         _ => Ok("kept".into()),
     }
 }
 ```
 
-- **Form mode** — `elicit::<T>(message)`: `T`'s JSON schema is the form. The
+- **Form mode** — `elicit::<T>(key, message)`: `T`'s JSON schema is the form.
+  `key` names the question within the call — one constant per `elicit` site,
+  `format!("item-{id}")` in a loop (see *Sessionless clients* below). The
   spec only allows a flat object of primitive properties (string, number,
   integer, boolean, enum); any other `T` fails with
   `ElicitError::InvalidSchema` before anything is sent.
@@ -276,7 +278,8 @@ async fn delete_repo(&self, args: Params<Repo>, client: McpClient<'_>) -> Result
   check `supports_elicitation()` / `supports_url_elicitation()` first),
   `NoChannel`, `Timeout`, `Cancelled` (the call was cancelled while
   waiting), `InvalidResponse` (the answer does not match `T`), `InvalidSchema`,
-  `Transport`. `?` turns them into a tool error result the agent reads.
+  `Transport`, `InputRequired` (sessionless clients: the question was sent
+  back with the result — propagate it). `?` turns them into a tool error result the agent reads.
   `InvalidSchema` and `Transport` are server bugs and become internal errors.
 - A member waits at most `mcp.elicitation-timeout-secs` (default 300) or
   `McpServer::with_elicitation_timeout`.
@@ -285,11 +288,60 @@ async fn delete_repo(&self, args: Params<Repo>, client: McpClient<'_>) -> Result
   spawned task is a compile error.
 - **Live elicitation needs an MCP session.** The client's answer arrives
   on a separate POST that rmcp routes by `Mcp-Session-Id`. Under
-  `mcp.stateless: true`, and for sessionless 2026-07-28 clients (which
-  negotiate per request), rmcp drops that POST. So every elicitation there
-  fails fast with `NoChannel` instead of hanging until the timeout.
-  Supporting sessionless clients needs the multi-round-trip flow
-  (SEP-2322), which is planned.
+  `mcp.stateless: true` there is none, so every elicitation fails fast with
+  `NoChannel` instead of hanging until the timeout.
+
+### Sessionless clients (2026-07-28): multi-round-trip requests
+
+A 2026-07-28 client negotiates per request and has no stream a server can
+send a request on. It is served by **multi-round-trip requests** (MRTR,
+SEP-2322) instead, once the endpoint has a key to sign its state with:
+
+```yaml
+mcp:
+  request-state-key: ${MCP_REQUEST_STATE_KEY}   # at least 32 bytes
+  mrtr-max-rounds: 10                           # default
+```
+
+The member's code is the same; what changes is how it runs:
+
+1. `elicit("confirm", …)` finds no answer, records the question and returns
+   `Err(ElicitError::InputRequired)`. The member returns (`?`), and the call
+   is answered with `resultType: "input_required"`: the questions
+   (`inputRequests`, by key) and an opaque `requestState`.
+2. The client asks the user and **retries the same request** with
+   `inputResponses` (by key) and the echoed `requestState`.
+3. The member **runs again from the top**. `elicit("confirm", …)` now returns
+   the answer.
+
+What follows from that:
+
+- **Ask first, act after.** Everything before the last `elicit` runs once per
+  round. Put side effects after the questions, or make them idempotent.
+- **A key identifies one question within a call.** Two `elicit` sites sharing
+  a key share an answer. `elicit_url` uses its `elicitation_id` as the key.
+- Several questions fit in one round: call `elicit` for each before
+  propagating the first `InputRequired`. Otherwise each `?` is its own round.
+- A pending question wins over whatever the member returned: swallowing
+  `InputRequired` still yields `input_required`.
+- Nothing is stored server-side, so any replica sharing the key serves any
+  round. The state carries the answers of earlier rounds; it is **signed, not
+  encrypted** (the client can read answers it gave), expires after
+  `mcp.elicitation-timeout-secs`, and is bound to the caller (token subject),
+  the method, the member and its arguments: a confirmation obtained for
+  `delete(id = 1)` is rejected on `delete(id = 2)`. A rejected state is a
+  `-32602` asking the client to retry without it; exceeding
+  `mcp.mrtr-max-rounds` is a `-32600`.
+- Only the answers to the questions of the previous round are read;
+  `inputResponses` nobody asked for are ignored.
+- Capabilities come from the request (`_meta` client capabilities), so
+  `supports_elicitation()` works the same.
+- **Without `mcp.request-state-key`** (or `McpServer::with_request_state_key`)
+  MRTR is off: `elicit` fails with `NoChannel` for these clients. A key
+  shorter than 32 bytes fails the boot.
+- Session-based clients (2025-11-25 and older) keep the live path whether or
+  not a key is set. The mode follows the protocol revision of the request;
+  there is nothing to choose.
 
 ## Completion
 
@@ -750,6 +802,8 @@ mcp:
   json-response: false        # true (stateless only) → plain application/json responses
   max-protocol-version: "2025-11-25" # cap the MCP revisions served (default: all known)
   elicitation-timeout-secs: 300 # how long an elicitation waits for the user
+  request-state-key: ${MCP_REQUEST_STATE_KEY} # ≥ 32 bytes; elicitation for 2026-07-28 clients (MRTR)
+  mrtr-max-rounds: 10         # rounds of input one call may take
   page-size: 100              # paginate the */list results (unset/0 = one page)
   session:
     idle-timeout-secs: 300    # close an HTTP session idle this long (0 = never)

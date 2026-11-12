@@ -44,7 +44,8 @@ tower = { workspace = true }
 http-body = { workspace = true }
 # `default-features = false`: rmcp's default `macros` feature is deliberately
 # unused — R2E dispatches tools itself (#[routes] MCP members), rmcp is the wire only.
-rmcp = { workspace = true }
+# `request-state`: the HMAC codec sealing the MRTR `requestState`.
+rmcp = { workspace = true, features = ["request-state"] }
 # `loopback` only: the in-memory channels (`Sink` senders) + `StreamExt::map`.
 futures-channel = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
