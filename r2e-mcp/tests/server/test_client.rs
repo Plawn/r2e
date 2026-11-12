@@ -195,6 +195,37 @@ async fn as_user_sends_the_test_jwt_bearer() {
     assert!(bob.call_tool_text("read_data", ()).await.is_err());
 }
 
+/// `TestApp::boot` wires the app-wide `TestJwt::new()`, whose audience is not
+/// the MCP resource: `as_user` binds the token to the endpoint's resource.
+#[r2e_core::test]
+async fn as_user_binds_the_token_to_the_endpoint_resource() {
+    let builder = pin_mcp_validator(
+        AppBuilder::new(),
+        &TestJwt::for_resource(RESOURCE),
+        RESOURCE,
+    )
+    .load_config::<()>()
+    .plugin(McpServer::new())
+    .build_state()
+    .await
+    .register_mcp_service::<SecuredClientTools>();
+    let app_jwt = TestJwt::new();
+    assert_ne!(app_jwt.audience(), RESOURCE);
+    let app = TestApp::from_builder(builder).with_jwt(app_jwt.clone());
+
+    let alice = app.mcp().as_user("alice", &[]).await;
+    assert_eq!(alice.call_tool_text("whoami", ()).await.unwrap(), "alice");
+
+    // The app-wide audience alone is still refused: the binding is what
+    // lets the token through, not a relaxed validator.
+    let refused = app
+        .mcp()
+        .bearer(app_jwt.token("alice", &[]))
+        .try_connect()
+        .await;
+    assert!(refused.is_err(), "wrong-audience token must be refused");
+}
+
 #[r2e_core::test]
 async fn refused_connections_surface_through_try_connect() {
     let app = secured_app().await;

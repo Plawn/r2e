@@ -85,6 +85,10 @@ impl McpConnect<'_> {
     /// with `mcp.auth` off the session is anonymous and only carries the
     /// `Authorization` header, as an HTTP request would.
     ///
+    /// The token's `aud` carries the app's test audience **and** the
+    /// endpoint's resource URI (`mcp.auth.resource`), so the `TestJwt` that
+    /// `TestApp::boot` wires works without `TestJwt::for_resource`.
+    ///
     /// # Panics
     ///
     /// Connecting panics if the app has no `TestJwt`
@@ -136,7 +140,16 @@ impl McpConnect<'_> {
             Who::User { sub, roles } => {
                 let roles: Vec<&str> = roles.iter().map(String::as_str).collect();
                 let scopes: Vec<&str> = self.scopes.iter().map(String::as_str).collect();
-                let mut token = self.app.test_jwt().token_builder(&sub).roles(&roles);
+                let jwt = self.app.test_jwt();
+                let mut token = jwt.token_builder(&sub).roles(&roles);
+                // RFC 8707: an MCP token is bound to the endpoint's resource
+                // URI, which is rarely the app-wide test audience. Carry
+                // both, so the token passes whichever one the validator pins.
+                if let Some(resource) = loopback.auth_resource() {
+                    if resource != jwt.audience() {
+                        token = token.audiences(&[jwt.audience(), &resource]);
+                    }
+                }
                 if !scopes.is_empty() {
                     token = token.scopes(&scopes);
                 }

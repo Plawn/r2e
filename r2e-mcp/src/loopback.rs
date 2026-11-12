@@ -138,6 +138,11 @@ impl std::error::Error for LoopbackError {
 pub(crate) struct LoopbackAuth {
     pub(crate) slot: Arc<OnceLock<McpTokenValidator>>,
     pub(crate) required_scopes: Arc<[String]>,
+    /// The canonical resource URI (`mcp.auth.resource`, or what it derives
+    /// from); `None` on the Basic-only surface. Read by the test client to
+    /// mint tokens bound to this endpoint.
+    #[cfg_attr(not(feature = "testing"), allow(dead_code))]
+    pub(crate) resource: Option<String>,
 }
 
 /// Everything a connect needs, filled by the plugin once the endpoint is
@@ -191,6 +196,13 @@ impl McpLoopback {
 
     fn mounted(&self) -> Option<Arc<LoopbackWiring>> {
         self.wiring.get().and_then(Weak::upgrade)
+    }
+
+    /// The resource URI the endpoint's tokens are bound to, when `mcp.auth`
+    /// validates tokens.
+    #[cfg(feature = "testing")]
+    pub(crate) fn auth_resource(&self) -> Option<String> {
+        self.mounted()?.auth.as_ref()?.resource.clone()
     }
 
     /// Whether the endpoint is mounted (connects can succeed).
