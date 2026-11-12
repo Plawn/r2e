@@ -15,6 +15,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- `rmcp` 3.8 → 3.9.
+
 ## [0.12.0] - 2026-11-10
 
 ### Added
