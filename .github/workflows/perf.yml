@@ -1,0 +1,110 @@
+name: Performance
+
+# Instruction-count gate for the request hot path and the bean graph
+# (`r2e-core/benches/instructions.rs`, driven by `scripts/perf-instructions.sh`).
+# The allocation budgets (`r2e-core/tests/perf_budget`) are plain tests and run
+# with the rest of the suite in `test.yml`.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - r2e-core/**
+      - r2e-http/**
+      - r2e-macros/**
+      - r2e-rt/**
+      - r2e-tracing/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - scripts/perf-instructions.sh
+      - .github/workflows/perf.yml
+  pull_request:
+    # `labeled`/`unlabeled` so that accepting a regression (see below) re-runs
+    # the check instead of waiting for the next push.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths:
+      - r2e-core/**
+      - r2e-http/**
+      - r2e-macros/**
+      - r2e-rt/**
+      - r2e-tracing/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - scripts/perf-instructions.sh
+      - .github/workflows/perf.yml
+  workflow_dispatch:
+
+concurrency:
+  group: perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  instructions:
+    name: instruction counts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # On a pull request this is the merge of the head into the base branch,
+      # so comparing it with the base tip measures the pull request alone.
+      - uses: actions/checkout@v4
+
+      - name: Fetch the base commit
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+
+      # `libc6-dbg`: Valgrind refuses to start without the dynamic loader's
+      # debug symbols on Debian-family images.
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends valgrind libc6-dbg
+          valgrind --version
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: |
+          rustup show
+          cargo --version
+
+      # The runner binary must be the exact version of the `gungraun` library
+      # the benchmark links, so the version comes from the lockfile.
+      - name: Read the locked gungraun version
+        id: gungraun
+        run: |
+          version="$(awk '/^name = "gungraun"$/ { getline; gsub(/"/, "", $3); print $3 }' Cargo.lock)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: runner-cache
+        with:
+          path: ~/.cargo/bin/gungraun-runner
+          key: gungraun-runner-${{ runner.os }}-${{ steps.gungraun.outputs.version }}
+
+      - name: Install gungraun-runner
+        if: steps.runner-cache.outputs.cache-hit != 'true'
+        run: cargo install gungraun-runner --version "${{ steps.gungraun.outputs.version }}" --locked
+
+      # Only master writes the cache (same policy as test.yml).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      # A regression that is the price of a wanted change is accepted by
+      # explaining it in the pull request and applying the
+      # `perf-regression-accepted` label: the numbers are still printed, the
+      # job no longer fails on them.
+      - name: scripts/perf-instructions.sh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        continue-on-error: ${{ contains(github.event.pull_request.labels.*.name, 'perf-regression-accepted') }}
+        run: scripts/perf-instructions.sh ${BASE_SHA:+"$BASE_SHA"}

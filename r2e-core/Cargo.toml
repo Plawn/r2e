@@ -77,6 +77,10 @@ futures-util = {workspace = true}
 tokio-tungstenite = {workspace = true}
 # Tests that build their own subscribers (`tracing_config`, `http_trace`, …).
 tracing-subscriber = {workspace = true}
+# Instruction counts under Valgrind for `benches/instructions.rs` — the CI
+# performance gate (`scripts/perf-instructions.sh`). Building it needs nothing
+# but this crate; running it needs Linux, Valgrind and `gungraun-runner`.
+gungraun = "0.20"
 criterion = {version = "0.8", default-features = false, features = ["cargo_bench_support"]}
 
 [target.'cfg(unix)'.dev-dependencies]
@@ -84,4 +88,8 @@ libc = "0.2"
 
 [[bench]]
 name = "controller_dispatch"
+harness = false
+
+[[bench]]
+name = "instructions"
 harness = false
