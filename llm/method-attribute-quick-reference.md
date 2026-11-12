@@ -35,6 +35,6 @@ requires: core-concepts
 | `#[scheduled(every = "5m")]` / `#[scheduled(schedule = "method")]` | method | Scheduled task; `schedule` names a sync `&self -> ScheduleConfig` method on the same impl, called once at registration (cadence from `#[config]` / a bean) |
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
 | `#[request_helper]` | method | Helper on the per-request façade (reads identity; callable only from routes/SSE/WS) |
-| `#[status(200)]` / `#[returns(T)]` | method | OpenAPI overrides |
+| `#[status(201)]` / `#[returns(T)]` | method | OpenAPI only: declared success status (default 200 for every verb) / response type |
 | `#[tool]` / `#[resource(uri)]` / `#[prompt]` / `#[completion]` | method | MCP member on a `#[routes]` impl (served by `register_mcp_service`) |
 | `#[routes(group = "g", opt_in)]` | impl | MCP group of the impl's MCP members (compile error without one) |

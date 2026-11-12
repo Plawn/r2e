@@ -17,6 +17,7 @@ mod lifecycle;
 mod live_config;
 mod peer_addr;
 mod proxy_routes;
+mod route_meta;
 mod scope;
 mod streaming_meta;
 mod tuple;

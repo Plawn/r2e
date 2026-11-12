@@ -651,7 +651,7 @@ fn response_204_has_no_content_block() {
 }
 
 #[test]
-fn post_defaults_to_201() {
+fn status_201_is_described_as_created() {
     let routes = vec![RouteInfo {
         response_status: 201,
         response_contents: json_response("User", json!({"type": "object"})),

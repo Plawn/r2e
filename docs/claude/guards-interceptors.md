@@ -572,9 +572,10 @@ Common layers: `TimeoutLayer`, `SetResponseHeaderLayer`, `CorsLayer`,
 
 ### `#[status(CODE)]` — Override HTTP status code for OpenAPI
 
-Overrides the default success status code in the generated OpenAPI spec (not
-the actual HTTP response). Defaults: GET→200, POST→201, PUT→200, PATCH→200,
-DELETE→204.
+Declares the success status code in the generated OpenAPI spec (not the
+actual HTTP response). The default is 200 for every verb — what a handler
+returning a plain body answers; a handler that answers 201/204/… itself
+declares it here.
 
 ### `#[returns(Type)]` — Explicit response type for OpenAPI
 

@@ -15,6 +15,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `#[routes]`: `RouteInfo.response_status` is the status the route answers
+  (#1272). It defaulted to 201 for `POST` and 204 for `DELETE`, though the
+  generated handler forwards the return value untouched and a plain body
+  answers 200 on every verb; the 204 also made `r2e-openapi` drop the response
+  body of a `DELETE` returning `Json<T>`. The default is now 200 for every
+  verb. **Generated specs change**: a `POST` / `DELETE` documented at 201 / 204
+  by default is now documented at 200 — a handler that really answers
+  201 / 204 (`(StatusCode::CREATED, ..)`, `StatusCode::NO_CONTENT`) declares it
+  with `#[status(N)]`.
+- `#[routes]`: path parameters are the placeholders of the route's full path
+  template (#1272). They were named after the handler's binding pattern, so
+  `Path((ws, user)): Path<(WorkspaceId, UserId)>` published one parameter
+  called `"(ws, user)"`, a renamed binding documented a parameter the URL does
+  not have, and a placeholder of the controller prefix was missing. Each
+  placeholder now yields one `ParamInfo`, typed positionally by the `Path<T>`
+  / `Path<(A, B)>` extractor whose arity matches the template (`string`
+  otherwise); a `#[derive(Params)]` `#[param(path)]` field of the same name
+  wins. Applies to `#[sse]` / `#[ws]` routes too.
+
 ## [0.11.0] - 2026-11-10
 
 ### Breaking

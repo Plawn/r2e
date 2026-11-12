@@ -1,7 +1,7 @@
 ---
 topic: openapi
 features: openapi
-tokens: ~2200
+tokens: ~2400
 requires: core-concepts
 ---
 
@@ -50,8 +50,19 @@ b.plugin(OpenApiPlugin::new(OpenApiConfig::new("My API", "1.0.0").with_docs_ui(t
 
 Spec at `/openapi.json`. Request and response bodies are documented through
 `RequestBodySchema` / `ResponseBodySchema` (below) — the macro never matches
-type names; `#[status(N)]` / `#[returns(T)]` override; doc comments become
+type names; `#[returns(T)]` overrides; doc comments become
 summary/description.
+
+The documented success status is **200 for every verb** (what a handler
+returning a plain body answers). A handler that answers another status itself
+— `(StatusCode::CREATED, Json(..))`, `StatusCode::NO_CONTENT` — declares it with
+`#[status(N)]`; the attribute never changes the response. A 204 is documented
+without a body.
+
+Path parameters are the `{placeholders}` of the full path template (controller
+prefix included), named after the placeholder; `Path<T>` / `Path<(A, B)>` types
+them positionally, and a `#[derive(Params)]` `#[param(path)]` field of the same
+name wins.
 
 **Error responses** come from what the route can actually fail with. The
 `#[routes]` macro records the route's `RejectionKind`s in

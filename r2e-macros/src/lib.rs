@@ -849,19 +849,21 @@ pub fn ws(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
-/// Override the default HTTP status code for a route.
+/// Declare the success status code a route is documented with.
 ///
-/// By default, GET/PUT/PATCH return 200, POST returns 201, and DELETE returns 204.
-/// Use this attribute to specify a custom status code.
+/// Every route is documented at 200 by default, whatever its HTTP method: that
+/// is what a handler returning a plain body answers. The attribute does not
+/// change the response — use it when the handler answers another status
+/// itself, so the OpenAPI spec matches.
 ///
 /// ```ignore
 /// #[post("/users")]
 /// #[status(201)]
-/// async fn create(&self, body: Json<CreateUser>) -> JsonResult<User> { ... }
+/// async fn create(&self, body: Json<CreateUser>) -> Result<(StatusCode, Json<User>), HttpError> { ... }
 ///
 /// #[delete("/users/{id}")]
-/// #[status(200)]
-/// async fn delete(&self, Path(id): Path<u64>) -> JsonResult<DeleteResult> { ... }
+/// #[status(204)]
+/// async fn delete(&self, Path(id): Path<u64>) -> StatusResult { ... }
 /// ```
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
