@@ -41,7 +41,7 @@ use r2e_core::Late;
 use rmcp::model::{ClientJsonRpcMessage, GetExtensions, JsonRpcMessage, ServerJsonRpcMessage};
 use rmcp::service::{ClientInitializeError, RunningService};
 use rmcp::transport::sink_stream::SinkStreamTransport;
-use rmcp::{RoleClient, ServiceExt};
+use rmcp::{ClientHandler, RoleClient, ServiceExt};
 
 /// The `tools/call` request a [`LoopbackSession`] sends
 /// (`CallToolRequestParams::new("add").with_arguments(..)`), re-exported so
@@ -138,6 +138,11 @@ impl std::error::Error for LoopbackError {
 pub(crate) struct LoopbackAuth {
     pub(crate) slot: Arc<OnceLock<McpTokenValidator>>,
     pub(crate) required_scopes: Arc<[String]>,
+    /// The canonical resource URI (`mcp.auth.resource`, or what it derives
+    /// from); `None` on the Basic-only surface. Read by the test client to
+    /// mint tokens bound to this endpoint.
+    #[cfg_attr(not(feature = "testing"), allow(dead_code))]
+    pub(crate) resource: Option<String>,
 }
 
 /// Everything a connect needs, filled by the plugin once the endpoint is
@@ -193,6 +198,13 @@ impl McpLoopback {
         self.wiring.get().and_then(Weak::upgrade)
     }
 
+    /// The resource URI the endpoint's tokens are bound to, when `mcp.auth`
+    /// validates tokens.
+    #[cfg(feature = "testing")]
+    pub(crate) fn auth_resource(&self) -> Option<String> {
+        self.mounted()?.auth.as_ref()?.resource.clone()
+    }
+
     /// Whether the endpoint is mounted (connects can succeed).
     pub fn is_mounted(&self) -> bool {
         self.mounted().is_some()
@@ -210,6 +222,18 @@ impl McpLoopback {
         session_id: impl Into<String>,
         identity: LoopbackIdentity,
     ) -> Result<LoopbackSession, LoopbackError> {
+        self.connect_with(session_id, identity, ()).await
+    }
+
+    /// [`connect`](Self::connect) with the rmcp client handler serving the
+    /// client side: what receives the server's notifications and requests
+    /// (`()` ignores the former and refuses the latter).
+    pub(crate) async fn connect_with<H: ClientHandler>(
+        &self,
+        session_id: impl Into<String>,
+        identity: LoopbackIdentity,
+        client: H,
+    ) -> Result<LoopbackSession<H>, LoopbackError> {
         let wiring = self.mounted().ok_or(LoopbackError::NotMounted)?;
         if wiring.stateless {
             return Err(LoopbackError::Stateless);
@@ -318,7 +342,7 @@ impl McpLoopback {
                 }
             }
         }));
-        match ().serve(client_transport).await {
+        match client.serve(client_transport).await {
             Ok(client) => {
                 let (state, cancel, server) = pending.into_session_parts();
                 Ok(LoopbackSession {
@@ -455,10 +479,13 @@ async fn resolve_identity(
 ///
 /// Dropping it ends the session; [`close`](Self::close) does so gracefully
 /// (the server side finishes its drain before this returns).
-pub struct LoopbackSession {
+///
+/// `H` is the rmcp client handler on the client side — `()` for every
+/// session [`McpLoopback::connect`] opens.
+pub struct LoopbackSession<H: ClientHandler = ()> {
     id: SessionId,
     /// `None` only between `close` taking it and `Drop`.
-    client: Option<RunningService<RoleClient, ()>>,
+    client: Option<RunningService<RoleClient, H>>,
     /// The server side's session state: closed with the session, so the id
     /// is free again at once even while an `McpSession` handle holds it.
     state: Arc<SessionState>,
@@ -467,7 +494,7 @@ pub struct LoopbackSession {
     server: JobHandle<()>,
 }
 
-impl LoopbackSession {
+impl<H: ClientHandler> LoopbackSession<H> {
     /// The session id given to [`connect`](McpLoopback::connect).
     pub fn id(&self) -> &SessionId {
         &self.id
@@ -485,8 +512,8 @@ impl LoopbackSession {
     }
 }
 
-impl Deref for LoopbackSession {
-    type Target = RunningService<RoleClient, ()>;
+impl<H: ClientHandler> Deref for LoopbackSession<H> {
+    type Target = RunningService<RoleClient, H>;
 
     fn deref(&self) -> &Self::Target {
         self.client
@@ -495,7 +522,7 @@ impl Deref for LoopbackSession {
     }
 }
 
-impl Drop for LoopbackSession {
+impl<H: ClientHandler> Drop for LoopbackSession<H> {
     fn drop(&mut self) {
         // The id is free now, not when the server task gets to run its
         // teardown; the client's own drop guard cancels its side; the token
@@ -507,7 +534,7 @@ impl Drop for LoopbackSession {
     }
 }
 
-impl fmt::Debug for LoopbackSession {
+impl<H: ClientHandler> fmt::Debug for LoopbackSession<H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LoopbackSession")
             .field("id", &self.id)

@@ -30,4 +30,6 @@ mod resources;
 mod schema;
 mod persistence;
 mod sessions;
+#[cfg(feature = "testing")]
+mod test_client;
 mod wire_golden;

@@ -970,20 +970,86 @@ for byte, so a padded entry would 403 every request.
 
 ## Testing
 
-Over `TestApp` (in-process, no port): POST JSON-RPC envelopes to the endpoint
-with `accept: application/json, text/event-stream` and (default rmcp host
-protection) `host: localhost`. Responses are SSE `data:` events — skip the
-empty priming event when parsing. Stateful mode requires the `initialize` →
-`Mcp-Session-Id` header → `notifications/initialized` dance first;
-`stateless: true` + `json-response: true` skips sessions entirely and answers
-plain JSON. See `examples/example-mcp/tests/mcp_e2e.rs` for a complete
-harness.
+`r2e` feature `mcp-testing` (or `r2e-mcp` feature `testing`) gives `TestApp`
+an MCP client — a **real session** on the mounted endpoint, in process (the
+loopback transport), the MCP counterpart of `app.get("/…").as_user(…)`:
 
-With feature `mcp-loopback`, drive the server as a real MCP client instead:
-read the `McpLoopback` bean (`app.bean_context().try_get::<McpLoopback>()`
-before `build()`), connect after the router is built and call
-`list_all_tools` / `call_tool` on the session — no envelopes, no SSE parsing
-(see "Transports" above; `r2e-mcp/tests/server/loopback.rs` is the reference).
+```rust
+use r2e::r2e_mcp::testing::{McpNotification, McpTestExt};
+
+#[r2e::test(app = McpApp)]
+async fn adds(app: TestApp) {
+    let mcp = app.mcp().await;                               // anonymous
+    let sum: CalcResult = mcp.call_tool("add", json!({ "a": 2.0, "b": 3.0 })).await.unwrap();
+    assert_eq!(sum.value, 5.0);
+
+    let admin = app.mcp().as_user("alice", &["admin"]).with_scopes(&["mcp:write"]).await;
+    assert!(admin.tool_names().await.contains(&"add".to_string()));
+}
+```
+
+**Identity.** `app.mcp()` is anonymous. `.as_user(sub, roles)` mints a bearer
+from the app's `TestJwt` (the one `TestApp::boot` wires, or `.with_jwt(jwt)`)
+and sends it through the endpoint's real token validator — the same path as
+HTTP, so `#[roles]`, `#[tool(scopes)]`, struct-level identities and list
+filtering behave identically. The token's `aud` carries the endpoint's
+resource URI in addition to the app-wide test audience, so no
+`TestJwt::for_resource` is needed on the client side. `.with_scopes(&[…])`
+adds OAuth scopes; `.bearer(token)` sends a hand-built token (expired, wrong
+audience…); `.as_principal(principal)` skips validation. `.await` panics on a
+refused connection — use `.try_connect().await` to assert the refusal
+(`Err(LoopbackError)`), e.g. an anonymous connect with `mcp.auth` on.
+
+**Calls.**
+
+| Method | Returns |
+|---|---|
+| `list_tools()` / `tool_names()` | the caller's tools, all pages, in listing order |
+| `call_tool::<Out>(name, args)` | `Out` decoded from `structuredContent`, else from the first text block |
+| `call_tool_text(name, args)` | the text blocks, joined |
+| `call_tool_raw(name, args)` | the `CallToolResult` (`isError` results included) |
+| `list_resources()` / `list_resource_templates()` / `read_resource(uri)` / `read_resource_text(uri)` | resources |
+| `list_prompts()` / `get_prompt(name, args)` | prompts |
+
+`args` is any `Serialize` producing a JSON object (`json!({…})`, a struct) or
+`()` for none. Failures are values, `McpTestError`: `Rpc { code, message,
+data }` (unknown tool `-32601`, invalid params `-32602`, a guard / role /
+scope refusal `-32600` with `data: "forbidden"`), `Tool(result)` (`isError:
+true`; `err.tool_error_text()`), `Decode { .. }`, `Transport(..)`.
+`err.code()` reads the JSON-RPC code.
+
+**Notifications.** The client records what the server pushes:
+`mcp.notifications()`, `mcp.wait_for(|n| …).await` (5 s, panics) and
+`mcp.wait_for_within(timeout, |n| …).await` (`None` on timeout — the way to
+assert an absence) over `McpNotification::{ToolListChanged,
+ResourceListChanged, PromptListChanged, ResourceUpdated { uri }, Progress {
+.. }}`. rmcp dispatches notification handlers concurrently: arrival order is
+not send order, so assert on sets (or sort), not sequences. The rmcp client
+attaches a progress token to every request, so `Progress::is_requested()` is
+always `true` under this client.
+
+```rust
+let mcp = app.mcp().await;
+mcp.call_tool_text("enable_scientific", ()).await.unwrap();
+mcp.wait_for(|n| *n == McpNotification::ToolListChanged).await;
+```
+
+Each `app.mcp()` is its own session (`mcp.session_id()`, overridable with
+`.session_id("…")`), visible through `McpSessions`; `mcp.session()` exposes
+the underlying `LoopbackSession` for anything the helpers do not cover, and
+`mcp.close().await` ends it. `r2e-test` does not depend on `r2e-mcp`: the
+client lives in `r2e_mcp::testing` and reaches `TestApp` through the
+`McpTestExt` extension trait.
+
+**When to stay on raw HTTP.** What the client bypasses is the HTTP envelope,
+so tests *about* that envelope keep POSTing JSON-RPC to the endpoint (`accept:
+application/json, text/event-stream`, `host: localhost`, SSE `data:` events,
+the `initialize` → `Mcp-Session-Id` → `notifications/initialized` dance): the
+401 + `WWW-Authenticate` challenge, the well-known routes, host/origin
+checks, and guards reading transport headers (an `x-api-key` guard sees no
+such header on a loopback session). `examples/example-mcp/tests/mcp_e2e.rs`
+shows both styles; `r2e-mcp/tests/server/test_client.rs` is the client's own
+suite.
 
 ## Auth — OAuth 2.1 resource server (`mcp.auth.*`)
 
@@ -1365,6 +1431,9 @@ let app = pin_mcp_validator(AppBuilder::new(), &jwt, RESOURCE)  // BEFORE load_c
     .register_mcp_service::<MathTools>();
 let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
 ```
+
+With the test client (see [Testing](#testing)) no token is built by hand:
+`app.mcp().as_user("alice", &[]).with_scopes(&["mcp:write"]).await`.
 
 The pinned validator (HS256, in-process) replaces the JWKS path via
 `override_bean`, and the config overrides set `discovery: off` — **zero

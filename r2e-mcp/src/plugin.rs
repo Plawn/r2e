@@ -630,7 +630,7 @@ impl Plugin for McpServer {
         // Session id → session, shared by the auth layer and the identity
         // layer: whichever learns the caller's subject binds the session.
         let bindings = SessionBindings::default();
-        let (auth_layer, provided_validator, auth_slot, auth_routes, challenges, required_scopes) =
+        let (auth_layer, provided_validator, auth_slot, auth_routes, challenges, required_scopes, auth_resource) =
             match auth_cfg {
             Some(auth) => {
                 let artifacts = build_auth(AuthInputs {
@@ -658,9 +658,10 @@ impl Plugin for McpServer {
                     Some(artifacts.extra_routes),
                     Some(artifacts.challenges),
                     Some(artifacts.required_scopes),
+                    artifacts.resource,
                 )
             }
-            None => (None, McpTokenValidator::disabled(), None, None, None, None),
+            None => (None, McpTokenValidator::disabled(), None, None, None, None, None),
         };
         // A loopback connect presenting a bearer token validates it through
         // the SAME slot the HTTP layer reads (pinned validators included) and
@@ -672,9 +673,10 @@ impl Plugin for McpServer {
             .map(|(slot, required_scopes)| LoopbackAuth {
                 slot,
                 required_scopes,
+                resource: auth_resource,
             });
         #[cfg(not(feature = "loopback"))]
-        let _ = required_scopes;
+        let _ = (required_scopes, auth_resource);
         // The layer reads the validator through the slot, filled from the
         // BEAN CONTEXT after the graph resolves: a test-pinned validator
         // (`override_bean`) is resolved, not captured (plugins.md

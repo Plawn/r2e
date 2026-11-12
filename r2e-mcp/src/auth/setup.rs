@@ -73,6 +73,9 @@ pub(crate) struct AuthArtifacts {
     /// `mcp.auth.required-scopes`, as the layer enforces them — shared with
     /// the loopback transport so an in-process connect meets the same policy.
     pub required_scopes: Arc<[String]>,
+    /// The canonical resource URI tokens are bound to (RFC 8707); `None` for
+    /// the Basic-only surface, which validates no token.
+    pub resource: Option<String>,
 }
 
 /// Canonicalise a resource URI (RFC 8707): `url::Url` lowercases the
@@ -273,6 +276,7 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         slot,
         extra_routes: Routes::new(),
         required_scopes,
+        resource: None,
     }
 }
 
@@ -681,6 +685,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         extra_routes,
         challenges,
         required_scopes,
+        resource: Some(resource),
     })
 }
 

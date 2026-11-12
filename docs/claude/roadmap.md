@@ -228,8 +228,9 @@ the loopback transport (#1076) are shipped: archive § W16. References:
   (`bump-version.sh r2e-mcp breaking`, propagates to `r2e`). The loopback
   transport #1076 and the session idle timeout + `McpSessionStore` #1244
   shipped in `r2e-mcp` 0.12.0 (2026-11-10); both tickets are closed.
-- `r2e-test` in-process MCP client: Tasker #1245 (see "Standalone Tasker
-  tickets" below).
+- In-process MCP test client (#1245): **done, awaiting merge/release** —
+  `r2e_mcp::testing::McpTestClient` (`app.mcp()` via the `McpTestExt`
+  extension trait, feature `testing`), additive on `r2e-mcp`.
 - `McpSessions::each`/bulk ops and per-tenant filtering, if a real app asks
   for them.
 - Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
@@ -266,9 +267,13 @@ pointer. Verified against Tasker and the code on 2026-11-12 (master
   full template, 200 as the default status for every verb). Generated specs
   change for a `POST`/`DELETE` that relied on the old 201/204 default. Closes
   with the next `r2e-macros` release.
-- **#1245 (medium)** — `r2e-test` in-process MCP client over the
-  `McpLoopback` bean (`TestApp::mcp()`), follow-up of the loopback transport
-  #1076; nothing started. The only survivor of the dropped W6.
+- **#1245 (medium)** — in-process MCP test client over the `McpLoopback`
+  bean, the only survivor of the dropped W6. **Implemented** on
+  `task/1245-mcp-test-client` (in review): `app.mcp()` lives in
+  `r2e_mcp::testing` (`McpTestExt` on `TestApp`; `r2e-test` does not depend on
+  `r2e-mcp`), `.as_user()` mints a `TestJwt` bearer bound to the endpoint's
+  resource, notifications are recorded. Additive — closes with the next
+  `r2e-mcp` release.
 - **#1181 follow-ups** (ticket closed, released in `r2e-macros` 0.11.0):
   close-the-loop still has to replace its `schedule_task_with` workaround in
   `ctl-api/src/controllers/sweep.rs` (app side). Not V1: live cadence

@@ -1,9 +1,21 @@
-//! Test helpers for authenticated MCP apps (feature `testing`).
+//! Test helpers for MCP apps (feature `testing`).
 //!
-//! The no-Docker fast path: pin a [`McpTokenValidator`] built from a
-//! [`TestJwt`] onto the builder so the app boots with **zero network I/O** —
-//! no discovery fetch, no JWKS fetch — while the real auth layer, well-known
-//! routes and per-tool scope checks stay active.
+//! **A client.** [`McpTestExt`] adds `app.mcp()` to `r2e_test::TestApp`: a
+//! real MCP session on the mounted endpoint, in process (the loopback
+//! transport), with typed helpers and captured server notifications — see
+//! [`McpTestClient`].
+//!
+//! ```ignore
+//! use r2e_mcp::testing::McpTestExt;
+//!
+//! let mcp = app.mcp().as_user("alice", &["admin"]).await;
+//! let sum: Sum = mcp.call_tool("add", json!({ "a": 2, "b": 3 })).await?;
+//! ```
+//!
+//! **Offline auth.** The no-Docker fast path: pin a [`McpTokenValidator`]
+//! built from a [`TestJwt`] onto the builder so the app boots with **zero
+//! network I/O** — no discovery fetch, no JWKS fetch — while the real auth
+//! layer, well-known routes and per-tool scope checks stay active.
 //!
 //! ```ignore
 //! let resource = "http://localhost:3000/mcp";
@@ -16,6 +28,12 @@
 //!     .register_mcp_service::<MathTools>();
 //! let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
 //! ```
+
+mod client;
+
+pub use client::{
+    McpConnect, McpNotification, McpTestClient, McpTestError, McpTestExt, NotificationRecorder,
+};
 
 use std::sync::Arc;
 
