@@ -235,22 +235,6 @@ the loopback transport (#1076) are shipped: archive § W16. References:
 - Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
   tickets" below.
 
-## W17 — data-catalog audit — remainder
-
-All six sprints (F1–F14) shipped 2026-08-31 (findings, sizes and sprint plan:
-archive § W17; metrics stacks: `docs/claude/metrics-stacks.md`). **Still
-open:** the per-sprint re-audit of data-catalog (which lines does it delete?)
-was not run — do it app-side together with the follow-ups below.
-
-App-side follow-ups (no framework change, hand to data-catalog): move
-`CatalogServiceImpl` into a module via `grpc_services(...)`, drop `axum`
-from catalog-core (`impl_into_response!` + prelude `from_fn`/`MatchedPath`),
-try `#[sse]`, refresh `docs/MIGRATION_R2E.md` against the table above.
-The CORS/Tracing plugin migration lives in Tasker #1001 (target
-data-catalog); if the r2e plugins cannot reproduce the app's current CORS
-or `TraceLayer` span/log shape, that delta comes back here as a framework
-finding.
-
 ## Open items tracked in their own docs
 
 Kept where the context lives rather than duplicated here:
