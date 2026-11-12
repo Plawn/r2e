@@ -14,8 +14,7 @@ use r2e_core::rt::sync::Notify;
 use r2e_test::TestApp;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, JsonObject,
-    NumberOrString, ProgressNotificationParam, ProgressToken, Prompt, ReadResourceRequestParams,
-    RequestMetaObject, Resource, ResourceContents, ResourceTemplate,
+    ProgressNotificationParam, Prompt, ReadResourceRequestParams, Resource, ResourceContents, ResourceTemplate,
     ResourceUpdatedNotificationParam, Tool,
 };
 use rmcp::service::{NotificationContext, ServiceError};
@@ -54,7 +53,6 @@ impl McpTestExt for TestApp {
             who: Who::Anonymous,
             scopes: Vec::new(),
             session_id: None,
-            progress: false,
         }
     }
 }
@@ -76,7 +74,6 @@ pub struct McpConnect<'a> {
     who: Who,
     scopes: Vec<String>,
     session_id: Option<String>,
-    progress: bool,
 }
 
 impl McpConnect<'_> {
@@ -127,15 +124,6 @@ impl McpConnect<'_> {
         self
     }
 
-    /// Send a fresh `progressToken` with every `tools/call`,
-    /// `resources/read` and `prompts/get`, as a progress-displaying client
-    /// does; the server's reports are captured as
-    /// [`McpNotification::Progress`].
-    pub fn with_progress(mut self) -> Self {
-        self.progress = true;
-        self
-    }
-
     /// Connect, returning the refusal instead of panicking — for tests
     /// asserting on [`LoopbackError::Unauthorized`] and friends.
     pub fn try_connect(
@@ -163,7 +151,6 @@ impl McpConnect<'_> {
                 NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
             )
         });
-        let progress = self.progress;
         async move {
             let log = Arc::new(NotificationLog::default());
             let recorder = NotificationRecorder {
@@ -172,11 +159,7 @@ impl McpConnect<'_> {
             let session = loopback
                 .connect_with(session_id, identity, recorder)
                 .await?;
-            Ok(McpTestClient {
-                session,
-                log,
-                progress: progress.then(|| AtomicU64::new(1)),
-            })
+            Ok(McpTestClient { session, log })
         }
     }
 }
@@ -210,8 +193,8 @@ pub enum McpNotification {
         /// The updated resource.
         uri: String,
     },
-    /// `notifications/progress` (connect with
-    /// [`with_progress`](McpConnect::with_progress) to request them).
+    /// `notifications/progress`. The client sends a progress token with
+    /// every request, so a `Progress` parameter always reports.
     Progress {
         /// The reported progress.
         progress: f64,
@@ -378,8 +361,6 @@ impl From<ServiceError> for McpTestError {
 pub struct McpTestClient {
     session: LoopbackSession<NotificationRecorder>,
     log: Arc<NotificationLog>,
-    /// `Some` when every request carries a progress token: the next one.
-    progress: Option<AtomicU64>,
 }
 
 impl McpTestClient {
@@ -398,13 +379,6 @@ impl McpTestClient {
     /// free again when this returns.
     pub async fn close(self) {
         self.session.close().await;
-    }
-
-    fn meta(&self) -> Option<RequestMetaObject> {
-        let next = self.progress.as_ref()?.fetch_add(1, Ordering::Relaxed);
-        Some(RequestMetaObject::with_progress_token(ProgressToken(
-            NumberOrString::Number(next as i64),
-        )))
     }
 
     // ── Tools ───────────────────────────────────────────────────────────
@@ -442,7 +416,6 @@ impl McpTestClient {
     ) -> Result<CallToolResult, McpTestError> {
         let mut params = CallToolRequestParams::new(name.to_owned());
         params.arguments = arguments_object(arguments);
-        params.meta = self.meta();
         Ok(self.session.call_tool(params).await?)
     }
 
@@ -490,8 +463,7 @@ impl McpTestClient {
 
     /// `resources/read`: the resource's contents.
     pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>, McpTestError> {
-        let mut params = ReadResourceRequestParams::new(uri);
-        params.meta = self.meta();
+        let params = ReadResourceRequestParams::new(uri);
         Ok(self.session.read_resource(params).await?.contents)
     }
 
@@ -528,17 +500,17 @@ impl McpTestClient {
     ) -> Result<GetPromptResult, McpTestError> {
         let mut params = GetPromptRequestParams::new(name);
         params.arguments = arguments_object(arguments);
-        params.meta = self.meta();
         Ok(self.session.get_prompt(params).await?)
     }
 
     // ── Notifications ───────────────────────────────────────────────────
 
-    /// Every server notification received so far, in arrival order.
+    /// Every server notification handled so far.
     ///
-    /// Notifications are delivered asynchronously: one the server has
-    /// already sent may not be here yet — use [`wait_for`](Self::wait_for)
-    /// to assert that one arrives.
+    /// Notifications are delivered asynchronously and handled concurrently:
+    /// one the server has already sent may not be here yet, and two sent
+    /// back to back may land in either order — use
+    /// [`wait_for`](Self::wait_for) to assert that one arrives.
     pub fn notifications(&self) -> Vec<McpNotification> {
         self.log.snapshot()
     }
