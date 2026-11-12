@@ -15,7 +15,7 @@ description = "MCP (Model Context Protocol) server support for R2E framework"
 default = []
 # Test helpers (`r2e_mcp::testing`): pin a TestJwt-backed validator so an
 # authenticated MCP app boots with zero network I/O.
-testing = ["dep:r2e-test"]
+testing = ["dep:r2e-test", "loopback"]
 # In-process (loopback) transport (`r2e_mcp::loopback::McpLoopback`): open
 # MCP sessions on the mounted endpoint without the network stack. rmcp's
 # `client` role only adds `tokio-stream`, already in the graph — no new crate.

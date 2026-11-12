@@ -17,6 +17,12 @@
 //! let token = jwt.token_builder("alice").scopes(&["mcp:write"]).build();
 //! ```
 
+mod client;
+
+pub use client::{
+    McpConnect, McpNotification, McpTestClient, McpTestError, McpTestExt, NotificationRecorder,
+};
+
 use std::sync::Arc;
 
 use r2e_core::builder::NoState;
