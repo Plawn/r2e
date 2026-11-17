@@ -199,8 +199,11 @@ pub(crate) struct ClientPolicy {
     /// `mcp.auth.enforce-azp`.
     enforce_azp: bool,
     /// `(client id, allowed-scopes)` of every declared client.
-    clients: Arc<[(String, Option<Arc<[String]>>)]>,
+    clients: Arc<[DeclaredClient]>,
 }
+
+/// `(client id, allowed-scopes)`.
+type DeclaredClient = (String, Option<Arc<[String]>>);
 
 impl ClientPolicy {
     /// Build the policy, rejecting the combinations that cannot be enforced.
@@ -210,7 +213,7 @@ impl ClientPolicy {
         validation_mode: TokenValidationMode,
     ) -> Result<Self, PluginBuildError> {
         let enforce_azp = cfg.enforce_azp.unwrap_or(false);
-        let declared: Arc<[(String, Option<Arc<[String]>>)]> = clients
+        let declared: Arc<[DeclaredClient]> = clients
             .map(|c| {
                 c.clients
                     .iter()

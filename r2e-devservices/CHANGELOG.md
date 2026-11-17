@@ -14,3 +14,12 @@ Up to 0.6.0 the whole workspace was released in lockstep; that history lives
 in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
+
+### Changed
+
+- `DevKeycloak` default realm (#1424): new public client `mcp-local-cli`
+  (PKCE S256, loopback redirect URIs only, same `mcp` audience scope), and
+  `mcp-public` no longer allows `http://localhost:*` / `http://127.0.0.1:*`
+  — a browser flow redirecting to loopback must use `mcp-local-cli`. Both
+  clients allow direct access grants so `password_token` can mint a token
+  with either `azp`.

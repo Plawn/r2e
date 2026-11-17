@@ -31,7 +31,7 @@ requires: testing
 - `DevOpenFga` (feature `openfga`): point the app at it, let the `OpenFga` plugin
   create the store and apply the model, and use a unique `openfga.store` per test.
 - `DevKeycloak` (feature `keycloak`): default realm `r2e-mcp` (`mcp-public`,
-  `test-cli`, users alice/bob); `kc.issuer()` + `password_token(...)` for OAuth tests.
+  `mcp-local-cli`, `test-cli`, users alice/bob); `kc.issuer()` + `password_token(...)` for OAuth tests.
 - Ryuk needs a local Docker Unix socket; `R2E_DEVSERVICES_*` tunes socket path,
   grace period and session key, and `R2E_DEVSERVICES_KEEP=1` disables cleanup.
 
@@ -154,10 +154,12 @@ For non-plugin wiring, the HTTP bootstrap helpers remain:
 
 `DevKeycloak` (feature `keycloak`) runs `quay.io/keycloak/keycloak` in
 `start-dev --import-realm` mode. The default import (`DEFAULT_REALM_JSON`)
-is realm `r2e-mcp`, built for MCP OAuth tests: public client `mcp-public`
-(authorization code + PKCE, localhost/claude.ai redirect URIs, default scope
-`mcp` whose audience mapper stamps `http://localhost:3000/mcp` into the token
-`aud`, optional scopes `mcp:read`/`mcp:write`), direct-grant client
+is realm `r2e-mcp`, built for MCP OAuth tests: public clients `mcp-public`
+(hosted agents: claude.ai/claude.com redirect URIs) and `mcp-local-cli` (local
+CLI agents: loopback redirect URIs only) — authorization code + PKCE, default
+scope `mcp` whose audience mapper stamps `http://localhost:3000/mcp` into the
+token `aud`, optional scopes `mcp:read`/`mcp:write`, direct grants allowed so
+`password_token` can mint a token with either `azp` — direct-grant client
 `test-cli`, confidential `mcp-introspect`/`introspect-secret` (RFC 7662),
 users `alice`/`alice-password` (roles admin, user) and `bob`/`bob-password`
 (user). `start_with(json)` / `shared_with(json)` import a custom realm —
