@@ -77,16 +77,6 @@ Reference: `docs/claude/dev-reload-config-semantics.md`.
   correctness gap (one carried registry); a correct re-spawn needs serve-token
   capture + per-cycle child tokens + provider dedup.
 
-## W12 — OpenFGA DX — Phase 4 (CLI), lowest priority (Tasker #1366)
-
-Phases 1–3 shipped 2026-07-20 (`.fga` parser + `model!` typed API, typed
-`FgaClient` with write-through invalidation, `OpenFga` plugin owning the store
-lifecycle at boot). Reference: `docs/features/23-openfga.md`.
-
-Remaining: `r2e fga diff` / `push` / `pull` (diff local model vs store, pull an
-existing store's model into a local `.fga`), plus tuple seed fixtures for
-dev/tests. Nothing FGA-related exists in `r2e-cli` yet beyond the bundled doc.
-
 ## W14 — Multi-tenant bean routing — remainder
 
 Shipped 2026-08-14 (crate `r2e-tenant`, `tenant` feature on both data
@@ -332,6 +322,11 @@ pointer. Verified against Tasker and the code on 2026-11-12 (master
 
 ## Decisions log — do NOT re-propose
 
+- **W12 phase 4 — OpenFGA CLI: DROPPED (2026-11-12, user decision, Tasker
+  #1366 closed).** No `r2e fga diff` / `push` / `pull`, no tuple seed
+  fixtures. Phases 1–3 (`.fga` parser + `model!`, typed `FgaClient`, `OpenFga`
+  plugin owning the store lifecycle at boot) are the whole workstream;
+  reference: `docs/features/23-openfga.md`.
 - **W6 testing-DX follow-ups: DROPPED (2026-11-12, user decision).** No dev
   services for Kafka / RabbitMQ / Pulsar (the generic `DevService` covers
   them), no `r2e doctor` check for missing dev-service config, no

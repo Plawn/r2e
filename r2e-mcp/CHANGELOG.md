@@ -25,6 +25,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   unchanged — its `elicitation_id` is the key.
 - `ElicitError` has a new variant, `InputRequired`; exhaustive matches need an
   arm (propagate it).
+- `McpAuthConfig` gains the public fields `public_clients` and `enforce_azp`
+  (#1424). Migration: a struct literal listing every field adds
+  `..Default::default()` (or the two fields, `None`); configuration files are
+  unaffected.
 
 ### Added
 
@@ -56,6 +60,29 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   notifications are recorded: `notifications()`, `wait_for(..)`,
   `wait_for_within(..)` over `McpNotification` (list changes, resource
   updates, progress).
+- `mcp.auth.public-clients` (#1424): several pre-registered public clients,
+  one per client family. The DCR shim answers with the `client_id` of the
+  first entry whose `redirect-uri-allowlist` covers every requested redirect
+  URI (and that entry's scope); URIs split across entries, or covered by
+  none, are a `400 invalid_redirect_uri` — as is a `redirect_uris` entry that
+  is not a string. `public-client-id` is unchanged and
+  exclusive with it (boot error when both are set). `audience: client-id`
+  accepts every declared id. Config type: `McpPublicClientConfig`.
+- `mcp.auth.enforce-azp` (#1424, default `false`): a bearer token whose `azp`
+  (`client_id` when the token has no `azp`) is not a declared client is
+  refused (401, `cause=claims`). Per-client `allowed-scopes`: a token's
+  effective scopes are capped to the list before `required-scopes`,
+  `#[tool(scopes)]` and `filter-members`. Both apply to HTTP and loopback
+  bearers; neither is available with `token-validation: userinfo` (boot
+  error). A present but malformed `azp` (not a non-empty string) is refused
+  rather than falling back to `client_id`. `allowed-scopes` caps scopes, not
+  roles: combining it with a `roles-claim` that is the scope claim is a boot
+  error.
+- `McpPrincipal::client_id()`: the client a token was issued to.
+- Logs: the DCR shim line carries the chosen `client_id` (and
+  `split_across_clients` on a refusal); the `MCP request` DEBUG line carries
+  `azp` — also when a validated token is then refused (client policy,
+  `required-scopes`).
 - `LoopbackSession<H = ()>`: a loopback session is generic over its rmcp
   `ClientHandler` (source-compatible — `McpLoopback::connect` still returns
   `LoopbackSession`).

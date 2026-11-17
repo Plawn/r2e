@@ -69,8 +69,8 @@ use r2e_core::type_list::AllSatisfied;
 use r2e_core::EndpointDeps;
 
 pub use auth::{
-    McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpTokenValidator, ToolRequirements,
-    ViaMcpAuth,
+    McpAuthConfig, McpBasicAuthConfig, McpPrincipal, McpPublicClientConfig, McpTokenValidator,
+    ToolRequirements, ViaMcpAuth,
 };
 pub use config::{McpConfig, McpSessionConfig};
 pub use dynamic::{

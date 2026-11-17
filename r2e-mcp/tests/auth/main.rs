@@ -8,6 +8,7 @@ mod fixtures;
 
 mod backends;
 mod basic;
+mod clients;
 mod completion;
 mod config;
 mod discovery;

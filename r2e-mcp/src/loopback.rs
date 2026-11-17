@@ -138,6 +138,9 @@ impl std::error::Error for LoopbackError {
 pub(crate) struct LoopbackAuth {
     pub(crate) slot: Arc<OnceLock<McpTokenValidator>>,
     pub(crate) required_scopes: Arc<[String]>,
+    /// `enforce-azp` + per-client `allowed-scopes`, as the HTTP layer
+    /// applies them to a validated bearer token.
+    pub(crate) client_policy: crate::auth::clients::ClientPolicy,
     /// The canonical resource URI (`mcp.auth.resource`, or what it derives
     /// from); `None` on the Basic-only surface. Read by the test client to
     /// mint tokens bound to this endpoint.
@@ -459,10 +462,13 @@ async fn resolve_identity(
                 return Ok(());
             };
             let validator = auth.slot.get().ok_or(LoopbackError::NotMounted)?;
-            validator
+            let principal = validator
                 .validate(&token)
                 .await
-                .map_err(LoopbackError::Unauthorized)?
+                .map_err(LoopbackError::Unauthorized)?;
+            auth.client_policy
+                .apply(principal)
+                .map_err(|failure| LoopbackError::Unauthorized(failure.error))?
         }
         LoopbackIdentity::Principal(principal) => principal,
     };

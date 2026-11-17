@@ -574,6 +574,72 @@ async fn required_scopes_apply_to_every_loopback_identity() {
     assert_eq!(call_text(&bob, "whoami").await, "bob");
 }
 
+/// #1424: the client policy (`enforce-azp`, per-client `allowed-scopes`)
+/// binds a loopback bearer exactly as it binds an HTTP one. Configured from
+/// YAML, the way an application declares `mcp.auth.public-clients`.
+#[r2e_core::test]
+async fn client_policy_applies_to_a_loopback_bearer() {
+    let yaml = r#"
+mcp:
+  auth:
+    issuer: http://idp.test
+    resource: http://localhost:3000/mcp
+    discovery: off
+    jwks-url: http://127.0.0.1:1/jwks
+    allow-insecure: true
+    enforce-azp: true
+    scopes-supported: ["mcp", "mcp:read"]
+    public-clients:
+      - client-id: mcp-saas
+        redirect-uri-allowlist:
+          - "https://claude.ai/api/mcp/auth_callback"
+      - client-id: mcp-local-cli
+        redirect-uri-allowlist: ["http://127.0.0.1:*", "http://localhost:*"]
+        allowed-scopes: ["mcp"]
+"#;
+    let jwt = TestJwt::with_config(b"loopback-secret", ISSUER, RESOURCE);
+    let validator =
+        McpTokenValidator::jwt(Arc::new(jwt.claims_validator()), ScopePolicy::default());
+    let app = boot!(
+        AppBuilder::new()
+            .override_config(R2eConfig::from_yaml_str(yaml).unwrap())
+            .load_config::<()>()
+            .plugin(McpServer::new().with_token_validator(validator)),
+        SecuredLoopTools
+    );
+    let token = |azp: &str| {
+        jwt.token_builder("alice")
+            .scopes(&["mcp", "mcp:read"])
+            .claim("azp", azp)
+            .build()
+    };
+
+    let err = app
+        .loopback
+        .connect("rogue", LoopbackIdentity::Bearer(token("some-other-client")))
+        .await
+        .map(drop)
+        .expect_err("a token from an undeclared client is refused");
+    assert!(matches!(err, LoopbackError::Unauthorized(_)), "{err}");
+
+    // Capped to `mcp`: the `mcp:read` tool is gone, whatever the token says.
+    let local = app
+        .loopback
+        .connect("local", LoopbackIdentity::Bearer(token("mcp-local-cli")))
+        .await
+        .unwrap();
+    let names = tool_names(&local).await;
+    assert!(names.contains(&"whoami".to_string()), "{names:?}");
+    assert!(!names.contains(&"read_data".to_string()), "{names:?}");
+
+    let saas = app
+        .loopback
+        .connect("saas", LoopbackIdentity::Bearer(token("mcp-saas")))
+        .await
+        .unwrap();
+    assert!(tool_names(&saas).await.contains(&"read_data".to_string()));
+}
+
 #[r2e_core::test]
 async fn bearer_without_auth_is_anonymous() {
     // No `mcp.auth`: there is no validator to run; the token is ignored and

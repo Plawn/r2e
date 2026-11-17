@@ -50,18 +50,36 @@ failure, not a runtime 401.
 
 ## IdP checklist (Keycloak)
 
-The DCR shim **registers nothing**: it hands every MCP client the id from
-`mcp.auth.public-client-id`, so that client must already allow the callbacks
-below.
+The DCR shim **registers nothing**: it hands an MCP client one of the ids
+declared under `mcp.auth.public-clients`, picked by the redirect URIs the
+client asks for, so each IdP client must already allow its callbacks.
 
-1. **Public client**, Standard flow on, no client secret, PKCE `S256`.
-2. **Valid redirect URIs** — add whichever clients you want to test:
+Two public clients, one per client family — both Standard flow on, no client
+secret, PKCE `S256`:
+
+1. **`mcp-saas`** (`MCP_CLIENT_ID`) — hosted agents. Valid redirect URIs:
    - `https://claude.ai/api/mcp/auth_callback` (claude.ai web)
    - `https://claude.com/api/mcp/auth_callback`
-   - `http://localhost:*` (Claude Code CLI, MCP Inspector)
    - `https://chatgpt.com/connector_platform_oauth_redirect` (ChatGPT connectors)
-3. **Web origins**: `https://claude.ai`, `https://chatgpt.com` (or `+`).
-4. *(recommended, see below)* a dedicated **Audience mapper**.
+
+   No `http://localhost:*` here: loopback redirects belong to the client
+   below, not to the one your SaaS integrations share.
+2. **`mcp-local-cli`** (`MCP_LOCAL_CLIENT_ID`) — local CLI agents (Claude
+   Code, a locally run MCP Inspector). Valid redirect URIs:
+   `http://localhost:*` and `http://127.0.0.1:*` only.
+3. **Web origins** on `mcp-saas`: `https://claude.ai`, `https://chatgpt.com`
+   (or `+`).
+4. *(recommended, see below)* a dedicated **Audience mapper** — on **both**
+   clients (or on a client scope they share).
+5. *(recommended)* `mcp.auth.enforce-azp: true` in `application.yaml`: only tokens issued to one of the
+   two clients authenticate.
+
+The split is visible in the logs: each `DCR shim registration answered` line
+carries the `client_id` the shim picked. A client asking for a hosted callback
+*and* a loopback one in the same registration gets `400 invalid_redirect_uri`.
+
+One client is enough to try things out: replace `public-clients` with
+`public-client-id: mcp-public` and a top-level `redirect-uri-allowlist`.
 
 ### The audience caveat
 
@@ -71,7 +89,7 @@ production-grade: any token that issuer minted for any service authenticates.
 
 R2E's default (`audience: resource`) requires the token's `aud` to contain the
 canonical resource URI `{server.public-url}/mcp` (RFC 8707). Keycloak only puts
-it there if you add, on the public client, a **dedicated mapper of type
+it there if you add, on each public client, a **dedicated mapper of type
 "Audience"** whose *Included Custom Audience* is exactly that URI. Without the
 mapper Keycloak issues `aud: ["account"]` and every request is a 401.
 
@@ -135,6 +153,7 @@ curl -s $BASE/.well-known/oauth-authorization-server
 |---|---|
 | OAuth completes, then the client reports a connection failure; the log shows `rejected request with disallowed Host header` | `mcp.allowed-hosts` doesn't list the tunnel hostname. The Host check sits *inside* rmcp, **after** the auth layer — so this failure mode always looks like a post-login error, never like an auth error |
 | 401 `invalid audience` | `audience: resource` without the IdP audience mapper — see above |
-| Client can't register | The redirect URI it sent isn't in `mcp.auth.redirect-uri-allowlist` **and/or** isn't configured on the public client at the IdP |
+| Client can't register (`400 invalid_redirect_uri`) | No single `mcp.auth.public-clients` entry covers every redirect URI it sent (the WARN `DCR shim registration rejected` names them; `split_across_clients=true` means it mixed hosted and loopback callbacks) **and/or** the URI isn't configured on that client at the IdP |
+| 401 with `cause=claims`, `detail=azp … is not a declared client` | `enforce-azp: true` and the token was issued to another client of the realm |
 | Server boots unauthenticated on `:3000` | Launched from the workspace root: the repo's own `application.yaml` won |
 | `whoami` returns a JSON-RPC `unauthorized` error | The `McpPrincipal` identity parameter is required by design and there is no principal on the request: `mcp.auth` is not configured (or disabled) for this run. A token that fails validation never reaches the tool — it is an HTTP 401 with a `WWW-Authenticate` challenge |

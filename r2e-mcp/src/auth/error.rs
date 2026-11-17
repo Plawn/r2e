@@ -79,6 +79,10 @@ pub(crate) struct AuthFailure {
     /// Stable snake_case category (`missing_credentials`, `unknown_kid`, …).
     pub cause: &'static str,
     pub detail: Option<String>,
+    /// The client a VALIDATED token was issued to, when the rejection came
+    /// after validation (client policy, `required-scopes`) — the `azp` of
+    /// the `MCP request` line.
+    pub client: Option<crate::request_log::AuthClient>,
 }
 
 impl AuthFailure {
@@ -87,7 +91,13 @@ impl AuthFailure {
             error,
             cause,
             detail: None,
+            client: None,
         }
+    }
+
+    pub(crate) fn with_client(mut self, client: Option<crate::request_log::AuthClient>) -> Self {
+        self.client = client;
+        self
     }
 
     pub(crate) fn with_detail(mut self, detail: impl Into<String>) -> Self {
@@ -119,6 +129,7 @@ impl From<McpAuthError> for AuthFailure {
             error,
             cause,
             detail,
+            client: None,
         }
     }
 }

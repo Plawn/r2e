@@ -1094,7 +1094,8 @@ What you get, with zero additional code:
   advertised scopes as `scope`; set `mcp.auth.scopes-supported` (or
   `required-scopes`) when the shim is on — without it clients pick a scope of
   their own and the IdP typically answers `invalid_scope`, so boot logs a
-  WARN naming the key.
+  WARN naming the key. To hand different clients different ids, see
+  "Several public clients" below.
 - **Authorize-redirect shim** (when `extra-authorize-params` is set): the
   mirrored metadata's `authorization_endpoint` points at
   `GET {mcp.path}/oauth/authorize`, which merges the configured params into
@@ -1106,6 +1107,91 @@ What you get, with zero additional code:
   when JWKS/discovery are briefly unreachable (stale-if-error caches on
   both).
 
+### Several public clients (`public-clients`)
+
+One IdP client for every MCP client means one set of redirect URIs, one
+consent policy and one audit identity for a hosted SaaS agent and a CLI on a
+developer laptop alike — and `http://localhost:*` allowed on the client your
+SaaS integrations use. Declare one IdP client per client family instead; the
+shim picks the id from the redirect URIs the caller asks for:
+
+```yaml
+mcp:
+  auth:
+    issuer: https://id.example.com/realms/acme
+    public-clients:
+      - client-id: mcp-saas
+        redirect-uri-allowlist:
+          - "https://claude.ai/api/mcp/auth_callback"
+          - "https://claude.com/api/mcp/auth_callback"
+          - "https://chatgpt.com/connector_platform_oauth_redirect"
+          - "https://dust.tt/*"
+      - client-id: mcp-local-cli
+        redirect-uri-allowlist: ["http://127.0.0.1:*", "http://localhost:*"]
+        allowed-scopes: ["mcp", "mcp:read"]   # optional, defense in depth
+    enforce-azp: true                          # optional
+```
+
+**Registration.** `POST {mcp.path}/oauth/register` answers with the
+`client_id` of the **first** entry whose `redirect-uri-allowlist` covers
+**every** requested `redirect_uris`. A request whose URIs are split across
+entries, or that no entry covers entirely, is refused with
+`400 invalid_redirect_uri` — never answered with a subset (in the
+single-client form, URIs off the allowlist are dropped from the answer; here
+that would hand the caller a client id that cannot use them). A
+`redirect_uris` entry that is not a string is refused the same way. The
+answer's
+`scope` is the entry's: its `scopes` when set, else `scopes-supported`
+narrowed to its `allowed-scopes`, else `scopes-supported`.
+
+Per-entry keys:
+
+| Key | Meaning |
+|---|---|
+| `client-id` | the pre-created public client on the IdP (required, unique) |
+| `redirect-uri-allowlist` | patterns this client answers for (required — the single-client default list does NOT apply); `:*` = any port, trailing `*` = prefix |
+| `scopes` | `scope` echoed by the registration answer (must fit `allowed-scopes`) |
+| `allowed-scopes` | cap on the effective scopes of a token issued to this client |
+
+`public-client-id` remains the single-client form and behaves exactly as
+before; setting it together with `public-clients` (or the top-level
+`redirect-uri-allowlist` together with `public-clients`) is a boot error.
+`audience: client-id` accepts every declared id. The shim still registers
+nothing: each client must exist on the IdP with its redirect URIs.
+
+**Validation.** Choosing the id at registration is advisory — any client can
+run the flow with any public client id it knows. Two keys make the split
+binding on the token:
+
+- `enforce-azp: true` — a bearer token whose `azp` claim (`client_id`,
+  RFC 9068, when the token has no `azp`) is not a declared client, or names
+  none, is a 401 (`cause=claims`). Off by default: tokens minted for other clients of the
+  same issuer (service accounts, a direct-grant test client) keep working.
+  Requires declared clients (either form).
+- `allowed-scopes` on an entry — the effective scopes of a token issued to
+  that client are `token scopes ∩ allowed-scopes`. Everything downstream sees
+  the effective scopes: `required-scopes`, `#[tool(scopes)]`,
+  `filter-members`. Without `enforce-azp`, a token naming no client or an
+  undeclared one is not restricted — boot logs a WARN.
+
+A present `azp` that is not a non-empty string (an array, a number, `""`) is
+never replaced by `client_id`: with `enforce-azp` or any `allowed-scopes`
+configured, such a token is a 401 (`cause=claims`).
+
+`allowed-scopes` caps **scopes only**. Roles (`#[roles]`, `roles-claim`,
+realm/client roles) and the raw claims a guard reads through
+`Identity::claims()` are left as the token carries them — restrict roles on
+the IdP, per client. Because of that, `allowed-scopes` together with a
+`roles-claim` that names the scope claim (`scope-claim`, or `scope` / `scp`
+by default) is a boot error: the stripped scopes would come back as roles.
+
+Both apply to bearer tokens on HTTP and on the loopback transport, whatever
+the validator (JWT, introspection, a pinned or custom one) — never to HTTP
+Basic or a trusted loopback principal. Neither can be enforced with
+`token-validation: userinfo` (the userinfo response does not name the
+client): that combination is a boot error. `McpPrincipal::client_id()` reads
+the same claim in a tool.
+
 ### Auth logs
 
 Operators can diagnose a failing OAuth flow from the server logs alone. No
@@ -1115,12 +1201,12 @@ log line carries a token or credential bytes.
 |---|---|---|---|
 | Request without `Authorization` (the normal first leg of every OAuth flow) | DEBUG | `MCP request without credentials; …` | — |
 | Credentials presented and refused, IdP unreachable | WARN | `MCP request rejected` | `cause`, `status`, `reason` (the wire `error_description`), `detail` |
-| Every MCP request | DEBUG | `MCP request` | `http_method`, `rpc_method`, `status`, `auth` |
-| Every DCR shim call | INFO (201) / WARN (refused, or redirect URIs dropped) | `DCR shim registration …` | `status`, `client_name` (clipped), `redirect_uris`, `rejected_redirect_uris` (count) + `rejected_sample`, `scope` |
+| Every MCP request | DEBUG | `MCP request` | `http_method`, `rpc_method`, `status`, `auth`, `azp` (the client the token was issued to, when it names one) |
+| Every DCR shim call | INFO (201) / WARN (refused, or redirect URIs dropped) | `DCR shim registration …` | `status`, `client_id` (the client the shim answered with), `client_name` (clipped), `redirect_uris`, `rejected_redirect_uris` (count) + `rejected_sample`, `split_across_clients` (refusal with `public-clients`), `scope` |
 
 `cause` is one of `malformed_header`, `malformed_token`, `missing_kid`,
 `unknown_kid`, `algorithm_refused`, `invalid_signature`, `token_expired`,
-`claims` (issuer/audience/`nbf`/required claim), `signing_key_unusable`,
+`claims` (issuer/audience/`nbf`/required claim, or `enforce-azp`), `signing_key_unusable`,
 `insufficient_scope` (`detail` = the missing scopes), `invalid_origin`,
 `basic_credentials`, `jwks_unavailable` / `upstream_unavailable`, or
 `invalid_token` for a custom/opaque validator (its `reason` is specific). The
@@ -1370,9 +1456,11 @@ that is the point:
 | `scope-claim` | `scope`, then `scp` | set `permissions` for Auth0 RBAC |
 | `roles-claim` | `roles` + `realm_access.roles` | custom claim REPLACES defaults |
 | `client-roles-for` | — | merge Keycloak `resource_access.<id>.roles` |
-| `public-client-id`, `shim` | — / auto | shim on iff client id set; `shim: false` opts out |
+| `public-client-id`, `shim` | — / auto | shim on iff a client is declared; `shim: false` opts out |
+| `public-clients` | — | several pre-registered clients, chosen by redirect URIs (`client-id`, `redirect-uri-allowlist`, `scopes`, `allowed-scopes`); exclusive with `public-client-id` |
+| `enforce-azp` | `false` | refuse a bearer whose `azp`/`client_id` is not a declared client |
 | `registration-path` | `/oauth/register` | mounted under `mcp.path` |
-| `redirect-uri-allowlist` | localhost/Claude/Inspector | custom list REPLACES defaults; `:*` = any port, trailing `*` = prefix |
+| `redirect-uri-allowlist` | localhost/Claude/Inspector | single-client form only; custom list REPLACES defaults; `:*` = any port, trailing `*` = prefix |
 | `extra-authorize-params` | — | map of query params merged into every authorization request (server wins over client duplicates); needs the shim — the mirror rewrites `authorization_endpoint` to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP |
 | `filter-members` | `true` | hide unauthorized tools, resources and prompts from their list methods |
 | `allow-insecure` | `false` | permit `http://` issuer/JWKS (dev only) |
@@ -1413,6 +1501,12 @@ written `[openid, profile]`.
 7. `npx @modelcontextprotocol/inspector`, or add the URL as a Claude custom
    connector: the client discovers the PRM, "registers" through the shim,
    runs authorization-code + PKCE against Keycloak, and calls tools.
+
+To keep loopback redirects off the client hosted agents use, create a second
+public client (`mcp-local-cli`: same settings, redirect URIs
+`http://localhost:*` and `http://127.0.0.1:*` only, same `mcp` scope so the
+audience mapper applies), drop `http://localhost:*` from `mcp-public`, and
+declare both under `public-clients` (see "Several public clients").
 
 ### Testing authenticated servers (no Docker)
 
@@ -1467,10 +1561,11 @@ fixtures.
 ### Testing against a real Keycloak (Docker)
 
 `r2e-devservices` feature `keycloak` ships `DevKeycloak`: a containerized
-Keycloak importing a bundled MCP realm (`r2e-mcp`) — public client
-`mcp-public` (PKCE S256, localhost + claude.ai redirect URIs) whose default
-scope `mcp` stamps `http://localhost:3000/mcp` into the token `aud`, optional
-scopes `mcp:read`/`mcp:write`, direct-grant client `test-cli`, confidential
+Keycloak importing a bundled MCP realm (`r2e-mcp`) — public clients
+`mcp-public` (PKCE S256, claude.ai redirect URIs) and `mcp-local-cli`
+(loopback redirect URIs only) whose default scope `mcp` stamps
+`http://localhost:3000/mcp` into the token `aud`, optional scopes
+`mcp:read`/`mcp:write`, direct-grant client `test-cli`, confidential
 `mcp-introspect` for RFC 7662, and users `alice` (admin) / `bob` (user).
 
 ```rust

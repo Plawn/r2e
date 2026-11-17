@@ -30,11 +30,12 @@ use r2e_core::http::{
 use tower::{Layer, Service};
 
 use super::basic::{basic_credentials, BasicCredentials};
+use super::clients::ClientPolicy;
 use super::error::{
     auth_error_response, AuthFailure, Challenges, McpAuthError, MISSING_CREDENTIALS,
 };
 use super::validator::{McpPrincipal, McpTokenValidator};
-use crate::request_log::AuthOutcome;
+use crate::request_log::{AuthClient, AuthOutcome};
 use crate::session::{session_not_found, SessionBindings, SessionLink};
 
 /// The streamable-HTTP session header (rmcp's `HEADER_SESSION_ID`).
@@ -56,6 +57,9 @@ pub(crate) struct AuthState {
     pub challenges: Challenges,
     /// Server-wide `mcp.auth.required-scopes` — enforced at HTTP level.
     pub required_scopes: Arc<[String]>,
+    /// `enforce-azp` + per-client `allowed-scopes` — applied to every
+    /// validated bearer token, before `required_scopes`.
+    pub client_policy: ClientPolicy,
     /// `mcp.allowed-origins` — when set, a present `Origin` header must
     /// match (DNS-rebinding guard); requests without `Origin` (non-browser
     /// clients) pass.
@@ -136,7 +140,18 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
                 )
                 .with_detail("after_build did not run"));
             };
-            validator.validate_detailed(bearer).await?
+            let principal = validator.validate_detailed(bearer).await?;
+            // From here on the token is genuine: a rejection still names
+            // the client it was issued to.
+            let client = AuthClient::of(&principal);
+            let principal = match state.client_policy.apply(principal) {
+                Ok(principal) => principal,
+                Err(failure) => return Err(failure.with_client(client)),
+            };
+            if let Err(e) = check_required_scopes(&principal, &state.required_scopes) {
+                return Err(AuthFailure::from(e).with_client(client));
+            }
+            return Ok(principal);
         }
         _ => {
             return Err(AuthFailure::new(
@@ -260,6 +275,9 @@ where
                                 response
                                     .extensions_mut()
                                     .insert(AuthOutcome("session_mismatch"));
+                                if let Some(client) = AuthClient::of(&principal) {
+                                    response.extensions_mut().insert(client);
+                                }
                                 return Ok(response);
                             }
                             None
@@ -271,11 +289,15 @@ where
                         }
                     };
 
+                    let client = AuthClient::of(&principal);
                     deposit_principal(req.extensions_mut(), principal);
                     let mut response = inner.call(req).await?.into_response();
                     response
                         .extensions_mut()
                         .insert(AuthOutcome("authenticated"));
+                    if let Some(client) = client {
+                        response.extensions_mut().insert(client);
+                    }
                     if let Some(opened) = link.and_then(|link| link.take())
                         && let Some(id) = response
                             .headers()
@@ -290,6 +312,9 @@ where
                     let mut response = auth_error_response(&failure.error, &state.challenges);
                     log_rejection(&failure, response.status());
                     response.extensions_mut().insert(AuthOutcome(failure.cause));
+                    if let Some(client) = failure.client {
+                        response.extensions_mut().insert(client);
+                    }
                     Ok(response)
                 }
             }

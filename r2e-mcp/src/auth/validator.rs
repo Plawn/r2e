@@ -57,6 +57,30 @@ impl McpPrincipal {
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.iter().any(|s| s == scope)
     }
+
+    /// The OAuth client the token was issued to: the `azp` claim, falling
+    /// back to `client_id` (RFC 9068 access tokens, RFC 7662 introspection
+    /// responses) only when `azp` is ABSENT. `None` when the token names no
+    /// client (HTTP Basic, a trusted loopback principal, a
+    /// userinfo-validated token) — or names it with a claim that is not a
+    /// non-empty string: a malformed `azp` never yields to `client_id`.
+    pub fn client_id(&self) -> Option<&str> {
+        let claims = &self.user.claims;
+        let claim = match claims.get("azp") {
+            Some(azp) => azp,
+            None => claims.get("client_id")?,
+        };
+        claim.as_str().filter(|id| !id.is_empty())
+    }
+
+    /// Whether the token carries an `azp` claim that is not a non-empty
+    /// string (an array, a number, `null`, `""`).
+    pub(crate) fn has_malformed_azp(&self) -> bool {
+        self.user
+            .claims
+            .get("azp")
+            .is_some_and(|azp| azp.as_str().is_none_or(str::is_empty))
+    }
 }
 
 /// A bearer-token validation strategy.

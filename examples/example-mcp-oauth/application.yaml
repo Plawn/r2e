@@ -44,10 +44,37 @@ mcp:
 
     # IdPs that block anonymous dynamic client registration (Keycloak) or
     # don't implement it at all (Google, Entra, Okta) need the DCR shim: it
-    # hands every MCP client this pre-created PUBLIC client id. The shim
-    # registers nothing — the client must already exist on the IdP with the
-    # redirect URIs below.
-    public-client-id: ${MCP_CLIENT_ID:mcp-public}
+    # hands MCP clients a pre-created PUBLIC client id. The shim registers
+    # nothing — each client must already exist on the IdP with the redirect
+    # URIs listed here.
+    #
+    # One IdP client per client family: hosted agents (fixed https
+    # callbacks) and local CLI agents (loopback, any port). The shim answers
+    # with the FIRST entry whose allowlist covers every redirect URI the
+    # caller asks for; a mix of both families is a 400. Keeping them apart
+    # keeps `http://localhost:*` off the client your SaaS integrations use.
+    # (A single client: `public-client-id: mcp-public` + the top-level
+    # `redirect-uri-allowlist`.)
+    public-clients:
+      - client-id: ${MCP_CLIENT_ID:mcp-saas}
+        redirect-uri-allowlist:
+          - "https://claude.ai/api/mcp/auth_callback"
+          - "https://claude.com/api/mcp/auth_callback"
+          - "https://inspector.modelcontextprotocol.io/*"
+          - "https://chatgpt.com/*"
+          - "https://chat.openai.com/*"
+      - client-id: ${MCP_LOCAL_CLIENT_ID:mcp-local-cli}
+        redirect-uri-allowlist:
+          - "http://localhost:*"
+          - "http://127.0.0.1:*"
+        # Optional, defense in depth: cap what a token issued to this client
+        # may do, whatever the IdP granted.
+        # allowed-scopes: ["openid", "profile"]
+
+    # Refuse a token whose `azp` is not one of the clients above. Off here
+    # so a token minted for another client of the realm (a smoke-test curl)
+    # still works; turn it on for anything real.
+    enforce-azp: false
 
     # ── Audience ───────────────────────────────────────────────────────
     # R2E's default (`resource`) requires `aud` to contain the canonical
@@ -59,17 +86,6 @@ mcp:
     # accepting any token that issuer minted for any service. Add the mapper
     # and switch to `resource` for anything real.
     audience: ${MCP_AUDIENCE_MODE:skip}
-
-    # A custom allowlist REPLACES the defaults, so the Claude / Inspector /
-    # localhost callbacks are repeated here alongside ChatGPT's.
-    redirect-uri-allowlist:
-      - "http://localhost:*"
-      - "http://127.0.0.1:*"
-      - "https://claude.ai/api/mcp/auth_callback"
-      - "https://claude.com/api/mcp/auth_callback"
-      - "https://inspector.modelcontextprotocol.io/*"
-      - "https://chatgpt.com/*"
-      - "https://chat.openai.com/*"
 
     # Advertised in the protected-resource metadata (what clients show in the
     # consent screen). Keep it to what the public client can actually grant.

@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp (`### In-process (loopback) transport`: mcp-loopback; `app.mcp()` test client: mcp-testing)
-tokens: ~11300
+tokens: ~11700
 requires: guards, security
 ---
 
@@ -700,7 +700,40 @@ section → unauthenticated server. Logs: every refused credential is one WARN
 `MCP request rejected` with a `cause` (`token_expired`, `claims`,
 `unknown_kid`, `algorithm_refused`, …; a request with no credentials is DEBUG),
 every MCP request one DEBUG `MCP request` line (`rpc_method`, `status`,
-`auth`), every DCR call one line — never the token.
+`auth`, `azp`), every DCR call one line (`client_id`) — never the token.
+
+**Several public clients** — one IdP client per client family (hosted agents
+vs local CLIs on loopback) instead of `public-client-id`:
+
+```yaml
+mcp:
+  auth:
+    issuer: https://id.example.com/realms/acme
+    public-clients:                      # exclusive with public-client-id
+      - client-id: mcp-saas
+        redirect-uri-allowlist:          # required per entry (no default list)
+          - "https://claude.ai/api/mcp/auth_callback"
+          - "https://dust.tt/*"
+      - client-id: mcp-local-cli
+        redirect-uri-allowlist: ["http://127.0.0.1:*", "http://localhost:*"]
+        allowed-scopes: ["mcp", "mcp:read"]   # optional cap on effective scopes
+    enforce-azp: true                    # optional, default false
+```
+
+The shim answers `POST {path}/oauth/register` with the FIRST entry whose
+allowlist covers ALL requested `redirect_uris` (and that entry's scope:
+`scopes`, else `scopes-supported` ∩ `allowed-scopes`); URIs split across
+entries or covered by none, or a non-string entry → `400
+invalid_redirect_uri` (no silent drop).
+`enforce-azp: true` refuses (401, `cause=claims`) a bearer whose `azp`
+(`client_id` only when `azp` is absent; a malformed `azp` is refused) is not
+a declared client; `allowed-scopes` makes the effective scopes
+`token ∩ allowlist` before `required-scopes`, `#[tool(scopes)]` and
+`filter-members` — it caps scopes, NOT roles or raw claims (boot error when
+`roles-claim` is the scope claim). Both apply on HTTP and loopback
+bearers, not to Basic; boot error with `token-validation: userinfo`, or when
+`public-client-id` / top-level `redirect-uri-allowlist` is set alongside
+`public-clients`. `McpPrincipal::client_id()` returns the token's client.
 
 Other `mcp.auth.*` keys (all optional): `resource`/`resource-name`, `discovery`
 (`eager`|`lazy`|`off`) + `discovery-ttl-secs`/`jwks-url`/explicit
@@ -720,7 +753,7 @@ empty entries, spaces, `"`, `\` fail at boot), `scope-claim`
 (default `scope` then `scp`; Auth0 RBAC → `permissions`), `roles-claim`
 (default `roles` + Keycloak `realm_access.roles`), `client-roles-for`
 (Keycloak `resource_access.<id>.roles`), `shim`, `registration-path`,
-`redirect-uri-allowlist`, `extra-authorize-params` (map merged into every
+`redirect-uri-allowlist` (single-client form), `public-clients`, `enforce-azp`, `extra-authorize-params` (map merged into every
 authorization request — Auth0 `audience`, Google `access_type=offline`;
 requires the shim: the mirrored metadata's `authorization_endpoint` is
 rewritten to `{mcp.path}/oauth/authorize`, which 302-redirects to the IdP

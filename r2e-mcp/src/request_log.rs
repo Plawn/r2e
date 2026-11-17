@@ -35,6 +35,30 @@ use tower::{Layer, Service};
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AuthOutcome(pub &'static str);
 
+/// Longest `azp` the request log echoes.
+const LOG_AZP_CHARS: usize = 64;
+
+/// The OAuth client the authenticated token was issued to (`azp`, falling
+/// back to `client_id`), as a response extension set by the auth layer.
+/// Token-controlled text: clipped here, Debug-escaped when logged.
+#[derive(Clone, Debug)]
+pub(crate) struct AuthClient(pub String);
+
+impl AuthClient {
+    /// `None` when the principal names no client — or when the request log
+    /// is off, so the common case costs no allocation.
+    pub(crate) fn of(principal: &crate::auth::McpPrincipal) -> Option<Self> {
+        if !tracing::enabled!(tracing::Level::DEBUG) {
+            return None;
+        }
+        let id = principal.client_id()?;
+        Some(Self(match id.char_indices().nth(LOG_AZP_CHARS) {
+            Some((end, _)) => format!("{}…", &id[..end]),
+            None => id.to_string(),
+        }))
+    }
+}
+
 /// The JSON-RPC method of a message body, bounded for logging: an unknown or
 /// client-invented method is never echoed verbatim (`other`), so the log
 /// line cannot be forged or blown up by the request.
@@ -244,11 +268,16 @@ where
                 .extensions()
                 .get::<AuthOutcome>()
                 .map_or("none", |outcome| outcome.0);
+            let azp = response
+                .extensions()
+                .get::<AuthClient>()
+                .map(|client| tracing::field::debug(client.0.as_str()));
             tracing::debug!(
                 http_method = %http_method,
                 rpc_method = tap.as_deref().map_or("-", tapped_method),
                 status = response.status().as_u16(),
                 auth,
+                azp,
                 "MCP request"
             );
             Ok(response)
