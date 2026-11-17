@@ -200,7 +200,3 @@ See `examples/example-openfga` for the complete wiring, `r2e-openfga/tests/plugi
 ## Standalone parser
 
 `r2e_openfga::model_parser` (crate `r2e-openfga-model`) exposes the `.fga` parser without proc-macro machinery — usable from build scripts and tooling: `parse(dsl)` (syntax, corpus-exact vs the official transformer) and `validate(&model)` (semantic referential checks), plus the serde data model for schema 1.1 JSON in both directions.
-
-## Roadmap (not yet shipped)
-
-- **CLI (Phase 4)** — `r2e fga diff | push | pull`, tuple seed fixtures.
