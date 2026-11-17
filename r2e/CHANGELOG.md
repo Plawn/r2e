@@ -15,12 +15,18 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-17
+
 ### Breaking
 
 - `mcp`: `McpClient::elicit` takes a key before the message
   (`client.elicit::<T>("confirm", "Really?")`) and `ElicitError` gains
   `InputRequired` — see `r2e-mcp`'s changelog. Elicitation now reaches
   sessionless 2026-07-28 clients once `mcp.request-state-key` is set.
+
+### Changed
+
+- Built against `r2e-mcp` 0.13.0 — its breaking changes surface through this crate's re-exports (see [`r2e-mcp/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-mcp-v0.13.0/r2e-mcp/CHANGELOG.md)).
 
 ## [0.12.0] - 2026-11-10
 

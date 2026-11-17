@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-17
+
 ### Breaking
 
 - `McpClient::elicit` takes a key before the message:

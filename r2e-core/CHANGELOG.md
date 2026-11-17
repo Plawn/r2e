@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-17
+
 ### Changed
 
 - Request ids are minted with `uuid`'s `fast-rng` feature (a thread-local
