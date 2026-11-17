@@ -6864,11 +6864,14 @@ mcp:
 The shim answers `POST {path}/oauth/register` with the FIRST entry whose
 allowlist covers ALL requested `redirect_uris` (and that entry's scope:
 `scopes`, else `scopes-supported` ∩ `allowed-scopes`); URIs split across
-entries or covered by none → `400 invalid_redirect_uri` (no silent drop).
+entries or covered by none, or a non-string entry → `400
+invalid_redirect_uri` (no silent drop).
 `enforce-azp: true` refuses (401, `cause=claims`) a bearer whose `azp`
-(fallback `client_id`) is not a declared client; `allowed-scopes` makes the
-effective scopes `token ∩ allowlist` before `required-scopes`,
-`#[tool(scopes)]` and `filter-members`. Both apply on HTTP and loopback
+(`client_id` only when `azp` is absent; a malformed `azp` is refused) is not
+a declared client; `allowed-scopes` makes the effective scopes
+`token ∩ allowlist` before `required-scopes`, `#[tool(scopes)]` and
+`filter-members` — it caps scopes, NOT roles or raw claims (boot error when
+`roles-claim` is the scope claim). Both apply on HTTP and loopback
 bearers, not to Basic; boot error with `token-validation: userinfo`, or when
 `public-client-id` / top-level `redirect-uri-allowlist` is set alongside
 `public-clients`. `McpPrincipal::client_id()` returns the token's client.

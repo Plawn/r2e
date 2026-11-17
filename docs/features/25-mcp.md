@@ -1138,7 +1138,9 @@ mcp:
 entries, or that no entry covers entirely, is refused with
 `400 invalid_redirect_uri` — never answered with a subset (in the
 single-client form, URIs off the allowlist are dropped from the answer; here
-that would hand the caller a client id that cannot use them). The answer's
+that would hand the caller a client id that cannot use them). A
+`redirect_uris` entry that is not a string is refused the same way. The
+answer's
 `scope` is the entry's: its `scopes` when set, else `scopes-supported`
 narrowed to its `allowed-scopes`, else `scopes-supported`.
 
@@ -1161,9 +1163,9 @@ nothing: each client must exist on the IdP with its redirect URIs.
 run the flow with any public client id it knows. Two keys make the split
 binding on the token:
 
-- `enforce-azp: true` — a bearer token whose `azp` claim (fallback
-  `client_id`, RFC 9068) is not a declared client, or names none, is a 401
-  (`cause=claims`). Off by default: tokens minted for other clients of the
+- `enforce-azp: true` — a bearer token whose `azp` claim (`client_id`,
+  RFC 9068, when the token has no `azp`) is not a declared client, or names
+  none, is a 401 (`cause=claims`). Off by default: tokens minted for other clients of the
   same issuer (service accounts, a direct-grant test client) keep working.
   Requires declared clients (either form).
 - `allowed-scopes` on an entry — the effective scopes of a token issued to
@@ -1171,6 +1173,17 @@ binding on the token:
   the effective scopes: `required-scopes`, `#[tool(scopes)]`,
   `filter-members`. Without `enforce-azp`, a token naming no client or an
   undeclared one is not restricted — boot logs a WARN.
+
+A present `azp` that is not a non-empty string (an array, a number, `""`) is
+never replaced by `client_id`: with `enforce-azp` or any `allowed-scopes`
+configured, such a token is a 401 (`cause=claims`).
+
+`allowed-scopes` caps **scopes only**. Roles (`#[roles]`, `roles-claim`,
+realm/client roles) and the raw claims a guard reads through
+`Identity::claims()` are left as the token carries them — restrict roles on
+the IdP, per client. Because of that, `allowed-scopes` together with a
+`roles-claim` that names the scope claim (`scope-claim`, or `scope` / `scp`
+by default) is a boot error: the stripped scopes would come back as roles.
 
 Both apply to bearer tokens on HTTP and on the loopback transport, whatever
 the validator (JWT, introspection, a pinned or custom one) — never to HTTP

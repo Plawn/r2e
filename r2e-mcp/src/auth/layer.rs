@@ -141,7 +141,17 @@ async fn authorize(state: &AuthState, headers: &HeaderMap) -> Result<McpPrincipa
                 .with_detail("after_build did not run"));
             };
             let principal = validator.validate_detailed(bearer).await?;
-            state.client_policy.apply(principal)?
+            // From here on the token is genuine: a rejection still names
+            // the client it was issued to.
+            let client = AuthClient::of(&principal);
+            let principal = match state.client_policy.apply(principal) {
+                Ok(principal) => principal,
+                Err(failure) => return Err(failure.with_client(client)),
+            };
+            if let Err(e) = check_required_scopes(&principal, &state.required_scopes) {
+                return Err(AuthFailure::from(e).with_client(client));
+            }
+            return Ok(principal);
         }
         _ => {
             return Err(AuthFailure::new(
@@ -302,6 +312,9 @@ where
                     let mut response = auth_error_response(&failure.error, &state.challenges);
                     log_rejection(&failure, response.status());
                     response.extensions_mut().insert(AuthOutcome(failure.cause));
+                    if let Some(client) = failure.client {
+                        response.extensions_mut().insert(client);
+                    }
                     Ok(response)
                 }
             }

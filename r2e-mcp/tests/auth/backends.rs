@@ -27,7 +27,7 @@ fn unix_now() -> u64 {
 /// response `respond(path)` returns, and logs the FULL raw request
 /// (content-length-framed, so POST bodies are captured even when they
 /// arrive in a separate segment).
-async fn mini_endpoint(
+pub(crate) async fn mini_endpoint(
     respond: impl Fn(&str) -> (u16, Value) + Send + Sync + 'static,
 ) -> (String, Arc<Mutex<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

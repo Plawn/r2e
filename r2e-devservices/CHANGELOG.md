@@ -15,11 +15,17 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
-### Changed
+### Breaking
+
+- `DevKeycloak` default realm (#1424): `mcp-public` no longer allows the
+  loopback redirect URIs `http://localhost:*` / `http://127.0.0.1:*`.
+  Migration: an authorization-code flow redirecting to loopback uses the new
+  client `mcp-local-cli` (below) instead of `mcp-public`; a custom realm
+  passed to `DevKeycloak` is unaffected.
+
+### Added
 
 - `DevKeycloak` default realm (#1424): new public client `mcp-local-cli`
-  (PKCE S256, loopback redirect URIs only, same `mcp` audience scope), and
-  `mcp-public` no longer allows `http://localhost:*` / `http://127.0.0.1:*`
-  — a browser flow redirecting to loopback must use `mcp-local-cli`. Both
-  clients allow direct access grants so `password_token` can mint a token
-  with either `azp`.
+  (PKCE S256, loopback redirect URIs only, same `mcp` audience scope). Both
+  `mcp-public` and `mcp-local-cli` allow direct access grants so
+  `password_token` can mint a token with either `azp`.

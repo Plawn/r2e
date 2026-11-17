@@ -198,6 +198,8 @@ pub(crate) fn resolve_public_clients(
 pub(crate) struct ClientPolicy {
     /// `mcp.auth.enforce-azp`.
     enforce_azp: bool,
+    /// Whether any declared client carries `allowed-scopes`.
+    caps_scopes: bool,
     /// `(client id, allowed-scopes)` of every declared client.
     clients: Arc<[DeclaredClient]>,
 }
@@ -243,6 +245,25 @@ impl ClientPolicy {
             )
             .into());
         }
+        if caps_scopes
+            && let Some(roles_claim) = &cfg.roles_claim
+            && match &cfg.scope_claim {
+                Some(scope_claim) => scope_claim == roles_claim,
+                None => roles_claim == "scope" || roles_claim == "scp",
+            }
+        {
+            // `allowed-scopes` narrows the principal's SCOPES; roles are
+            // extracted from the claims and are not touched. Reading the
+            // roles from the scope claim would hand the stripped scopes
+            // back as roles (`#[roles("mcp:write")]` would still pass).
+            return Err(format!(
+                "mcp.auth.public-clients[].allowed-scopes cannot be combined with \
+                 `roles-claim: {roles_claim}`: that claim is the scope claim, so the \
+                 scopes `allowed-scopes` strips would still be granted as roles — \
+                 point `roles-claim` at a roles claim, or drop `allowed-scopes`"
+            )
+            .into());
+        }
         if caps_scopes && !enforce_azp {
             tracing::warn!(
                 "mcp.auth.public-clients: `allowed-scopes` is set without \
@@ -252,6 +273,7 @@ impl ClientPolicy {
         }
         Ok(Self {
             enforce_azp,
+            caps_scopes,
             clients: declared,
         })
     }
@@ -259,9 +281,23 @@ impl ClientPolicy {
     /// Apply the policy to a freshly validated principal: refuse a token
     /// from an undeclared client (`enforce-azp`), then narrow its scopes to
     /// the client's `allowed-scopes`.
+    ///
+    /// Only `McpPrincipal::scopes` is narrowed — what `required-scopes`,
+    /// `filter-members` and `#[tool(scopes)]` read. The identity's roles and
+    /// raw claims are left as the token carries them.
     pub(crate) fn apply(&self, mut principal: McpPrincipal) -> Result<McpPrincipal, AuthFailure> {
         if self.clients.is_empty() {
             return Ok(principal);
+        }
+        // A present but malformed `azp` is refused as soon as the policy
+        // decides anything from the client: falling back to `client_id`
+        // would let the token pick the client it is judged as.
+        if (self.enforce_azp || self.caps_scopes) && principal.has_malformed_azp() {
+            return Err(AuthFailure::new(
+                McpAuthError::InvalidToken("token was not issued to a declared client"),
+                "claims",
+            )
+            .with_detail("`azp` claim is not a non-empty string"));
         }
         let declared = principal
             .client_id()

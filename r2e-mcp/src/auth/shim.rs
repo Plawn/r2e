@@ -185,11 +185,29 @@ async fn register(state: Arc<ShimState>, req: Request) -> Response {
     // full `client_name`.
     let logged_name = client_name.map(|name| clip(name, LOG_NAME_CHARS));
 
-    let requested: Vec<&str> = request
-        .get("redirect_uris")
-        .and_then(Value::as_array)
+    let redirect_uris = request.get("redirect_uris").and_then(Value::as_array);
+    let requested: Vec<&str> = redirect_uris
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
+    // Entries that are not strings. The single-client form ignores them, as
+    // it always has; with several clients nothing is dropped silently — the
+    // all-or-nothing rule below must see the whole request.
+    let malformed = redirect_uris.map_or(0, |a| a.len() - requested.len());
+    if !state.clients.legacy && malformed > 0 {
+        tracing::warn!(
+            status = 400,
+            client_name = ?logged_name,
+            redirect_uris = requested.len(),
+            malformed_redirect_uris = malformed,
+            "DCR shim registration rejected: `redirect_uris` holds entries that are \
+             not strings"
+        );
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            "`redirect_uris` must be an array of strings",
+        );
+    }
 
     // Several declared clients: the answer is the first one covering EVERY
     // requested URI. Nothing is dropped — a subset answered under one client

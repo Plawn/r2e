@@ -2,13 +2,18 @@
 //! DCR shim's per-request client selection, and the validation-side binding
 //! of a token to its client (`enforce-azp`, per-client `allowed-scopes`).
 
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use r2e_core::http::{Body, StatusCode};
 use r2e_mcp::auth::{AudienceMode, McpAuthConfig, McpPublicClientConfig, TokenValidationMode};
+use r2e_mcp::McpServer;
 use serde_json::{json, Value};
 
+use crate::backends::mini_endpoint;
 use crate::fixtures::{
-    initialize_auth, offline_auth, post_auth, secured_app_with, send, test_jwt, tool_names,
-    tools_call_auth, tools_list_auth,
+    initialize_auth, offline_auth, post_auth, secured_app_with, secured_plugin_app, send,
+    test_jwt, tool_names, tools_call_auth, tools_list_auth, ISSUER, RESOURCE,
 };
 use crate::support;
 
@@ -150,6 +155,45 @@ async fn a_redirect_no_client_covers_is_refused() {
     }
 }
 
+/// A raw registration body — `register` can only send string URIs.
+async fn register_raw(router: &r2e_core::http::Routes, body: Value) -> (StatusCode, Value) {
+    let (status, _, raw) = send(
+        router,
+        "POST",
+        REGISTER,
+        &[("content-type", "application/json")],
+        Body::from(body.to_string()),
+    )
+    .await;
+    let parsed: Value =
+        serde_json::from_str(&raw).unwrap_or_else(|e| panic!("not JSON ({e}): {raw}"));
+    (status, parsed)
+}
+
+#[r2e_core::test]
+async fn a_non_string_redirect_uri_is_refused() {
+    let router = secured_app_with(multi_auth()).await;
+    // Dropping the `42` would answer for a request the caller did not make.
+    for uris in [json!([CLAUDE, 42]), json!([CLAUDE, null]), json!([["x"], CLAUDE])] {
+        let (status, body) = register_raw(&router, json!({ "redirect_uris": uris })).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "invalid_redirect_uri", "{body}");
+    }
+}
+
+#[r2e_core::test]
+async fn the_single_client_form_still_ignores_non_string_redirect_uris() {
+    let router = secured_app_with(McpAuthConfig {
+        public_client_id: Some("mcp-public".into()),
+        ..offline_auth()
+    })
+    .await;
+    let (status, body) =
+        register_raw(&router, json!({ "redirect_uris": [CLAUDE, 42] })).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["redirect_uris"], json!([CLAUDE]));
+}
+
 #[r2e_core::test]
 async fn the_first_covering_entry_wins() {
     let router = secured_app_with(McpAuthConfig {
@@ -288,11 +332,82 @@ async fn enforce_azp_with_userinfo_is_a_boot_error() {
     .await;
 }
 
+/// `audience: client-id` through the PRODUCTION validator (introspection —
+/// no pinned validator): every declared client id is an accepted audience,
+/// nothing else is.
 #[r2e_core::test]
-async fn client_id_audience_accepts_the_declared_clients() {
-    // Boots: every declared client id is an accepted audience.
-    let _ = secured_app_with(McpAuthConfig {
+async fn client_id_audience_accepts_exactly_the_declared_clients() {
+    // The canned IdP answers with whatever audience the test set last.
+    let audience = Arc::new(Mutex::new(String::new()));
+    let answered = Arc::clone(&audience);
+    let (idp, _) = mini_endpoint(move |_| {
+        let exp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+            + 3600;
+        (
+            200,
+            json!({
+                "active": true,
+                "sub": "alice",
+                "scope": "mcp",
+                "aud": *answered.lock().unwrap(),
+                "exp": exp,
+                "iss": ISSUER,
+            }),
+        )
+    })
+    .await;
+    let router = secured_plugin_app(McpServer::new().with_auth(McpAuthConfig {
         audience: Some(AudienceMode::ClientId),
+        token_validation: Some(TokenValidationMode::Introspection),
+        client_id: Some("rs-client".into()),
+        client_secret: Some("rs-secret".into()),
+        introspection_endpoint: Some(format!("{idp}/introspect")),
+        ..multi_auth()
+    }))
+    .await;
+
+    // One opaque token per case: results are cached per token.
+    for (token, aud, expected) in [
+        ("token-saas", "mcp-saas", StatusCode::OK),
+        ("token-local", "mcp-local-cli", StatusCode::OK),
+        // The resource itself is NOT an audience in this mode.
+        ("token-resource", RESOURCE, StatusCode::UNAUTHORIZED),
+        ("token-other", "some-other-client", StatusCode::UNAUTHORIZED),
+    ] {
+        *audience.lock().unwrap() = aud.to_string();
+        assert_eq!(initialize_status(&router, token).await, expected, "aud `{aud}`");
+    }
+}
+
+/// `allowed-scopes` narrows scopes, not roles: roles read from the scope
+/// claim would hand the stripped scopes back.
+#[r2e_core::test]
+#[should_panic(expected = "allowed-scopes cannot be combined with `roles-claim: scp`")]
+async fn allowed_scopes_with_roles_read_from_the_scope_claim_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        roles_claim: Some("scp".into()),
+        ..multi_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+#[should_panic(expected = "allowed-scopes cannot be combined with `roles-claim: permissions`")]
+async fn allowed_scopes_with_roles_read_from_a_custom_scope_claim_is_a_boot_error() {
+    let _ = secured_app_with(McpAuthConfig {
+        scope_claim: Some("permissions".into()),
+        roles_claim: Some("permissions".into()),
+        ..multi_auth()
+    })
+    .await;
+}
+
+#[r2e_core::test]
+async fn a_roles_claim_distinct_from_the_scope_claim_boots_with_allowed_scopes() {
+    let _ = secured_app_with(McpAuthConfig {
+        roles_claim: Some("groups".into()),
         ..multi_auth()
     })
     .await;
@@ -346,6 +461,36 @@ async fn enforce_azp_admits_declared_clients() {
         .claim("client_id", "mcp-saas")
         .build();
     assert_eq!(initialize_status(&router, &rfc9068).await, StatusCode::OK);
+}
+
+/// A present but malformed `azp` never yields to `client_id`: the token
+/// would otherwise choose the client it is judged as.
+#[r2e_core::test]
+async fn a_malformed_azp_does_not_fall_back_to_client_id() {
+    let malformed = |azp: Value| {
+        test_jwt()
+            .token_builder("alice")
+            .scopes(&["mcp", "mcp:read", "mcp:write"])
+            .claim("azp", azp)
+            .claim("client_id", "mcp-saas")
+            .build()
+    };
+    let router = secured_app_with(enforcing()).await;
+    for azp in [json!(["undeclared"]), json!(42), json!(""), Value::Null] {
+        assert_eq!(
+            initialize_status(&router, &malformed(azp.clone())).await,
+            StatusCode::UNAUTHORIZED,
+            "azp {azp}"
+        );
+    }
+
+    // Without `enforce-azp` but with an `allowed-scopes` cap declared, the
+    // token is refused too rather than slipping past the cap.
+    let router = secured_app_with(multi_auth()).await;
+    assert_eq!(
+        initialize_status(&router, &malformed(json!(["mcp-local-cli"]))).await,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[r2e_core::test]

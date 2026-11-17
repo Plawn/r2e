@@ -509,9 +509,53 @@ async fn chosen_client_and_azp_are_logged() {
         .build();
     let response = post_auth(&router, "/mcp", None, &token, &support::initialize_body()).await;
     assert_eq!(response.status, StatusCode::UNAUTHORIZED);
-    let lines = captured.with_message(REJECTED);
+    let all = captured.take();
+    let lines: Vec<Line> = all
+        .iter()
+        .filter(|line| line.message() == REJECTED)
+        .cloned()
+        .collect();
     assert_one_warn(&lines, "claims");
     assert!(lines[0].field("detail").contains("rogue"), "{lines:#?}");
+    // The token was genuine: the request line still names its client.
+    let requests: Vec<&Line> = all.iter().filter(|line| line.message() == REQUEST).collect();
+    assert_eq!(requests.len(), 1, "{all:#?}");
+    assert!(requests[0].field("azp").contains("rogue"), "{all:#?}");
+}
+
+/// #1424: a declared client refused on `required-scopes` (403) is still
+/// named on the request line — the case the field is there to diagnose.
+#[r2e_core::test(flavor = "current_thread")]
+async fn azp_is_logged_when_required_scopes_refuse_the_token() {
+    use r2e_mcp::auth::McpPublicClientConfig;
+
+    let captured = Captured::default();
+    let _guard = captured.install();
+    let router = secured_app_with(McpAuthConfig {
+        public_clients: Some(vec![McpPublicClientConfig {
+            client_id: "mcp-local-cli".into(),
+            redirect_uri_allowlist: vec!["http://127.0.0.1:*".into()],
+            allowed_scopes: Some(vec!["mcp".into()]),
+            ..Default::default()
+        }]),
+        enforce_azp: Some(true),
+        required_scopes: Some(vec!["mcp:write".into()]),
+        scopes_supported: Some(vec!["mcp".into(), "mcp:write".into()]),
+        ..offline_auth()
+    })
+    .await;
+    captured.take();
+
+    let token = test_jwt()
+        .token_builder("alice")
+        .scopes(&["mcp", "mcp:write"])
+        .claim("azp", "mcp-local-cli")
+        .build();
+    let response = post_auth(&router, "/mcp", None, &token, &support::initialize_body()).await;
+    assert_eq!(response.status, StatusCode::FORBIDDEN);
+    let lines = captured.with_message(REQUEST);
+    assert_eq!(lines.len(), 1, "{lines:#?}");
+    assert!(lines[0].field("azp").contains("mcp-local-cli"), "{lines:#?}");
 }
 
 /// No scope requirement: mountable without `mcp.auth`.
