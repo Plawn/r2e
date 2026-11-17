@@ -36,6 +36,7 @@
 //! [`error`] (challenge building).
 
 pub(crate) mod basic;
+pub(crate) mod clients;
 pub mod config;
 pub mod discovery;
 pub mod error;
@@ -49,7 +50,8 @@ pub mod validator;
 pub mod wellknown;
 
 pub use config::{
-    AudienceMode, DiscoveryMode, McpAuthConfig, McpBasicAuthConfig, TokenValidationMode,
+    AudienceMode, DiscoveryMode, McpAuthConfig, McpBasicAuthConfig, McpPublicClientConfig,
+    TokenValidationMode,
 };
 pub use discovery::{DiscoveryClient, OAuthServerMetadata};
 pub use error::McpAuthError;

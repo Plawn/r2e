@@ -18,6 +18,7 @@ use r2e_core::plugin::PluginBuildError;
 use r2e_security::{Algorithm, SecurityConfig};
 
 use super::basic::BasicCredentials;
+use super::clients::{resolve_public_clients, ClientPolicy};
 use super::config::{AudienceMode, DiscoveryMode, McpAuthConfig, TokenValidationMode};
 use super::discovery::{DiscoveryClient, OAuthServerMetadata};
 use super::error::Challenges;
@@ -26,9 +27,7 @@ use super::opaque::{
     IntrospectionBackend, UserinfoBackend, DEFAULT_OPAQUE_CACHE_MAX_ENTRIES,
     DEFAULT_OPAQUE_CACHE_TTL_SECS,
 };
-use super::shim::{
-    shim_routes, AuthorizeShim, ShimState, AUTHORIZE_PATH, DEFAULT_REDIRECT_ALLOWLIST,
-};
+use super::shim::{shim_routes, AuthorizeShim, ShimState, AUTHORIZE_PATH};
 use super::validator::{McpTokenValidator, ScopePolicy};
 use super::wellknown::{prm_json, prm_routes};
 use crate::session::SessionBindings;
@@ -76,6 +75,9 @@ pub(crate) struct AuthArtifacts {
     /// The canonical resource URI tokens are bound to (RFC 8707); `None` for
     /// the Basic-only surface, which validates no token.
     pub resource: Option<String>,
+    /// `enforce-azp` + per-client `allowed-scopes` — shared with the
+    /// loopback transport, like `required_scopes`.
+    pub client_policy: ClientPolicy,
 }
 
 /// Canonicalise a resource URI (RFC 8707): `url::Url` lowercases the
@@ -266,6 +268,7 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         challenges: challenges.clone(),
         basic: Some(basic),
         required_scopes: required_scopes.clone(),
+        client_policy: ClientPolicy::default(),
         allowed_origins: allowed_origins(inputs),
         bindings: inputs.bindings.clone(),
     });
@@ -277,6 +280,7 @@ fn build_basic_only(inputs: &AuthInputs<'_>, basic: BasicCredentials) -> AuthArt
         extra_routes: Routes::new(),
         required_scopes,
         resource: None,
+        client_policy: ClientPolicy::default(),
     }
 }
 
@@ -302,6 +306,15 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
     }
 
     let validation_mode = cfg.token_validation.unwrap_or_default();
+    let scopes_supported = cfg
+        .scopes_supported
+        .clone()
+        .or_else(|| cfg.required_scopes.clone())
+        .unwrap_or_default();
+    // The declared public clients (single- or multi-client form), and what
+    // the layer enforces from them on every validated token.
+    let public_clients = resolve_public_clients(cfg, &scopes_supported, validate_scopes)?;
+    let client_policy = ClientPolicy::from_config(cfg, public_clients.as_ref(), validation_mode)?;
     if validation_mode == TokenValidationMode::Introspection
         && (cfg.client_id.is_none() || cfg.client_secret.is_none())
     {
@@ -383,13 +396,14 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
             Some(audiences)
         }
         AudienceMode::ClientId => {
-            let client_id = cfg.public_client_id.clone().ok_or_else(|| {
+            let clients = public_clients.as_ref().ok_or_else(|| {
                 PluginBuildError::from(
-                    "mcp.auth.audience: `client-id` requires `mcp.auth.public-client-id`"
+                    "mcp.auth.audience: `client-id` requires `mcp.auth.public-client-id` \
+                     (or `mcp.auth.public-clients`)"
                         .to_string(),
                 )
             })?;
-            Some(vec![client_id])
+            Some(clients.ids())
         }
         AudienceMode::Skip => {
             if validation_mode != TokenValidationMode::Userinfo {
@@ -560,16 +574,17 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         challenges: challenges.clone(),
         basic,
         required_scopes: required_scopes.clone(),
+        client_policy: client_policy.clone(),
         allowed_origins: allowed_origins(&inputs),
         bindings: inputs.bindings.clone(),
     });
 
     // ── Well-known routes (PRM + optional DCR shim) ─────────────────────────
-    let shim_on = cfg.shim.unwrap_or(cfg.public_client_id.is_some());
-    if shim_on && cfg.public_client_id.is_none() {
+    let shim_on = cfg.shim.unwrap_or(public_clients.is_some());
+    if shim_on && public_clients.is_none() {
         return Err(
-            "mcp.auth.shim: true requires `mcp.auth.public-client-id` (the client id \
-             the shim hands out)"
+            "mcp.auth.shim: true requires `mcp.auth.public-client-id` or \
+             `mcp.auth.public-clients` (the client id(s) the shim hands out)"
                 .to_string()
                 .into(),
         );
@@ -594,11 +609,6 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
                 .into(),
         );
     }
-    let scopes_supported = cfg
-        .scopes_supported
-        .clone()
-        .or_else(|| cfg.required_scopes.clone())
-        .unwrap_or_default();
     // Shim on: clients must fetch the AUTHORIZATION SERVER metadata from us
     // (the mirrored document carrying the rewritten registration endpoint),
     // so the PRM points at the resource origin instead of the issuer.
@@ -650,18 +660,12 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         });
         let shim_state = Arc::new(ShimState {
             discovery: discovery.clone(),
-            client_id: cfg.public_client_id.clone().expect("checked above"),
+            clients: public_clients.expect("checked above"),
             registration_endpoint: format!(
                 "{resource_origin}{}{registration_path}",
                 inputs.mcp_path
             ),
             scopes_supported: scopes_supported.clone(),
-            redirect_allowlist: cfg.redirect_uri_allowlist.clone().unwrap_or_else(|| {
-                DEFAULT_REDIRECT_ALLOWLIST
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect()
-            }),
             authorize,
         });
         extra_routes =
@@ -686,6 +690,7 @@ pub(crate) async fn build_auth(inputs: AuthInputs<'_>) -> Result<AuthArtifacts, 
         challenges,
         required_scopes,
         resource: Some(resource),
+        client_policy,
     })
 }
 

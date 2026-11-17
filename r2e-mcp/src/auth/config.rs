@@ -48,8 +48,9 @@ pub enum AudienceMode {
     /// `aud` must contain the resource URI OR any of `extra-audiences`
     /// (Auth0 API identifiers, Entra app-ID URIs).
     AnyOf,
-    /// `aud` must contain `public-client-id` (IdPs that bind tokens to the
-    /// requesting client instead of the resource).
+    /// `aud` must contain `public-client-id` — or any `public-clients[]`
+    /// id — (IdPs that bind tokens to the requesting client instead of the
+    /// resource).
     ClientId,
     /// Do not validate `aud` at all. Any token minted by the issuer for any
     /// service passes — only for flows where the token deliberately carries
@@ -88,6 +89,49 @@ pub struct McpBasicAuthConfig {
     pub roles: Option<Vec<String>>,
     /// Scopes granted to the principal (`required-scopes`, `#[tool(scopes)]`).
     pub scopes: Option<Vec<String>>,
+}
+
+/// One pre-registered public client the DCR shim can hand out
+/// (`mcp.auth.public-clients[]`).
+///
+/// Declare one entry per client family — typically one IdP client for the
+/// hosted MCP clients (fixed `https` callbacks) and one for local CLI agents
+/// (loopback redirects) — so each family gets its own consent, revocation
+/// and scope policy on the IdP. A registration call is answered with the
+/// **first** entry whose `redirect-uri-allowlist` covers **every** requested
+/// redirect URI.
+///
+/// ```yaml
+/// mcp:
+///   auth:
+///     public-clients:
+///       - client-id: mcp-saas
+///         redirect-uri-allowlist:
+///           - "https://claude.ai/api/mcp/auth_callback"
+///       - client-id: mcp-local-cli
+///         redirect-uri-allowlist: ["http://127.0.0.1:*", "http://localhost:*"]
+///         allowed-scopes: ["mcp", "mcp:read"]
+/// ```
+#[derive(serde::Deserialize, FromConfigValue, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct McpPublicClientConfig {
+    /// The client id pre-registered on the IdP.
+    pub client_id: String,
+    /// Redirect-URI patterns this client answers for (exact match, a
+    /// trailing `*` prefix wildcard, or `:*` for any port). Required and
+    /// non-empty: there is no default list in this form.
+    #[serde(default)]
+    pub redirect_uri_allowlist: Vec<String>,
+    /// The `scope` the registration answer advertises for this client.
+    /// Default: `scopes-supported`, narrowed to `allowed-scopes` when set.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+    /// Upper bound on what a token issued to this client may do: the
+    /// token's effective scopes are the intersection of its granted scopes
+    /// and this list (applied before `required-scopes`, `#[tool(scopes)]`
+    /// and member filtering). Unset = no restriction.
+    #[serde(default)]
+    pub allowed_scopes: Option<Vec<String>>,
 }
 
 /// Typed view of the `mcp.auth.*` config section (presence-based: no
@@ -206,19 +250,33 @@ pub struct McpAuthConfig {
     pub client_roles_for: Option<String>,
 
     /// Public client id handed out by the DCR shim. Setting it enables the
-    /// shim (override with `shim`).
+    /// shim (override with `shim`). The single-client form: equivalent to a
+    /// one-entry [`public_clients`](Self::public_clients) built from this id
+    /// and `redirect-uri-allowlist`; setting both forms is a boot error.
     #[config(key = "public-client-id")]
     pub public_client_id: Option<String>,
-    /// Force the DCR shim on/off (default: on iff `public-client-id` is
-    /// set).
+    /// Several pre-registered public clients, picked per registration call
+    /// by the requested redirect URIs. See [`McpPublicClientConfig`].
+    /// Mutually exclusive with `public-client-id` and the top-level
+    /// `redirect-uri-allowlist`.
+    #[config(key = "public-clients")]
+    pub public_clients: Option<Vec<McpPublicClientConfig>>,
+    /// Refuse (401) any bearer token whose `azp` claim (falling back to
+    /// `client_id`) is not one of the declared public clients. Off by
+    /// default; not available with `token-validation: userinfo` (the
+    /// userinfo response names no client).
+    #[config(key = "enforce-azp")]
+    pub enforce_azp: Option<bool>,
+    /// Force the DCR shim on/off (default: on iff `public-client-id` or
+    /// `public-clients` is set).
     pub shim: Option<bool>,
     /// Path of the shim's registration endpoint, relative to `mcp.path`
     /// (default `/oauth/register`).
     #[config(key = "registration-path")]
     pub registration_path: Option<String>,
     /// Allowed `redirect_uris` patterns for the shim (exact match, or a
-    /// trailing `*` wildcard). Defaults cover localhost, Claude and the MCP
-    /// Inspector.
+    /// trailing `*` wildcard) in the single-client form. Defaults cover
+    /// localhost, Claude and the MCP Inspector.
     #[config(key = "redirect-uri-allowlist")]
     pub redirect_uri_allowlist: Option<Vec<String>>,
     /// Extra query parameters injected into every authorization request
