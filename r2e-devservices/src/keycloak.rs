@@ -19,11 +19,15 @@ const ADMIN_PASSWORD: &str = "admin";
 ///
 /// Realm `r2e-mcp` ships everything an MCP OAuth test needs:
 ///
-/// - public client `mcp-public` — authorization code + PKCE (S256), redirect
-///   URIs for localhost and claude.ai/claude.com callbacks; default scope
-///   `mcp` carries an **audience mapper** stamping
+/// - public client `mcp-public` (hosted agents) — authorization code + PKCE
+///   (S256), redirect URIs for the claude.ai/claude.com callbacks only;
+///   default scope `mcp` carries an **audience mapper** stamping
 ///   `http://localhost:3000/mcp` into the token `aud`, optional scopes
 ///   `mcp:read` / `mcp:write`
+/// - public client `mcp-local-cli` (local CLI agents) — same shape, loopback
+///   redirect URIs only (`http://localhost:*`, `http://127.0.0.1:*`). The two
+///   back `mcp.auth.public-clients`; both also allow direct access grants so
+///   a test can mint a token whose `azp` is either client
 /// - public client `test-cli` — direct access grants, for
 ///   [`password_token`](DevKeycloak::password_token)
 /// - confidential client `mcp-introspect` (secret `introspect-secret`) — for

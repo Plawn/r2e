@@ -11,7 +11,7 @@
 
 use r2e_core::http::{Routes, StatusCode};
 use r2e_devservices::DevKeycloak;
-use r2e_mcp::auth::McpAuthConfig;
+use r2e_mcp::auth::{McpAuthConfig, McpPublicClientConfig};
 use r2e_mcp::McpServer;
 
 use crate::fixtures::{
@@ -119,4 +119,104 @@ async fn keycloak_roles_gate_tools() {
     )
     .await;
     assert_eq!(result["error"]["data"], "forbidden", "{result}");
+}
+
+/// #1424: one IdP client per client family. The shim answers with the
+/// client matching the redirect URIs, and `enforce-azp` + `allowed-scopes`
+/// bind each real Keycloak token (`azp`) to its client.
+#[r2e_core::test]
+#[ignore = "requires Docker"]
+async fn keycloak_clients_are_told_apart() {
+    const CLAUDE: &str = "https://claude.ai/api/mcp/auth_callback";
+
+    let kc = DevKeycloak::shared().await;
+    let app = secured_plugin_app(McpServer::new().with_auth(McpAuthConfig {
+        issuer: kc.issuer(),
+        resource: Some(fixtures::RESOURCE.to_string()),
+        allow_insecure: Some(true),
+        public_clients: Some(vec![
+            McpPublicClientConfig {
+                client_id: "mcp-public".into(),
+                redirect_uri_allowlist: vec![CLAUDE.into()],
+                ..Default::default()
+            },
+            McpPublicClientConfig {
+                client_id: "mcp-local-cli".into(),
+                redirect_uri_allowlist: vec![
+                    "http://127.0.0.1:*".into(),
+                    "http://localhost:*".into(),
+                ],
+                allowed_scopes: Some(vec!["mcp".into(), "mcp:read".into()]),
+                ..Default::default()
+            },
+        ]),
+        enforce_azp: Some(true),
+        scopes_supported: Some(vec!["mcp".into(), "mcp:read".into(), "mcp:write".into()]),
+        ..Default::default()
+    }))
+    .await;
+
+    // The shim picks the client by the redirect URIs.
+    for (uri, client_id, scope) in [
+        (CLAUDE, "mcp-public", "mcp mcp:read mcp:write"),
+        ("http://127.0.0.1:51234/callback", "mcp-local-cli", "mcp mcp:read"),
+    ] {
+        let body = serde_json::json!({ "redirect_uris": [uri] }).to_string();
+        let (status, _, raw) = fixtures::send(
+            &app,
+            "POST",
+            "/mcp/oauth/register",
+            &[("content-type", "application/json")],
+            r2e_core::http::Body::from(body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{raw}");
+        let answer: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(answer["client_id"], client_id);
+        assert_eq!(answer["scope"], scope);
+    }
+
+    let scopes = "mcp:read mcp:write";
+
+    // The hosted client keeps the scopes Keycloak granted.
+    let token = kc
+        .password_token("alice", "alice-password", "mcp-public", scopes)
+        .await;
+    let session = initialize_auth(&app, "/mcp", &token).await;
+    let names = tool_names(&tools_list_auth(&app, "/mcp", &session, &token).await);
+    assert!(names.contains(&"write_data".to_string()), "{names:?}");
+
+    // The same grant through the local-CLI client is capped: Keycloak
+    // issued `mcp:write`, the server does not honour it.
+    let token = kc
+        .password_token("alice", "alice-password", "mcp-local-cli", scopes)
+        .await;
+    let session = initialize_auth(&app, "/mcp", &token).await;
+    let names = tool_names(&tools_list_auth(&app, "/mcp", &session, &token).await);
+    assert!(names.contains(&"read_data".to_string()), "{names:?}");
+    assert!(!names.contains(&"write_data".to_string()), "{names:?}");
+    let result = tools_call_auth(
+        &app,
+        "/mcp",
+        &session,
+        &token,
+        "write_data",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(result["error"]["data"], "forbidden", "{result}");
+
+    // A valid token of the same realm, issued to an undeclared client.
+    let token = kc
+        .password_token("alice", "alice-password", "test-cli", scopes)
+        .await;
+    let response = fixtures::post_auth(
+        &app,
+        "/mcp",
+        None,
+        &token,
+        &crate::support::initialize_body(),
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::UNAUTHORIZED);
 }
