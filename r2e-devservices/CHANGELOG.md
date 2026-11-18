@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-17
+
 ### Breaking
 
 - `DevKeycloak` default realm (#1424): `mcp-public` no longer allows the

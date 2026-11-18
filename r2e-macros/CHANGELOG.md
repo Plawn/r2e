@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-17
+
 ### Fixed
 
 - `#[routes]`: `RouteInfo.response_status` is the status the route answers

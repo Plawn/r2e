@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-17
+
 ### Fixed
 
 - Specs built from `#[routes]` metadata follow the `r2e-macros` fixes of
