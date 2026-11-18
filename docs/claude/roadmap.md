@@ -210,17 +210,17 @@ the loopback transport (#1076) are shipped: archive § W16. References:
 
 - **P4 — protocol gaps: done.** Progress, live elicitation, `completion/complete`
   and list pagination shipped 2026-09-26; MRTR (SEP-2322, elicitation for
-  sessionless 2026-07-28 clients) merged 2026-11-12 via PR #151 (`7a46300f`):
-  keyed `McpClient::elicit(key, …)` (breaking), opt-in through
+  sessionless 2026-07-28 clients) via PR #151: keyed
+  `McpClient::elicit(key, …)` (breaking), opt-in through
   `mcp.request-state-key`. SEP-2577-deprecated sampling, roots and logging are
   deliberately NOT implemented. Plan: `plans/w16-p4-mcp-protocol-gaps.md`.
-- **Awaiting release:** MRTR only — a breaking bump of `r2e-mcp`
-  (`bump-version.sh r2e-mcp breaking`, propagates to `r2e`). The loopback
-  transport #1076 and the session idle timeout + `McpSessionStore` #1244
-  shipped in `r2e-mcp` 0.12.0 (2026-11-10); both tickets are closed.
-- In-process MCP test client (#1245): **done, awaiting merge/release** —
-  `r2e_mcp::testing::McpTestClient` (`app.mcp()` via the `McpTestExt`
-  extension trait, feature `testing`), additive on `r2e-mcp`.
+- **Released in `r2e-mcp` 0.13.0 / `r2e` 0.13.0 (2026-11-18, PR #157):**
+  MRTR (PR #151), the in-process test client `r2e_mcp::testing::McpTestClient`
+  (#1245, PR #155: `app.mcp()` via `McpTestExt`, feature `testing`) and the
+  multi-client DCR shim (#1424, PR #156: `mcp.auth.public-clients`,
+  `enforce-azp`, per-client `allowed-scopes`; `DevKeycloak` realm gains
+  `mcp-local-cli`, breaking `r2e-devservices` 0.7.0). Nothing MCP is awaiting
+  release.
 - `McpSessions::each`/bulk ops and per-tenant filtering, if a real app asks
   for them.
 - Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
@@ -241,29 +241,18 @@ Kept where the context lives rather than duplicated here:
 - `docs/research/HANDOFF-perf-tpc.md` — Linux benchmark run, proxy-mesh push
   gate, tunnel `copy_bidirectional` (543).
 
-## Standalone Tasker tickets (target `r2e`, open as of 2026-11-12)
+## Standalone Tasker tickets (target `r2e`, open as of 2026-11-18)
 
 Not part of a workstream above; Tasker is the record, this list is the
-pointer. Verified against Tasker and the code on 2026-11-12 (master
-`1676ab0c`). r2e 0.12.0 (2026-11-10, PR #149) released #1076, #1244, #1181,
-#1173, #1288, #1290, #1291 and #1299 — all closed. "Merged" below means on
-`master`, unreleased: the ticket closes with the release that ships it.
+pointer. Verified against Tasker on 2026-11-18 (master `2ca4d950`).
+r2e 0.13.0 (2026-11-18, PR #157: `r2e`/`r2e-cli`/`r2e-mcp` 0.13.0,
+`r2e-devservices` 0.7.0, `r2e-core` 0.10.1, `r2e-macros` 0.11.1,
+`r2e-openapi` 0.10.1) released #1272, #1245 and #1424 — all closed; r2e 0.12.0
+(2026-11-10, PR #149) released #1076, #1244, #1181, #1173, #1288, #1290, #1291
+and #1299. "Merged" below means on `master`, unreleased: the ticket closes with
+the release that ships it.
 
-- **Next release (nothing cut yet):** `r2e-mcp` breaking (MRTR, PR #151 →
-  propagates to `r2e`), `r2e-macros` + `r2e-openapi` patch (#1272), `r2e-core`
-  patch (request ids on `uuid` `fast-rng`, PR #150).
-- **#1272 (medium)** — MERGED 2026-11-12 via PR #152 (`1676ab0c`):
-  `RouteInfo` matches the runtime (one path parameter per placeholder of the
-  full template, 200 as the default status for every verb). Generated specs
-  change for a `POST`/`DELETE` that relied on the old 201/204 default. Closes
-  with the next `r2e-macros` release.
-- **#1245 (medium)** — in-process MCP test client over the `McpLoopback`
-  bean, the only survivor of the dropped W6. **Implemented** on
-  `task/1245-mcp-test-client` (in review): `app.mcp()` lives in
-  `r2e_mcp::testing` (`McpTestExt` on `TestApp`; `r2e-test` does not depend on
-  `r2e-mcp`), `.as_user()` mints a `TestJwt` bearer bound to the endpoint's
-  resource, notifications are recorded. Additive — closes with the next
-  `r2e-mcp` release.
+- **Next release:** nothing merged and unreleased.
 - **#1181 follow-ups** (ticket closed, released in `r2e-macros` 0.11.0):
   close-the-loop still has to replace its `schedule_task_with` workaround in
   `ctl-api/src/controllers/sweep.rs` (app side). Not V1: live cadence
