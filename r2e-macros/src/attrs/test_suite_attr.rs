@@ -11,7 +11,7 @@ use syn::{
 
 use crate::util::crate_path::{r2e_core_path, r2e_test_path};
 use crate::util::runtime_args::{
-    parse_bool, tracing_removed, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs,
+    parse_bool, tracing_removed, type_ends_with, KeyedExpr, KeyedFlag, KeyedTypes, RuntimeArgs,
 };
 
 struct SuiteArgs {
@@ -24,6 +24,9 @@ struct SuiteArgs {
     /// expression must yield an environment that does NOT belong to it
     /// (`r2e_test::SharedEnv`).
     env_expr: Option<KeyedExpr>,
+    /// `#[r2e::test_suite(app = ..., resources(Db))]`: `TestResource`s started
+    /// once, before `#[before_all]`'s boot, and owned by the booted `TestApp`.
+    resources: Option<KeyedTypes>,
     jwt: bool,
     /// Where `jwt = ...` was written, for the diagnostics that reject it.
     jwt_key: Option<KeyedFlag>,
@@ -37,6 +40,7 @@ impl Default for SuiteArgs {
             app_ty: None,
             with_expr: None,
             env_expr: None,
+            resources: None,
             jwt: true,
             jwt_key: None,
             runtime: RuntimeArgs::default(),
@@ -59,6 +63,10 @@ impl SuiteArgs {
                 .unwrap_or_default();
 
             if !meta.input.peek(syn::Token![=]) {
+                if key == "resources" {
+                    this.resources = Some(KeyedTypes::parse(&meta)?);
+                    return Ok(());
+                }
                 return Err(meta.error(format!("unexpected argument `{key}`")));
             }
 
@@ -107,6 +115,13 @@ impl SuiteArgs {
                  `AppBuilder` of the app being booted",
             ));
         }
+        if let Some(resources) = &self.resources {
+            return Some(syn::Error::new_spanned(
+                resources,
+                "`resources(...)` requires `app = <App type>` — a resource is started for, \
+                 and wired into, the app being booted",
+            ));
+        }
         if let Some(jwt) = &self.jwt_key {
             return Some(syn::Error::new_spanned(
                 jwt,
@@ -153,6 +168,16 @@ impl SuiteArgs {
                     "`with = ...` is never evaluated: {reason}, so no `TestApp` is booted. \
                      Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` \
                      — or drop `with = ...`"
+                ),
+            ));
+        }
+        if let Some(resources) = &self.resources {
+            return Err(syn::Error::new_spanned(
+                resources,
+                format!(
+                    "`resources(...)` are never started: {reason}, so no `TestApp` is booted. \
+                     Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` \
+                     — or drop `resources(...)`"
                 ),
             ));
         }
@@ -739,6 +764,18 @@ fn before_all_bindings(
                 }
                 None => quote! { |__r2e_b| __r2e_b },
             };
+            // Started once per suite; they move into the `TestApp`, so they
+            // live exactly as long as the suite keeps it.
+            let (configure, adopt_resources) = match &args.resources {
+                Some(resources) => {
+                    bindings.push(resources.start_tokens(&test_crate));
+                    (
+                        quote! { __r2e_resources.configure(#configure) },
+                        quote! { .with_resources(__r2e_resources) },
+                    )
+                }
+                None => (configure, quote! {}),
+            };
             // `env = expr` boots on an environment the caller already owns, so
             // `App::setup()` is not called again (shared across suites too).
             // The expression runs on the SUITE runtime, which is shut down
@@ -761,7 +798,7 @@ fn before_all_bindings(
                     quote! { #test_crate::TestApp::boot_plain_env::<#app_ty>(#env, #configure).await }
                 }
             };
-            bindings.push(quote! { let __r2e_test_app = #boot_call; });
+            bindings.push(quote! { let __r2e_test_app = #boot_call #adopt_resources; });
         }
 
     for input in &method.sig.inputs {

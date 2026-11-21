@@ -1,7 +1,7 @@
 ---
 topic: devservices
 features: core (dev-dependency `r2e-devservices`)
-tokens: ~2300
+tokens: ~2600
 requires: testing
 ---
 
@@ -14,7 +14,11 @@ requires: testing
 - Use `DevPostgres::shared().await` / `DevRedis::shared().await` for one
   container shared by every test process of the workspace session; `start()` /
   `start_with_tag(tag)` stay isolated and handle-scoped.
-- Wire it in with `b.override_config_value("app.database.url", pg.url())`.
+- Wire it in declaratively with a `TestResource` + `resources(Db)`
+  (llm/testing.md), or by hand with
+  `b.override_config_value("app.database.url", pg.url())`.
+- Isolate tests on the shared Postgres with `pg.fresh_database().await` — one
+  new empty database per call, no SQL client needed in the test.
 - Custom image or credentials: `shared_with(PostgresImage::new(...))` /
   `PostgresSpec::default().with_user(...)` — both are part of the container
   identity, so each distinct spec gets its own shared container.
@@ -45,6 +49,27 @@ workspace-scoped `testcontainers/ryuk:0.14.0` reaper holds one TCP lease per
 test process and removes the containers after the final process exits
 (10-second reconnection grace by default). `start()` / `start_with_tag(tag)`
 remain isolated and handle-scoped, with Ryuk as the crash/`SIGKILL` fallback.
+
+Tests on a shared container must not share state. `fresh_database()` creates a
+new, uniquely named database on the container (through `createdb` run inside
+it) and returns a handle whose `url()` points at it — the usual body of a
+`TestResource::start`:
+
+```rust
+use r2e_devservices::DevPostgres;
+use r2e_test::TestApp;
+
+# async fn __doc() {
+let db = DevPostgres::shared().await.fresh_database().await;
+let app = TestApp::boot_with::<MyApp>(|b| {
+    b.override_config_value("datasource.url", db.url())
+}).await;
+# }
+```
+
+The database is not dropped afterwards; it goes away with the container. It
+works on an isolated `start()` container too, which stays alive as long as any
+handle derived from it does.
 
 `DevPostgres` and `DevRedis` also take a full image (repository + tag), and
 `DevPostgres` takes credentials. Both are part of the container's identity, so
@@ -102,6 +127,11 @@ let url = format!("http://{}", clickhouse.endpoint(8123));
 // DevService::start(spec) for an isolated container
 # }
 ```
+
+`service.exec(["cmd", "arg"]).await` runs a command inside the container and
+returns an `ExecOutput { exit_code, stdout, stderr }` (`success()` = exit code
+0) — for provisioning the image's own CLI can do (create a database, a topic, a
+bucket) without a client library in the test.
 
 A ready-made `testcontainers_modules` image (`ClickHouse`, `Kafka`, `Mongo`, …)
 works the same way, but each sits behind its own feature: add

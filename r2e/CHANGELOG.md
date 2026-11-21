@@ -15,6 +15,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `#[r2e::test(app = MyApp, resources(Db))]` / `#[r2e::test_suite(...)]` — see
+  `r2e-macros`' and `r2e-test`'s changelogs.
+
 ## [0.13.0] - 2026-11-17
 
 ### Breaking

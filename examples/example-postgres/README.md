@@ -34,8 +34,8 @@ so a Docker-less CI stays green:
 cargo test -p example-postgres --test postgres_test -- --ignored
 ```
 
-Each test provisions an isolated database on the shared container and points
-the app at it with `override_config_value("datasource.url", ...)`. Migrations
+Each test declares `resources(Db)`: a `TestResource` that takes a
+`fresh_database()` on the shared container and sets `datasource.url` to it. Migrations
 need no help from the test: the datasource plugin runs them inside
 `build_state()`, which `TestApp` executes.
 

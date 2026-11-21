@@ -1,8 +1,10 @@
-use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::Duration;
 
-use testcontainers::core::ContainerRequest;
+use testcontainers::core::{ContainerRequest, ExecCommand};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, Image, ImageExt, ReuseDirective};
 use tokio::sync::OnceCell;
@@ -376,11 +378,72 @@ impl Configuration {
 /// [`DevService::shared`] (one container per configuration, reused across the
 /// test binaries of the session).
 pub struct DevService {
-    /// Owns the isolated container, or references the reusable shared one.
-    /// Type-erased so one registry can hold every service's containers.
-    _container: Box<dyn Any + Send + Sync>,
+    /// Runs a command in the container — and, through the container handle it
+    /// captured, owns the isolated container or references the reusable shared
+    /// one. A closure rather than the handle itself so one registry can hold
+    /// every service's containers: the image type is erased behind it.
+    exec: Box<Exec>,
+    service: String,
     host: String,
     ports: HashMap<u16, u16>,
+}
+
+type Exec = dyn Fn(Vec<String>) -> ExecFuture + Send + Sync;
+type ExecFuture = Pin<Box<dyn Future<Output = Result<ExecOutput, String>> + Send>>;
+
+/// What a command run by [`DevService::exec`] left behind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecOutput {
+    /// The command's exit code.
+    pub exit_code: i64,
+    /// Everything it wrote to stdout, lossily decoded as UTF-8.
+    pub stdout: String,
+    /// Everything it wrote to stderr, lossily decoded as UTF-8.
+    pub stderr: String,
+}
+
+impl ExecOutput {
+    /// Whether the command exited with code 0.
+    pub fn success(&self) -> bool {
+        self.exit_code == 0
+    }
+}
+
+/// Run `command` in `container` and collect its output.
+async fn run_exec<I: Image>(
+    container: &ContainerAsync<I>,
+    command: Vec<String>,
+) -> Result<ExecOutput, String> {
+    let mut result = container
+        .exec(ExecCommand::new(command))
+        .await
+        .map_err(|error| error.to_string())?;
+    // Both streams end when the command exits, so draining them is the wait.
+    let stdout = result
+        .stdout_to_vec()
+        .await
+        .map_err(|error| error.to_string())?;
+    let stderr = result
+        .stderr_to_vec()
+        .await
+        .map_err(|error| error.to_string())?;
+    // The streams can close a beat before Docker records the exit code.
+    let mut attempts = 0;
+    let exit_code = loop {
+        match result.exit_code().await.map_err(|error| error.to_string())? {
+            Some(code) => break code,
+            None if attempts < 100 => {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            None => return Err("the command never reported an exit code".to_string()),
+        }
+    };
+    Ok(ExecOutput {
+        exit_code,
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
 }
 
 impl DevService {
@@ -513,11 +576,63 @@ impl DevService {
             ports.insert(container_port, host_port);
         }
 
+        let container = Arc::new(container);
         Self {
-            _container: Box::new(container),
+            exec: Box::new(move |command| {
+                let container = Arc::clone(&container);
+                // `ExecResult` is not `Sync`, so the future reading its exit
+                // code is not `Send` — and a dev service has to be usable from
+                // a `Send` future. Driving it from a blocking thread keeps the
+                // non-`Send` part off the caller's future.
+                #[expect(
+                    clippy::disallowed_types,
+                    reason = "r2e-devservices has no r2e-core dependency; raw tokio is runtime-neutral test plumbing here"
+                )]
+                let runtime = tokio::runtime::Handle::current();
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "r2e-devservices has no r2e-core dependency; raw tokio is runtime-neutral test plumbing here"
+                )]
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        runtime.block_on(run_exec(&container, command))
+                    })
+                    .await
+                    .unwrap_or_else(|error| Err(error.to_string()))
+                })
+            }),
+            service: service.clone(),
             host,
             ports,
         }
+    }
+
+    /// Run a command inside the container and wait for it to exit.
+    ///
+    /// The escape hatch for whatever a service needs done *in* the container —
+    /// creating a database, a topic, a bucket — without a client for it in the
+    /// test's dependencies:
+    ///
+    /// ```ignore
+    /// let output = service.exec(["createdb", "-U", "postgres", "scratch"]).await;
+    /// assert!(output.success(), "{}", output.stderr);
+    /// ```
+    ///
+    /// A non-zero exit is reported in [`ExecOutput::exit_code`], not as a
+    /// panic: only the caller knows whether it is a failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if Docker cannot run the command at all.
+    pub async fn exec<S: Into<String>>(&self, command: impl IntoIterator<Item = S>) -> ExecOutput {
+        let command: Vec<String> = command.into_iter().map(Into::into).collect();
+        let rendered = command.join(" ");
+        (self.exec)(command).await.unwrap_or_else(|error| {
+            panic!(
+                "cannot run `{rendered}` in the {} dev service container: {error}",
+                self.service
+            )
+        })
     }
 
     /// The host the container is reachable on.

@@ -3,6 +3,7 @@ mod app;
 mod boot;
 mod jwt;
 mod multipart;
+mod resource;
 pub mod ordering;
 mod server;
 mod session;
@@ -17,6 +18,7 @@ pub use app::{
     TestRequest, TestResponse, TENANT_CLAIM, TENANT_HEADER,
 };
 pub use jwt::{TestJwt, TokenBuilder};
+pub use resource::{TestResource, TestResources};
 pub use server::TestServer;
 pub use session::{SessionRequest, TestSession};
 pub use shared_env::{shared_env_runtime, SharedEnv, SharedEnvError, SharedEnvFuture};

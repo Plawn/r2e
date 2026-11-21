@@ -11,73 +11,44 @@
 //! cargo test -p example-postgres --test postgres_test -- --ignored
 //! ```
 
-use std::sync::atomic::{AtomicU32, Ordering};
-
 use example_postgres::models::Article;
 use example_postgres::PostgresApp;
 use r2e_devservices::DevPostgres;
-use r2e_test::TestApp;
-use sqlx::{AssertSqlSafe, Connection};
+use r2e_test::{TestApp, TestResource};
 
-/// Boot the app against the shared dev PostgreSQL container.
+/// The database a test runs against.
 ///
-/// `DevPostgres::shared()` reuses one container across every test process in
-/// the suite, so tests must NOT assume an empty database. We isolate each test
-/// by creating a fresh database on that container and pointing the app at it
-/// via `override_config_value("datasource.url", ...)` — the same key the
-/// `SqlxDataSource` plugin reads.
+/// `DevPostgres::shared()` reuses one container across every test process of
+/// the session, so tests must NOT assume an empty database: each one takes a
+/// `fresh_database()` on that container and points the app at it through
+/// `datasource.url` — the key the `SqlxDataSource` plugin reads.
 ///
-/// Migrations are the plugin's job now: it runs them inside `build_state()`,
-/// so the isolated database gets its schema without any help from the test.
-async fn boot() -> TestApp {
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let pg = DevPostgres::shared().await;
+/// Migrations are the plugin's job: it runs them inside `build_state()`, so
+/// the fresh database gets its schema without any help from the test.
+struct Db(DevPostgres);
 
-    // `pg.url()` targets the container's default `postgres` database; split off
-    // the trailing `/postgres` to get the server base, then a unique per-test db.
-    let base = pg
-        .url()
-        .rsplit_once('/')
-        .expect("dev postgres url has a /database segment")
-        .0;
-    let db = format!(
-        "r2e_pg_test_{}_{}",
-        std::process::id(),
-        COUNTER.fetch_add(1, Ordering::Relaxed)
-    );
+impl TestResource for Db {
+    async fn start() -> Self {
+        Db(DevPostgres::shared().await.fresh_database().await)
+    }
 
-    // CREATE DATABASE runs on the default database (it cannot run in a tx).
-    let mut admin = sqlx::PgConnection::connect(pg.url())
-        .await
-        .expect("connect to the shared postgres database");
-    // The db name is derived from pid/counter, not user input; assert it safe.
-    let create = format!("CREATE DATABASE \"{db}\"");
-    sqlx::raw_sql(AssertSqlSafe(create))
-        .execute(&mut admin)
-        .await
-        .expect("create the isolated test database");
-    admin.close().await.ok();
-
-    let url = format!("{base}/{db}");
-
-    TestApp::boot_with::<PostgresApp>(move |b| b.override_config_value("datasource.url", url)).await
+    fn config(&self) -> Vec<(String, String)> {
+        vec![("datasource.url".into(), self.0.url().into())]
+    }
 }
 
-#[r2e::test]
+#[r2e::test(app = PostgresApp, resources(Db))]
 #[ignore = "requires Docker"]
-async fn list_is_empty_on_a_fresh_database() {
-    let app = boot().await;
+async fn list_is_empty_on_a_fresh_database(app: TestApp) {
     let resp = app.get("/articles?page=0&size=20").send().await;
     resp.assert_ok();
     resp.assert_json_path("total_elements", 0);
     resp.assert_json_path("content", serde_json::json!([]));
 }
 
-#[r2e::test]
+#[r2e::test(app = PostgresApp, resources(Db))]
 #[ignore = "requires Docker"]
-async fn create_then_fetch_roundtrips_through_postgres() {
-    let app = boot().await;
-
+async fn create_then_fetch_roundtrips_through_postgres(app: TestApp) {
     let created = app
         .post("/articles")
         .json(&serde_json::json!({ "title": "Hello", "body": "world", "published": true }))
@@ -95,11 +66,9 @@ async fn create_then_fetch_roundtrips_through_postgres() {
     assert_eq!(fetched.body, "world");
 }
 
-#[r2e::test]
+#[r2e::test(app = PostgresApp, resources(Db))]
 #[ignore = "requires Docker"]
-async fn update_persists_partial_changes() {
-    let app = boot().await;
-
+async fn update_persists_partial_changes(app: TestApp) {
     let created: Article = app
         .post("/articles")
         .json(&serde_json::json!({ "title": "Draft", "body": "body" }))
@@ -120,11 +89,9 @@ async fn update_persists_partial_changes() {
     assert_eq!(updated.body, "body");
 }
 
-#[r2e::test]
+#[r2e::test(app = PostgresApp, resources(Db))]
 #[ignore = "requires Docker"]
-async fn delete_removes_the_row() {
-    let app = boot().await;
-
+async fn delete_removes_the_row(app: TestApp) {
     let created: Article = app
         .post("/articles")
         .json(&serde_json::json!({ "title": "Temp", "body": "gone soon" }))
@@ -143,9 +110,8 @@ async fn delete_removes_the_row() {
         .assert_not_found();
 }
 
-#[r2e::test]
+#[r2e::test(app = PostgresApp, resources(Db))]
 #[ignore = "requires Docker"]
-async fn missing_article_is_not_found() {
-    let app = boot().await;
+async fn missing_article_is_not_found(app: TestApp) {
     app.get("/articles/999999").send().await.assert_not_found();
 }

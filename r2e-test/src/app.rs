@@ -345,6 +345,10 @@ pub struct TestApp {
     /// ([`new`](Self::new) / [`from_builder`](Self::from_builder)), which has
     /// no lifecycle to run.
     pub(crate) running: Option<r2e_core::RunningApp>,
+    /// What the app was booted on ([`with_resources`](Self::with_resources)).
+    /// Declared last: fields drop in order, so the app is gone before the
+    /// database or broker it was talking to.
+    pub(crate) resources: crate::TestResources,
 }
 
 impl TestApp {
@@ -356,6 +360,7 @@ impl TestApp {
             config: None,
             jwt: None,
             running: None,
+            resources: crate::TestResources::new(),
         }
     }
 
@@ -375,6 +380,7 @@ impl TestApp {
             config,
             jwt: None,
             running: None,
+            resources: crate::TestResources::new(),
         }
     }
 

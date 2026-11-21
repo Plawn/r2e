@@ -1,0 +1,5 @@
+error: `resources(...)` needs at least one `TestResource` type: `resources(Db)`
+ --> cases/testing/fail/test_resources_empty.rs:4:26
+  |
+4 | #[r2e::test(app = MyApp, resources())]
+  |                          ^^^^^^^^^

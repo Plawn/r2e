@@ -276,6 +276,7 @@ impl TestApp {
             config,
             jwt,
             running: Some(running),
+            resources: crate::TestResources::new(),
         })
     }
 }

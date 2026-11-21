@@ -24,7 +24,7 @@ use syn::{parse_macro_input, FnArg, ItemFn};
 
 use crate::util::crate_path::r2e_core_path;
 use crate::util::runtime_args::{
-    parse_bool, tracing_removed, type_ends_with, KeyedExpr, KeyedFlag, RuntimeArgs,
+    parse_bool, tracing_removed, type_ends_with, KeyedExpr, KeyedFlag, KeyedTypes, RuntimeArgs,
 };
 
 // ── Argument parsing ─────────────────────────────────────────────────────
@@ -40,6 +40,10 @@ struct MainArgs {
     /// evaluated inside the test's async block (so `env = ENV.get().await` is
     /// fine) and must produce `<App as App>::Env`.
     env_expr: Option<KeyedExpr>,
+    /// `#[r2e::test(app = ..., resources(Db, Broker))]`: `TestResource`s
+    /// started before the boot, wired into the builder and owned by the
+    /// `TestApp`.
+    resources: Option<KeyedTypes>,
     /// `#[r2e::test(app = ..., jwt = false)]`: skip the TestJwt auto-wiring.
     jwt: bool,
     /// Where `jwt = ...` was written, for the diagnostic that rejects it
@@ -62,6 +66,7 @@ impl Default for MainArgs {
             app_fn: None,
             with_expr: None,
             env_expr: None,
+            resources: None,
             jwt: true,
             jwt_key: None,
             order: None,
@@ -106,6 +111,8 @@ impl MainArgs {
                         }
                     }
                 }
+            } else if key == "resources" {
+                this.resources = Some(KeyedTypes::parse(&meta)?);
             } else {
                 return Err(meta.error(format!(
                     "unexpected argument `{key}` — `#[r2e::main]` takes no bare-path \
@@ -140,6 +147,14 @@ impl MainArgs {
                 with,
                 "`with = ...` requires `app = <App type>` — the hook pre-configures the \
                  `AppBuilder` of the app being booted",
+            ));
+        }
+        if let Some(resources) = &self.resources {
+            return Some(syn::Error::new_spanned(
+                resources,
+                "`resources(...)` requires `app = <App type>` — a resource is started for, \
+                 and wired into, the app being booted:\n\n\
+                 \x20 #[r2e::test(app = MyApp, resources(Db))]",
             ));
         }
         if let Some(jwt) = &self.jwt_key {
@@ -249,6 +264,7 @@ fn expand_inner(args: MainArgs, func: ItemFn, is_test: bool) -> TokenStream2 {
             app_ty,
             args.with_expr.as_ref().map(|k| &k.expr),
             args.env_expr.as_ref().map(|k| &k.expr),
+            args.resources.as_ref(),
             args.jwt,
             ordering.as_ref(),
             &func,
@@ -385,6 +401,9 @@ impl OrderedHooks {
 /// - `app: TestApp` — the booted app (at most one),
 /// - `jwt: TestJwt` — a clone of the app's auto-wired `TestJwt`,
 /// - `#[inject] bean: T` — `app.bean::<T>()` from the resolved graph.
+///
+/// `resources(A, B)` starts each `TestResource` first; the test reads one back
+/// with `app.resource::<A>()`.
 // One parameter per knob the attribute accepts; bundling them into a struct
 // would only move the same list one indirection away.
 #[allow(clippy::too_many_arguments)]
@@ -392,6 +411,7 @@ fn expand_boot_test(
     app_ty: &syn::Path,
     with_expr: Option<&syn::Expr>,
     env_expr: Option<&syn::Expr>,
+    resources: Option<&KeyedTypes>,
     jwt: bool,
     ordering: Option<&OrderedHooks>,
     func: &ItemFn,
@@ -408,6 +428,17 @@ fn expand_boot_test(
     let configure: TokenStream2 = match with_expr {
         Some(expr) => quote! { #expr },
         None => quote! { |__r2e_b| __r2e_b },
+    };
+    // Resources start before the boot (and before `env = ...` is evaluated),
+    // set their config ahead of the `with` hook, and move into the app, which
+    // keeps them alive until it is dropped.
+    let (start_resources, configure, adopt_resources) = match resources {
+        Some(resources) => (
+            resources.start_tokens(&test_crate),
+            quote! { __r2e_resources.configure(#configure) },
+            quote! { .with_resources(__r2e_resources) },
+        ),
+        None => (quote! {}, configure, quote! {}),
     };
     // `env = expr` boots on an environment the caller already owns (a
     // `LazyLock`/`OnceCell` shared by the whole test binary), so `App::setup()`
@@ -483,7 +514,8 @@ fn expand_boot_test(
             #runtime_builder
                 .block_on(async {
                     #turn
-                    let __r2e_test_app = #boot_call;
+                    #start_resources
+                    let __r2e_test_app = #boot_call #adopt_resources;
                     #(#bindings)*
                     #(#app_binding)*
                     #wrapped_body

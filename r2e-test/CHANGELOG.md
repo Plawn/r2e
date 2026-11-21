@@ -23,6 +23,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   placeholder panics on `send()`.
 - JSON paths project over arrays: `assert_json_path("users.name", json!(["Alice", "Bob"]))`.
   A field read on an array used to resolve to `null`.
+- `TestResource`: an external dependency (database, broker, mock server)
+  started before the boot, whose `config()` is applied to the builder.
+  `TestResources` starts and holds them, `TestApp::with_resources` hands them
+  to the app (dropped after it) and `app.resource::<R>()` reads one back.
+  Declared with `resources(...)` on `#[r2e::test]` / `#[r2e::test_suite]`.
 
 ## [0.11.0] - 2026-11-10
 

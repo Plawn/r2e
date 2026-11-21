@@ -1,7 +1,7 @@
 ---
 topic: testing
 features: core (dev-dependency `r2e-test`)
-tokens: ~4400
+tokens: ~5000
 requires: quick-start, app-builder, devservices
 ---
 
@@ -29,6 +29,9 @@ requires: quick-start, app-builder, devservices
   `TestApp` runs no hooks and aborts tracked tasks.
 - A test boot skips the plugin serve hooks, so `#[scheduled]` tasks do not tick;
   use `app.serve()` for a live port (WebSocket/SSE).
+- An external dependency the app reads from config (database, broker, mock
+  server) is a `TestResource`: `resources(Db)` on `#[r2e::test]` /
+  `#[r2e::test_suite]` starts it before the boot and applies its `config()`.
 - Container-backed dependencies (Postgres, Redis, OpenFGA, Keycloak): see
   llm/devservices.md.
 
@@ -245,6 +248,69 @@ app's own shutdown sequence (`on_drain`, disposers, `#[pre_destroy]`, `on_stop`)
 over what `build` registered. If `build` hands an `Env`-owned resource to
 something that closes it, the first `shutdown()` invalidates it for every later
 boot — the app's contract, not the harness's.
+
+#### Test resources: external dependencies wired by declaration
+
+A `TestResource` is something the app needs running *before* it boots and
+reads from config — a database, a broker, a mock HTTP server. Declare it once,
+list it in `resources(...)`, and every test gets it started and wired:
+
+```rust
+use r2e_devservices::DevPostgres;
+use r2e_test::{TestApp, TestResource};
+
+struct Db(DevPostgres);
+
+impl TestResource for Db {
+    // Runs before the boot. Shared container, one fresh database per start.
+    async fn start() -> Self {
+        Db(DevPostgres::shared().await.fresh_database().await)
+    }
+
+    // Applied to the builder as `override_config_value(key, value)`.
+    fn config(&self) -> Vec<(String, String)> {
+        vec![("datasource.url".into(), self.0.url().into())]
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn users_are_persisted(app: TestApp) {
+    app.get("/users").send().await.assert_ok();
+    let _url = app.resource::<Db>().0.url(); // the started value, by type
+}
+```
+
+Rules:
+
+- `resources(A, B)` start in declaration order; their config applies in that
+  order (a later resource wins a shared key), then the `with = ...` hook runs
+  last and wins over all of them.
+- Values are strings and convert like environment variables: `"5432"` reads
+  back as a `u16`.
+- `config()` defaults to nothing — a resource may only need to be running.
+- The `TestApp` owns its resources and drops them *after* the app, so a
+  container outlives the pool connected to it. `app.resource::<R>()` panics if
+  `R` was not declared.
+- One start per boot: per test under `#[r2e::test]`, once for all cases under
+  `#[r2e::test_suite(app = ..., resources(Db))]` (which needs a `#[before_all]`
+  binding the `TestApp`, like `env = ...`).
+- `resources(...)` without `app = ...`, an empty `resources()`, and a resource
+  listed twice are errors (the first two at compile time).
+
+By hand, which is what the macro expands to:
+
+```rust
+use r2e_test::{TestApp, TestResource, TestResources};
+
+# struct Db;
+# impl TestResource for Db { async fn start() -> Self { Db } }
+# async fn __doc() {
+let resources = TestResources::new().start::<Db>().await;
+let app = TestApp::boot_with::<MyApp>(resources.configure(|b| b))
+    .await
+    .with_resources(resources);
+# }
+```
 
 ### Test lifecycle: startup and shutdown
 

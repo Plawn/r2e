@@ -1,0 +1,5 @@
+error: `resources(...)` are never started: this suite's #[before_all] binds nothing from the booted app, so no `TestApp` is booted. Bind the app in #[before_all] — `async fn setup(app: TestApp) -> Self` — or drop `resources(...)`
+ --> cases/testing/fail/test_suite_resources_without_app_binding.rs:7:32
+  |
+7 | #[r2e::test_suite(app = MyApp, resources(Db))]
+  |                                ^^^^^^^^^^^^^

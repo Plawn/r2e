@@ -66,7 +66,7 @@ mod common;
 mod ryuk;
 mod service;
 
-pub use service::{DevService, DevServiceSpec};
+pub use service::{DevService, DevServiceSpec, ExecOutput};
 
 /// Re-exported so a user-defined [`DevServiceSpec`] builds its image against
 /// the exact same `testcontainers` version — a mismatched one yields a

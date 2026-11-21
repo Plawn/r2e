@@ -174,17 +174,34 @@ containers on demand (features `postgres`, `redis`, `openfga`):
 
 ```rust
 use r2e_devservices::DevPostgres;
+use r2e_test::{TestApp, TestResource};
 
-#[r2e::test]
-async fn users_are_persisted() {
-    let pg = DevPostgres::shared().await; // one container for the test session
-    let app = TestApp::boot_with::<my_app::MyApp>(|b| {
-        b.override_config_value("app.database.url", pg.url())
-    })
-    .await;
+struct Db(DevPostgres);
+
+impl TestResource for Db {
+    async fn start() -> Self {
+        // One container for the session, one fresh database per test.
+        Db(DevPostgres::shared().await.fresh_database().await)
+    }
+
+    fn config(&self) -> Vec<(String, String)> {
+        vec![("app.database.url".into(), self.0.url().into())]
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn users_are_persisted(app: TestApp) {
     // ...
 }
 ```
+
+A `TestResource` is started before the boot and its `config()` is applied to
+the builder; the `TestApp` keeps it alive and hands it back with
+`app.resource::<Db>()`. `resources(A, B)` start in order, and the `with = ...`
+hook still runs last. On `#[r2e::test_suite(app = ..., resources(Db))]` the
+resource starts once for the whole suite. Without the macro:
+`TestResources::new().start::<Db>().await`, then
+`TestApp::boot_with::<A>(resources.configure(|b| b)).await.with_resources(resources)`.
 
 `shared()` reuses one stable container across all test processes in the
 workspace session. Each process keeps a TCP lease to a shared Ryuk reaper;

@@ -147,6 +147,106 @@ async fn postgres_dev_service_takes_custom_credentials() {
     assert_ne!(default.port(), pg.port());
 }
 
+/// One container, one database per test: each `fresh_database()` is empty and
+/// invisible to the others — including across the per-test runtimes the shared
+/// container outlives.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_dev_service_hands_out_fresh_databases() {
+    use r2e_devservices::DevPostgres;
+
+    let pg = DevPostgres::shared().await;
+    let first = pg.fresh_database().await;
+    let second = pg.fresh_database().await;
+    assert_ne!(first.url(), second.url());
+    assert_eq!(first.port(), pg.port(), "same container, another database");
+
+    let first_pool = sqlx::PgPool::connect(first.url()).await.unwrap();
+    sqlx::query("CREATE TABLE marker (id INT)")
+        .execute(&first_pool)
+        .await
+        .unwrap();
+
+    let second_pool = sqlx::PgPool::connect(second.url()).await.unwrap();
+    let (tables,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM information_schema.tables WHERE table_name = 'marker'")
+            .fetch_one(&second_pool)
+            .await
+            .unwrap();
+    assert_eq!(tables, 0, "a fresh database must not see another one's tables");
+}
+
+/// The shared container is started on one test's runtime and used from the
+/// next one's: `exec` must not depend on the runtime that started it.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_dev_service_creates_databases_from_a_later_runtime() {
+    use r2e_devservices::DevPostgres;
+
+    let url = std::thread::spawn(|| {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async { DevPostgres::shared().await.fresh_database().await.url().to_string() })
+    })
+    .join()
+    .unwrap();
+
+    let other = DevPostgres::shared().await.fresh_database().await;
+    assert_ne!(url, other.url());
+    sqlx::PgPool::connect(other.url()).await.unwrap();
+}
+
+/// A handle derived from an isolated container keeps it alive on its own, and
+/// follows the spec's credentials.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_fresh_database_keeps_its_isolated_container_alive() {
+    use r2e_devservices::{DevPostgres, PostgresSpec};
+
+    let db = {
+        let pg = DevPostgres::start_with(PostgresSpec::default().with_user("app")).await;
+        pg.fresh_database().await
+    };
+    let pool = sqlx::PgPool::connect(db.url())
+        .await
+        .expect("the container must outlive the handle it was derived from");
+    let (user,): (String,) = sqlx::query_as("SELECT current_user")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(user, "app");
+}
+
+/// `exec` reports a failing command instead of panicking.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn exec_reports_the_exit_code_and_output() {
+    use r2e_devservices::testcontainers::core::WaitFor;
+    use r2e_devservices::testcontainers::{GenericImage, ImageExt};
+    use r2e_devservices::{DevService, DevServiceSpec};
+
+    let service = DevService::start(DevServiceSpec::new("exec-probe", || {
+        GenericImage::new("postgres", "16-alpine")
+            .with_wait_for(WaitFor::seconds(0))
+            .with_entrypoint("sleep")
+            .with_cmd(["300"])
+    }))
+    .await;
+
+    let ok = service.exec(["sh", "-c", "echo out; echo err >&2"]).await;
+    assert!(ok.success());
+    assert_eq!(ok.stdout.trim(), "out");
+    assert_eq!(ok.stderr.trim(), "err");
+
+    let failed = service.exec(["sh", "-c", "exit 3"]).await;
+    assert_eq!(failed.exit_code, 3);
+    assert!(!failed.success());
+}
+
 /// A service R2E knows nothing about, defined entirely on the user's side.
 #[tokio::test]
 #[ignore = "requires Docker"]
