@@ -458,6 +458,23 @@ After generation, you need to:
 1. Register in `src/app.rs`: `.register_grpc_service::<UserService>()`
 2. Run `cargo build` — build.rs picks up the new proto automatically
 
+## Testing
+
+`TestApp` reaches the registered services without a socket: enable the `grpc`
+feature of `r2e-test` and pass `app.grpc()` to the generated client.
+
+```rust
+#[r2e::test(app = my_app::MyApp)]
+async fn greets(app: TestApp) {
+    let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+    let reply = client.say_hello(HelloRequest { name: "Bob".into() }).await.unwrap();
+    assert_eq!(reply.into_inner().message, "Hello Bob!");
+}
+```
+
+It works in both transport modes and covers streaming and reflection. See
+[Testing § Calling gRPC services](./12-testing.md#calling-grpc-services).
+
 ## GrpcServer API Reference
 
 | Constructor | Description |

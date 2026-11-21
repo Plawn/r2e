@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../../../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- Rollback-only pools, for per-test rollback: `DbPool::rollback_only(url)` and
+  `rollback_only_pool::<Conn>(url)` (a plain r2d2 pool) hold one connection in
+  Diesel's test transaction. A managed `Tx` / `DbTx` is a savepoint in it, and
+  the database rolls everything back when the pool is dropped. Pinned from a
+  test with `TestResource::configure` + `override_bean`.
+
 ## [0.10.0] - 2026-11-10
 
 ### Changed

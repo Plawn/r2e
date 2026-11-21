@@ -1,0 +1,7 @@
+error: `resources(...)` requires `app = <App type>` — a resource is started for, and wired into, the app being booted:
+
+         #[r2e::test(app = MyApp, resources(Db))]
+ --> cases/testing/fail/test_resources_without_app.rs:5:13
+  |
+5 | #[r2e::test(resources(Db))]
+  |             ^^^^^^^^^^^^^

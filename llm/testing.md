@@ -1,7 +1,7 @@
 ---
 topic: testing
 features: core (dev-dependency `r2e-test`)
-tokens: ~4300
+tokens: ~6300
 requires: quick-start, app-builder, devservices
 ---
 
@@ -27,8 +27,17 @@ requires: quick-start, app-builder, devservices
   never memoise it in a bare `OnceCell` / `LazyLock`.
 - Call `app.shutdown().await` in tests that assert on disposal — dropping a
   `TestApp` runs no hooks and aborts tracked tasks.
-- A test boot skips the plugin serve hooks, so `#[scheduled]` tasks do not tick;
-  use `app.serve()` for a live port (WebSocket/SSE).
+- A test boot skips the plugin serve hooks, so `#[scheduled]` tasks do not tick
+  on their own: fire one with `app.scheduler().run("job").await` (feature
+  `scheduler-testing`). Use `app.serve()` for a live port (WebSocket/SSE).
+- gRPC services are called in-process: `GreeterClient::new(app.grpc())`
+  (feature `grpc` of `r2e-test`) — no port, either transport mode.
+- An external dependency the app reads from config (database, broker, mock
+  server) is a `TestResource`: `resources(Db)` on `#[r2e::test]` /
+  `#[r2e::test_suite]` starts it before the boot and applies its `config()`.
+- Per-test rollback (`@TestTransaction`): a `TestResource` pins
+  `DbPool::rollback_only(url)` in its `configure` hook — the app writes for
+  real, through its routes too, and nothing is ever committed.
 - Container-backed dependencies (Postgres, Redis, OpenFGA, Keycloak): see
   llm/devservices.md.
 
@@ -44,7 +53,7 @@ use r2e_test::{TestApp, TestJwt};
 async fn lists_users(app: TestApp) {
     app.get("/users").as_user("alice", &["user"]).send().await
         .assert_ok()
-        .assert_json_path("/0/name", "Alice");
+        .assert_json_path("[0].name", "Alice");
 }
 
 // With overrides: pin mocks and patch config BEFORE `build` runs
@@ -246,6 +255,129 @@ over what `build` registered. If `build` hands an `Env`-owned resource to
 something that closes it, the first `shutdown()` invalidates it for every later
 boot — the app's contract, not the harness's.
 
+#### Test resources: external dependencies wired by declaration
+
+A `TestResource` is something the app needs running *before* it boots and
+reads from config — a database, a broker, a mock HTTP server. Declare it once,
+list it in `resources(...)`, and every test gets it started and wired:
+
+```rust
+use r2e_devservices::DevPostgres;
+use r2e_test::{TestApp, TestResource};
+
+struct Db(DevPostgres);
+
+impl TestResource for Db {
+    // Runs before the boot. Shared container, one fresh database per start.
+    async fn start() -> Self {
+        Db(DevPostgres::shared().await.fresh_database().await)
+    }
+
+    // Applied to the builder as `override_config_value(key, value)`.
+    fn config(&self) -> Vec<(String, String)> {
+        vec![("datasource.url".into(), self.0.url().into())]
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn users_are_persisted(app: TestApp) {
+    app.get("/users").send().await.assert_ok();
+    let _url = app.resource::<Db>().0.url(); // the started value, by type
+}
+```
+
+Rules:
+
+- `resources(A, B)` start in declaration order; their config applies in that
+  order (a later resource wins a shared key), then the `with = ...` hook runs
+  last and wins over all of them.
+- Values are strings and convert like environment variables: `"5432"` reads
+  back as a `u16`.
+- `config()` defaults to nothing — a resource may only need to be running.
+- `configure(&self, builder) -> AppBuilder` (default: unchanged) reaches the
+  builder itself, typically to pin a bean the resource built
+  (`builder.override_bean(...)`). Every resource's `configure` runs after all
+  the `config()` keys and before the `with = ...` hook.
+- The `TestApp` owns its resources and drops them *after* the app, so a
+  container outlives the pool connected to it. `app.resource::<R>()` panics if
+  `R` was not declared.
+- One start per boot: per test under `#[r2e::test]`, once for all cases under
+  `#[r2e::test_suite(app = ..., resources(Db))]` (which needs a `#[before_all]`
+  binding the `TestApp`, like `env = ...`).
+- `resources(...)` without `app = ...`, an empty `resources()`, and a resource
+  listed twice are errors (the first two at compile time).
+
+By hand, which is what the macro expands to:
+
+```rust
+use r2e_test::{TestApp, TestResource, TestResources};
+
+# struct Db;
+# impl TestResource for Db { async fn start() -> Self { Db } }
+# async fn __doc() {
+let resources = TestResources::new().start::<Db>().await;
+let app = TestApp::boot_with::<MyApp>(resources.configure(|b| b))
+    .await
+    .with_resources(resources);
+# }
+```
+
+#### Per-test rollback
+
+Tests that share one migrated database stay isolated by never committing: a
+resource pins a **rollback-only pool** in place of the app's (Quarkus:
+`@TestTransaction` — except that here it also covers what the app writes while
+serving the test's HTTP calls).
+
+```rust,ignore
+use r2e::r2e_data_sqlx::DbPool;
+use r2e_test::{TestApp, TestResource};
+use sqlx::Postgres;
+
+struct Db(DbPool<Postgres>);
+
+impl TestResource for Db {
+    async fn start() -> Self {
+        // One database for the whole run, migrated once on an ordinary
+        // connection (e.g. behind a `OnceCell`).
+        let url = migrated_database().await;
+        Db(DbPool::rollback_only(url).await.expect("test database"))
+    }
+
+    // Pinning the pool makes the datasource plugin skip its own connection
+    // and its `migrate-at-start`.
+    fn configure(&self, builder: AppBuilder) -> AppBuilder {
+        builder.override_bean(self.0.clone())
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn a_created_user_is_listed(app: TestApp) {
+    app.post("/users").json(&new_user()).send().await.assert_ok();
+    app.get("/users").send().await.assert_json_path("name", json!(["Dana"]));
+} // the pool is dropped with the app: the database rolls everything back
+```
+
+- The pool holds **one** connection with an open transaction. A `#[managed]`
+  `Tx` / `DbTx` of the app (or a `pool.begin()`) is a savepoint inside it:
+  commit and rollback behave as usual from the app's side.
+- The app's pool bean decides which constructor to pin: `DbPool::rollback_only(url)`
+  for the datasource plugin's `DbPool<DB>`, `rollback_only_pool::<DB>(url)` for
+  a plain `sqlx::Pool<DB>`. Diesel has the same pair in `r2e_data_diesel`
+  (`DbPool::<Conn>::rollback_only`, `rollback_only_pool::<Conn>` for an r2d2 pool).
+- Read the test's writes through that pool (`#[inject] pool: DbPool<Postgres>`)
+  — another connection sees none of them.
+- Everything is serialized on the one connection: code that holds a
+  transaction and asks the pool for a second connection waits until the
+  acquire times out. Tests writing the same unique key in parallel wait on
+  each other in the database.
+- Migrate beforehand, on an ordinary connection; a migration run through the
+  pool is rolled back with the rest.
+- PostgreSQL: a statement that fails outside any savepoint aborts the outer
+  transaction and every later statement fails. A statement expected to fail
+  belongs in a transaction of the app.
+- Sequences are not rolled back — do not assert on generated ids.
+
 ### Test lifecycle: startup and shutdown
 
 `TestApp::boot` runs the **production startup phase**, not just a router build:
@@ -296,6 +428,48 @@ registered `per_worker_service()` is a boot error rather than a silently dead
 service; an invalid `server.workers` is a boot error there exactly as in
 production.
 
+Scheduled jobs are fired by hand instead (feature `scheduler-testing` on the
+`r2e` facade, in `[dev-dependencies]`) — no timer, no sleep, no polling:
+
+```rust
+use r2e::r2e_scheduler::testing::{SchedulerTestExt, TickOutcome};
+# async fn __doc(app: r2e_test::TestApp) {
+// One tick on the executor pool; returns once the body has finished.
+assert_eq!(app.scheduler().run("nightly_sync").await, TickOutcome::Ran);
+// `skip_if` is evaluated as on a driven tick -> TickOutcome::Skipped.
+// A panicking job panics the test. Unknown name -> panic listing the jobs.
+let info = app.scheduler().job("nightly_sync").unwrap();     // ScheduledJobInfo
+assert_eq!(info.run_count, 1);
+# }
+```
+
+The name is `#[scheduled(name = "...")]`, else `{Type}_{method}`
+(`ScheduledJobs_count_users`); `app.scheduler().jobs()` lists them. The real
+cadence is never driven under `TestApp` — test the schedule value itself
+(`ScheduleConfig`), not the passage of time.
+
+gRPC services are called through `app.grpc()` (feature `grpc` of `r2e-test`,
+in `[dev-dependencies]`) — a channel onto the services registered with
+`register_grpc_service`, handed to the tonic-generated client. No socket: it
+works whether the app uses `GrpcServer::on_port(..)` (never bound in a test)
+or `GrpcServer::multiplexed()`:
+
+```rust,ignore
+use my_app::proto::greeter_client::GreeterClient;
+
+let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+let reply = client.say_hello(HelloRequest { name: "Bob".into() }).await?.into_inner();
+// .bearer(token) for a hand-minted token, .metadata("x-tenant", "acme") for
+// metadata on every call; metadata set on one tonic::Request wins.
+// A guard/identity rejection is the tonic::Status production returns.
+assert!(app.grpc().service_names().contains(&"greeter.Greeter"));
+```
+
+Unary, server-streaming, client-streaming and bidi calls all work, reflection
+included. `app.grpc()` panics when the app registered no gRPC service. Not
+exercised: HTTP/2 framing, TLS, the multiplexed `content-type` routing and the
+grpc-web arm — use `app.serve()` and a real client for those.
+
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
 next `load_config::<C>()` uses it instead of reading disk (see Configuration).
@@ -317,9 +491,12 @@ CLI test runner:
 
 - `app.bean::<T>()` — fetch any bean from the booted graph; `app.config()`.
 - `TestRequest`: `.bearer(t)`, `.header(...)`, `.json(body)`, `.form(...)`,
-  `.query(k, v)`, `.file(...)` — then `.send().await`.
+  `.query(k, v)`, `.path_param("id", 42)` (fills `{id}` in the path, percent-encoded),
+  `.file(...)` — then `.send().await`.
 - `TestResponse` assertions: `assert_ok/created/no_content/bad_request/unauthorized/
-  forbidden/not_found/...`, `assert_json_path(path, expected)`,
+  forbidden/not_found/...`, `assert_json_path(path, expected)` (paths: `a.b`, `items[0].name`,
+  `[0].name` on a root array, `items.name` projects to an array, `items.len()` — never
+  JSON-pointer `/0/name`),
   `assert_json_contains(subset)`, `assert_json_shape(schema)`, `assert_header(...)`,
   cookie and SSE assertions; access via `json::<T>()`, `text()`.
 - `app.session()` — cookie-persisting `TestSession`.

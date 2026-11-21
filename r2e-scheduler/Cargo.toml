@@ -11,8 +11,16 @@ keywords = ["scheduler", "cron", "background-tasks"]
 categories = ["asynchronous"]
 description = "Background task scheduler for R2E - interval, cron, and delayed task execution"
 
+[features]
+# Test helpers (`r2e_scheduler::testing`): `app.scheduler()` — fire a
+# `#[scheduled]` job from a test and wait for it. Dev-graph only (pulls
+# r2e-test) — enable it from [dev-dependencies], not [dependencies].
+testing = ["dep:r2e-test"]
+
 [dependencies]
 r2e-core = {workspace = true}
+# `testing` feature only — no cycle: r2e-test does not depend on r2e-scheduler.
+r2e-test = {workspace = true, optional = true}
 r2e-executor = {workspace = true}
 futures-util = {workspace = true}
 cron = {workspace = true}

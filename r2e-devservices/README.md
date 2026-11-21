@@ -33,6 +33,12 @@ async fn users_are_persisted() {
 }
 ```
 
+Tests sharing the container should not share a database:
+`pg.fresh_database().await` creates a new, uniquely named one (with `createdb`
+inside the container — no SQL client in the test) and returns a handle whose
+`url()` points at it. With `r2e-test`, wrap it in a `TestResource` and list it
+in `#[r2e::test(app = MyApp, resources(Db))]` to skip the manual wiring.
+
 A different image (repository *and* tag) works too — useful for distributions
 that ship extra extensions — as do custom credentials. Everything in the spec
 is part of the container's identity, so each distinct spec gets its own shared

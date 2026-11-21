@@ -308,6 +308,55 @@ impl quote::ToTokens for KeyedExpr {
     }
 }
 
+/// A `key(TypeA, TypeB)` argument (`resources(Db, Broker)`), kept with its
+/// key for the same reason as [`KeyedExpr`].
+pub(crate) struct KeyedTypes {
+    pub key: syn::Path,
+    paren: syn::token::Paren,
+    pub types: Vec<syn::Type>,
+}
+
+impl KeyedTypes {
+    pub fn parse(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Self> {
+        let content;
+        let paren = syn::parenthesized!(content in meta.input);
+        let types = content
+            .parse_terminated(<syn::Type as syn::parse::Parse>::parse, syn::Token![,])?;
+        if types.is_empty() {
+            return Err(syn::Error::new_spanned(
+                &meta.path,
+                "`resources(...)` needs at least one `TestResource` type: `resources(Db)`",
+            ));
+        }
+        Ok(Self {
+            key: meta.path.clone(),
+            paren,
+            types: types.into_iter().collect(),
+        })
+    }
+
+    /// The statement starting every resource, in declaration order, and
+    /// binding the result to `__r2e_resources`.
+    pub fn start_tokens(&self, test_crate: &TokenStream2) -> TokenStream2 {
+        let types = &self.types;
+        quote! {
+            let __r2e_resources = #test_crate::TestResources::new()
+                #( .start::<#types>().await )*;
+        }
+    }
+}
+
+impl quote::ToTokens for KeyedTypes {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        // The original parentheses, so a diagnostic spans `resources(Db)` as
+        // written rather than the whole attribute.
+        self.key.to_tokens(tokens);
+        let types = &self.types;
+        self.paren
+            .surround(tokens, |inner| inner.extend(quote! { #(#types),* }));
+    }
+}
+
 /// A `key = <literal>` argument whose value is not worth keeping, but whose
 /// key span is (`jwt = false`).
 pub(crate) struct KeyedFlag {

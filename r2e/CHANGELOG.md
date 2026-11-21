@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- Feature `scheduler-testing` (`scheduler` + `r2e-scheduler/testing`):
+  `app.scheduler().run("job").await` fires a `#[scheduled]` job from a test.
+  Dev-graph only — enable it from `[dev-dependencies]`.
+- `#[r2e::test(app = MyApp, resources(Db))]` / `#[r2e::test_suite(...)]` — see
+  `r2e-macros`' and `r2e-test`'s changelogs.
+
 ## [0.13.0] - 2026-11-17
 
 ### Breaking

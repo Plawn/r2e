@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../../../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- Rollback-only pools, for per-test rollback: `DbPool::rollback_only(url)` and
+  `rollback_only_pool::<DB>(url)` (a plain `sqlx::Pool<DB>`) hold one
+  connection inside a transaction nothing commits. The app's `begin` — and so
+  every managed `Tx` / `DbTx` — is a savepoint in it, and the database rolls
+  everything back when the pool is dropped. Pinned from a test with
+  `TestResource::configure` + `override_bean`.
+
 ## [0.10.0] - 2026-11-10
 
 ### Changed

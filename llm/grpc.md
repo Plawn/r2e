@@ -1,7 +1,7 @@
 ---
 topic: grpc
 features: grpc
-tokens: ~2800
+tokens: ~3000
 requires: core-concepts, modules
 ---
 
@@ -17,6 +17,8 @@ requires: core-concepts, modules
 - Include the generated code with `r2e::r2e_grpc::include_protos!()`; one Rust
   module per proto package. Add `tonic`, `tonic-prost` and `prost` as
   dependencies (`r2e add grpc` scaffolds all of it).
+- Test a service in-process with `GreeterClient::new(app.grpc())` (feature
+  `grpc` of `r2e-test`) — no port to bind.
 - `descriptor = proto::FILE_DESCRIPTOR_SET` on `#[grpc_routes]` is only needed
   for reflection (`GrpcServer::…with_reflection()`).
 - Pick the transport: `GrpcServer::on_port("0.0.0.0:50051")` (separate port) or
@@ -230,3 +232,22 @@ token was refused (RFC 6750 §3).
 Manual claims: `r2e_grpc::bearer_token(metadata) -> Result<&str, Rejection>`,
 `extract_jwt_claims_from_metadata(metadata, &validator).await ->
 Result<StandardClaims, Status>`.
+
+### Testing
+
+Enable feature `grpc` on the `r2e-test` dev-dependency and hand `app.grpc()`
+to the generated client — the registered services, in-process, with no port
+(either transport mode; `on_port` is never bound under `TestApp`):
+
+```rust,ignore
+#[r2e::test(app = my_app::MyApp)]
+async fn greets(app: TestApp) {
+    let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+    let reply = client.say_hello(HelloRequest { name: "Bob".into() }).await.unwrap();
+    assert_eq!(reply.into_inner().message, "Hello Bob!");
+}
+```
+
+`.as_user(sub, roles)` mints a `TestJwt` bearer exactly as the HTTP builder
+does; `.bearer(token)` / `.metadata(key, value)` set metadata on every call.
+See llm/testing.md.

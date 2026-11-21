@@ -165,7 +165,7 @@ async fn creates_user(app: TestApp) {
 async fn lists_created_user(app: TestApp) {
     app.get("/users").send().await
         .assert_ok()
-        .assert_json_path("/0/name", "Alice");
+        .assert_json_path("[0].name", "Alice");
 }
 ```
 
@@ -282,6 +282,89 @@ listener: SO_REUSEPORT sharded serving and QUIC/HTTP3. An in-process start
 spawns no worker runtimes, so a registered `per_worker_service()` is refused at
 boot rather than silently never started — and an invalid `server.workers` fails
 the boot exactly as it does in production.
+
+### Firing scheduled jobs
+
+No driver means no timer: a `#[scheduled]` method never runs by itself in a
+test. Fire it by name instead — enable the `scheduler-testing` feature of `r2e`
+in `[dev-dependencies]`:
+
+```rust
+use r2e::r2e_scheduler::testing::{SchedulerTestExt, TickOutcome};
+
+#[r2e::test(app = my_app::MyApp)]
+async fn the_nightly_sync_imports_orders(app: TestApp) {
+    assert_eq!(app.scheduler().run("nightly_sync").await, TickOutcome::Ran);
+    app.get("/orders").send().await.assert_ok().assert_json_path("total", 3);
+}
+```
+
+`run` executes one tick on the executor pool and returns when the body has
+finished, so there is nothing to sleep on or poll. It behaves like a driven
+tick: a `skip_if` predicate is evaluated first (`TickOutcome::Skipped`, counted
+in `skip_count`), the job's `ScheduledJobInfo` stats move (`run_count`,
+`last_run`, `last_duration`, `panic_count`), and interceptors apply. Two things
+differ on purpose: a panicking job **panics the test** rather than being
+contained, and the overlap policy does not apply (each `run` is one tick).
+
+The job name is the `name = "..."` of `#[scheduled]`, otherwise
+`{Type}_{method}`; an unknown name panics with the list of registered jobs
+(`app.scheduler().jobs()`). With `scheduler.enabled = false` there is nothing to
+run and `app.scheduler()` panics saying so.
+
+The cadence itself is never exercised under `TestApp` — there is no virtual
+clock. Assert on the schedule value (`ScheduleConfig`) if the cadence matters.
+
+### Calling gRPC services
+
+A test boot binds no port, so a `GrpcServer::on_port(..)` listener never
+exists there. `app.grpc()` is a channel onto the services the app registered
+with `register_grpc_service` — give it to the client tonic generated from your
+proto. Enable the `grpc` feature of `r2e-test` in `[dev-dependencies]`:
+
+```toml
+[dev-dependencies]
+r2e-test = { version = "…", features = ["grpc"] }
+```
+
+```rust
+use my_app::proto::greeter_client::GreeterClient;
+use my_app::proto::HelloRequest;
+
+#[r2e::test(app = my_app::MyApp)]
+async fn greets_an_admin(app: TestApp) {
+    let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+
+    let reply = client
+        .say_hello(HelloRequest { name: "Bob".into() })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(reply.message, "Hello Bob!");
+}
+```
+
+The calls run in-process against the same tonic services the transport would
+serve, in both transport modes (separate port and multiplexed), reflection
+included when the plugin enables it. Unary and streaming calls behave as they
+do over the wire, and a guard or identity rejection comes back as the
+`tonic::Status` production returns.
+
+| Method | Effect |
+|---|---|
+| `.as_user(sub, roles)` | `authorization: Bearer <token>` minted by the app's `TestJwt`, as on the HTTP builder |
+| `.bearer(token)` | A token you minted yourself |
+| `.metadata(key, value)` | One metadata entry on every call |
+| `.service_names()` | The fully-qualified names being served |
+
+Metadata set on a single `tonic::Request` wins over the channel's. The channel
+is `Clone`, and each `TestApp` has its own. `app.grpc()` panics when the app
+registered no gRPC service.
+
+What the channel does not exercise is the transport itself: HTTP/2 framing,
+TLS, the multiplexed `content-type` routing and the grpc-web arm. For those,
+`app.serve()` the multiplexed app and connect a real client to its address.
 
 ### Suite tests (`#[r2e::test_suite]`)
 
@@ -620,6 +703,7 @@ async fn test_response_structure() {
 | `.multipart()` | Finalize the collected file/field parts into a `multipart/form-data` body |
 | `.cookie(name, value)` | Add a cookie |
 | `.query(key, value)` | Add a query parameter |
+| `.path_param(name, value)` | Fill a `{name}` placeholder of the path (percent-encoded) |
 | `.queries(pairs)` | Add multiple query parameters |
 | `.send().await` | Execute the request |
 
@@ -719,17 +803,90 @@ URL to inject into the test config:
 
 ```rust
 use r2e_devservices::DevPostgres;
+use r2e_test::{TestApp, TestResource};
 
-#[r2e::test]
-async fn users_are_persisted() {
-    let pg = DevPostgres::shared().await;
-    let app = TestApp::boot_with::<my_app::MyApp>(|b| {
-        b.override_config_value("app.database.url", pg.url())
-    })
-    .await;
+struct Db(DevPostgres);
+
+impl TestResource for Db {
+    async fn start() -> Self {
+        // One container for the session, one fresh database per test.
+        Db(DevPostgres::shared().await.fresh_database().await)
+    }
+
+    fn config(&self) -> Vec<(String, String)> {
+        vec![("app.database.url".into(), self.0.url().into())]
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn users_are_persisted(app: TestApp) {
     // ...
 }
 ```
+
+A `TestResource` is started before the boot and its `config()` is applied to
+the builder; the `TestApp` keeps it alive and hands it back with
+`app.resource::<Db>()`. `resources(A, B)` start in order, and the `with = ...`
+hook still runs last. On `#[r2e::test_suite(app = ..., resources(Db))]` the
+resource starts once for the whole suite. Without the macro:
+`TestResources::new().start::<Db>().await`, then
+`TestApp::boot_with::<A>(resources.configure(|b| b)).await.with_resources(resources)`.
+
+### Per-test rollback
+
+A fresh database per test is the simplest isolation. When tests share one
+migrated database instead, a resource can pin a **rollback-only pool** in place
+of the app's — the analogue of Quarkus's `@TestTransaction`, which here also
+covers what the app writes while serving the test's HTTP calls:
+
+```rust
+use r2e::r2e_data_sqlx::DbPool;
+use r2e_test::{TestApp, TestResource};
+use sqlx::Postgres;
+
+struct Db(DbPool<Postgres>);
+
+impl TestResource for Db {
+    async fn start() -> Self {
+        // Migrated once, on an ordinary connection.
+        let url = migrated_database().await;
+        Db(DbPool::rollback_only(url).await.expect("test database"))
+    }
+
+    // `configure` reaches the builder itself; it runs after every resource's
+    // `config()` and before the `with = ...` hook.
+    fn configure(&self, builder: AppBuilder) -> AppBuilder {
+        builder.override_bean(self.0.clone())
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn a_created_user_is_listed(app: TestApp) {
+    app.post("/users").json(&new_user()).send().await.assert_ok();
+    app.get("/users").send().await.assert_json_path("name", json!(["Dana"]));
+} // dropped with the app: the database rolls everything back
+```
+
+The pool holds one connection with a transaction nothing commits; a
+`#[managed]` transaction of the app is a savepoint inside it, so commit and
+rollback behave as usual from the app's side. `rollback_only_pool::<DB>(url)`
+is the same thing for an app whose bean is a plain `sqlx::Pool<DB>`, and
+`r2e_data_diesel` has both (`DbPool::<Conn>::rollback_only`,
+`rollback_only_pool::<Conn>`).
+
+What follows from the single connection:
+
+- Read the test's writes through the pinned pool — another connection sees
+  none of them.
+- Code that holds a transaction and asks the pool for a second connection
+  waits until the acquire times out.
+- Migrate beforehand: a pinned pool skips the datasource plugin's
+  `migrate-at-start`, and a migration run through the pool would be rolled
+  back.
+- On PostgreSQL, a statement that fails outside any savepoint aborts the outer
+  transaction; put statements expected to fail in a transaction of the app.
+- Sequences are not rolled back, and tests writing the same unique key in
+  parallel wait on each other.
 
 `shared()` reuses one container across every test process of the workspace
 session (a Ryuk reaper removes it after the last one exits); `start()` gives an

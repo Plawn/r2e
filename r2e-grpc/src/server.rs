@@ -2,7 +2,7 @@ use r2e_core::plugin::{PluginBuildContext, PluginBuildError};
 use r2e_core::Plugin;
 
 use crate::multiplex::MultiplexService;
-use crate::registry::{GrpcServiceRegistry, RegisteredServices};
+use crate::registry::{GrpcServiceRegistry, RegisteredServices, ServedServices};
 
 /// Transport mode for the gRPC server.
 #[derive(Debug, Clone)]
@@ -159,13 +159,17 @@ impl Plugin for GrpcServer {
     ) -> Result<Self::Provided, PluginBuildError> {
         let registry = GrpcServiceRegistry::new();
         let transport = self.transport;
-        #[cfg(feature = "reflection")]
-        let reflection = self.reflection;
+        let served = ServedServices::new(
+            registry.clone(),
+            #[cfg(feature = "reflection")]
+            self.reflection,
+        );
+        let marker = GrpcMarker(served.clone());
         #[cfg(feature = "web")]
         let grpc_web = self.grpc_web;
 
         // Store the registry for register_grpc_service to find.
-        ctx.store_data(registry.clone());
+        ctx.store_data(registry);
 
         match transport {
             GrpcTransport::SeparatePort(addr) => {
@@ -193,15 +197,13 @@ impl Plugin for GrpcServer {
                 // through the dev listener store, keeps the port answering
                 // with the freshly registered services.
                 ctx.on_serve_each_cycle(move |serve_ctx| {
-                    let Some(services) = registry.take() else {
+                    let Some(services) = served.drain() else {
                         tracing::warn!(
                             "GrpcServer::on_port is installed but no gRPC service was \
                              registered; not starting the gRPC server"
                         );
                         return;
                     };
-                    #[cfg(feature = "reflection")]
-                    let services = apply_reflection(services, &reflection);
                     let RegisteredServices { routes, names, .. } = services;
                     // Bind explicitly (instead of tonic's internal bind) so
                     // the resolved address — including an OS-assigned port
@@ -262,10 +264,8 @@ impl Plugin for GrpcServer {
                 // Wraps run at build time, after every
                 // `register_grpc_service` call filled the registry.
                 // Graceful shutdown rides the HTTP server's.
-                ctx.wrap_router(move |router| match registry.take() {
+                ctx.wrap_router(move |router| match served.drain() {
                     Some(services) => {
-                        #[cfg(feature = "reflection")]
-                        let services = apply_reflection(services, &reflection);
                         let RegisteredServices { routes, names, .. } = services;
                         tracing::info!(
                             services = ?names,
@@ -310,7 +310,7 @@ impl Plugin for GrpcServer {
             }
         }
 
-        Ok((GrpcMarker(()),))
+        Ok((marker,))
     }
 }
 
@@ -326,8 +326,21 @@ impl Plugin for GrpcServer {
 /// and no registry to register into. Sealing it makes
 /// "`grpc_services(..)` without `.plugin(GrpcServer::..)` is a compile error"
 /// exact rather than merely conventional.
+///
+/// What it carries is the plugin's view of the registered services, which
+/// `r2e-test` reads to call them in-process (`TestApp::grpc`).
 #[derive(Clone)]
-pub struct GrpcMarker(pub(crate) ());
+pub struct GrpcMarker(pub(crate) ServedServices);
+
+impl GrpcMarker {
+    /// The routes the plugin serves (or would serve, for an app that was never
+    /// served) and their service names, reflection included — `None` when no
+    /// service is registered. Nothing is consumed.
+    #[doc(hidden)] // the seam `r2e-test`'s in-process gRPC channel is built on
+    pub fn served_routes(&self) -> Option<(tonic::service::Routes, Vec<&'static str>)> {
+        self.0.current()
+    }
+}
 
 /// Fold the reflection services (v1 + v1alpha, both for client compatibility:
 /// older `grpcurl` speaks v1alpha only) into the drained service set, fed by

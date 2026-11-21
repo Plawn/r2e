@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `DevPostgres::fresh_database()`: a new, uniquely named database on the
+  container and a handle whose `url()` points at it — per-test isolation on the
+  shared container with no SQL client in the test.
+- `DevService::exec(command)` runs a command inside the container and returns
+  an `ExecOutput { exit_code, stdout, stderr }`.
+
 ## [0.7.0] - 2026-11-17
 
 ### Breaking

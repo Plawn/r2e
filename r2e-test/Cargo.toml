@@ -14,6 +14,9 @@ description = "Test utilities for R2E - TestApp HTTP client and TestJwt token ge
 [features]
 default = []
 ws = ["dep:tokio-tungstenite", "dep:futures-util"]
+# `app.grpc()`: an in-process channel for the generated tonic clients, onto the
+# services of the app's `GrpcServer` plugin — no socket.
+grpc = ["dep:r2e-grpc"]
 
 [dependencies]
 # `test-util`: paused clocks for `#[r2e::test(start_paused = true)]`. A test
@@ -31,9 +34,11 @@ serde_json = {workspace = true}
 tokio = {workspace = true, features = ["full"]}
 inventory = {workspace = true}
 form_urlencoded = {workspace = true}
+percent-encoding = {workspace = true}
 futures-core = {workspace = true}
 tokio-tungstenite = {workspace = true, optional = true}
 futures-util = {workspace = true, optional = true}
+r2e-grpc = {workspace = true, optional = true}
 
 [dev-dependencies]
 base64 = {workspace = true}

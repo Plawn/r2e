@@ -17,6 +17,7 @@ requires: error-handling
 - `RequestHead<'a>` is the same `Copy` view guards see through `GuardContext::head()` — use its helpers (`header`, `path_param`, `host`, `extension::<T>()`).
 - SSE and WebSocket handlers acquire no managed resources; every other HTTP handler shape does.
 - Do not build `DbPool<DB>` by hand: install `SqlxDataSource<DB>` / `DieselDataSource<Conn>`, configure `datasource.*`, then `#[inject]` the pool or take `#[managed] tx: &mut DbTx<..>`.
+- Tests only: `DbPool::rollback_only(url)` builds a pool that never commits (per-test rollback) — see llm/testing.md § Per-test rollback.
 - Attaching a migrator (`.migrations(&MIGRATOR)` / `embed_migrations!`) does not run it — only `migrate-at-start: true` does, inside `build_state()`, so a broken schema fails the boot and `TestApp` gets migrations too.
 - A second datasource is a tag: `datasource_tag!(pub Reporting = "reporting")` mints the distinct bean type `DbPool<DB, Reporting>` configured under `datasource.reporting.*`.
 - There is no `datasource.enabled` gate; to swap the database in a test pin the pool with `.override_bean(pool)` (neither the connection nor the migrations then run).

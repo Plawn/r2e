@@ -15,6 +15,16 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `r2e_scheduler::testing` (feature `testing`): `SchedulerTestExt` gives
+  `TestApp` an `app.scheduler()` handle. `run("job").await` fires one tick of a
+  scheduled job on the executor pool and returns once it has finished — the
+  `skip_if` predicate is honoured (`TickOutcome::Skipped`), `ScheduledJobInfo`
+  stats move as under the driver, and a panicking job panics the test.
+  `jobs()` / `job(name)` read the stats. A test boot still starts no driver:
+  nothing ticks on a timer.
+
 ## [0.10.0] - 2026-11-10
 
 ### Added

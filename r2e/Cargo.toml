@@ -49,6 +49,10 @@ events-kafka = ["events", "dep:r2e-events-kafka"]
 events-pulsar = ["events", "dep:r2e-events-pulsar"]
 events-rabbitmq = ["events", "dep:r2e-events-rabbitmq"]
 scheduler = ["dep:r2e-scheduler", "executor"]
+# Scheduler test helpers (`r2e::r2e_scheduler::testing::SchedulerTestExt`,
+# `app.scheduler().run("job")`). Dev-graph only (pulls r2e-test) — enable it
+# from [dev-dependencies], not [dependencies].
+scheduler-testing = ["scheduler", "r2e-scheduler/testing"]
 executor = ["dep:r2e-executor"]
 cache = ["dep:r2e-cache"]
 rate-limit = ["dep:r2e-rate-limit"]

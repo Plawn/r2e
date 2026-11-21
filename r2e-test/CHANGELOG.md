@@ -15,6 +15,29 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `.path_param(name, value)` on `TestRequest` / `SessionRequest` fills a
+  `{name}` placeholder of the request path (percent-encoded as one segment;
+  `{*name}` keeps its `/` separators). An unknown name or an unfilled
+  placeholder panics on `send()`.
+- JSON paths project over arrays: `assert_json_path("users.name", json!(["Alice", "Bob"]))`.
+  A field read on an array used to resolve to `null`.
+- `TestResource`: an external dependency (database, broker, mock server)
+  started before the boot, whose `config()` is applied to the builder.
+  `TestResources` starts and holds them, `TestApp::with_resources` hands them
+  to the app (dropped after it) and `app.resource::<R>()` reads one back.
+  Declared with `resources(...)` on `#[r2e::test]` / `#[r2e::test_suite]`.
+- `TestResource::configure(&self, builder) -> AppBuilder` (default: unchanged):
+  a resource reaches the builder itself, typically to pin a bean it built —
+  e.g. a rollback-only pool (`DbPool::rollback_only`) for per-test rollback.
+  Runs after every resource's `config()` and before the `with = ...` hook.
+- Feature `grpc`: `TestApp::grpc()` returns a `GrpcTestChannel` onto the gRPC
+  services the app registered — `GreeterClient::new(app.grpc())` calls them
+  in-process, with no port, in both transport modes. `.as_user(sub, roles)`,
+  `.bearer(token)` and `.metadata(key, value)` set metadata on every call;
+  `.service_names()` lists what is served.
+
 ## [0.11.0] - 2026-11-10
 
 ### Changed

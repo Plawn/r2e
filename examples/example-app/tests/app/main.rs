@@ -10,5 +10,6 @@ mod config;
 mod order_module;
 mod ordered;
 mod proxy;
+mod rollback;
 mod upload;
 mod user_controller;

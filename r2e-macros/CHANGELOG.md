@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `resources(A, B)` on `#[r2e::test]` and `#[r2e::test_suite]`: starts each
+  `r2e_test::TestResource` before the boot and wires its config into the app.
+  Requires `app = ...`.
+
 ## [0.11.1] - 2026-11-17
 
 ### Fixed

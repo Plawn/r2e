@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The `GrpcServer` plugin's marker bean keeps the services it serves reachable
+  after the transport took them, which is what `r2e-test`'s `app.grpc()`
+  (feature `grpc`) builds its in-process channel on. No public API change.
+
 ## [0.11.0] - 2026-11-10
 
 ### Fixed

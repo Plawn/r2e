@@ -25,8 +25,9 @@ bytes = {workspace = true}
 base64 = {workspace = true}
 # Reflection client (pb types + generated client stub) for the e2e test.
 tonic-reflection = {workspace = true}
-# HS256 test tokens + validator for the guards e2e test.
-r2e-test = {workspace = true}
+# HS256 test tokens + validator for the guards e2e test; `grpc`: the in-process
+# channel behind `app.grpc()` (tests/grpc_test_client.rs).
+r2e-test = {workspace = true, features = ["grpc"]}
 # `#[inject(request)] Query<T>` over a gRPC call head (guards e2e test).
 serde = {workspace = true}
 # Guard-scope e2e test: impl-level vs method-level `RateLimit` buckets.

@@ -117,6 +117,20 @@ impl GrpcServiceRegistry {
         })
     }
 
+    /// A copy of what [`take`](Self::take) would return, leaving the registry
+    /// as it is — `None` when no service is registered.
+    pub(crate) fn snapshot(&self) -> Option<RegisteredServices> {
+        let guard = self.inner.lock().unwrap();
+        if guard.names.is_empty() {
+            return None;
+        }
+        Some(RegisteredServices {
+            routes: guard.routes.clone(),
+            names: guard.names.clone(),
+            descriptors: guard.descriptors.clone(),
+        })
+    }
+
     /// The names of the currently registered services (without draining).
     pub fn service_names(&self) -> Vec<&'static str> {
         self.inner.lock().unwrap().names.clone()
@@ -135,5 +149,68 @@ impl Default for GrpcServiceRegistry {
 pub(crate) fn push_unique(descriptors: &mut Vec<&'static [u8]>, descriptor: &'static [u8]) {
     if !descriptors.contains(&descriptor) {
         descriptors.push(descriptor);
+    }
+}
+
+/// The services of one app, as the plugin serves them: the registry plus the
+/// reflection setting that decorates it on the way out.
+///
+/// Both transports drain through [`drain`](Self::drain), which keeps a copy of
+/// the routes it hands to the transport. That copy — or, for an app that was
+/// never served, a snapshot of the still-full registry — is what an in-process
+/// test client calls (`r2e-test`'s `grpc` feature), so a test reaches exactly
+/// the service set a socket would.
+#[derive(Clone)]
+pub(crate) struct ServedServices {
+    registry: GrpcServiceRegistry,
+    drained: Arc<Mutex<Option<Drained>>>,
+    #[cfg(feature = "reflection")]
+    reflection: Option<Vec<&'static [u8]>>,
+}
+
+#[derive(Clone)]
+struct Drained {
+    routes: Routes,
+    names: Vec<&'static str>,
+}
+
+impl ServedServices {
+    pub(crate) fn new(
+        registry: GrpcServiceRegistry,
+        #[cfg(feature = "reflection")] reflection: Option<Vec<&'static [u8]>>,
+    ) -> Self {
+        Self {
+            registry,
+            drained: Arc::default(),
+            #[cfg(feature = "reflection")]
+            reflection,
+        }
+    }
+
+    fn decorate(&self, services: RegisteredServices) -> RegisteredServices {
+        #[cfg(feature = "reflection")]
+        let services = crate::server::apply_reflection(services, &self.reflection);
+        services
+    }
+
+    /// Drain the registry for a transport, reflection services included.
+    /// `None` when no service was registered.
+    pub(crate) fn drain(&self) -> Option<RegisteredServices> {
+        let services = self.decorate(self.registry.take()?);
+        *self.drained.lock().unwrap() = Some(Drained {
+            routes: services.routes.clone(),
+            names: services.names.clone(),
+        });
+        Some(services)
+    }
+
+    /// The routes a transport serves (or would serve) and their service
+    /// names, without consuming anything.
+    pub(crate) fn current(&self) -> Option<(Routes, Vec<&'static str>)> {
+        if let Some(drained) = self.drained.lock().unwrap().clone() {
+            return Some((drained.routes, drained.names));
+        }
+        let services = self.decorate(self.registry.snapshot()?);
+        Some((services.routes, services.names))
     }
 }

@@ -1,3 +1,7 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use testcontainers::ImageExt;
 use testcontainers_modules::postgres::Postgres;
 
@@ -178,13 +182,39 @@ impl PostgresSpec {
 /// Credentials default to `postgres`/`postgres`, database `postgres`; override
 /// them through [`PostgresSpec`].
 pub struct DevPostgres {
-    /// The isolated container this handle owns. `None` on the shared path:
-    /// there the container belongs to the process-wide registry and outlives
-    /// every handle, so the handle is a cheap copy of the connection details.
-    _container: Option<DevService>,
+    container: Container,
+    user: String,
+    password: String,
     host: String,
     port: u16,
     url: String,
+}
+
+/// The container behind a handle.
+enum Container {
+    /// An isolated container, alive as long as one handle onto it is — the
+    /// handles [`fresh_database`](DevPostgres::fresh_database) derives share
+    /// the ownership, so the first one can be dropped.
+    Owned(Arc<DevService>),
+    /// The shared container: it belongs to the process-wide registry and
+    /// outlives every handle, so dropping a handle stops nothing.
+    Shared(&'static DevService),
+}
+
+impl Container {
+    fn service(&self) -> &DevService {
+        match self {
+            Self::Owned(service) => service,
+            Self::Shared(service) => service,
+        }
+    }
+
+    fn share(&self) -> Self {
+        match self {
+            Self::Owned(service) => Self::Owned(Arc::clone(service)),
+            Self::Shared(service) => Self::Shared(service),
+        }
+    }
 }
 
 impl DevPostgres {
@@ -207,15 +237,14 @@ impl DevPostgres {
     pub async fn start_with(spec: impl Into<PostgresSpec>) -> Self {
         let spec = spec.into();
         let service = DevService::start(spec.service_spec()).await;
-        let mut handle = Self::describe(&service, &spec);
-        handle._container = Some(service);
-        handle
+        Self::describe(Container::Owned(Arc::new(service)), &spec)
     }
 
     /// The cross-process shared PostgreSQL container, started on first use.
     ///
-    /// Tests sharing the container must not assume an empty database —
-    /// use per-test schemas/databases or [`start`](Self::start) for isolation.
+    /// Tests sharing the container must not assume an empty database — take a
+    /// [`fresh_database`](Self::fresh_database) per test, or use
+    /// [`start`](Self::start) for an isolated container.
     ///
     /// The *container* is shared; the returned handle is a cheap owned copy of
     /// its connection details, so dropping it stops nothing.
@@ -231,23 +260,82 @@ impl DevPostgres {
     /// across the test binaries of the session.
     pub async fn shared_with(spec: impl Into<PostgresSpec>) -> Self {
         let spec = spec.into();
-        Self::describe(DevService::shared(spec.service_spec()).await, &spec)
+        let service = DevService::shared(spec.service_spec()).await;
+        Self::describe(Container::Shared(service), &spec)
     }
 
-    /// The connection details of a running container, without owning it.
-    fn describe(service: &DevService, spec: &PostgresSpec) -> Self {
-        let host = service.host().to_string();
-        let port = service.port(CONTAINER_PORT);
+    /// The connection details of a running container.
+    fn describe(container: Container, spec: &PostgresSpec) -> Self {
+        let host = container.service().host().to_string();
+        let port = container.service().port(CONTAINER_PORT);
         Self {
-            _container: None,
-            url: format!(
-                "postgres://{}:{}@{host}:{port}/{}",
-                encoded(&spec.user),
-                encoded(&spec.password),
-                encoded(&spec.database)
-            ),
+            url: database_url(&spec.user, &spec.password, &host, port, &spec.database),
+            container,
+            user: spec.user.clone(),
+            password: spec.password.clone(),
             host,
             port,
+        }
+    }
+
+    /// Create a new, empty database on this container and return a handle
+    /// whose [`url`](Self::url) points at it.
+    ///
+    /// This is how tests share one container without sharing state: the
+    /// container starts once per session, each test gets a database of its own.
+    ///
+    /// ```ignore
+    /// let db = DevPostgres::shared().await.fresh_database().await;
+    /// let app = TestApp::boot_with::<MyApp>(|b| {
+    ///     b.override_config_value("datasource.url", db.url())
+    /// })
+    /// .await;
+    /// ```
+    ///
+    /// The database is created with `createdb` inside the container, so the
+    /// test needs no Postgres client of its own. Its name is unique across the
+    /// test processes of the session. It is not dropped afterwards: it goes
+    /// away with the container.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the database cannot be created.
+    pub async fn fresh_database(&self) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        // The process id separates test binaries, the counter separates tests,
+        // and the clock separates this run from an earlier one whose container
+        // (and process id) is being reused.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let database = format!(
+            "r2e_{}_{}_{nanos:x}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+
+        // Over the container's local socket, which the official image trusts.
+        let output = self
+            .container
+            .service()
+            .exec(["createdb", "-U", self.user.as_str(), database.as_str()])
+            .await;
+        assert!(
+            output.success(),
+            "cannot create the `{database}` database on the dev PostgreSQL container \
+             (createdb exited with {}): {}",
+            output.exit_code,
+            output.stderr.trim()
+        );
+
+        Self {
+            container: self.container.share(),
+            url: database_url(&self.user, &self.password, &self.host, self.port, &database),
+            user: self.user.clone(),
+            password: self.password.clone(),
+            host: self.host.clone(),
+            port: self.port,
         }
     }
 
@@ -266,6 +354,15 @@ impl DevPostgres {
     pub fn port(&self) -> u16 {
         self.port
     }
+}
+
+fn database_url(user: &str, password: &str, host: &str, port: u16, database: &str) -> String {
+    format!(
+        "postgres://{}:{}@{host}:{port}/{}",
+        encoded(user),
+        encoded(password),
+        encoded(database)
+    )
 }
 
 /// Percent-encode a credential for the connection URL.

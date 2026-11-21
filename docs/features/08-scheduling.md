@@ -400,6 +400,26 @@ such a job re-arms from the resume like any other unarmed job); a `Skip` panic
 consumes its deadline, so the job is re-armed one period from the resume and
 `next_run` reads `None` meanwhile. Other jobs are unaffected either way.
 
+## Testing scheduled tasks
+
+A `TestApp` boot starts no scheduler driver, so nothing ticks on a timer. Fire a
+job by name instead (feature `scheduler-testing` of `r2e`, in
+`[dev-dependencies]`):
+
+```rust
+use r2e::r2e_scheduler::testing::{SchedulerTestExt, TickOutcome};
+
+#[r2e::test(app = my_app::MyApp)]
+async fn cleanup_removes_expired_sessions(app: TestApp) {
+    assert_eq!(app.scheduler().run("SessionJobs_cleanup").await, TickOutcome::Ran);
+}
+```
+
+`run` executes one tick on the executor pool and returns once it has finished;
+`skip_if` is honoured (`TickOutcome::Skipped`) and a panicking job panics the
+test. The name is `#[scheduled(name = "...")]`, otherwise `{Type}_{method}`.
+See the testing guide for the details.
+
 ## Logs
 
 The scheduler logs the driver lifecycle (with the job count) and any per-tick

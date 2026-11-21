@@ -140,10 +140,6 @@ often a user would hit it.
   `Tenancy<R>` is E0107. Works, reads slightly oddly. `PerTenant`'s
   `fallback_to_default()` uses the same trick for a better reason (it adds `T` to
   `Deps`).
-- **`DevPostgres::create_database(name)` was skipped** — one container backing N
-  tenant databases needs either a SQL client dependency in `r2e-devservices` or
-  container `exec` plumbing. Until then, Docker-based per-tenant tests create
-  their own databases.
 - **Generated handlers now carry `#[allow(clippy::too_many_arguments)]`** because
   the 6-extractor head prefix pushes them past clippy's threshold; without it
   every downstream crate using `#[managed]` or `#[guard]` gets a new warning.
