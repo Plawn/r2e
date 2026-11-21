@@ -80,6 +80,11 @@ class SelectionTests(unittest.TestCase):
     def test_mcp_change_enables_the_loopback_leg(self):
         self.assertTrue(self.select(["r2e-mcp/src/lib.rs"])["mcp_loopback"])
 
+    def test_scheduler_change_enables_the_testing_leg(self):
+        graph = metadata(package("r2e-scheduler"), package("app", "examples/app"))
+        self.assertTrue(self.select(["r2e-scheduler/src/lib.rs"], graph=graph)["scheduler_testing"])
+        self.assertFalse(self.select(["examples/app/src/main.rs"], graph=graph)["scheduler_testing"])
+
     def test_lock_only_transitive_upgrade(self):
         old = lock(("external", "1", ["transitive 1"]), ("transitive", "1", []))
         new = lock(("external", "1", ["transitive 2"]), ("transitive", "2", []))

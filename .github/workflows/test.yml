@@ -133,6 +133,12 @@ jobs:
         if: fromJSON(env.CI_PLAN).mcp_loopback
         run: cargo check -p r2e --features mcp-loopback
 
+      # `testing` (r2e-scheduler) is off by default: it pulls r2e-test for
+      # `app.scheduler()`, and its test target is empty without it.
+      - name: cargo test -p r2e-scheduler --features testing --test testing
+        if: fromJSON(env.CI_PLAN).scheduler_testing
+        run: cargo test -p r2e-scheduler --features testing --test testing
+
       # Excluded from `--workspace` above; its own leg so a trybuild
       # `.stderr` drift is named in the job summary rather than buried.
       - name: compile-tests (trybuild)

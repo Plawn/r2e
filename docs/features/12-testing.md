@@ -283,6 +283,38 @@ spawns no worker runtimes, so a registered `per_worker_service()` is refused at
 boot rather than silently never started — and an invalid `server.workers` fails
 the boot exactly as it does in production.
 
+### Firing scheduled jobs
+
+No driver means no timer: a `#[scheduled]` method never runs by itself in a
+test. Fire it by name instead — enable the `scheduler-testing` feature of `r2e`
+in `[dev-dependencies]`:
+
+```rust
+use r2e::r2e_scheduler::testing::{SchedulerTestExt, TickOutcome};
+
+#[r2e::test(app = my_app::MyApp)]
+async fn the_nightly_sync_imports_orders(app: TestApp) {
+    assert_eq!(app.scheduler().run("nightly_sync").await, TickOutcome::Ran);
+    app.get("/orders").send().await.assert_ok().assert_json_path("total", 3);
+}
+```
+
+`run` executes one tick on the executor pool and returns when the body has
+finished, so there is nothing to sleep on or poll. It behaves like a driven
+tick: a `skip_if` predicate is evaluated first (`TickOutcome::Skipped`, counted
+in `skip_count`), the job's `ScheduledJobInfo` stats move (`run_count`,
+`last_run`, `last_duration`, `panic_count`), and interceptors apply. Two things
+differ on purpose: a panicking job **panics the test** rather than being
+contained, and the overlap policy does not apply (each `run` is one tick).
+
+The job name is the `name = "..."` of `#[scheduled]`, otherwise
+`{Type}_{method}`; an unknown name panics with the list of registered jobs
+(`app.scheduler().jobs()`). With `scheduler.enabled = false` there is nothing to
+run and `app.scheduler()` panics saying so.
+
+The cadence itself is never exercised under `TestApp` — there is no virtual
+clock. Assert on the schedule value (`ScheduleConfig`) if the cadence matters.
+
 ### Suite tests (`#[r2e::test_suite]`)
 
 When several tests share the same expensive setup, put them on an inherent

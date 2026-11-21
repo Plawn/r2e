@@ -5,6 +5,9 @@
 
 mod driver;
 mod duration;
+mod manual;
+#[cfg(feature = "testing")]
+pub mod testing;
 mod types;
 
 pub use driver::{jobs_driver, start_jobs, SchedulerCommands};
@@ -325,6 +328,9 @@ impl ScheduledJobInfo {
 #[derive(Clone)]
 pub struct ScheduledJobRegistry {
     inner: Arc<Mutex<Vec<ScheduledJobInfo>>>,
+    /// The jobs of an app no driver runs (an in-process start), for the
+    /// `testing` feature to fire by hand — see the `manual` module.
+    manual: manual::ManualSlot,
 }
 
 impl ScheduledJobRegistry {
@@ -332,7 +338,14 @@ impl ScheduledJobRegistry {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Vec::new())),
+            manual: manual::ManualSlot::default(),
         }
+    }
+
+    /// The jobs left undriven by an in-process start, converted on first use.
+    #[cfg(feature = "testing")]
+    pub(crate) fn manual_jobs(&self) -> Result<Arc<manual::ManualJobs>, manual::Unavailable> {
+        self.manual.jobs(self)
     }
 
     /// Register a job in the registry.
@@ -552,6 +565,20 @@ impl Plugin for Scheduler {
             // receiver moves straight into the serve hook. Built here so the
             // handle's token is the same one the driver waits on.
             let (handle, commands) = SchedulerHandle::channel(token.clone());
+
+            // An in-process start (`TestApp::boot`) never runs the serve hook
+            // below, so nothing would ever reach the collected tasks. Leave
+            // them — and the pool ticks run on — on the registry bean, where
+            // `testing::SchedulerTestExt` fires them one tick at a time. The
+            // task registry is shared plugin data: borrow a clone and put it
+            // back for the serve hook and the controllers still to register.
+            if let Some(tasks) = dctx.take_data::<TaskRegistryHandle>() {
+                dctx.store_data(tasks.clone());
+                registry.manual.set(manual::ManualState::Dormant {
+                    tasks,
+                    executor: executor.clone(),
+                });
+            }
             dctx.add_layer(Box::new(move |router| {
                 router.layer(r2e_core::http::Extension(handle))
             }));
@@ -564,6 +591,8 @@ impl Plugin for Scheduler {
             // live graph) and the framework cancels + drains them on every exit
             // path, including a boot aborted by a later startup hook.
             dctx.on_serve(move |serve_ctx| {
+                // The driver owns the jobs from here on.
+                registry.manual.set(manual::ManualState::Driven);
                 let tasks = serve_ctx.task_registry().take_of::<ScheduledTaskMarker>();
                 if let Some(driver) = scheduled_tasks_driver(
                     tasks,

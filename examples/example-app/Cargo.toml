@@ -25,6 +25,9 @@ dashmap = {workspace = true}
 futures-core = {workspace = true}
 
 [dev-dependencies]
+# `scheduler-testing` unlocks `app.scheduler().run("job")` for
+# tests/scheduling/manual_tick.rs (tests see the union of dep features).
+r2e = {workspace = true, features = ["scheduler-testing"]}
 r2e-test = {workspace = true, features = ["ws"]}
 garde = {workspace = true}
 http = {workspace = true}

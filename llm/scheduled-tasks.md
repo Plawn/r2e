@@ -1,7 +1,7 @@
 ---
 topic: scheduled-tasks
 features: scheduler
-tokens: ~3800
+tokens: ~3900
 requires: di-beans, background-work
 ---
 
@@ -288,3 +288,9 @@ Interval variants carry a `PositiveDuration` (a `Duration` guaranteed non-zero;
 `PositiveDuration::from_secs(60).unwrap()` / derefs to `Duration`), so a zero
 interval is unrepresentable; `parse_duration("5m")` returns `PositiveDuration`.
 `#[scheduled(every = "0s")]` is a compile error.
+
+Testing — a `TestApp` boot starts no driver, so nothing ticks. Fire a job by
+name with `app.scheduler().run("job").await` (`r2e::r2e_scheduler::testing::SchedulerTestExt`,
+facade feature `scheduler-testing` in `[dev-dependencies]`): one tick on the
+pool, awaited, `skip_if` honoured (`TickOutcome::Ran` / `Skipped`), stats
+updated, job panics re-raised into the test. See llm/testing.md.

@@ -1,7 +1,7 @@
 ---
 topic: testing
 features: core (dev-dependency `r2e-test`)
-tokens: ~5000
+tokens: ~5300
 requires: quick-start, app-builder, devservices
 ---
 
@@ -27,8 +27,9 @@ requires: quick-start, app-builder, devservices
   never memoise it in a bare `OnceCell` / `LazyLock`.
 - Call `app.shutdown().await` in tests that assert on disposal — dropping a
   `TestApp` runs no hooks and aborts tracked tasks.
-- A test boot skips the plugin serve hooks, so `#[scheduled]` tasks do not tick;
-  use `app.serve()` for a live port (WebSocket/SSE).
+- A test boot skips the plugin serve hooks, so `#[scheduled]` tasks do not tick
+  on their own: fire one with `app.scheduler().run("job").await` (feature
+  `scheduler-testing`). Use `app.serve()` for a live port (WebSocket/SSE).
 - An external dependency the app reads from config (database, broker, mock
   server) is a `TestResource`: `resources(Db)` on `#[r2e::test]` /
   `#[r2e::test_suite]` starts it before the boot and applies its `config()`.
@@ -361,6 +362,26 @@ serving and QUIC/HTTP3. An in-process start spawns no worker runtimes, so a
 registered `per_worker_service()` is a boot error rather than a silently dead
 service; an invalid `server.workers` is a boot error there exactly as in
 production.
+
+Scheduled jobs are fired by hand instead (feature `scheduler-testing` on the
+`r2e` facade, in `[dev-dependencies]`) — no timer, no sleep, no polling:
+
+```rust
+use r2e::r2e_scheduler::testing::{SchedulerTestExt, TickOutcome};
+# async fn __doc(app: r2e_test::TestApp) {
+// One tick on the executor pool; returns once the body has finished.
+assert_eq!(app.scheduler().run("nightly_sync").await, TickOutcome::Ran);
+// `skip_if` is evaluated as on a driven tick -> TickOutcome::Skipped.
+// A panicking job panics the test. Unknown name -> panic listing the jobs.
+let info = app.scheduler().job("nightly_sync").unwrap();     // ScheduledJobInfo
+assert_eq!(info.run_count, 1);
+# }
+```
+
+The name is `#[scheduled(name = "...")]`, else `{Type}_{method}`
+(`ScheduledJobs_count_users`); `app.scheduler().jobs()` lists them. The real
+cadence is never driven under `TestApp` — test the schedule value itself
+(`ScheduleConfig`), not the passage of time.
 
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
