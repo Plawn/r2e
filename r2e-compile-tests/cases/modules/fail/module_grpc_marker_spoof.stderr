@@ -16,5 +16,5 @@ error[E0423]: cannot initialize a tuple struct which contains private fields
 note: constructor is not visible here due to private fields
   --> $WORKSPACE/r2e-grpc/src/server.rs
    |
-   | pub struct GrpcMarker(pub(crate) ());
-   |                       ^^^^^^^^^^^^^ private field
+   | pub struct GrpcMarker(pub(crate) ServedServices);
+   |                       ^^^^^^^^^^^^^^^^^^^^^^^^^ private field

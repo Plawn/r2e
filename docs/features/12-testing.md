@@ -315,6 +315,57 @@ run and `app.scheduler()` panics saying so.
 The cadence itself is never exercised under `TestApp` — there is no virtual
 clock. Assert on the schedule value (`ScheduleConfig`) if the cadence matters.
 
+### Calling gRPC services
+
+A test boot binds no port, so a `GrpcServer::on_port(..)` listener never
+exists there. `app.grpc()` is a channel onto the services the app registered
+with `register_grpc_service` — give it to the client tonic generated from your
+proto. Enable the `grpc` feature of `r2e-test` in `[dev-dependencies]`:
+
+```toml
+[dev-dependencies]
+r2e-test = { version = "…", features = ["grpc"] }
+```
+
+```rust
+use my_app::proto::greeter_client::GreeterClient;
+use my_app::proto::HelloRequest;
+
+#[r2e::test(app = my_app::MyApp)]
+async fn greets_an_admin(app: TestApp) {
+    let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+
+    let reply = client
+        .say_hello(HelloRequest { name: "Bob".into() })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(reply.message, "Hello Bob!");
+}
+```
+
+The calls run in-process against the same tonic services the transport would
+serve, in both transport modes (separate port and multiplexed), reflection
+included when the plugin enables it. Unary and streaming calls behave as they
+do over the wire, and a guard or identity rejection comes back as the
+`tonic::Status` production returns.
+
+| Method | Effect |
+|---|---|
+| `.as_user(sub, roles)` | `authorization: Bearer <token>` minted by the app's `TestJwt`, as on the HTTP builder |
+| `.bearer(token)` | A token you minted yourself |
+| `.metadata(key, value)` | One metadata entry on every call |
+| `.service_names()` | The fully-qualified names being served |
+
+Metadata set on a single `tonic::Request` wins over the channel's. The channel
+is `Clone`, and each `TestApp` has its own. `app.grpc()` panics when the app
+registered no gRPC service.
+
+What the channel does not exercise is the transport itself: HTTP/2 framing,
+TLS, the multiplexed `content-type` routing and the grpc-web arm. For those,
+`app.serve()` the multiplexed app and connect a real client to its address.
+
 ### Suite tests (`#[r2e::test_suite]`)
 
 When several tests share the same expensive setup, put them on an inherent

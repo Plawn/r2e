@@ -6465,6 +6465,7 @@ dependencies = [
  "percent-encoding",
  "r2e",
  "r2e-core",
+ "r2e-grpc",
  "r2e-security",
  "serde",
  "serde_json",

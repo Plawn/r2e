@@ -378,6 +378,26 @@ See [CLI Reference](../reference/cli-reference.md) for full details.
 
 Rejections become `tonic::Status` by kind. See [Guards and Identity](./guards-and-identity.md).
 
+## Testing
+
+A test boot binds no port. `app.grpc()` — feature `grpc` of the `r2e-test`
+dev-dependency — is a channel onto the registered services that the generated
+client accepts as-is, in both transport modes:
+
+```rust
+#[r2e::test(app = my_app::MyApp)]
+async fn greets(app: TestApp) {
+    let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+    let reply = client.say_hello(HelloRequest { name: "Bob".into() }).await.unwrap();
+    assert_eq!(reply.into_inner().message, "Hello Bob!");
+}
+```
+
+`.as_user(sub, roles)` authenticates the way the HTTP test builder does;
+`.bearer(token)` and `.metadata(key, value)` add metadata to every call.
+Streaming calls and reflection work too. The transport itself (HTTP/2, TLS,
+grpc-web) is not exercised — serve the app for that.
+
 ## Next steps
 
 - [Guards and Identity](./guards-and-identity.md) — guards, `#[inject(identity)]`, status mapping

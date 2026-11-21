@@ -28,6 +28,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `TestResources` starts and holds them, `TestApp::with_resources` hands them
   to the app (dropped after it) and `app.resource::<R>()` reads one back.
   Declared with `resources(...)` on `#[r2e::test]` / `#[r2e::test_suite]`.
+- Feature `grpc`: `TestApp::grpc()` returns a `GrpcTestChannel` onto the gRPC
+  services the app registered — `GreeterClient::new(app.grpc())` calls them
+  in-process, with no port, in both transport modes. `.as_user(sub, roles)`,
+  `.bearer(token)` and `.metadata(key, value)` set metadata on every call;
+  `.service_names()` lists what is served.
 
 ## [0.11.0] - 2026-11-10
 

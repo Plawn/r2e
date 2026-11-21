@@ -1,7 +1,7 @@
 ---
 topic: testing
 features: core (dev-dependency `r2e-test`)
-tokens: ~5300
+tokens: ~5600
 requires: quick-start, app-builder, devservices
 ---
 
@@ -30,6 +30,8 @@ requires: quick-start, app-builder, devservices
 - A test boot skips the plugin serve hooks, so `#[scheduled]` tasks do not tick
   on their own: fire one with `app.scheduler().run("job").await` (feature
   `scheduler-testing`). Use `app.serve()` for a live port (WebSocket/SSE).
+- gRPC services are called in-process: `GreeterClient::new(app.grpc())`
+  (feature `grpc` of `r2e-test`) — no port, either transport mode.
 - An external dependency the app reads from config (database, broker, mock
   server) is a `TestResource`: `resources(Db)` on `#[r2e::test]` /
   `#[r2e::test_suite]` starts it before the boot and applies its `config()`.
@@ -382,6 +384,28 @@ The name is `#[scheduled(name = "...")]`, else `{Type}_{method}`
 (`ScheduledJobs_count_users`); `app.scheduler().jobs()` lists them. The real
 cadence is never driven under `TestApp` — test the schedule value itself
 (`ScheduleConfig`), not the passage of time.
+
+gRPC services are called through `app.grpc()` (feature `grpc` of `r2e-test`,
+in `[dev-dependencies]`) — a channel onto the services registered with
+`register_grpc_service`, handed to the tonic-generated client. No socket: it
+works whether the app uses `GrpcServer::on_port(..)` (never bound in a test)
+or `GrpcServer::multiplexed()`:
+
+```rust,ignore
+use my_app::proto::greeter_client::GreeterClient;
+
+let mut client = GreeterClient::new(app.grpc().as_user("alice", &["admin"]));
+let reply = client.say_hello(HelloRequest { name: "Bob".into() }).await?.into_inner();
+// .bearer(token) for a hand-minted token, .metadata("x-tenant", "acme") for
+// metadata on every call; metadata set on one tonic::Request wins.
+// A guard/identity rejection is the tonic::Status production returns.
+assert!(app.grpc().service_names().contains(&"greeter.Greeter"));
+```
+
+Unary, server-streaming, client-streaming and bidi calls all work, reflection
+included. `app.grpc()` panics when the app registered no gRPC service. Not
+exercised: HTTP/2 framing, TLS, the multiplexed `content-type` routing and the
+grpc-web arm — use `app.serve()` and a real client for those.
 
 For a fully in-memory config in a test, stash one with
 `.override_config(R2eConfig::from_yaml_str(yaml)?)` in the `with` hook — the
