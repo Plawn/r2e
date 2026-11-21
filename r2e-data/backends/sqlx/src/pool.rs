@@ -34,10 +34,10 @@ const MAX_POOL_ATTEMPTS: usize = 3;
 /// `datasource.<name>.*` config section. The tag is a compile-time marker only:
 /// it costs nothing at runtime and never reaches SQLx.
 pub struct DbPool<DB: Database, Tag = DefaultDataSource> {
-    inner: Arc<Inner<DB>>,
+    pub(crate) inner: Arc<Inner<DB>>,
     /// `fn() -> Tag` (not `Tag`): the marker must not make the pool's
     /// auto-traits depend on it, and the pool never holds a `Tag` value.
-    tag: PhantomData<fn() -> Tag>,
+    pub(crate) tag: PhantomData<fn() -> Tag>,
 }
 
 impl<DB: Database, Tag> Clone for DbPool<DB, Tag> {
@@ -59,17 +59,17 @@ impl<DB: Database, Tag> Clone for DbPool<DB, Tag> {
 /// The URL rides along for the same reason: it is what the generation was built
 /// from, so keeping it in the cell makes "are we already on this URL?" a
 /// lock-free read of the very snapshot it describes.
-struct PoolGeneration<DB: Database> {
-    pool: Pool<DB>,
-    generation: u64,
-    url: String,
+pub(crate) struct PoolGeneration<DB: Database> {
+    pub(crate) pool: Pool<DB>,
+    pub(crate) generation: u64,
+    pub(crate) url: String,
 }
 
-struct Inner<DB: Database> {
-    current: ArcSwap<PoolGeneration<DB>>,
-    options: PoolOptions<DB>,
-    url: LiveConfig<String>,
-    last_error: Mutex<Option<String>>,
+pub(crate) struct Inner<DB: Database> {
+    pub(crate) current: ArcSwap<PoolGeneration<DB>>,
+    pub(crate) options: PoolOptions<DB>,
+    pub(crate) url: LiveConfig<String>,
+    pub(crate) last_error: Mutex<Option<String>>,
 }
 
 impl<DB: Database, Tag> DbPool<DB, Tag> {

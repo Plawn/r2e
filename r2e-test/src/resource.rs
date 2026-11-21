@@ -30,6 +30,7 @@
 
 use std::any::{Any, TypeId};
 use std::future::Future;
+use std::sync::Arc;
 
 use r2e_core::AppBuilder;
 
@@ -60,7 +61,26 @@ pub trait TestResource: Send + Sync + Sized + 'static {
     fn config(&self) -> Vec<(String, String)> {
         Vec::new()
     }
+
+    /// What this resource changes on the builder beyond config keys —
+    /// typically a bean it built itself, pinned with
+    /// [`override_bean`](AppBuilder::override_bean):
+    ///
+    /// ```ignore
+    /// fn configure(&self, builder: AppBuilder) -> AppBuilder {
+    ///     builder.override_bean(self.pool.clone())
+    /// }
+    /// ```
+    ///
+    /// Runs after every resource's [`config`](Self::config) and before the
+    /// test's own `with = ...` hook.
+    fn configure(&self, builder: AppBuilder) -> AppBuilder {
+        builder
+    }
 }
+
+/// The [`TestResource::configure`] of one started resource.
+type BuilderHook = Arc<dyn Fn(AppBuilder) -> AppBuilder + Send + Sync>;
 
 /// The started resources of one boot.
 ///
@@ -76,7 +96,8 @@ pub trait TestResource: Send + Sync + Sized + 'static {
 #[derive(Default)]
 pub struct TestResources {
     config: Vec<(String, String)>,
-    started: Vec<(TypeId, Box<dyn Any + Send + Sync>)>,
+    hooks: Vec<BuilderHook>,
+    started: Vec<(TypeId, Arc<dyn Any + Send + Sync>)>,
 }
 
 impl TestResources {
@@ -98,22 +119,30 @@ impl TestResources {
             "the test resource `{}` is declared twice",
             std::any::type_name::<R>()
         );
-        let resource = R::start().await;
+        let resource = Arc::new(R::start().await);
         self.config.extend(resource.config());
-        self.started.push((TypeId::of::<R>(), Box::new(resource)));
+        let hooked = Arc::clone(&resource);
+        self.hooks
+            .push(Arc::new(move |builder| hooked.configure(builder)));
+        self.started.push((TypeId::of::<R>(), resource));
         self
     }
 
-    /// A builder hook applying the resources' config, then `then` — the shape
-    /// [`TestApp::boot_with`] takes.
+    /// A builder hook applying the resources' config, their
+    /// [`configure`](TestResource::configure) in declaration order, then
+    /// `then` — the shape [`TestApp::boot_with`] takes.
     pub fn configure(
         &self,
         then: impl FnOnce(AppBuilder) -> AppBuilder,
     ) -> impl FnOnce(AppBuilder) -> AppBuilder {
         let config = self.config.clone();
+        let hooks = self.hooks.clone();
         move |mut builder| {
             for (key, value) in config {
                 builder = builder.override_config_value(key, value);
+            }
+            for hook in hooks {
+                builder = hook(builder);
             }
             then(builder)
         }

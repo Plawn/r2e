@@ -87,6 +87,52 @@ impl TestResource for Silent {
     }
 }
 
+/// Reaches the builder itself — where a resource pins a bean it built.
+struct Hooked {
+    url: String,
+}
+
+impl TestResource for Hooked {
+    async fn start() -> Self {
+        Hooked {
+            url: "from-configure".into(),
+        }
+    }
+
+    fn config(&self) -> Vec<(String, String)> {
+        vec![("upstream.port".into(), "7000".into())]
+    }
+
+    fn configure(&self, builder: AppBuilder) -> AppBuilder {
+        builder.override_config_value("upstream.url", self.url.clone())
+    }
+}
+
+// `Hooked` is declared first: its `configure` still runs after `Upstream`'s
+// `config`, which sets the same key.
+#[r2e::test(app = DemoApp, resources(Hooked, Upstream))]
+async fn a_resource_hooks_the_builder_after_every_config(app: TestApp) {
+    assert_eq!(
+        app.config().get::<String>("upstream.url").unwrap(),
+        "from-configure"
+    );
+    // Config keys keep following the declaration order.
+    assert_eq!(app.config().get::<u16>("upstream.port").unwrap(), 5432);
+}
+
+#[r2e::test(
+    app = DemoApp,
+    resources(Hooked),
+    with = |b| b.override_config_value("upstream.url", "from-with"),
+)]
+async fn the_with_hook_wins_over_a_resource_hook(app: TestApp) {
+    assert_eq!(
+        app.config().get::<String>("upstream.url").unwrap(),
+        "from-with"
+    );
+    assert_eq!(app.config().get::<u16>("upstream.port").unwrap(), 7000);
+}
+
 #[r2e::test(app = DemoApp, resources(Upstream))]
 async fn a_resource_configures_the_booted_app(app: TestApp) {
     let url = app.config().get::<String>("upstream.url").unwrap();

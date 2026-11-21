@@ -3751,6 +3751,7 @@ missing/forged/replayed = 400 `invalid_request`.
 - `RequestHead<'a>` is the same `Copy` view guards see through `GuardContext::head()` — use its helpers (`header`, `path_param`, `host`, `extension::<T>()`).
 - SSE and WebSocket handlers acquire no managed resources; every other HTTP handler shape does.
 - Do not build `DbPool<DB>` by hand: install `SqlxDataSource<DB>` / `DieselDataSource<Conn>`, configure `datasource.*`, then `#[inject]` the pool or take `#[managed] tx: &mut DbTx<..>`.
+- Tests only: `DbPool::rollback_only(url)` builds a pool that never commits (per-test rollback) — see llm/testing.md § Per-test rollback.
 - Attaching a migrator (`.migrations(&MIGRATOR)` / `embed_migrations!`) does not run it — only `migrate-at-start: true` does, inside `build_state()`, so a broken schema fails the boot and `TestApp` gets migrations too.
 - A second datasource is a tag: `datasource_tag!(pub Reporting = "reporting")` mints the distinct bean type `DbPool<DB, Reporting>` configured under `datasource.reporting.*`.
 - There is no `datasource.enabled` gate; to swap the database in a test pin the pool with `.override_bean(pool)` (neither the connection nor the migrations then run).
@@ -7675,6 +7676,9 @@ b.plugin(RequestIdPlugin)                   // X-Request-Id propagation (HttpTra
 - An external dependency the app reads from config (database, broker, mock
   server) is a `TestResource`: `resources(Db)` on `#[r2e::test]` /
   `#[r2e::test_suite]` starts it before the boot and applies its `config()`.
+- Per-test rollback (`@TestTransaction`): a `TestResource` pins
+  `DbPool::rollback_only(url)` in its `configure` hook — the app writes for
+  real, through its routes too, and nothing is ever committed.
 - Container-backed dependencies (Postgres, Redis, OpenFGA, Keycloak): see
   llm/devservices.md.
 
@@ -7931,6 +7935,10 @@ Rules:
 - Values are strings and convert like environment variables: `"5432"` reads
   back as a `u16`.
 - `config()` defaults to nothing — a resource may only need to be running.
+- `configure(&self, builder) -> AppBuilder` (default: unchanged) reaches the
+  builder itself, typically to pin a bean the resource built
+  (`builder.override_bean(...)`). Every resource's `configure` runs after all
+  the `config()` keys and before the `with = ...` hook.
 - The `TestApp` owns its resources and drops them *after* the app, so a
   container outlives the pool connected to it. `app.resource::<R>()` panics if
   `R` was not declared.
@@ -7954,6 +7962,62 @@ let app = TestApp::boot_with::<MyApp>(resources.configure(|b| b))
     .with_resources(resources);
 # }
 ```
+
+#### Per-test rollback
+
+Tests that share one migrated database stay isolated by never committing: a
+resource pins a **rollback-only pool** in place of the app's (Quarkus:
+`@TestTransaction` — except that here it also covers what the app writes while
+serving the test's HTTP calls).
+
+```rust,ignore
+use r2e::r2e_data_sqlx::DbPool;
+use r2e_test::{TestApp, TestResource};
+use sqlx::Postgres;
+
+struct Db(DbPool<Postgres>);
+
+impl TestResource for Db {
+    async fn start() -> Self {
+        // One database for the whole run, migrated once on an ordinary
+        // connection (e.g. behind a `OnceCell`).
+        let url = migrated_database().await;
+        Db(DbPool::rollback_only(url).await.expect("test database"))
+    }
+
+    // Pinning the pool makes the datasource plugin skip its own connection
+    // and its `migrate-at-start`.
+    fn configure(&self, builder: AppBuilder) -> AppBuilder {
+        builder.override_bean(self.0.clone())
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn a_created_user_is_listed(app: TestApp) {
+    app.post("/users").json(&new_user()).send().await.assert_ok();
+    app.get("/users").send().await.assert_json_path("name", json!(["Dana"]));
+} // the pool is dropped with the app: the database rolls everything back
+```
+
+- The pool holds **one** connection with an open transaction. A `#[managed]`
+  `Tx` / `DbTx` of the app (or a `pool.begin()`) is a savepoint inside it:
+  commit and rollback behave as usual from the app's side.
+- The app's pool bean decides which constructor to pin: `DbPool::rollback_only(url)`
+  for the datasource plugin's `DbPool<DB>`, `rollback_only_pool::<DB>(url)` for
+  a plain `sqlx::Pool<DB>`. Diesel has the same pair in `r2e_data_diesel`
+  (`DbPool::<Conn>::rollback_only`, `rollback_only_pool::<Conn>` for an r2d2 pool).
+- Read the test's writes through that pool (`#[inject] pool: DbPool<Postgres>`)
+  — another connection sees none of them.
+- Everything is serialized on the one connection: code that holds a
+  transaction and asks the pool for a second connection waits until the
+  acquire times out. Tests writing the same unique key in parallel wait on
+  each other in the database.
+- Migrate beforehand, on an ordinary connection; a migration run through the
+  pool is rolled back with the rest.
+- PostgreSQL: a statement that fails outside any savepoint aborts the outer
+  transaction and every later statement fails. A statement expected to fail
+  belongs in a transaction of the app.
+- Sequences are not rolled back — do not assert on generated ids.
 
 ### Test lifecycle: startup and shutdown
 

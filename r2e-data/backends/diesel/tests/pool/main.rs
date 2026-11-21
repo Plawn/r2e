@@ -5,4 +5,6 @@
 mod support;
 
 #[cfg(feature = "sqlite")]
+mod rollback;
+#[cfg(feature = "sqlite")]
 mod sqlite;

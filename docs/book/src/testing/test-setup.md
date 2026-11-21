@@ -203,6 +203,62 @@ resource starts once for the whole suite. Without the macro:
 `TestResources::new().start::<Db>().await`, then
 `TestApp::boot_with::<A>(resources.configure(|b| b)).await.with_resources(resources)`.
 
+### Per-test rollback
+
+A fresh database per test is the simplest isolation. When tests share one
+migrated database instead, a resource can pin a **rollback-only pool** in place
+of the app's — the analogue of Quarkus's `@TestTransaction`, which here also
+covers what the app writes while serving the test's HTTP calls:
+
+```rust
+use r2e::r2e_data_sqlx::DbPool;
+use r2e_test::{TestApp, TestResource};
+use sqlx::Postgres;
+
+struct Db(DbPool<Postgres>);
+
+impl TestResource for Db {
+    async fn start() -> Self {
+        // Migrated once, on an ordinary connection.
+        let url = migrated_database().await;
+        Db(DbPool::rollback_only(url).await.expect("test database"))
+    }
+
+    // `configure` reaches the builder itself; it runs after every resource's
+    // `config()` and before the `with = ...` hook.
+    fn configure(&self, builder: AppBuilder) -> AppBuilder {
+        builder.override_bean(self.0.clone())
+    }
+}
+
+#[r2e::test(app = my_app::MyApp, resources(Db))]
+async fn a_created_user_is_listed(app: TestApp) {
+    app.post("/users").json(&new_user()).send().await.assert_ok();
+    app.get("/users").send().await.assert_json_path("name", json!(["Dana"]));
+} // dropped with the app: the database rolls everything back
+```
+
+The pool holds one connection with a transaction nothing commits; a
+`#[managed]` transaction of the app is a savepoint inside it, so commit and
+rollback behave as usual from the app's side. `rollback_only_pool::<DB>(url)`
+is the same thing for an app whose bean is a plain `sqlx::Pool<DB>`, and
+`r2e_data_diesel` has both (`DbPool::<Conn>::rollback_only`,
+`rollback_only_pool::<Conn>`).
+
+What follows from the single connection:
+
+- Read the test's writes through the pinned pool — another connection sees
+  none of them.
+- Code that holds a transaction and asks the pool for a second connection
+  waits until the acquire times out.
+- Migrate beforehand: a pinned pool skips the datasource plugin's
+  `migrate-at-start`, and a migration run through the pool would be rolled
+  back.
+- On PostgreSQL, a statement that fails outside any savepoint aborts the outer
+  transaction; put statements expected to fail in a transaction of the app.
+- Sequences are not rolled back, and tests writing the same unique key in
+  parallel wait on each other.
+
 `shared()` reuses one stable container across all test processes in the
 workspace session. Each process keeps a TCP lease to a shared Ryuk reaper;
 after the final process exits, Ryuk removes the managed containers (10-second

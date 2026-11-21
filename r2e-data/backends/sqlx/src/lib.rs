@@ -38,6 +38,7 @@
 mod datasource;
 mod health;
 mod pool;
+mod rollback;
 #[cfg(feature = "tenant")]
 mod tenant;
 mod tx;
@@ -45,6 +46,7 @@ mod tx;
 pub use datasource::{DataSourceConfig, DataSourceTag, DefaultDataSource, SqlxDataSource};
 pub use health::DataSourceHealth;
 pub use pool::DbPool;
+pub use rollback::rollback_only_pool;
 #[cfg(feature = "tenant")]
 pub use tenant::{PoolSource, TenantPool, TenantPools, TenantTx};
 pub use tx::{DbTx, FixedPool, ManagedTx, RotatingPool, SqlxTx, Tx, TxSource};

@@ -248,7 +248,7 @@ where
 }
 
 /// Run a (blocking) r2d2 pool build on Tokio's blocking pool.
-async fn build_pool<Conn>(
+pub(crate) async fn build_pool<Conn>(
     factory: &PoolFactory<Conn>,
     url: String,
 ) -> Result<Pool<ConnectionManager<Conn>>, PoolError>

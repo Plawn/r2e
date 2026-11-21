@@ -28,6 +28,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   `TestResources` starts and holds them, `TestApp::with_resources` hands them
   to the app (dropped after it) and `app.resource::<R>()` reads one back.
   Declared with `resources(...)` on `#[r2e::test]` / `#[r2e::test_suite]`.
+- `TestResource::configure(&self, builder) -> AppBuilder` (default: unchanged):
+  a resource reaches the builder itself, typically to pin a bean it built —
+  e.g. a rollback-only pool (`DbPool::rollback_only`) for per-test rollback.
+  Runs after every resource's `config()` and before the `with = ...` hook.
 - Feature `grpc`: `TestApp::grpc()` returns a `GrpcTestChannel` onto the gRPC
   services the app registered — `GreeterClient::new(app.grpc())` calls them
   in-process, with no port, in both transport modes. `.as_user(sub, roles)`,
