@@ -7657,7 +7657,7 @@ use r2e_test::{TestApp, TestJwt};
 async fn lists_users(app: TestApp) {
     app.get("/users").as_user("alice", &["user"]).send().await
         .assert_ok()
-        .assert_json_path("/0/name", "Alice");
+        .assert_json_path("[0].name", "Alice");
 }
 
 // With overrides: pin mocks and patch config BEFORE `build` runs
@@ -7930,9 +7930,12 @@ CLI test runner:
 
 - `app.bean::<T>()` — fetch any bean from the booted graph; `app.config()`.
 - `TestRequest`: `.bearer(t)`, `.header(...)`, `.json(body)`, `.form(...)`,
-  `.query(k, v)`, `.file(...)` — then `.send().await`.
+  `.query(k, v)`, `.path_param("id", 42)` (fills `{id}` in the path, percent-encoded),
+  `.file(...)` — then `.send().await`.
 - `TestResponse` assertions: `assert_ok/created/no_content/bad_request/unauthorized/
-  forbidden/not_found/...`, `assert_json_path(path, expected)`,
+  forbidden/not_found/...`, `assert_json_path(path, expected)` (paths: `a.b`, `items[0].name`,
+  `[0].name` on a root array, `items.name` projects to an array, `items.len()` — never
+  JSON-pointer `/0/name`),
   `assert_json_contains(subset)`, `assert_json_shape(schema)`, `assert_header(...)`,
   cookie and SSE assertions; access via `json::<T>()`, `text()`.
 - `app.session()` — cookie-persisting `TestSession`.

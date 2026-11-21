@@ -15,6 +15,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `.path_param(name, value)` on `TestRequest` / `SessionRequest` fills a
+  `{name}` placeholder of the request path (percent-encoded as one segment;
+  `{*name}` keeps its `/` separators). An unknown name or an unfilled
+  placeholder panics on `send()`.
+- JSON paths project over arrays: `assert_json_path("users.name", json!(["Alice", "Bob"]))`.
+  A field read on an array used to resolve to `null`.
+
 ## [0.11.0] - 2026-11-10
 
 ### Changed

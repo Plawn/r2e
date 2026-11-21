@@ -190,18 +190,11 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
     /// Cookies from the session jar are included automatically.
     /// `Set-Cookie` headers from the response update the session jar.
     pub async fn send(self) -> TestResponse {
-        let RequestParts {
-            method,
-            path,
-            headers,
-            body,
-            queries,
-            multipart,
-        } = self.parts;
+        let mut parts = self.parts;
 
         // Start with session defaults, override with per-request headers
         let mut merged = self.session.default_headers.clone();
-        for (name, value) in headers {
+        for (name, value) in std::mem::take(&mut parts.headers) {
             if let Some(name) = name {
                 merged.insert(name, value);
             }
@@ -211,15 +204,7 @@ impl<'s, 'a> SessionRequest<'s, 'a> {
         if let Some(cookie_value) = self.session.cookie_header_value() {
             merged.insert(COOKIE, cookie_value.parse().unwrap());
         }
-
-        let parts = RequestParts {
-            method,
-            path,
-            headers: merged,
-            body,
-            queries,
-            multipart,
-        };
+        parts.headers = merged;
 
         let request = parts.into_request();
         let response = execute_request(&self.session.app.router, request).await;

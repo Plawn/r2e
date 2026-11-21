@@ -165,7 +165,7 @@ async fn creates_user(app: TestApp) {
 async fn lists_created_user(app: TestApp) {
     app.get("/users").send().await
         .assert_ok()
-        .assert_json_path("/0/name", "Alice");
+        .assert_json_path("[0].name", "Alice");
 }
 ```
 
@@ -620,6 +620,7 @@ async fn test_response_structure() {
 | `.multipart()` | Finalize the collected file/field parts into a `multipart/form-data` body |
 | `.cookie(name, value)` | Add a cookie |
 | `.query(key, value)` | Add a query parameter |
+| `.path_param(name, value)` | Fill a `{name}` placeholder of the path (percent-encoded) |
 | `.queries(pairs)` | Add multiple query parameters |
 | `.send().await` | Execute the request |
 

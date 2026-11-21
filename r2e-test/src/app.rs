@@ -34,6 +34,7 @@ pub(crate) struct RequestParts {
     pub(crate) headers: HeaderMap,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) queries: Vec<(String, String)>,
+    pub(crate) path_params: Vec<(String, String)>,
     pub(crate) multipart: Option<crate::multipart::MultipartForm>,
 }
 
@@ -45,6 +46,7 @@ impl RequestParts {
             headers: HeaderMap::new(),
             body: None,
             queries: Vec::new(),
+            path_params: Vec::new(),
             multipart: None,
         }
     }
@@ -58,7 +60,8 @@ impl RequestParts {
             self.headers.insert(CONTENT_TYPE, ct.parse().unwrap());
         }
 
-        let uri = build_uri(&self.path, &self.queries);
+        let path = expand_path(&self.path, &self.path_params);
+        let uri = build_uri(&path, &self.queries);
         let body = match self.body {
             Some(b) => Body::from(b),
             None => Body::empty(),
@@ -225,6 +228,30 @@ macro_rules! impl_request_builders {
             } else {
                 self.parts.headers.insert(COOKIE, new_pair.parse().unwrap());
             }
+            self
+        }
+
+        /// Fill a `{name}` placeholder of the request path (RestAssured:
+        /// `pathParam`).
+        ///
+        /// ```ignore
+        /// app.get("/users/{id}/posts/{slug}")
+        ///     .path_param("id", 42)
+        ///     .path_param("slug", "hello world") // sent as `hello%20world`
+        ///     .send()
+        ///     .await;
+        /// ```
+        ///
+        /// The value is percent-encoded as **one** path segment, so a `/` in
+        /// it never changes which route matches. A catch-all placeholder
+        /// written `{*name}` keeps its `/` separators and encodes each segment.
+        ///
+        /// # Panics
+        ///
+        /// On [`send`](Self::send): if the path has no `{name}` placeholder, or
+        /// if a placeholder is left unfilled once path parameters are in use.
+        pub fn path_param(mut self, name: impl Into<String>, value: impl std::fmt::Display) -> Self {
+            self.parts.path_params.push((name.into(), value.to_string()));
             self
         }
 
@@ -611,6 +638,56 @@ impl<'a> TestRequest<'a> {
 
 // ─── Shared helpers ───
 
+/// Everything but RFC 3986 "unreserved" characters is escaped in a path
+/// parameter value.
+const PATH_SEGMENT: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+fn encode_segment(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, PATH_SEGMENT).to_string()
+}
+
+/// Fill the `{name}` / `{*name}` placeholders of `template` with `params`.
+///
+/// A request that declares no path parameter is returned untouched.
+pub(crate) fn expand_path(template: &str, params: &[(String, String)]) -> String {
+    if params.is_empty() {
+        return template.to_string();
+    }
+    // Placeholders live in the path, never in a query string written inline.
+    let (path, query) = match template.find('?') {
+        Some(at) => template.split_at(at),
+        None => (template, ""),
+    };
+    let mut expanded = path.to_string();
+    for (name, value) in params {
+        let single = format!("{{{name}}}");
+        let catch_all = format!("{{*{name}}}");
+        if expanded.contains(&single) {
+            expanded = expanded.replace(&single, &encode_segment(value));
+        } else if expanded.contains(&catch_all) {
+            let encoded: Vec<String> = value.split('/').map(encode_segment).collect();
+            expanded = expanded.replace(&catch_all, &encoded.join("/"));
+        } else {
+            panic!("path parameter \"{name}\" has no {{{name}}} placeholder in \"{template}\"");
+        }
+    }
+    // Encoded values cannot contain a brace, so one left here is a placeholder.
+    if let Some(start) = expanded.find('{') {
+        let rest = &expanded[start..];
+        let end = rest.find('}').map_or(rest.len(), |e| e + 1);
+        panic!(
+            "path placeholder {} was not given a value in \"{template}\"",
+            &rest[..end]
+        );
+    }
+    expanded.push_str(query);
+    expanded
+}
+
 /// Build a URI by merging path and additional query params.
 pub(crate) fn build_uri(path: &str, queries: &[(String, String)]) -> String {
     if queries.is_empty() {
@@ -699,19 +776,50 @@ pub fn tokenize_path(path: &str) -> Vec<PathToken> {
     tokens
 }
 
+/// Read `name` off `value`. An array is **projected**: every element is read
+/// in turn and the results collected, so `users.name` over a list of users is
+/// the list of their names (RestAssured / GPath semantics). A missing key reads
+/// as `null`, which keeps a projection aligned with its source array.
+fn read_field(value: &Value, name: &str) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(|i| read_field(i, name)).collect()),
+        other => other.get(name).cloned().unwrap_or(Value::Null),
+    }
+}
+
+/// Resolve a JSON path against `root`.
+///
+/// Grammar: dot-separated fields (`a.b`), array indices (`a[0]`, `[0].name`
+/// for a root array), and a trailing `len()` / `size()`. A field read on an
+/// array projects over its elements (`users.name` → `["Alice", "Bob"]`).
+/// Anything missing resolves to `null`.
 pub fn resolve_path(root: &Value, path: &str) -> Value {
+    static NULL: Value = Value::Null;
     let tokens = tokenize_path(path);
-    let mut current: &Value = root;
+    let mut current: std::borrow::Cow<'_, Value> = std::borrow::Cow::Borrowed(root);
     for (i, token) in tokens.iter().enumerate() {
         match token {
             PathToken::Field(name) => {
-                current = current.get(name).unwrap_or(&Value::Null);
+                current = match current {
+                    // A projection builds a new array; plain descent borrows.
+                    std::borrow::Cow::Borrowed(v) if !v.is_array() => {
+                        std::borrow::Cow::Borrowed(v.get(name).unwrap_or(&NULL))
+                    }
+                    other => std::borrow::Cow::Owned(read_field(&other, name)),
+                };
             }
             PathToken::Index(idx) => {
-                current = current.get(*idx).unwrap_or(&Value::Null);
+                current = match current {
+                    std::borrow::Cow::Borrowed(v) => {
+                        std::borrow::Cow::Borrowed(v.get(*idx).unwrap_or(&NULL))
+                    }
+                    std::borrow::Cow::Owned(v) => {
+                        std::borrow::Cow::Owned(v.get(*idx).cloned().unwrap_or(Value::Null))
+                    }
+                };
             }
             PathToken::Len => {
-                let len = match current {
+                let len = match &*current {
                     Value::Array(a) => a.len(),
                     Value::Object(o) => o.len(),
                     Value::String(s) => s.len(),
@@ -728,7 +836,7 @@ pub fn resolve_path(root: &Value, path: &str) -> Value {
             }
         }
     }
-    current.clone()
+    current.into_owned()
 }
 
 // ─── JSON matching helpers ───
@@ -909,9 +1017,11 @@ impl TestResponse {
 
     /// Assert that a JSON path resolves to the expected value.
     ///
-    /// Supports dot-separated fields, array indices, and `len()`/`size()`:
+    /// Supports dot-separated fields, array indices, projection over arrays,
+    /// and `len()`/`size()` (RestAssured: `body("users[0].name", equalTo(..))`):
     /// ```ignore
     /// resp.assert_json_path("users[0].name", "Alice")
+    ///     .assert_json_path("users.name", json!(["Alice", "Bob"]))
     ///     .assert_json_path("users.len()", 2)
     ///     .assert_json_path("meta.page", 1)
     ///     .assert_json_path("active", true);

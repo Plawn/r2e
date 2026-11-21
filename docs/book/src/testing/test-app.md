@@ -78,6 +78,19 @@ let resp = app.get("/users")
     .await;
 ```
 
+### Path parameters
+
+```rust
+let resp = app.get("/users/{id}/posts/{slug}")
+    .path_param("id", 42)
+    .path_param("slug", "hello world") // sent as `hello%20world`
+    .send()
+    .await;
+```
+
+The value is percent-encoded as one path segment. An unknown name, or a
+placeholder left unfilled, panics on `send()`.
+
 ### Query parameters
 
 ```rust

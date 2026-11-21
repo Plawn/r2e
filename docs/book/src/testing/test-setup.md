@@ -98,7 +98,7 @@ async fn creates_user(app: TestApp) {
 async fn lists_created_user(app: TestApp) {
     app.get("/users").send().await
         .assert_ok()
-        .assert_json_path("/0/name", "Alice");
+        .assert_json_path("[0].name", "Alice");
 }
 ```
 
