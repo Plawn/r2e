@@ -1,7 +1,7 @@
 ---
 topic: testing
 features: core (dev-dependency `r2e-test`)
-tokens: ~6300
+tokens: ~6400
 requires: quick-start, app-builder, devservices
 ---
 
@@ -501,7 +501,8 @@ CLI test runner:
   cookie and SSE assertions; access via `json::<T>()`, `text()`.
 - `app.session()` — cookie-persisting `TestSession`.
 - `app.serve()` — live `TestServer` on a random port (WebSocket/SSE tests);
-  `WsTestClient` for WS. On a booted app the server runs on the app's tracked
+  `WsTestClient` for WS (`server.ws(path)`, `server.ws_with_protocols(path, &[..])`
+  + `ws.protocol()`; a refused handshake: `WsTestError::http_status()`). On a booted app the server runs on the app's tracked
   lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the
   `TestServer` first stops that server on its own, under the same
   `drain_timeout` (the budget starts from whichever trigger fired).

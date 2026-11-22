@@ -447,6 +447,50 @@ async fn admin_ws(&self, mut ws: WsStream) {
 }
 ```
 
+### Subprotocols
+
+`protocols = [..]` lists the subprotocols a route speaks, most preferred first. The upgrade response echoes the first entry of that list the client offered — and nothing else from the client's `Sec-WebSocket-Protocol` header; the handler reads the selection with `ws.protocol()`:
+
+```rust
+#[ws("/open", protocols = ["collab.v2", "collab.v1"])]
+async fn open(&self, mut ws: WsStream) {
+    match ws.protocol() {
+        Some("collab.v2") => { /* ... */ }
+        Some(_) => { /* collab.v1 */ }
+        None => { /* the client offered none of them */ }
+    }
+}
+```
+
+When the client offers subprotocols and none matches, the server still upgrades, without a `Sec-WebSocket-Protocol` header: browsers then fail the connection themselves. Reject the offer in a guard if you want a server-side refusal.
+
+### Reading the offered subprotocols before the upgrade
+
+A browser cannot set headers on a WebSocket, except `Sec-WebSocket-Protocol` — so a ticket often travels there (`new WebSocket(url, ["collab.v1", "app.ticket.<ticket>"])`). Guards and pre-auth guards see the request headers before the upgrade; `requested_protocols` splits the offer:
+
+```rust
+use r2e::web::ws::requested_protocols;
+
+pub struct TicketGate;
+impl SelfBuilt for TicketGate {}
+impl PreAuthGuard for TicketGate {
+    async fn check(&self, ctx: &PreAuthGuardContext<'_>) -> Result<(), Rejection> {
+        let ticket = requested_protocols(ctx.headers)
+            .find_map(|protocol| protocol.strip_prefix("app.ticket."));
+        match ticket {
+            Some(ticket) if is_valid(ticket) => Ok(()),
+            _ => Err(Rejection::forbidden("ticket refused")),
+        }
+    }
+}
+
+#[ws("/open", protocols = ["collab.v1"])]
+#[pre_guard(TicketGate)]
+async fn open(&self, mut ws: WsStream) { /* ... */ }
+```
+
+The refusal is an ordinary HTTP response rendered by the application's error envelope (`AppBuilder::error_projection::<E>()`); the ticket is never echoed, since only entries of `protocols` can be selected.
+
 ## Summary
 
 | Type | Role |

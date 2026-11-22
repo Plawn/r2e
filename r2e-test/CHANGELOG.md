@@ -17,6 +17,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- WebSocket subprotocols (#1447): `WsTestClient::connect_with_protocols(url,
+  &[..])` and `TestServer::ws_with_protocols(path, &[..])` offer subprotocols,
+  `WsTestClient::protocol()` is the one the server selected, and
+  `WsTestError::http_status()` is the status of the HTTP response that refused
+  a handshake before the upgrade.
 - `.path_param(name, value)` on `TestRequest` / `SessionRequest` fills a
   `{name}` placeholder of the request path (percent-encoded as one segment;
   `{*name}` keeps its `/` separators). An unknown name or an unfilled

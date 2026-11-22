@@ -17,6 +17,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- WebSockets (`ws`): `#[ws("/path", protocols = [..])]` negotiates a
+  subprotocol, read with `WsStream::protocol()`;
+  `web::ws::requested_protocols` reads the client's offer from a guard, before
+  the upgrade (#1447).
 - MCP (`mcp`): extension JSON-RPC methods (`#[method]`,
   `McpServer::with_extension`), groups on dynamic members and a per-request
   `McpViewFilter`; `mcp-loopback`: typed request extensions on loopback

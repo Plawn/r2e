@@ -1667,6 +1667,18 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
     let upgrade_ident = format_ident!("__ws_upgrade");
     let upgrade_ty: syn::Type = syn::parse_quote! { #krate::http::ws::WebSocketUpgrade };
     let upgrade = pipeline.extract_parts(&upgrade_ident, &upgrade_ty);
+    // `protocols = [..]`: negotiate the subprotocol on the upgrade. The first
+    // entry of the route's list that the client also offered is echoed back in
+    // `Sec-WebSocket-Protocol` and readable from the socket; anything else the
+    // client offered (a ticket smuggled as a protocol, say) is never echoed.
+    let negotiate = (!wm.protocols.is_empty()).then(|| {
+        let protocols = &wm.protocols;
+        let count = protocols.len();
+        quote! {
+            let __ws_protocols: [&'static str; #count] = [#(#protocols),*];
+            let __ws_upgrade = __ws_upgrade.protocols(__ws_protocols);
+        }
+    });
 
     // The upgrade callback owns the receiver for the whole socket lifetime:
     // the façade (its `Arc` + request data) or the core `Arc` itself.
@@ -1725,6 +1737,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             #params
             #validation
             #upgrade
+            #negotiate
             let _ = __body;
             #owned_receiver
             #krate::http::response::IntoResponse::into_response(

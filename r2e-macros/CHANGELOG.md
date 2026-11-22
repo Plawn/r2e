@@ -35,6 +35,10 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `#[ws("/path", protocols = [..])]` (#1447): the WebSocket subprotocols a
+  route speaks, most preferred first (`&'static str` expressions). The upgrade
+  response echoes the first one the client offered. An empty list or any other
+  `#[ws]` argument is a compile error.
 - `#[method(name = "…", scopes = …, any_scopes = …)]` members in a `#[routes]`
   MCP impl: extension JSON-RPC methods (#1444; needs `r2e-mcp` with
   `McpRoutes.methods`). Compile errors for a missing `name`, an unknown

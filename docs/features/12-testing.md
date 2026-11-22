@@ -790,7 +790,7 @@ Tokens are signed with HMAC-SHA256 and contain:
 
 Beyond the in-process client, `r2e-test` re-exports a few specialized helpers:
 
-- **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects; the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, and `assert_no_message`.
+- **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects (`server.ws_with_protocols(path, &[..])` offers subprotocols, `ws.protocol()` reads the selected one; a handshake refused before the upgrade is an error whose `http_status()` is the response's status); the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, and `assert_no_message`.
 - **`FiniteStream` / `ParsedSseEvent`** — consume and parse SSE responses; `TestResponse` also has `sse_events`, `assert_sse_event`, and `assert_sse_data`.
 - **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch. On a booted `TestApp` it runs on the app's tracked lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the `TestServer` first stops it on its own.
 - **`SetCookie`** — parsed `Set-Cookie` attributes, with `TestResponse` helpers `assert_cookie_secure`, `assert_cookie_http_only`, `assert_cookie_same_site`, `assert_cookie_path`.
