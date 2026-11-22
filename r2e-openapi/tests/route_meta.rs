@@ -83,7 +83,13 @@ fn tuple_path_documents_one_parameter_per_placeholder() {
         params,
         &json!([
             { "name": "ws", "in": "path", "required": true, "schema": { "type": "string" } },
-            { "name": "user", "in": "path", "required": true, "schema": { "type": "integer" } },
+            // `u64: JsonSchema` — the parameter publishes the type's own schema.
+            {
+                "name": "user",
+                "in": "path",
+                "required": true,
+                "schema": { "type": "integer", "format": "uint64", "minimum": 0 }
+            },
         ])
     );
 }

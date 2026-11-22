@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Changed
+
+- A parameter is documented with `ParamInfo::schema` when the route metadata
+  carries one (#1441), and with `{ "type": param_type }` otherwise. Specs
+  generated from `#[derive(Params)]` / `Path<T>` therefore publish enum values
+  and numeric bounds, and primitive parameters gain their `format` (`int64`,
+  `uint32`, …) and `minimum: 0` for unsigned integers.
+
 ## [0.10.1] - 2026-11-17
 
 ### Fixed

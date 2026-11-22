@@ -15,6 +15,24 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `ParamInfo` gains `schema: Option<serde_json::Value>` and is now
+  `#[non_exhaustive]` (#1441): a struct literal no longer compiles. Build it
+  with `ParamInfo::new(name, location, param_type, required)` and, for a
+  schema, `.with_schema(Some(value))`; fields stay public for reading. Code
+  that only goes through `#[derive(Params)]` / `#[routes]` is unaffected, but
+  needs `r2e-macros` 0.12.0 (released alongside).
+
+### Added
+
+- A route parameter publishes its type's own JSON Schema (#1441).
+  `di::meta::param_schema_of::<T>()` (feature `openapi`) is the inline schema
+  of a `T: JsonSchema` — sub-schemas inlined, no `$schema` / `title` — and
+  `None` for a recursive type. `#[derive(Params)]` and `#[routes]` reach it
+  through an autoref probe, so a field whose type lacks `JsonSchema` compiles
+  unchanged and keeps `ParamInfo::schema == None`.
+
 ## [0.10.1] - 2026-11-17
 
 ### Changed

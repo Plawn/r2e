@@ -1,7 +1,7 @@
 ---
 topic: openapi
 features: openapi
-tokens: ~2400
+tokens: ~2500
 requires: core-concepts
 ---
 
@@ -63,6 +63,16 @@ Path parameters are the `{placeholders}` of the full path template (controller
 prefix included), named after the placeholder; `Path<T>` / `Path<(A, B)>` types
 them positionally, and a `#[derive(Params)]` `#[param(path)]` field of the same
 name wins.
+
+A parameter's schema (path, query, header — a `#[derive(Params)]` field or a
+`Path<T>` element) is the type's own when it implements `schemars::JsonSchema`:
+an enum publishes its `enum: [...]`, a bounded newtype its `minimum` /
+`maximum` / `default`, `u32` is `integer` + `format: uint32`. The schema is
+inlined (no `$ref`); `Option<T>` publishes `T` and only flips `required`. A
+type without `JsonSchema` needs no extra bound and is documented by name:
+`integer` / `number` / `boolean` for the primitives, `string` otherwise. So
+type a field with the domain type directly — `sort: Option<ProductSort>`
+(`FromStr + JsonSchema`) — rather than `Option<String>` converted by hand.
 
 **Error responses** come from what the route can actually fail with. The
 `#[routes]` macro records the route's `RejectionKind`s in

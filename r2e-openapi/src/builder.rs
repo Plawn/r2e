@@ -515,7 +515,10 @@ pub fn build_spec_with_warnings(
                     "name": p.name,
                     "in": location,
                     "required": p.required,
-                    "schema": { "type": p.param_type }
+                    "schema": p
+                        .schema
+                        .clone()
+                        .unwrap_or_else(|| json!({ "type": p.param_type }))
                 })
             })
             .collect();

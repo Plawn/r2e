@@ -305,12 +305,64 @@ pub fn schema_of<T: schemars::JsonSchema + ?Sized>() -> (String, Value) {
 }
 
 /// Metadata about a route parameter.
+///
+/// Built with [`ParamInfo::new`]; the struct is `#[non_exhaustive]` so a new
+/// field is not a breaking change.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct ParamInfo {
     pub name: String,
     pub location: ParamLocation,
+    /// OpenAPI type name (`string`, `integer`, `number`, `boolean`) guessed
+    /// from the Rust type's name. Published as `{ "type": param_type }` when
+    /// [`schema`](Self::schema) is `None`.
     pub param_type: String,
     pub required: bool,
+    /// JSON Schema of the parameter, taken from the type's
+    /// `schemars::JsonSchema` impl (`openapi` feature). `None` when the type
+    /// has no such impl — the spec then falls back on
+    /// [`param_type`](Self::param_type).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Value>,
+}
+
+impl ParamInfo {
+    /// A parameter documented by its type name only (no schema).
+    pub fn new(
+        name: impl Into<String>,
+        location: ParamLocation,
+        param_type: impl Into<String>,
+        required: bool,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            location,
+            param_type: param_type.into(),
+            required,
+            schema: None,
+        }
+    }
+
+    /// Set (or clear) the parameter's JSON Schema.
+    pub fn with_schema(mut self, schema: Option<Value>) -> Self {
+        self.schema = schema;
+        self
+    }
+}
+
+/// The inline JSON Schema of a parameter of type `T`: sub-schemas are inlined
+/// (a parameter schema cannot carry `$defs`), no `$schema` / `title` noise.
+/// `None` for a type whose schema cannot be inlined (recursive types).
+#[cfg(feature = "openapi")]
+pub fn param_schema_of<T: schemars::JsonSchema + ?Sized>() -> Option<Value> {
+    let mut generator = schemars::generate::SchemaSettings::draft2020_12()
+        .with(|s| s.inline_subschemas = true)
+        .into_generator();
+    let schema = generator.subschema_for::<T>();
+    if !generator.definitions().is_empty() {
+        return None;
+    }
+    Some(Value::from(schema))
 }
 
 /// Where a parameter is located in the HTTP request.

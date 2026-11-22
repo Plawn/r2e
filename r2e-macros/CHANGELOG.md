@@ -15,6 +15,24 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `#[derive(Params)]` / `#[routes]` codegen contract (#1441; needs `r2e-core`
+  0.11.0, released alongside): parameter metadata is built with
+  `ParamInfo::new(..).with_schema(..)` and probes each parameter type through
+  `r2e_core::web::params::__ParamSchemaProbe`. The macro syntax is unchanged,
+  but the expansion does not compile against an older `r2e-core`.
+
+### Changed
+
+- A parameter's OpenAPI schema comes from its type instead of the type's name
+  (#1441): a `#[derive(Params)]` field (path, query, header) or a `Path<T>`
+  element whose type implements `schemars::JsonSchema` publishes that schema
+  inline — `enum: [...]` for an enum, `minimum` / `maximum` / `default` for a
+  bounded newtype; `Option<T>` publishes `T`. Primitives get more precise as
+  a result (`u32` → `integer`, `format: uint32`, `minimum: 0`). A type without
+  `JsonSchema` gains no trait bound and keeps the name-based type.
+
 ### Added
 
 - `resources(A, B)` on `#[r2e::test]` and `#[r2e::test_suite]`: starts each
