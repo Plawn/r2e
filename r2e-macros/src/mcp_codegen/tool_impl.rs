@@ -290,12 +290,25 @@ fn generate_invoke_method(
             } else {
                 quote! { __call.arguments }
             };
+            if kind == McpMemberKind::Method {
+                // A method's params are the raw JSON-RPC `params`: only
+                // `Deserialize` is needed (no schema is advertised).
+                let params = if has_call {
+                    quote! { __call.params.clone() }
+                } else {
+                    quote! { __call.params }
+                };
+                quote_spanned! {params_ty.span()=>
+                    let __params = #mcp::__macro_support::method_params::<#params_ty>(#params)?;
+                }
+            } else {
             // Spanned at the params type so a missing `Deserialize`/`JsonSchema`
             // is a trait-bound error pointing at the user's type.
             quote_spanned! {params_ty.span()=>
                 let __params = <#params_ty as #mcp::__macro_support::ToolParams>::from_arguments(
                     #arguments,
                 )?;
+            }
             }
         }
         None => quote! {},
@@ -402,6 +415,7 @@ fn generate_invoke_method(
         McpMemberKind::Resource => quote! { #mcp::__macro_support::ResourceCall },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::PromptCall },
         McpMemberKind::Completion => quote! { #mcp::__macro_support::Completion },
+        McpMemberKind::Method => quote! { #mcp::__macro_support::MethodCall },
     };
     let ok_ty = match kind {
         McpMemberKind::Tool => quote! { #mcp::__macro_support::CallToolResult },
@@ -410,6 +424,7 @@ fn generate_invoke_method(
         },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::GetPromptResult },
         McpMemberKind::Completion => quote! { #mcp::__macro_support::Completions },
+        McpMemberKind::Method => quote! { #mcp::__macro_support::MethodValue },
     };
     let convert = match kind {
         McpMemberKind::Tool => quote! {
@@ -444,6 +459,9 @@ fn generate_invoke_method(
         }
         McpMemberKind::Completion => quote! {
             #mcp::__macro_support::IntoCompletion::into_completion(__result)
+        },
+        McpMemberKind::Method => quote! {
+            #mcp::__macro_support::IntoMethodResult::into_method_result(__result)
         },
     };
 

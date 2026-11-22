@@ -60,6 +60,15 @@ impl<T: DeserializeOwned + JsonSchema + ObjectParams> ToolParams for T {
     }
 }
 
+/// Deserialize the `params` of an extension method (`#[method]`) into its
+/// `Params<T>`. No schema is advertised for a method, so `T` only needs
+/// `Deserialize`.
+#[doc(hidden)]
+pub fn method_params<T: DeserializeOwned>(params: Value) -> Result<T, McpError> {
+    serde_json::from_value(params)
+        .map_err(|e| McpError::InvalidParams(format!("invalid method params: {e}")))
+}
+
 /// Generate the draft 2020-12 root schema for `T` as a plain JSON object,
 /// with the `$schema` marker stripped (MCP `inputSchema` is a bare object;
 /// the dialect is fixed by the spec). `$defs` are KEPT inline —

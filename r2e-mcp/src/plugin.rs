@@ -159,6 +159,8 @@ pub struct McpServer {
     token_validator: Option<McpTokenValidator>,
     /// Resolves the [`McpSessionInit`] bean once the graph is built.
     session_init: Option<(&'static str, ResolveInit)>,
+    /// `capabilities.extensions`, by extension id.
+    extensions: Vec<(String, serde_json::Value)>,
 }
 
 impl McpServer {
@@ -344,6 +346,26 @@ impl McpServer {
         self
     }
 
+    /// Advertise a protocol extension under `capabilities.extensions`, in
+    /// `initialize` and `server/discover` alike: `id` is the extension
+    /// identifier (`io.modelcontextprotocol/skills`), `settings` its settings
+    /// object (`json!({})` when it has none). Declaring the same id again
+    /// replaces its settings.
+    ///
+    /// An extension is a contract the application fulfils: the methods it
+    /// defines are `#[method]` members of a `#[routes]` service. Two of
+    /// them — `io.modelcontextprotocol/skills` and
+    /// `io.modelcontextprotocol/tasks` — gate their methods: the endpoint
+    /// answers `-32601` to `skills/*` or `tasks/*` until the extension is
+    /// advertised, and startup refuses a `#[method]` so named without it.
+    /// A `settings` value that is not a JSON object aborts startup.
+    pub fn with_extension(mut self, id: impl Into<String>, settings: serde_json::Value) -> Self {
+        let id = id.into();
+        self.extensions.retain(|(existing, _)| *existing != id);
+        self.extensions.push((id, settings));
+        self
+    }
+
     /// Shape each MCP session's member list when it opens: the `T` bean's
     /// [`McpSessionInit::init`] runs once per session, on its first
     /// request, with the caller's identity, and returns the groups to
@@ -360,6 +382,25 @@ impl McpServer {
         }));
         self
     }
+}
+
+/// `McpServer::with_extension` declarations as `capabilities.extensions`:
+/// every settings value must be a JSON object.
+fn extension_capabilities(
+    declared: Vec<(String, serde_json::Value)>,
+) -> Result<rmcp::model::ExtensionCapabilities, PluginBuildError> {
+    let mut extensions = rmcp::model::ExtensionCapabilities::new();
+    for (id, settings) in declared {
+        let serde_json::Value::Object(settings) = settings else {
+            return Err(format!(
+                "McpServer::with_extension(\"{id}\", …): the settings must be a JSON object \
+                 (`json!({{}})` for none), got `{settings}`"
+            )
+            .into());
+        };
+        extensions.insert(id, settings);
+    }
+    Ok(extensions)
 }
 
 /// Validate the configured endpoint path: absolute, single segment target,
@@ -530,6 +571,7 @@ impl Plugin for McpServer {
 
         let path = cfg.path.unwrap_or_else(|| "/mcp".to_string());
         validate_path(&path)?;
+        let extensions = extension_capabilities(self.extensions)?;
         let identity = ServerIdentity {
             name: cfg
                 .name
@@ -842,6 +884,7 @@ impl Plugin for McpServer {
                     filter_members,
                     auth_enabled,
                     stateful: !stateless,
+                    extensions,
                 },
             ));
             tracing::info!(
@@ -849,6 +892,7 @@ impl Plugin for McpServer {
                 tools = ?catalog.tool_names(),
                 resources = catalog.resource_count(),
                 prompts = catalog.prompt_count(),
+                methods = ?catalog.method_names(),
                 groups = ?catalog.group_names(),
                 "Mounting MCP endpoint"
             );

@@ -27,6 +27,8 @@ pub enum McpMemberKind {
     /// `#[completion]` — a `completion/complete` provider, wired to a prompt
     /// argument or template variable by `complete(...)`. No route of its own.
     Completion,
+    /// `#[method(name = "…")]` — an extension JSON-RPC method (`skills/list`).
+    Method,
 }
 
 impl McpMemberKind {
@@ -37,6 +39,7 @@ impl McpMemberKind {
             McpMemberKind::Resource => "resource",
             McpMemberKind::Prompt => "prompt",
             McpMemberKind::Completion => "completion",
+            McpMemberKind::Method => "method",
         }
     }
 
@@ -47,13 +50,24 @@ impl McpMemberKind {
             McpMemberKind::Resource => "ResourceCall",
             McpMemberKind::Prompt => "PromptCall",
             McpMemberKind::Completion => "Completion",
+            McpMemberKind::Method => "MethodCall",
         }
     }
 
     /// Whether methods of this family may take a `Params<T>` parameter
     /// (resources and completions carry no argument object).
     pub fn takes_params(self) -> bool {
-        matches!(self, McpMemberKind::Tool | McpMemberKind::Prompt)
+        matches!(
+            self,
+            McpMemberKind::Tool | McpMemberKind::Prompt | McpMemberKind::Method
+        )
+    }
+
+    /// Whether methods of this family may take an `McpClient` (requests to
+    /// the client mid-call). An extension method answers its JSON-RPC
+    /// request directly: it has no elicitation round-trip.
+    pub fn takes_client(self) -> bool {
+        !matches!(self, McpMemberKind::Completion | McpMemberKind::Method)
     }
 
     /// Whether methods of this family may take the per-call extras
@@ -253,6 +267,7 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "meta",
         ],
         McpMemberKind::Completion => &[],
+        McpMemberKind::Method => &["name", "scopes", "any_scopes"],
     }
 }
 
@@ -541,6 +556,15 @@ fn classify_args(member: &mut MemberDef, kind: McpMemberKind) -> syn::Result<Vec
             continue;
         }
         if type_last_segment_is(&pat_type.ty, "McpClient") {
+            if !kind.takes_client() {
+                return Err(syn::Error::new_spanned(
+                    pat_type,
+                    format!(
+                        "#[{marker}] methods cannot take McpClient: an extension method \
+                         answers its request directly, without a round-trip to the client"
+                    ),
+                ));
+            }
             if has_client {
                 return Err(syn::Error::new_spanned(
                     pat_type,
@@ -556,10 +580,12 @@ fn classify_args(member: &mut MemberDef, kind: McpMemberKind) -> syn::Result<Vec
         } else {
             ""
         };
-        let extras_part = if kind.takes_call_extras() {
-            "`CancelToken`, `McpSession`, `Progress`, or `McpClient`"
-        } else {
+        let extras_part = if !kind.takes_call_extras() {
             "or `CancelToken`"
+        } else if !kind.takes_client() {
+            "`CancelToken`, `McpSession`, or `Progress`"
+        } else {
+            "`CancelToken`, `McpSession`, `Progress`, or `McpClient`"
         };
         return Err(syn::Error::new_spanned(
             pat_type,
@@ -630,6 +656,8 @@ pub fn parse(
         std::collections::HashMap::new();
     let mut seen_prompts: std::collections::HashMap<String, syn::Ident> =
         std::collections::HashMap::new();
+    let mut seen_methods: std::collections::HashMap<String, syn::Ident> =
+        std::collections::HashMap::new();
 
     for impl_item in std::mem::take(&mut item.items) {
         let syn::ImplItem::Fn(mut method) = impl_item else {
@@ -647,6 +675,8 @@ pub fn parse(
                 McpMemberKind::Prompt
             } else if attr.path().is_ident("completion") {
                 McpMemberKind::Completion
+            } else if attr.path().is_ident("method") {
+                McpMemberKind::Method
             } else {
                 continue;
             };
@@ -674,7 +704,7 @@ pub fn parse(
                             attr,
                             format!(
                                 "#[{name}] on a method without #[tool], #[resource], \
-                                 #[prompt] or #[completion] does nothing in a #[routes] impl — add a \
+                                 #[prompt], #[completion] or #[method] does nothing in a #[routes] impl — add a \
                                  member marker or remove the decorator"
                             ),
                         ));
@@ -724,6 +754,25 @@ pub fn parse(
                 "#[resource] requires a URI: #[resource(uri = \"…\")]",
             ));
         }
+        if kind == McpMemberKind::Method {
+            match meta.name.as_deref() {
+                None => {
+                    return Err(syn::Error::new_spanned(
+                        marker_attr,
+                        "#[method] requires the JSON-RPC method name: \
+                         #[method(name = \"namespace/verb\")]",
+                    ));
+                }
+                Some(name) if name.trim().is_empty() || name.trim() != name => {
+                    return Err(syn::Error::new_spanned(
+                        marker_attr,
+                        "a JSON-RPC method name must be non-empty, without surrounding \
+                         whitespace",
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
         method.attrs = all_attrs;
         let mut member_def = parse_member(method, &MemberRules::mcp(kind.attr_name()))?;
         reject_self_in_route_signature(
@@ -737,6 +786,8 @@ pub fn parse(
                 name: name.clone(),
                 opt_in: meta.opt_in,
             }),
+            // An extension method is not listed, so it belongs to no group.
+            None if kind == McpMemberKind::Method => None,
             None => service_group.clone(),
         };
         let method = member_def.fn_item.clone();
@@ -765,6 +816,12 @@ pub fn parse(
                 member.tool_name(),
                 "prompt name",
                 "use #[prompt(name = \"...\")] to disambiguate",
+            ),
+            McpMemberKind::Method => (
+                &mut seen_methods,
+                member.tool_name(),
+                "method name",
+                "give each #[method] a distinct `name`",
             ),
             // Keyed by method name, which Rust already keeps unique.
             McpMemberKind::Completion => {

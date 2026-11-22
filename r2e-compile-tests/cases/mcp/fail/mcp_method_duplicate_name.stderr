@@ -1,0 +1,5 @@
+error: duplicate method name `acme/list` (also produced by method `first`); give each #[method] a distinct `name`
+  --> cases/mcp/fail/mcp_method_duplicate_name.rs:17:14
+   |
+17 |     async fn second(&self) -> Json<u32> {
+   |              ^^^^^^

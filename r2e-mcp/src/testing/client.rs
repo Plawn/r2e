@@ -14,7 +14,8 @@ use r2e_core::rt;
 use r2e_core::rt::sync::Notify;
 use r2e_test::TestApp;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult, JsonObject,
+    CallToolRequestParams, CallToolResult, ClientRequest, CustomRequest, GetPromptRequestParams,
+    GetPromptResult, JsonObject,
     ProgressNotificationParam, Prompt, ReadResourceRequestParams, Resource, ResourceContents, ResourceTemplate,
     ResourceUpdatedNotificationParam, Tool,
 };
@@ -328,6 +329,14 @@ pub enum McpTestError {
         /// The result as received.
         result: Box<CallToolResult>,
     },
+    /// An extension method's result could not be decoded into the requested
+    /// type ([`McpTestClient::call_method`]).
+    DecodeMethod {
+        /// Why decoding failed.
+        message: String,
+        /// The result as received.
+        result: Value,
+    },
     /// The session ended or the exchange broke below JSON-RPC.
     Transport(String),
 }
@@ -356,7 +365,9 @@ impl fmt::Display for McpTestError {
         match self {
             Self::Rpc { code, message, .. } => write!(f, "JSON-RPC error {code}: {message}"),
             Self::Tool(result) => write!(f, "tool error: {}", result_text(result)),
-            Self::Decode { message, .. } => write!(f, "undecodable result: {message}"),
+            Self::Decode { message, .. } | Self::DecodeMethod { message, .. } => {
+                write!(f, "undecodable result: {message}")
+            }
             Self::Transport(message) => write!(f, "MCP transport error: {message}"),
         }
     }
@@ -526,6 +537,48 @@ impl McpTestClient {
         let mut params = GetPromptRequestParams::new(name);
         params.arguments = arguments_object(arguments);
         Ok(self.session.get_prompt(params).await?)
+    }
+
+    // ── Extension methods ───────────────────────────────────────────────
+
+    /// An extension JSON-RPC method (`#[method(name = "…")]`), the result
+    /// untouched. `params` is anything serializing to the request's
+    /// `params` (`json!({..})`, a `#[derive(Serialize)]` struct) or `()`
+    /// for none.
+    ///
+    /// The result is read back through the client's model of MCP results:
+    /// members a method adds to a result MCP itself defines may not survive
+    /// it. Assert the exact wire shape of such a method over HTTP.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `params` does not serialize.
+    pub async fn call_method_raw(
+        &self,
+        method: &str,
+        params: impl Serialize,
+    ) -> Result<Value, McpTestError> {
+        let params = serde_json::to_value(params)
+            .unwrap_or_else(|err| panic!("`{method}` params do not serialize: {err}"));
+        let request = CustomRequest::new(method, (!params.is_null()).then_some(params));
+        let result = self
+            .session
+            .send_request(ClientRequest::CustomRequest(request))
+            .await?;
+        serde_json::to_value(result).map_err(|err| McpTestError::Transport(err.to_string()))
+    }
+
+    /// An extension JSON-RPC method, the result decoded into `Out`.
+    pub async fn call_method<Out: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: impl Serialize,
+    ) -> Result<Out, McpTestError> {
+        let result = self.call_method_raw(method, params).await?;
+        serde_json::from_value(result.clone()).map_err(|err| McpTestError::DecodeMethod {
+            message: err.to_string(),
+            result,
+        })
     }
 
     // ── Notifications ───────────────────────────────────────────────────

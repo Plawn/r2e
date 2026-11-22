@@ -19,6 +19,7 @@ mod lifecycle;
 mod loopback;
 #[cfg(feature = "loopback")]
 mod loopback_extensions;
+mod methods;
 mod mount;
 mod mrtr;
 mod pagination;
