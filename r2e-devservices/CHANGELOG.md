@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-22
+
 ### Added
 
 - `DevPostgres::fresh_database()`: a new, uniquely named database on the
