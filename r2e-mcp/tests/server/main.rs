@@ -17,6 +17,8 @@ mod interceptors;
 mod lifecycle;
 #[cfg(feature = "loopback")]
 mod loopback;
+#[cfg(feature = "loopback")]
+mod loopback_extensions;
 mod mount;
 mod mrtr;
 mod pagination;

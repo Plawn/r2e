@@ -83,7 +83,8 @@ pub use global::{McpRegistry, RegistryEdit};
 pub use identity::McpCaller;
 #[cfg(feature = "loopback")]
 pub use loopback::{
-    CallToolRequestParams, LoopbackError, LoopbackIdentity, LoopbackSession, McpLoopback,
+    CallToolRequestParams, LoopbackConnect, LoopbackError, LoopbackIdentity, LoopbackSession,
+    McpLoopback,
 };
 pub use params::{ObjectParams, Params, ToolParams};
 pub use plugin::McpServer;

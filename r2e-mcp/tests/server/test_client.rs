@@ -3,7 +3,8 @@
 //!
 //! * anonymous by default; `as_user` mints the `TestJwt` bearer HTTP's
 //!   `as_user` sends (roles, `with_scopes`), validated by the pinned
-//!   validator; refusals surface through `try_connect`;
+//!   validator; refusals surface through `try_connect`; `.extension(T)`
+//!   attaches a typed request extension to the session;
 //! * typed helpers: `call_tool::<Out>` decodes `structuredContent` or the
 //!   first text block, `call_tool_text`, `call_tool_raw`; resources and
 //!   prompts; JSON-RPC errors and `isError` results as `McpTestError`;
@@ -84,7 +85,18 @@ impl ClientTools {
             .map(|p| p.user.sub.clone())
             .unwrap_or_else(|| "<anonymous>".to_string())
     }
+
+    /// The typed extension the client connected with, if any.
+    #[tool]
+    async fn workspace(&self, call: ToolCall) -> String {
+        call.extension::<Workspace>()
+            .map_or_else(|| "<none>".to_string(), |w| w.0.to_string())
+    }
 }
+
+/// A typed request extension only an in-process caller can attach.
+#[derive(Clone)]
+struct Workspace(&'static str);
 
 #[controller]
 struct SecuredClientTools;
@@ -442,6 +454,16 @@ async fn progress_reports_are_captured() {
     mcp.read_resource("progress://report").await.unwrap();
     mcp.wait_for(|n| matches!(n, McpNotification::Progress { progress, .. } if *progress == 1.0))
         .await;
+}
+
+#[r2e_core::test]
+async fn the_client_carries_typed_extensions() {
+    let app = plain_app().await;
+    let mcp = app.mcp().extension(Workspace("acme")).await;
+    assert_eq!(mcp.call_tool_text("workspace", ()).await.unwrap(), "acme");
+
+    let bare = app.mcp().await;
+    assert_eq!(bare.call_tool_text("workspace", ()).await.unwrap(), "<none>");
 }
 
 #[r2e_core::test]
