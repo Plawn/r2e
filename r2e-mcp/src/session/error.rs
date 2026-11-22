@@ -40,6 +40,10 @@ pub enum McpMemberError {
     /// A dynamic member's completion provider names no argument (prompt) or
     /// template variable (resource) of the member, or names one twice.
     InvalidCompletion(String),
+    /// A dynamic member puts itself in a group that the catalog — or a
+    /// member already in the same holder — declares with the other
+    /// `opt_in`: every member of a group must agree on it.
+    GroupMismatch(String),
 }
 
 /// The former name of [`McpMemberError`], kept for source compatibility.
@@ -64,6 +68,11 @@ impl fmt::Display for McpMemberError {
                 "MCP {kind} `{key}` declares OAuth scopes but `mcp.auth` is disabled"
             ),
             McpMemberError::InvalidCompletion(reason) => f.write_str(reason),
+            McpMemberError::GroupMismatch(group) => write!(
+                f,
+                "MCP group `{group}` is declared opt-in by some members and not by others \
+                 — every member of a group must agree on `opt_in`"
+            ),
         }
     }
 }

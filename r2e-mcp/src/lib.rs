@@ -104,6 +104,7 @@ pub use route::{
 pub use service::McpService;
 pub use session::{
     InMemoryMcpSessionStore, McpMemberError, McpSession, McpSessionError, McpSessionInit,
+    McpMember, McpView, McpViewFilter,
     McpSessionStore, McpSessionStoreError, McpSessionStoreFuture, McpSessions, SessionId,
     SessionInit, SessionToolset,
 };
@@ -324,6 +325,7 @@ pub mod prelude {
     pub use crate::service::McpService;
     pub use crate::session::{
         McpMemberError, McpSession, McpSessionInit, McpSessions, SessionId, SessionInit,
+        McpMember, McpView, McpViewFilter,
         SessionToolset,
     };
     pub use crate::{meta, AppBuilderMcpExt, MetaObject};

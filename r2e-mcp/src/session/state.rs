@@ -6,9 +6,10 @@ use std::time::Duration;
 use r2e_core::http::Parts;
 use r2e_core::rt;
 use r2e_core::rt::sync::OnceCell;
-use rmcp::model::{InitializeRequestParams, Prompt, Resource, ResourceTemplate, Tool};
-use rmcp::service::{Peer, RequestContext, RoleServer};
+use rmcp::model::InitializeRequestParams;
+use rmcp::service::{Peer, RoleServer};
 
+use super::access::{Access, ViewFilterFn};
 use super::error::McpMemberError;
 use super::id::SessionId;
 use super::init::{SessionInit, SessionInitFn, SessionToolset};
@@ -18,7 +19,7 @@ use crate::catalog::{
 };
 use crate::error::McpError;
 use crate::global::McpRegistry;
-use crate::route::{PromptRoute, ResourceRoute, ToolRoute};
+use crate::route::{McpGroup, PromptRoute, ResourceRoute, ToolRoute};
 use crate::uri_template::UriTemplate;
 
 /// The mutable state of one MCP session (one per rmcp session handler).
@@ -149,137 +150,55 @@ impl SessionState {
         Arc::clone(&self.view.read().expect("MCP session view lock poisoned"))
     }
 
-    // ── Member resolution: the session's view first, then the global
-    // registry. A session-private member shadows a global namesake; the
-    // catalog never clashes with either (checked when they are added).
-
-    /// The tool `name` resolves to for this session.
-    pub(crate) fn tool(&self, name: &str) -> Option<Arc<ToolRoute>> {
-        if let Some(route) = self.view().tools.route(name) {
-            return Some(Arc::clone(route));
-        }
-        self.registry.view().tools.route(name).map(Arc::clone)
+    pub(crate) fn registry_view(&self) -> Arc<SessionView> {
+        self.registry.view()
     }
 
-    /// The resource `uri` resolves to (fixed URI, then template; session,
-    /// then registry), with the template variables it captured.
-    pub(crate) fn resource(
+    /// This request's window on the members — see [`Access`]. `parts` is
+    /// the request head (`None` outside a request: no caller, no
+    /// extensions); `filter` the endpoint's view filter.
+    pub(crate) fn access<'a>(
+        &'a self,
+        parts: Option<&'a Parts>,
+        filter: Option<&'a ViewFilterFn>,
+    ) -> Access<'a> {
+        Access::new(self, self.view(), self.registry.view(), parts, filter)
+    }
+
+    /// Whether the group `name` is on for the session `view` belongs to:
+    /// a catalog group, or one a dynamic member (session-private, then
+    /// `registry`) declares. `false` for an unknown name.
+    pub(crate) fn group_enabled(
         &self,
-        uri: &str,
-    ) -> Option<(Arc<ResourceRoute>, BTreeMap<String, String>)> {
-        if let Some((route, variables)) = self.view().resource_route(uri) {
-            return Some((Arc::clone(route), variables));
+        view: &SessionView,
+        registry: &SessionView,
+        name: &str,
+    ) -> bool {
+        if let Some(index) = self.catalog.group(name) {
+            return view.enabled[index];
         }
-        self.registry
-            .view()
-            .resource_route(uri)
-            .map(|(route, variables)| (Arc::clone(route), variables))
+        view.private
+            .group(name)
+            .or_else(|| registry.private.group(name))
+            .is_some_and(|group| view.group_on(self.catalog.keys(), group))
     }
 
-    /// The prompt `name` resolves to for this session.
-    pub(crate) fn prompt(&self, name: &str) -> Option<Arc<PromptRoute>> {
-        if let Some(route) = self.view().prompts.route(name) {
-            return Some(Arc::clone(route));
+    /// Every group this session can switch: the catalog's, then the ones
+    /// its private members and the registry's declare.
+    pub(crate) fn group_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .catalog
+            .group_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let (view, registry) = (self.view(), self.registry.view());
+        for group in view.private.groups().chain(registry.private.groups()) {
+            if !names.iter().any(|known| *known == group.name) {
+                names.push(group.name.to_string());
+            }
         }
-        self.registry.view().prompts.route(name).map(Arc::clone)
-    }
-
-    /// The resource a `completion/complete` `ref/resource` names.
-    pub(crate) fn completion_resource(&self, uri: &str) -> Option<Arc<ResourceRoute>> {
-        if let Some(route) = self.view().completion_resource(uri) {
-            return Some(Arc::clone(route));
-        }
-        self.registry
-            .view()
-            .completion_resource(uri)
-            .map(Arc::clone)
-    }
-
-    // ── List payloads: the session's list followed by the registry's,
-    // built into one allocation. With an empty registry (the common
-    // deployment) this is exactly the prebuilt list's clone.
-
-    pub(crate) fn tool_list(&self, context: &RequestContext<RoleServer>) -> Vec<Tool> {
-        let view = self.view();
-        let global = self.registry.view();
-        if global.tools.is_empty() {
-            return view.tools.visible_list(context);
-        }
-        let mut out = Vec::with_capacity(view.tools.len() + global.tools.len());
-        view.tools.extend_visible(context, &mut out, |_| false);
-        if view.private.tools.is_empty() {
-            global.tools.extend_visible(context, &mut out, |_| false);
-        } else {
-            global
-                .tools
-                .extend_visible(context, &mut out, |name| view.tools.route(name).is_some());
-        }
-        out
-    }
-
-    pub(crate) fn resource_list(&self, context: &RequestContext<RoleServer>) -> Vec<Resource> {
-        let view = self.view();
-        let global = self.registry.view();
-        if global.resources.is_empty() {
-            return view.resources.visible_list(context);
-        }
-        let mut out = Vec::with_capacity(view.resources.len() + global.resources.len());
-        view.resources.extend_visible(context, &mut out, |_| false);
-        if view.private.resources.is_empty() {
-            global
-                .resources
-                .extend_visible(context, &mut out, |_| false);
-        } else {
-            global
-                .resources
-                .extend_visible(context, &mut out, |uri| view.resources.route(uri).is_some());
-        }
-        out
-    }
-
-    pub(crate) fn resource_template_list(
-        &self,
-        context: &RequestContext<RoleServer>,
-    ) -> Vec<ResourceTemplate> {
-        let view = self.view();
-        let global = self.registry.view();
-        if global.resource_templates.is_empty() {
-            return view.resource_templates.visible_list(context);
-        }
-        let mut out =
-            Vec::with_capacity(view.resource_templates.len() + global.resource_templates.len());
-        view.resource_templates
-            .extend_visible(context, &mut out, |_| false);
-        if view.private.resources.is_empty() {
-            global
-                .resource_templates
-                .extend_visible(context, &mut out, |_| false);
-        } else {
-            global
-                .resource_templates
-                .extend_visible(context, &mut out, |raw| {
-                    view.resource_templates.has_raw(raw)
-                });
-        }
-        out
-    }
-
-    pub(crate) fn prompt_list(&self, context: &RequestContext<RoleServer>) -> Vec<Prompt> {
-        let view = self.view();
-        let global = self.registry.view();
-        if global.prompts.is_empty() {
-            return view.prompts.visible_list(context);
-        }
-        let mut out = Vec::with_capacity(view.prompts.len() + global.prompts.len());
-        view.prompts.extend_visible(context, &mut out, |_| false);
-        if view.private.prompts.is_empty() {
-            global.prompts.extend_visible(context, &mut out, |_| false);
-        } else {
-            global
-                .prompts
-                .extend_visible(context, &mut out, |name| view.prompts.route(name).is_some());
-        }
-        out
+        names
     }
 
     pub(crate) fn capture_peer(&self, peer: &Peer<RoleServer>) {
@@ -342,28 +261,41 @@ impl SessionState {
     ) -> Result<(T, Changed), McpMemberError> {
         let _guard = self.write.lock().expect("MCP session write lock poisoned");
         let current = self.view();
+        let registry = self.registry.view();
         let mut draft = Draft {
             catalog: Some(self.catalog.keys()),
             enabled: current.enabled.to_vec(),
+            dynamic: current.dynamic.clone(),
             private: current.private.clone(),
+            registry: Some(&registry.private),
         };
         let out = f(&mut draft)?;
-        if draft.private.same_as(&current.private) && draft.enabled[..] == current.enabled[..] {
+        if draft.private.same_as(&current.private)
+            && draft.enabled[..] == current.enabled[..]
+            && draft.dynamic == current.dynamic
+        {
             // A no-op (group already in that state, nothing removed): skip
             // the rebuild.
             return Ok((out, Changed::default()));
         }
         let next = self
             .catalog
-            .view(draft.enabled.into_boxed_slice(), draft.private)
+            .view(
+                draft.enabled.into_boxed_slice(),
+                draft.dynamic,
+                draft.private,
+            )
             .map_err(|reason| McpMemberError::Duplicate {
                 kind: "member",
                 key: reason,
             })?;
-        let changed = current.diff(&next);
-        if changed.any() {
-            *self.view.write().expect("MCP session view lock poisoned") = Arc::new(next);
-        }
+        // The session's own families, plus the registry's members whose
+        // group this change switched (they are gated at request time, so
+        // no family differs for them).
+        let changed = current
+            .diff(&next)
+            .or(current.registry_diff(&next, self.catalog.keys(), &registry));
+        *self.view.write().expect("MCP session view lock poisoned") = Arc::new(next);
         Ok((out, changed))
     }
 
@@ -397,17 +329,55 @@ impl SessionState {
 pub(crate) struct Draft<'a> {
     pub(crate) catalog: Option<&'a CatalogKeys>,
     pub(crate) enabled: Vec<bool>,
+    /// Explicit states of the groups only dynamic members declare.
+    pub(crate) dynamic: BTreeMap<String, bool>,
     pub(crate) private: PrivateMembers,
+    /// The global registry's members, for a session's draft: their groups
+    /// are switchable by the session. `None` for the registry's own draft.
+    pub(crate) registry: Option<&'a PrivateMembers>,
 }
 
 impl Draft<'_> {
+    /// Switch a group: a catalog group, or one a dynamic member currently
+    /// declares (the draft's own, or the registry's) — any other name is
+    /// [`McpMemberError::UnknownGroup`].
     pub(super) fn set_group(&mut self, name: &str, on: bool) -> Result<(), McpMemberError> {
-        let index = self
-            .catalog
-            .and_then(|catalog| catalog.group(name))
-            .ok_or_else(|| McpMemberError::UnknownGroup(name.to_owned()))?;
-        self.enabled[index] = on;
+        if let Some(index) = self.catalog.and_then(|catalog| catalog.group(name)) {
+            self.enabled[index] = on;
+            return Ok(());
+        }
+        let declared = self.private.group(name).is_some()
+            || self
+                .registry
+                .is_some_and(|registry| registry.group(name).is_some());
+        if !declared {
+            return Err(McpMemberError::UnknownGroup(name.to_owned()));
+        }
+        self.dynamic.insert(name.to_owned(), on);
         Ok(())
+    }
+
+    /// A dynamic member's group must agree on `opt_in` with the catalog
+    /// group of that name, with the members already in this holder and —
+    /// for a session — with the registry's.
+    fn check_group(&self, group: &Option<McpGroup>) -> Result<(), McpMemberError> {
+        let Some(group) = group else {
+            return Ok(());
+        };
+        let declared = self
+            .catalog
+            .and_then(|catalog| catalog.group_opt_in(&group.name))
+            .or_else(|| self.private.group(&group.name).map(|g| g.opt_in))
+            .or_else(|| {
+                let registry = self.registry?.group(&group.name)?;
+                Some(registry.opt_in)
+            });
+        match declared {
+            Some(opt_in) if opt_in != group.opt_in => {
+                Err(McpMemberError::GroupMismatch(group.name.to_string()))
+            }
+            _ => Ok(()),
+        }
     }
 
     fn check_scopes(
@@ -431,6 +401,7 @@ impl Draft<'_> {
 
     pub(crate) fn add_tool(&mut self, tool: ToolRoute) -> Result<(), McpMemberError> {
         self.check_scopes("tool", &tool.name, &tool.requirements)?;
+        self.check_group(&tool.group)?;
         if self
             .catalog
             .is_some_and(|catalog| catalog.has_tool_key(&tool.name))
@@ -447,6 +418,7 @@ impl Draft<'_> {
 
     pub(crate) fn add_resource(&mut self, resource: ResourceRoute) -> Result<(), McpMemberError> {
         self.check_scopes("resource", &resource.uri, &resource.requirements)?;
+        self.check_group(&resource.group)?;
         resource_completions_valid(&resource).map_err(McpMemberError::InvalidCompletion)?;
         if resource.is_template() {
             let shape = template_shape(&resource.uri)?;
@@ -481,6 +453,7 @@ impl Draft<'_> {
 
     pub(crate) fn add_prompt(&mut self, prompt: PromptRoute) -> Result<(), McpMemberError> {
         self.check_scopes("prompt", &prompt.name, &prompt.requirements)?;
+        self.check_group(&prompt.group)?;
         prompt_completions_valid(&prompt).map_err(McpMemberError::InvalidCompletion)?;
         if self
             .catalog
@@ -497,12 +470,8 @@ impl Draft<'_> {
     }
 
     pub(super) fn apply(&mut self, toolset: SessionToolset) -> Result<(), McpMemberError> {
-        for group in &toolset.enable {
-            self.set_group(group, true)?;
-        }
-        for group in &toolset.disable {
-            self.set_group(group, false)?;
-        }
+        // Members first: a group the toolset's own members declare is
+        // switchable in the same batch.
         for tool in toolset.tools {
             self.add_tool(tool)?;
         }
@@ -511,6 +480,12 @@ impl Draft<'_> {
         }
         for prompt in toolset.prompts {
             self.add_prompt(prompt)?;
+        }
+        for group in &toolset.enable {
+            self.set_group(group, true)?;
+        }
+        for group in &toolset.disable {
+            self.set_group(group, false)?;
         }
         Ok(())
     }

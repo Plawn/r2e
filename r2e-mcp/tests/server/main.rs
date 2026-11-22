@@ -35,4 +35,5 @@ mod persistence;
 mod sessions;
 #[cfg(feature = "testing")]
 mod test_client;
+mod view_filter;
 mod wire_golden;

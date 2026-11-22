@@ -13,6 +13,7 @@
 //! Every change that alters a family's list sends that family's
 //! `notifications/*/list_changed` to the session.
 
+mod access;
 mod error;
 mod handle;
 mod id;
@@ -22,6 +23,8 @@ mod sessions;
 mod state;
 mod store;
 
+pub(crate) use access::{erase_view_filter, Access, ViewFilterFn};
+pub use access::{McpMember, McpView, McpViewFilter};
 pub use error::{McpMemberError, McpSessionError};
 pub use handle::McpSession;
 pub use id::SessionId;
