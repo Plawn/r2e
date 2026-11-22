@@ -622,7 +622,7 @@ fn params_expr(
         .map(|(_, pt)| pt)
         .collect();
 
-    let path_extractors = path_extractor_types(&params);
+    let path_extractors = path_extractor_types(&params, krate);
 
     // Autoref specialization: for each handler param type, probe for ParamsMetadata.
     // Types implementing ParamsMetadata return their param infos; others return empty vec.
@@ -650,24 +650,42 @@ fn params_expr(
                 Some(__prefix) => format!("{}{}", __prefix, #route_path),
                 None => #route_path.to_string(),
             };
-            __r2e_route_params(&__path, &[#(#path_extractors),*], __p)
+            __r2e_route_params(&__path, vec![#(#path_extractors),*], __p)
         }
     }
 }
 
-/// The OpenAPI type strings of each `Path<T>` extractor among the handler's
-/// typed parameters, as `&[&str]` expressions: one entry per element of a
-/// tuple `T`, a single entry otherwise.
-fn path_extractor_types(params: &[&syn::PatType]) -> Vec<TokenStream> {
+/// The typing of each `Path<T>` extractor among the handler's typed
+/// parameters, as `Vec<(&str, Option<Value>)>` expressions: one entry per
+/// element of a tuple `T`, a single entry otherwise. Each entry is the
+/// OpenAPI type guessed from the type's name plus the type's own schema when
+/// it implements `JsonSchema` (autoref probe, `None` otherwise).
+fn path_extractor_types(params: &[&syn::PatType], krate: &TokenStream) -> Vec<TokenStream> {
+    let entry = |ty: &syn::Type| {
+        let name = type_to_openapi_str(ty);
+        quote! {
+            (
+                #name,
+                (&#krate::web::params::__ParamSchemaProbe::<#ty>(::core::marker::PhantomData))
+                    .param_schema(),
+            )
+        }
+    };
     params
         .iter()
         .filter(|pt| type_last_segment_is(&pt.ty, "Path"))
         .map(|pt| {
-            let types: Vec<&'static str> = match unwrap_extractor_inner(&pt.ty) {
-                syn::Type::Tuple(tuple) => tuple.elems.iter().map(type_to_openapi_str).collect(),
-                inner => vec![type_to_openapi_str(&inner)],
+            let entries: Vec<TokenStream> = match unwrap_extractor_inner(&pt.ty) {
+                syn::Type::Tuple(tuple) => tuple.elems.iter().map(entry).collect(),
+                inner => vec![entry(&inner)],
             };
-            quote! { &[#(#types),*] as &[&str] }
+            quote! {
+                {
+                    #[allow(unused_imports)]
+                    use #krate::web::params::__NoParamSchema as _;
+                    vec![#(#entries),*]
+                }
+            }
         })
         .collect()
 }
@@ -682,7 +700,7 @@ fn route_params_helper(krate: &TokenStream) -> TokenStream {
     quote! {
         fn __r2e_route_params(
             __path: &str,
-            __extractors: &[&[&str]],
+            __extractors: Vec<Vec<(&str, Option<#krate::serde_json::Value>)>>,
             __probed: Vec<#krate::di::meta::ParamInfo>,
         ) -> Vec<#krate::di::meta::ParamInfo> {
             use #krate::di::meta::{ParamInfo, ParamLocation};
@@ -700,7 +718,9 @@ fn route_params_helper(krate: &TokenStream) -> TokenStream {
             }
             // `Path<T>` deserializes every placeholder positionally, so only
             // an extractor of the template's arity can type them.
-            let __types = __extractors.iter().find(|__e| __e.len() == __names.len());
+            let mut __types = __extractors
+                .into_iter()
+                .find(|__e| __e.len() == __names.len());
             let mut __probed: Vec<Option<ParamInfo>> = __probed.into_iter().map(Some).collect();
             let mut __out: Vec<ParamInfo> = Vec::with_capacity(__names.len() + __probed.len());
             for (__i, __name) in __names.iter().enumerate() {
@@ -712,11 +732,12 @@ fn route_params_helper(krate: &TokenStream) -> TokenStream {
                         })
                     })
                     .and_then(Option::take);
-                __out.push(__declared.unwrap_or_else(|| ParamInfo {
-                    name: __name.to_string(),
-                    location: ParamLocation::Path,
-                    param_type: __types.map_or("string", |__t| __t[__i]).to_string(),
-                    required: true,
+                __out.push(__declared.unwrap_or_else(|| {
+                    let (__ty, __schema) = __types
+                        .as_mut()
+                        .map_or(("string", None), |__t| (__t[__i].0, __t[__i].1.take()));
+                    ParamInfo::new(*__name, ParamLocation::Path, __ty, true)
+                        .with_schema(__schema)
                 }));
             }
             // Everything else the `Params` structs declared, deduplicated by

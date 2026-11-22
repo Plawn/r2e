@@ -87,6 +87,30 @@ pub trait __NoParamsMeta {
 
 impl<T> __NoParamsMeta for &__ParamMetaProbe<T> {}
 
+// Same trick for a single parameter's schema: `(&probe).param_schema()` is
+// the type's inline JSON Schema when it implements `schemars::JsonSchema`
+// (and the `openapi` feature is on), `None` otherwise — no trait bound is
+// added to the fields of a `#[derive(Params)]` struct.
+
+#[doc(hidden)]
+pub struct __ParamSchemaProbe<T: ?Sized>(pub core::marker::PhantomData<T>);
+
+#[cfg(feature = "openapi")]
+impl<T: schemars::JsonSchema + ?Sized> __ParamSchemaProbe<T> {
+    pub fn param_schema(&self) -> Option<serde_json::Value> {
+        crate::di::meta::param_schema_of::<T>()
+    }
+}
+
+#[doc(hidden)]
+pub trait __NoParamSchema {
+    fn param_schema(&self) -> Option<serde_json::Value> {
+        None
+    }
+}
+
+impl<T: ?Sized> __NoParamSchema for &__ParamSchemaProbe<T> {}
+
 // ── PrefixedExtract: core extraction trait for nested Params support ──
 
 /// Trait for Params types that support prefixed extraction.

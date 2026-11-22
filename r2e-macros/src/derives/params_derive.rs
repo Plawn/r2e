@@ -854,7 +854,9 @@ fn parse_name_attr(attr: &syn::Attribute) -> syn::Result<Option<String>> {
 
 use crate::util::type_utils::{is_option_type, unwrap_option_type};
 
-/// Map a Rust type to an OpenAPI type string.
+/// Map a Rust type to an OpenAPI type string, by name. This is the fallback
+/// `ParamInfo::param_type`; a type implementing `JsonSchema` publishes its
+/// own schema instead (see `generate_param_infos`).
 fn rust_type_to_openapi_str(ty: &Type) -> &'static str {
     let inner = unwrap_option_type(ty).unwrap_or(ty);
     if let Type::Path(type_path) = inner
@@ -896,14 +898,23 @@ fn generate_param_infos(
             };
             let param_type = rust_type_to_openapi_str(&f.ty);
             let required = !f.is_optional && f.default_value.is_none();
+            // The schema describes the value, not its absence: `Option<T>`
+            // publishes `T` (optionality is `required`).
+            let schema_ty = unwrap_option_type(&f.ty).unwrap_or(&f.ty);
 
             quote! {
-                #krate::di::meta::ParamInfo {
-                    name: #param_name.to_string(),
-                    location: #location,
-                    param_type: #param_type.to_string(),
-                    required: #required,
-                }
+                #krate::di::meta::ParamInfo::new(
+                    #param_name,
+                    #location,
+                    #param_type,
+                    #required,
+                )
+                .with_schema({
+                    #[allow(unused_imports)]
+                    use #krate::web::params::__NoParamSchema as _;
+                    (&#krate::web::params::__ParamSchemaProbe::<#schema_ty>(::core::marker::PhantomData))
+                        .param_schema()
+                })
             }
         })
         .collect()

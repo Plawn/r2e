@@ -102,12 +102,7 @@ fn single_get_route() {
 #[test]
 fn route_with_path_param() {
     let routes = vec![RouteInfo {
-        params: vec![ParamInfo {
-            name: "id".to_string(),
-            location: ParamLocation::Path,
-            param_type: "integer".to_string(),
-            required: true,
-        }],
+        params: vec![ParamInfo::new("id", ParamLocation::Path, "integer", true)],
         ..route("GET", "/users/{id}", "get_user")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -125,12 +120,7 @@ fn route_with_path_param() {
 #[test]
 fn route_with_query_param() {
     let routes = vec![RouteInfo {
-        params: vec![ParamInfo {
-            name: "page".to_string(),
-            location: ParamLocation::Query,
-            param_type: "integer".to_string(),
-            required: false,
-        }],
+        params: vec![ParamInfo::new("page", ParamLocation::Query, "integer", false)],
         ..route("GET", "/users", "list_users")
     }];
     let spec = build_spec(&default_config(), &routes);
@@ -464,12 +454,7 @@ fn generated_spec_is_valid_openapi_structure() {
     let routes = vec![
         RouteInfo {
             tag: Some("Users".to_string()),
-            params: vec![ParamInfo {
-                name: "id".to_string(),
-                location: ParamLocation::Path,
-                param_type: "integer".to_string(),
-                required: true,
-            }],
+            params: vec![ParamInfo::new("id", ParamLocation::Path, "integer", true)],
             ..route("GET", "/users/{id}", "get_user")
         },
         RouteInfo {
@@ -577,12 +562,7 @@ fn schemaless_bodies_render_by_media_type() {
 #[test]
 fn header_param_location() {
     let routes = vec![RouteInfo {
-        params: vec![ParamInfo {
-            name: "X-Request-Id".to_string(),
-            location: ParamLocation::Header,
-            param_type: "string".to_string(),
-            required: true,
-        }],
+        params: vec![ParamInfo::new("X-Request-Id", ParamLocation::Header, "string", true)],
         ..route("GET", "/data", "get_data")
     }];
     let spec = build_spec(&default_config(), &routes);
