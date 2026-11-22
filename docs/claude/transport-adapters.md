@@ -191,6 +191,35 @@ references.
 
 ## Decisions log
 
+- **2026-11-22 (#1444, #1445, #1446) — three additions to the MCP port, none
+  a new mechanism.** (1) *Extension methods*: `#[method(name = "…")]` is one
+  more member family of the same `#[routes]` MCP impl
+  (`McpRoutes.methods`, `MethodRoute`), dispatched from rmcp's
+  `CustomRequest` hook (and from the `skills/*` requests rmcp models itself)
+  through the same `prepare()` → guards → invoke path as a tool; it has no
+  list, hence no group and no schema. `McpServer::with_extension` only
+  writes `capabilities.extensions`; the catalog refuses at boot a core
+  method name, a duplicate, and a `skills/*`/`tasks/*` method whose
+  extension is not advertised (the endpoint answers `-32601` to those until
+  it is).
+  Rejected: a raw "fallback JSON-RPC handler" closure on the builder (no
+  guards, no identity, a second dispatch path). (2) *Loopback extensions*:
+  `McpLoopback::session(id).extension(T)` inserts typed values into the
+  synthesized `Parts` — the existing carrier — instead of adding a loopback
+  "context" argument; this confirms the #1076 rejection of a
+  transport-neutral call context. A smuggled `McpPrincipal` is dropped so
+  `.identity(..)` stays the only way in. (3) *Dynamic groups + view filter*:
+  `Dynamic*::group/opt_in_group` reuse `McpGroup`; group state for names the
+  catalog does not know lives in `SessionView.dynamic` (per session, also
+  for registry members — the registry stays one shared view, gated at
+  request time). `McpViewFilter` is a sync, per-request predicate applied in
+  ONE place (`session::access::Access`, which every list and lookup of the
+  handler goes through), so "hidden = unknown" cannot drift between list
+  and call. Rejected: an async filter (I/O on the list hot path; resolve
+  upstream and read it from `McpView`), per-session registry copies
+  (O(sessions × members) per change), and letting a filter *reveal* members
+  (it only narrows, after groups and scopes).
+
 - **2026-11-05 (#1076) — loopback = a second inbound transport on the MCP
   port, not a feature of its own.** `r2e-mcp` feature `loopback` (facade
   `mcp-loopback`; rmcp `client` role, no new crate) adds `McpLoopback`, a
