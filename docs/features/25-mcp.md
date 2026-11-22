@@ -667,6 +667,14 @@ first. Identity is not an extension: an `McpPrincipal` passed to
 `.extension(..)` is dropped, only `.identity(..)` authenticates the session.
 `connect(id, identity)` stays as the short form without extensions.
 
+Custom **headers** are deliberately not settable on a loopback session: a
+header is the network's encoding of context an in-process caller already
+holds as a value, and an extension can only be attached from inside the
+process — nothing a remote client sends can forge one. Code that must serve
+both transports reads the extension, and the HTTP side gets it from a layer
+that parses the header. The test client mirrors this:
+`app.mcp().extension(WorkspaceId(7)).await`.
+
 Other errors: `NotMounted` (`mcp.enabled = false`, connect before the Routes
 stage ran, or the router was dropped), `Stateless` (`mcp.stateless = true`
 keeps no sessions), `InvalidSessionId` (empty or not header-safe),

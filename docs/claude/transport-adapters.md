@@ -208,7 +208,9 @@ references.
   synthesized `Parts` — the existing carrier — instead of adding a loopback
   "context" argument; this confirms the #1076 rejection of a
   transport-neutral call context. A smuggled `McpPrincipal` is dropped so
-  `.identity(..)` stays the only way in. (3) *Dynamic groups + view filter*:
+  `.identity(..)` stays the only way in. Arbitrary headers on a loopback
+  session are refused by design: extensions are the single carrier (typed,
+  not forgeable from the network); a header-reading scope stays HTTP-only. (3) *Dynamic groups + view filter*:
   `Dynamic*::group/opt_in_group` reuse `McpGroup`; group state for names the
   catalog does not know lives in `SessionView.dynamic` (per session, also
   for registry members — the registry stays one shared view, gated at
