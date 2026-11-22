@@ -5,8 +5,9 @@ use std::sync::Arc;
 use rmcp::model::{Prompt, Resource, ResourceTemplate, Tool};
 
 use super::family::{family_members, template_members, Family, FamilyInputs, TemplateFamily};
+use super::CatalogKeys;
 use crate::auth::tools::ToolRequirements;
-use crate::route::{PromptRoute, ResourceRoute, ToolRoute};
+use crate::route::{McpGroup, PromptRoute, ResourceRoute, ToolRoute};
 
 /// A catalog member: the route plus what a view rebuild needs.
 pub(super) struct Member<R, W> {
@@ -43,6 +44,43 @@ impl PrivateMembers {
             && same(&self.resources, &other.resources)
             && same(&self.prompts, &other.prompts)
     }
+
+    /// The group of every grouped member (repeats included).
+    pub(crate) fn groups(&self) -> impl Iterator<Item = &McpGroup> {
+        let tools = self.tools.iter().filter_map(|t| t.group.as_ref());
+        let resources = self.resources.iter().filter_map(|r| r.group.as_ref());
+        let prompts = self.prompts.iter().filter_map(|p| p.group.as_ref());
+        tools.chain(resources).chain(prompts)
+    }
+
+    /// The declaration of the group `name`, when a member carries it.
+    pub(crate) fn group(&self, name: &str) -> Option<&McpGroup> {
+        self.groups().find(|group| group.name == name)
+    }
+
+    /// Whether any member is in a group.
+    pub(crate) fn grouped(&self) -> bool {
+        self.groups().next().is_some()
+    }
+}
+
+/// Whether `group` is on for a session whose state is `enabled` (catalog
+/// groups, by index) and `dynamic` (explicit states of the groups only
+/// dynamic members declare): a catalog group follows the catalog's switch,
+/// any other its explicit state, else its own `opt_in` default.
+pub(crate) fn group_on(
+    keys: &CatalogKeys,
+    enabled: &[bool],
+    dynamic: &BTreeMap<String, bool>,
+    group: &McpGroup,
+) -> bool {
+    if let Some(index) = keys.group(&group.name) {
+        return enabled[index];
+    }
+    dynamic
+        .get(group.name.as_ref())
+        .copied()
+        .unwrap_or(!group.opt_in)
 }
 
 /// Which families a view change touched — one `list_changed` notification
@@ -64,12 +102,27 @@ impl Changed {
     pub(crate) fn any(self) -> bool {
         self.tools || self.resources || self.prompts
     }
+
+    pub(crate) fn or(self, other: Changed) -> Changed {
+        Changed {
+            tools: self.tools || other.tools,
+            resources: self.resources || other.resources,
+            prompts: self.prompts || other.prompts,
+        }
+    }
 }
 
 /// What one session serves.
 pub(crate) struct SessionView {
     /// Per catalog group (same index as the catalog's group table).
     pub(crate) enabled: Box<[bool]>,
+    /// Explicit on/off states of the groups only dynamic members declare
+    /// (session-private or registry), by name. A group absent from here
+    /// follows its `opt_in` default — see [`group_on`].
+    pub(crate) dynamic: BTreeMap<String, bool>,
+    /// Whether a private member is in a group. On the registry's view this
+    /// is what makes its members gated at request time.
+    pub(crate) grouped: bool,
     pub(crate) private: PrivateMembers,
     pub(crate) tools: Family<ToolRoute, Tool>,
     pub(crate) resources: Family<ResourceRoute, Resource>,
@@ -86,8 +139,40 @@ impl SessionView {
         members: PrivateMembers,
     ) -> Result<SessionView, String> {
         let mut inputs = FamilyInputs::default();
-        inputs.extend_private(label, &members);
-        inputs.into_view(filter, Box::default(), members)
+        // Every member is in: a registry member's group is evaluated
+        // against the asking session at request time.
+        inputs.extend_private(label, &members, |_| true);
+        inputs.into_view(filter, Box::default(), BTreeMap::new(), members)
+    }
+
+    /// Whether `group` is on for the session this view belongs to.
+    pub(crate) fn group_on(&self, keys: &CatalogKeys, group: &McpGroup) -> bool {
+        group_on(keys, &self.enabled, &self.dynamic, group)
+    }
+
+    /// The families in which `registry` serves a member whose group is not
+    /// in the same state for `self` and `next` — the registry's members are
+    /// gated at request time, so no family rebuild shows that change.
+    pub(crate) fn registry_diff(
+        &self,
+        next: &SessionView,
+        keys: &CatalogKeys,
+        registry: &SessionView,
+    ) -> Changed {
+        if !registry.grouped {
+            return Changed::default();
+        }
+        let flipped = |group: &Option<McpGroup>| {
+            group
+                .as_ref()
+                .is_some_and(|g| self.group_on(keys, g) != next.group_on(keys, g))
+        };
+        let members = &registry.private;
+        Changed {
+            tools: members.tools.iter().any(|t| flipped(&t.group)),
+            resources: members.resources.iter().any(|r| flipped(&r.group)),
+            prompts: members.prompts.iter().any(|p| flipped(&p.group)),
+        }
     }
 
     pub(crate) fn resource_route(
@@ -133,7 +218,9 @@ impl Members {
     pub(super) fn view(
         &self,
         filter: bool,
+        keys: Option<&CatalogKeys>,
         enabled: Box<[bool]>,
+        dynamic: BTreeMap<String, bool>,
         private: PrivateMembers,
     ) -> Result<SessionView, String> {
         let mut inputs = FamilyInputs {
@@ -142,7 +229,11 @@ impl Members {
             templates: template_members(&self.templates, &enabled),
             prompts: family_members(&self.prompts, &enabled),
         };
-        inputs.extend_private("<session>", &private);
-        inputs.into_view(filter, enabled, private)
+        // A session-private member of a group that is off is left out here
+        // (the view is rebuilt on every group change).
+        inputs.extend_private("<session>", &private, |group| {
+            keys.is_none_or(|keys| group_on(keys, &enabled, &dynamic, group))
+        });
+        inputs.into_view(filter, enabled, dynamic, private)
     }
 }

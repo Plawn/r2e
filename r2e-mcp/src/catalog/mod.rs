@@ -15,20 +15,19 @@ mod validate;
 mod view;
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use r2e_core::http::Parts;
 use rmcp::model::{
-    Implementation, PromptsCapability, ResourcesCapability, ServerCapabilities, ServerConfig, Tool,
-    ToolsCapability,
+    ExtensionCapabilities, Implementation, PromptsCapability, ResourcesCapability,
+    ServerCapabilities, ServerConfig, Tool, ToolsCapability,
 };
-use rmcp::service::{RequestContext, RoleServer};
 
 pub(crate) use crate::identity::{caller_in, Caller};
 use crate::registry::RegisteredMcpService;
-use crate::route::{McpGroup, ToolRoute};
+use crate::route::{McpGroup, MethodRoute, ToolRoute};
 
+pub(crate) use family::Admit;
 use family::{family_members, template_members, Family, TemplateFamily};
 use validate::require_auth_for_scopes;
 pub(crate) use validate::{prompt_completions_valid, resource_completions_valid, scopes_allowed};
@@ -51,13 +50,63 @@ pub(crate) struct CatalogOptions {
     pub auth_enabled: bool,
     /// MCP sessions exist (`mcp.stateless = false`).
     pub stateful: bool,
+    /// The extensions advertised under `capabilities.extensions`
+    /// (`McpServer::with_extension`).
+    pub extensions: ExtensionCapabilities,
 }
 
-/// The caller of a JSON-RPC message: the `mcp.auth` principal or a
-/// service's struct identity, from the HTTP request parts the transport
-/// copies into the request extensions.
-pub(crate) fn caller_of(context: &RequestContext<RoleServer>) -> Option<Caller<'_>> {
-    caller_in(context.extensions.get::<Parts>())
+/// The MCP methods the endpoint serves itself: a `#[method]` may not take
+/// one of these names (rmcp would never hand it the request).
+const CORE_METHODS: &[&str] = &[
+    "initialize",
+    "ping",
+    "server/discover",
+    "completion/complete",
+    "logging/setLevel",
+    "prompts/get",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "resources/subscribe",
+    "resources/templates/list",
+    "resources/unsubscribe",
+    "subscriptions/listen",
+    "tools/call",
+    "tools/list",
+];
+
+/// Why `method` cannot be served as declared, if so: a core MCP method, a
+/// notification, or an extension method rmcp only routes once the server
+/// advertises its extension.
+fn method_refusal(method: &str, capabilities: &ServerCapabilities) -> Option<String> {
+    if CORE_METHODS.contains(&method) {
+        return Some(format!(
+            "`{method}` is a core MCP method, served by the endpoint itself"
+        ));
+    }
+    if method.is_empty() || method.starts_with("notifications/") {
+        return Some(format!(
+            "`{method}` is not a request method name (notifications carry no response)"
+        ));
+    }
+    let skills = rmcp::model::SKILLS_EXTENSION_ID;
+    let tasks = rmcp::model::TASKS_EXTENSION_ID;
+    let missing = match method {
+        "skills/list" | "skills/get" if !capabilities.supports_skills() => {
+            format!("McpServer::with_extension(\"{skills}\", json!({{}}))")
+        }
+        "resources/directory/read" if !capabilities.supports_directory_read() => {
+            format!("McpServer::with_extension(\"{skills}\", json!({{\"directoryRead\": true}}))")
+        }
+        "tasks/get" | "tasks/update" | "tasks/cancel" if !capabilities.supports_tasks() => {
+            format!("McpServer::with_extension(\"{tasks}\", json!({{}}))")
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "`{method}` is only routed once the server advertises its extension — add \
+         `{missing}`"
+    ))
 }
 
 /// What a dynamic member is validated against: the catalog's keys, group
@@ -76,6 +125,8 @@ pub(crate) struct CatalogKeys {
     /// `mcp.auth` is on: session-private members may declare scopes.
     pub(crate) auth_enabled: bool,
     group_index: HashMap<Cow<'static, str>, usize>,
+    /// Each catalog group's `opt_in`, by index.
+    group_opt_in: Box<[bool]>,
     /// Every catalog key, hidden groups included: a session-private member
     /// may not reuse one (it would shadow a member another session sees).
     tool_keys: HashSet<String>,
@@ -87,6 +138,12 @@ pub(crate) struct CatalogKeys {
 impl CatalogKeys {
     pub(crate) fn group(&self, name: &str) -> Option<usize> {
         self.group_index.get(name).copied()
+    }
+
+    /// Whether the catalog declares the group `name` opt-in (`None` = not a
+    /// catalog group).
+    pub(crate) fn group_opt_in(&self, name: &str) -> Option<bool> {
+        self.group(name).map(|index| self.group_opt_in[index])
     }
 
     /// `mcp.auth.filter-members` (and auth on): per-caller list filtering.
@@ -121,6 +178,9 @@ pub(crate) struct Catalog {
     keys: Arc<CatalogKeys>,
     /// Tool descriptors of every catalog tool, for [`Catalog::tool_wire`].
     all_tools: Family<ToolRoute, Tool>,
+    /// Extension methods (`#[method]`), by JSON-RPC method name. Not part
+    /// of any view: a method is neither listed nor grouped.
+    methods: HashMap<String, MethodRoute>,
     pub(crate) default_view: Arc<SessionView>,
 }
 
@@ -132,8 +192,10 @@ impl Catalog {
     /// Panics when two services register the same tool name, resource URI or
     /// prompt name (hidden groups included — the MCP equivalent of an HTTP
     /// route conflict, surfaced at boot with both service names), when
-    /// members disagree on a group's `opt_in`, or when a member takes an
-    /// `McpSession` under `mcp.stateless`.
+    /// members disagree on a group's `opt_in`, when a member takes an
+    /// `McpSession` under `mcp.stateless`, or when a `#[method]` names a
+    /// core MCP method or an extension method whose extension the server
+    /// does not advertise.
     pub(crate) fn build(
         services: Vec<RegisteredMcpService>,
         identity: ServerIdentity,
@@ -146,6 +208,7 @@ impl Catalog {
         let mut resources = Vec::new();
         let mut templates = Vec::new();
         let mut prompts = Vec::new();
+        let mut methods: Vec<(&'static str, MethodRoute)> = Vec::new();
 
         let mut intern = |service: &'static str, group: &Option<McpGroup>| -> Option<usize> {
             let group = group.as_ref()?;
@@ -175,6 +238,15 @@ impl Catalog {
         for service in services {
             let name = service.name;
             uses_session |= service.routes.uses_session;
+            for method in service.routes.methods {
+                require_auth_for_scopes(
+                    options.auth_enabled,
+                    "method",
+                    &method.name,
+                    &method.requirements,
+                );
+                methods.push((name, method));
+            }
             for tool in service.routes.tools {
                 require_auth_for_scopes(
                     options.auth_enabled,
@@ -299,6 +371,24 @@ impl Catalog {
         prompt_capabilities.list_changed = Some(true);
         capabilities.prompts = Some(prompt_capabilities);
         capabilities.completions = Some(Default::default());
+        if !options.extensions.is_empty() {
+            capabilities.extensions = Some(options.extensions);
+        }
+        let mut method_index: HashMap<String, MethodRoute> = HashMap::new();
+        let mut method_owner: HashMap<String, &'static str> = HashMap::new();
+        for (service, method) in methods {
+            let key = method.name.to_string();
+            if let Some(reason) = method_refusal(&key, &capabilities) {
+                panic!("MCP method in `{service}` cannot be served: {reason}");
+            }
+            if let Some(previous) = method_owner.insert(key.clone(), service) {
+                panic!(
+                    "duplicate MCP method name `{key}`: registered by `{previous}` and \
+                     `{service}`"
+                );
+            }
+            method_index.insert(key, method);
+        }
         info.capabilities = capabilities;
         info.server_info = Implementation::new(identity.name, identity.version);
         info.instructions = identity.instructions;
@@ -313,10 +403,13 @@ impl Catalog {
             prompts,
         };
         let default_enabled: Box<[bool]> = groups.iter().map(|g| !g.opt_in).collect();
+        let group_opt_in: Box<[bool]> = groups.iter().map(|g| g.opt_in).collect();
         let default_view = members
             .view(
                 options.filter_members,
+                None,
                 default_enabled,
+                BTreeMap::new(),
                 PrivateMembers::default(),
             )
             .expect("catalog members were validated above");
@@ -329,12 +422,14 @@ impl Catalog {
                 filter: options.filter_members,
                 auth_enabled: options.auth_enabled,
                 group_index,
+                group_opt_in,
                 tool_keys,
                 resource_keys,
                 template_shapes,
                 prompt_keys,
             }),
             all_tools,
+            methods: method_index,
             default_view: Arc::new(default_view),
         }
     }
@@ -345,9 +440,16 @@ impl Catalog {
     pub(crate) fn view(
         &self,
         enabled: Box<[bool]>,
+        dynamic: BTreeMap<String, bool>,
         private: PrivateMembers,
     ) -> Result<SessionView, String> {
-        self.members.view(self.keys.filter, enabled, private)
+        self.members.view(
+            self.keys.filter,
+            Some(&self.keys),
+            enabled,
+            dynamic,
+            private,
+        )
     }
 
     /// The validation index dynamic members are checked against.
@@ -372,6 +474,17 @@ impl Catalog {
     /// enforced by `tools/call` itself.
     pub(crate) fn tool_wire(&self, name: &str) -> Option<Tool> {
         self.all_tools.wire(name)
+    }
+
+    /// The extension method serving the JSON-RPC method `name`.
+    pub(crate) fn method(&self, name: &str) -> Option<&MethodRoute> {
+        self.methods.get(name)
+    }
+
+    pub(crate) fn method_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.methods.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
     }
 
     pub(crate) fn tool_names(&self) -> Vec<&str> {

@@ -6237,6 +6237,15 @@ See llm/testing.md.
   serves them, one `list_changed` per touched family, no per-session work.
   Precedence: catalog > session-private > registry; a catalog key is never
   overridable. The endpoint is mounted even with no MCP service registered.
+- Dynamic members take groups too (`DynamicTool::….group("git")` /
+  `.opt_in_group("git")`), switched per session like a catalog group. For a
+  per-**request** decision (tenant, plan, a role that changes mid-session,
+  `mcp.stateless`), install `McpServer::view_filter::<T>()`: `T:
+  McpViewFilter` is asked about every member on every list and lookup; a
+  member it hides answers like an unknown one.
+- Extension JSON-RPC methods (`skills/list`, a vendor method): a
+  `#[method(name = "…")]` member of the same `#[routes]` impl, advertised
+  with `McpServer::with_extension(id, settings)` (`capabilities.extensions`).
 - `#[tool(meta = meta!({ … }))]` (also `#[resource]`/`#[prompt]`,
   `DynamicTool::meta`) puts a free-form `_meta` on the list entry (MCP Apps:
   `_meta.ui.resourceUri`). `ToolCall::session_id()` is the transport's
@@ -6652,6 +6661,18 @@ async fn run_thread(
   is visible to members as `McpPrincipal` (`#[inject(identity)]`), binds the
   session to its `sub` (`McpSessions::for_subject`) and drives
   `#[roles]`/scopes like a bearer.
+- Request extensions: `loopback.session(id).identity(..).extension(value)
+  .connect().await?` (`connect(id, identity)` is the short form without
+  extensions) attaches typed values to the request parts **every** message of
+  the session carries — what an upstream HTTP layer would have put in
+  `request.extensions_mut()`. They read exactly as over HTTP:
+  `ToolCall::extension::<T>()`, `SessionInit::extension`, `McpView::extension`,
+  an `#[inject(request)]` field, a guard's parts, `ExtensionTenantResolver`.
+  One value per type (`T: Clone + Send + Sync + 'static`); an `McpPrincipal`
+  passed there is dropped — identity only comes from `.identity(..)`.
+  There is no way to add **headers** to a loopback session, by decision:
+  extensions are the one carrier of caller context (typed, unreachable from
+  the network). `app.mcp()` has the same `.extension(value)` in tests.
 - The synthesized request is `POST {mcp.path}` with `Mcp-Session-Id` and,
   for `Bearer(token)`, `Authorization: Bearer {token}` (with or without
   `mcp.auth`; a token that is not a valid header value is `Unauthorized`);
@@ -6747,6 +6768,17 @@ b.provide(RoleToolsets)                                    // the hook is a bean
   = "…")]` (member, overrides); `opt_in` = hidden until enabled (needs a
   `group` — compile error otherwise). No group = always visible (existing apps
   unchanged).
+- Dynamic members join groups the same way: `DynamicTool::new(..).group("git")`
+  (on by default) or `.opt_in_group("git")` (hidden until enabled), same on
+  `DynamicResource`/`DynamicPrompt`, session-private or in `McpRegistry`. The
+  name may be a catalog group or a new one; one name has ONE `opt_in` value
+  across the catalog, the session's members and the registry
+  (`McpMemberError::GroupMismatch` otherwise). Group state is per session,
+  also for registry members: `enable_group` in one session reveals the
+  registry's members of that group to that session only.
+  `enable_group`/`disable_group` on a name no member declares is
+  `McpMemberError::UnknownGroup`; in one `SessionToolset`, members are added
+  before groups are switched, so a batch can add a member and enable its group.
 - A hidden or foreign member answers **exactly like an unknown one** (tool
   -32601, resource -32002, prompt -32602); scope/role filtering still applies
   on top, to private members too.
@@ -6756,7 +6788,9 @@ b.provide(RoleToolsets)                                    // the hook is a bean
   (`DynamicResource::new(uri, name).handler(|call: ResourceCall| async { … })`),
   `add_prompt`/`remove_prompt` (`DynamicPrompt::new(name).handler(|p: T, call:
   PromptCall| …)`), `apply(SessionToolset)` (batched, one notification),
-  `is_group_enabled`, `has_tool`, `subject`. A private member cannot shadow a
+  `is_group_enabled`, `groups()` (catalog groups, then dynamic ones),
+  `has_tool`, `subject`, `notify_list_changed()` (re-announce all three lists
+  when a `McpViewFilter`'s inputs changed). A private member cannot shadow a
   catalog name, even a hidden one.
 - `McpSessionInit::init` runs once per session, lazily on its first request
   (`SessionInit`: `principal`, `subject`, `has_role`, `has_scope`,
@@ -6788,6 +6822,126 @@ b.provide(RoleToolsets)                                    // the hook is a bean
 - `mcp.stateless: true`: groups, `session_init` and `McpRegistry` work
   (recomputed per request); a member taking `McpSession` is a **boot panic**
   (mutations would not outlive the request).
+
+#### Per-request view filter — `McpViewFilter`
+
+Groups and `session_init` shape a session **once**; a view filter decides on
+**every** request, from the request itself. Use it when visibility follows
+something that is not session state: a tenant or plan read from a request
+extension, a right that can change mid-session, or `mcp.stateless`.
+
+```rust
+/// What an upstream layer (or a loopback `.extension(..)`) put on the request.
+#[derive(Clone)]
+pub struct Plan { pub beta: bool }
+
+#[derive(Clone)]
+pub struct PlanFilter;
+
+impl McpViewFilter for PlanFilter {
+    fn visible(&self, member: McpMember<'_>, view: &McpView<'_>) -> bool {
+        // Members tagged `_meta.beta` exist only for beta plans.
+        let beta_only = member.meta().is_some_and(|meta| meta.contains_key("beta"));
+        !beta_only || view.extension::<Plan>().is_some_and(|plan| plan.beta)
+    }
+}
+
+# async fn __doc(b: AppBuilder) -> impl Sized {
+b.provide(PlanFilter)                                      // the filter is a bean
+    .plugin(McpServer::new().view_filter::<PlanFilter>())
+    .build_state().await
+# }
+# fn main() {}
+```
+
+- `visible` is asked about every member the session would otherwise serve —
+  catalog, session-private and registry, all three families — on every list
+  **and** every lookup: a hidden member answers exactly like an unknown one
+  (tool -32601, resource -32002, prompt -32602; `resources/subscribe` and
+  completion too). It only ever narrows: groups and the scope/role filter
+  still apply.
+- It is synchronous and runs on the hot path: no I/O. Resolve what it needs
+  upstream (an HTTP layer, a loopback `.extension(..)`, `session_init`) and
+  read it from the view.
+- `McpMember`: `name()` (tool/prompt name, resource URI), `group()`, `meta()`,
+  `requirements()`, `is_tool()`/`is_resource()`/`is_prompt()`, `as_tool()`.
+  `McpView`: `session_id()`, `is_persistent()`, `is_group_enabled(name)`,
+  `principal()`, `subject()`, `has_role`, `has_scope`, `identity::<T>()`,
+  `extension::<T>()` (by reference), `header(name)`, `parts()`.
+- A session-private member the filter hides does not shadow a registry
+  namesake: the caller gets the registry one, if the filter admits it.
+- Nothing is pushed when the filter's answer changes: call
+  `McpSession::notify_list_changed()` (via `McpSessions`) for the sessions
+  concerned. A missing filter bean is a boot panic.
+
+### Extension methods — `#[method]` and `capabilities.extensions`
+
+A JSON-RPC method MCP itself does not define — an official extension
+(`skills/list`) or a vendor one (`acme/render`) — is a `#[method]` member of
+a `#[routes]` MCP impl, next to its tools:
+
+```rust
+#[derive(serde::Deserialize)]
+pub struct GetSkill { pub uri: String }
+
+#[controller]
+pub struct Skills;
+
+#[routes]
+impl Skills {
+    #[method(name = "skills/list")]
+    async fn list(&self) -> serde_json::Value {
+        serde_json::json!({ "skills": [] })
+    }
+
+    #[method(name = "skills/get", scopes = "skills:read")]
+    async fn get(&self, Params(p): Params<GetSkill>) -> Result<serde_json::Value, McpError> {
+        Err(McpError::NotFound(p.uri))
+    }
+
+    /// A vendor method reading its raw call.
+    #[method(name = "acme/echo")]
+    async fn echo(&self, call: MethodCall) -> Json<serde_json::Value> {
+        Json(call.params)
+    }
+}
+
+# async fn __doc(b: AppBuilder) -> impl Sized {
+b.plugin(
+        McpServer::new()
+            // advertised under `capabilities.extensions` by `initialize` and `server/discover`
+            .with_extension("io.modelcontextprotocol/skills", serde_json::json!({})),
+    )
+    .build_state().await
+    .register_mcp_service::<Skills>()
+# }
+# fn main() {}
+```
+
+- `#[method(name = "…")]` — `name` is required and is the wire method;
+  `scopes` / `any_scopes` as on `#[tool]`. No `group`: a method is not a list
+  entry. Guards, interceptors, `#[roles]` and `#[inject(identity)]` work as on
+  a tool.
+- Parameters: `&self` plus `Params<T>` (`T: Deserialize` — no schema is
+  published, so no `JsonSchema`/`ObjectParams`), `MethodCall` (`method`,
+  raw `params`, `parts`, `session`, `session_id()`, `extension::<T>()`,
+  `identity::<T>()`), `CancelToken`, `McpSession`, `Progress`. Not
+  `McpClient` (compile error).
+- Returns: `serde_json::Value`, `Json<T>`, `()` (an empty object) or
+  `Result<_, E: Into<McpError>>`. The value is the JSON-RPC `result`,
+  verbatim; every `McpError` is a JSON-RPC error (no `isError` plane).
+- Served over stateful HTTP, `mcp.stateless` and loopback alike. A method no
+  member declares stays `-32601`.
+- `McpServer::with_extension(id, settings)`: `settings` must be a JSON object
+  (boot panic otherwise); the same id again replaces it. Two extensions gate
+  their methods: `skills/*` needs `io.modelcontextprotocol/skills`
+  (`resources/directory/read` needs its `{"directoryRead": true}`), `tasks/*`
+  needs `io.modelcontextprotocol/tasks` — unadvertised, the endpoint answers
+  `-32601` and a `#[method]` so named is a **boot panic**. So is a core MCP
+  method name (`tools/list`, …) and a duplicate method name across services.
+- Tests: `mcp.call_method::<Out>("skills/list", ()).await?` /
+  `call_method_raw(method, params)` (`serde_json::Value`) on the `app.mcp()`
+  client.
 
 ### Endpoint-wide dynamic members — `McpRegistry`
 
@@ -7138,8 +7292,13 @@ cases live in `r2e-mcp/tests`.
   `McpError::tool(...)` degrades there to JSON-RPC -32603.
 - Do not give a prompt non-string argument fields — MCP argument values are
   strings.
-- Do not try to hide a tool by filtering `tools/list` yourself — use a group;
-  an `opt_in` member is also uncallable, a filtered one would not be.
+- Do not try to hide a tool by filtering `tools/list` yourself (a layer, a
+  wrapper) — use a group, or `McpServer::view_filter` for a per-request rule:
+  both make the member uncallable too, a hand-filtered list would not.
+- Do not do I/O in `McpViewFilter::visible` — it runs per member on every
+  list and lookup; read a value resolved upstream.
+- Do not hand-route an extension method with an axum layer or a raw handler —
+  declare a `#[method]` member; do not name one after a core MCP method.
 - Do not put HTTP routes and MCP members in the same `#[routes]` impl — it
   is a compile error; write one adapter type per port over a shared bean.
 - Do not write `#[mcp_routes]` — it was removed in 0.11; the macro is `#[routes]`.

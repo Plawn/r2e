@@ -404,6 +404,69 @@ async fn file_names(&self, c: Completion) -> Completions {
   provider naming no argument or variable with
   `McpMemberError::InvalidCompletion`.
 
+## Extension methods and capabilities
+
+MCP extensions (`io.modelcontextprotocol/skills`, MCP Apps, a vendor's own)
+add JSON-RPC methods MCP itself does not define, and announce themselves under
+`capabilities.extensions`. Both halves are declarative:
+
+```rust
+#[derive(Deserialize)]
+pub struct GetSkill { pub uri: String }
+
+#[controller]
+pub struct Skills {
+    #[inject] catalog: SkillCatalog,
+}
+
+#[routes]
+impl Skills {
+    #[method(name = "skills/list")]
+    async fn list(&self) -> Json<SkillList> {
+        Json(self.catalog.list())
+    }
+
+    #[method(name = "skills/get", scopes = "skills:read")]
+    async fn get(&self, Params(p): Params<GetSkill>) -> Result<Json<Skill>, McpError> {
+        self.catalog.get(&p.uri).map(Json).ok_or(McpError::NotFound(p.uri))
+    }
+}
+
+AppBuilder::new()
+    .plugin(McpServer::new().with_extension("io.modelcontextprotocol/skills", json!({})))
+    .build_state().await
+    .register_mcp_service::<Skills>()
+```
+
+- A `#[method(name = "…")]` member lives in the same `#[routes]` impl as
+  tools, resources and prompts, and is served like a tool: same guards,
+  interceptors, `#[roles]`, `scopes` / `any_scopes`, `#[inject(identity)]`,
+  same `McpError` → JSON-RPC error table. It is not a list entry, so it has no
+  `group` and no schema.
+- Parameters: `Params<T>` (`T: Deserialize`), `MethodCall` (the raw call:
+  `method`, `params`, `parts`, `session`, `session_id()`, `extension::<T>()`,
+  `identity::<T>()`), `CancelToken`, `McpSession`, `Progress`. `McpClient` is a
+  compile error: an extension method answers its request directly.
+- Return `serde_json::Value`, `Json<T>`, `()` (an empty object) or
+  `Result<_, E: Into<McpError>>`; the value is the JSON-RPC `result`,
+  verbatim. There is no in-result error plane.
+- It works over stateful HTTP, `mcp.stateless` and the loopback transport. A
+  method nobody declares still answers `-32601`.
+- `McpServer::with_extension(id, settings)` advertises the extension in
+  `initialize` and `server/discover`. `settings` is the extension's settings
+  object (`json!({})` when it has none; anything but an object aborts
+  startup); declaring an id twice keeps the last settings.
+- Two official extensions gate their methods, so a server cannot serve them
+  unannounced: `skills/list` / `skills/get` need
+  `io.modelcontextprotocol/skills` (`resources/directory/read` needs its
+  `{"directoryRead": true}` setting), `tasks/get` / `tasks/update` /
+  `tasks/cancel` need `io.modelcontextprotocol/tasks`. Without the extension
+  the endpoint answers `-32601`, and a `#[method]` with such a name aborts
+  startup with the `with_extension` call to add. A core MCP method name
+  (`tools/list`, …) and a method name declared twice abort startup too.
+- In tests: `mcp.call_method::<Out>("skills/list", ()).await?`, or
+  `call_method_raw` for the untyped `Value`.
+
 ## Not implemented (deliberately)
 
 SEP-2577 deprecates server-initiated sampling (`sampling/createMessage`),
@@ -517,7 +580,7 @@ interceptors):
 | Transport | Crate feature | Opens a session by | Identity |
 |---|---|---|---|
 | Streamable HTTP (default) | `mcp` | `POST {mcp.path}` + `initialize` | `mcp.auth` bearer / Basic, struct-level `#[inject(identity)]` per request |
-| In-process loopback | `mcp-loopback` (r2e-mcp `loopback`) | `McpLoopback::connect(id, identity)` | resolved once at connect, carried by every message |
+| In-process loopback | `mcp-loopback` (r2e-mcp `loopback`) | `McpLoopback::connect(id, identity)` / `.session(id)…connect()` | resolved once at connect, carried by every message |
 
 The loopback transport is for code running *inside* the app that needs to call
 its own tools as an MCP client — an agent loop, one session per agent thread —
@@ -580,6 +643,38 @@ field reading a header the loopback request does not carry rejects the connect
 with `LoopbackError::Rejected(status, body)` — that identity is HTTP-only;
 keep it on the HTTP adapter or make the field `Option<…>`.
 
+**Request extensions.** Over HTTP, an upstream layer hands context to the
+endpoint through `request.extensions_mut()` (a tenant, a workspace, a
+correlation id). A loopback session has no such layer, so the caller attaches
+the values itself:
+
+```rust
+let session = loopback
+    .session("agent-42")
+    .identity(LoopbackIdentity::Principal(principal))
+    .extension(WorkspaceId(7))
+    .extension(Plan::Beta)
+    .connect()
+    .await?;
+```
+
+The values are part of the request parts every message of the session
+carries, so they read exactly like an HTTP layer's: `ToolCall::extension::<T>()`
+(and `ResourceCall` / `PromptCall` / `MethodCall`), `SessionInit::extension`,
+`McpView::extension`, an `#[inject(request)]` field, a guard's request parts,
+`ExtensionTenantResolver`. One value per type — a second `T` replaces the
+first. Identity is not an extension: an `McpPrincipal` passed to
+`.extension(..)` is dropped, only `.identity(..)` authenticates the session.
+`connect(id, identity)` stays as the short form without extensions.
+
+Custom **headers** are deliberately not settable on a loopback session: a
+header is the network's encoding of context an in-process caller already
+holds as a value, and an extension can only be attached from inside the
+process — nothing a remote client sends can forge one. Code that must serve
+both transports reads the extension, and the HTTP side gets it from a layer
+that parses the header. The test client mirrors this:
+`app.mcp().extension(WorkspaceId(7)).await`.
+
 Other errors: `NotMounted` (`mcp.enabled = false`, connect before the Routes
 stage ran, or the router was dropped), `Stateless` (`mcp.stateless = true`
 keeps no sessions), `InvalidSessionId` (empty or not header-safe),
@@ -624,6 +719,34 @@ impl GitTools {
 - **Hidden = not callable.** A member of a disabled group answers exactly like
   an unknown one (`-32601` tool, `-32002` resource, `-32602` prompt): no
   enumeration oracle. The scope/role filter still applies on top.
+
+Dynamic members join groups too — `DynamicTool`, `DynamicResource` and
+`DynamicPrompt` all have `.group(name)` (visible by default) and
+`.opt_in_group(name)` (hidden until enabled), whether the member is
+session-private or in the `McpRegistry`:
+
+```rust
+registry.add_tool(
+    DynamicTool::new("git_blame")
+        .opt_in_group("git")                  // joins the catalog's "git" group
+        .handler(|p: BlameIn, _call: ToolCall| async move { blame(&p.path) }),
+)?;
+```
+
+- The name may be a catalog group or one only dynamic members declare. A
+  group has one `opt_in` value everywhere it is declared — the catalog, a
+  session's private members, the registry — otherwise the add is
+  `McpMemberError::GroupMismatch`.
+- Group state stays per session, registry members included: a session that
+  enables `git` sees the registry's `git` members, the others do not. This
+  is how a plugin host ships an opt-in pack to everyone and lets each session
+  (or `session_init`) switch it on.
+- `enable_group` / `disable_group` on a name no member declares is
+  `McpMemberError::UnknownGroup`. In one `SessionToolset`, members are added
+  before groups are switched, so a single batch can add a member and enable
+  its group. `McpSession::groups()` lists catalog groups, then dynamic ones.
+- A stateless request has no session to switch: under `mcp.stateless`, group
+  state comes from `session_init` (per request) or a view filter.
 
 ### During the session — `McpSession`
 
@@ -758,6 +881,58 @@ impl PackLoader {
   `mcp.enabled = false` (accepts members, serves nothing). The endpoint is
   mounted even when no `#[routes]` MCP service is registered, so a
   registry-only server is a valid shape.
+
+### Per request — `McpViewFilter`
+
+The three levers above are session state: decided once, changed explicitly.
+When visibility must follow the **request** — a tenant or plan resolved by an
+upstream layer, a right that changes mid-session, a stateless deployment —
+install a view filter:
+
+```rust
+#[derive(Clone)]
+pub struct PlanFilter;
+
+impl McpViewFilter for PlanFilter {
+    fn visible(&self, member: McpMember<'_>, view: &McpView<'_>) -> bool {
+        // Members tagged `_meta.beta` exist only for beta plans.
+        let beta_only = member.meta().is_some_and(|meta| meta.contains_key("beta"));
+        !beta_only || view.extension::<Plan>().is_some_and(|plan| plan.beta)
+    }
+}
+
+AppBuilder::new()
+    .provide(PlanFilter)                                   // the filter is a bean
+    .plugin(McpServer::new().view_filter::<PlanFilter>())
+```
+
+- The filter is asked about every member the session would otherwise serve —
+  catalog, session-private and registry; tools, resources (templates
+  included) and prompts — on every list **and** every lookup. A member it
+  hides answers exactly like an unknown one (`-32601` / `-32002` / `-32602`),
+  for `resources/subscribe` and completion too: no enumeration oracle, and
+  no way to call what the list does not show.
+- It only narrows. Groups and the scope/role filter apply first; the filter
+  cannot reveal a member they hide.
+- `visible` is synchronous and on the hot path (once per member per list):
+  no I/O, no locks held across calls. Resolve what it needs upstream — an
+  HTTP layer or a loopback `.extension(..)`, `session_init` — and read it
+  from the view.
+- `McpMember` is the route itself: `name()` (tool or prompt name, resource
+  URI or template text), `group()`, `meta()`, `requirements()` (declared
+  scopes and roles), `is_tool()` / `is_resource()` / `is_prompt()`,
+  `as_tool()`. `McpView` is the caller: `session_id()`, `is_persistent()`
+  (`false` for a sessionless request), `is_group_enabled(name)`, `principal()`,
+  `subject()`, `has_role`, `has_scope`, `identity::<T>()`, `extension::<T>()`,
+  `header(name)`, `parts()`.
+- A session-private member the filter hides does not shadow a registry
+  namesake: the caller is served the registry one, if the filter admits it.
+- The endpoint cannot know when the filter's answer changes. When it does
+  for a live session (a plan upgrade), call `McpSession::notify_list_changed()`
+  on it (through `McpSessions`) so the client re-lists. Legacy resource
+  subscriptions are checked when they are taken, not on each update.
+- The bean is resolved at startup (`override_bean` works in tests); a missing
+  one aborts startup.
 
 ### Security, capabilities, stateless
 

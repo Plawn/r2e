@@ -1,0 +1,5 @@
+error: unknown #[method] argument `group`; expected `name`, `scopes`, `any_scopes`
+  --> cases/mcp/fail/mcp_method_unknown_key.rs:11:34
+   |
+11 |     #[method(name = "acme/list", group = "admin")]
+   |                                  ^^^^^

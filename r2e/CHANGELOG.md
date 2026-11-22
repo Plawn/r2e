@@ -17,6 +17,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- MCP (`mcp`): extension JSON-RPC methods (`#[method]`,
+  `McpServer::with_extension`), groups on dynamic members and a per-request
+  `McpViewFilter`; `mcp-loopback`: typed request extensions on loopback
+  sessions (#1444, #1445, #1446) — see the `r2e-mcp` changelog. The prelude
+  gains `method`, `MethodCall`, `McpMember`, `McpView`, `McpViewFilter`.
+
 - Feature `scheduler-testing` (`scheduler` + `r2e-scheduler/testing`):
   `app.scheduler().run("job").await` fires a `#[scheduled]` job from a test.
   Dev-graph only — enable it from `[dev-dependencies]`.

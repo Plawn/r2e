@@ -15,6 +15,56 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `McpRoutes` gains the public field `methods: Vec<MethodRoute>` (#1444).
+  Generated code is unaffected; a hand-built `McpRoutes { .. }` literal adds
+  `methods: Vec::new()`.
+
+### Added
+
+- Extension JSON-RPC methods (#1444): `#[method(name = "…")]` members of a
+  `#[routes]` MCP impl serve methods MCP itself does not define
+  (`skills/list`, a vendor method) with the guards, roles, scopes
+  (`scopes` / `any_scopes`) and identity of a tool. Parameters: `Params<T>`
+  (`T: Deserialize`), `MethodCall`, `CancelToken`, `McpSession`, `Progress`;
+  returns `serde_json::Value`, `Json<T>`, `()` or `Result<_, E:
+  Into<McpError>>` (`IntoMethodResult`). Served over stateful HTTP,
+  `mcp.stateless` and loopback; an undeclared method stays `-32601`.
+- `McpServer::with_extension(id, settings)` advertises a protocol extension
+  under `capabilities.extensions` in `initialize` and `server/discover`
+  (#1444). `skills/*` and `tasks/*` are only routed once their extension is
+  advertised; startup refuses a `#[method]` so named without it, a core MCP
+  method name, a duplicate method name and non-object settings.
+- Test client: `McpTestClient::call_method` / `call_method_raw` (#1444).
+- Loopback request extensions (#1445): `McpLoopback::session(id)` returns a
+  `LoopbackConnect` builder — `.identity(..)`, `.extension(value)`,
+  `.connect()`. Extensions ride the request parts of every message of the
+  session and read as over HTTP (`ToolCall::extension`,
+  `SessionInit::extension`, `#[inject(request)]`, guards, tenant resolvers).
+  `connect(id, identity)` is unchanged.
+- Groups on dynamic members (#1446): `.group(name)` / `.opt_in_group(name)`
+  on `DynamicTool`, `DynamicResource` and `DynamicPrompt`, session-private or
+  in `McpRegistry`; the group is switched per session with
+  `enable_group` / `disable_group` / `SessionToolset`, registry members
+  included. A name declared with two different `opt_in` values is the new
+  `McpMemberError::GroupMismatch` (the enum is `#[non_exhaustive]`).
+- Per-request view filter (#1446): `McpServer::view_filter::<T>()` with
+  `T: McpViewFilter` decides on every list and lookup which members exist
+  for the caller (`McpMember`, `McpView`); a hidden member answers like an
+  unknown one. Works under `mcp.stateless`.
+- `McpSession::notify_list_changed()` re-announces the three lists to one
+  session (#1446).
+
+### Changed
+
+- `McpSession::groups()` also lists the groups only dynamic members declare,
+  after the catalog's (#1446).
+- `McpSession::apply(SessionToolset)` adds members before switching groups,
+  so one batch can add a member and enable its group (#1446).
+- `enable_group` / `disable_group` accept a group declared only by a dynamic
+  member; a name no member declares is still `UnknownGroup` (#1446).
+
 ## [0.13.0] - 2026-11-17
 
 ### Breaking

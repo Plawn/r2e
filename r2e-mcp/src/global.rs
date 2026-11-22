@@ -131,7 +131,9 @@ impl McpRegistry {
         let mut draft = Draft {
             catalog: Some(catalog.keys()),
             enabled: Vec::new(),
+            dynamic: Default::default(),
             private: PrivateMembers::default(),
+            registry: None,
         };
         let revalidate =
             |err: McpMemberError| panic!("MCP registry member added before boot is invalid: {err}");
@@ -181,7 +183,9 @@ impl McpRegistry {
             draft: Draft {
                 catalog,
                 enabled: Vec::new(),
+                dynamic: Default::default(),
                 private: current.private.clone(),
+                registry: None,
             },
         };
         let out = f(&mut edit)?;

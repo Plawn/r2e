@@ -26,6 +26,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- The prelude re-exports the `#[method]` attribute (MCP extension methods,
+  #1444).
 - A route parameter publishes its type's own JSON Schema (#1441).
   `di::meta::param_schema_of::<T>()` (feature `openapi`) is the inline schema
   of a `T: JsonSchema` — sub-schemas inlined, no `$schema` / `title` — and

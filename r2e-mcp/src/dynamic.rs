@@ -35,13 +35,13 @@ use crate::params::{
 };
 use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 use crate::route::{
-    Completion, CompletionProvider, IntoCompletion, PromptArgumentDef, PromptCall, PromptInvoke,
+    Completion, CompletionProvider, IntoCompletion, McpGroup, PromptArgumentDef, PromptCall, PromptInvoke,
     PromptRoute, ResourceCall, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
     ToolCall, ToolInvoke, ToolRoute,
 };
 
-/// The four requirement setters every dynamic builder shares (its
-/// `requirements: ToolRequirements` field).
+/// The requirement and group setters every dynamic builder shares (its
+/// `requirements: ToolRequirements` and `group: Option<McpGroup>` fields).
 macro_rules! requirement_setters {
     () => {
         /// Scopes the caller must all hold (requires `mcp.auth`).
@@ -65,6 +65,31 @@ macro_rules! requirement_setters {
         /// Roles the caller must all hold.
         pub fn all_roles(mut self, roles: &'static [&'static str]) -> Self {
             self.requirements.all_roles = roles;
+            self
+        }
+
+        /// Put the member in the group `name`, enabled by default: a
+        /// session hides it with
+        /// [`McpSession::disable_group`](crate::McpSession::disable_group).
+        /// Same semantics as a catalog member's `group = "..."` — see
+        /// [`McpGroup`].
+        pub fn group(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+            self.group = Some(McpGroup {
+                name: name.into(),
+                opt_in: false,
+            });
+            self
+        }
+
+        /// Put the member in the opt-in group `name`: hidden — and not
+        /// callable — until the session enables it
+        /// ([`McpSession::enable_group`](crate::McpSession::enable_group),
+        /// [`SessionToolset::enable`](crate::SessionToolset::enable)).
+        pub fn opt_in_group(mut self, name: impl Into<Cow<'static, str>>) -> Self {
+            self.group = Some(McpGroup {
+                name: name.into(),
+                opt_in: true,
+            });
             self
         }
     };
@@ -173,6 +198,7 @@ pub struct DynamicTool {
     annotations: ToolAnnotations,
     requirements: ToolRequirements,
     meta: Option<MetaObject>,
+    group: Option<McpGroup>,
 }
 
 impl DynamicTool {
@@ -187,6 +213,7 @@ impl DynamicTool {
             annotations: ToolAnnotations::default(),
             requirements: ToolRequirements::NONE,
             meta: None,
+            group: None,
         }
     }
 
@@ -250,7 +277,7 @@ impl DynamicTool {
             output_schema: self.output_schema,
             annotations: self.annotations,
             requirements: self.requirements,
-            group: None,
+            group: self.group,
             meta: self.meta,
             invoke,
         }
@@ -269,6 +296,7 @@ pub struct DynamicResource {
     requirements: ToolRequirements,
     completions: Vec<CompletionProvider>,
     meta: Option<MetaObject>,
+    group: Option<McpGroup>,
 }
 
 impl DynamicResource {
@@ -283,6 +311,7 @@ impl DynamicResource {
             requirements: ToolRequirements::NONE,
             completions: Vec::new(),
             meta: None,
+            group: None,
         }
     }
 
@@ -363,7 +392,7 @@ impl DynamicResource {
             description: self.description,
             mime_type: self.mime_type,
             requirements,
-            group: None,
+            group: self.group,
             completions: self.completions,
             meta: self.meta,
             invoke,
@@ -459,6 +488,7 @@ pub struct DynamicPrompt {
     requirements: ToolRequirements,
     completions: Vec<CompletionProvider>,
     meta: Option<MetaObject>,
+    group: Option<McpGroup>,
 }
 
 impl DynamicPrompt {
@@ -471,6 +501,7 @@ impl DynamicPrompt {
             requirements: ToolRequirements::NONE,
             completions: Vec::new(),
             meta: None,
+            group: None,
         }
     }
 
@@ -529,7 +560,7 @@ impl DynamicPrompt {
             description: self.description,
             arguments: H::arguments(),
             requirements: self.requirements,
-            group: None,
+            group: self.group,
             completions: self.completions,
             meta: self.meta,
             invoke,

@@ -17,6 +17,9 @@ mod interceptors;
 mod lifecycle;
 #[cfg(feature = "loopback")]
 mod loopback;
+#[cfg(feature = "loopback")]
+mod loopback_extensions;
+mod methods;
 mod mount;
 mod mrtr;
 mod pagination;
@@ -32,4 +35,5 @@ mod persistence;
 mod sessions;
 #[cfg(feature = "testing")]
 mod test_client;
+mod view_filter;
 mod wire_golden;
