@@ -15,20 +15,19 @@ mod validate;
 mod view;
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use r2e_core::http::Parts;
 use rmcp::model::{
     ExtensionCapabilities, Implementation, PromptsCapability, ResourcesCapability,
     ServerCapabilities, ServerConfig, Tool, ToolsCapability,
 };
-use rmcp::service::{RequestContext, RoleServer};
 
 pub(crate) use crate::identity::{caller_in, Caller};
 use crate::registry::RegisteredMcpService;
 use crate::route::{McpGroup, MethodRoute, ToolRoute};
 
+pub(crate) use family::Admit;
 use family::{family_members, template_members, Family, TemplateFamily};
 use validate::require_auth_for_scopes;
 pub(crate) use validate::{prompt_completions_valid, resource_completions_valid, scopes_allowed};
@@ -110,13 +109,6 @@ fn method_refusal(method: &str, capabilities: &ServerCapabilities) -> Option<Str
     ))
 }
 
-/// The caller of a JSON-RPC message: the `mcp.auth` principal or a
-/// service's struct identity, from the HTTP request parts the transport
-/// copies into the request extensions.
-pub(crate) fn caller_of(context: &RequestContext<RoleServer>) -> Option<Caller<'_>> {
-    caller_in(context.extensions.get::<Parts>())
-}
-
 /// What a dynamic member is validated against: the catalog's keys, group
 /// names and the two serving flags — nothing that dispatches.
 ///
@@ -133,6 +125,8 @@ pub(crate) struct CatalogKeys {
     /// `mcp.auth` is on: session-private members may declare scopes.
     pub(crate) auth_enabled: bool,
     group_index: HashMap<Cow<'static, str>, usize>,
+    /// Each catalog group's `opt_in`, by index.
+    group_opt_in: Box<[bool]>,
     /// Every catalog key, hidden groups included: a session-private member
     /// may not reuse one (it would shadow a member another session sees).
     tool_keys: HashSet<String>,
@@ -144,6 +138,12 @@ pub(crate) struct CatalogKeys {
 impl CatalogKeys {
     pub(crate) fn group(&self, name: &str) -> Option<usize> {
         self.group_index.get(name).copied()
+    }
+
+    /// Whether the catalog declares the group `name` opt-in (`None` = not a
+    /// catalog group).
+    pub(crate) fn group_opt_in(&self, name: &str) -> Option<bool> {
+        self.group(name).map(|index| self.group_opt_in[index])
     }
 
     /// `mcp.auth.filter-members` (and auth on): per-caller list filtering.
@@ -403,10 +403,13 @@ impl Catalog {
             prompts,
         };
         let default_enabled: Box<[bool]> = groups.iter().map(|g| !g.opt_in).collect();
+        let group_opt_in: Box<[bool]> = groups.iter().map(|g| g.opt_in).collect();
         let default_view = members
             .view(
                 options.filter_members,
+                None,
                 default_enabled,
+                BTreeMap::new(),
                 PrivateMembers::default(),
             )
             .expect("catalog members were validated above");
@@ -419,6 +422,7 @@ impl Catalog {
                 filter: options.filter_members,
                 auth_enabled: options.auth_enabled,
                 group_index,
+                group_opt_in,
                 tool_keys,
                 resource_keys,
                 template_shapes,
@@ -436,9 +440,16 @@ impl Catalog {
     pub(crate) fn view(
         &self,
         enabled: Box<[bool]>,
+        dynamic: BTreeMap<String, bool>,
         private: PrivateMembers,
     ) -> Result<SessionView, String> {
-        self.members.view(self.keys.filter, enabled, private)
+        self.members.view(
+            self.keys.filter,
+            Some(&self.keys),
+            enabled,
+            dynamic,
+            private,
+        )
     }
 
     /// The validation index dynamic members are checked against.

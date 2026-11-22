@@ -30,7 +30,8 @@ use crate::registry::McpServiceRegistry;
 use crate::request_log::McpRequestLog;
 use crate::resource_updates::McpResourceUpdates;
 use crate::session::{
-    erase_init, McpSessionInit, McpSessionStore, McpSessions, SessionBindings, SessionInitFn,
+    erase_init, erase_view_filter, McpSessionInit, McpSessionStore, McpSessions, McpViewFilter,
+    SessionBindings, SessionInitFn, ViewFilterFn,
     SessionPersistence, TrackSessionId, TransportStore,
 };
 
@@ -43,6 +44,9 @@ const SESSION_STORE_STATELESS: &str = "McpServer: a session store needs sessions
 /// Resolves the `session_init` hook bean from the built graph (`None` = no
 /// such bean).
 type ResolveInit = fn(&BeanContext) -> Option<SessionInitFn>;
+
+/// Resolves the `view_filter` bean from the built graph.
+type ResolveViewFilter = fn(&BeanContext) -> Option<ViewFilterFn>;
 
 /// `(target, message)` of the ERROR events rmcp emits for a benign condition;
 /// [`McpServer`]'s `setup` contributes each as a
@@ -159,6 +163,8 @@ pub struct McpServer {
     token_validator: Option<McpTokenValidator>,
     /// Resolves the [`McpSessionInit`] bean once the graph is built.
     session_init: Option<(&'static str, ResolveInit)>,
+    /// Resolves the [`McpViewFilter`] bean once the graph is built.
+    view_filter: Option<(&'static str, ResolveViewFilter)>,
     /// `capabilities.extensions`, by extension id.
     extensions: Vec<(String, serde_json::Value)>,
 }
@@ -379,6 +385,29 @@ impl McpServer {
     {
         self.session_init = Some((std::any::type_name::<T>(), |beans| {
             beans.try_get::<T>().map(erase_init)
+        }));
+        self
+    }
+
+    /// Decide per request which members exist for the caller: the `T`
+    /// bean's [`McpViewFilter::visible`] is asked about every member the
+    /// session would otherwise serve, on every list and every lookup — a
+    /// member it hides answers like an unknown one (`-32601` for a tool,
+    /// `-32002` for a resource, `-32602` for a prompt).
+    ///
+    /// Where [`session_init`](Self::session_init) shapes a session once,
+    /// when it opens, the filter runs on each request — so it also works
+    /// without sessions (`mcp.stateless`) and follows a caller whose rights
+    /// change mid-session.
+    ///
+    /// `T` is resolved from the bean graph (so tests can `override_bean`
+    /// it); a missing bean aborts startup.
+    pub fn view_filter<T>(mut self) -> Self
+    where
+        T: McpViewFilter + Clone,
+    {
+        self.view_filter = Some((std::any::type_name::<T>(), |beans| {
+            beans.try_get::<T>().map(erase_view_filter)
         }));
         self
     }
@@ -753,6 +782,7 @@ impl Plugin for McpServer {
         let sessions_slot: Arc<OnceLock<McpSessions>> = Arc::new(OnceLock::new());
         let members_slot: Arc<OnceLock<McpRegistry>> = Arc::new(OnceLock::new());
         let init_slot: Arc<OnceLock<SessionInitFn>> = Arc::new(OnceLock::new());
+        let filter_slot: Arc<OnceLock<ViewFilterFn>> = Arc::new(OnceLock::new());
         // The session store: the builder's, else an `Arc<dyn McpSessionStore>`
         // bean — resolved from the built graph like the token validator, so a
         // test-pinned store (`override_bean`) is the one used.
@@ -762,10 +792,12 @@ impl Plugin for McpServer {
             let sessions_slot = Arc::clone(&sessions_slot);
             let members_slot = Arc::clone(&members_slot);
             let init_slot = Arc::clone(&init_slot);
+            let filter_slot = Arc::clone(&filter_slot);
             let store_slot = Arc::clone(&store_slot);
             let fallback = sessions.clone();
             let members_fallback = members.clone();
             let session_init = self.session_init;
+            let view_filter = self.view_filter;
             let session_store = self.session_store;
             ctx.after_build(move |dctx| {
                 let beans = dctx.bean_context();
@@ -787,6 +819,15 @@ impl Plugin for McpServer {
                         )
                     });
                     let _ = init_slot.set(hook);
+                }
+                if let Some((type_name, resolve)) = view_filter {
+                    let filter = resolve(beans).unwrap_or_else(|| {
+                        panic!(
+                            "McpServer::view_filter::<{type_name}>(): no `{type_name}` bean \
+                             is registered — provide or register it before `build_state()`"
+                        )
+                    });
+                    let _ = filter_slot.set(filter);
                 }
             });
         }
@@ -906,6 +947,7 @@ impl Plugin for McpServer {
                 sessions,
                 bindings: bindings.clone(),
                 init: init_slot.get().cloned(),
+                view_filter: filter_slot.get().cloned(),
                 shutdown: mcp_cancel.clone(),
                 elicitation_timeout,
                 mrtr,
