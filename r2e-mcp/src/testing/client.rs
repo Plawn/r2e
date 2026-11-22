@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use r2e_core::http::Extensions;
 use r2e_core::rt;
 use r2e_core::rt::sync::Notify;
 use r2e_test::TestApp;
@@ -53,6 +54,7 @@ impl McpTestExt for TestApp {
             who: Who::Anonymous,
             scopes: Vec::new(),
             session_id: None,
+            extensions: Extensions::new(),
         }
     }
 }
@@ -74,6 +76,7 @@ pub struct McpConnect<'a> {
     who: Who,
     scopes: Vec<String>,
     session_id: Option<String>,
+    extensions: Extensions,
 }
 
 impl McpConnect<'_> {
@@ -128,6 +131,14 @@ impl McpConnect<'_> {
         self
     }
 
+    /// Attach a typed request extension to the session — what an upstream
+    /// HTTP layer would have inserted; see
+    /// [`LoopbackConnect::extension`](crate::loopback::LoopbackConnect::extension).
+    pub fn extension<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
+        self.extensions.insert(value);
+        self
+    }
+
     /// Connect, returning the refusal instead of panicking — for tests
     /// asserting on [`LoopbackError::Unauthorized`] and friends.
     pub fn try_connect(
@@ -164,13 +175,14 @@ impl McpConnect<'_> {
                 NEXT_SESSION.fetch_add(1, Ordering::Relaxed)
             )
         });
+        let extensions = self.extensions;
         async move {
             let log = Arc::new(NotificationLog::default());
             let recorder = NotificationRecorder {
                 log: Arc::clone(&log),
             };
             let session = loopback
-                .connect_with(session_id, identity, recorder)
+                .connect_with(session_id, identity, extensions, recorder)
                 .await?;
             Ok(McpTestClient { session, log })
         }

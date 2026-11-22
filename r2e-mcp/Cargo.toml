@@ -59,6 +59,8 @@ tracing = { workspace = true }
 # TestJwt: offline HS256 tokens for the auth target (the `testing` feature's
 # `pin_mcp_validator` additionally needs `--features testing`).
 r2e-test = { workspace = true }
+# `ExtensionTenantResolver` over a loopback extension (tests/server/loopback_extensions.rs).
+r2e-tenant = { workspace = true }
 # Test-harness runtime deps — dev-deps are exempt from the tokio dep-boundary
 # check (r2e-grpc/r2e-prometheus precedent).
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
