@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-22
+
 ### Breaking
 
 - `#[derive(Params)]` / `#[routes]` codegen contract (#1441; needs `r2e-core`

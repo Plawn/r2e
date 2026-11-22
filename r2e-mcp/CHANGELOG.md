@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-22
+
 ### Breaking
 
 - `McpRoutes` gains the public field `methods: Vec<MethodRoute>` (#1444).
@@ -64,6 +66,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   so one batch can add a member and enable its group (#1446).
 - `enable_group` / `disable_group` accept a group declared only by a dynamic
   member; a name no member declares is still `UnknownGroup` (#1446).
+
+### Changed
+
+- Built against `r2e-core` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.11.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-security` 0.12.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.12.0/r2e-security/CHANGELOG.md)).
+- Built against `r2e-test` 0.12.0 — its breaking changes surface through this crate's re-exports (see [`r2e-test/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-test-v0.12.0/r2e-test/CHANGELOG.md)).
 
 ## [0.13.0] - 2026-11-17
 

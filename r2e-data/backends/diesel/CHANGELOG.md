@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../../../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-22
+
 ### Added
 
 - Rollback-only pools, for per-test rollback: `DbPool::rollback_only(url)` and
@@ -22,6 +24,11 @@ in the root [`CHANGELOG.md`](../../../CHANGELOG.md).
   Diesel's test transaction. A managed `Tx` / `DbTx` is a savepoint in it, and
   the database rolls everything back when the pool is dropped. Pinned from a
   test with `TestResource::configure` + `override_bean`.
+
+### Changed
+
+- Built against `r2e-core` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.11.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-tenant` 0.11.0 — its breaking changes surface through this crate's re-exports (see [`r2e-tenant/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-tenant-v0.11.0/r2e-tenant/CHANGELOG.md)).
 
 ## [0.10.0] - 2026-11-10
 
