@@ -6670,6 +6670,9 @@ async fn run_thread(
   an `#[inject(request)]` field, a guard's parts, `ExtensionTenantResolver`.
   One value per type (`T: Clone + Send + Sync + 'static`); an `McpPrincipal`
   passed there is dropped — identity only comes from `.identity(..)`.
+  There is no way to add **headers** to a loopback session, by decision:
+  extensions are the one carrier of caller context (typed, unreachable from
+  the network). `app.mcp()` has the same `.extension(value)` in tests.
 - The synthesized request is `POST {mcp.path}` with `Mcp-Session-Id` and,
   for `Bearer(token)`, `Authorization: Bearer {token}` (with or without
   `mcp.auth`; a token that is not a valid header value is `Unauthorized`);
