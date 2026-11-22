@@ -112,6 +112,7 @@ pub struct RouteInfo {
 ```
 
 - Path parameters (e.g.: `Path(id): Path<u64>`) are automatically detected.
+- A parameter's schema — a `#[derive(Params)]` field (path, query or header) or a `Path<T>` element — is the type's own when it implements `schemars::JsonSchema`, inlined: an enum publishes `enum: [...]`, a bounded newtype its `minimum` / `maximum` / `default`. `Option<T>` publishes `T` (optionality is `required`). A type without `JsonSchema` needs no extra bound and falls back on its name (`integer` / `number` / `boolean` for primitives, `string` otherwise). `ParamInfo.schema` carries it; `ParamInfo.param_type` is the fallback.
 - The request body is the last parameter when it reads the body (`FromRequest`), documented through its `RequestBodySchema` impl; `Option<..>` makes it optional. A `#[derive(Params)]` struct last is recognised as non-body (it reads path + query only) and is never warned about.
 - The response body comes from the return type's `ResponseBodySchema` impl, probed through `Result<T, E>` and `(StatusCode, T)` tuples; `#[returns(T)]` declares it for `impl Trait` returns.
 - Both probes use autoref specialization — a type without the trait is documented without a body and warned about once at boot.
