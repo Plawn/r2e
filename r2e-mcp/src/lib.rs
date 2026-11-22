@@ -96,9 +96,10 @@ pub use resource_updates::McpResourceUpdates;
 pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
 pub use route::{
     Completion, CompletionFuture, CompletionInvoke, CompletionProvider, CompletionRef, Completions,
-    IntoCompletion, McpGroup, McpRoutes, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke,
-    PromptRoute, ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject,
-    ToolAnnotations, ToolCall, ToolFuture, ToolInvoke, ToolRoute,
+    IntoCompletion, IntoMethodResult, McpGroup, McpRoutes, MethodCall, MethodFuture, MethodInvoke,
+    MethodRoute, PromptArgumentDef, PromptCall, PromptFuture, PromptInvoke, PromptRoute,
+    ResourceCall, ResourceFuture, ResourceInvoke, ResourceRoute, SchemaObject, ToolAnnotations,
+    ToolCall, ToolFuture, ToolInvoke, ToolRoute,
 };
 pub use service::McpService;
 pub use session::{
@@ -263,20 +264,23 @@ pub mod __macro_support {
     };
     pub use crate::params::private::Sealed as ObjectParamsSeal;
     pub use crate::params::{
-        empty_object_schema, prompt_arguments_from_schema, schema_object_for, Params, ToolParams,
+        empty_object_schema, method_params, prompt_arguments_from_schema, schema_object_for,
+        Params, ToolParams,
     };
     pub use crate::progress::Progress;
     pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
     pub use crate::route::{
-        Completion, CompletionFuture, CompletionProvider, Completions, IntoCompletion, McpGroup,
-        McpRoutes, PromptCall, PromptFuture, PromptRoute, ResourceCall, ResourceFuture,
-        ResourceRoute, SchemaObject, ToolAnnotations, ToolCall, ToolFuture, ToolRoute,
+        Completion, CompletionFuture, CompletionProvider, Completions, IntoCompletion,
+        IntoMethodResult, McpGroup, McpRoutes, MethodCall, MethodFuture, MethodRoute, PromptCall,
+        PromptFuture, PromptRoute, ResourceCall, ResourceFuture, ResourceRoute, SchemaObject,
+        ToolAnnotations, ToolCall, ToolFuture, ToolRoute,
     };
     pub use crate::service::McpService;
     pub use crate::session::McpSession;
     pub use r2e_core::NoIdentity;
     pub use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
     pub use serde_json::json;
+    pub use serde_json::Value as MethodValue;
 
     /// The owned request parts an `#[inject(identity)]` extractor runs
     /// against: a copy of the transport request's parts (headers, URI,
@@ -315,7 +319,7 @@ pub mod prelude {
     pub use crate::progress::Progress;
     pub use crate::resource_updates::McpResourceUpdates;
     pub use crate::route::{
-        Completion, CompletionRef, Completions, PromptCall, ResourceCall, ToolCall,
+        Completion, CompletionRef, Completions, MethodCall, PromptCall, ResourceCall, ToolCall,
     };
     pub use crate::service::McpService;
     pub use crate::session::{

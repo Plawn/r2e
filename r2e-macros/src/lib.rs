@@ -1635,6 +1635,22 @@ pub fn completion(_args: TokenStream, input: TokenStream) -> TokenStream {
     input
 }
 
+/// Marker attribute declaring an MCP extension method inside `#[routes]`:
+/// a JSON-RPC method the MCP specification does not define (`skills/list`),
+/// served on the same endpoint as the tools.
+///
+/// Arguments: `name = "namespace/verb"` (required — the JSON-RPC method
+/// name), plus `scopes`/`any_scopes`. The method takes `Params<T>` (the
+/// request's `params`, `T: Deserialize`), `MethodCall`, `CancelToken`,
+/// `McpSession`, `Progress` and `#[inject(identity)]`, and returns
+/// `impl IntoMethodResult` (`Json<T>`, `serde_json::Value`, `()`, or a
+/// `Result` of either). This is a no-op on its own — it is consumed by
+/// `#[routes]`.
+#[proc_macro_attribute]
+pub fn method(_args: TokenStream, input: TokenStream) -> TokenStream {
+    input
+}
+
 /// Mark an MCP `Params<T>` type as an object-shaped argument structure.
 ///
 /// Only structs with named fields are accepted. Combine this derive with

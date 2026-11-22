@@ -108,7 +108,7 @@ const GRPC_DISALLOWED_ATTRS: &[&str] = &[
 ];
 
 /// The MCP member markers, stripped off the emitted method.
-pub const MCP_MEMBER_MARKERS: &[&str] = &["tool", "resource", "prompt", "completion"];
+pub const MCP_MEMBER_MARKERS: &[&str] = &["tool", "resource", "prompt", "completion", "method"];
 
 impl MemberRules {
     /// `#[routes]`: every HTTP decorator; impl-level restrictions live in
@@ -150,7 +150,7 @@ impl MemberRules {
     /// …), named in the duplicate-identity error.
     pub fn mcp(marker: &str) -> Self {
         Self {
-            transport: "#[tool]/#[resource]/#[prompt]/#[completion]",
+            transport: "#[tool]/#[resource]/#[prompt]/#[completion]/#[method]",
             impl_block: "a #[routes] impl block with no HTTP route",
             label: "MCP",
             plugins: MCP_PLUGINS,

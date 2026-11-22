@@ -613,6 +613,153 @@ impl std::fmt::Debug for PromptRoute {
     }
 }
 
+// ── Extension methods ──────────────────────────────────────────────────────
+
+/// Everything an extension-method invocation can observe about its call —
+/// the [`ToolCall`] of a `#[method]` member.
+///
+/// An extension method is a JSON-RPC method MCP itself does not define
+/// (`skills/list`, a vendor method): the request's `params` arrive raw here
+/// and typed through `Params<T>`.
+#[derive(Clone)]
+pub struct MethodCall {
+    /// The JSON-RPC method name, as the client sent it.
+    pub method: String,
+    /// The raw `params` of the request (an empty JSON object when the
+    /// client sent none).
+    pub params: Value,
+    /// The HTTP request parts of the transport request carrying this call —
+    /// see [`ToolCall::parts`].
+    pub parts: Option<Arc<Parts>>,
+    /// The JSON-RPC request id, stringified (for logging/correlation).
+    pub request_id: String,
+    /// Cancelled when the client aborts the request or the server shuts
+    /// down.
+    pub cancel: CancelToken,
+    /// The MCP session serving this call — what an `McpSession` member
+    /// parameter resolves to. `None` only for hand-built calls.
+    pub session: Option<McpSession>,
+    /// Progress reporter bound to the request's `progressToken`.
+    pub progress: Progress,
+}
+
+impl MethodCall {
+    /// A hand-built call (tests, adapters) of `method` with the given raw
+    /// `params`. The transport-provided fields start empty, as in
+    /// [`ToolCall::new`].
+    pub fn new(method: impl Into<String>, params: Value) -> Self {
+        MethodCall {
+            method: method.into(),
+            params,
+            parts: None,
+            request_id: String::new(),
+            cancel: CancelToken::new(),
+            session: None,
+            progress: Progress::disabled(),
+        }
+    }
+
+    /// The transport session id of the session serving this call; `None`
+    /// for a sessionless request or a hand-built call.
+    pub fn session_id(&self) -> Option<&SessionId> {
+        self.session.as_ref().and_then(McpSession::id)
+    }
+
+    /// Read a request-scoped value of type `T` from the request extensions —
+    /// see [`ToolCall::extension`].
+    pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        self.parts.as_ref()?.extensions.get::<T>().cloned()
+    }
+
+    /// Resolve a request-scoped identity of type `T` — see
+    /// [`ToolCall::identity`].
+    pub fn identity<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
+        identity_in(self.parts.as_deref())
+    }
+}
+
+/// Types a `#[method]` member may return: the JSON-RPC `result` of the
+/// request, verbatim.
+///
+/// Implemented for `Json<T: Serialize>`, `serde_json::Value`, `()` (an empty
+/// object — a JSON-RPC result is never `null` in MCP) and
+/// `Result<T, E: Into<McpError>>`. There is no in-result error plane: every
+/// [`McpError`] becomes a JSON-RPC error (see
+/// [`McpError::into_error_data`]).
+pub trait IntoMethodResult {
+    /// Convert into the `result` value, or an error reported as a JSON-RPC
+    /// error.
+    fn into_method_result(self) -> Result<Value, McpError>;
+}
+
+impl IntoMethodResult for Value {
+    fn into_method_result(self) -> Result<Value, McpError> {
+        Ok(self)
+    }
+}
+
+impl IntoMethodResult for () {
+    fn into_method_result(self) -> Result<Value, McpError> {
+        Ok(Value::Object(Default::default()))
+    }
+}
+
+impl<T: serde::Serialize> IntoMethodResult for r2e_core::http::Json<T> {
+    fn into_method_result(self) -> Result<Value, McpError> {
+        serde_json::to_value(&self.0)
+            .map_err(|e| McpError::Internal(format!("failed to serialize method result: {e}")))
+    }
+}
+
+impl<T: IntoMethodResult, E: Into<McpError>> IntoMethodResult for Result<T, E> {
+    fn into_method_result(self) -> Result<Value, McpError> {
+        self.map_err(Into::into)?.into_method_result()
+    }
+}
+
+/// Boxed future returned by an extension-method invocation.
+pub type MethodFuture = Pin<Box<dyn Future<Output = Result<Value, McpError>> + Send>>;
+
+/// Type-erased extension-method closure.
+pub type MethodInvoke = Arc<dyn Fn(MethodCall) -> MethodFuture + Send + Sync>;
+
+/// One extension JSON-RPC method served by the endpoint — what `#[routes]`
+/// compiles a `#[method(name = "…")]` member into.
+///
+/// Unlike a tool, a method is not listed anywhere: a client knows it from
+/// the extension the server advertises
+/// ([`McpServer::with_extension`](crate::McpServer::with_extension)).
+#[derive(Clone)]
+pub struct MethodRoute {
+    /// The JSON-RPC method name (`skills/list`).
+    pub name: Cow<'static, str>,
+    /// Scope/role requirements (scopes checked by the generated code, roles
+    /// by the guard machinery).
+    pub requirements: ToolRequirements,
+    /// The dispatch closure.
+    pub invoke: MethodInvoke,
+}
+
+impl MethodRoute {
+    /// A hand-built method route from an async closure.
+    pub fn new<F, Fut, R>(name: impl Into<Cow<'static, str>>, handler: F) -> Self
+    where
+        F: Fn(MethodCall) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = R> + Send + 'static,
+        R: IntoMethodResult,
+    {
+        let handler = Arc::new(handler);
+        MethodRoute {
+            name: name.into(),
+            requirements: ToolRequirements::NONE,
+            invoke: Arc::new(move |call| {
+                let handler = Arc::clone(&handler);
+                Box::pin(async move { handler(call).await.into_method_result() })
+            }),
+        }
+    }
+}
+
 // ── Route bundle ───────────────────────────────────────────────────────────
 
 /// Everything one MCP service contributes to the endpoint: its tool,
@@ -627,6 +774,8 @@ pub struct McpRoutes {
     pub resources: Vec<ResourceRoute>,
     /// `#[prompt]` routes.
     pub prompts: Vec<PromptRoute>,
+    /// `#[method]` routes: extension JSON-RPC methods.
+    pub methods: Vec<MethodRoute>,
     /// Whether a member takes an [`McpSession`] parameter (it may reshape
     /// its session's member list). Turns on `listChanged` in the advertised
     /// capabilities; rejected at boot under `mcp.stateless`.

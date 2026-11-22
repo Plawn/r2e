@@ -140,6 +140,7 @@ pub fn generate_mcp_service_impl(def: &McpRoutesImplDef, deco: &MemberDecoSets) 
             McpMemberKind::Prompt => generate_prompt_route(def, member, &mcp),
             // Wired into the prompt/resource routes that reference it.
             McpMemberKind::Completion => quote! {},
+            McpMemberKind::Method => generate_method_route(def, member, &mcp),
         })
         .collect();
 
@@ -311,6 +312,36 @@ fn generate_tool_route(def: &McpRoutesImplDef, tool: &McpTool, mcp: &TokenStream
                 invoke: ::std::sync::Arc::new(
                     move |__call: #mcp::__macro_support::ToolCall|
                         -> #mcp::__macro_support::ToolFuture {
+                        let __w = __w.clone();
+                        #inner
+                        ::std::boxed::Box::pin(async move { #call })
+                    },
+                ),
+            });
+        }
+    }
+}
+
+/// One `__routes.methods.push(MethodRoute { ... })` statement for an
+/// extension method. Nothing is advertised: no schema, title or group.
+fn generate_method_route(
+    def: &McpRoutesImplDef,
+    method: &McpTool,
+    mcp: &TokenStream,
+) -> TokenStream {
+    let InvokeCall { outer, inner, call } = invoke_call(method);
+    let name = method.tool_name();
+    let requirements = super::requirements_expr(def, method, mcp);
+    quote! {
+        {
+            let __w = __wrapper.clone();
+            #outer
+            __routes.methods.push(#mcp::__macro_support::MethodRoute {
+                name: #name.into(),
+                requirements: #requirements,
+                invoke: ::std::sync::Arc::new(
+                    move |__call: #mcp::__macro_support::MethodCall|
+                        -> #mcp::__macro_support::MethodFuture {
                         let __w = __w.clone();
                         #inner
                         ::std::boxed::Box::pin(async move { #call })

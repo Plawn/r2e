@@ -12,12 +12,16 @@ use r2e_core::rt::sync::broadcast;
 use r2e_core::rt::CancelToken;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CompleteRequestParams, CompleteResult, CompletionInfo,
-    ErrorCode, ErrorData, GetPromptRequestParams, GetPromptResponse, InitializeRequestParams,
-    InitializeResult, InputRequiredResult, InputResponses, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
-    ListToolsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams,
+    CallToolRequestParams, CallToolResponse, CancelTaskParams, CompleteRequestParams,
+    CompleteResult, CompletionInfo, CustomRequest, CustomResult, ErrorCode, ErrorData,
+    GetPromptRequestParams, GetPromptResponse, GetSkillRequestParams, GetSkillResult,
+    GetTaskParams, GetTaskResult, InitializeRequestParams, InitializeResult, InputRequiredResult,
+    InputResponses, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListSkillsResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
+    ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams,
     ReadResourceResponse, ReadResourceResult, Reference, ResourceUpdatedNotificationParam,
     ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
+    UpdateTaskParams,
 };
 use rmcp::service::{RequestContext, RoleServer, SubscriptionContext};
 use rmcp::transport::streamable_http_server::SessionRestoreMarker;
@@ -33,7 +37,8 @@ use crate::pagination::{paginate, ListKey};
 use crate::progress::Progress;
 use crate::resource_updates::McpResourceUpdates;
 use crate::route::{
-    Completion, CompletionRef, Completions, PromptCall, ResourceCall, ResourceRoute, ToolCall,
+    Completion, CompletionRef, Completions, MethodCall, PromptCall, ResourceCall, ResourceRoute,
+    ToolCall,
 };
 use crate::session::{
     McpSession, McpSessions, SessionBindings, SessionId, SessionInitFn, SessionLink,
@@ -335,6 +340,67 @@ impl R2eMcpHandler {
     /// The session handle a member call carries.
     fn session(&self) -> McpSession {
         McpSession::new(Arc::clone(&self.state))
+    }
+
+    /// Serve an extension method (`#[method]`): the JSON-RPC `params` in,
+    /// the `result` out. A method no service declares answers `-32601`.
+    async fn extension_method(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        mut context: RequestContext<RoleServer>,
+    ) -> Result<Value, ErrorData> {
+        self.prepare(&context).await?;
+        let Some(route) = self.endpoint.catalog.method(method) else {
+            return Err(ErrorData::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                method.to_string(),
+                None,
+            ));
+        };
+        let call = MethodCall {
+            method: method.to_string(),
+            params: params.unwrap_or_else(|| Value::Object(Default::default())),
+            parts: take_parts(&mut context),
+            request_id: context.id.to_string(),
+            progress: Progress::new(context.meta.get_progress_token(), &context.peer),
+            cancel: context.ct.into(),
+            session: Some(self.session()),
+        };
+        (route.invoke)(call)
+            .await
+            .map_err(McpError::into_error_data)
+    }
+
+    /// An extension method rmcp models itself (`skills/*`, `tasks/*`): the
+    /// typed params are handed to the `#[method]` as JSON, and its result
+    /// must be the method's result type — rmcp then validates it.
+    async fn typed_extension_method<P, R>(
+        &self,
+        method: &'static str,
+        params: P,
+        context: RequestContext<RoleServer>,
+    ) -> Result<R, ErrorData>
+    where
+        P: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        let params = serde_json::to_value(params).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("failed to encode `{method}` params: {e}"),
+                None,
+            )
+        })?;
+        let params = (!params.is_null()).then_some(params);
+        let result = self.extension_method(method, params, context).await?;
+        serde_json::from_value(result).map_err(|e| {
+            ErrorData::new(
+                ErrorCode::INTERNAL_ERROR,
+                format!("`{method}` returned a result that is not the method's: {e}"),
+                None,
+            )
+        })
     }
 
     /// The page of a `*/list` result the request's cursor asks for
@@ -801,6 +867,77 @@ impl ServerHandler for R2eMcpHandler {
         }
     }
 
+    /// A JSON-RPC method MCP does not define: a `#[method]` of a service.
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, ErrorData> {
+        let CustomRequest { method, params, .. } = request;
+        self.extension_method(&method, params, context)
+            .await
+            .map(CustomResult::new)
+    }
+
+    // The extension methods rmcp models (and only routes once the server
+    // advertises their extension) go to the same `#[method]` members.
+
+    async fn list_skills(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, ErrorData> {
+        self.typed_extension_method("skills/list", request, context)
+            .await
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, ErrorData> {
+        self.typed_extension_method("skills/get", request, context)
+            .await
+    }
+
+    async fn read_resource_directory(
+        &self,
+        request: ReadResourceDirectoryRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceDirectoryResult, ErrorData> {
+        self.typed_extension_method("resources/directory/read", request, context)
+            .await
+    }
+
+    async fn get_task(
+        &self,
+        request: GetTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, ErrorData> {
+        self.typed_extension_method("tasks/get", request, context)
+            .await
+    }
+
+    async fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.extension_method("tasks/update", encode_params(request), context)
+            .await
+            .map(drop)
+    }
+
+    async fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        self.extension_method("tasks/cancel", encode_params(request), context)
+            .await
+            .map(drop)
+    }
+
     async fn complete(
         &self,
         request: CompleteRequestParams,
@@ -877,6 +1014,12 @@ impl ServerHandler for R2eMcpHandler {
 /// The wire form of a provider's suggestions, capped at the spec's 100
 /// values; truncating implies `hasMore` and a `total` (the provider's own,
 /// else the untruncated count).
+/// The typed params of an rmcp-modelled extension method, as the JSON a
+/// `#[method]` deserializes (`None` when they do not encode).
+fn encode_params(params: impl serde::Serialize) -> Option<Value> {
+    serde_json::to_value(params).ok().filter(|v| !v.is_null())
+}
+
 fn completion_info(completions: Completions) -> CompletionInfo {
     let Completions {
         mut values,
