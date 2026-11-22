@@ -403,3 +403,37 @@ mod batching {
         assert!(done.await.unwrap().is_ok());
     }
 }
+
+// ─── requested_protocols ───
+
+fn offered(lines: &[&str]) -> Vec<String> {
+    let mut headers = r2e_core::http::HeaderMap::new();
+    for line in lines {
+        headers.append(
+            r2e_core::http::header::SEC_WEBSOCKET_PROTOCOL,
+            line.parse().unwrap(),
+        );
+    }
+    r2e_core::web::ws::requested_protocols(&headers)
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn requested_protocols_splits_and_trims_the_offer() {
+    assert_eq!(
+        offered(&["collab.v1, app.ticket.abc ,collab.v2"]),
+        ["collab.v1", "app.ticket.abc", "collab.v2"]
+    );
+}
+
+#[test]
+fn requested_protocols_reads_every_header_line_in_order() {
+    assert_eq!(offered(&["a, b", "c"]), ["a", "b", "c"]);
+}
+
+#[test]
+fn requested_protocols_is_empty_without_the_header() {
+    assert!(offered(&[]).is_empty());
+    assert!(offered(&[" , "]).is_empty());
+}

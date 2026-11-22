@@ -407,14 +407,79 @@ pub fn is_deprecated(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| a.path().is_ident("deprecated"))
 }
 
-/// Extract `#[ws("/path")]`. Returns the path if found.
-pub fn extract_ws_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<String>> {
+/// A parsed `#[ws("/path")]` / `#[ws("/path", protocols = [..])]` attribute.
+pub struct WsAttr {
+    pub path: String,
+    /// Subprotocols the route supports, in decreasing order of preference.
+    /// Each element is an expression of type `&'static str`.
+    pub protocols: Vec<syn::Expr>,
+}
+
+/// Extract `#[ws("/path")]` or `#[ws("/path", protocols = ["a", B])]`.
+pub fn extract_ws_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<WsAttr>> {
     for attr in attrs {
         if !attr.path().is_ident("ws") {
             continue;
         }
-        let route_path: RoutePath = attr.parse_args()?;
-        return Ok(Some(route_path.path));
+        let args: syn::punctuated::Punctuated<syn::Expr, syn::Token![,]> =
+            attr.parse_args_with(syn::punctuated::Punctuated::parse_terminated)?;
+        let mut iter = args.iter();
+        let path = match iter.next() {
+            Some(syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(lit_str),
+                ..
+            })) => lit_str.value(),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[ws] requires a path string as first argument",
+                ))
+            }
+        };
+
+        let mut protocols: Option<Vec<syn::Expr>> = None;
+        for expr in iter {
+            let syn::Expr::Assign(assign) = expr else {
+                return Err(syn::Error::new_spanned(
+                    expr,
+                    "unknown #[ws] argument: expected `protocols = [..]`",
+                ));
+            };
+            let is_protocols =
+                matches!(&*assign.left, syn::Expr::Path(p) if p.path.is_ident("protocols"));
+            if !is_protocols {
+                return Err(syn::Error::new_spanned(
+                    &assign.left,
+                    "unknown #[ws] argument: expected `protocols = [..]`",
+                ));
+            }
+            if protocols.is_some() {
+                return Err(syn::Error::new_spanned(
+                    &assign.left,
+                    "duplicate `protocols` argument on #[ws]",
+                ));
+            }
+            let syn::Expr::Array(array) = &*assign.right else {
+                return Err(syn::Error::new_spanned(
+                    &assign.right,
+                    "`protocols` expects an array of `&'static str` — \
+                     `protocols = [\"chat.v2\", \"chat.v1\"]`, most preferred first",
+                ));
+            };
+            if array.elems.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    array,
+                    "`protocols` must list at least one subprotocol; \
+                     drop the argument for a route that negotiates none",
+                ));
+            }
+            protocols = Some(array.elems.iter().cloned().collect());
+        }
+
+        return Ok(Some(WsAttr {
+            path,
+            protocols: protocols.unwrap_or_default(),
+        }));
     }
     Ok(None)
 }

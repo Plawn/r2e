@@ -649,14 +649,15 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                         keep_alive,
                         member,
                     });
-                } else if let Some(ws_path) = extract_ws_attr(&all_attrs)? {
+                } else if let Some(ws_attr) = extract_ws_attr(&all_attrs)? {
                     method.attrs = all_attrs;
                     let mut member = parse_member(method, &rules)?;
                     validate_anonymous(&member)?;
                     let ws_param = find_ws_param(&member.fn_item)?;
                     strip_raw_markers(&mut member.fn_item);
                     ws_methods.push(WsMethod {
-                        path: ws_path,
+                        path: ws_attr.path,
+                        protocols: ws_attr.protocols,
                         member,
                         ws_param,
                     });

@@ -101,6 +101,22 @@ impl TestServer {
             .await
             .expect("failed to connect WebSocket")
     }
+
+    /// Connect to a WebSocket endpoint on this server, offering `protocols`
+    /// in `Sec-WebSocket-Protocol`. Read the one the server selected with
+    /// [`WsTestClient::protocol`](crate::WsTestClient::protocol).
+    ///
+    /// Panics when the handshake fails; to assert a refusal, call
+    /// [`WsTestClient::connect_with_protocols`](crate::WsTestClient::connect_with_protocols)
+    /// on [`ws_url`](Self::ws_url) — or send the request in-process, the
+    /// refusal being an ordinary HTTP response.
+    #[cfg(feature = "ws")]
+    pub async fn ws_with_protocols(&self, path: &str, protocols: &[&str]) -> crate::ws::WsTestClient {
+        let url = format!("ws://{}{}", self.addr, path);
+        crate::ws::WsTestClient::connect_with_protocols(&url, protocols)
+            .await
+            .expect("failed to connect WebSocket")
+    }
 }
 
 impl Drop for TestServer {

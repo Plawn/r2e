@@ -841,7 +841,18 @@ pub fn sse(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// // Pattern 2: return impl WsHandler (framework manages the loop)
 /// #[ws("/echo")]
 /// async fn echo(&self) -> impl WsHandler { EchoHandler }
+///
+/// // Subprotocol negotiation (`Sec-WebSocket-Protocol`), most preferred first
+/// #[ws("/collab", protocols = ["collab.v2", "collab.v1"])]
+/// async fn collab(&self, mut ws: WsStream) {
+///     let version = ws.protocol(); // Some("collab.v2") | Some("collab.v1") | None
+/// }
 /// ```
+///
+/// `protocols = [..]` takes `&'static str` expressions (literals or consts).
+/// The first entry the client also offered is echoed back in the upgrade
+/// response; when none matches, the upgrade still happens with no subprotocol
+/// and `WsStream::protocol()` is `None`.
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]

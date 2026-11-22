@@ -44,6 +44,32 @@ use dashmap::DashMap;
 use futures_util::{Sink, SinkExt};
 use serde::{de::DeserializeOwned, Serialize};
 
+// ── Subprotocols ─────────────────────────────────────────────────────────
+
+/// The subprotocols a client offered in `Sec-WebSocket-Protocol`, in order.
+///
+/// Reads the request headers, so it works **before** the upgrade — in a
+/// [`Guard`](crate::Guard) or [`PreAuthGuard`](crate::PreAuthGuard), through
+/// `ctx.headers`. That is where a browser client can carry a credential: the
+/// WebSocket API lets a page set no other request header.
+///
+/// Every header line is split on commas and trimmed; empty entries and
+/// non-visible-ASCII lines are skipped. The values are arbitrary client text.
+///
+/// ```ignore
+/// let ticket = requested_protocols(ctx.headers)
+///     .find_map(|p| p.strip_prefix("app.ticket."));
+/// ```
+pub fn requested_protocols(headers: &crate::http::HeaderMap) -> impl Iterator<Item = &str> {
+    headers
+        .get_all(crate::http::header::SEC_WEBSOCKET_PROTOCOL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter(|protocol| !protocol.is_empty())
+}
+
 // ── WsError ──────────────────────────────────────────────────────────────
 
 /// Errors from WebSocket operations.
@@ -159,6 +185,19 @@ impl WsStream {
             shutdown,
             going_away: false,
         }
+    }
+
+    /// The subprotocol negotiated for this session, if any.
+    ///
+    /// `Some` when the route declares `#[ws("/path", protocols = [..])]` and
+    /// the client offered one of them in `Sec-WebSocket-Protocol`: the value is
+    /// the one echoed back in the upgrade response (the route's most preferred
+    /// match). `None` when the route declares no protocols, or when the client
+    /// offered none of them — the upgrade is not refused in that case, so a
+    /// session that requires a subprotocol should close here (browsers fail the
+    /// connection on their side when they asked for one and got none).
+    pub fn protocol(&self) -> Option<&str> {
+        self.inner.protocol().and_then(|value| value.to_str().ok())
     }
 
     /// The app shutdown token this session observes, if any.

@@ -21,7 +21,7 @@ requires: core-concepts
 | `#[any("/path")]` | method | All-methods route (wildcards: `{*path}`) |
 | `#[fallback]` | method | App-wide catch-all (no path arg) |
 | `#[sse("/path")]` | method | SSE endpoint |
-| `#[ws("/path")]` | method | WebSocket endpoint |
+| `#[ws("/path")]`, `#[ws("/path", protocols = ["v2", "v1"])]` | method | WebSocket endpoint; `protocols` negotiates a subprotocol (`ws.protocol()`) |
 | `#[anonymous]` | method | Skip struct-level identity for this route |
 | `#[roles("r1", "r2")]` | method or impl | Any-of role check (403); impl = every non-anonymous route |
 | `#[all_roles("r1", "r2")]` | method or impl | All-of role check (403); impl = every non-anonymous route |

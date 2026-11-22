@@ -240,6 +240,9 @@ pub struct SseMethod {
 
 pub struct WsMethod {
     pub path: String,
+    /// `protocols = [..]`: the subprotocols the route supports (most preferred
+    /// first), each an expression of type `&'static str`. Empty = none.
+    pub protocols: Vec<syn::Expr>,
     pub member: MemberDef,
     /// Index of the WsStream/WebSocket parameter among typed params, or None if returning WsHandler.
     pub ws_param: Option<WsParam>,

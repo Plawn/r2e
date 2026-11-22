@@ -20,6 +20,8 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct WsTestClient {
     stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
     timeout: Duration,
+    /// The subprotocol the server echoed back in the upgrade response.
+    protocol: Option<String>,
 }
 
 /// Error type for WS test operations.
@@ -48,18 +50,69 @@ impl std::fmt::Display for WsTestError {
 
 impl std::error::Error for WsTestError {}
 
+impl WsTestError {
+    /// The status of the HTTP response that refused the handshake, when the
+    /// server answered the upgrade request with an ordinary response (a guard
+    /// denial, a failed identity, a 404) instead of `101 Switching Protocols`.
+    pub fn http_status(&self) -> Option<r2e_core::http::StatusCode> {
+        match self {
+            Self::Protocol(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                r2e_core::http::StatusCode::from_u16(response.status().as_u16()).ok()
+            }
+            _ => None,
+        }
+    }
+}
+
 impl WsTestClient {
     /// Connect to a WebSocket endpoint.
     ///
     /// `url` should be a full `ws://` URL, e.g. `ws://127.0.0.1:12345/ws/echo`.
     pub async fn connect(url: &str) -> Result<Self, WsTestError> {
-        let (stream, _response) = tokio_tungstenite::connect_async(url)
+        Self::connect_with_protocols(url, &[]).await
+    }
+
+    /// Connect to a WebSocket endpoint, offering `protocols` in
+    /// `Sec-WebSocket-Protocol` (in that order, as a browser's
+    /// `new WebSocket(url, protocols)` does).
+    ///
+    /// The subprotocol the server selected is then available from
+    /// [`protocol`](Self::protocol). A server that refuses the handshake
+    /// before the upgrade (a guard, say) yields an error whose
+    /// [`http_status`](WsTestError::http_status) is that response's status.
+    pub async fn connect_with_protocols(
+        url: &str,
+        protocols: &[&str],
+    ) -> Result<Self, WsTestError> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
+        use tokio_tungstenite::tungstenite::http::HeaderValue;
+
+        let mut request = url.into_client_request().map_err(WsTestError::Protocol)?;
+        if !protocols.is_empty() {
+            let offered = HeaderValue::from_str(&protocols.join(", "))
+                .expect("subprotocols must be valid header text");
+            request.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, offered);
+        }
+        let (stream, response) = tokio_tungstenite::connect_async(request)
             .await
             .map_err(WsTestError::Protocol)?;
+        let protocol = response
+            .headers()
+            .get(SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         Ok(Self {
             stream,
             timeout: DEFAULT_TIMEOUT,
+            protocol,
         })
+    }
+
+    /// The subprotocol the server selected (the `Sec-WebSocket-Protocol` of
+    /// the upgrade response), or `None` when it selected none.
+    pub fn protocol(&self) -> Option<&str> {
+        self.protocol.as_deref()
     }
 
     /// Set the timeout for receive operations.

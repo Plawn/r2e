@@ -1,7 +1,7 @@
 ---
 topic: websockets
 features: ws
-tokens: ~1100
+tokens: ~2100
 requires: core-concepts
 ---
 
@@ -12,6 +12,8 @@ requires: core-concepts
 - Requires feature `ws`: mark the method `#[ws("/path")]` and take `mut ws: WsStream`.
 - `send`/`send_text`/`send_json`/`send_binary` queue **and** flush; `feed`/`feed_text`/`feed_binary` queue only — you must call `flush()`, and you bound the batch size.
 - `WsStream` implements `futures::Sink<Message>`, so `SinkExt` combinators (`send_all`, `forward`) work; `WsBroadcaster` / `WsRooms` give fan-out and rooms.
+- Subprotocols: `#[ws("/path", protocols = ["v2", "v1"])]` (most preferred first) echoes the first one the client offered; the handler reads it with `ws.protocol()`.
+- Guards, pre-auth guards and identity run **before** the upgrade: a refusal is an ordinary HTTP response in the app's error envelope, and `requested_protocols(ctx.headers)` reads what the client offered (a ticket carried as a subprotocol, say).
 - Every `#[ws]` session is a tracked task joined at shutdown under `shutdown_grace_period` (it does not hold the HTTP drain).
 - A plain `while let Some(Ok(msg)) = ws.next().await` loop already exits cleanly: at shutdown `next()` sends `1001 Going Away` and returns `None`.
 - On the send side, `select!` on `ws.shutdown_requested()` (a `'static` future, safe to hold across awaits); `ws.shutdown_token()` gives the token, `CLOSE_GOING_AWAY` the `1001` constant.
@@ -60,6 +62,88 @@ ws.flush().await?;
 combinators (`send_all`, `forward`) work directly.
 
 `WsBroadcaster` / `WsRooms` (prelude) support fan-out and room semantics.
+
+### Subprotocols and refusal before the upgrade
+
+`protocols = [..]` lists the subprotocols a route speaks, most preferred first
+(`&'static str` expressions — literals or constants). The upgrade response
+echoes the **first entry of that list the client offered**, and nothing else
+of the client's `Sec-WebSocket-Protocol`; `ws.protocol() -> Option<&str>` is
+what was selected.
+
+A browser can set no header on a WebSocket except `Sec-WebSocket-Protocol`, so
+a credential often travels there next to the real subprotocol
+(`new WebSocket(url, ["collab.v1", "app.ticket.<ticket>"])`). The whole
+pipeline — pre-auth guards, identity, guards, parameters — runs **before** the
+upgrade, with the request headers at hand:
+
+```rust
+use r2e::web::ws::{requested_protocols, WsStream};
+
+/// Judges the ticket before the upgrade.
+pub struct TicketGate;
+impl SelfBuilt for TicketGate {}
+impl PreAuthGuard for TicketGate {
+    async fn check(&self, ctx: &PreAuthGuardContext<'_>) -> Result<(), Rejection> {
+        let ticket = requested_protocols(ctx.headers)
+            .find_map(|protocol| protocol.strip_prefix("app.ticket."));
+        match ticket {
+            Some("good") => Ok(()),
+            _ => Err(Rejection::forbidden("ticket refused")),
+        }
+    }
+}
+
+#[controller(path = "/collab")]
+pub struct CollabController;
+
+#[routes]
+impl CollabController {
+    #[ws("/open", protocols = ["collab.v2", "collab.v1"])]
+    #[pre_guard(TicketGate)]
+    async fn open(&self, mut ws: WsStream) {
+        // "collab.v2" or "collab.v1" — never the ticket.
+        let negotiated = ws.protocol().unwrap_or("none").to_string();
+        ws.send_text(negotiated).await.ok();
+    }
+}
+# fn main() {}
+```
+
+- `requested_protocols(&HeaderMap) -> impl Iterator<Item = &str>` — every
+  subprotocol the client offered, in order, split on `,` and trimmed. Works
+  from `GuardContext::headers` and `PreAuthGuardContext::headers` alike.
+- **A refusal is plain HTTP.** A guard's `Err(Rejection)`, a failed identity
+  or a bad path parameter on a `#[ws]` route never upgrades: it is rendered by
+  the app-level envelope (`AppBuilder::error_projection::<E>()`, default
+  `HttpError`) with its status — 401/403/…, no `Sec-WebSocket-Protocol`.
+- **No match is not a refusal.** When the client offers subprotocols and none
+  is in `protocols` (or the route declares none), the server still upgrades,
+  without `Sec-WebSocket-Protocol`; a browser then fails the connection
+  itself. `ws.protocol()` is `None` in the handler — close there, or reject
+  the offer in a guard, to make it a server-side refusal.
+- Negotiation happens on the upgrade, so it applies to every handler form:
+  a `WsStream` parameter, a raw `WebSocket` parameter (its own `protocol()`),
+  or a returned `WsHandler` (`ws.protocol()` in `on_connect`).
+- An empty `protocols = []` and any other `#[ws]` argument are compile errors.
+
+In tests (`r2e-test`, feature `ws`):
+
+```rust,ignore
+let server = app.serve().await;
+let mut ws = server.ws_with_protocols("/collab/open", &["collab.v1", "app.ticket.good"]).await;
+assert_eq!(ws.protocol(), Some("collab.v1"));
+
+// A refusal: the handshake fails with the HTTP response.
+let url = format!("{}/collab/open", server.ws_url());
+let error = WsTestClient::connect_with_protocols(&url, &["collab.v1"]).await.err().unwrap();
+assert_eq!(error.http_status(), Some(StatusCode::FORBIDDEN));
+// The body (the envelope) is asserted in-process: app.get("/collab/open")
+//   .header("sec-websocket-protocol", "collab.v1, app.ticket.bad").send().await
+```
+
+Like a browser, the test client fails a handshake that offered subprotocols
+and got none back.
 
 ### Sessions and shutdown
 

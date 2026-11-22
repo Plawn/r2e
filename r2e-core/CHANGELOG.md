@@ -26,6 +26,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- WebSocket subprotocols (#1447): `WsStream::protocol()` returns the
+  subprotocol selected by `#[ws(.., protocols = [..])]`, and
+  `web::ws::requested_protocols(&HeaderMap)` lists what the client offered in
+  `Sec-WebSocket-Protocol` — usable from a `Guard` / `PreAuthGuard`, which run
+  before the upgrade.
 - The prelude re-exports the `#[method]` attribute (MCP extension methods,
   #1444).
 - A route parameter publishes its type's own JSON Schema (#1441).
