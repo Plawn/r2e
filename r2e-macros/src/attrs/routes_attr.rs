@@ -65,7 +65,7 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl) -> syn::Result<TokenStrea
     {
         return Err(syn::Error::new_spanned(
             mcp_attr,
-            "`#[tool]`, `#[resource]`, `#[prompt]` and `#[completion]` cannot share an \
+            "`#[tool]`, `#[resource]`, `#[prompt]`, `#[completion]` and `#[method]` cannot share an \
              impl with HTTP routes: one type exposes one port. Move the MCP members to \
              their own `#[controller]` type over the same beans \
              (docs/features/25-mcp.md § One port per type).",
@@ -82,7 +82,7 @@ fn expand_impl(args: TokenStream, item: syn::ItemImpl) -> syn::Result<TokenStrea
         return Err(syn::Error::new_spanned(
             &args,
             "`group`/`opt_in` apply to MCP members — this #[routes] impl has no \
-             #[tool]/#[resource]/#[prompt]/#[completion] member",
+             #[tool]/#[resource]/#[prompt]/#[completion]/#[method] member",
         ));
     }
     let def = routes_parsing::parse(item)?;

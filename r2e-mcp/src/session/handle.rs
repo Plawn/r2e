@@ -60,28 +60,25 @@ impl McpSession {
         self.state.id()
     }
 
-    /// Whether `group` is currently enabled (`false` for an unknown group).
+    /// Whether `group` is currently enabled: a catalog group, or one a
+    /// dynamic member (session-private or global) declares. `false` for an
+    /// unknown group.
     pub fn is_group_enabled(&self, group: &str) -> bool {
         self.state
-            .catalog()
-            .group(group)
-            .is_some_and(|index| self.state.view().enabled[index])
+            .group_enabled(&self.state.view(), &self.state.registry_view(), group)
     }
 
     /// Whether the session currently serves a tool named `name` — its own
     /// or a global one (before the per-caller auth filter).
     pub fn has_tool(&self, name: &str) -> bool {
-        self.state.tool(name).is_some()
+        self.state.access(None, None).tool(name).is_some()
     }
 
-    /// The groups declared by the catalog, in declaration order.
+    /// The groups this session can switch: the catalog's, in declaration
+    /// order, then the ones its dynamic members (session-private and
+    /// global) declare.
     pub fn groups(&self) -> Vec<String> {
-        self.state
-            .catalog()
-            .group_names()
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
+        self.state.group_names()
     }
 
     fn change<T>(
@@ -94,6 +91,13 @@ impl McpSession {
         let (out, changed) = self.state.update(f)?;
         self.state.notify(changed);
         Ok(out)
+    }
+
+    /// Tell this session's client to re-list tools, resources and prompts
+    /// — after a change in what a [`McpViewFilter`](crate::McpViewFilter)
+    /// would answer for it. A no-op for a sessionless request.
+    pub fn notify_list_changed(&self) {
+        self.state.notify(crate::catalog::Changed::ALL);
     }
 
     /// Show a group's members to this session.

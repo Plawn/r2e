@@ -35,7 +35,9 @@ use std::sync::{Arc, OnceLock, Weak};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 use r2e_core::http::body::to_bytes;
-use r2e_core::http::{Body, HeaderValue, Method, Parts, Request, StatusCode, AUTHORIZATION};
+use r2e_core::http::{
+    Body, Extensions, HeaderValue, Method, Parts, Request, StatusCode, AUTHORIZATION,
+};
 use r2e_core::rt::{self, CancelToken, JobHandle};
 use r2e_core::Late;
 use rmcp::model::{ClientJsonRpcMessage, GetExtensions, JsonRpcMessage, ServerJsonRpcMessage};
@@ -52,7 +54,7 @@ use crate::auth::error::McpAuthError;
 use crate::auth::layer::{check_required_scopes, deposit_principal};
 use crate::auth::{McpPrincipal, McpTokenValidator};
 use crate::handler::{Endpoint, R2eMcpHandler};
-use crate::identity::{rejected, run_scopes, IdentityState};
+use crate::identity::{rejected, run_scopes, IdentityState, McpCaller};
 use crate::session::{SessionBindings, SessionId, SessionState, SESSION_ID_HEADER};
 
 /// Largest rejection body kept in [`LoopbackError::Rejected`].
@@ -225,7 +227,29 @@ impl McpLoopback {
         session_id: impl Into<String>,
         identity: LoopbackIdentity,
     ) -> Result<LoopbackSession, LoopbackError> {
-        self.connect_with(session_id, identity, ()).await
+        self.connect_with(session_id, identity, Extensions::new(), ())
+            .await
+    }
+
+    /// Start describing a session named `session_id`: the builder form of
+    /// [`connect`](Self::connect), for a caller that also carries typed
+    /// request extensions.
+    ///
+    /// ```rust,ignore
+    /// let session = loopback
+    ///     .session("agent-42")
+    ///     .identity(LoopbackIdentity::Principal(principal))
+    ///     .extension(WorkspaceId(7))
+    ///     .connect()
+    ///     .await?;
+    /// ```
+    pub fn session(&self, session_id: impl Into<String>) -> LoopbackConnect<'_> {
+        LoopbackConnect {
+            loopback: self,
+            session_id: session_id.into(),
+            identity: LoopbackIdentity::Anonymous,
+            extensions: Extensions::new(),
+        }
     }
 
     /// [`connect`](Self::connect) with the rmcp client handler serving the
@@ -235,6 +259,7 @@ impl McpLoopback {
         &self,
         session_id: impl Into<String>,
         identity: LoopbackIdentity,
+        mut extensions: Extensions,
         client: H,
     ) -> Result<LoopbackSession<H>, LoopbackError> {
         let wiring = self.mounted().ok_or(LoopbackError::NotMounted)?;
@@ -252,6 +277,13 @@ impl McpLoopback {
         parts.method = Method::POST;
         parts.uri = wiring.path.parse().map_err(|_| LoopbackError::NotMounted)?;
         parts.headers.insert(SESSION_ID_HEADER, header);
+        // The caller's typed extensions go in first, where an upstream HTTP
+        // layer would have put them: the request scopes below read them, and
+        // the identity resolved here always wins over a smuggled one — who
+        // the caller is goes through `LoopbackIdentity`, never an extension.
+        extensions.remove::<McpPrincipal>();
+        extensions.remove::<McpCaller>();
+        parts.extensions.extend(extensions);
         resolve_identity(&wiring, identity, &mut parts).await?;
         if let Some(identity) = &wiring.identity {
             let caller = run_scopes(&identity.scopes, &mut parts)
@@ -359,6 +391,59 @@ impl McpLoopback {
             // `pending` drops here: cancel + abort + close.
             Err(err) => Err(LoopbackError::Handshake(Box::new(err))),
         }
+    }
+}
+
+/// A loopback session being described, from [`McpLoopback::session`].
+///
+/// Anonymous and without extensions until told otherwise;
+/// [`connect`](Self::connect) opens it.
+#[must_use = "a LoopbackConnect does nothing until `.connect()` is awaited"]
+pub struct LoopbackConnect<'a> {
+    loopback: &'a McpLoopback,
+    session_id: String,
+    identity: LoopbackIdentity,
+    extensions: Extensions,
+}
+
+impl LoopbackConnect<'_> {
+    /// Who opens the session (default: [`LoopbackIdentity::Anonymous`]).
+    pub fn identity(mut self, identity: LoopbackIdentity) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    /// Attach a typed request extension to the session — what an upstream
+    /// HTTP layer would have inserted with `request.extensions_mut()`.
+    ///
+    /// It is part of the request parts **every** message of the session
+    /// carries, so it reads exactly like an HTTP layer's:
+    /// [`ToolCall::extension`](crate::ToolCall::extension),
+    /// [`SessionInit::extension`](crate::SessionInit::extension), a
+    /// `#[inject(request)]` field, a guard's request parts, a tenant
+    /// resolver. One value per type: a second `T` replaces the first.
+    ///
+    /// The session's identity is not an extension: an
+    /// [`McpPrincipal`] passed here is dropped — use
+    /// [`identity`](Self::identity).
+    pub fn extension<T: Clone + Send + Sync + 'static>(mut self, value: T) -> Self {
+        self.extensions.insert(value);
+        self
+    }
+
+    /// Open the session — see [`McpLoopback::connect`] for the refusals.
+    pub async fn connect(self) -> Result<LoopbackSession, LoopbackError> {
+        self.loopback
+            .connect_with(self.session_id, self.identity, self.extensions, ())
+            .await
+    }
+}
+
+impl fmt::Debug for LoopbackConnect<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoopbackConnect")
+            .field("session_id", &self.session_id)
+            .finish_non_exhaustive()
     }
 }
 

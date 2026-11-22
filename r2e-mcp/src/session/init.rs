@@ -115,7 +115,8 @@ impl SessionInit {
         identity_in(self.parts.as_deref())
     }
 
-    /// A request extension inserted by an HTTP layer.
+    /// A request extension: inserted by an HTTP layer, or attached to a
+    /// loopback session at connect (`McpLoopback::session(..).extension(..)`).
     pub fn extension<T: Clone + Send + Sync + 'static>(&self) -> Option<T> {
         self.extension_ref::<T>().cloned()
     }

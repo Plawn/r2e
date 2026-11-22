@@ -2,13 +2,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use rmcp::model::{Prompt, Resource, ResourceTemplate, Tool};
-use rmcp::service::{RequestContext, RoleServer};
 
-use super::caller_of;
+use super::Caller;
 use super::view::{Member, PrivateMembers, SessionView};
 use crate::auth::tools::{visible_to, ToolRequirements};
 use crate::pagination::ListKey;
-use crate::route::{PromptRoute, ResourceRoute, ToolRoute};
+use crate::route::{McpGroup, PromptRoute, ResourceRoute, ToolRoute};
 use crate::uri_template::UriTemplate;
 
 /// One member family's dispatch table: routes by key, the precomputed list
@@ -17,10 +16,19 @@ pub(crate) struct Family<R, W> {
     routes: HashMap<String, FamilyRoute<R>>,
     list: Vec<W>,
     reqs: Vec<ToolRequirements>,
+    /// The route behind each `list` entry (same index): what a request-time
+    /// [`Admit`] predicate is asked about.
+    order: Vec<Arc<R>>,
     /// Per-caller list filtering (`mcp.auth.filter-members`). Off — or no
     /// member has requirements — means the precomputed list goes out as-is.
     filter: bool,
 }
+
+/// A request-time visibility predicate over a family's routes: the group
+/// state of the global registry's members and the application's
+/// [`McpViewFilter`](crate::McpViewFilter). `None` = every member passes
+/// (the precomputed list can go out as-is).
+pub(crate) type Admit<'a, R> = Option<&'a dyn Fn(&R) -> bool>;
 
 /// Dispatch data for one member plus its slot in the precomputed wire list.
 ///
@@ -48,6 +56,7 @@ impl<R, W: Clone> Family<R, W> {
         let mut owners: HashMap<String, &'static str> = HashMap::with_capacity(capacity);
         let mut list = Vec::with_capacity(capacity);
         let mut reqs = Vec::with_capacity(capacity);
+        let mut order = Vec::with_capacity(capacity);
         for (service, key, req, wire, route) in members {
             if let Some(previous) = owners.get(key.as_str()) {
                 return Err(format!(
@@ -59,6 +68,7 @@ impl<R, W: Clone> Family<R, W> {
             let wire_index = list.len();
             list.push(wire);
             reqs.push(req);
+            order.push(Arc::clone(&route));
             routes.insert(key, FamilyRoute { route, wire_index });
         }
         let filter = filter && reqs.iter().any(|r| !r.is_empty());
@@ -66,22 +76,28 @@ impl<R, W: Clone> Family<R, W> {
             routes,
             list,
             reqs,
+            order,
             filter,
         })
     }
 
+    /// Whether the member at `index` is listed for this caller: its
+    /// requirements (under `mcp.auth.filter-members`) and `admit`.
+    fn listed(&self, index: usize, caller: Option<&Caller<'_>>, admit: Admit<'_, R>) -> bool {
+        (!self.filter || visible_to(caller, &self.reqs[index]))
+            && admit.is_none_or(|admit| admit(&self.order[index]))
+    }
+
     /// The list payload for this caller: precomputed when unfiltered,
-    /// otherwise the members whose requirements the caller satisfies.
-    pub(crate) fn visible_list(&self, context: &RequestContext<RoleServer>) -> Vec<W> {
-        if !self.filter {
+    /// otherwise the members whose requirements the caller satisfies and
+    /// `admit` accepts.
+    pub(crate) fn visible_list(&self, caller: Option<&Caller<'_>>, admit: Admit<'_, R>) -> Vec<W> {
+        if !self.filter && admit.is_none() {
             return self.list.clone();
         }
-        let caller = caller_of(context);
-        self.list
-            .iter()
-            .zip(self.reqs.iter())
-            .filter(|(_, req)| visible_to(caller.as_ref(), req))
-            .map(|(wire, _)| wire.clone())
+        (0..self.list.len())
+            .filter(|&index| self.listed(index, caller, admit))
+            .map(|index| self.list[index].clone())
             .collect()
     }
 
@@ -90,21 +106,19 @@ impl<R, W: Clone> Family<R, W> {
     /// a session's own (a session-private member hides a global namesake).
     pub(crate) fn extend_visible(
         &self,
-        context: &RequestContext<RoleServer>,
+        caller: Option<&Caller<'_>>,
+        admit: Admit<'_, R>,
         out: &mut Vec<W>,
         shadowed: impl Fn(&str) -> bool,
     ) where
         W: ListKey,
     {
-        let caller = caller_of(context);
         out.extend(
-            self.list
-                .iter()
-                .zip(self.reqs.iter())
-                .filter(|(wire, req)| {
-                    !shadowed(wire.list_key()) && (!self.filter || visible_to(caller.as_ref(), req))
+            (0..self.list.len())
+                .filter(|&index| {
+                    !shadowed(self.list[index].list_key()) && self.listed(index, caller, admit)
                 })
-                .map(|(wire, _)| wire.clone()),
+                .map(|index| self.list[index].clone()),
         );
     }
 
@@ -196,40 +210,53 @@ impl TemplateFamily {
         })
     }
 
+    fn listed(
+        &self,
+        index: usize,
+        caller: Option<&Caller<'_>>,
+        admit: Admit<'_, ResourceRoute>,
+    ) -> bool {
+        (!self.filter || visible_to(caller, &self.reqs[index]))
+            && admit.is_none_or(|admit| admit(&self.routes[index].route))
+    }
+
     pub(crate) fn visible_list(
         &self,
-        context: &RequestContext<RoleServer>,
+        caller: Option<&Caller<'_>>,
+        admit: Admit<'_, ResourceRoute>,
     ) -> Vec<ResourceTemplate> {
-        if !self.filter {
+        if !self.filter && admit.is_none() {
             return self.list.clone();
         }
-        let caller = caller_of(context);
-        self.list
-            .iter()
-            .zip(self.reqs.iter())
-            .filter(|(_, req)| visible_to(caller.as_ref(), req))
-            .map(|(wire, _)| wire.clone())
+        (0..self.list.len())
+            .filter(|&index| self.listed(index, caller, admit))
+            .map(|index| self.list[index].clone())
             .collect()
     }
 
     /// See [`Family::extend_visible`]; templates are shadowed by their text.
     pub(crate) fn extend_visible(
         &self,
-        context: &RequestContext<RoleServer>,
+        caller: Option<&Caller<'_>>,
+        admit: Admit<'_, ResourceRoute>,
         out: &mut Vec<ResourceTemplate>,
         shadowed: impl Fn(&str) -> bool,
     ) {
-        let caller = caller_of(context);
         out.extend(
-            self.list
-                .iter()
-                .zip(self.reqs.iter())
-                .filter(|(wire, req)| {
-                    !shadowed(&wire.uri_template)
-                        && (!self.filter || visible_to(caller.as_ref(), req))
+            (0..self.list.len())
+                .filter(|&index| {
+                    !shadowed(&self.list[index].uri_template) && self.listed(index, caller, admit)
                 })
-                .map(|(wire, _)| wire.clone()),
+                .map(|index| self.list[index].clone()),
         );
+    }
+
+    /// The template with exactly this text, if served.
+    pub(crate) fn raw_route(&self, raw: &str) -> Option<&Arc<ResourceRoute>> {
+        self.routes
+            .iter()
+            .find(|entry| entry.matcher.raw() == raw)
+            .map(|entry| &entry.route)
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -291,9 +318,16 @@ pub(super) struct FamilyInputs {
 }
 
 impl FamilyInputs {
-    /// Append `private`'s members, owned by `label` for diagnostics.
-    pub(super) fn extend_private(&mut self, label: &'static str, private: &PrivateMembers) {
-        self.tools.extend(private.tools.iter().map(|route| {
+    /// Append the members of `private` whose group `on` accepts (ungrouped
+    /// members always), owned by `label` for diagnostics.
+    pub(super) fn extend_private(
+        &mut self,
+        label: &'static str,
+        private: &PrivateMembers,
+        on: impl Fn(&McpGroup) -> bool,
+    ) {
+        let on = |group: &Option<McpGroup>| group.as_ref().is_none_or(&on);
+        self.tools.extend(private.tools.iter().filter(|route| on(&route.group)).map(|route| {
             (
                 label,
                 route.name.to_string(),
@@ -302,7 +336,7 @@ impl FamilyInputs {
                 Arc::clone(route),
             )
         }));
-        for route in &private.resources {
+        for route in private.resources.iter().filter(|route| on(&route.group)) {
             if route.is_template() {
                 self.templates.push((
                     label,
@@ -320,7 +354,7 @@ impl FamilyInputs {
                 ));
             }
         }
-        self.prompts.extend(private.prompts.iter().map(|route| {
+        self.prompts.extend(private.prompts.iter().filter(|route| on(&route.group)).map(|route| {
             (
                 label,
                 route.name.to_string(),
@@ -335,9 +369,12 @@ impl FamilyInputs {
         self,
         filter: bool,
         enabled: Box<[bool]>,
+        dynamic: BTreeMap<String, bool>,
         private: PrivateMembers,
     ) -> Result<SessionView, String> {
         Ok(SessionView {
+            grouped: private.grouped(),
+            dynamic,
             tools: Family::build("tool name", filter, self.tools)?,
             resources: Family::build("resource URI", filter, self.resources)?,
             resource_templates: TemplateFamily::build(filter, self.templates)?,

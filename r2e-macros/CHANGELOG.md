@@ -35,6 +35,11 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `#[method(name = "…", scopes = …, any_scopes = …)]` members in a `#[routes]`
+  MCP impl: extension JSON-RPC methods (#1444; needs `r2e-mcp` with
+  `McpRoutes.methods`). Compile errors for a missing `name`, an unknown
+  argument, a duplicate name in the impl, an `McpClient` parameter and a
+  `#[method]` next to HTTP routes.
 - `resources(A, B)` on `#[r2e::test]` and `#[r2e::test_suite]`: starts each
   `r2e_test::TestResource` before the boot and wires its config into the app.
   Requires `app = ...`.
