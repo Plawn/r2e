@@ -10,6 +10,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use super::loader::{KeyPaths, Segment};
 use super::value::ConfigValue;
 
 /// A node of the key trie: the value stored at the exact key (if any) and the
@@ -18,16 +19,73 @@ use super::value::ConfigValue;
 struct Node<'a> {
     value: Option<&'a ConfigValue>,
     children: BTreeMap<&'a str, Node<'a>>,
+    /// A YAML mapping key that reads as a list index (`"0"`) lives here: the
+    /// node is a map whatever its children look like.
+    keyed: bool,
 }
 
 impl<'a> Node<'a> {
-    fn insert(&mut self, path: &'a str, value: &'a ConfigValue) {
+    /// Insert a key by the YAML path that produced it.
+    fn insert_path(&mut self, path: &'a [Segment], value: &'a ConfigValue) {
         let mut node = self;
-        for segment in path.split('.') {
-            node = node.children.entry(segment).or_default();
+        for segment in path {
+            if segment.key && is_index(&segment.text) {
+                node.keyed = true;
+            }
+            node = node.children.entry(segment.text.as_str()).or_default();
         }
         node.value = Some(value);
     }
+
+    /// Insert a key known only by its dotted form (plain YAML key, `R2E_`
+    /// overlay, provider, `set`). Segments split on `.`, except that an
+    /// existing child whose own name contains dots (a YAML map key such as
+    /// `gpt-4.1`) is followed when the rest of the key starts with it — the
+    /// longest such child wins.
+    fn insert_dotted(&mut self, mut rest: &'a str, value: &'a ConfigValue) {
+        let mut node = self;
+        loop {
+            let dotted_child = node
+                .children
+                .keys()
+                .copied()
+                .filter(|name| {
+                    name.contains('.')
+                        && rest
+                            .strip_prefix(name)
+                            .is_some_and(|tail| tail.is_empty() || tail.starts_with('.'))
+                })
+                .max_by_key(|name| name.len());
+            let segment = match dotted_child {
+                Some(name) => &rest[..name.len()],
+                None => rest.split('.').next().unwrap_or(rest),
+            };
+            node = node.children.entry(segment).or_default();
+            match rest[segment.len()..].strip_prefix('.') {
+                Some(tail) => rest = tail,
+                None => break,
+            }
+        }
+        node.value = Some(value);
+    }
+}
+
+/// The part of a recorded path below `prefix`, or `None` when the prefix does
+/// not end on a segment boundary of that path (`a.gpt-4` against the key
+/// `a."gpt-4.1"`): the key is then not under the prefix at all.
+fn below<'a>(path: &'a [Segment], prefix: &str) -> Option<&'a [Segment]> {
+    let mut consumed = 0;
+    for (i, segment) in path.iter().enumerate() {
+        consumed += segment.text.len();
+        if consumed == prefix.len() {
+            return Some(&path[i + 1..]);
+        }
+        if consumed > prefix.len() {
+            return None;
+        }
+        consumed += 1; // the joining dot
+    }
+    None
 }
 
 /// Rebuild the subtree under `prefix` (the whole config for `None`).
@@ -36,23 +94,43 @@ impl<'a> Node<'a> {
 /// [`R2eConfig::tree`](super::R2eConfig::tree) for the full semantics.
 pub(crate) fn build(
     values: &HashMap<String, ConfigValue>,
+    paths: &KeyPaths,
     prefix: Option<&str>,
 ) -> Option<ConfigValue> {
     let mut root = Node::default();
-    match prefix {
-        None => {
-            for (key, value) in values {
-                root.insert(key, value);
-            }
+    let dotted = prefix.map(|prefix| format!("{prefix}."));
+    if let Some(prefix) = prefix {
+        root.value = values.get(prefix);
+    }
+    let under = |key: &str| match &dotted {
+        Some(dotted) => key.starts_with(dotted.as_str()),
+        None => true,
+    };
+
+    // Recorded YAML paths first: they create the dotted children the plain
+    // keys below are matched against.
+    for (key, path) in paths {
+        let Some(value) = values.get(key).filter(|_| under(key)) else {
+            continue;
+        };
+        let path = match prefix {
+            Some(prefix) => below(path, prefix),
+            None => Some(path.as_slice()),
+        };
+        if let Some(path) = path.filter(|path| !path.is_empty()) {
+            root.insert_path(path, value);
         }
-        Some(prefix) => {
-            root.value = values.get(prefix);
-            let dotted = format!("{prefix}.");
-            for (key, value) in values {
-                if let Some(rest) = key.strip_prefix(&dotted) {
-                    root.insert(rest, value);
-                }
-            }
+    }
+    for (key, value) in values {
+        if paths.contains_key(key) {
+            continue;
+        }
+        let rest = match &dotted {
+            Some(dotted) => key.strip_prefix(dotted.as_str()),
+            None => Some(key.as_str()),
+        };
+        if let Some(rest) = rest {
+            root.insert_dotted(rest, value);
         }
     }
     materialize(&root)
@@ -72,6 +150,8 @@ fn materialize(node: &Node<'_>) -> Option<ConfigValue> {
             indices.sort_unstable();
             indices
         });
+
+    let indices = if node.keyed { None } else { indices };
 
     match (node.value, indices) {
         // YAML sequence: the parent `List` seeds length and element values,
@@ -157,6 +237,10 @@ fn parse_index(segment: &str) -> Option<usize> {
     } else {
         None
     }
+}
+
+pub(crate) fn is_index(segment: &str) -> bool {
+    parse_index(segment).is_some()
 }
 
 /// Sorted indices forming exactly `0..n`.

@@ -15,6 +15,21 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `R2eConfig::tree` — and so `SerdeConfig<T>` — returns a YAML subtree as it
+  was written (#1471). An empty table (`limits: {}`) is an empty map instead
+  of a missing field; a mapping key keeps its dots (`gpt-4.1` no longer reads
+  as `gpt-4` → `1`); a digit-only mapping key (`"0"`, `200`) stays a key
+  instead of turning its parent into a list. Flat access (`get("a.b")`,
+  `sub_keys`, `has_prefix`) is unchanged, and an empty table still does not
+  make `has_prefix` true. An override written by dotted key
+  (`override_config_value`, a provider, `R2eConfig::set`) reaches a dotted map
+  key: `models.gpt-4.1.timeout` lands under `gpt-4.1`. The `R2E_` overlay
+  still cannot address a key containing a dot or a dash (strict `_` → `.`).
+- A non-string YAML mapping key (`200:`, `true:`) is stored under its YAML
+  spelling (`200`) instead of a debug rendering (`Number(200)`).
+
 ## [0.11.0] - 2026-11-22
 
 ### Breaking

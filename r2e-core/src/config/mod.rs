@@ -165,6 +165,9 @@ impl std::error::Error for ConfigError {}
 #[derive(Debug, Clone)]
 pub struct R2eConfig {
     values: Arc<HashMap<String, ConfigValue>>,
+    /// YAML paths of the flat keys whose dotted form is ambiguous (see
+    /// [`loader::KeyPaths`]); read by [`tree`](Self::tree) only.
+    paths: Arc<loader::KeyPaths>,
 }
 
 /// Default base config file name used by [`R2eConfig::load`].
@@ -277,7 +280,7 @@ impl R2eConfig {
         resolver: &dyn SecretResolver,
         require_file: bool,
     ) -> Result<Self, ConfigError> {
-        let mut values = HashMap::new();
+        let mut flat = loader::Flat::default();
 
         // 1. Load base config. `is_file()` (not `exists()`) so a directory
         // path gets this clear error instead of a raw "Is a directory" io
@@ -288,7 +291,7 @@ impl R2eConfig {
                 file.display()
             )));
         }
-        loader::load_yaml_file(file, &mut values)?;
+        loader::load_yaml_file(file, &mut flat)?;
 
         // 2. Load .env file (does NOT overwrite existing env vars)
         let _ = dotenvy::dotenv();
@@ -297,16 +300,18 @@ impl R2eConfig {
         let resolved_profile = profile
             .map(str::to_string)
             .or_else(|| std::env::var("R2E_PROFILE").ok())
-            .or_else(|| match values.get("r2e.profile") {
+            .or_else(|| match flat.values.get("r2e.profile") {
                 Some(ConfigValue::String(s)) => Some(s.clone()),
                 _ => None,
             });
         if let Some(p) = resolved_profile {
             if p != "default" {
-                loader::load_yaml_file(&profile_file_for(file, &p), &mut values)?;
+                loader::load_yaml_file(&profile_file_for(file, &p), &mut flat)?;
             }
-            values.insert("r2e.profile".to_string(), ConfigValue::String(p));
+            flat.values
+                .insert("r2e.profile".to_string(), ConfigValue::String(p));
         }
+        let loader::Flat { mut values, paths } = flat;
 
         // 4. Resolve ${...} placeholders in string values
         resolve_string_values(&mut values, resolver)?;
@@ -316,6 +321,7 @@ impl R2eConfig {
 
         Ok(R2eConfig {
             values: Arc::new(values),
+            paths: Arc::new(paths),
         })
     }
 
@@ -392,10 +398,11 @@ impl R2eConfig {
 
     /// Create a config from a YAML string (useful for testing).
     pub fn from_yaml_str(yaml: &str) -> Result<Self, ConfigError> {
-        let mut values = HashMap::new();
-        loader::load_yaml_str(yaml, &mut values)?;
+        let mut flat = loader::Flat::default();
+        loader::load_yaml_str(yaml, &mut flat)?;
         Ok(R2eConfig {
-            values: Arc::new(values),
+            values: Arc::new(flat.values),
+            paths: Arc::new(flat.paths),
         })
     }
 
@@ -403,6 +410,7 @@ impl R2eConfig {
     pub fn empty() -> Self {
         R2eConfig {
             values: Arc::new(HashMap::new()),
+            paths: Arc::default(),
         }
     }
 
@@ -482,6 +490,8 @@ impl R2eConfig {
     pub fn has_prefix(&self, prefix: &str) -> bool {
         match self.values.get(prefix) {
             Some(ConfigValue::Null) | None => {}
+            // An empty YAML table (`tls: {}`) contributes no key either.
+            Some(ConfigValue::Map(map)) if map.is_empty() => {}
             Some(_) => return true,
         }
         let dotted = format!("{prefix}.");
@@ -533,9 +543,18 @@ impl R2eConfig {
     ///   (`R2E_A=1` next to `a.b`): the children win and the scalar is
     ///   dropped — the same reading as `has_prefix`.
     ///
+    /// **A subtree loaded from YAML comes back as written.** An empty table
+    /// (`limits: {}`) is an empty `Map`; a mapping key keeps its dots
+    /// (`gpt-4.1` is one key, not `gpt-4` → `1`) and a digit-only mapping key
+    /// (`"0"`) stays a key instead of turning its parent into a list. A key
+    /// written afterwards by an override (`R2eConfig::set`, a provider,
+    /// `override_config_value`) is only known by its dotted form: it replaces
+    /// the YAML key of the same name, or lands under the longest YAML map key
+    /// it starts with (`models.gpt-4.1.timeout` goes under `gpt-4.1`).
+    ///
     /// Returns `None` when nothing lives at or under the prefix.
     pub fn tree(&self, prefix: Option<&str>) -> Option<ConfigValue> {
-        tree::build(&self.values, prefix)
+        tree::build(&self.values, &self.paths, prefix)
     }
 
     /// Fingerprint of the **entire** config — every key and value,

@@ -84,11 +84,7 @@ impl ConfigValue {
             serde_yaml::Value::Mapping(map) => {
                 let mut result = HashMap::new();
                 for (k, v) in map {
-                    let key = match k {
-                        serde_yaml::Value::String(s) => s.clone(),
-                        other => format!("{other:?}"),
-                    };
-                    result.insert(key, ConfigValue::from_yaml(v));
+                    result.insert(super::loader::mapping_key(k), ConfigValue::from_yaml(v));
                 }
                 ConfigValue::Map(result)
             }

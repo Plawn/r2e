@@ -103,3 +103,28 @@ fn load_from_directory_path_errors_clearly() {
         "expected clear not-a-file error, got: {err}"
     );
 }
+
+#[test]
+fn profile_overlay_keeps_dotted_map_keys_and_empty_tables() {
+    use r2e_core::config::ConfigValue;
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = write_file(
+        dir.path(),
+        "app.yaml",
+        "models:\n  gpt-4.1:\n    timeout: 30\nlimits: {}\n",
+    );
+    write_file(
+        dir.path(),
+        "app-test.yaml",
+        "models:\n  gpt-4.1:\n    timeout: 5\n",
+    );
+
+    let config = R2eConfig::load_profiled_from(&file, Some("test")).unwrap();
+    let Some(ConfigValue::Map(models)) = config.tree(Some("models")) else {
+        panic!("models must be a map");
+    };
+    assert_eq!(models.keys().collect::<Vec<_>>(), ["gpt-4.1"]);
+    assert_eq!(config.get::<i64>("models.gpt-4.1.timeout").unwrap(), 5);
+    assert!(matches!(config.tree(Some("limits")), Some(ConfigValue::Map(m)) if m.is_empty()));
+}
