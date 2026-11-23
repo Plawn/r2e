@@ -138,11 +138,12 @@ slot per provided type. A typed read via `state.get::<T>()` compiles to a
 fixed-offset field access and a clone of the selected bean. At startup the
 registry sorts dependencies and runs the bean constructors.
 
-At compile time, registration prepends each bean's dependencies to the
-requirement list. At `build_state()` the compiler checks those requirements
+At compile time, each registration pushes its dependency list as one group
+onto the requirement list. At `build_state()` the compiler checks those groups
 against an index of the provided types, eight per block. To measure a downstream
 `cargo check` with dependencies already built, run `python3 scripts/bench-di-check.py`
-from the checkout. It reports median times for chains of 50, 100, and 250 beans.
+from the checkout. It reports median times for graphs of 100 and 250 beans with
+1, 5 and 10 dependencies per bean.
 
 The materialized HList and indexed state access still use recursive types.
 Past the default `recursion_limit = 128` (around 127 provisions), add this

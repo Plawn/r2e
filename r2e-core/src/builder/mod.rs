@@ -43,7 +43,7 @@ use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect
 use crate::rt::CancelToken;
 use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::runtime::service::{ServiceComponent, StopPhase};
-use crate::type_list::{AllSatisfied, BeanState, BuildHList, ProvisionIndex, TAppend, TCons, TNil};
+use crate::type_list::{AllGroupsSatisfied, AllSatisfied, BeanState, BuildHList, ProvisionIndex, PushRequired, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -53,10 +53,16 @@ use tracing::info;
 
 /// Builder returned by the NoState registration methods
 /// ([`register`](AppBuilder::register), [`with_default_bean`](AppBuilder::with_default_bean), …):
-/// `Provided` is pushed onto the provision list `P` and `Deps` is prepended to
-/// the requirement list `R`.
+/// `Provided` is pushed onto the provision list `P` and `Deps` is pushed, as
+/// one group, onto the requirement list `R`.
+///
+/// `R` is a list of **requirement groups** — one type list per registration
+/// (a bean's `Deps`, a plugin's `Required`, a module's `Imports`) — never a
+/// flat list of beans: pushing a group is one cons cell, whatever the number
+/// of dependencies, and `build_state()` checks it group by group
+/// ([`AllGroupsSatisfied`](crate::type_list::AllGroupsSatisfied)).
 pub type Registered<Provided, Deps, P, R, Mods> =
-    AppBuilder<NoState, TCons<Provided, P>, <Deps as TAppend<R>>::Output, Mods>;
+    AppBuilder<NoState, TCons<Provided, P>, TCons<Deps, R>, Mods>;
 
 /// Builder returned by [`load_config`](AppBuilder::load_config): pushes the
 /// typed config `C`, runtime [`LiveConfigRegistry`](crate::config::LiveConfigRegistry),
@@ -79,14 +85,14 @@ pub type WithLoadedConfig<C, P, R, Mods> = AppBuilder<
 >;
 
 /// Builder returned by [`plugin`](AppBuilder::plugin): the plugin's
-/// `Provisions` join `P`, its `Required` (`Deps`) joins `R`, and — when it
+/// `Provisions` join `P`, its `Required` (`Deps`) joins `R` as one group, and — when it
 /// ships any — its `Controllers` are queued on `Mods` so `build_state()`
 /// registers them. Nothing is checked at the call site; `Required` is verified
 /// against the final provision list at `build_state()`.
 pub type WithPluginInstalled<Pl, P, R, Mods> = AppBuilder<
     NoState,
     <P as TAppend<<Pl as PluginInstall>::Provisions>>::Output,
-    <R as TAppend<<Pl as PluginInstall>::Required>>::Output,
+    <<Pl as PluginInstall>::Required as PushRequired<R>>::Output,
     <<Pl as PluginInstall>::Controllers as PushPluginCtrls<Pl, Mods>>::Output,
 >;
 
@@ -126,7 +132,7 @@ pub type ModuleRegisteredP<M, P, R, Mods> =
 
 /// The requirement list [`ModuleRegistered`] carries.
 pub type ModuleRegisteredR<M, P, R, Mods> =
-    <ModulePluginsR<M, P, R, Mods> as TAppend<<M as FeatureModule>::Imports>>::Output;
+    TCons<<M as FeatureModule>::Imports, ModulePluginsR<M, P, R, Mods>>;
 
 /// The pending-module list [`ModuleRegistered`] carries.
 pub type ModuleRegisteredMods<M, P, R, Mods> = TCons<ModEntry<M>, ModulePluginsMods<M, P, R, Mods>>;

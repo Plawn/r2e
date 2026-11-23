@@ -1,4 +1,4 @@
-error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<i32, TCons<i16, TCons<i8, TCons<u64, TCons<u32, TCons<u16, TCons<u8, TCons<Consumer, TCons<ShutdownToken, TNil>>>>>>>>>, TCons<Missing, TNil>>`, but its trait bounds were not satisfied
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<i32, TCons<i16, TCons<i8, TCons<u64, TCons<u32, TCons<u16, TCons<u8, TCons<Consumer, TCons<ShutdownToken, TNil>>>>>>>>>, TCons<TCons<Missing, TNil>, TNil>>`, but its trait bounds were not satisfied
   --> cases/beans/fail/indexed_graph_missing_bean.rs:28:14
    |
 19 | /         AppBuilder::new()

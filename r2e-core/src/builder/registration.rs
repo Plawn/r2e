@@ -82,8 +82,7 @@ pub trait RegisterModule<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>:
         <M::Controllers as ControllerDepsList>::Deps: ModuleDepsSatisfied<ModuleScope<M>, CtrlIdx>,
         <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
         M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
-        M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
-        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>;
+        M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>;
 }
 
 impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>
@@ -104,7 +103,6 @@ impl<P, R, Mods, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>
         <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
         M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
         M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
-        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     {
         self.register_module_impl::<M, DepIdx, ExpIdx, CtrlIdx, EndpIdx, PlugIdx>()
     }

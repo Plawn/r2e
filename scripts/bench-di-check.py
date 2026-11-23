@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure downstream cargo check on a chain of beans, excluding dependency builds."""
+"""Measure downstream cargo check on a graph of beans, excluding dependency builds."""
 
 import argparse
 import json
@@ -19,13 +19,14 @@ def positive(value):
     return number
 
 
-def chain(size):
+def graph(size, deps):
+    """Bean `i` depends on the `deps` beans registered just before it."""
     lines = ['#![recursion_limit = "{}"]'.format(max(512, 4 * size)),
              "use r2e::prelude::*;"]
     for i in range(size):
-        dep = f"_previous: Bean{i - 1}" if i else ""
+        params = ", ".join(f"_d{j}: Bean{j}" for j in range(max(0, i - deps), i))
         lines.extend([f"#[derive(Clone)] struct Bean{i};",
-                      f"#[bean] impl Bean{i} {{ fn new({dep}) -> Self {{ Self }} }}"])
+                      f"#[bean] impl Bean{i} {{ fn new({params}) -> Self {{ Self }} }}"])
     lines.append("pub async fn boot() { let _ = AppBuilder::new()")
     lines.extend(f"    .register::<Bean{i}>()" for i in range(size))
     lines.append("    .build_state().await; }")
@@ -37,7 +38,9 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1],
                         help="R2E checkout to benchmark")
     parser.add_argument("--runs", type=positive, default=3)
-    parser.add_argument("sizes", type=positive, nargs="*", default=[50, 100, 250])
+    parser.add_argument("--deps", type=positive, nargs="+", default=[1, 5, 10],
+                        help="dependencies per bean (one measurement per value)")
+    parser.add_argument("sizes", type=positive, nargs="*", default=[100, 250])
     args = parser.parse_args()
     repo = args.repo.resolve()
     with TemporaryDirectory(prefix="r2e-di-check-") as tmp:
@@ -57,16 +60,18 @@ def main():
         env = dict(os.environ, CARGO_INCREMENTAL="0", RUSTC_WRAPPER="")
         subprocess.run(cmd, cwd=repo, env=env, check=True)
         for size in args.sizes:
-            graph = chain(size)
-            samples = []
-            for run in range(args.runs):
-                source.write_text(f"{graph}\n// Measurement {run}\n")
-                start = perf_counter()
-                subprocess.run(cmd, cwd=repo, env=env, check=True)
-                samples.append(perf_counter() - start)
-            print(f"{size} beans: {median(samples):.2f}s median "
-                  f"({', '.join(f'{s:.2f}s' for s in samples)})", flush=True)
-
+            for deps in args.deps:
+                source_text = graph(size, deps)
+                edges = sum(min(deps, i) for i in range(size))
+                samples = []
+                for run in range(args.runs):
+                    source.write_text(f"{source_text}\n// Measurement {run}\n")
+                    start = perf_counter()
+                    subprocess.run(cmd, cwd=repo, env=env, check=True)
+                    samples.append(perf_counter() - start)
+                print(f"{size} beans x {deps} deps ({edges} edges): "
+                      f"{median(samples):.2f}s median "
+                      f"({', '.join(f'{s:.2f}s' for s in samples)})", flush=True)
 
 if __name__ == "__main__":
     main()

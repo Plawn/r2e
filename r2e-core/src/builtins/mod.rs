@@ -79,7 +79,7 @@ where
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: crate::type_list::TAppend<Self::Provisions>,
-        R: crate::type_list::TAppend<Self::Required>,
+        Self::Required: crate::type_list::PushRequired<R>,
         Self::Controllers: crate::di::module::PushPluginCtrls<Self, Mods>,
     {
         unreachable!("`TracingPluginRemoved` is implemented by nothing")

@@ -68,7 +68,7 @@ use crate::beans::{BeanRegistry, Registrable};
 use crate::builder::{AppBuilder, NoState};
 use crate::controller::{Controller, EndpointDeps};
 use crate::plugin::PluginInstall;
-use crate::type_list::{Here, TAppend, TCons, TNil, There};
+use crate::type_list::{Here, PushRequired, TAppend, TCons, TNil, There};
 
 /// A feature module: a closed subgraph of providers + controllers with
 /// declared imports and exports.
@@ -400,11 +400,11 @@ macro_rules! impl_module_plugins {
         where
             $P0: PluginInstall,
             P: TAppend<<$P0 as PluginInstall>::Provisions>,
-            R: TAppend<<$P0 as PluginInstall>::Required>,
+            <$P0 as PluginInstall>::Required: PushRequired<R>,
             <$P0 as PluginInstall>::Controllers: PushPluginCtrls<$P0, Mods>,
         {
             type OutP = <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output;
-            type OutR = <R as TAppend<<$P0 as PluginInstall>::Required>>::Output;
+            type OutR = <<$P0 as PluginInstall>::Required as PushRequired<R>>::Output;
             type OutMods =
                 <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output;
 
@@ -421,27 +421,27 @@ macro_rules! impl_module_plugins {
         where
             $P0: PluginInstall,
             P: TAppend<<$P0 as PluginInstall>::Provisions>,
-            R: TAppend<<$P0 as PluginInstall>::Required>,
+            <$P0 as PluginInstall>::Required: PushRequired<R>,
             <$P0 as PluginInstall>::Controllers: PushPluginCtrls<$P0, Mods>,
             ($($Ps,)+): ModulePlugins<
                 <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
-                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Required as PushRequired<R>>::Output,
                 <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
             >,
         {
             type OutP = <($($Ps,)+) as ModulePlugins<
                 <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
-                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Required as PushRequired<R>>::Output,
                 <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
             >>::OutP;
             type OutR = <($($Ps,)+) as ModulePlugins<
                 <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
-                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Required as PushRequired<R>>::Output,
                 <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
             >>::OutR;
             type OutMods = <($($Ps,)+) as ModulePlugins<
                 <P as TAppend<<$P0 as PluginInstall>::Provisions>>::Output,
-                <R as TAppend<<$P0 as PluginInstall>::Required>>::Output,
+                <<$P0 as PluginInstall>::Required as PushRequired<R>>::Output,
                 <<$P0 as PluginInstall>::Controllers as PushPluginCtrls<$P0, Mods>>::Output,
             >>::OutMods;
 
@@ -974,7 +974,6 @@ where
     <M::Endpoints as ModuleEndpointSet>::Deps: ModuleDepsSatisfied<ModuleScope<M>, EndpIdx>,
     M::RequiredPlugins: RequiredPluginsInstalled<crate::builder::ModulePluginsP<M, P, R, Mods>, PlugIdx>,
     M::Exports: TAppend<crate::builder::ModulePluginsP<M, P, R, Mods>>,
-    crate::builder::ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     Rest: ModuleGroup<
         crate::builder::ModuleRegisteredP<M, P, R, Mods>,
         crate::builder::ModuleRegisteredR<M, P, R, Mods>,

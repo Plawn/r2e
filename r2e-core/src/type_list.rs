@@ -502,6 +502,51 @@ where
 {
 }
 
+/// Pushes a plugin's requirement group (`Self`) onto the builder's
+/// requirement list `R`.
+///
+/// An empty group leaves `R` untouched, so installing a plugin that requires
+/// nothing (and provides nothing) keeps the builder's type — which is what lets
+/// `.when(cond, |b| b.plugin(Health))` type-check. A non-empty group becomes
+/// one cons cell, whatever its length.
+pub trait PushRequired<R> {
+    /// `R` with this group pushed.
+    type Output;
+}
+
+impl<R> PushRequired<R> for TNil {
+    type Output = R;
+}
+
+impl<H, T, R> PushRequired<R> for TCons<H, T> {
+    type Output = TCons<TCons<H, T>, R>;
+}
+
+/// Compile-time verification that every **requirement group** in `Self` is
+/// satisfied by the provision index `P`.
+///
+/// The builder's requirement list is a list of groups — one type list per
+/// registration (a bean's `Deps`, a plugin's `Required`, a module's
+/// `Imports`). Each group is checked on its own with [`AllSatisfied`], so the
+/// trait-solver depth grows with the number of registrations plus the widest
+/// group, never with the total number of dependency edges.
+///
+/// `Indices` is an opaque witness tuple inferred by the compiler.
+#[diagnostic::on_unimplemented(
+    message = "one or more bean dependencies are missing from the AppBuilder",
+    note = "a registered bean has a dependency that was not provided — add `.provide(value)` or `.register::<Type>()` for the missing type"
+)]
+pub trait AllGroupsSatisfied<P, Indices> {}
+
+impl<P> AllGroupsSatisfied<P, ()> for TNil {}
+
+impl<G, T, P, IG, IT> AllGroupsSatisfied<P, (IG, IT)> for TCons<G, T>
+where
+    G: AllSatisfied<P, IG>,
+    T: AllGroupsSatisfied<P, IT>,
+{
+}
+
 // ── Plugin dependency resolution ─────────────────────────────────────────
 
 /// Maps a concrete tuple type to a type-level list and resolves values from

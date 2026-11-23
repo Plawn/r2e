@@ -387,8 +387,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// provision list and its dependencies (`T::Deps`) are prepended to the
     /// requirement list.
     pub fn register<T: Registrable>(mut self) -> Registered<T::Provided, T::Deps, P, R, Mods>
-    where
-        T::Deps: TAppend<R>,
     {
         T::register_into(&mut self.shared.bean_registry);
         self.with_updated_types()
@@ -451,8 +449,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// later [`register`](Self::register) of the same type silently replaces
     /// this registration (last-wins), without changing the provision list.
     pub fn with_default_bean<B: Bean>(mut self) -> Registered<B, B::Deps, P, R, Mods>
-    where
-        B::Deps: TAppend<R>,
     {
         self.shared.bean_registry.register_default::<B>();
         self.with_updated_types()
@@ -462,8 +458,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///
     /// The bean IS added to the provision list (guaranteed to be present).
     pub fn with_default_async_bean<B: AsyncBean>(mut self) -> Registered<B, B::Deps, P, R, Mods>
-    where
-        B::Deps: TAppend<R>,
     {
         self.shared.bean_registry.register_async_default::<B>();
         self.with_updated_types()
@@ -475,8 +469,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     pub fn with_default_producer<Pr: Producer>(
         mut self,
     ) -> Registered<Pr::Output, Pr::Deps, P, R, Mods>
-    where
-        Pr::Deps: TAppend<R>,
     {
         self.shared.bean_registry.register_producer_default::<Pr>();
         self.with_updated_types()
@@ -945,11 +937,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     pub fn plugin<Pl: PluginInstall>(self, plugin: Pl) -> WithPluginInstalled<Pl, P, R, Mods>
     where
         P: TAppend<Pl::Provisions>,
-        // Nothing is checked at the call site: the plugin's `Deps` are appended
-        // to `R` and verified against the final provision list at
+        // Nothing is checked at the call site: the plugin's `Deps` join `R` as
+        // one group, verified against the final provision list at
         // `build_state()`, so a dependency may be provided or registered after
         // this call.
-        R: TAppend<Pl::Required>,
+        Pl::Required: PushRequired<R>,
         Pl::Controllers: PushPluginCtrls<Pl, Mods>,
     {
         plugin.install(self)
@@ -1036,7 +1028,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         // provision list, so a module may both bring and require a plugin.
         M::RequiredPlugins: RequiredPluginsInstalled<ModulePluginsP<M, P, R, Mods>, PlugIdx>,
         M::Exports: TAppend<ModulePluginsP<M, P, R, Mods>>,
-        ModulePluginsR<M, P, R, Mods>: TAppend<M::Imports>,
     {
         // The plugins the module brings are installed FIRST, exactly as
         // `.plugin(..)` would install them (their provisions join the
@@ -1071,7 +1062,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// access.
     ///
     /// The `R` (requirements) list is checked against `P` (provisions) at
-    /// compile time via the [`AllSatisfied`] bound: every bean dependency must
+    /// compile time via the [`AllGroupsSatisfied`] bound: every bean dependency must
     /// be present in the provision list, or the compiler emits an error.
     ///
     /// Note: apps with more than ~127 registrations may need
@@ -1086,7 +1077,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     pub async fn build_state<W, MW>(self) -> AppBuilder<BeanState<<P as BuildHList>::Output>>
     where
         P: BuildHList + ProvisionIndex,
-        R: AllSatisfied<P::Index, W>,
+        R: AllGroupsSatisfied<P::Index, W>,
         Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
         self.try_build_state::<W, MW>()
@@ -1112,7 +1103,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ) -> Result<AppBuilder<BeanState<<P as BuildHList>::Output>>, crate::beans::BeanError>
     where
         P: BuildHList + ProvisionIndex,
-        R: AllSatisfied<P::Index, W>,
+        R: AllGroupsSatisfied<P::Index, W>,
         Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
         // The subscriber first, before anything fallible: every later boot

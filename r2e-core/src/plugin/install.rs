@@ -366,11 +366,13 @@ pub type PluginBuildError = Box<dyn std::error::Error + Send + Sync>;
 /// (`.register()`, `.provide()`, `.when()`, …) during install. It is kept as an
 /// escape hatch for that case.
 ///
-/// # `Required = TNil` and `with_updated_types()`
+/// # `Required` and `with_updated_types()`
 ///
-/// When `Required` is `TNil`, the compiler cannot prove that
-/// `<R as TAppend<TNil>>::Output == R`. Since `R` is a phantom type parameter,
-/// call [`.with_updated_types()`](AppBuilder::with_updated_types) at the end of
+/// `Required` joins the builder's requirement list as one group
+/// ([`PushRequired`](crate::type_list::PushRequired); an empty `Required`
+/// leaves `R` as it is). `P` and `R` are
+/// phantom type parameters: call
+/// [`.with_updated_types()`](AppBuilder::with_updated_types) at the end of
 /// `install()` to perform the zero-cost phantom type conversion.
 #[doc(hidden)]
 #[diagnostic::on_unimplemented(
@@ -387,7 +389,7 @@ pub trait PluginInstall: Send + 'static {
     /// For multiple: `TCons<A, TCons<B, TNil>>`.
     type Provisions;
 
-    /// The requirement list appended to the builder's `R`: the plugin's `Deps`.
+    /// The requirement group pushed onto the builder's `R`: the plugin's `Deps`.
     ///
     /// Nothing is checked at the `.plugin()` call site — the list rides along
     /// in `R` and is verified against the **final** provision list at
@@ -414,7 +416,7 @@ pub trait PluginInstall: Send + 'static {
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
+        Self::Required: crate::type_list::PushRequired<R>,
         Self::Controllers: crate::di::module::PushPluginCtrls<Self, Mods>;
 }
 
@@ -443,7 +445,7 @@ where
     ) -> crate::builder::WithPluginInstalled<Self, P, R, Mods>
     where
         P: TAppend<Self::Provisions>,
-        R: TAppend<Self::Required>,
+        Self::Required: crate::type_list::PushRequired<R>,
         Self::Controllers: crate::di::module::PushPluginCtrls<Self, Mods>,
     {
         let name = plugin_action_name::<T>();

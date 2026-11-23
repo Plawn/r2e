@@ -38,8 +38,9 @@ requires: core-concepts
   need two **newtypes**.
 
 Generic helpers that call `.register::<B>()` on `AppBuilder<NoState, P, R, Mods>`
-use `B::Deps: TAppend<R>`. Helpers that finish a generic builder use
-`P: BuildHList + ProvisionIndex` and `R: AllSatisfied<P::Index, W>`.
+need no bound on `R` (the result is `Registered<B::Provided, B::Deps, P, R, Mods>`).
+Helpers that finish a generic builder use
+`P: BuildHList + ProvisionIndex` and `R: AllGroupsSatisfied<P::Index, W>`.
 Import these traits from `r2e::type_list` and let concrete chains infer `W`.
 
 ### Three bean kinds, one `register()`

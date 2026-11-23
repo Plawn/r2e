@@ -327,3 +327,58 @@ async fn indexed_graph_checks_every_slot_including_forward_dependencies() {
         .unwrap();
     assert_eq!(app.state().get::<i128>(), 36);
 }
+
+/// The generic-helper bounds the migration guide prescribes: registration
+/// needs no bound on `R`, a plugin pushes its group through `PushRequired`,
+/// and the finishing helper checks the groups with `AllGroupsSatisfied`.
+#[r2e_core::test]
+async fn requirement_groups_compose_through_generic_helpers() {
+    use r2e_core::builder::{NoState, Registered, WithPluginInstalled};
+    use r2e_core::di::module::PushPluginCtrls;
+    use r2e_core::plugin::PluginInstall;
+    use r2e_core::type_list::{
+        AllGroupsSatisfied, BeanState, BuildHList, ProvisionIndex, PushRequired, TAppend,
+    };
+
+    #[r2e_macros::producer]
+    fn sum(a: u8, b: u16) -> u32 {
+        u32::from(a) + u32::from(b)
+    }
+
+    fn with_sum<P, R, Mods>(
+        b: AppBuilder<NoState, P, R, Mods>,
+    ) -> Registered<<Sum as Registrable>::Provided, <Sum as Registrable>::Deps, P, R, Mods> {
+        b.register::<Sum>()
+    }
+
+    fn with_plugin<Pl, P, R, Mods>(
+        b: AppBuilder<NoState, P, R, Mods>,
+        plugin: Pl,
+    ) -> WithPluginInstalled<Pl, P, R, Mods>
+    where
+        Pl: PluginInstall,
+        P: TAppend<Pl::Provisions>,
+        Pl::Required: PushRequired<R>,
+        Pl::Controllers: PushPluginCtrls<Pl, Mods>,
+    {
+        b.plugin(plugin)
+    }
+
+    async fn finish<P, R, W>(
+        b: AppBuilder<NoState, P, R>,
+    ) -> AppBuilder<BeanState<<P as BuildHList>::Output>>
+    where
+        P: BuildHList + ProvisionIndex,
+        R: AllGroupsSatisfied<P::Index, W>,
+    {
+        b.try_build_state().await.unwrap()
+    }
+
+    // `Sum`'s two dependencies are one group, satisfied by later provisions;
+    // `Health` requires nothing, so it leaves the requirement list as it is.
+    let builder = with_plugin(with_sum(AppBuilder::new()), r2e_core::builtins::Health)
+        .provide(1u8)
+        .provide(2u16);
+    let app = finish(builder).await;
+    assert_eq!(app.state().get::<u32>(), 3);
+}
