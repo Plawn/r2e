@@ -1,7 +1,7 @@
 ---
 topic: configuration
 features: core
-tokens: ~4600
+tokens: ~4800
 requires: di-beans
 ---
 
@@ -48,6 +48,10 @@ requires: di-beans
 1. `application.yaml` (hierarchies flattened to dotted keys) + `application-{profile}.yaml` (profile from `R2E_PROFILE`)
 2. `.env` file
 3. `${VAR}` / `${VAR:default}` / `${file:/path}` secret placeholders in string values
+   — the default is everything after the first colon, verbatim (`${VAR:-1}` is
+   `-1`; there is no shell `:-` operator), used only when `VAR` is not set
+   (set-but-empty stays empty); defaults nest (`${A:${B:x}}`); a cycle or a
+   missing variable is a startup error, and it names every missing variable
 4. Config providers registered with `.with_config_provider(...)`
 5. Provider-supplied string placeholders are resolved again
 6. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`). The
@@ -155,6 +159,10 @@ b.load_config::<Settings>()                 // or load_config::<SerdeConfig<Work
 - The section is rebuilt from the flat keys, so `R2E_*` overrides and
   `override_config_value` — including indexed keys like `worker.backends.0` —
   are visible. An absent section deserializes from an empty map.
+- A YAML subtree is read as written: `limits: {}` is an empty map, a map key
+  keeps its dots (`gpt-4.1` is one `HashMap` key), a digit-only map key
+  (`"0"`) stays a key. `R2E_*` cannot address a map key containing a dot or a
+  dash — put a `${VAR}` placeholder in the YAML value instead.
 - Strings coerce on typed fields (`"8080"` → `u16`, `"yes"` → `bool`) — but
   not inside untagged / internally tagged enums or `#[serde(flatten)]`.
 - Errors name the r2e key (`worker.backends.1.remote.url`).

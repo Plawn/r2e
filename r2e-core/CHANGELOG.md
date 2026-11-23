@@ -15,6 +15,38 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `R2eConfig::tree` — and so `SerdeConfig<T>` — returns a YAML subtree as it
+  was written (#1471). An empty table (`limits: {}`) is an empty map instead
+  of a missing field; a mapping key keeps its dots (`gpt-4.1` no longer reads
+  as `gpt-4` → `1`); a digit-only mapping key (`"0"`, `200`) stays a key
+  instead of turning its parent into a list. Flat access (`get("a.b")`,
+  `sub_keys`, `has_prefix`) is unchanged, and an empty table still does not
+  make `has_prefix` true. An override written by dotted key
+  (`override_config_value`, a provider, `R2eConfig::set`) reaches a dotted map
+  key: `models.gpt-4.1.timeout` lands under `gpt-4.1`. The `R2E_` overlay
+  still cannot address a key containing a dot or a dash (strict `_` → `.`).
+- A non-string YAML mapping key (`200:`, `true:`) is stored under its YAML
+  spelling (`200`) instead of a debug rendering (`Number(200)`).
+- `${...}` placeholders are parsed with matched braces (#1472). A default may
+  hold a placeholder (`${A:${B:x}}`), and a resolved value that contains a
+  placeholder is rendered in turn. A variable that refers back to itself
+  (`V=${V}`, or `A` → `B` → `A`) used to hang the boot; it is now
+  `ConfigError::Load("Placeholder cycle A -> B -> A in: …")`.
+- A missing variable no longer hides the next one: `ConfigError::NotFound`
+  names every unresolved reference of the whole config, comma-separated
+  (`"DB_URL, env:TOKEN"`). With a single missing variable the error is
+  unchanged.
+
+### Changed
+
+- The default syntax is now specified and tested: everything after the first
+  colon is the default, verbatim, used only when the variable is not set (a
+  variable set to the empty string stays empty). `${VAR:-1}` is `-1` and
+  `${VAR:}` the empty string; there is no shell-style `:-` operator, so
+  `${VAR:-fallback}` yields `-fallback` — write `${VAR:fallback}`.
+
 ## [0.11.0] - 2026-11-22
 
 ### Breaking

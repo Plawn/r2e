@@ -145,6 +145,69 @@ fn r2e_env_overlay_is_visible() {
     assert_eq!(cfg.region.as_deref(), Some("eu-west"));
 }
 
+// ── Lossless subtree (#1471) ───────────────────────────────────────────────
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+struct Model {
+    timeout: i64,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+struct Plan {
+    models: std::collections::HashMap<String, Model>,
+    limits: std::collections::HashMap<String, i64>,
+    codes: std::collections::HashMap<String, String>,
+}
+
+const PLAN: &str = r#"
+plan:
+  models:
+    gpt-4.1:
+      timeout: 30
+      url: ${R2E_TEST_1471_URL:http://default}
+  limits: {}
+  codes:
+    "0": zero
+    "1": one
+"#;
+
+#[test]
+fn empty_table_dotted_key_and_digit_key_round_trip() {
+    let _env = crate::support::env_lock();
+    crate::support::remove_env("R2E_TEST_1471_URL");
+    let mut config = R2eConfig::from_yaml_str(PLAN).unwrap();
+    config
+        .resolve_placeholders_with(&r2e_core::config::DefaultSecretResolver)
+        .unwrap();
+    let plan = SerdeConfig::<Plan>::from_config(&config, Some("plan")).unwrap();
+
+    assert_eq!(plan.models.len(), 1);
+    assert_eq!(
+        plan.models["gpt-4.1"],
+        Model {
+            timeout: 30,
+            url: Some("http://default".into()),
+        }
+    );
+    // `limits` is required: an empty table must not read as a missing field.
+    assert!(plan.limits.is_empty());
+    assert_eq!(plan.codes["0"], "zero");
+    assert_eq!(plan.codes["1"], "one");
+}
+
+#[test]
+fn override_lands_under_the_dotted_map_key() {
+    let mut config = R2eConfig::from_yaml_str(PLAN).unwrap();
+    config.set("plan.models.gpt-4.1.timeout", "90".into());
+    config.set("plan.limits.rps", "5".into());
+    let plan = SerdeConfig::<Plan>::from_config(&config, Some("plan")).unwrap();
+    assert_eq!(plan.models.len(), 1);
+    assert_eq!(plan.models["gpt-4.1"].timeout, 90);
+    assert_eq!(plan.limits["rps"], 5);
+}
+
 // ── Error keys ─────────────────────────────────────────────────────────────
 
 fn deserialize_error(yaml: &str, prefix: Option<&str>) -> (String, String) {

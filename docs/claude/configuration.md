@@ -56,9 +56,9 @@ On the builder: `.with_config_file("patina.yaml")` before `.load_config::<C>()`.
 | `try_get::<V>("key")` | `Option<V>` | Returns `None` on missing key or type mismatch |
 | `get_or("key", default)` | `V` | With fallback |
 | `contains_key("key")` | `bool` | Key existence |
-| `has_prefix("prefix")` | `bool` | Any key under the prefix (empty YAML key = absent). Section presence primitive. |
+| `has_prefix("prefix")` | `bool` | Any key under the prefix (empty YAML key or empty table `{}` = absent). Section presence primitive. |
 | `sub_keys("prefix")` | `Vec<String>` | Distinct immediate child segments, sorted. Map-section primitive. |
-| `tree(Some("prefix"))` | `Option<ConfigValue>` | Nested `Map`/`List` subtree rebuilt from the flat keys (`None` = whole config). `None` when nothing lives under the prefix. Backs `SerdeConfig<T>`. |
+| `tree(Some("prefix"))` | `Option<ConfigValue>` | Nested `Map`/`List` subtree rebuilt from the flat keys (`None` = whole config). `None` when nothing lives under the prefix. A YAML subtree comes back as written: empty table = empty `Map`, a map key keeps its dots (`gpt-4.1`), a digit-only map key (`"0"`) stays a key. Backs `SerdeConfig<T>`. |
 | `set("key", ConfigValue::...)` | `()` | Insert/overwrite |
 
 ---
@@ -108,6 +108,21 @@ Syntax in YAML string values:
 | `${env:VAR}` | Env var (explicit) |
 | `${env:VAR:default}` | Explicit env var with fallback |
 | `${file:/path}` | File contents (trimmed) |
+
+Rules (`secrets::resolve_placeholders`):
+
+- **The default is everything after the first colon, verbatim** — `${VAR:-1}`
+  is `-1`, `${VAR:http://localhost:8080}` keeps its colons, `${VAR:}` is the
+  empty string. There is **no shell-style `:-` operator**: `${VAR:-fallback}`
+  yields `-fallback`. `file:` takes no default (`:` belongs to the path).
+- **The default applies only when the variable is not set.** A variable set to
+  the empty string stays empty.
+- **Placeholders nest**: a default may hold one (`${A:${B:x}}`), and a resolved
+  value is rendered in turn (`URL=postgres://${HOST}/app`). A value that refers
+  back to itself fails with `ConfigError::Load("Placeholder cycle A -> B -> A
+  in: …")` instead of hanging.
+- **One error names every missing variable**: `ConfigError::NotFound("A, B,
+  env:C")`, gathered over the whole config (strings, lists and maps).
 
 Custom resolvers implement `SecretResolver`: `fn resolve(&self, reference: &str) -> Result<String, ConfigError>`.
 
@@ -551,6 +566,16 @@ overrides (an index past the seed extends it; gaps become `Null`); dense
 (`01`) form a map; children win over a scalar at the same key. An absent or
 `null` section deserializes from an empty map (so all-`#[serde(default)]`
 structs load without any YAML).
+
+**A YAML subtree is read as written** (#1471): an empty table (`limits: {}`)
+is an empty map, not a missing field; a map key keeps its dots (`gpt-4.1` is
+one key of a `HashMap<String, _>`); a digit-only map key (`"0"`, `200`) stays
+a key. An override by dotted key (`override_config_value`, a provider, `set`)
+replaces the YAML key of the same name or lands under the longest YAML map
+key it starts with — `plan.models.gpt-4.1.timeout` goes under `gpt-4.1`. The
+`R2E_` overlay cannot address a key containing a dot or a dash (strict `_` →
+`.` mapping, never relaxed): override such an entry through a `${VAR}`
+placeholder in the YAML value instead.
 
 **Coercion.** Strings are coerced on typed hints (integers, floats, `bool`,
 `char`), scalars format into `String` fields, a single scalar is a

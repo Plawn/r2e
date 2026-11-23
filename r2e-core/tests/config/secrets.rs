@@ -159,3 +159,175 @@ mcp:
 
     unsafe { std::env::remove_var("TEST_R2E_NESTED_AUD") };
 }
+
+// ── Default syntax, nesting, cycles, missing variables (#1472) ─────────────
+
+use r2e_core::config::ConfigError;
+
+fn resolve(value: &str) -> Result<String, ConfigError> {
+    resolve_placeholders(value, &DefaultSecretResolver)
+}
+
+#[test]
+fn default_is_verbatim_after_the_first_colon() {
+    let _env = crate::support::env_lock();
+    crate::support::remove_env("TEST_R2E_1472_UNSET");
+
+    // No shell-style `:-` operator: the dash belongs to the default.
+    assert_eq!(resolve("${TEST_R2E_1472_UNSET:-1}").unwrap(), "-1");
+    assert_eq!(resolve("${TEST_R2E_1472_UNSET:-fallback}").unwrap(), "-fallback");
+    assert_eq!(resolve("${env:TEST_R2E_1472_UNSET:-1}").unwrap(), "-1");
+    assert_eq!(resolve("${TEST_R2E_1472_UNSET:}").unwrap(), "");
+    assert_eq!(resolve("${env:TEST_R2E_1472_UNSET:}").unwrap(), "");
+    // Later colons are part of the default.
+    assert_eq!(
+        resolve("${TEST_R2E_1472_UNSET:http://localhost:8080}").unwrap(),
+        "http://localhost:8080"
+    );
+}
+
+#[test]
+fn a_variable_set_to_empty_stays_empty() {
+    let _env = crate::support::env_lock();
+    crate::support::set_env("TEST_R2E_1472_EMPTY", "");
+    let plain = resolve("[${TEST_R2E_1472_EMPTY:fallback}]");
+    let prefixed = resolve("[${env:TEST_R2E_1472_EMPTY:fallback}]");
+    crate::support::remove_env("TEST_R2E_1472_EMPTY");
+
+    assert_eq!(plain.unwrap(), "[]");
+    assert_eq!(prefixed.unwrap(), "[]");
+}
+
+#[test]
+fn a_default_may_hold_a_placeholder() {
+    let _env = crate::support::env_lock();
+    crate::support::remove_env("TEST_R2E_1472_OUTER");
+    crate::support::remove_env("TEST_R2E_1472_UNSET");
+    crate::support::set_env("TEST_R2E_1472_INNER", "inner");
+    let nested = resolve("a-${TEST_R2E_1472_OUTER:${TEST_R2E_1472_INNER}}-z");
+    let twice = resolve("${TEST_R2E_1472_OUTER:${TEST_R2E_1472_UNSET:deep}}");
+    crate::support::remove_env("TEST_R2E_1472_INNER");
+
+    assert_eq!(nested.unwrap(), "a-inner-z");
+    assert_eq!(twice.unwrap(), "deep");
+}
+
+#[test]
+fn a_default_may_hold_braces() {
+    let _env = crate::support::env_lock();
+    crate::support::remove_env("TEST_R2E_1472_UNSET");
+    assert_eq!(
+        resolve(r#"${TEST_R2E_1472_UNSET:{"a":1}}"#).unwrap(),
+        r#"{"a":1}"#
+    );
+}
+
+#[test]
+fn a_resolved_value_is_rendered_in_turn() {
+    let _env = crate::support::env_lock();
+    crate::support::set_env("TEST_R2E_1472_HOST", "db.internal");
+    crate::support::set_env("TEST_R2E_1472_URL", "postgres://${TEST_R2E_1472_HOST}/app");
+    let result = resolve("${TEST_R2E_1472_URL}");
+    crate::support::remove_env("TEST_R2E_1472_HOST");
+    crate::support::remove_env("TEST_R2E_1472_URL");
+
+    assert_eq!(result.unwrap(), "postgres://db.internal/app");
+}
+
+#[test]
+fn a_self_containing_variable_is_a_named_error() {
+    let _env = crate::support::env_lock();
+    crate::support::set_env("TEST_R2E_1472_SELF", "x${TEST_R2E_1472_SELF}");
+    let result = resolve("${TEST_R2E_1472_SELF}");
+    crate::support::remove_env("TEST_R2E_1472_SELF");
+
+    let err = result.unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Load(msg)
+            if msg.contains("TEST_R2E_1472_SELF -> TEST_R2E_1472_SELF")),
+        "expected a cycle error naming the chain, got: {err}"
+    );
+}
+
+#[test]
+fn a_cycle_through_two_variables_names_the_chain() {
+    let _env = crate::support::env_lock();
+    crate::support::set_env("TEST_R2E_1472_A", "${TEST_R2E_1472_B}");
+    crate::support::set_env("TEST_R2E_1472_B", "${env:TEST_R2E_1472_A:unused}");
+    let result = resolve("${TEST_R2E_1472_A}");
+    crate::support::remove_env("TEST_R2E_1472_A");
+    crate::support::remove_env("TEST_R2E_1472_B");
+
+    let err = result.unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::Load(msg) if msg.contains(
+            "TEST_R2E_1472_A -> TEST_R2E_1472_B -> env:TEST_R2E_1472_A"
+        )),
+        "expected a cycle error naming the chain, got: {err}"
+    );
+}
+
+#[test]
+fn the_same_variable_twice_is_not_a_cycle() {
+    let _env = crate::support::env_lock();
+    crate::support::set_env("TEST_R2E_1472_PART", "p");
+    crate::support::set_env(
+        "TEST_R2E_1472_PAIR",
+        "${TEST_R2E_1472_PART}-${TEST_R2E_1472_PART}",
+    );
+    let result = resolve("${TEST_R2E_1472_PAIR}/${TEST_R2E_1472_PAIR}");
+    crate::support::remove_env("TEST_R2E_1472_PART");
+    crate::support::remove_env("TEST_R2E_1472_PAIR");
+
+    assert_eq!(result.unwrap(), "p-p/p-p");
+}
+
+#[test]
+fn every_missing_variable_is_named() {
+    let _env = crate::support::env_lock();
+    for var in ["TEST_R2E_1472_M1", "TEST_R2E_1472_M2", "TEST_R2E_1472_M3"] {
+        crate::support::remove_env(var);
+    }
+
+    let err = resolve("${TEST_R2E_1472_M2}/${TEST_R2E_1472_M1}/${TEST_R2E_1472_M2}").unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::NotFound(names)
+            if names == "TEST_R2E_1472_M1, TEST_R2E_1472_M2"),
+        "got: {err}"
+    );
+
+    // Over a whole config: strings, lists and maps report together.
+    let mut config = r2e_core::R2eConfig::from_yaml_str(
+        r#"
+db:
+  url: ${TEST_R2E_1472_M1}
+  hosts: ["${TEST_R2E_1472_M2}", "${TEST_R2E_1472_M1:ok}"]
+  extra:
+    token: ${env:TEST_R2E_1472_M3}
+"#,
+    )
+    .unwrap();
+    let err = config
+        .resolve_placeholders_with(&DefaultSecretResolver)
+        .unwrap_err();
+    assert!(
+        matches!(&err, ConfigError::NotFound(names)
+            if names == "TEST_R2E_1472_M1, TEST_R2E_1472_M2, env:TEST_R2E_1472_M3"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn a_single_missing_variable_keeps_its_error() {
+    let _env = crate::support::env_lock();
+    crate::support::remove_env("TEST_R2E_1472_M1");
+    let err = resolve("${TEST_R2E_1472_M1}").unwrap_err();
+    assert!(matches!(&err, ConfigError::NotFound(name) if name == "TEST_R2E_1472_M1"));
+}
+
+#[test]
+fn unclosed_nested_placeholder_is_an_error() {
+    let _env = crate::support::env_lock();
+    let err = resolve("${TEST_R2E_1472_UNSET:${OTHER}").unwrap_err();
+    assert!(matches!(&err, ConfigError::Load(msg) if msg.contains("Unclosed placeholder")));
+}
