@@ -658,6 +658,8 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
                     ws_methods.push(WsMethod {
                         path: ws_attr.path,
                         protocols: ws_attr.protocols,
+                        max_message_size: ws_attr.max_message_size,
+                        max_frame_size: ws_attr.max_frame_size,
                         member,
                         ws_param,
                     });
@@ -794,6 +796,19 @@ pub fn parse(item: syn::ItemImpl) -> syn::Result<RoutesImplDef> {
     }
     for wm in ws_methods.iter().filter(|m| !m.member.decorators.anonymous) {
         reject_self_in_route_signature(&wm.member.fn_item.sig, "ws")?;
+    }
+
+    // `max_message_size = "method"` / `max_frame_size = "method"` name a plain
+    // method of this block; every method is classified by now.
+    for wm in &ws_methods {
+        for (name, limit) in [
+            ("max_message_size", &wm.max_message_size),
+            ("max_frame_size", &wm.max_frame_size),
+        ] {
+            if let Some(limit) = limit {
+                crate::codegen::scheduled::check_ws_limit(name, limit, other_methods.iter())?;
+            }
+        }
     }
 
     Ok(RoutesImplDef {

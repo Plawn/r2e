@@ -1679,6 +1679,38 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             let __ws_upgrade = __ws_upgrade.protocols(__ws_protocols);
         }
     });
+    // `max_message_size = ..` / `max_frame_size = ..`: bound what the session
+    // reads. Evaluated here, after the whole pipeline, so a refused request
+    // never pays for it; a `"method"` value reads the controller core.
+    let limit_value = |limit: &Option<crate::extract::route::WsLimit>| match limit {
+        None => quote! { ::core::option::Option::None },
+        Some(crate::extract::route::WsLimit::Expr(expr)) => {
+            quote_spanned! { expr.span() =>
+                ::core::option::Option::Some({
+                    let __ws_limit: usize = #expr;
+                    __ws_limit
+                })
+            }
+        }
+        Some(crate::extract::route::WsLimit::Method(lit)) => {
+            // Spanned on the attribute literal: a wrong return type is
+            // reported there.
+            let method = syn::Ident::new(&lit.value(), lit.span());
+            quote_spanned! { lit.span() =>
+                ::core::option::Option::Some({
+                    let __ws_limit: usize = __ctrl.#method();
+                    __ws_limit
+                })
+            }
+        }
+    };
+    let limits = (wm.max_message_size.is_some() || wm.max_frame_size.is_some()).then(|| {
+        let message = limit_value(&wm.max_message_size);
+        let frame = limit_value(&wm.max_frame_size);
+        quote! {
+            let __ws_upgrade = #krate::web::ws::__limit_upgrade(__ws_upgrade, #message, #frame);
+        }
+    });
 
     // The upgrade callback owns the receiver for the whole socket lifetime:
     // the façade (its `Arc` + request data) or the core `Arc` itself.
@@ -1738,6 +1770,7 @@ fn generate_ws_handler(def: &RoutesImplDef, wm: &WsMethod) -> TokenStream {
             #validation
             #upgrade
             #negotiate
+            #limits
             let _ = __body;
             #owned_receiver
             #krate::http::response::IntoResponse::into_response(

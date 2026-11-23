@@ -292,3 +292,151 @@ mod subprotocols {
         assert_eq!(error.http_status(), Some(StatusCode::FORBIDDEN), "{error}");
     }
 }
+
+mod limits {
+    use r2e::prelude::*;
+    use r2e::web::ws::WsStream;
+    use r2e_test::TestApp;
+
+    const VOICE_FRAME: usize = 64;
+
+    #[controller(path = "/limits")]
+    pub struct LimitedController {
+        #[config("collab.max-message-size")]
+        collab_max_message_size: usize,
+    }
+
+    #[routes]
+    impl LimitedController {
+        /// The bound read from `[collab]` at each upgrade.
+        fn collab_limit(&self) -> usize {
+            self.collab_max_message_size
+        }
+
+        #[ws("/literal", max_message_size = 1024)]
+        async fn literal(&self, mut ws: WsStream) {
+            ws.on_each(|msg| async move { Some(msg) }).await;
+        }
+
+        #[ws("/configured", max_message_size = "collab_limit")]
+        async fn configured(&self, mut ws: WsStream) {
+            ws.on_each(|msg| async move { Some(msg) }).await;
+        }
+
+        #[ws("/frames", max_frame_size = VOICE_FRAME)]
+        async fn frames(&self, mut ws: WsStream) {
+            ws.on_each(|msg| async move { Some(msg) }).await;
+        }
+
+        #[ws(
+            "/negotiated",
+            protocols = ["collab.v1"],
+            max_message_size = "collab_limit",
+            max_frame_size = 4 * 1024
+        )]
+        async fn negotiated(&self, mut ws: WsStream) {
+            let negotiated = ws.protocol().unwrap_or("none").to_string();
+            ws.send_text(negotiated).await.ok();
+            ws.on_each(|msg| async move { Some(msg) }).await;
+        }
+
+        #[ws("/unbounded")]
+        async fn unbounded(&self, mut ws: WsStream) {
+            ws.on_each(|msg| async move { Some(msg) }).await;
+        }
+    }
+
+    async fn setup(collab_limit: usize) -> TestApp {
+        let config = R2eConfig::from_yaml_str(&format!(
+            "collab:\n  max-message-size: {collab_limit}\n"
+        ))
+        .unwrap();
+        TestApp::from_builder(
+            AppBuilder::new()
+                .override_config(config)
+                .load_config::<()>()
+                .build_state()
+                .await
+                .register_controller::<LimitedController>(),
+        )
+    }
+
+    #[r2e::test]
+    async fn message_within_the_bound_is_delivered() {
+        let app = setup(2048).await;
+        let server = app.serve().await;
+        let mut ws = server.ws("/limits/literal").await;
+        let payload = "a".repeat(1024);
+        ws.send_text(payload.clone()).await.unwrap();
+        assert_eq!(ws.next_text().await.unwrap(), payload);
+    }
+
+    #[r2e::test]
+    async fn message_over_a_literal_bound_closes_the_connection() {
+        let app = setup(2048).await;
+        let server = app.serve().await;
+        let mut ws = server.ws("/limits/literal").await;
+        ws.send_text("a".repeat(1025)).await.unwrap();
+        ws.assert_closed().await;
+    }
+
+    #[r2e::test]
+    async fn bound_is_read_from_config_at_each_upgrade() {
+        // Same route, two configurations: the bound follows `[collab]`.
+        for (limit, sent, delivered) in [(2048, 2000, true), (512, 2000, false), (512, 512, true)] {
+            let app = setup(limit).await;
+            let server = app.serve().await;
+            let mut ws = server.ws("/limits/configured").await;
+            let payload = "a".repeat(sent);
+            ws.send_text(payload.clone()).await.unwrap();
+            if delivered {
+                assert_eq!(ws.next_text().await.unwrap(), payload, "limit {limit}, sent {sent}");
+            } else {
+                ws.assert_closed().await;
+            }
+        }
+    }
+
+    #[r2e::test]
+    async fn frame_over_the_frame_bound_closes_the_connection() {
+        let app = setup(2048).await;
+        let server = app.serve().await;
+
+        let mut ws = server.ws("/limits/frames").await;
+        ws.send_binary(vec![7u8; VOICE_FRAME]).await.unwrap();
+        assert_eq!(ws.next_binary().await.unwrap(), vec![7u8; VOICE_FRAME]);
+
+        let mut ws = server.ws("/limits/frames").await;
+        ws.send_binary(vec![7u8; VOICE_FRAME + 1]).await.unwrap();
+        ws.assert_closed().await;
+    }
+
+    #[r2e::test]
+    async fn limits_combine_with_protocols() {
+        let app = setup(8192).await;
+        let server = app.serve().await;
+
+        let mut ws = server.ws_with_protocols("/limits/negotiated", &["collab.v1"]).await;
+        assert_eq!(ws.protocol(), Some("collab.v1"));
+        assert_eq!(ws.next_text().await.unwrap(), "collab.v1");
+        let payload = "a".repeat(4096);
+        ws.send_text(payload.clone()).await.unwrap();
+        assert_eq!(ws.next_text().await.unwrap(), payload);
+
+        // Under the message bound (8192) but over the frame bound (4096).
+        let mut ws = server.ws_with_protocols("/limits/negotiated", &["collab.v1"]).await;
+        ws.next_text().await.unwrap();
+        ws.send_text("a".repeat(4097)).await.unwrap();
+        ws.assert_closed().await;
+    }
+
+    #[r2e::test]
+    async fn route_without_limits_keeps_the_defaults() {
+        let app = setup(16).await;
+        let server = app.serve().await;
+        let mut ws = server.ws("/limits/unbounded").await;
+        let payload = "a".repeat(1 << 20);
+        ws.send_text(payload.clone()).await.unwrap();
+        assert_eq!(ws.next_text().await.unwrap().len(), payload.len());
+    }
+}

@@ -243,6 +243,10 @@ pub struct WsMethod {
     /// `protocols = [..]`: the subprotocols the route supports (most preferred
     /// first), each an expression of type `&'static str`. Empty = none.
     pub protocols: Vec<syn::Expr>,
+    /// `max_message_size = ..`: largest message the session accepts, in bytes.
+    pub max_message_size: Option<crate::extract::route::WsLimit>,
+    /// `max_frame_size = ..`: largest frame the session accepts, in bytes.
+    pub max_frame_size: Option<crate::extract::route::WsLimit>,
     pub member: MemberDef,
     /// Index of the WsStream/WebSocket parameter among typed params, or None if returning WsHandler.
     pub ws_param: Option<WsParam>,
