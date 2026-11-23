@@ -5,7 +5,9 @@
 //!   ones at the view rebuild; switching such a group notifies `list_changed`;
 //! * `McpServer::view_filter::<T>()`: a bean asked about every member, on
 //!   every list and every lookup — a hidden member answers like an unknown
-//!   one, over sessions, stateless serving and the loopback.
+//!   one, over sessions, stateless serving and the loopback;
+//! * `McpViewFilter::listed` (#1467): a member that exists may be left out
+//!   of the lists and still answer by name; a hidden one stays hidden.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -97,10 +99,12 @@ struct Workspace(&'static str);
 /// * a member tagged `_meta.class = "internal"` exists only for a request
 ///   carrying a [`Workspace`] extension;
 /// * `needs_lab` exists only while the session has the `lab` group on;
-/// * anything named in `blocked` is gone.
+/// * anything named in `blocked` is gone;
+/// * anything named in `unlisted` exists but is left out of the lists.
 #[derive(Clone, Default)]
 struct Gate {
     blocked: Arc<Mutex<HashSet<String>>>,
+    unlisted: Arc<Mutex<HashSet<String>>>,
     seen_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -126,6 +130,17 @@ impl McpViewFilter for Gate {
             return member.is_tool() && view.is_group_enabled("lab");
         }
         true
+    }
+
+    fn listed(&self, member: McpMember<'_>, _view: &McpView<'_>) -> bool {
+        !self.unlisted.lock().unwrap().contains(member.name())
+    }
+}
+
+impl Gate {
+    fn unlist(&self, names: &[&str]) {
+        let mut unlisted = self.unlisted.lock().unwrap();
+        unlisted.extend(names.iter().map(|name| name.to_string()));
     }
 }
 
@@ -633,6 +648,150 @@ async fn the_filter_reads_loopback_extensions() {
         .await
         .unwrap();
     assert_eq!(names(inside.list_all_tools().await.unwrap()), ["ops", "ping"]);
+}
+
+// ── Listed vs. reachable by name (#1467) ───────────────────────────────────
+
+#[r2e_core::test]
+async fn an_unlisted_member_is_left_out_of_lists_and_answers_by_name() {
+    let gate = Gate::default();
+    let App {
+        router, registry, ..
+    } = gated(gate.clone()).await;
+    registry
+        .edit(|edit| {
+            edit.add_tool(echoing(echo("tail"), "tail"))?;
+            edit.add_resource(
+                DynamicResource::new("tail://notes", "notes")
+                    .handler(|_call: ResourceCall| async { "notes" }),
+            )?;
+            edit.add_prompt(
+                DynamicPrompt::new("tail_prompt")
+                    .handler(|_p: EchoIn, _call: PromptCall| async { "tail" }),
+            )
+        })
+        .unwrap();
+    let a = initialize(&router, "/mcp").await;
+    let sa = Some(a.as_str());
+    let staff: &[(&str, &str)] = &[("x-tier", "staff")];
+
+    // Catalog and registry members of every family, all unlisted.
+    gate.unlist(&[
+        "audit",
+        "staff://handbook",
+        "staff://people/{name}",
+        "brief",
+        "tail",
+        "tail://notes",
+        "tail_prompt",
+    ]);
+    assert_eq!(listed(&router, sa, staff, "tools").await, ["ping"]);
+    assert!(listed(&router, sa, staff, "resources").await.is_empty());
+    assert!(listed(&router, sa, staff, "templates").await.is_empty());
+    assert!(listed(&router, sa, staff, "prompts").await.is_empty());
+
+    // …and all of them still answer by name.
+    assert_eq!(text_of(&call(&router, sa, staff, "audit").await), "audited");
+    assert_eq!(text_of(&call(&router, sa, staff, "tail").await), "tail:x");
+    for (uri, text) in [
+        ("staff://handbook", "rules"),
+        ("staff://people/ada", "ada"),
+        ("tail://notes", "notes"),
+    ] {
+        let read = rpc(&router, sa, staff, "resources/read", json!({ "uri": uri })).await;
+        assert_eq!(read["result"]["contents"][0]["text"], text, "{read}");
+    }
+    let sub = rpc(
+        &router,
+        sa,
+        staff,
+        "resources/subscribe",
+        json!({ "uri": "staff://handbook" }),
+    )
+    .await;
+    assert!(sub.get("error").is_none(), "{sub}");
+    for (name, arguments) in [("brief", json!({})), ("tail_prompt", json!({ "text": "x" }))] {
+        let got = rpc(
+            &router,
+            sa,
+            staff,
+            "prompts/get",
+            json!({ "name": name, "arguments": arguments }),
+        )
+        .await;
+        assert!(got["result"]["messages"].is_array(), "{got}");
+    }
+
+    // `listed` cannot bring back what `visible` hides: without the staff
+    // header the group is gone, by name too.
+    assert_eq!(call(&router, sa, &[], "audit").await["error"]["code"], -32601);
+    gate.blocked.lock().unwrap().insert("tail".into());
+    assert_eq!(call(&router, sa, staff, "tail").await["error"]["code"], -32601);
+}
+
+#[r2e_core::test]
+async fn an_unlisted_private_member_still_shadows_its_registry_namesake() {
+    let gate = Gate::default();
+    let App {
+        router,
+        registry,
+        sessions,
+    } = gated(gate.clone()).await;
+    let a = initialize(&router, "/mcp").await;
+    let sa = Some(a.as_str());
+    registry.add_tool(echoing(echo("dup"), "global")).unwrap();
+    sessions
+        .get(&a)
+        .unwrap()
+        .add_tool(echoing(echo("dup"), "private"))
+        .unwrap();
+
+    // A call resolves to the private member, so the list must not describe
+    // the registry's under the same name.
+    gate.unlist(&["dup"]);
+    assert_eq!(listed(&router, sa, &[], "tools").await, ["ping"]);
+    assert_eq!(text_of(&call(&router, sa, &[], "dup").await), "private:x");
+}
+
+#[r2e_core::test]
+async fn unlisting_works_on_stateless_requests() {
+    let gate = Gate::default();
+    let App { router, .. } = boot!(
+        AppBuilder::new().provide(gate.clone()),
+        McpServer::new()
+            .stateless(true)
+            .json_response(true)
+            .view_filter::<Gate>()
+    );
+    gate.unlist(&["ping"]);
+    assert!(listed(&router, None, &[], "tools").await.is_empty());
+    assert_eq!(text_of(&call(&router, None, &[], "ping").await), "pong");
+}
+
+#[cfg(feature = "loopback")]
+#[r2e_core::test]
+async fn unlisting_works_on_the_loopback() {
+    use r2e_mcp::McpLoopback;
+    use rmcp::model::CallToolRequestParams;
+
+    let gate = Gate::default();
+    let app = AppBuilder::new()
+        .provide(gate.clone())
+        .plugin(McpServer::new().view_filter::<Gate>())
+        .build_state()
+        .await
+        .register_mcp_service::<Open>();
+    let loopback = app.bean_context().try_get::<McpLoopback>().unwrap();
+    let _router = app.build();
+    gate.unlist(&["ping"]);
+
+    let client = loopback.session("plain").connect().await.unwrap();
+    assert!(client.list_all_tools().await.unwrap().is_empty());
+    let result = client
+        .call_tool(CallToolRequestParams::new("ping"))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(false));
 }
 
 #[r2e_core::test]

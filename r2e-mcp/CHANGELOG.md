@@ -15,6 +15,27 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- `McpError` gains the variant `Rpc(ErrorData)` and is now
+  `#[non_exhaustive]` (#1468). An exhaustive `match` on `McpError` adds a
+  wildcard arm; constructing and returning errors is unaffected.
+
+### Added
+
+- `McpError::Rpc(ErrorData)`, `McpError::rpc(code, message, data)` and
+  `From<ErrorData> for McpError` (#1468): a handler returns a finished
+  JSON-RPC error and the client receives its code, message and `data` as
+  written — tools (as a JSON-RPC error, not an `isError` result), resources,
+  prompts, `#[method]` members and completion providers, catalog and dynamic
+  members, every transport. `ErrorData` is re-exported at the crate root.
+  The named variants keep their mapping.
+- `McpViewFilter::listed` (#1467), default `true`: asked on lists only, about
+  members `visible` accepted, it leaves a member out of the lists while it
+  still answers by name. A filter that does not override it is unchanged —
+  hidden at list and at lookup. Covers the three families, catalog,
+  session-private and registry members, `mcp.stateless` and the loopback.
+
 ## [0.14.0] - 2026-11-22
 
 ### Breaking
