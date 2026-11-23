@@ -384,11 +384,11 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     ///   struct) in the provision list.
     ///
     /// The provided type (`T::Provided`) is tracked in the compile-time
-    /// provision list and its dependencies (`T::Deps`) are appended to the
+    /// provision list and its dependencies (`T::Deps`) are prepended to the
     /// requirement list.
     pub fn register<T: Registrable>(mut self) -> Registered<T::Provided, T::Deps, P, R, Mods>
     where
-        R: TAppend<T::Deps>,
+        T::Deps: TAppend<R>,
     {
         T::register_into(&mut self.shared.bean_registry);
         self.with_updated_types()
@@ -452,7 +452,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// this registration (last-wins), without changing the provision list.
     pub fn with_default_bean<B: Bean>(mut self) -> Registered<B, B::Deps, P, R, Mods>
     where
-        R: TAppend<B::Deps>,
+        B::Deps: TAppend<R>,
     {
         self.shared.bean_registry.register_default::<B>();
         self.with_updated_types()
@@ -463,7 +463,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// The bean IS added to the provision list (guaranteed to be present).
     pub fn with_default_async_bean<B: AsyncBean>(mut self) -> Registered<B, B::Deps, P, R, Mods>
     where
-        R: TAppend<B::Deps>,
+        B::Deps: TAppend<R>,
     {
         self.shared.bean_registry.register_async_default::<B>();
         self.with_updated_types()
@@ -476,7 +476,7 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         mut self,
     ) -> Registered<Pr::Output, Pr::Deps, P, R, Mods>
     where
-        R: TAppend<Pr::Deps>,
+        Pr::Deps: TAppend<R>,
     {
         self.shared.bean_registry.register_producer_default::<Pr>();
         self.with_updated_types()
@@ -506,7 +506,6 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     where
         B: Clone + Send + Sync + 'static,
         F: FnOnce(&crate::config::R2eConfig) -> B + Send + 'static,
-        R: TAppend<TCons<crate::config::R2eConfig, TNil>>,
     {
         self.shared
             .bean_registry
@@ -1086,8 +1085,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
     /// non-panicking alternative.
     pub async fn build_state<W, MW>(self) -> AppBuilder<BeanState<<P as BuildHList>::Output>>
     where
-        P: BuildHList,
-        R: AllSatisfied<P, W>,
+        P: BuildHList + ProvisionIndex,
+        R: AllSatisfied<P::Index, W>,
         Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
         self.try_build_state::<W, MW>()
@@ -1112,8 +1111,8 @@ impl<P, R, Mods> AppBuilder<NoState, P, R, Mods> {
         mut self,
     ) -> Result<AppBuilder<BeanState<<P as BuildHList>::Output>>, crate::beans::BeanError>
     where
-        P: BuildHList,
-        R: AllSatisfied<P, W>,
+        P: BuildHList + ProvisionIndex,
+        R: AllSatisfied<P::Index, W>,
         Mods: ModuleList<BeanState<<P as BuildHList>::Output>, MW>,
     {
         // The subscriber first, before anything fallible: every later boot

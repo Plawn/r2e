@@ -293,3 +293,37 @@ async fn with_bean_factory_reads_config() {
 
     assert_eq!(app.state().get::<FactoryMade>().0, "factory-app");
 }
+
+#[r2e_core::test]
+async fn indexed_graph_checks_every_slot_including_forward_dependencies() {
+    #[r2e_macros::producer]
+    fn total(a: u8, b: u16, c: u32, d: i8, e: i16, f: i32, g: i64, h: u64, enabled: bool) -> i128 {
+        assert!(enabled);
+        i128::from(a)
+            + i128::from(b)
+            + i128::from(c)
+            + i128::from(d)
+            + i128::from(e)
+            + i128::from(f)
+            + i128::from(g)
+            + i128::from(h)
+    }
+
+    // The last provision is at the head of the full block. The first
+    // provision (u8) is beyond it, in the same short tail as ShutdownToken.
+    let app = AppBuilder::new()
+        .provide(1u8)
+        .register::<Total>()
+        .provide(2u16)
+        .provide(3u32)
+        .provide(4i8)
+        .provide(5i16)
+        .provide(6i32)
+        .provide(7i64)
+        .provide(8u64)
+        .provide(true)
+        .try_build_state()
+        .await
+        .unwrap();
+    assert_eq!(app.state().get::<i128>(), 36);
+}

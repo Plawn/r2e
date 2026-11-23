@@ -133,17 +133,21 @@ and registration work.
 
 ### 8. Large bean graphs and compile time
 
-The application state is the provision list `P` materialized as a type-level HList
-(one slot per `.provide()` / `.register()`). Bean access — `state.get::<T>()` and
-the by-type resolution behind `#[inject]` — monomorphizes to a **fixed-offset
-field load** (no hash, no `TypeId` compare, no branch), so it is struct-speed
-regardless of graph size. There is **no runtime cost** to a large graph.
+The application state materializes the provision list `P` as an HList with one
+slot per provided type. A typed read via `state.get::<T>()` compiles to a
+fixed-offset field access and a clone of the selected bean. At startup the
+registry sorts dependencies and runs the bean constructors.
 
-The trade-off is **compile time**: the `HasBean` witness recursion grows roughly
-linearly with the bean count (a few seconds even at ~256 beans). Past the default
-`recursion_limit = 128` (around ~127 provisions) the `There` witness chain
-overflows with `E0275`; add this crate-level attribute at the top of both
-`main.rs` and `lib.rs` so the binary and integration-test library compile:
+At compile time, registration prepends each bean's dependencies to the
+requirement list. At `build_state()` the compiler checks those requirements
+against an index of the provided types, eight per block. To measure a downstream
+`cargo check` with dependencies already built, run `python3 scripts/bench-di-check.py`
+from the checkout. It reports median times for chains of 50, 100, and 250 beans.
+
+The materialized HList and indexed state access still use recursive types.
+Past the default `recursion_limit = 128` (around 127 provisions), add this
+crate-level attribute at the top of both `main.rs` and `lib.rs` so the binary
+and integration-test library compile:
 
 ```rust
 #![recursion_limit = "512"]

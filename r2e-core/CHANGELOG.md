@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Generic DI builder helpers now prepend each bean's requirements and check
+  them against an eight-slot provision index at `build_state()`. This reduces
+  downstream type-checking time for large registration chains. The fluent
+  builder syntax and materialized state layout are preserved.
+  [Migrate explicit generic bounds](../docs/migration/di-provision-index.md).
+
 ### Fixed
 
 - `R2eConfig::tree` — and so `SerdeConfig<T>` — returns a YAML subtree as it

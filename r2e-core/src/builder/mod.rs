@@ -43,7 +43,7 @@ use crate::plugin::{DeferredAction, DeferredContext, PluginInstall, RoutesEffect
 use crate::rt::CancelToken;
 use crate::runtime::lifecycle::{DrainHook, ShutdownHook, StartupHook, StopHandle};
 use crate::runtime::service::{ServiceComponent, StopPhase};
-use crate::type_list::{AllSatisfied, BeanState, BuildHList, TAppend, TCons, TNil};
+use crate::type_list::{AllSatisfied, BeanState, BuildHList, ProvisionIndex, TAppend, TCons, TNil};
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -53,10 +53,10 @@ use tracing::info;
 
 /// Builder returned by the NoState registration methods
 /// ([`register`](AppBuilder::register), [`with_default_bean`](AppBuilder::with_default_bean), …):
-/// `Provided` is pushed onto the provision list `P` and `Deps` is appended to
+/// `Provided` is pushed onto the provision list `P` and `Deps` is prepended to
 /// the requirement list `R`.
 pub type Registered<Provided, Deps, P, R, Mods> =
-    AppBuilder<NoState, TCons<Provided, P>, <R as TAppend<Deps>>::Output, Mods>;
+    AppBuilder<NoState, TCons<Provided, P>, <Deps as TAppend<R>>::Output, Mods>;
 
 /// Builder returned by [`load_config`](AppBuilder::load_config): pushes the
 /// typed config `C`, runtime [`LiveConfigRegistry`](crate::config::LiveConfigRegistry),

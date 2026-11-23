@@ -1,0 +1,21 @@
+error[E0599]: the method `build_state` exists for struct `r2e::AppBuilder<NoState, TCons<i32, TCons<i16, TCons<i8, TCons<u64, TCons<u32, TCons<u16, TCons<u8, TCons<Consumer, TCons<ShutdownToken, TNil>>>>>>>>>, TCons<Missing, TNil>>`, but its trait bounds were not satisfied
+  --> cases/beans/fail/indexed_graph_missing_bean.rs:28:14
+   |
+19 | /         AppBuilder::new()
+20 | |             .register::<Consumer>()
+21 | |             .provide(0u8)
+22 | |             .provide(0u16)
+...  |
+27 | |             .provide(0i32)
+28 | |             .build_state()
+   | |             -^^^^^^^^^^^ method cannot be called due to unsatisfied trait bounds
+   | |_____________|
+   |
+   |
+  ::: $WORKSPACE/r2e-core/src/type_list/provision_index.rs
+   |
+   |   pub struct Block<Slots, Tail>(PhantomData<fn() -> (Slots, Tail)>);
+   |   ----------------------------- doesn't satisfy `_: Contains<Missing, _>`
+   |
+   = note: the following trait bounds were not satisfied:
+           `type_list::provision_index::Block<(i32, i16, i8, u64, u32, u16, u8, Consumer), TCons<ShutdownToken, TNil>>: Contains<Missing, _>`

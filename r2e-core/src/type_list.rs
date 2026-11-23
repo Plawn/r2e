@@ -23,8 +23,9 @@
 //!
 //! When `build_state()` is called, the requirement list `R` (every dependency
 //! declared by registered beans and, at `register_controller()`, each
-//! controller's `Deps`) is checked against the provision list `P` via
-//! [`AllSatisfied<P, W>`]. `AllSatisfied` walks the requirement list and
+//! controller's `Deps`) is checked via [`AllSatisfied`]. For bean construction
+//! [`ProvisionIndex`] groups `P` into blocks of eight. Controllers are checked
+//! against the materialized state. `AllSatisfied` walks the requirement list and
 //! resolves one [`Contains`] bound per element.
 //!
 //! If a required type is missing, the compiler produces a clear error message
@@ -61,6 +62,9 @@
 //!
 //! This mechanism avoids overlapping trait implementations and allows the compiler
 //! to resolve each `Contains` bound independently.
+
+mod provision_index;
+pub use provision_index::ProvisionIndex;
 
 use std::marker::PhantomData;
 
