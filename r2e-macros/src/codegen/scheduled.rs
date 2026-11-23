@@ -6,6 +6,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 
 use crate::model::types::{OverlapMode, ScheduledConfig};
+use crate::util::self_method::resolve_self_method;
 
 /// Generate the `ScheduleConfig` expression for a parsed `#[scheduled]` config.
 ///
@@ -103,31 +104,6 @@ pub(crate) struct SkipCall {
     pub is_async: bool,
 }
 
-/// Resolve a `<key> = "method"` literal against the host impl block's *plain*
-/// methods (no route/transverse marker — each host filters before calling).
-/// The target must be a `&self`-only method; `what`/`example` flavour the
-/// errors. Returns the method ident and whether it is `async`.
-fn resolve_self_method<'a>(
-    lit: &syn::LitStr,
-    mut plain_methods: impl Iterator<Item = &'a syn::ImplItemFn>,
-    not_found: impl FnOnce(&str) -> String,
-    bad_signature: &str,
-) -> syn::Result<(syn::Ident, bool)> {
-    let target = lit.value();
-    let Some(method) = plain_methods.find(|m| m.sig.ident == target) else {
-        return Err(syn::Error::new(lit.span(), not_found(&target)));
-    };
-    let has_self = method
-        .sig
-        .inputs
-        .iter()
-        .any(|arg| matches!(arg, syn::FnArg::Receiver(_)));
-    if !has_self || method.sig.inputs.len() > 1 {
-        return Err(syn::Error::new_spanned(&method.sig, bad_signature));
-    }
-    Ok((method.sig.ident.clone(), method.sig.asyncness.is_some()))
-}
-
 /// Resolve a `#[scheduled(skip_if = "...")]` value against the host impl
 /// block's *plain* methods (no route/transverse marker — each host filters
 /// before calling). The predicate must be a `&self`-only method, sync or
@@ -158,52 +134,6 @@ pub(crate) fn resolve_skip_if<'a>(
         "a skip_if predicate must take only `&self` (no parameters) and return `bool`",
     )?;
     Ok(Some(SkipCall { fn_name, is_async }))
-}
-
-/// Check a `#[ws(max_message_size = "...")]` / `#[ws(max_frame_size = "...")]`
-/// method name against the host impl block's *plain* methods. The provider
-/// must be a **sync** `&self`-only method: it is called at each upgrade, between
-/// the pipeline and the handshake. Its `usize` return is enforced by an
-/// ascription at the call site. An expression limit needs no check.
-pub(crate) fn check_ws_limit<'a>(
-    name: &str,
-    limit: &crate::extract::route::WsLimit,
-    plain_methods: impl Iterator<Item = &'a syn::ImplItemFn>,
-) -> syn::Result<()> {
-    let crate::extract::route::WsLimit::Method(lit) = limit else {
-        return Ok(());
-    };
-    let (_, is_async) = resolve_self_method(
-        lit,
-        plain_methods,
-        |target| {
-            format!(
-                "{name} = \"{target}\" does not name a plain method in this impl block\n\n\
-                 A string names a plain, sync `&self` method returning `usize` (a size in \
-                 bytes), defined in the same impl block as the #[ws] method — it cannot carry \
-                 a route, #[scheduled], #[consumer], #[async_exec], or lifecycle marker.\n\n\
-                 example:\n  fn message_limit(&self) -> usize {{ self.max_message_size }}\n\n  \
-                 #[ws(\"/connect\", {name} = \"message_limit\")]\n  \
-                 async fn connect(&self, ws: WsStream) {{ /* ... */ }}\n\n\
-                 The method is called at each upgrade; read the limit from a \
-                 `#[config(\"...\")]` field or an injected bean. For a fixed size, pass an \
-                 expression instead: `{name} = 64 * 1024`."
-            )
-        },
-        "a #[ws] size limit provider must take only `&self` (no parameters) and return `usize`",
-    )?;
-    if is_async {
-        return Err(syn::Error::new(
-            lit.span(),
-            format!(
-                "{name} = \"{}\" names an `async fn` — the limit provider must be sync\n\n\
-                 The limit is read at each upgrade, right before the handshake. Make the \
-                 method a plain `fn(&self) -> usize`.",
-                lit.value()
-            ),
-        ));
-    }
-    Ok(())
 }
 
 /// Resolve a `#[scheduled(schedule = "...")]` value against the host impl
