@@ -762,42 +762,39 @@ impl<T: ConfigProperties + Send + 'static> PluginConfig for T {
     }
 }
 
-/// Resolve `${...}` placeholders in every string the config map holds.
-///
-/// A YAML sequence is stored whole under its parent key (`ConfigValue::List`),
-/// so resolving only top-level `ConfigValue::String`s left every placeholder
-/// inside a list untouched: `mcp.allowed-hosts: ["${MCP_HOST}"]` reached the
-/// plugin as the literal `"${MCP_HOST}"`. Lists and maps are walked for that
-/// reason.
+/// Resolve `${...}` placeholders in every string value. Missing variables
+/// are gathered over the whole config so one error names them all.
 fn resolve_string_values(
     values: &mut HashMap<String, ConfigValue>,
     resolver: &dyn SecretResolver,
 ) -> Result<(), ConfigError> {
+    let mut missing = secrets::Missing::default();
     for value in values.values_mut() {
-        resolve_in_value(value, resolver)?;
+        resolve_in_value(value, resolver, &mut missing)?;
     }
-    Ok(())
+    missing.into_result()
 }
 
 /// Resolve `${...}` placeholders in one value, recursing through containers.
 fn resolve_in_value(
     value: &mut ConfigValue,
     resolver: &dyn SecretResolver,
+    missing: &mut secrets::Missing,
 ) -> Result<(), ConfigError> {
     match value {
         ConfigValue::String(s) => {
             if s.contains("${") {
-                *s = secrets::resolve_placeholders(s, resolver)?;
+                *s = secrets::resolve_collecting(s, resolver, missing)?;
             }
         }
         ConfigValue::List(items) => {
             for item in items {
-                resolve_in_value(item, resolver)?;
+                resolve_in_value(item, resolver, missing)?;
             }
         }
         ConfigValue::Map(entries) => {
             for entry in entries.values_mut() {
-                resolve_in_value(entry, resolver)?;
+                resolve_in_value(entry, resolver, missing)?;
             }
         }
         ConfigValue::Integer(_)

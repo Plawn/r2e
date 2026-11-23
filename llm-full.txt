@@ -2029,6 +2029,10 @@ pub fn from_token(token: CancelToken) -> Self;            // for `.override_bean
 1. `application.yaml` (hierarchies flattened to dotted keys) + `application-{profile}.yaml` (profile from `R2E_PROFILE`)
 2. `.env` file
 3. `${VAR}` / `${VAR:default}` / `${file:/path}` secret placeholders in string values
+   — the default is everything after the first colon, verbatim (`${VAR:-1}` is
+   `-1`; there is no shell `:-` operator), used only when `VAR` is not set
+   (set-but-empty stays empty); defaults nest (`${A:${B:x}}`); a cycle or a
+   missing variable is a startup error, and it names every missing variable
 4. Config providers registered with `.with_config_provider(...)`
 5. Provider-supplied string placeholders are resolved again
 6. Env vars prefixed `R2E_` (`R2E_SERVER_PORT=8080` ↔ `server.port`). The

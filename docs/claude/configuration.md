@@ -109,6 +109,21 @@ Syntax in YAML string values:
 | `${env:VAR:default}` | Explicit env var with fallback |
 | `${file:/path}` | File contents (trimmed) |
 
+Rules (`secrets::resolve_placeholders`):
+
+- **The default is everything after the first colon, verbatim** — `${VAR:-1}`
+  is `-1`, `${VAR:http://localhost:8080}` keeps its colons, `${VAR:}` is the
+  empty string. There is **no shell-style `:-` operator**: `${VAR:-fallback}`
+  yields `-fallback`. `file:` takes no default (`:` belongs to the path).
+- **The default applies only when the variable is not set.** A variable set to
+  the empty string stays empty.
+- **Placeholders nest**: a default may hold one (`${A:${B:x}}`), and a resolved
+  value is rendered in turn (`URL=postgres://${HOST}/app`). A value that refers
+  back to itself fails with `ConfigError::Load("Placeholder cycle A -> B -> A
+  in: …")` instead of hanging.
+- **One error names every missing variable**: `ConfigError::NotFound("A, B,
+  env:C")`, gathered over the whole config (strings, lists and maps).
+
 Custom resolvers implement `SecretResolver`: `fn resolve(&self, reference: &str) -> Result<String, ConfigError>`.
 
 ---
