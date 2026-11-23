@@ -24,6 +24,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Added
 
+- `#[resource(ttl = "30s", cache_scope = "private")]` (#1474): the `ttlMs`
+  and `cacheScope` of the read result, applied where the method's return sets
+  none. `ttl` is a duration string (`"500ms"`, `"1m30s"`) or whole seconds
+  (`ttl = 30`); `cache_scope` is `"public"` or `"private"`; both are checked
+  at compile time. A resource using either needs the `r2e-mcp` release that
+  ships with this one.
 - `#[ws("/path", max_message_size = .., max_frame_size = ..)]` (#1469): each
   limit is a `usize` expression or a string naming a plain sync
   `&self -> usize` method of the same impl block, called at each upgrade.

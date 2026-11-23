@@ -1,0 +1,5 @@
+error: unknown cache scope `shared`; expected `"public"` or `"private"`
+  --> cases/mcp/fail/mcp_resource_bad_cache_scope.rs:10:47
+   |
+10 |     #[resource(uri = "r2e://a", cache_scope = "shared")]
+   |                                               ^^^^^^^^

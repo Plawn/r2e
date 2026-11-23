@@ -19,7 +19,7 @@ use r2e_mcp::testing::{pin_mcp_validator, McpNotification, McpTestError, McpTest
 use r2e_mcp::{
     meta, AppBuilderMcpExt, CacheScope, DynamicResource, LoopbackError, McpError, McpPrincipal,
     McpResourceUpdates, McpServer, McpSessionInit, McpSessions, Params, ReadResourceResult,
-    ResourceCall, ResourceContents, ResourceRead, SessionInit, SessionToolset, ToolCall,
+    ResourceCall, ResourceContents, ResourceRead, SessionInit, SessionToolset, ToolCall, WithMeta,
 };
 use r2e_test::{TestApp, TestJwt};
 use schemars::JsonSchema;
@@ -492,18 +492,28 @@ async fn resource_updates_are_captured() {
 
 // ── The whole `resources/read` result (#1474) ──────────────────────────────
 
+#[derive(Serialize, JsonSchema)]
+struct Tagged {
+    echoed: String,
+}
+
 #[controller]
 struct CachedResources;
 
 #[routes]
 impl CachedResources {
-    /// Contents with the result's own fields set next to them.
+    /// Contents with the cache fields set per read, plus the result's `_meta`.
     #[resource(uri = "skill://{name}/SKILL.md", mime_type = "text/markdown")]
-    async fn skill(&self, call: ResourceCall) -> Result<ResourceRead<String>, McpError> {
-        Ok(ResourceRead::new(format!("# {}", call.variables["name"]))
-            .ttl(Duration::from_secs(30))
-            .cache_scope(CacheScope::Private)
-            .meta(meta!({ "rev": 7 })))
+    async fn skill(
+        &self,
+        call: ResourceCall,
+    ) -> Result<WithMeta<ResourceRead<String>>, McpError> {
+        Ok(WithMeta::new(
+            ResourceRead::new(format!("# {}", call.variables["name"]))
+                .ttl(Duration::from_secs(30))
+                .cache_scope(CacheScope::Private),
+            meta!({ "rev": 7 }),
+        ))
     }
 
     /// The raw result, sent as written.
@@ -519,37 +529,73 @@ impl CachedResources {
     async fn plain(&self) -> &'static str {
         "plain"
     }
+
+    /// Cache fields declared on the attribute.
+    #[resource(uri = "r2e://cached/declared", ttl = "1m30s", cache_scope = "private")]
+    async fn declared(&self) -> &'static str {
+        "declared"
+    }
+
+    /// The return overrides what the attribute declares, field by field.
+    #[resource(uri = "r2e://cached/overridden", ttl = 60, cache_scope = "public")]
+    async fn overridden(&self) -> ResourceRead<&'static str> {
+        ResourceRead::new("overridden").ttl(Duration::ZERO)
+    }
+
+    /// `_meta` on a tool result; the wrapped value keeps its conversion.
+    #[tool]
+    async fn tagged(&self) -> WithMeta<Json<Tagged>> {
+        WithMeta::new(Json(Tagged { echoed: "x".into() }), meta!({ "rev": 7 }))
+    }
+
+    /// `_meta` on a prompt result.
+    #[prompt]
+    async fn tagged_prompt(&self) -> WithMeta<&'static str> {
+        WithMeta::new("hello", meta!({ "rev": 7 }))
+    }
 }
 
 #[derive(Clone)]
 struct CachedSessionResources;
 impl McpSessionInit for CachedSessionResources {
     async fn init(&self, _s: &SessionInit) -> Result<SessionToolset, McpError> {
-        Ok(SessionToolset::new().resource(
-            DynamicResource::new("r2e://session/cached", "cached")
-                .mime_type("text/markdown")
-                .handler(|_call: ResourceCall| async {
-                    ResourceRead::new("dynamic")
-                        .ttl(Duration::from_millis(250))
-                        .cache_scope(CacheScope::Private)
-                }),
-        ))
+        Ok(SessionToolset::new()
+            .resource(
+                DynamicResource::new("r2e://session/cached", "cached")
+                    .mime_type("text/markdown")
+                    .handler(|_call: ResourceCall| async {
+                        ResourceRead::new("dynamic")
+                            .ttl(Duration::from_millis(250))
+                            .cache_scope(CacheScope::Private)
+                    }),
+            )
+            .resource(
+                DynamicResource::new("r2e://session/declared", "declared")
+                    .ttl(Duration::from_secs(5))
+                    .cache_scope(CacheScope::Public)
+                    .handler(|_call: ResourceCall| async { "declared" }),
+            ))
     }
 }
 
-#[r2e_core::test]
-async fn a_resource_sets_ttl_and_cache_scope_on_the_read_result() {
+async fn cached_app() -> TestApp {
     let builder = AppBuilder::new()
         .plugin(McpServer::new().session_init::<CachedSessionResources>())
         .provide(CachedSessionResources)
         .build_state()
         .await
         .register_mcp_service::<CachedResources>();
-    let app = TestApp::from_builder(builder);
+    TestApp::from_builder(builder)
+}
+
+#[r2e_core::test]
+async fn a_resource_sets_ttl_and_cache_scope_on_the_read_result() {
+    let app = cached_app().await;
     let mcp = app.mcp().await;
 
     // `ResourceRead<T>`: the wrapped return keeps its conversion (requested
-    // URI, declared MIME type) and the result gains its own fields.
+    // URI, declared MIME type) and the result gains its cache fields;
+    // `WithMeta` adds the result's `_meta`.
     let skill = mcp
         .read_resource_raw("skill://deploy/SKILL.md")
         .await
@@ -592,4 +638,45 @@ async fn a_resource_sets_ttl_and_cache_scope_on_the_read_result() {
         mcp.read_resource_text("r2e://session/cached").await.unwrap(),
         "dynamic"
     );
+}
+
+#[r2e_core::test]
+async fn declared_cache_fields_are_defaults_the_return_overrides() {
+    let app = cached_app().await;
+    let mcp = app.mcp().await;
+
+    // `#[resource(ttl, cache_scope)]` applies to a contents-only return.
+    let declared = mcp.read_resource_raw("r2e://cached/declared").await.unwrap();
+    assert_eq!(declared.ttl_ms, Some(90_000));
+    assert_eq!(declared.cache_scope, Some(CacheScope::Private));
+
+    // What the return sets wins; what it leaves unset keeps the declaration.
+    let overridden = mcp
+        .read_resource_raw("r2e://cached/overridden")
+        .await
+        .unwrap();
+    assert_eq!(overridden.ttl_ms, Some(0));
+    assert_eq!(overridden.cache_scope, Some(CacheScope::Public));
+
+    // `DynamicResource::ttl` / `cache_scope`: the same declaration.
+    let dynamic = mcp
+        .read_resource_raw("r2e://session/declared")
+        .await
+        .unwrap();
+    assert_eq!(dynamic.ttl_ms, Some(5_000));
+    assert_eq!(dynamic.cache_scope, Some(CacheScope::Public));
+}
+
+#[r2e_core::test]
+async fn with_meta_sets_the_result_meta_on_tools_and_prompts() {
+    let app = cached_app().await;
+    let mcp = app.mcp().await;
+
+    let tool = mcp.call_tool_raw("tagged", json!({})).await.unwrap();
+    assert_eq!(tool.meta.as_ref().unwrap().get("rev"), Some(&json!(7)));
+    assert_eq!(tool.structured_content, Some(json!({ "echoed": "x" })));
+
+    let prompt = mcp.get_prompt("tagged_prompt", json!({})).await.unwrap();
+    assert_eq!(prompt.meta.as_ref().unwrap().get("rev"), Some(&json!(7)));
+    assert_eq!(prompt.messages.len(), 1);
 }
