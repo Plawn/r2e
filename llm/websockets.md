@@ -1,7 +1,7 @@
 ---
 topic: websockets
 features: ws
-tokens: ~2100
+tokens: ~2800
 requires: core-concepts
 ---
 
@@ -13,6 +13,7 @@ requires: core-concepts
 - `send`/`send_text`/`send_json`/`send_binary` queue **and** flush; `feed`/`feed_text`/`feed_binary` queue only — you must call `flush()`, and you bound the batch size.
 - `WsStream` implements `futures::Sink<Message>`, so `SinkExt` combinators (`send_all`, `forward`) work; `WsBroadcaster` / `WsRooms` give fan-out and rooms.
 - Subprotocols: `#[ws("/path", protocols = ["v2", "v1"])]` (most preferred first) echoes the first one the client offered; the handler reads it with `ws.protocol()`.
+- Size limits: `#[ws("/path", max_message_size = 64 * 1024, max_frame_size = ..)]` — each a `usize` expression or `"method"`, a plain sync `&self -> usize` method (config-driven bound); an oversized message closes the connection without being buffered.
 - Guards, pre-auth guards and identity run **before** the upgrade: a refusal is an ordinary HTTP response in the app's error envelope, and `requested_protocols(ctx.headers)` reads what the client offered (a ticket carried as a subprotocol, say).
 - Every `#[ws]` session is a tracked task joined at shutdown under `shutdown_grace_period` (it does not hold the HTTP drain).
 - A plain `while let Some(Ok(msg)) = ws.next().await` loop already exits cleanly: at shutdown `next()` sends `1001 Going Away` and returns `None`.
@@ -125,7 +126,8 @@ impl CollabController {
 - Negotiation happens on the upgrade, so it applies to every handler form:
   a `WsStream` parameter, a raw `WebSocket` parameter (its own `protocol()`),
   or a returned `WsHandler` (`ws.protocol()` in `on_connect`).
-- An empty `protocols = []` and any other `#[ws]` argument are compile errors.
+- An empty `protocols = []` and any `#[ws]` argument other than `protocols`,
+  `max_message_size` and `max_frame_size` are compile errors.
 
 In tests (`r2e-test`, feature `ws`):
 
@@ -144,6 +146,72 @@ assert_eq!(error.http_status(), Some(StatusCode::FORBIDDEN));
 
 Like a browser, the test client fails a handshake that offered subprotocols
 and got none back.
+
+### Message and frame size limits
+
+`max_message_size` and `max_frame_size` bound, in bytes, what a session
+accepts from the client. Both are optional; a route that sets neither keeps the
+defaults (64 MiB per message, 16 MiB per frame). Each takes either a `usize`
+expression (a literal, a `const`) or a string naming a **plain, sync
+`&self -> usize` method of the same impl block** — the way to read the bound
+from config or a bean. The method is called at each upgrade, after guards and
+identity.
+
+```rust
+use r2e::prelude::*;
+use r2e::web::ws::WsStream;
+
+const VOICE_FRAME: usize = 64 * 1024;
+
+#[controller(path = "/rt")]
+pub struct RealtimeController {
+    #[config("collab.max-message-size")]
+    collab_max_message_size: usize,
+}
+
+#[routes]
+impl RealtimeController {
+    fn collab_limit(&self) -> usize {
+        self.collab_max_message_size
+    }
+
+    // Fixed bound.
+    #[ws("/voice", max_message_size = VOICE_FRAME)]
+    async fn voice(&self, mut ws: WsStream) {
+        ws.on_each(|msg| async move { Some(msg) }).await;
+    }
+
+    // Bound read from `collab.max-message-size`; combines with `protocols`.
+    #[ws("/collab", protocols = ["collab.v1"], max_message_size = "collab_limit")]
+    async fn collab(&self, mut ws: WsStream) {
+        ws.on_each(|msg| async move { Some(msg) }).await;
+    }
+}
+# fn main() {}
+```
+
+- **Over the bound, the connection ends.** The read fails
+  (`ws.next()` yields `Some(Err(_))`, `on_each` returns) and the socket is
+  dropped; the oversized message is never delivered to the handler.
+- **It is not buffered first.** With `max_message_size` set, the frame limit
+  is clamped to it (`min(max_frame_size or 16 MiB, max_message_size)`), so an
+  oversized single-frame message is refused on its frame header, before its
+  payload is read. A message split into small frames is cut as soon as the
+  accumulated size passes the bound.
+- `max_frame_size` alone bounds each frame and leaves the message default.
+- The limits apply to what the server **reads**; they do not bound what the
+  handler sends.
+- A string that names no plain method, an `async` method, or a value that is
+  not `usize` is a compile error on the attribute.
+
+In tests, `WsTestClient::assert_closed()` waits for the server to end the
+connection:
+
+```rust,ignore
+let mut ws = server.ws("/rt/voice").await;
+ws.send_binary(vec![0u8; 64 * 1024 + 1]).await.unwrap();
+ws.assert_closed().await;
+```
 
 ### Sessions and shutdown
 

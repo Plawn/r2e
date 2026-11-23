@@ -15,6 +15,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `#[ws("/path", max_message_size = .., max_frame_size = ..)]` (#1469): each
+  limit is a `usize` expression or a string naming a plain sync
+  `&self -> usize` method of the same impl block, called at each upgrade.
+  Combines with `protocols`. A route using either argument needs the
+  `r2e-core` release that ships with this one (`web::ws::__limit_upgrade`).
+
 ## [0.12.0] - 2026-11-22
 
 ### Breaking

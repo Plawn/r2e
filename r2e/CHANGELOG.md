@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- WebSockets (`ws`): `#[ws("/path", max_message_size = .., max_frame_size =
+  ..)]` bounds what a session reads, from a `usize` expression or a
+  `&self -> usize` method (a config-driven bound); an oversized message closes
+  the connection without being buffered in full (#1469).
+
 ## [0.14.0] - 2026-11-22
 
 ### Added

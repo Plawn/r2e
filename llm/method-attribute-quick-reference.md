@@ -1,7 +1,7 @@
 ---
 topic: method-attribute-quick-reference
 features: core
-tokens: ~900
+tokens: ~1000
 requires: core-concepts
 ---
 
@@ -21,7 +21,7 @@ requires: core-concepts
 | `#[any("/path")]` | method | All-methods route (wildcards: `{*path}`) |
 | `#[fallback]` | method | App-wide catch-all (no path arg) |
 | `#[sse("/path")]` | method | SSE endpoint |
-| `#[ws("/path")]`, `#[ws("/path", protocols = ["v2", "v1"])]` | method | WebSocket endpoint; `protocols` negotiates a subprotocol (`ws.protocol()`) |
+| `#[ws("/path")]`, `#[ws("/path", protocols = ["v2", "v1"], max_message_size = 64 * 1024, max_frame_size = "method")]` | method | WebSocket endpoint; `protocols` negotiates a subprotocol (`ws.protocol()`); `max_message_size` / `max_frame_size` bound what the session reads (a `usize` expression or a `&self -> usize` method name) |
 | `#[anonymous]` | method | Skip struct-level identity for this route |
 | `#[roles("r1", "r2")]` | method or impl | Any-of role check (403); impl = every non-anonymous route |
 | `#[all_roles("r1", "r2")]` | method or impl | All-of role check (403); impl = every non-anonymous route |

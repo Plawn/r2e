@@ -847,12 +847,23 @@ pub fn sse(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// async fn collab(&self, mut ws: WsStream) {
 ///     let version = ws.protocol(); // Some("collab.v2") | Some("collab.v1") | None
 /// }
+///
+/// // Size limits, in bytes: a `usize` expression, or the name of a plain sync
+/// // `&self -> usize` method of this impl block (a config-driven bound)
+/// #[ws("/voice", max_message_size = 64 * 1024, max_frame_size = "frame_limit")]
+/// async fn voice(&self, mut ws: WsStream) { ... }
 /// ```
 ///
 /// `protocols = [..]` takes `&'static str` expressions (literals or consts).
 /// The first entry the client also offered is echoed back in the upgrade
 /// response; when none matches, the upgrade still happens with no subprotocol
 /// and `WsStream::protocol()` is `None`.
+///
+/// `max_message_size = ..` and `max_frame_size = ..` bound what the session
+/// reads from the client; each is optional and the defaults (64 MiB / 16 MiB)
+/// apply otherwise. A method-name value is called at each upgrade. With
+/// `max_message_size` set, the frame limit is clamped to it, so an oversized
+/// message closes the connection without being buffered in full.
 ///
 /// This attribute is consumed by [`routes`] — it is a no-op on its own.
 #[proc_macro_attribute]
