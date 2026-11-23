@@ -109,6 +109,9 @@ pub use session::{
     SessionInit, SessionToolset,
 };
 
+/// A finished JSON-RPC error (`code`, `message`, `data`): what
+/// [`McpError::Rpc`] carries to the client as written.
+pub use rmcp::model::ErrorData;
 /// The free-form `_meta` object a tool, resource or prompt advertises in its
 /// list entry (`ToolRoute::meta`, `#[tool(meta = …)]`, `DynamicTool::meta`).
 /// Build one with [`meta!`].

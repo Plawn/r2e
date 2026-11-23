@@ -394,6 +394,8 @@ impl McpServer {
     /// session would otherwise serve, on every list and every lookup — a
     /// member it hides answers like an unknown one (`-32601` for a tool,
     /// `-32002` for a resource, `-32602` for a prompt).
+    /// [`McpViewFilter::listed`] may additionally leave a member that
+    /// exists out of the lists while it stays reachable by name.
     ///
     /// Where [`session_init`](Self::session_init) shapes a session once,
     /// when it opens, the filter runs on each request — so it also works

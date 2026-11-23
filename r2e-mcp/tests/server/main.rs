@@ -27,6 +27,7 @@ mod plugin;
 mod progress;
 mod prompts;
 mod protocol_version;
+mod raw_error;
 mod registry;
 mod rejection;
 mod resources;

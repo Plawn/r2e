@@ -126,6 +126,33 @@ retry with better arguments. Everything else maps to JSON-RPC errors:
 | unknown tool name | `-32601 method_not_found` |
 | guard rejection | `-32600` with the HTTP status text (`data: "forbidden"`, message carries the rejection body) |
 | `McpError::Internal` / panics | `-32603 internal_error` |
+| `McpError::Rpc(ErrorData)` / `McpError::rpc(code, message, data)` | that code, message and `data`, unchanged |
+
+### A JSON-RPC error of your own
+
+The named variants each own one standard code. When none fits — an
+application code in your own range, a structured `data` payload the client
+decodes, an error received from another JSON-RPC peer and relayed — return
+the error itself:
+
+```rust
+#[tool]
+async fn export(&self) -> Result<String, McpError> {
+    Err(McpError::rpc(
+        -32050,
+        "quota exceeded",
+        Some(json!({ "retry_after_secs": 30 })),
+    ))
+}
+```
+
+`McpError::Rpc` holds an `ErrorData` (rmcp's type, re-exported as
+`r2e_mcp::ErrorData`) and `From<ErrorData>` makes `?` work on one. It is sent
+as written — no code remapping, no `data` rewriting — from tools (as a
+JSON-RPC error, not an `isError` result), resources, prompts, extension
+methods and completion providers, for catalog and dynamic members, over
+HTTP, stateless serving and the loopback. Prefer a named variant whenever
+one fits: clients key on the standard codes.
 
 ## Resources and prompts
 
@@ -914,6 +941,26 @@ AppBuilder::new()
   no way to call what the list does not show.
 - It only narrows. Groups and the scope/role filter apply first; the filter
   cannot reveal a member they hide.
+- **Listed vs. reachable.** `visible` answers "does this member exist for
+  this request?". A second method, `listed` (default `true`), answers "does
+  it appear in the lists?": it is consulted by `tools/list`,
+  `resources/list`, `resources/templates/list` and `prompts/list` only, and
+  only about members `visible` accepted. Override it to keep a catalog short
+  while every member still answers by name:
+
+  ```rust
+  fn listed(&self, member: McpMember<'_>, _view: &McpView<'_>) -> bool {
+      // Members tagged `_meta.unlisted` are reached by name only.
+      !member.meta().is_some_and(|meta| meta.contains_key("unlisted"))
+  }
+  ```
+
+  Because a list is `visible && listed`, it can never advertise a member a
+  lookup would not find, and a filter that leaves `listed` alone behaves as
+  before: hidden at list and at lookup. `listed` is curation, not access
+  control — whoever knows the name can call; put access rules in `visible`,
+  guards or scopes. An unlisted session-private member still shadows its
+  registry namesake.
 - `visible` is synchronous and on the hot path (once per member per list):
   no I/O, no locks held across calls. Resolve what it needs upstream — an
   HTTP layer or a loopback `.extension(..)`, `session_init` — and read it

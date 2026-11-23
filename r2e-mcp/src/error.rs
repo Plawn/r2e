@@ -9,6 +9,11 @@
 //! - **Protocol failures** (every other variant) become JSON-RPC error
 //!   responses (`ErrorData`) — the call itself was invalid or could not be
 //!   served.
+//!
+//! The named variants pick the code for you. [`McpError::Rpc`] is the
+//! exception: it carries a finished JSON-RPC error — code, message, `data` —
+//! and reaches the client as written, for a server that owns its error
+//! codes or relays another server's.
 
 use std::borrow::Cow;
 use std::fmt;
@@ -43,6 +48,15 @@ pub enum McpError {
     Forbidden(String),
     /// Unexpected server-side failure (JSON-RPC `-32603`).
     Internal(String),
+    /// A JSON-RPC error sent as written: its code, message and `data` reach
+    /// the client untouched, from a tool, a resource, a prompt or an
+    /// extension method alike. Build one with [`McpError::rpc`] or convert
+    /// an [`ErrorData`] (`?` works: `From<ErrorData>`).
+    ///
+    /// From a tool this is a protocol error, not an `is_error` result — the
+    /// calling agent does not get to read it and retry; prefer
+    /// [`McpError::Tool`] for a failure the agent can act on.
+    Rpc(ErrorData),
 }
 
 impl McpError {
@@ -60,6 +74,12 @@ impl McpError {
             message: message.into(),
             data: Some(data),
         }
+    }
+
+    /// A JSON-RPC error with a code of the caller's choosing (see
+    /// [`McpError::Rpc`]).
+    pub fn rpc(code: i32, message: impl Into<String>, data: Option<serde_json::Value>) -> Self {
+        McpError::Rpc(ErrorData::new(ErrorCode(code), message.into(), data))
     }
 
     /// Map this error onto the wire: domain failures become an
@@ -89,6 +109,7 @@ impl McpError {
                 Some(serde_json::Value::String("forbidden".into())),
             )),
             McpError::Internal(msg) => Err(ErrorData::new(ErrorCode::INTERNAL_ERROR, msg, None)),
+            McpError::Rpc(error) => Err(error),
         }
     }
 
@@ -120,11 +141,19 @@ impl fmt::Display for McpError {
             McpError::Unauthorized(m) => write!(f, "unauthorized: {m}"),
             McpError::Forbidden(m) => write!(f, "forbidden: {m}"),
             McpError::Internal(m) => write!(f, "internal error: {m}"),
+            McpError::Rpc(error) => write!(f, "{} (code {})", error.message, error.code.0),
         }
     }
 }
 
 impl std::error::Error for McpError {}
+
+/// A finished JSON-RPC error passes through as [`McpError::Rpc`].
+impl From<ErrorData> for McpError {
+    fn from(error: ErrorData) -> Self {
+        McpError::Rpc(error)
+    }
+}
 
 /// [`HttpError`] maps by status so services shared between HTTP controllers
 /// and MCP tools (`Result<_, HttpError>` methods) keep their semantics: 401 →

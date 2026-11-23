@@ -6300,7 +6300,8 @@ See llm/testing.md.
 - Return `Json<T>` for structured output (`structuredContent` + `outputSchema`),
   `String`/`&str`/`()`, `CallToolResult`, or `Result<_, E: Into<McpError>>`;
   `McpError::tool(...)` is an agent-readable `isError` result, other variants
-  become JSON-RPC errors.
+  become JSON-RPC errors; `McpError::rpc(code, message, data)` is a JSON-RPC
+  error sent as written.
 - Guards, interceptors and `#[roles]` are the same HTTP machinery and work on
   all three families (see llm/guards.md); per-member scopes are
   `#[tool(scopes = "…")]` (ALL) or `any_scopes` (at least one).
@@ -6430,6 +6431,23 @@ errors (bad args → -32602, unknown tool → -32601). A guard or identity
 `InvalidParams` (-32602), `Internal`/`Unavailable`/`Timeout` → `Internal`
 (-32603), `Conflict`/`RateLimited` → `McpError::tool(..)` carrying the details.
 Beans/config go on the struct, never as parameters.
+
+**A JSON-RPC error of your own** — when the named variants' fixed codes do
+not fit (an application code in your own range, a structured `data` payload,
+an error received from another JSON-RPC peer and relayed):
+
+```rust,ignore
+// code, message, optional `data` — sent to the client as written
+Err(McpError::rpc(-32050, "quota exceeded", Some(json!({ "retry_after_secs": 30 }))))
+// or a finished `ErrorData` (`r2e::r2e_mcp::ErrorData`, rmcp's type): `?` converts it
+Err(McpError::Rpc(error_data))
+```
+
+`McpError::Rpc` is never rewritten: code, message and `data` reach the client
+unchanged, from a tool (a JSON-RPC error, not an `isError` result), a
+resource, a prompt, a `#[method]` or a completion provider, catalog and
+dynamic members alike, on every transport. Prefer the named variants when one
+fits — clients key on the standard codes.
 
 Resources and prompts — the same impl block can carry the two other MCP
 member families (one marker per method):
@@ -6962,6 +6980,16 @@ b.provide(PlanFilter)                                      // the filter is a be
   `extension::<T>()` (by reference), `header(name)`, `parts()`.
 - A session-private member the filter hides does not shadow a registry
   namesake: the caller gets the registry one, if the filter admits it.
+- **Listed vs. reachable**: override `listed(member, view) -> bool` (default
+  `true`) to leave a member out of `tools/list` / `resources/list` /
+  `resources/templates/list` / `prompts/list` while it still answers by name
+  (call, read, subscribe, `prompts/get`, completion). It is asked on lists
+  only, and only about members `visible` accepted — so a list can never show
+  what a lookup would not find, and a filter that does not override it hides
+  at list **and** lookup, as before. `listed` is curation (a short catalog,
+  members reached by a name the client learns elsewhere), **not** access
+  control: anyone who knows the name can call. An unlisted session-private
+  member still shadows its registry namesake.
 - Nothing is pushed when the filter's answer changes: call
   `McpSession::notify_list_changed()` (via `McpSessions`) for the sessions
   concerned. A missing filter bean is a boot panic.

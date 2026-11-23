@@ -12,10 +12,13 @@
 //! 2. the **view filter**, when one is installed
 //!    ([`McpServer::view_filter`](crate::McpServer::view_filter)) — asked
 //!    about every member, on every list and every lookup;
-//! 3. on lists only, the caller's scopes and roles under
-//!    `mcp.auth.filter-members` (a call enforces them in the member).
+//! 3. on lists only, the filter's [`McpViewFilter::listed`] (a member that
+//!    exists may be left out of the lists) and the caller's scopes and roles
+//!    under `mcp.auth.filter-members` (a call enforces them in the member).
 //!
-//! A member the first two hide answers exactly like an unknown one.
+//! A member the first two hide answers exactly like an unknown one. The
+//! third only ever narrows a list: a list never advertises a member a
+//! lookup would not find.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -190,7 +193,7 @@ impl<'a> McpView<'a> {
 /// session-private and registry alike — on every list **and** every lookup
 /// (`tools/call`, `resources/read`, `resources/subscribe`, `prompts/get`,
 /// `completion/complete`): a member it hides answers exactly like an
-/// unknown one, so a list and a call can never disagree.
+/// unknown one, so a list never shows a member a call would not find.
 ///
 /// It runs synchronously on the request path, once per member on a list:
 /// decide from what [`McpView`] and [`McpMember`] carry plus state the bean
@@ -198,6 +201,10 @@ impl<'a> McpView<'a> {
 /// unlocked for a caller), tell the clients to re-list with
 /// [`McpSession::notify_list_changed`](crate::McpSession::notify_list_changed)
 /// or [`McpSessions::notify_list_changed`](crate::McpSessions::notify_list_changed).
+///
+/// [`listed`](Self::listed) separates the two questions when they differ: a
+/// member that exists but is left out of the lists (a long tail of tools a
+/// client may still call by name, a deprecated member kept for old clients).
 ///
 /// ```ignore
 /// #[derive(Clone)]
@@ -213,16 +220,31 @@ impl<'a> McpView<'a> {
 /// }
 /// ```
 pub trait McpViewFilter: Send + Sync + 'static {
-    /// Whether `member` exists for the request `view` describes.
+    /// Whether `member` exists for the request `view` describes: asked on
+    /// every list and every lookup by name.
     fn visible(&self, member: McpMember<'_>, view: &McpView<'_>) -> bool;
+
+    /// Whether a member that exists is advertised by the list methods
+    /// (`tools/list`, `resources/list`, `resources/templates/list`,
+    /// `prompts/list`). Asked on lists only, and only about members
+    /// [`visible`](Self::visible) accepted — so it can take a member out of
+    /// a list, never put a hidden one in.
+    ///
+    /// Defaults to `true`: what exists is listed. A member it leaves out
+    /// still answers every lookup by name (`tools/call`, `resources/read`,
+    /// `resources/subscribe`, `prompts/get`, `completion/complete`) — this
+    /// is curation, not access control; a member the caller must not reach
+    /// is one `visible` hides.
+    fn listed(&self, _member: McpMember<'_>, _view: &McpView<'_>) -> bool {
+        true
+    }
 }
 
 /// Type-erased [`McpViewFilter`].
-pub(crate) type ViewFilterFn =
-    Arc<dyn for<'a, 'b> Fn(McpMember<'a>, &'b McpView<'a>) -> bool + Send + Sync>;
+pub(crate) type ViewFilterFn = Arc<dyn McpViewFilter>;
 
 pub(crate) fn erase_view_filter<T: McpViewFilter>(filter: T) -> ViewFilterFn {
-    Arc::new(move |member, view| filter.visible(member, view))
+    Arc::new(filter)
 }
 
 /// A route a request-time check can be asked about.
@@ -294,18 +316,33 @@ impl<'a> Access<'a> {
         }
     }
 
+    fn request(&self) -> McpView<'_> {
+        McpView {
+            parts: self.parts,
+            state: self.state,
+            view: &self.view,
+            registry: &self.registry,
+        }
+    }
+
+    /// Whether the filter lets `member` exist for this request.
     fn filtered(&self, member: McpMember<'_>) -> bool {
+        self.filter
+            .is_none_or(|filter| filter.visible(member, &self.request()))
+    }
+
+    /// Whether the filter lets `member` exist **and** be listed.
+    fn advertised(&self, member: McpMember<'_>) -> bool {
         self.filter.is_none_or(|filter| {
-            filter(
-                member,
-                &McpView {
-                    parts: self.parts,
-                    state: self.state,
-                    view: &self.view,
-                    registry: &self.registry,
-                },
-            )
+            let view = self.request();
+            filter.visible(member, &view) && filter.listed(member, &view)
         })
+    }
+
+    fn group_on<R: Gated>(&self, route: &R) -> bool {
+        route
+            .group()
+            .is_none_or(|group| self.view.group_on(self.state.catalog().keys(), group))
     }
 
     /// Whether a member of the session's own view exists for this request.
@@ -316,10 +353,17 @@ impl<'a> Access<'a> {
     /// Whether a registry member exists for this request: its group is on
     /// for the session, and the filter lets it through.
     fn global<R: Gated>(&self, route: &R) -> bool {
-        route
-            .group()
-            .is_none_or(|group| self.view.group_on(self.state.catalog().keys(), group))
-            && self.filtered(route.member())
+        self.group_on(route) && self.filtered(route.member())
+    }
+
+    /// Whether a member of the session's own view goes in a list.
+    fn own_listed<R: Gated>(&self, route: &R) -> bool {
+        self.advertised(route.member())
+    }
+
+    /// Whether a registry member goes in a list.
+    fn global_listed<R: Gated>(&self, route: &R) -> bool {
+        self.group_on(route) && self.advertised(route.member())
     }
 
     fn own_gated(&self) -> bool {
@@ -390,17 +434,22 @@ impl<'a> Access<'a> {
     // ── List payloads: the session's list followed by the registry's,
     // built into one allocation. With an empty registry and no filter (the
     // common deployment) this is exactly the prebuilt list's clone.
+    //
+    // A member is admitted when it exists and the filter lists it; a
+    // registry namesake is shadowed by a session-private member that
+    // *exists*, listed or not — a call resolves to the private one, so the
+    // list must not describe the other.
 
     pub(crate) fn tool_list(&self) -> Vec<Tool> {
         let caller = caller_in(self.parts);
         let caller = caller.as_ref();
-        let own = |route: &ToolRoute| self.own(route);
+        let own = |route: &ToolRoute| self.own_listed(route);
         let own: Admit<'_, ToolRoute> = self.own_gated().then_some(&own);
         let (view, registry) = (&self.view.tools, &self.registry.tools);
         if registry.is_empty() {
             return view.visible_list(caller, own);
         }
-        let global = |route: &ToolRoute| self.global(route);
+        let global = |route: &ToolRoute| self.global_listed(route);
         let global: Admit<'_, ToolRoute> = self.global_gated().then_some(&global);
         let mut out = Vec::with_capacity(view.len() + registry.len());
         view.extend_visible(caller, own, &mut out, |_| false);
@@ -417,13 +466,13 @@ impl<'a> Access<'a> {
     pub(crate) fn resource_list(&self) -> Vec<Resource> {
         let caller = caller_in(self.parts);
         let caller = caller.as_ref();
-        let own = |route: &ResourceRoute| self.own(route);
+        let own = |route: &ResourceRoute| self.own_listed(route);
         let own: Admit<'_, ResourceRoute> = self.own_gated().then_some(&own);
         let (view, registry) = (&self.view.resources, &self.registry.resources);
         if registry.is_empty() {
             return view.visible_list(caller, own);
         }
-        let global = |route: &ResourceRoute| self.global(route);
+        let global = |route: &ResourceRoute| self.global_listed(route);
         let global: Admit<'_, ResourceRoute> = self.global_gated().then_some(&global);
         let mut out = Vec::with_capacity(view.len() + registry.len());
         view.extend_visible(caller, own, &mut out, |_| false);
@@ -440,7 +489,7 @@ impl<'a> Access<'a> {
     pub(crate) fn resource_template_list(&self) -> Vec<ResourceTemplate> {
         let caller = caller_in(self.parts);
         let caller = caller.as_ref();
-        let own = |route: &ResourceRoute| self.own(route);
+        let own = |route: &ResourceRoute| self.own_listed(route);
         let own: Admit<'_, ResourceRoute> = self.own_gated().then_some(&own);
         let (view, registry) = (
             &self.view.resource_templates,
@@ -449,7 +498,7 @@ impl<'a> Access<'a> {
         if registry.is_empty() {
             return view.visible_list(caller, own);
         }
-        let global = |route: &ResourceRoute| self.global(route);
+        let global = |route: &ResourceRoute| self.global_listed(route);
         let global: Admit<'_, ResourceRoute> = self.global_gated().then_some(&global);
         let mut out = Vec::with_capacity(view.len() + registry.len());
         view.extend_visible(caller, own, &mut out, |_| false);
@@ -466,13 +515,13 @@ impl<'a> Access<'a> {
     pub(crate) fn prompt_list(&self) -> Vec<Prompt> {
         let caller = caller_in(self.parts);
         let caller = caller.as_ref();
-        let own = |route: &PromptRoute| self.own(route);
+        let own = |route: &PromptRoute| self.own_listed(route);
         let own: Admit<'_, PromptRoute> = self.own_gated().then_some(&own);
         let (view, registry) = (&self.view.prompts, &self.registry.prompts);
         if registry.is_empty() {
             return view.visible_list(caller, own);
         }
-        let global = |route: &PromptRoute| self.global(route);
+        let global = |route: &PromptRoute| self.global_listed(route);
         let global: Admit<'_, PromptRoute> = self.global_gated().then_some(&global);
         let mut out = Vec::with_capacity(view.len() + registry.len());
         view.extend_visible(caller, own, &mut out, |_| false);
