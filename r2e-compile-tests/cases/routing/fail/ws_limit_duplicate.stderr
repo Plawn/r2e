@@ -1,0 +1,13 @@
+error: duplicate `max_message_size` argument on #[ws]
+  --> cases/routing/fail/ws_limit_duplicate.rs:11:44
+   |
+11 |     #[ws("/chat", max_message_size = 1024, max_message_size = 2048)]
+   |                                            ^^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::web::ws::WsStream`
+ --> cases/routing/fail/ws_limit_duplicate.rs:4:5
+  |
+4 | use r2e::web::ws::WsStream;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

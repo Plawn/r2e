@@ -28,6 +28,14 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   materialized state layout are preserved.
   [Migrate explicit generic bounds](../docs/migration/di-provision-index.md).
 
+### Added
+
+- WebSocket size limits (#1469): the `#[ws]` arguments `max_message_size` and
+  `max_frame_size` bound what a session reads. With a message limit, the frame
+  limit is clamped to it, so an oversized message is refused on its frame
+  header and closes the connection without being buffered in full. Routes
+  that set neither keep the defaults (64 MiB / 16 MiB).
+
 ### Fixed
 
 - `R2eConfig::tree` — and so `SerdeConfig<T>` — returns a YAML subtree as it

@@ -6,6 +6,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 
 use crate::model::types::{OverlapMode, ScheduledConfig};
+use crate::util::self_method::resolve_self_method;
 
 /// Generate the `ScheduleConfig` expression for a parsed `#[scheduled]` config.
 ///
@@ -101,31 +102,6 @@ pub(crate) fn task_name(config: &ScheduledConfig, owner: &str, fn_name: &str) ->
 pub(crate) struct SkipCall {
     pub fn_name: syn::Ident,
     pub is_async: bool,
-}
-
-/// Resolve a `<key> = "method"` literal against the host impl block's *plain*
-/// methods (no route/transverse marker — each host filters before calling).
-/// The target must be a `&self`-only method; `what`/`example` flavour the
-/// errors. Returns the method ident and whether it is `async`.
-fn resolve_self_method<'a>(
-    lit: &syn::LitStr,
-    mut plain_methods: impl Iterator<Item = &'a syn::ImplItemFn>,
-    not_found: impl FnOnce(&str) -> String,
-    bad_signature: &str,
-) -> syn::Result<(syn::Ident, bool)> {
-    let target = lit.value();
-    let Some(method) = plain_methods.find(|m| m.sig.ident == target) else {
-        return Err(syn::Error::new(lit.span(), not_found(&target)));
-    };
-    let has_self = method
-        .sig
-        .inputs
-        .iter()
-        .any(|arg| matches!(arg, syn::FnArg::Receiver(_)));
-    if !has_self || method.sig.inputs.len() > 1 {
-        return Err(syn::Error::new_spanned(&method.sig, bad_signature));
-    }
-    Ok((method.sig.ident.clone(), method.sig.asyncness.is_some()))
 }
 
 /// Resolve a `#[scheduled(skip_if = "...")]` value against the host impl

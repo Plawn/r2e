@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Added
+
+- `WsTestClient::assert_closed()` (#1469): waits for the server to end the
+  connection — a close frame, the end of the stream or a transport error —
+  and panics on a data message or on timeout.
+
 ## [0.12.0] - 2026-11-22
 
 ### Added

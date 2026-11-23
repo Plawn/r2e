@@ -70,6 +70,33 @@ pub fn requested_protocols(headers: &crate::http::HeaderMap) -> impl Iterator<It
         .filter(|protocol| !protocol.is_empty())
 }
 
+/// Frame limit a session keeps when `#[ws]` sets only `max_message_size`
+/// (the transport default, 16 MiB).
+const DEFAULT_MAX_FRAME_SIZE: usize = 16 << 20;
+
+/// Apply the `#[ws(max_message_size = .., max_frame_size = ..)]` limits to an
+/// upgrade. Called by the generated handler; not a public API.
+///
+/// The frame limit is clamped to the message limit: a frame is refused on its
+/// header, before its payload is read, whereas the message limit alone is only
+/// checked once a frame has been buffered. Clamping makes an oversized message
+/// close the connection without ever being held in memory in full.
+#[doc(hidden)]
+pub fn __limit_upgrade(
+    upgrade: crate::http::ws::WebSocketUpgrade,
+    max_message_size: Option<usize>,
+    max_frame_size: Option<usize>,
+) -> crate::http::ws::WebSocketUpgrade {
+    let Some(message) = max_message_size else {
+        return match max_frame_size {
+            Some(frame) => upgrade.max_frame_size(frame),
+            None => upgrade,
+        };
+    };
+    let frame = max_frame_size.unwrap_or(DEFAULT_MAX_FRAME_SIZE).min(message);
+    upgrade.max_message_size(message).max_frame_size(frame)
+}
+
 // ── WsError ──────────────────────────────────────────────────────────────
 
 /// Errors from WebSocket operations.

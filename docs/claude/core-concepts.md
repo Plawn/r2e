@@ -80,7 +80,7 @@ beans, and the `Controller::on_start(core)` override on controllers.
 
 ## Macro Crate Internals (r2e-macros)
 
-`src/` is grouped by role: `attrs/` (transforming attribute macros: `bean_attr`, `controller_attr`, `main_attr`, `module_attr`, `producer_attr`, `routes_attr`, `test_suite_attr`), `derives/` (derive macros: `api_error_derive`, `config_derive`, `params_derive`, …), `parsing/` (`controller_parsing`, `routes_parsing`, `grpc_routes_parsing`), `codegen/` (emission: `controller_codegen`, `controller_impl`, `handlers`, `decorators`, `scheduled`, `transverse`, `wrapping`), `model/` (shared parsed-definition types), `util/` (`crate_path`, `type_utils`, `hash_tokens`, `runtime_args`), plus `extract/` and `grpc_codegen/`.
+`src/` is grouped by role: `attrs/` (transforming attribute macros: `bean_attr`, `controller_attr`, `main_attr`, `module_attr`, `producer_attr`, `routes_attr`, `test_suite_attr`), `derives/` (derive macros: `api_error_derive`, `config_derive`, `params_derive`, …), `parsing/` (`controller_parsing`, `routes_parsing`, `grpc_routes_parsing`), `codegen/` (emission: `controller_codegen`, `controller_impl`, `handlers`, `decorators`, `scheduled`, `transverse`, `wrapping`), `model/` (shared parsed-definition types), `util/` (`crate_path`, `type_utils`, `hash_tokens`, `runtime_args`, `self_method`), plus `extract/` and `grpc_codegen/`.
 
 **Controller path:** `lib.rs` → `attrs/controller_attr.rs` → `parsing/controller_parsing.rs` (`ControllerStructDef`) → `codegen/controller_codegen.rs`
 

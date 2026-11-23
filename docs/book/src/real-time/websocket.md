@@ -467,6 +467,37 @@ async fn open(&self, mut ws: WsStream) { /* ... */ }
 
 The refusal is an ordinary HTTP response rendered by the application's error envelope (`AppBuilder::error_projection::<E>()`); the ticket is never echoed, since only entries of `protocols` can be selected.
 
+### Message and frame size limits
+
+`max_message_size` and `max_frame_size` bound, in bytes, what a session accepts from the client. Both are optional; a route that sets neither keeps the defaults (64 MiB per message, 16 MiB per frame).
+
+Each takes either a `usize` expression, or a string naming a plain, sync `&self -> usize` method of the same impl block — the way to read the bound from configuration or a bean. The method is called at each upgrade, after guards and identity:
+
+```rust
+#[controller(path = "/rt")]
+pub struct RealtimeController {
+    #[config("collab.max-message-size")]
+    collab_max_message_size: usize,
+}
+
+#[routes]
+impl RealtimeController {
+    fn collab_limit(&self) -> usize {
+        self.collab_max_message_size
+    }
+
+    #[ws("/voice", max_message_size = 64 * 1024)]
+    async fn voice(&self, mut ws: WsStream) { /* ... */ }
+
+    #[ws("/collab", protocols = ["collab.v1"], max_message_size = "collab_limit")]
+    async fn collab(&self, mut ws: WsStream) { /* ... */ }
+}
+```
+
+A message over the bound ends the connection: the read fails and the socket is dropped, without the message reaching the handler. It is not buffered first — with `max_message_size` set, the frame limit is clamped to it (`min(max_frame_size or 16 MiB, max_message_size)`), so an oversized single-frame message is refused on its frame header, and a fragmented one is cut as soon as the accumulated size passes the bound. `max_frame_size` alone bounds each frame and leaves the message default.
+
+The limits apply to what the server reads, not to what the handler sends. In tests, `WsTestClient::assert_closed()` waits for the server to end the connection.
+
 ## Summary
 
 | Type | Purpose |

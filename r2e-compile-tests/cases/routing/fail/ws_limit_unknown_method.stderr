@@ -1,0 +1,23 @@
+error: max_message_size = "message_limit" does not name a plain method in this impl block
+
+       A string names a plain, sync `&self` method returning `usize` (a size in bytes), defined in the same impl block as the #[ws] method — it cannot carry a route, #[scheduled], #[consumer], #[async_exec], or lifecycle marker.
+
+       example:
+         fn message_limit(&self) -> usize { self.max_message_size }
+
+         #[ws("/connect", max_message_size = "message_limit")]
+         async fn connect(&self, ws: WsStream) { /* ... */ }
+
+       The method is called at each upgrade; read the limit from a `#[config("...")]` field or an injected bean. For a fixed size, pass an expression instead: `max_message_size = 64 * 1024`.
+  --> cases/routing/fail/ws_limit_unknown_method.rs:11:38
+   |
+11 |     #[ws("/chat", max_message_size = "message_limit")]
+   |                                      ^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::web::ws::WsStream`
+ --> cases/routing/fail/ws_limit_unknown_method.rs:4:5
+  |
+4 | use r2e::web::ws::WsStream;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

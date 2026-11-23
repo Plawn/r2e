@@ -1,4 +1,5 @@
-//! `#[ws]` takes a path and, optionally, `protocols = [..]` — nothing else.
+//! `#[ws]` takes a path and, optionally, `protocols`, `max_message_size` and
+//! `max_frame_size` — nothing else.
 
 use r2e::prelude::*;
 use r2e::web::ws::WsStream;

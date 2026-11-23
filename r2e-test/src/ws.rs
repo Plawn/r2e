@@ -194,6 +194,41 @@ impl WsTestClient {
             .map_err(|_| WsTestError::Timeout)?
     }
 
+    /// Wait for the server to end the connection, with timeout.
+    ///
+    /// The connection is over when a close frame arrives, the stream ends, or
+    /// the transport fails (a server that drops the socket without a closing
+    /// handshake — what a refused oversized message looks like). Ping/pong
+    /// frames are skipped.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a text or binary message arrives instead, or when the
+    /// connection is still open after the timeout.
+    pub async fn assert_closed(&mut self) {
+        let fut = async {
+            loop {
+                match self.stream.next().await {
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
+                    Some(Ok(Message::Text(text))) => {
+                        panic!("Expected the connection to close, but received text: {text}")
+                    }
+                    Some(Ok(Message::Binary(data))) => panic!(
+                        "Expected the connection to close, but received {} binary bytes",
+                        data.len()
+                    ),
+                    Some(Ok(_)) => continue,
+                }
+            }
+        };
+        if tokio::time::timeout(self.timeout, fut).await.is_err() {
+            panic!(
+                "Expected the connection to close within {:?}, but it is still open",
+                self.timeout
+            );
+        }
+    }
+
     /// Assert that no message arrives within the given duration.
     pub async fn assert_no_message(&mut self, wait: Duration) {
         let result = tokio::time::timeout(wait, self.stream.next()).await;

@@ -1,0 +1,15 @@
+error: max_frame_size = "message_limit" names an `async fn` — the limit provider must be sync
+
+       The limit is read at each upgrade, right before the handshake. Make the method a plain `fn(&self) -> usize`.
+  --> cases/routing/fail/ws_limit_async_method.rs:15:36
+   |
+15 |     #[ws("/chat", max_frame_size = "message_limit")]
+   |                                    ^^^^^^^^^^^^^^^
+
+warning: unused import: `r2e::web::ws::WsStream`
+ --> cases/routing/fail/ws_limit_async_method.rs:4:5
+  |
+4 | use r2e::web::ws::WsStream;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

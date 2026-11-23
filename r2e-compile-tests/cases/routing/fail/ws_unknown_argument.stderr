@@ -1,13 +1,13 @@
-error: unknown #[ws] argument: expected `protocols = [..]`
-  --> cases/routing/fail/ws_unknown_argument.rs:11:19
+error: unknown #[ws] argument: expected `protocols = [..]`, `max_message_size = ..` or `max_frame_size = ..`
+  --> cases/routing/fail/ws_unknown_argument.rs:12:19
    |
-11 |     #[ws("/chat", subprotocols = ["chat.v1"])]
+12 |     #[ws("/chat", subprotocols = ["chat.v1"])]
    |                   ^^^^^^^^^^^^
 
 warning: unused import: `r2e::web::ws::WsStream`
- --> cases/routing/fail/ws_unknown_argument.rs:4:5
+ --> cases/routing/fail/ws_unknown_argument.rs:5:5
   |
-4 | use r2e::web::ws::WsStream;
+5 | use r2e::web::ws::WsStream;
   |     ^^^^^^^^^^^^^^^^^^^^^^
   |
   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

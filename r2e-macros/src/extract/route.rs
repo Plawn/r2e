@@ -407,15 +407,43 @@ pub fn is_deprecated(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| a.path().is_ident("deprecated"))
 }
 
-/// A parsed `#[ws("/path")]` / `#[ws("/path", protocols = [..])]` attribute.
+/// One `#[ws]` size limit (`max_message_size` / `max_frame_size`).
+pub enum WsLimit {
+    /// `max_message_size = 64 * 1024` — any expression of type `usize`.
+    Expr(syn::Expr),
+    /// `max_message_size = "method"` — a plain sync `&self -> usize` method of
+    /// the same impl block, called at each upgrade (the value then comes from
+    /// a `#[config]` field or an injected bean).
+    Method(syn::LitStr),
+}
+
+/// A parsed `#[ws("/path")]` /
+/// `#[ws("/path", protocols = [..], max_message_size = .., max_frame_size = ..)]`.
 pub struct WsAttr {
     pub path: String,
     /// Subprotocols the route supports, in decreasing order of preference.
     /// Each element is an expression of type `&'static str`.
     pub protocols: Vec<syn::Expr>,
+    /// Largest message (in bytes) the session accepts; `None` = the default.
+    pub max_message_size: Option<WsLimit>,
+    /// Largest frame (in bytes) the session accepts; `None` = the default.
+    pub max_frame_size: Option<WsLimit>,
 }
 
-/// Extract `#[ws("/path")]` or `#[ws("/path", protocols = ["a", B])]`.
+const WS_UNKNOWN_ARGUMENT: &str = "unknown #[ws] argument: expected `protocols = [..]`, \
+     `max_message_size = ..` or `max_frame_size = ..`";
+
+fn parse_ws_limit(value: &syn::Expr) -> WsLimit {
+    match value {
+        syn::Expr::Lit(syn::ExprLit {
+            lit: syn::Lit::Str(method),
+            ..
+        }) => WsLimit::Method(method.clone()),
+        other => WsLimit::Expr(other.clone()),
+    }
+}
+
+/// Extract `#[ws("/path")]` and its optional `key = value` arguments.
 pub fn extract_ws_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<WsAttr>> {
     for attr in attrs {
         if !attr.path().is_ident("ws") {
@@ -438,47 +466,64 @@ pub fn extract_ws_attr(attrs: &[syn::Attribute]) -> syn::Result<Option<WsAttr>> 
         };
 
         let mut protocols: Option<Vec<syn::Expr>> = None;
+        let mut max_message_size: Option<WsLimit> = None;
+        let mut max_frame_size: Option<WsLimit> = None;
         for expr in iter {
             let syn::Expr::Assign(assign) = expr else {
-                return Err(syn::Error::new_spanned(
-                    expr,
-                    "unknown #[ws] argument: expected `protocols = [..]`",
-                ));
+                return Err(syn::Error::new_spanned(expr, WS_UNKNOWN_ARGUMENT));
             };
-            let is_protocols =
-                matches!(&*assign.left, syn::Expr::Path(p) if p.path.is_ident("protocols"));
-            if !is_protocols {
-                return Err(syn::Error::new_spanned(
-                    &assign.left,
-                    "unknown #[ws] argument: expected `protocols = [..]`",
-                ));
-            }
-            if protocols.is_some() {
-                return Err(syn::Error::new_spanned(
-                    &assign.left,
-                    "duplicate `protocols` argument on #[ws]",
-                ));
-            }
-            let syn::Expr::Array(array) = &*assign.right else {
-                return Err(syn::Error::new_spanned(
-                    &assign.right,
-                    "`protocols` expects an array of `&'static str` — \
-                     `protocols = [\"chat.v2\", \"chat.v1\"]`, most preferred first",
-                ));
+            let key = match &*assign.left {
+                syn::Expr::Path(p) => p.path.get_ident().map(|ident| ident.to_string()),
+                _ => None,
             };
-            if array.elems.is_empty() {
-                return Err(syn::Error::new_spanned(
-                    array,
-                    "`protocols` must list at least one subprotocol; \
-                     drop the argument for a route that negotiates none",
-                ));
+            let duplicate = |name: &str| {
+                syn::Error::new_spanned(
+                    &assign.left,
+                    format!("duplicate `{name}` argument on #[ws]"),
+                )
+            };
+            match key.as_deref() {
+                Some("protocols") => {
+                    if protocols.is_some() {
+                        return Err(duplicate("protocols"));
+                    }
+                    let syn::Expr::Array(array) = &*assign.right else {
+                        return Err(syn::Error::new_spanned(
+                            &assign.right,
+                            "`protocols` expects an array of `&'static str` — \
+                             `protocols = [\"chat.v2\", \"chat.v1\"]`, most preferred first",
+                        ));
+                    };
+                    if array.elems.is_empty() {
+                        return Err(syn::Error::new_spanned(
+                            array,
+                            "`protocols` must list at least one subprotocol; \
+                             drop the argument for a route that negotiates none",
+                        ));
+                    }
+                    protocols = Some(array.elems.iter().cloned().collect());
+                }
+                Some("max_message_size") => {
+                    if max_message_size.is_some() {
+                        return Err(duplicate("max_message_size"));
+                    }
+                    max_message_size = Some(parse_ws_limit(&assign.right));
+                }
+                Some("max_frame_size") => {
+                    if max_frame_size.is_some() {
+                        return Err(duplicate("max_frame_size"));
+                    }
+                    max_frame_size = Some(parse_ws_limit(&assign.right));
+                }
+                _ => return Err(syn::Error::new_spanned(&assign.left, WS_UNKNOWN_ARGUMENT)),
             }
-            protocols = Some(array.elems.iter().cloned().collect());
         }
 
         return Ok(Some(WsAttr {
             path,
             protocols: protocols.unwrap_or_default(),
+            max_message_size,
+            max_frame_size,
         }));
     }
     Ok(None)
