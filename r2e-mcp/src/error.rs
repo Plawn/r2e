@@ -26,10 +26,7 @@ use rmcp::model::{CallToolResult, ContentBlock, ErrorCode, ErrorData};
 /// Return `Err(McpError::tool(...))` (or any `Result<_, E: Into<McpError>>`)
 /// from a `#[tool]` method; the dispatcher maps it per the table on
 /// [the module docs](self).
-///
-/// Non-exhaustive: match with a wildcard arm.
 #[derive(Debug, Clone)]
-#[non_exhaustive]
 pub enum McpError {
     /// A domain-level tool failure, reported **inside** the tool result
     /// (`is_error: true`) so agents can read it and adapt.

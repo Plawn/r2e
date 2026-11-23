@@ -17,9 +17,9 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
-- `McpError` gains the variant `Rpc(ErrorData)` and is now
-  `#[non_exhaustive]` (#1468). An exhaustive `match` on `McpError` adds a
-  wildcard arm; constructing and returning errors is unaffected.
+- `McpError` gains the variant `Rpc(ErrorData)` (#1468). An exhaustive
+  `match` on `McpError` adds an arm for it; constructing and returning
+  errors is unaffected.
 
 ### Added
 

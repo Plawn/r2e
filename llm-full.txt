@@ -6447,8 +6447,7 @@ Err(McpError::Rpc(error_data))
 unchanged, from a tool (a JSON-RPC error, not an `isError` result), a
 resource, a prompt, a `#[method]` or a completion provider, catalog and
 dynamic members alike, on every transport. Prefer the named variants when one
-fits — clients key on the standard codes. `McpError` is `#[non_exhaustive]`:
-a `match` on it needs a wildcard arm.
+fits — clients key on the standard codes.
 
 Resources and prompts — the same impl block can carry the two other MCP
 member families (one marker per method):
