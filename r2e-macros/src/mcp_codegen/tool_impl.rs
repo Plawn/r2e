@@ -419,9 +419,7 @@ fn generate_invoke_method(
     };
     let ok_ty = match kind {
         McpMemberKind::Tool => quote! { #mcp::__macro_support::CallToolResult },
-        McpMemberKind::Resource => quote! {
-            ::std::vec::Vec<#mcp::__macro_support::ResourceContents>
-        },
+        McpMemberKind::Resource => quote! { #mcp::__macro_support::ReadResourceResult },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::GetPromptResult },
         McpMemberKind::Completion => quote! { #mcp::__macro_support::Completions },
         McpMemberKind::Method => quote! { #mcp::__macro_support::MethodValue },

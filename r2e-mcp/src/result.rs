@@ -1,8 +1,11 @@
 //! Conversion of tool method return values into MCP `CallToolResult`s.
 
 use r2e_core::http::Json;
+use std::time::Duration;
+
 use rmcp::model::{
-    CallToolResult, ContentBlock, GetPromptResult, PromptMessage, ResourceContents, Role,
+    CacheScope, CallToolResult, ContentBlock, GetPromptResult, MetaObject, PromptMessage,
+    ReadResourceResult, ResourceContents, Role,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -80,8 +83,10 @@ impl<T: IntoToolResult, E: Into<McpError>> IntoToolResult for Result<T, E> {
 /// `#[resource(mime_type)]` attribute, default `text/plain`), `Json<T:
 /// Serialize>` (one text content, MIME defaulting to `application/json`),
 /// `Vec<ResourceContents>` / `ResourceContents` (passthrough — the way to
-/// return binary blobs via [`ResourceContents::blob`]), and `Result<T, E:
-/// Into<McpError>>`.
+/// return binary blobs via [`ResourceContents::blob`]), [`ResourceRead<T>`]
+/// (any of the above plus the result's own fields: `ttlMs`, `cacheScope`,
+/// `_meta`), a raw [`ReadResourceResult`] (sent as written), and `Result<T,
+/// E: Into<McpError>>`.
 pub trait IntoResourceResult {
     /// `uri` is the requested URI; `mime_type` the route's declared MIME
     /// type (both applied to text-shaped returns).
@@ -89,7 +94,18 @@ pub trait IntoResourceResult {
         self,
         uri: &str,
         mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError>;
+    ) -> Result<ReadResourceResult, McpError>;
+}
+
+/// The whole `resources/read` result, sent as written.
+impl IntoResourceResult for ReadResourceResult {
+    fn into_resource_result(
+        self,
+        _uri: &str,
+        _mime_type: Option<&str>,
+    ) -> Result<ReadResourceResult, McpError> {
+        Ok(self)
+    }
 }
 
 impl IntoResourceResult for Vec<ResourceContents> {
@@ -97,8 +113,8 @@ impl IntoResourceResult for Vec<ResourceContents> {
         self,
         _uri: &str,
         _mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError> {
-        Ok(self)
+    ) -> Result<ReadResourceResult, McpError> {
+        Ok(ReadResourceResult::new(self))
     }
 }
 
@@ -107,8 +123,8 @@ impl IntoResourceResult for ResourceContents {
         self,
         _uri: &str,
         _mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError> {
-        Ok(vec![self])
+    ) -> Result<ReadResourceResult, McpError> {
+        Ok(ReadResourceResult::new(vec![self]))
     }
 }
 
@@ -117,13 +133,13 @@ impl IntoResourceResult for String {
         self,
         uri: &str,
         mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError> {
+    ) -> Result<ReadResourceResult, McpError> {
         // `ResourceContents::text` sets `text/plain`; honour a declared MIME.
         let mut contents = ResourceContents::text(self, uri);
         if let Some(mime) = mime_type {
             contents = contents.with_mime_type(mime);
         }
-        Ok(vec![contents])
+        Ok(ReadResourceResult::new(vec![contents]))
     }
 }
 
@@ -132,7 +148,7 @@ impl IntoResourceResult for &str {
         self,
         uri: &str,
         mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError> {
+    ) -> Result<ReadResourceResult, McpError> {
         self.to_string().into_resource_result(uri, mime_type)
     }
 }
@@ -144,12 +160,12 @@ impl<T: Serialize> IntoResourceResult for Json<T> {
         self,
         uri: &str,
         mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError> {
+    ) -> Result<ReadResourceResult, McpError> {
         let text = r2e_core::json::to_string(&self.0)
             .map_err(|e| McpError::Internal(format!("failed to serialize resource: {e}")))?;
         let contents = ResourceContents::text(text, uri)
             .with_mime_type(mime_type.unwrap_or("application/json"));
-        Ok(vec![contents])
+        Ok(ReadResourceResult::new(vec![contents]))
     }
 }
 
@@ -158,11 +174,90 @@ impl<T: IntoResourceResult, E: Into<McpError>> IntoResourceResult for Result<T, 
         self,
         uri: &str,
         mime_type: Option<&str>,
-    ) -> Result<Vec<ResourceContents>, McpError> {
+    ) -> Result<ReadResourceResult, McpError> {
         match self {
             Ok(v) => v.into_resource_result(uri, mime_type),
             Err(e) => Err(e.into()),
         }
+    }
+}
+
+/// A resource's contents together with the fields of the `resources/read`
+/// result itself: how long the client may keep it (`ttlMs`), who may cache it
+/// (`cacheScope`) and a free-form `_meta` object.
+///
+/// Wraps any other resource return, which keeps its own conversion (URI,
+/// declared MIME type); a field left unset keeps what the wrapped value
+/// produced.
+///
+/// ```ignore
+/// #[resource(uri = "skill://{name}/SKILL.md", mime_type = "text/markdown")]
+/// async fn skill(&self, call: ResourceCall) -> Result<ResourceRead<String>, McpError> {
+///     let body = self.skills.body(&call.variables["name"]).await?;
+///     Ok(ResourceRead::new(body)
+///         .ttl(Duration::from_secs(30))
+///         .cache_scope(CacheScope::Private))
+/// }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct ResourceRead<T> {
+    contents: T,
+    ttl_ms: Option<u64>,
+    cache_scope: Option<CacheScope>,
+    meta: Option<MetaObject>,
+}
+
+impl<T> ResourceRead<T> {
+    /// Wrap `contents` — anything a resource may return.
+    pub fn new(contents: T) -> Self {
+        ResourceRead {
+            contents,
+            ttl_ms: None,
+            cache_scope: None,
+            meta: None,
+        }
+    }
+
+    /// How long the client may treat the result as fresh (`ttlMs`, whole
+    /// milliseconds).
+    pub fn ttl(mut self, ttl: Duration) -> Self {
+        self.ttl_ms = Some(u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX));
+        self
+    }
+
+    /// Who may cache the result (`cacheScope`): [`CacheScope::Private`] for
+    /// contents that depend on the caller.
+    pub fn cache_scope(mut self, cache_scope: CacheScope) -> Self {
+        self.cache_scope = Some(cache_scope);
+        self
+    }
+
+    /// Free-form `_meta` object of the result — usually built with
+    /// [`meta!`](crate::meta).
+    pub fn meta(mut self, meta: impl Into<MetaObject>) -> Self {
+        self.meta = Some(meta.into());
+        self
+    }
+}
+
+impl<T: IntoResourceResult> IntoResourceResult for ResourceRead<T> {
+    fn into_resource_result(
+        self,
+        uri: &str,
+        mime_type: Option<&str>,
+    ) -> Result<ReadResourceResult, McpError> {
+        let mut result = self.contents.into_resource_result(uri, mime_type)?;
+        if self.ttl_ms.is_some() {
+            result.ttl_ms = self.ttl_ms;
+        }
+        if self.cache_scope.is_some() {
+            result.cache_scope = self.cache_scope;
+        }
+        if self.meta.is_some() {
+            result.meta = self.meta;
+        }
+        Ok(result)
     }
 }
 

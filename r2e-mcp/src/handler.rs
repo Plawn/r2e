@@ -19,7 +19,7 @@ use rmcp::model::{
     InputResponses, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
     ListSkillsResult, ListToolsResult, PaginatedRequestParams, ProtocolVersion,
     ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams,
-    ReadResourceResponse, ReadResourceResult, Reference, ResourceUpdatedNotificationParam,
+    ReadResourceResponse, Reference, ResourceUpdatedNotificationParam,
     ServerConfig, SubscribeRequestParams, SubscriptionFilter, Tool, UnsubscribeRequestParams,
     UpdateTaskParams,
 };
@@ -723,9 +723,7 @@ impl ServerHandler for R2eMcpHandler {
             return Ok(ReadResourceResponse::InputRequired(required));
         }
         match outcome {
-            Ok(contents) => Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
-                contents,
-            ))),
+            Ok(result) => Ok(ReadResourceResponse::Complete(result)),
             // Resources have no in-result error plane: every error is a
             // JSON-RPC error (`McpError::Tool` degrades to internal).
             Err(err) => Err(err.into_error_data()),

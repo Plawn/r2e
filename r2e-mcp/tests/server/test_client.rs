@@ -17,8 +17,9 @@ use r2e_core::prelude::*;
 use r2e_core::AppBuilder;
 use r2e_mcp::testing::{pin_mcp_validator, McpNotification, McpTestError, McpTestExt};
 use r2e_mcp::{
-    AppBuilderMcpExt, LoopbackError, McpError, McpPrincipal, McpResourceUpdates, McpServer,
-    McpSessions, Params, ToolCall,
+    meta, AppBuilderMcpExt, CacheScope, DynamicResource, LoopbackError, McpError, McpPrincipal,
+    McpResourceUpdates, McpServer, McpSessionInit, McpSessions, Params, ReadResourceResult,
+    ResourceCall, ResourceContents, ResourceRead, SessionInit, SessionToolset, ToolCall,
 };
 use r2e_test::{TestApp, TestJwt};
 use schemars::JsonSchema;
@@ -486,5 +487,109 @@ async fn resource_updates_are_captured() {
         McpNotification::ResourceUpdated {
             uri: "r2e://fixture/log".to_string()
         }
+    );
+}
+
+// ── The whole `resources/read` result (#1474) ──────────────────────────────
+
+#[controller]
+struct CachedResources;
+
+#[routes]
+impl CachedResources {
+    /// Contents with the result's own fields set next to them.
+    #[resource(uri = "skill://{name}/SKILL.md", mime_type = "text/markdown")]
+    async fn skill(&self, call: ResourceCall) -> Result<ResourceRead<String>, McpError> {
+        Ok(ResourceRead::new(format!("# {}", call.variables["name"]))
+            .ttl(Duration::from_secs(30))
+            .cache_scope(CacheScope::Private)
+            .meta(meta!({ "rev": 7 })))
+    }
+
+    /// The raw result, sent as written.
+    #[resource(uri = "r2e://cached/raw")]
+    async fn raw(&self, call: ResourceCall) -> ReadResourceResult {
+        ReadResourceResult::new(vec![ResourceContents::text("raw", call.uri)])
+            .with_ttl_ms(1_500)
+            .with_cache_scope(CacheScope::Public)
+    }
+
+    /// A contents-only return: the result carries nothing else.
+    #[resource(uri = "r2e://cached/plain")]
+    async fn plain(&self) -> &'static str {
+        "plain"
+    }
+}
+
+#[derive(Clone)]
+struct CachedSessionResources;
+impl McpSessionInit for CachedSessionResources {
+    async fn init(&self, _s: &SessionInit) -> Result<SessionToolset, McpError> {
+        Ok(SessionToolset::new().resource(
+            DynamicResource::new("r2e://session/cached", "cached")
+                .mime_type("text/markdown")
+                .handler(|_call: ResourceCall| async {
+                    ResourceRead::new("dynamic")
+                        .ttl(Duration::from_millis(250))
+                        .cache_scope(CacheScope::Private)
+                }),
+        ))
+    }
+}
+
+#[r2e_core::test]
+async fn a_resource_sets_ttl_and_cache_scope_on_the_read_result() {
+    let builder = AppBuilder::new()
+        .plugin(McpServer::new().session_init::<CachedSessionResources>())
+        .provide(CachedSessionResources)
+        .build_state()
+        .await
+        .register_mcp_service::<CachedResources>();
+    let app = TestApp::from_builder(builder);
+    let mcp = app.mcp().await;
+
+    // `ResourceRead<T>`: the wrapped return keeps its conversion (requested
+    // URI, declared MIME type) and the result gains its own fields.
+    let skill = mcp
+        .read_resource_raw("skill://deploy/SKILL.md")
+        .await
+        .unwrap();
+    assert_eq!(skill.ttl_ms, Some(30_000));
+    assert_eq!(skill.cache_scope, Some(CacheScope::Private));
+    assert_eq!(skill.meta.as_ref().unwrap().get("rev"), Some(&json!(7)));
+    match &skill.contents[..] {
+        [ResourceContents::TextResourceContents {
+            uri,
+            mime_type,
+            text,
+            ..
+        }] => {
+            assert_eq!(uri, "skill://deploy/SKILL.md");
+            assert_eq!(mime_type.as_deref(), Some("text/markdown"));
+            assert_eq!(text, "# deploy");
+        }
+        other => panic!("unexpected contents: {other:?}"),
+    }
+
+    // A raw `ReadResourceResult` arrives as written.
+    let raw = mcp.read_resource_raw("r2e://cached/raw").await.unwrap();
+    assert_eq!(raw.ttl_ms, Some(1_500));
+    assert_eq!(raw.cache_scope, Some(CacheScope::Public));
+    assert_eq!(mcp.read_resource_text("r2e://cached/raw").await.unwrap(), "raw");
+
+    // A contents-only return sets neither field.
+    let plain = mcp.read_resource_raw("r2e://cached/plain").await.unwrap();
+    assert_eq!(plain.ttl_ms, None);
+    assert_eq!(plain.cache_scope, None);
+    assert!(plain.meta.is_none());
+    assert_eq!(plain.contents.len(), 1);
+
+    // A `DynamicResource` handler returns the same types.
+    let dynamic = mcp.read_resource_raw("r2e://session/cached").await.unwrap();
+    assert_eq!(dynamic.ttl_ms, Some(250));
+    assert_eq!(dynamic.cache_scope, Some(CacheScope::Private));
+    assert_eq!(
+        mcp.read_resource_text("r2e://session/cached").await.unwrap(),
+        "dynamic"
     );
 }

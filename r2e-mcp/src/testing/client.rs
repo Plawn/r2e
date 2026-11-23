@@ -16,7 +16,8 @@ use r2e_test::TestApp;
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientRequest, CustomRequest, GetPromptRequestParams,
     GetPromptResult, JsonObject,
-    ProgressNotificationParam, Prompt, ReadResourceRequestParams, Resource, ResourceContents, ResourceTemplate,
+    ProgressNotificationParam, Prompt, ReadResourceRequestParams, ReadResourceResult, Resource,
+    ResourceContents, ResourceTemplate,
     ResourceUpdatedNotificationParam, Tool,
 };
 use rmcp::service::{NotificationContext, ServiceError};
@@ -499,8 +500,14 @@ impl McpTestClient {
 
     /// `resources/read`: the resource's contents.
     pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>, McpTestError> {
+        Ok(self.read_resource_raw(uri).await?.contents)
+    }
+
+    /// `resources/read`, the result as received: the contents plus `ttl_ms`,
+    /// `cache_scope` and `meta`.
+    pub async fn read_resource_raw(&self, uri: &str) -> Result<ReadResourceResult, McpTestError> {
         let params = ReadResourceRequestParams::new(uri);
-        Ok(self.session.read_resource(params).await?.contents)
+        Ok(self.session.read_resource(params).await?)
     }
 
     /// `resources/read`, the text contents joined (blobs skipped).

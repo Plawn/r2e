@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use r2e_core::http::Parts;
 use r2e_core::rt::CancelToken;
-use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
+use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ReadResourceResult};
 use serde_json::Value;
 
 use crate::auth::ToolRequirements;
@@ -371,7 +371,7 @@ impl ResourceCall {
 
 /// Boxed future returned by a resource read.
 pub type ResourceFuture =
-    Pin<Box<dyn Future<Output = Result<Vec<ResourceContents>, McpError>> + Send>>;
+    Pin<Box<dyn Future<Output = Result<ReadResourceResult, McpError>> + Send>>;
 
 /// Type-erased resource read closure. Owns (an `Arc` of) the service
 /// wrapper; called once per `resources/read`.
