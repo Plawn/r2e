@@ -15,6 +15,13 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- Codegen contract with `r2e-mcp` (#1474): a `#[resource]` method's generated
+  dispatch returns `r2e_mcp::ReadResourceResult` instead of
+  `Vec<ResourceContents>`. The macro syntax is unchanged; this release needs
+  the `r2e-mcp` release that ships with it.
+
 ### Added
 
 - `#[ws("/path", max_message_size = .., max_frame_size = ..)]` (#1469): each

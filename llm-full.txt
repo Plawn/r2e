@@ -6547,7 +6547,8 @@ impl MathTools {
 `#[resource(uri, name, title, description, mime_type, scopes, any_scopes)]`:
 no `Params<T>` (`resources/read` carries no arguments); `ResourceCall` instead
 of `ToolCall`; returns `String`/`&str` (text with the declared MIME type),
-`Json<T>` (`application/json`), `ResourceContents`/`Vec<ResourceContents>`, or
+`Json<T>` (`application/json`), `ResourceContents`/`Vec<ResourceContents>`,
+`ResourceRead<T>` / `ReadResourceResult` (the result's own fields — below), or
 `Result<_, E: Into<McpError>>`. `#[prompt(name, title, description, scopes,
 any_scopes)]`: `Params<T>` drives deserialization AND the advertised
 `arguments` (requiredness + doc-comment descriptions; MCP argument values are
@@ -6561,6 +6562,43 @@ preserved); unknown resource URI → -32002, unknown prompt name → -32602.
 Guards/interceptors/scopes/roles work identically on all three families, and
 `resources/list`, `resources/templates/list` and `prompts/list` are filtered by
 caller access like `tools/list`.
+
+Cache fields of `resources/read` — `ttlMs` (how long the client may keep the
+result), `cacheScope` (`Private`: the contents depend on the caller) and the
+result's `_meta`. Wrap any resource return in `ResourceRead` (the wrapped value
+keeps its conversion: requested URI, declared MIME type), or return the whole
+`ReadResourceResult` to send it as written. A contents-only return sets none
+of them. `DynamicResource::handler` accepts the same types.
+
+```rust
+# use r2e::prelude::*;
+use std::time::Duration;
+use r2e::r2e_mcp::{CacheScope, ReadResourceResult, ResourceContents};
+
+# #[controller]
+# pub struct SkillResources;
+#[routes]
+impl SkillResources {
+    /// One skill, fresh for 30 s, private to the caller.
+    #[resource(uri = "skill://{name}/SKILL.md", mime_type = "text/markdown")]
+    async fn skill(&self, call: ResourceCall) -> Result<ResourceRead<String>, McpError> {
+        let body = format!("# {}", call.variables["name"]);
+        Ok(ResourceRead::new(body)                 // ResourceRead is in the prelude
+            .ttl(Duration::from_secs(30))          // → "ttlMs": 30000
+            .cache_scope(CacheScope::Private)      // → "cacheScope": "private"
+            .meta(meta!({ "rev": 7 })))            // → result "_meta"
+    }
+
+    /// The raw result, sent as written (contents built by hand).
+    #[resource(uri = "skill://index")]
+    async fn index(&self, call: ResourceCall) -> ReadResourceResult {
+        ReadResourceResult::new(vec![ResourceContents::text("deploy", call.uri)])
+            .with_ttl_ms(30_000)
+            .with_cache_scope(CacheScope::Private)
+    }
+}
+# fn main() {}
+```
 
 Progress — a `Progress` parameter (any family; also `ToolCall::progress`)
 reports `notifications/progress` on the request's own stream:
@@ -7463,7 +7501,8 @@ let seen: Vec<McpNotification> = alice.notifications();
 - `call_tool::<Out>` decodes `structuredContent`, else the first text block;
   `call_tool_text` joins text blocks; `call_tool_raw` returns the
   `CallToolResult`. Also `list_tools`, `list_resources`,
-  `list_resource_templates`, `read_resource(_text)`, `list_prompts`,
+  `list_resource_templates`, `read_resource(_text)`, `read_resource_raw`
+  (the whole result: `ttl_ms`, `cache_scope`, `meta`), `list_prompts`,
   `get_prompt(name, args)`. Arguments: any `Serialize` JSON object, or `()`.
 - `McpTestError`: `Rpc { code, message, data }` (`-32601` unknown tool,
   `-32602` invalid params, `-32600` + `data: "forbidden"` for a guard / role /
