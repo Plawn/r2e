@@ -118,7 +118,7 @@ pub use runtime::worker_local::{WorkerLocal, WorkerLocalGuard};
 pub use runtime::worker_set::{WorkerHealth, WorkerSet, WorkerSlot, WorkerSnapshot, WorkerState};
 pub use state::R2eState;
 pub use type_list::{
-    AllSatisfied, BeanAccess, BeanLookup, BeanState, BuildHList, Contains, ControllerTuple, HCons,
+    AllGroupsSatisfied, AllSatisfied, BeanAccess, BeanLookup, BeanState, BuildHList, Contains, ControllerTuple, HCons,
     HNil, HasBean, Here, PluginDeps, TAppend, TCons, TNil, There,
 };
 pub use web::extract::{

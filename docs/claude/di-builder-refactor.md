@@ -14,7 +14,8 @@ see git history for the phase logs. Open work is listed at the bottom.)
   `with_bean` / `with_async_bean` / `with_producer` — the user never has to know
   which trait the macro generated.
   Signature: `.register::<T>() -> AppBuilder<NoState, TCons<T::Provided, P>,
-  <R as TAppend<T::Deps>>::Output>`.
+  TCons<T::Deps, R>>` (`R` is a list of requirement groups, one per
+  registration).
 - **`.provide(value)`** — register an already-built value.
 - **`.provide_all(bundle)`** — provide every field of a
   `#[derive(ProvideBundle)]` struct in one call, the `App::Env` case (a handful
@@ -82,6 +83,10 @@ the state model.
 - **`build_state()`** takes no type arguments: it materializes `P` into the HList
   state, wraps it in `BeanState`, and retains the graph as `Arc<BeanContext>`
   through the typed phase (`bean_context()` / `state()` accessors).
+  Bean requirements are checked group by group (`AllGroupsSatisfied`) against
+  `<P as ProvisionIndex>::Index`, which groups
+  eight adjacent types per lookup block. `P` still determines the state layout.
+  See [DI graph check time](di-compile-time.md) for the algorithm and benchmark.
   `BuildHList::build_bean_state` is the wrapping form of `build_hlist`.
   Dev-reload caches `(state, ctx)`.
   The typed phase holds `state: T` (not `Option<T>`), so `register_controller`

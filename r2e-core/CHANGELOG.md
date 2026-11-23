@@ -15,6 +15,19 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- The builder's requirement list is now a list of groups — one per
+  registration (`TCons<Deps, R>`), checked with `AllGroupsSatisfied` against an
+  eight-slot provision index at `build_state()`. Registration methods no longer
+  bound `R`; `.plugin()` and `PluginInstall::install` take
+  `Required: PushRequired<R>` instead of `R: TAppend<Required>`. This reduces
+  downstream type-checking time for large registration chains (100 beans × 10
+  dependencies: rustc stack overflow → 0.55 s) and makes `recursion_limit`
+  depend on the number of beans only. The fluent builder syntax and
+  materialized state layout are preserved.
+  [Migrate explicit generic bounds](../docs/migration/di-provision-index.md).
+
 ### Fixed
 
 - `R2eConfig::tree` — and so `SerdeConfig<T>` — returns a YAML subtree as it

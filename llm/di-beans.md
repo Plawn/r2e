@@ -1,7 +1,7 @@
 ---
 topic: di-beans
 features: core
-tokens: ~3700
+tokens: ~3800
 requires: core-concepts
 ---
 
@@ -36,6 +36,12 @@ requires: core-concepts
   always compile and the producer decides `Some`/`None`.
 - There are no qualifiers or named beans — two beans of the same underlying type
   need two **newtypes**.
+
+Generic helpers that call `.register::<B>()` on `AppBuilder<NoState, P, R, Mods>`
+need no bound on `R` (the result is `Registered<B::Provided, B::Deps, P, R, Mods>`).
+Helpers that finish a generic builder use
+`P: BuildHList + ProvisionIndex` and `R: AllGroupsSatisfied<P::Index, W>`.
+Import these traits from `r2e::type_list` and let concrete chains infer `W`.
 
 ### Three bean kinds, one `register()`
 

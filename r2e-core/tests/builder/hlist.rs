@@ -293,3 +293,92 @@ async fn with_bean_factory_reads_config() {
 
     assert_eq!(app.state().get::<FactoryMade>().0, "factory-app");
 }
+
+#[r2e_core::test]
+async fn indexed_graph_checks_every_slot_including_forward_dependencies() {
+    #[r2e_macros::producer]
+    fn total(a: u8, b: u16, c: u32, d: i8, e: i16, f: i32, g: i64, h: u64, enabled: bool) -> i128 {
+        assert!(enabled);
+        i128::from(a)
+            + i128::from(b)
+            + i128::from(c)
+            + i128::from(d)
+            + i128::from(e)
+            + i128::from(f)
+            + i128::from(g)
+            + i128::from(h)
+    }
+
+    // The last provision is at the head of the full block. The first
+    // provision (u8) is beyond it, in the same short tail as ShutdownToken.
+    let app = AppBuilder::new()
+        .provide(1u8)
+        .register::<Total>()
+        .provide(2u16)
+        .provide(3u32)
+        .provide(4i8)
+        .provide(5i16)
+        .provide(6i32)
+        .provide(7i64)
+        .provide(8u64)
+        .provide(true)
+        .try_build_state()
+        .await
+        .unwrap();
+    assert_eq!(app.state().get::<i128>(), 36);
+}
+
+/// The generic-helper bounds the migration guide prescribes: registration
+/// needs no bound on `R`, a plugin pushes its group through `PushRequired`,
+/// and the finishing helper checks the groups with `AllGroupsSatisfied`.
+#[r2e_core::test]
+async fn requirement_groups_compose_through_generic_helpers() {
+    use r2e_core::builder::{NoState, Registered, WithPluginInstalled};
+    use r2e_core::di::module::PushPluginCtrls;
+    use r2e_core::plugin::PluginInstall;
+    use r2e_core::type_list::{
+        AllGroupsSatisfied, BeanState, BuildHList, ProvisionIndex, PushRequired, TAppend,
+    };
+
+    #[r2e_macros::producer]
+    fn sum(a: u8, b: u16) -> u32 {
+        u32::from(a) + u32::from(b)
+    }
+
+    fn with_sum<P, R, Mods>(
+        b: AppBuilder<NoState, P, R, Mods>,
+    ) -> Registered<<Sum as Registrable>::Provided, <Sum as Registrable>::Deps, P, R, Mods> {
+        b.register::<Sum>()
+    }
+
+    fn with_plugin<Pl, P, R, Mods>(
+        b: AppBuilder<NoState, P, R, Mods>,
+        plugin: Pl,
+    ) -> WithPluginInstalled<Pl, P, R, Mods>
+    where
+        Pl: PluginInstall,
+        P: TAppend<Pl::Provisions>,
+        Pl::Required: PushRequired<R>,
+        Pl::Controllers: PushPluginCtrls<Pl, Mods>,
+    {
+        b.plugin(plugin)
+    }
+
+    async fn finish<P, R, W>(
+        b: AppBuilder<NoState, P, R>,
+    ) -> AppBuilder<BeanState<<P as BuildHList>::Output>>
+    where
+        P: BuildHList + ProvisionIndex,
+        R: AllGroupsSatisfied<P::Index, W>,
+    {
+        b.try_build_state().await.unwrap()
+    }
+
+    // `Sum`'s two dependencies are one group, satisfied by later provisions;
+    // `Health` requires nothing, so it leaves the requirement list as it is.
+    let builder = with_plugin(with_sum(AppBuilder::new()), r2e_core::builtins::Health)
+        .provide(1u8)
+        .provide(2u16);
+    let app = finish(builder).await;
+    assert_eq!(app.state().get::<u32>(), 3);
+}
