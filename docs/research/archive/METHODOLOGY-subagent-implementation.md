@@ -1,5 +1,7 @@
 # Methodology — Subagent implementation + orchestrator audit
 
+> **Archived 2026-11-24.** Status: superseded by `docs/claude/methodology-adversarial-fix-loop.md`; the perf/TPC waves it ran are done on the r2e side (`docs/research/HANDOFF-perf-tpc.md`).
+
 > Established 2026-06-11 while implementing Wave 1 of the perf/TPC plan (tasks 544, 534).
 > Refined through sessions 3–4 (536, 537, 538) — see "Refinements" at the bottom.
 > Read this before resuming the task waves in `HANDOFF-perf-tpc.md`.

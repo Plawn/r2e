@@ -1,5 +1,7 @@
 # Phase 1 — Optional Dependencies + Conditional Bean Registration
 
+> **Archived 2026-11-24.** Status: shipped (`Option<T>` beans, `.when` / `config_flag` / `profile_is`); the one remaining item (example-app demo of a config-driven `#[producer] -> Option<T>`) is tracked in `docs/claude/roadmap.md` § Open items.
+
 **Status: essentially complete / superseded — only one item remains.**
 
 Context (for the remaining item only):

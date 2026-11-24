@@ -8,7 +8,7 @@ see git history for the phase logs. Open work is listed at the bottom.)
 ## Registration API
 
 - **`.register::<T>()`** — the single registration entry point. Backed by the
-  `Registrable` trait (`r2e-core/src/beans.rs`): `type Provided; type Deps;
+  `Registrable` trait (`r2e-core/src/beans/traits.rs`): `type Provided; type Deps;
   fn register_into(&mut BeanRegistry)`. `#[bean]`/`#[derive(Bean)]`/async beans
   give `Provided = Self`; `#[producer]` gives `Provided = Output`. There is no
   `with_bean` / `with_async_bean` / `with_producer` — the user never has to know
@@ -50,7 +50,7 @@ see git history for the phase logs. Open work is listed at the bottom.)
   zoo. Note that a runtime-conditional registration cannot be tracked in `P`;
   the compile-time-safe way to express "maybe present" is
   `#[producer] -> Option<T>` (the slot is always in `P`).
-- `RegMeta` (`beans.rs`) unifies eager (`BeanRegistration`), lazy
+- `RegMeta` (`r2e-core/src/beans/registry.rs`) unifies eager (`BeanRegistration`), lazy
   (`LazyBeanRegistration`), and fingerprint (`FingerprintReg`) registrations so
   dedup / alternative resolution / topological sort are written once.
 
@@ -324,7 +324,7 @@ untouched.
   an unsatisfied bound), rejects the intentional default/override pattern, taxes
   every generic wrapper over `P`, and is incompatible with
   `allow_bean_override()`. The runtime `DuplicateBean` check (the first thing
-  `build_state` does, `beans.rs`) has a `Display` message pointing at the fix.
+  `build_state` does, `r2e-core/src/beans/graph.rs`; message in `beans/error.rs`) has a `Display` message pointing at the fix.
 - **Inherently runtime, cannot be moved to compile time:** dependency **cycles**
   (would need the whole graph at the type level — softened instead:
   `topological_sort` runs a three-color DFS `find_cycle` over the stuck

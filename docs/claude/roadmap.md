@@ -3,8 +3,9 @@
 Status: **LIVE WORKING BACKLOG** — only still-open work and the decisions log
 live here. Shipped workstreams (what landed, when, what was deferred and why)
 are recorded in `docs/claude/roadmap-archive.md`, one section per workstream
-(W2 real-app audit, W13 live config, W14 tenancy, W15 factory-first plugins,
-W16 MCP P1–P5, W17 data-catalog sprints, tracing single path); the reference
+(W2 real-app audit, W6 testing DX, W11 `todo`-file items, W13 live config,
+W14 tenancy, W15 factory-first plugins, W16 MCP P1–P5, W17 data-catalog
+sprints, tracing single path); the reference
 docs (`plugins.md`, `beans-di.md`, `guards-interceptors.md`, `executor.md`,
 `subsystems.md`, `di-builder-refactor.md`, `eventbus-perf.md`, `llm.txt`)
 stay authoritative for how things work today. When a workstream ships, move
@@ -44,6 +45,16 @@ the *absent when disabled* assertion for every real plugin.
 
 ## W11 — Carried from the root `todo` file — remainder
 
+The root `todo` file was removed on 2026-11-24 once its last live line was
+mirrored here; every other item it carried shipped (#965, #966/#973,
+#970/#971 — archive § W11).
+
+- **Vault-style config provider** — a Vault implementation (and one for the
+  open-source edition of Vault) behind a clean interface. The interfaces
+  exist (`ConfigProvider` in `r2e-core/src/config/runtime.rs`,
+  `SecretResolver` in `r2e-core/src/config/secrets.rs`); no Vault
+  implementation ships as of 2026-11-24 (only a doc fixture in
+  `llm-doctests`).
 - **HTTP backend containment** — `plans/axum-containment-roadmap.md`: phases A
   (one serve path, `r2e_http::server::serve`) and B (tower-http behind
   `r2e_http::layers`) and C (`Routes<S>` replaces `Router`, breaking) shipped
@@ -209,14 +220,26 @@ the loopback transport (#1076) are shipped: archive § W16. References:
   sessionless 2026-07-28 clients) via PR #151: keyed
   `McpClient::elicit(key, …)` (breaking), opt-in through
   `mcp.request-state-key`. SEP-2577-deprecated sampling, roots and logging are
-  deliberately NOT implemented. Plan: `plans/w16-p4-mcp-protocol-gaps.md`.
+  deliberately NOT implemented. Plan (archived): `plans/archive/w16-p4-mcp-protocol-gaps.md`.
 - **Released in `r2e-mcp` 0.13.0 / `r2e` 0.13.0 (2026-11-18, PR #157):**
   MRTR (PR #151), the in-process test client `r2e_mcp::testing::McpTestClient`
   (#1245, PR #155: `app.mcp()` via `McpTestExt`, feature `testing`) and the
   multi-client DCR shim (#1424, PR #156: `mcp.auth.public-clients`,
   `enforce-azp`, per-client `allowed-scopes`; `DevKeycloak` realm gains
-  `mcp-local-cli`, breaking `r2e-devservices` 0.7.0). Nothing MCP is awaiting
-  release.
+  `mcp-local-cli`, breaking `r2e-devservices` 0.7.0).
+- **Released in `r2e-mcp` 0.14.0 / `r2e` 0.14.0 (2026-11-22, PR #164):**
+  extension JSON-RPC methods (#1444, PR #162: `#[method(name = "…")]`,
+  `McpServer::with_extension`, `McpTestClient::call_method`; breaking:
+  `McpRoutes.methods`), loopback request extensions (#1445:
+  `McpLoopback::session(id)` → `LoopbackConnect`), groups on dynamic members
+  and the per-request `McpViewFilter` (#1446, `McpServer::view_filter`,
+  `McpSession::notify_list_changed`).
+- **Released in `r2e-mcp` 0.15.0 / `r2e` 0.15.0 (2026-11-24, PR #170):**
+  `McpViewFilter::listed` (#1467) and `McpError::Rpc(ErrorData)` (#1468,
+  PR #166; breaking for an exhaustive `match`); `resources/read` cache fields
+  (`#[resource(ttl, cache_scope)]`, `ResourceRead`) and `WithMeta` (#1474,
+  PR #169; breaking: `IntoResourceResult` yields `ReadResourceResult`).
+  Nothing MCP is awaiting release.
 - `McpSessions::each`/bulk ops and per-tenant filtering, if a real app asks
   for them.
 - Hexagonal / generator follow-ups #1216–#1220: see "Standalone Tasker
@@ -226,7 +249,7 @@ the loopback transport (#1076) are shipped: archive § W16. References:
 
 Kept where the context lives rather than duplicated here:
 
-- `plans/phase1-optional-deps-conditional-beans.md` — example-app demo of the
+- `plans/archive/phase1-optional-deps-conditional-beans.md` (rest shipped) — example-app demo of the
   config-driven `#[producer] -> Option<T>` pattern.
 - `plans/phase2-profiles-alternatives.md` — `#[bean(profile = "…")]` sugar
   (open design conflict with `P`), guaranteed profile groups, two profile test
@@ -237,10 +260,29 @@ Kept where the context lives rather than duplicated here:
 - `docs/research/HANDOFF-perf-tpc.md` — Linux benchmark run, proxy-mesh push
   gate, tunnel `copy_bidirectional` (543).
 
-## Standalone Tasker tickets (target `r2e`, open as of 2026-11-18)
+## Standalone Tasker tickets (target `r2e`, open as of 2026-11-24)
 
 Not part of a workstream above; Tasker is the record, this list is the
-pointer. Verified against Tasker on 2026-11-18 (master `2ca4d950`).
+pointer. Verified against Tasker on 2026-11-18 (master `2ca4d950`); the two
+releases since were checked against git and the crate changelogs on
+2026-11-24 (master `c2131d58`).
+r2e 0.15.0 (2026-11-24, PR #170: `r2e`/`r2e-cli`/`r2e-mcp` 0.15.0,
+`r2e-core` 0.12.0, `r2e-macros`/`r2e-test`/`r2e-grpc`/`r2e-security`/`r2e-oidc`
+0.13.0, the rest of the core-dependent crates 0.12.0) released #1471/#1472
+(PR #165: lossless YAML subtree for `R2eConfig::tree`/`SerdeConfig`,
+matched-brace placeholders, nested defaults, cycle detection), #1467/#1468
+(PR #166), the DI provision index (PR #167, breaking `r2e-core`:
+`PushRequired`, `AllGroupsSatisfied`, `docs/migration/di-provision-index.md`,
+internals in `docs/claude/di-compile-time.md`), #1469 (PR #168: `#[ws]`
+`max_message_size`/`max_frame_size`, `WsTestClient::assert_closed`) and #1474
+(PR #169). r2e 0.14.0 (2026-11-22, PR #164: `r2e`/`r2e-cli`/`r2e-mcp` 0.14.0,
+`r2e-core` 0.11.0, `r2e-macros`/`r2e-test`/`r2e-grpc`/`r2e-security`/`r2e-oidc`
+0.12.0, `r2e-devservices` 0.7.1) released the testing-DX parity batch (PR #159:
+`.path_param`, `TestResource`/`TestResources` + `resources(..)` on
+`#[r2e::test]`, per-test rollback, `app.scheduler().run(..)` behind
+`scheduler-testing`, `TestApp::grpc()`), #1441 (PR #160: parameter OpenAPI
+schema from `JsonSchema`, breaking `ParamInfo`), #1444–#1446 (PR #162) and
+#1447 (PR #163: `#[ws(protocols = [..])]`, `WsStream::protocol()`).
 r2e 0.13.0 (2026-11-18, PR #157: `r2e`/`r2e-cli`/`r2e-mcp` 0.13.0,
 `r2e-devservices` 0.7.0, `r2e-core` 0.10.1, `r2e-macros` 0.11.1,
 `r2e-openapi` 0.10.1) released #1272, #1245 and #1424 — all closed; r2e 0.12.0
@@ -248,7 +290,8 @@ r2e 0.13.0 (2026-11-18, PR #157: `r2e`/`r2e-cli`/`r2e-mcp` 0.13.0,
 and #1299. "Merged" below means on `master`, unreleased: the ticket closes with
 the release that ships it.
 
-- **Next release:** nothing merged and unreleased.
+- **Next release:** nothing merged and unreleased (as of 2026-11-24, after
+  PR #170).
 - **#1181 follow-ups** (ticket closed, released in `r2e-macros` 0.11.0):
   close-the-loop still has to replace its `schedule_task_with` workaround in
   `ctl-api/src/controllers/sweep.rs` (app side). Not V1: live cadence
@@ -316,7 +359,8 @@ the release that ships it.
   services for Kafka / RabbitMQ / Pulsar (the generic `DevService` covers
   them), no `r2e doctor` check for missing dev-service config, no
   `r2e test --watch` (Phase 3, never approved). The shipped part is in the
-  archive § W6; the in-process MCP test client lives on as Tasker #1245.
+  archive § W6; the in-process MCP test client (Tasker #1245) shipped
+  separately in r2e-mcp 0.13.0 (PR #155, `app.mcp()`).
 - **No closure-based config path on the builder (2026-11-09, #1288).**
   `plugin_with(|cfg| plugin)`, `apply(|b| ..)`-for-config or any
   "read `r2e_config()` mid-chain to construct a plugin" API: REJECTED. A

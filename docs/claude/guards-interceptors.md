@@ -351,7 +351,7 @@ macro), not just `#[intercept]`. Semantics (locked in task #906):
 
 Tests: `r2e-core/tests/decorators/controller_level.rs` (runtime semantics) +
 `r2e-compile-tests/cases/decorators/{pass,fail}/controller_level_*` and
-`cases/grpc/fail/grpc_impl_guard_not_supported.rs` (compile surface).
+`cases/grpc/{pass/grpc_guards.rs,fail/grpc_impl_layer_not_supported.rs}` (compile surface).
 
 ## Cache interceptor type constraints
 

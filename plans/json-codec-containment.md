@@ -1,5 +1,7 @@
 # Plan — Containing the JSON codec (`serde_json`) behind an R2E façade
 
+> Status: **shipped** — phases 1–4 landed 2026-08-24 (see the log at the bottom), merged via PR #40. The live baseline is `scripts/boundaries/src-baseline-serde_json.txt`.
+
 Follow-up to `plans/runtime-http-dependency-containment.md`. That plan put the
 async runtime (`r2e-rt`) and the HTTP backend (`r2e-http`) behind R2E-owned
 seams. This one does the same for the JSON codec, with one deliberate
@@ -212,7 +214,9 @@ plan (new row for `Json<T>: FromRequest`). `CLAUDE.md` architecture entry for
   the façade (`r2e-core` error/ws/sse/`Cacheable`, `#[derive(Cacheable)]`
   emitting `#krate::json::…`, all four event backends + `pending.rs`/`state.rs`,
   `r2e-oidc`, `r2e-openfga`, `r2e-test`, `r2e-security` JWKS parse). Boundary
-  group `serde_json` enforced; baseline holds 5 lines, all reviewed:
+  group `serde_json` enforced; baseline held 5 lines at the time (2026-11-24:
+  4 — `r2e-openapi` dropped out; now `r2e-cli`, `r2e-devservices`,
+  `r2e-openfga/macros`, `r2e-test`), all reviewed:
   `r2e-cli` (`cargo metadata` → `Value`, no `r2e-core` dep), `r2e-devservices`
   (`Value`, no `r2e-core` dep), `r2e-openapi` (`to_string_pretty` spec dump),
   `r2e-openfga/macros` (build-time), `r2e-test` (`json_value` → `Value`).

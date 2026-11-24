@@ -1,5 +1,7 @@
 # #1180 — Serde-only typed config (`SerdeConfig<T>`)
 
+> **Archived 2026-11-24.** Status: shipped — `SerdeConfig<T>`, `R2eConfig::tree` and the coercing deserializer in PR #118 (#1180); the lossless YAML subtree followed in PR #165 (#1471, r2e-core 0.12.0). Current reference: `docs/claude/configuration.md`.
+
 Tasker: #1180 "Config typée : charger une config serde existante via
 `load_config::<T>()` sans dépendre de r2e". Status: **plan, not started**.
 

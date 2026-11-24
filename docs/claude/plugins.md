@@ -199,7 +199,7 @@ ctx.after_routes(move |routes: &mut RoutesContext| {
 `routes()` is the **route registry**: the `RouteInfo` list collected by
 `register_controller` plus the module and plugin controller folds (it is the
 `MetaRegistry`'s `RouteInfo` collection — see the deviation note in
-`plans/plugin-module-lifecycle-unification.md`). Because the Routes stage runs
+`plans/archive/plugin-module-lifecycle-unification.md`). Because the Routes stage runs
 after *all* controllers are registered, a Routes effect is install-order
 independent. `OpenApiPlugin` is the reference implementation: it builds the
 spec from `routes.routes()` and mounts `/openapi.json` (+ `/docs`) with

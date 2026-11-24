@@ -33,7 +33,8 @@ controller/      # request façade, core-only path, #[anonymous], injection
 decorators/      # DecoratorSpec, guards, interceptors
 plugin/          # Provided/Deps/Late, deferred surface, config, lifecycle
 http/            # extractors, errors, SSE/WS, managed resources, HTTP plugins
-runtime/         # rt, sharded serving, socket options, tracing
+runtime/         # rt, sharded serving, socket options, shutdown,
+                 #   worker scopes, `TracingConfig` parsing (not the install)
 dev_reload/      # hot-patch cycles, live config, rollback — its OWN target:
                  #   `mark_hot_reload_loop()` is process-global and one-way,
                  #   and would make every serving test in a shared binary skip
@@ -41,6 +42,13 @@ dev_reload/      # hot-patch cycles, live config, rollback — its OWN target:
 perf_budget/     # allocation + bean-clone budgets for the request hot path,
                  #   request scope and the bean graph — its OWN target:
                  #   `#[global_allocator]` is process-global
+tracing_install/      # subscriber install by build_state() + boot-log replay
+tracing_no_capture/   # install without launch: boot logs dropped, one WARN
+tracing_disabled/     # tracing.enabled: false installs nothing
+tracing_env_disabled/ # same, via R2E_TRACING_ENABLED=false
+tracing_foreign/      # a foreign subscriber installed first wins
+                 # each tracing_* is its OWN target: the global subscriber
+                 #   is a one-shot process global
 ```
 
 Conventions inside a target:

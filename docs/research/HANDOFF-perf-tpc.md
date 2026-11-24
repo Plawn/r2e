@@ -2,7 +2,7 @@
 
 > Started 2026-06-11. Pruned 2026-07-23: everything verified as shipped was removed.
 > Read this + `docs/research/thread-per-core.md` (design reference + open backlog) and
-> `METHODOLOGY-subagent-implementation.md` (how the waves were run).
+> `archive/METHODOLOGY-subagent-implementation.md` (how the waves were run; superseded by `docs/claude/methodology-adversarial-fix-loop.md`).
 
 ## Status
 

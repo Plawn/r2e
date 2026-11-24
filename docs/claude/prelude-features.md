@@ -26,6 +26,18 @@ Additional types are available via `r2e::http::*` submodules for advanced use (e
 
 ## Feature Flags
 
+Facade features (`r2e/Cargo.toml` `[features]` is the source of truth):
+
+- **default** = `security`, `events`, `utils`.
+- **full** = default + `scheduler`, `executor`, `cache`, `rate-limit`, `openapi`, `oidc`, `prometheus`, `observability`, `ws`, `multipart`, `grpc`, `grpc-reflection`, `grpc-web`, `static`, `tenant`, `mcp`.
+- **One per crate:** `scheduler` (implies `executor`), `executor`, `cache`, `rate-limit`, `oidc`, `openapi`, `prometheus`, `openfga`, `observability`, `grpc`, `mcp`, `static`, `tenant`, `data-sqlx`, `data-diesel`; `events-{iggy,kafka,pulsar,rabbitmq}` (imply `events`).
+- **Sub-features:** `grpc-reflection`, `grpc-web`; `mcp-loopback` (in-process MCP sessions); `ws`, `multipart`, `json-sonic` (r2e-core); `sqlx-{sqlite,postgres,mysql}`, `diesel-{sqlite,postgres,mysql}` (driver; `sqlite`/`postgres`/`mysql` are aliases of the sqlx ones); `tenant-sqlx`, `tenant-diesel` (per-tenant pools).
+- **Not in `full`, deliberately:** `metrics-facade` (a stack choice, `docs/claude/metrics-stacks.md`), `openfga`, `quic` (heavy crypto deps), `dev-reload` (never in production), `test-util` (paused clocks; leaks timer behaviour through feature unification), `data-sqlx`/`data-diesel` and their drivers.
+- **Dev-graph only** (pull `r2e-test`; enable from `[dev-dependencies]`): `scheduler-testing` (`SchedulerTestExt`, `app.scheduler()`), `mcp-testing` (`pin_mcp_validator`).
+- `data` is an empty compatibility marker (pagination lives in r2e-core).
+
+Always-available (no flag):
+
 - Validation uses `garde` crate and is always available (no feature flag). Types deriving `garde::Validate` are automatically validated when extracted via `Json<T>`.
 - `#[derive(Params)]` aggregates path, query, and header params into a single DTO (BeanParam-like). Also generates `ParamsMetadata` for automatic OpenAPI parameter documentation. An unattributed field is a query parameter named after the field, and the derive reads the struct's existing `#[serde(rename_all/rename/default/skip)]` attributes, so a shipped `Query<T>` type migrates untouched (`docs/features/02-validation.md`). The 400 is a `Rejection` rendered by the route's error envelope (default `HttpError`).
 
