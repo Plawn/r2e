@@ -855,7 +855,7 @@ you — the rows below are the imperative form for `.provide()`-d / plugin value
 and a plugin-only method wouldn't help direct `.provide()` users. Both funnel
 into the same `BeanRegistry` primitives.
 
-Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
+Semantics (all tested in the `r2e-core/tests/di/` + `tests/plugin/` targets):
 
 - **Hooks read the target bean by type from the resolved graph** — so a pinned
   test override (`override_bean` / `pin_provide`) is the value the hook runs
@@ -873,7 +873,7 @@ Semantics (all tested in `r2e-core/tests/beans.rs` + `tests/plugin.rs`):
 
 ## Key files
 
-- `r2e-core/src/beans.rs` — `Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `BeanContext`, `BeanRegistry`
+- `r2e-core/src/beans/` — `traits.rs` (`Bean`, `AsyncBean`, `Producer`, `PostConstruct`, `Registrable`), `context.rs` (`BeanContext`), `registry.rs` + `registry_provide.rs` (`BeanRegistry`), `graph.rs`/`resolve.rs` (graph + resolution), `reuse.rs` (dev-reload fingerprints), `error.rs` (`BeanError`)
 - `r2e-core/src/type_list.rs` — HList state (`HCons`/`HNil`), `HasBean`, `BeanAccess` (`state.get::<T>()`), `BeanLookup` (`state.bean::<T>()`), `BuildHList`, `AllSatisfied`, `ControllerTuple`
 - `r2e-core/src/builder/` — unified `register()`, `provide()`, `when()` + `config_flag()` / `profile_is()`, `with_default_bean()`/`register_override()` (last-wins override), async `build_state()` / `try_build_state()`; `RegisterController` / `RegisterControllers` extension traits (typed phase, `builder/typed.rs`)
 - `r2e-macros/src/attrs/bean_attr.rs` — `#[bean]` (sync + async detection, `#[config]` param support, `Option<T>` detection, `#[consumer]`/`#[scheduled]`/`#[intercept]`/`#[post_construct]`/`#[pre_destroy]`/`#[on_start]`/`#[async_exec]` scanning), delegating the actual `EventSubscriber` / `ScheduledSource` / `PostConstruct` / decorator-fill / dispatch-wrapper / pool-submission codegen to the shared `codegen/transverse.rs`

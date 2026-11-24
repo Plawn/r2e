@@ -20,7 +20,9 @@ Provides `RabbitMqEventBus`, a distributed implementation of the `EventBus` trai
 
 ```toml
 [dependencies]
-r2e-events-rabbitmq = { version = "0.1" }
+r2e = { version = "0.15", features = ["events-rabbitmq"] }  # re-exported as r2e::r2e_events_rabbitmq
+# or standalone:
+# r2e-events-rabbitmq = "0.12"
 ```
 
 ```rust

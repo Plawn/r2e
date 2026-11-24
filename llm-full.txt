@@ -68,13 +68,13 @@ extra).
 |---|---|---|
 | `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, `Rejection` / `RejectionKind`, `ErrorSchema`, error envelopes, `#[error(rejection)]`, panic capture / `on_panic` | `llm/error-handling.md` | core |
 | `#[bean]`, `#[producer]`, `AsyncBean`, `.provide` / `.register`, `ProvideBundle`, `Option<T>` beans, same-typed beans (newtypes) | `llm/di-beans.md` | core |
-| writing a `Plugin`, `Provided` / `Deps`, plugin config, plugin-shipped controllers, `HealthRegistry` | `llm/plugins.md` | core |
+| writing a `Plugin`, `Provided` / `Deps`, plugin config (`Layered<C>` file overlay), plugin-shipped controllers, `HealthRegistry`, layer bands (`LayerSlot`, `add_layer_in` / `with_layer_in`), `Cors` / `CorsConfig` | `llm/plugins.md` | core |
 | `#[post_construct]`, `#[pre_destroy]`, `#[on_start]`, startup/shutdown hooks | `llm/lifecycle-hooks.md` | core |
 | `#[module]`, feature modules, imports/exports, module aggregates, path-prefixed modules | `llm/modules.md` | core |
-| `AppBuilder` assembly order, `serve_auto`, `ShutdownToken`, graceful shutdown | `llm/app-builder.md` | core |
-| `R2eConfig`, `#[config]`, typed sections, profiles, secrets `${…}`, env overlay, config providers/rotation, well-known keys | `llm/configuration.md` | core |
+| `AppBuilder` assembly order, `serve_auto`, `ShutdownToken`, graceful shutdown (layer bands: `LayerSlot` in `llm/plugins.md`) | `llm/app-builder.md` | core |
+| `R2eConfig`, `#[config]`, typed sections, `SerdeConfig<T>`, profiles, secrets `${VAR}` / `${VAR:default}` (no `:-`), placeholder cycle detection, env overlay, config providers/rotation, well-known keys (`cors.*`, `CorsConfig`, `Cors::preset`) | `llm/configuration.md` | core |
 | validation (`garde`), `#[derive(Params)]` for path/query/header params | `llm/validation.md` | core |
-| handler parameter types at a glance (`Json`, `Path`, `Query`, `Params`, raw `Request`, …) | `llm/handler-parameter-types.md` | core |
+| handler parameter types at a glance (`Json`, `Path`, `Query`, `Params`, raw `Request`, `RequestId`, `RequestSpan`, `MatchedPath`, `Bytes`, …) | `llm/handler-parameter-types.md` | core |
 | the list of method attributes (`#[get]`, `#[roles]`, `#[intercept]`, `#[consumer]`, `#[scheduled]`, …) | `llm/method-attribute-quick-reference.md` | core |
 | the list of builder methods (`provide`, `register`, `plugin`, `on_start`, `serve_auto`, …) | `llm/builder-method-quick-reference.md` | core |
 
@@ -110,28 +110,28 @@ extra).
 
 | Your task involves… | Read | features |
 |---|---|---|
-| Server-Sent Events, `#[sse]`, streams | `llm/sse.md` | core |
-| WebSockets, `#[ws]`, sessions, shutdown of open sockets | `llm/websockets.md` | ws |
+| Server-Sent Events, `#[sse]` (`keep_alive`), streams, `SseBroadcaster`, rooms (`SseRooms`), lag policy (`LagPolicy`, `subscribe_lagged`) | `llm/sse.md` | core |
+| WebSockets, `#[ws]` (`protocols`, `max_message_size` / `max_frame_size`), `requested_protocols`, sessions, `WsBroadcaster` / `WsRooms`, shutdown of open sockets | `llm/websockets.md` | ws |
 | `#[any]`, `#[fallback]`, `{*path}` wildcards, proxying, streaming bodies | `llm/proxy-catch-all.md` | core |
 | file upload, `Multipart`, typed upload builders | `llm/multipart.md` | multipart |
 | embedded static files, SPA fallback | `llm/static-files.md` | static |
-| OpenAPI 3.1 generation, Swagger UI, `schemars` | `llm/openapi.md` | openapi |
+| OpenAPI 3.1 generation, Swagger UI, `schemars`, parameter schemas from `JsonSchema` (path/query/header) | `llm/openapi.md` | openapi |
 | gRPC services, `#[grpc_routes]`, multiplexed / separate port, gRPC-Web | `llm/grpc.md` | grpc |
-| MCP server: `#[routes]` MCP members (one type = one port: MCP members and HTTP routes on separate types), `#[routes(group, opt_in)]`, `#[tool]` / `#[resource]` / `#[prompt]`, `mcp.*` config, MCP OAuth resource server, in-process loopback transport (`McpLoopback`, feature `mcp-loopback`) | `llm/mcp-server.md` | mcp |
+| MCP server: `#[routes]` MCP members (one type = one port: MCP members and HTTP routes on separate types), `#[routes(group, opt_in)]`, `#[tool]` / `#[resource]` / `#[prompt]`, `mcp.*` config, MCP OAuth resource server, in-process loopback transport (`McpLoopback`, feature `mcp-loopback`), `#[method]` extensions / `with_extension`, `McpViewFilter`, `ResourceRead` / `WithMeta` / resource caching (`ttl`, `cache_scope`), `McpError::rpc`, dynamic members / groups, `McpResourceUpdates`, `app.mcp()` test client | `llm/mcp-server.md` | mcp |
 
 ### Observability & operations
 
 | Your task involves… | Read | features |
 |---|---|---|
 | HTTP metrics, the `Prometheus` plugin, `layer_only`, `MetricsFacade` | `llm/prometheus.md` | prometheus |
-| per-request logging: the `HttpTrace` plugin, `trace.*`, request ids, `MakeRequestSpan`; OpenTelemetry tracing, OTLP export, context propagation | `llm/observability.md` | core, observability |
+| per-request logging: the `HttpTrace` plugin, `trace.*`, request ids, `MakeRequestSpan`; OpenTelemetry tracing, OTLP export, context propagation, `with_request` / `with_request_state`, `RequestSpan` | `llm/observability.md` | core, observability |
 | `RequestIdPlugin`, `SecureHeaders`, `Health` / `Health::builder()`, `NormalizePath` | `llm/additional-plugins.md` | core |
 
 ### Testing & tooling
 
 | Your task involves… | Read | features |
 |---|---|---|
-| `TestApp`, `#[r2e::test]`, `override_bean` / `override_config_value`, `as_user`, JSON assertions, SSE/WS test clients, test lifecycle | `llm/testing.md` | (dev-dependency `r2e-test`) |
+| `TestApp`, `#[r2e::test]`, `override_bean` / `override_config_value`, `as_user`, `.path_param`, JSON assertions, SSE/WS test clients, `TestResource` / `resources(..)`, per-test rollback, `app.grpc()`, `app.scheduler()`, test lifecycle (`app.mcp()`: `llm/mcp-server.md`) | `llm/testing.md` | (dev-dependency `r2e-test`) |
 | Dev services: `DevPostgres` / `DevRedis` / `DevKeycloak`, testcontainers, shared containers | `llm/devservices.md` | (dev-dependency `r2e-devservices`) |
 | `r2e new` / `r2e add` / `r2e dev` / `r2e generate` / `r2e doctor` / `r2e routes` / `r2e docs`, hot reload | `llm/dev-experience.md` | dev-reload |
 
@@ -370,6 +370,12 @@ integration for control): 1. `#[any]`/`#[fallback]` controller routes →
 2. `merge_router(router)` (raw fragment, shares state + global plugins, no DI) →
 3. `with_layer_fn(|routes| ...)` (transform the final `Routes`) →
 4. `r2e::http::axum_compat` (the raw axum API, off the supported surface).
+
+A hand-written handler mounted with `merge_router` gets no `#[inject]`; read an
+app-scoped bean with the `BeanExtract` extractor (prelude) instead of a
+`State<Arc<…>>`: `BeanExtract(pool, _): BeanExtract<SqlitePool, I>`, the
+handler generic over the index witness `I` (inferred from the app state, like
+every bean lookup).
 
 ---
 
@@ -1294,7 +1300,7 @@ A newtype is typed, compiler-checked, and works at **every** injection site
   nested section), or `Layered` refuses to compile. Never read
   `b.r2e_config()` mid-chain to construct a plugin — that splits the builder
   and breaks "install order is irrelevant". Builtins on this contract:
-  `Cors::new()` (`cors.*`), `HttpTrace::new()` (`trace.*`),
+  `Cors::new()` (`cors.*`, typed `CorsConfig`; `Cors::preset(cfg)` / `Cors::custom(layer)`), `HttpTrace::new()` (`trace.*`, `HttpTraceConfig`),
   `OpenApiPlugin::default()` (`openapi.*`); `Config = ()` is only for plugins
   with nothing to configure (`Health`, `NormalizePath`, `DevReload`).
 
@@ -2376,6 +2382,11 @@ nothing set is permissive under the `dev` profile with a warning and a boot erro
 elsewhere (fail-closed, like auth). Kebab keys are not addressable via `R2E_`,
 and a `${VAR}` placeholder is one list entry, not a comma-separated list — list
 several origins in YAML.
+Typed view: `CorsConfig` (prelude, every field `Option`). `Cors::preset(CorsConfig)`
+is a shared baseline the file overrides key by key; `Cors::custom(layer)` installs
+a hand-built `r2e::http::layers::cors::CorsLayer` as-is (only `cors.enabled` is
+still read). The other builtin typed sections: `HttpTraceConfig` (`trace.*`,
+`HttpTrace::preset`) and `TracingConfig` (`tracing.*`).
 
 `openapi.*` — read by `OpenApiPlugin::default()` (feature `openapi`): `enabled`
 (default `true`; `false` removes `/openapi.json` and `/docs`), `title`
@@ -2549,9 +2560,10 @@ Axum's own rejection types are re-exported for handlers that take a
 
 ### TL;DR
 
-- Handler parameters come after `&self`; a raw `req: Request` MUST be the last parameter.
+- Handler parameters come after `&self`; at most ONE body-consuming parameter (`Json`, `Form`, `String`, `Bytes`, `Multipart`, `TypedMultipart`, raw `Request`) and it MUST be the last one.
 - Standard extractors: `Path<T>`, `Query<T>`, `Json<T>` (auto-validated), `Form<T>`, `HeaderMap`, `ConnectInfo<SocketAddr>`, `TypedMultipart<T>` (feature `multipart`).
 - R2E-specific parameters: a `#[derive(Params)]` struct, `#[inject(identity)] user: AuthenticatedUser` (`Option<T>` = adaptive), `#[managed] tx: &mut Tx<'_, _>`, `SchedulerHandle`.
+- Request-scoped data from a layer (`RequestId`, `RequestSpan`, `WorkerInfo`) is a plain, infallible parameter; for a field on the controller instead, use `#[inject(request)]` (llm/core-concepts.md).
 - Use `peer: PeerAddr` — a plain parameter, NOT `#[inject(request)]` — for an infallible client-address read; it is `None` under in-process `TestApp`.
 
 Alongside `&self`:
@@ -2561,16 +2573,52 @@ Alongside `&self`:
 | `Path(id): Path<u64>` | URL path parameter |
 | `Query(params): Query<T>` | Query string (T: Deserialize) |
 | `Json(body): Json<T>` | JSON body (auto-validated if T: garde::Validate) |
+| `body: Option<Json<T>>` | `None` when the request has no JSON content type; a malformed JSON body is still a 400 |
+| `body: String` / `body: Bytes` | Raw body as UTF-8 text / bytes |
 | `params: MyParams` | `#[derive(Params)]` aggregation (`#[param(path)]`/`#[query]`/`#[header]`; unattributed fields = query, `#[serde(rename…)]` honoured) |
 | `#[inject(identity)] user: AuthenticatedUser` | Identity from JWT (`Option<T>` = adaptive) |
 | `#[managed] tx: &mut Tx<'_, Sqlite>` | Managed resource (transaction) |
 | `TypedMultipart(form): TypedMultipart<T>` | Typed multipart (feature `multipart`) |
+| `multipart: Multipart` | Untyped streaming multipart (feature `multipart`; see llm/multipart.md) |
 | `Form(data): Form<T>` | URL-encoded form |
 | `HeaderMap` | All request headers |
+| `MatchedPath` / `OriginalUri` | Route template that matched (`/users/{id}`) / URI before nesting stripped a prefix |
+| `id: RequestId` | Request id (`.0: String`) from `RequestIdPlugin` / `HttpTrace`; a fresh UUID when neither set one |
+| `span: RequestSpan` | The `HttpTrace` per-request span: `span.record("field", value)`; a no-op span on excluded paths (llm/observability.md) |
+| `worker: WorkerInfo` | Worker serving the request (`id`, `workers`, `role`; control plane when not sharded) |
 | `ConnectInfo(addr): ConnectInfo<SocketAddr>` | Client socket address |
 | `peer: PeerAddr` | `PeerAddr(Option<SocketAddr>)` — infallible `ConnectInfo` read (`None` under in-process `TestApp`); plain param, not `#[inject(request)]` |
 | `SchedulerHandle` | Scheduler control (when `Scheduler` installed) |
 | `req: Request` | Raw request — MUST be the last parameter |
+
+```rust
+#[derive(serde::Deserialize)]
+pub struct Patch { pub name: String }
+
+#[controller(path = "/demo")]
+pub struct DemoController;
+
+#[routes]
+impl DemoController {
+    #[post("/{id}")]
+    async fn update(
+        &self,
+        Path(id): Path<u64>,
+        request_id: RequestId,
+        matched: MatchedPath,
+        body: Option<Json<Patch>>,          // body parameter last
+    ) -> String {
+        let name = body.map(|Json(p)| p.name).unwrap_or_default();
+        format!("{id} {name} {} {}", request_id.0, matched.as_str())
+    }
+
+    #[post("/raw")]
+    async fn raw(&self, body: Bytes) -> String {
+        body.len().to_string()
+    }
+}
+# fn main() {}
+```
 
 ---
 
@@ -2578,18 +2626,18 @@ Alongside `&self`:
 
 ### TL;DR
 
-- Routing markers: `#[get/post/put/delete/patch("/path")]`, `#[any("/path")]` (all methods, `{*path}` wildcards), `#[fallback]` (no path argument), `#[sse("/path")]`, `#[ws("/path")]`.
+- Routing markers: `#[get/post/put/delete/patch("/path")]`, `#[any("/path")]` (all methods, `{*path}` wildcards), `#[fallback]` (no path argument), `#[sse("/path")]` (`keep_alive = 15 | false`), `#[ws("/path")]`.
 - Auth markers: `#[anonymous]` per route; `#[roles]`/`#[all_roles]`/`#[guard]`/`#[pre_guard]` on a method or on the impl — only `#[pre_guard]` also covers `#[anonymous]` routes.
 - Cross-cutting markers: `#[intercept]`, `#[layer]`, `#[middleware]` (all three on a method or on the impl), `#[managed]` (on a parameter), `#[async_exec]`.
-- Off-request and documentation markers: `#[consumer]`, `#[scheduled]`, `#[request_helper]`, `#[status(N)]` / `#[returns(T)]`.
-- MCP members (`#[tool]`, `#[resource(uri = …)]`, `#[prompt]`, `#[completion]`, see llm/mcp-server.md) make a `#[routes]` impl an MCP service. One type = one port: an MCP member next to an HTTP route in the same impl is a compile error — write one `#[controller]` type per port over the shared beans. Impl-level `#[roles]`/`#[all_roles]`/`#[guard]`/`#[intercept]` cover MCP members too (decorators built once per registration, over the type's one core); `#[pre_guard]`/`#[layer]`/`#[middleware]` are HTTP-only (a compile error on an MCP service).
+- Off-request and documentation markers: `#[consumer]`, `#[scheduled]`, `#[request_helper]`, `#[status(N)]` / `#[returns(T)]`, `#[raw]` (no-op parameter marker documenting a plain extractor).
+- MCP members (`#[tool]`, `#[resource(uri = …)]`, `#[prompt]`, `#[completion]`, `#[method(name = "ns/verb")]`, see llm/mcp-server.md) make a `#[routes]` impl an MCP service. One type = one port: an MCP member next to an HTTP route in the same impl is a compile error — write one `#[controller]` type per port over the shared beans. Impl-level `#[roles]`/`#[all_roles]`/`#[guard]`/`#[intercept]` cover MCP members too (decorators built once per registration, over the type's one core); `#[pre_guard]`/`#[layer]`/`#[middleware]` are HTTP-only (a compile error on an MCP service).
 
 | Attribute | Level | Purpose |
 |-----------|-------|---------|
 | `#[get/post/put/delete/patch("/path")]` | method | Verb route |
 | `#[any("/path")]` | method | All-methods route (wildcards: `{*path}`) |
 | `#[fallback]` | method | App-wide catch-all (no path arg) |
-| `#[sse("/path")]` | method | SSE endpoint |
+| `#[sse("/path")]`, `#[sse("/path", keep_alive = 15)]`, `keep_alive = false` | method | SSE endpoint; keep-alive on by default, interval in seconds, `false` disables it |
 | `#[ws("/path")]`, `#[ws("/path", protocols = ["v2", "v1"], max_message_size = 64 * 1024, max_frame_size = "method")]` | method | WebSocket endpoint; `protocols` negotiates a subprotocol (`ws.protocol()`); `max_message_size` / `max_frame_size` bound what the session reads (a `usize` expression or a `&self -> usize` method name) |
 | `#[anonymous]` | method | Skip struct-level identity for this route |
 | `#[roles("r1", "r2")]` | method or impl | Any-of role check (403); impl = every non-anonymous route |
@@ -2598,6 +2646,7 @@ Alongside `&self`:
 | `#[pre_guard(Expr)]` | method or impl | Pre-auth guard (before JWT); impl = every route incl. `#[anonymous]` |
 | `#[intercept(Expr)]` | method or impl | Interceptor |
 | `#[managed]` | parameter | Managed resource lifecycle |
+| `#[raw]` | parameter | No-op: documents that the parameter is a plain extractor (every unmarked parameter already is) |
 | `#[layer(expr)]` / `#[layer(\|this: &Self\| expr)]` | method or impl | Tower layer; closure form builds it from the controller core once at registration; impl = every route except `#[fallback]`, outside method layers |
 | `#[middleware(fn)]` / `#[middleware(fn, state)]` | method or impl | Middleware fn `async fn(Request, Next) -> Response`; `state` passes the core as a leading `Arc<Self>` argument; impl = every route except `#[fallback]` |
 | `#[consumer(bus = "field")]` | method | Event consumer |
@@ -2605,8 +2654,12 @@ Alongside `&self`:
 | `#[async_exec]` | method (bean or controller) | Submit body to `PoolExecutor`, returns `JobHandle` |
 | `#[request_helper]` | method | Helper on the per-request façade (reads identity; callable only from routes/SSE/WS) |
 | `#[status(201)]` / `#[returns(T)]` | method | OpenAPI only: declared success status (default 200 for every verb) / response type |
-| `#[tool]` / `#[resource(uri)]` / `#[prompt]` / `#[completion]` | method | MCP member on a `#[routes]` impl (served by `register_mcp_service`) |
+| `#[tool(name, title, description, read_only, destructive, idempotent, open_world, scopes, any_scopes)]` | method | MCP tool on a `#[routes]` impl (served by `register_mcp_service`); `scopes = "a,b"` or `["a", "b"]` requires ALL, `any_scopes` at least one |
+| `#[resource(uri, name, title, description, mime_type, ttl, cache_scope, scopes, any_scopes)]` | method | MCP resource; `ttl = "30s"` (or whole seconds) / `cache_scope = "public" \| "private"` set the read result's `ttlMs` / `cacheScope` |
+| `#[prompt(name, title, description, scopes, any_scopes)]` / `#[completion]` | method | MCP prompt / completion provider (wired by `complete(arg = "method")`) |
+| `#[method(name = "ns/verb", scopes, any_scopes)]` | method | MCP extension JSON-RPC method on the same endpoint (advertise with `McpServer::with_extension`) |
 | `#[routes(group = "g", opt_in)]` | impl | MCP group of the impl's MCP members (compile error without one) |
+| `#[grpc_routes(proto::svc_server::Svc)]` | impl | gRPC service impl in place of `#[routes]` (see llm/grpc.md) |
 
 ---
 
@@ -2630,18 +2683,29 @@ Alongside `&self`:
 | `.provide(value)` | builder | Provide a constructed bean |
 | `.register::<T>()` | builder | Register a Bean / AsyncBean / Producer |
 | `.register_module::<M>()` | builder | Feature module (providers + controllers) |
+| `.provide_with_post_construct(v)` | builder | `.provide(v)` + run `v`'s `PostConstruct` hook during `build_state` (after factory beans' hooks) |
+| `.with_bean_factory(\|cfg: &R2eConfig\| B)` | builder | Bean built by a closure over the loaded config (prefer a `#[bean]` with `#[config]` params) |
+| `.with_default_bean::<B>()` / `.with_default_async_bean::<B>()` / `.with_default_producer::<P>()` | builder | Overridable default registration (library/plugin side) |
+| `.register_override::<T>()` | builder | Replace a `with_default_*` registration of the same type (last-wins; does not add a second slot) |
+| `.with_profile(p)` | builder | Force the active profile (beats `R2E_PROFILE` / `r2e.profile`); tests use it instead of mutating env |
+| `.with_config_file(path)` | builder | Base config file other than `application.yaml` for the next `load_config` (profile overlay derived from it) |
 | `.when(cond, \|b\| ...)` | any | Conditional `Self -> Self` assembly (`config_flag`, `profile_is`) — canNOT wrap `.plugin()` |
 | `.build_state().await` | — | Resolve graph → inferred HList state, wrapped as `BeanState<L>` (no type args) |
 | `.register_controller::<C>()` | app | Register controller (+ consumers + scheduled) |
 | `.register_controllers::<(A, B)>()` | app | Several at once |
 | `.bridge_sse::<Bus, E>()` | app | EventBus → SSE topic bridge |
 | `.schedule_task(def)` | app | Dynamic scheduled task |
-| `.merge_router(r)` / `.with_layer_fn(f)` | app | Raw axum escape hatches (last resort) |
+| `.with_layer(l)` / `.with_layer_in(slot, l)` | app | App-wide tower layer (`RouteLayer`); lands in the `LayerSlot::App` band (innermost) unless a `LayerSlot` is given — band, not call order, decides position (see llm/plugins.md) |
+| `.with_layer_fn(f)` / `.with_layer_fn_in(slot, f)` | app | `FnOnce(r2e::http::Routes) -> Routes` transform of the assembled routes, in `LayerSlot::App` by default; `.with_service_builder(f)` is an alias of `with_layer_fn` |
+| `.merge_router(r)` | app | Merge hand-built `r2e::http::Routes<T>` (a raw axum `Router` must go through `r2e::http::axum_compat::from_router` first); no controller DI/guards/interceptors |
+| `.with_meta_consumer::<M, _>(f)` | app | At `build()`, `f(&[M])` reads every collected route-metadata item `M` and returns `Routes<T>` to merge (plugin authoring) |
+| `.get_plugin_data::<D>()` | app | Read data a plugin stored with `DeferredContext::store_data` (`Option<&D>`) |
 | `.on_panic(f)` | any | App callback per caught panic — HTTP handlers, `#[scheduled]` ticks, executor jobs (`PanicReport` = message + `origin()` + `label()`). R2E logs + contains either way; this is the counting seam |
 | `.on_start(f)` / `.on_stop(f)` | app | Lifecycle hooks (`on_stop` always runs at shutdown, outside every budget) |
 | `.on_start_once(f)` | app | Like `.on_start`, but once per **process**: skipped on later `r2e dev` hot-patch cycles |
 | `.on_drain(f)` | app | Awaited hooks run at shutdown trigger, BEFORE the listener stops accepting |
 | `.drain_timeout(d)` | app | Bound the HTTP drain (in-flight requests after the listener stops). Default: 30s, or `server.drain-timeout` |
+| `.with_stop_handle(h)` | any | Wire a hand-made `StopHandle` into shutdown (rare: a provided `StopHandle` bean is picked up automatically) |
 | `.drain_timeout_unbounded()` | app | Opt out of the drain bound entirely (plain-axum behaviour); wins over config |
 | `.shutdown_grace_period(d)` | app | Bound the tracked-handle join, PER handle (`spawn_service`, `ServeContext::track`, `#[ws]` sessions). Default: unbounded |
 | `.per_worker_service(f)` | any | Shard-local `!Send` service per sharded worker (`WorkerContext` → `WorkerService`); needs `server.workers` |
@@ -2975,6 +3039,21 @@ headers works on both. Building one by hand (rare — outside a request) can use
 `default_method()` / `no_extensions()`.
 Error helper: `GuardError::forbidden(...)`,
 `GuardError::unauthorized(...)`, `GuardError::new(status, msg)`.
+
+Typed path-parameter keys: inside a route's `#[guard(..)]` / `#[intercept(..)]`
+expression, `#[routes]` brings a `path` namespace into scope with one
+`path::<name>: PathParam<T>` constant per `{name}` in the route (`T` taken from
+the `Path<..>` parameter, `()` when there is none). Take a `PathParam<T>` in the
+guard constructor instead of a string literal, then read it with
+`ctx.parse_path_param::<T>(param.name())` (missing → 500, unparsable → 400).
+`ctx.path_params` is a `PathParams` (`get(name)`, `parse::<T>(name)`;
+`PathParams::from_pairs(&[("id", "7")])` in unit tests).
+
+```rust,ignore
+#[get("/projects/{id}")]
+#[guard(ProjectGuard::viewer(path::id))]           // path::id: PathParam<ProjectId>
+async fn show(&self, Path(id): Path<ProjectId>) -> Json<Project> { /* … */ }
+```
 
 ### Bean-reading guard — `#[derive(DecoratorBean)]`
 
@@ -5511,9 +5590,11 @@ aggregation via `ask_all` every 10s, `/whoami`, `/stats`, `/workers`, `/metrics`
 
 ### TL;DR
 
-- Mark the method `#[sse("/path")]` and return a `Stream<Item = Result<SseEvent, Infallible>>`.
+- Mark the method `#[sse("/path")]` and return a `Stream<Item = Result<SseEvent, Infallible>>`. Keep-alive is on by default; `#[sse("/path", keep_alive = 15)]` sets the interval in seconds, `keep_alive = false` disables it.
 - Inject `SseBroadcaster` and return `self.sse_broadcaster.subscribe()`; the broadcaster is an ordinary bean — `.provide(SseBroadcaster::new(128))`.
 - `SseTopic<E>` is the typed per-event topic fed by the EventBus→SSE bridge.
+- One stream per entity (per-run logs, per-user feeds): inject `SseRooms<K>` and `subscribe(key)`; call `remove(&key)` / `reap_empty()` so rooms do not grow unbounded.
+- A slow subscriber silently drops events by default; `subscribe_lagged("lagged")` emits a synthetic event carrying the dropped count instead.
 - Streams from `#[sse]` are wrapped in `take_until(shutdown)` automatically — nothing to write or inject; a stream that must outlive the drain cannot use `#[sse]`.
 
 ```rust
@@ -5545,6 +5626,48 @@ once per route at registration, not per request), so an idle subscriber does not
 hold the HTTP drain open until `drain_timeout` expires. Nothing to write in the
 handler and nothing to inject; a stream that must outlive the drain has to be
 served outside `#[sse]`.
+
+### Sending, lag, rooms
+
+All of these are in the prelude (`r2e::web::sse::*`).
+
+| API | Purpose |
+|-----|---------|
+| `SseBroadcaster::new(cap)` | App-scoped broadcast channel (a bean); `subscriber_count()`, `capacity()` |
+| `.send(data)` / `.send_event(name, data)` | Broadcast a data-only / named event; `Err` when nobody is subscribed |
+| `.subscribe()` | `SseSubscription` (a `Stream<Item = Result<SseEvent, Infallible>>`); lagged events skipped silently |
+| `.subscribe_lagged(name)` | Emit `event: <name>` with `data: <dropped count>` when the subscriber lags |
+| `.subscribe_with(LagPolicy::Silent \| LagPolicy::Synthetic(name))` | The general form of the two above |
+| `SseTopic<E>::new(cap)` | Typed topic: `publish(&e)` serializes `E`; `with_event_name(..)`, `subscribe*` as above |
+| `SseRooms<K>::new(cap)` | Per-key broadcasters, created lazily: `room(key)` (the `SseBroadcaster`), `subscribe(key)` / `subscribe_lagged(key, name)` / `subscribe_with(key, policy)`, `remove(&key)`, `reap_empty() -> usize`, `room_count()` |
+
+```rust
+use std::convert::Infallible;
+use r2e::http::response::SseEvent;
+use r2e::web::sse::SseRooms;
+
+#[controller(path = "/runs")]
+pub struct RunLogController {
+    #[inject] logs: SseRooms<String>,   // .provide(SseRooms::<String>::new(256))
+}
+
+#[routes]
+impl RunLogController {
+    #[sse("/{id}/logs", keep_alive = 15)]
+    async fn logs(
+        &self,
+        Path(id): Path<String>,
+    ) -> impl futures_core::Stream<Item = Result<SseEvent, Infallible>> {
+        self.logs.subscribe_lagged(id, "lagged")
+    }
+}
+
+// Producer side (a bean or a background job):
+fn log_line(logs: &SseRooms<String>, run: &str, line: &str) {
+    let _ = logs.room(run.to_string()).send_event("log", line);
+}
+# fn main() {}
+```
 
 ---
 
@@ -6744,6 +6867,10 @@ impl Reviewer {
 # fn main() {}
 ```
 
+`Completion` fields: `reference` (`CompletionRef::Prompt(name)` /
+`CompletionRef::Resource(uri_template)`, `#[non_exhaustive]`), `argument`
+(the argument or template variable being completed), `value` (typed so far),
+`context` (`BTreeMap<String, String>` of already-resolved arguments).
 Provider params: `Completion`, `CancelToken`, `#[inject(identity)]` only (no
 `Progress`/`McpClient`/`McpSession`). Returns `Vec<String>`, `Completions`
 (`total`/`has_more`) or `Result<_, E: Into<McpError>>` (Err → JSON-RPC error).
@@ -6886,7 +7013,7 @@ async fn run_thread(
 
 - `connect(id, identity)` → `LoopbackSession` (derefs to rmcp's
   `RunningService<RoleClient, ()>`: `list_all_tools`, `call_tool`,
-  `read_resource`, `get_prompt`, …). Errors: `NotMounted` (`mcp.enabled =
+  `read_resource`, `get_prompt`, …). Errors (`LoopbackError`): `NotMounted` (`mcp.enabled =
   false`, or before/after the router exists), `Stateless` (`mcp.stateless`),
   `InvalidSessionId` (empty / not header-safe), `SessionInUse` (a live
   session already holds the id — free again the moment it is closed,
@@ -7062,6 +7189,12 @@ b.provide(RoleToolsets)                                    // the hook is a bean
   one (`-32002`), and invalidates delivery when the URI disappears or resolves
   to a replacement route. A replacement requires a new `resources/subscribe`,
   with a fresh access check.
+- Pushing updates: inject the `McpResourceUpdates` bean (provided by the
+  `McpServer` plugin; in the prelude), change the backing data, then
+  `updates.notify(uri)` → `usize` (live session listeners; 0 is normal).
+  Only sessions subscribed to that exact URI get
+  `notifications/resources/updated`. `McpServer::with_resource_updates(u)`
+  supplies your own handle when you need it before the graph is built.
 - Typed dynamic tool/prompt handlers retain the original arguments in
   `ToolCall.arguments` / `PromptCall.arguments` alongside their typed input.
 - `mcp.stateless: true`: groups, `session_init` and `McpRegistry` work

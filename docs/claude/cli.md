@@ -90,6 +90,19 @@ Uses Dioxus Subsecond for instant hot-patching — recompiles only changed code 
 
 **Prerequisites:** `dx` CLI installed. If missing, prints instructions.
 
+## `r2e test` — Test runner with coverage
+
+Thin wrapper over Cargo (`commands/test.rs`): runs `cargo test`, or `cargo llvm-cov` when coverage is asked for. `build_invocation(&TestOptions)` builds the `CargoInvocation` and is what `r2e-cli/tests/test.rs` asserts on.
+
+**Flags:**
+- `--coverage` — run under `cargo llvm-cov` (summary on stdout)
+- `--sonarqube` — implies coverage; writes an LCOV report (`--lcov --output-path`, default `coverage/lcov.info`, parent dir created) and prints the `sonar.rust.lcov.reportPaths` setting
+- `--output-path <PATH>` — LCOV path for `--sonarqube`
+- `--workspace`, `-p/--package <NAME>`, `--features <FEAT>...`, `--all-features`, `--no-default-features` — forwarded to Cargo
+- `-- <ARGS>` — forwarded to the test binary
+
+**Prerequisites (coverage only):** `cargo install cargo-llvm-cov` + `rustup component add llvm-tools-preview`; a failed `llvm-cov` run prints both.
+
 ## `r2e add <extension>` — Extension management
 
 Adds an R2E extension to `Cargo.toml`. Known extensions: `security`, `data-sqlx`, `data-diesel`, `openapi`, `events`, `scheduler`, `cache`, `rate-limit`, `utils`, `prometheus`, `grpc`, `mcp`, `test`. (`r2e add openapi` also pulls in `schemars`.)

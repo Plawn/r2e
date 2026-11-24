@@ -299,18 +299,22 @@ impl Plugin for MyPlugin {
 | `enabled` | `(&self) -> bool` | The `<prefix>.enabled` config gate (default `true`) |
 | `graph` | `(&self) -> GraphHandle` | Cloneable **weak** handle on the **final** resolved graph (fills at the end of a successful `build_state()`; reads `Some` for the app's whole life *and* for any tracked task that outlives it, since the router, every tracked task and the serving scope each hold the graph independently — it reads `None` only once the last of those owners is gone) |
 | `config_raw` | `(&self) -> Option<&R2eConfig>` | The loaded raw config, if any |
-| `add_layer` | `<F: FnOnce(Routes) -> Routes + Send + 'static>(&mut self, F)` | **Graph** — add a Tower layer to the router |
+| `add_layer` | `<F: FnOnce(Routes) -> Routes + Send + 'static>(&mut self, F)` | **Graph** — add a Tower layer to the router, in the default `LayerSlot::App` band |
+| `add_layer_in` | `<F: FnOnce(Routes) -> Routes + Send + 'static>(&mut self, LayerSlot, F)` | **Graph** — add a layer in a given band (`Trace`, `Metrics`, `Cors`, `Auth`, `App`) |
 | `store_data` | `<D: Any + Send + Sync>(&mut self, D)` | **Graph** — store a value keyed by type for later retrieval |
 | `on_serve` | `<F: FnOnce(ServeContext) + Send + 'static>(&mut self, F)` | **Graph** — run when the server starts listening |
 | `after_build` | `<F: FnOnce(&mut DeferredContext) + Send + 'static>(&mut self, F)` | **Graph** — boot-time escape hatch with full-graph access |
 | `after_routes` | `<F: FnOnce(&mut RoutesContext) + Send + 'static>(&mut self, F)` | **Routes** — runs after every controller is registered |
 | `wrap_router` | `<F: FnOnce(Routes) -> Routes + Send + 'static>(&mut self, F)` | **Finalize** — outermost transport-level router transform |
 | `on_shutdown` | `<F: FnOnce() + Send + 'static>(&mut self, F)` | cleanup — run during graceful shutdown |
-| `on_shutdown_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | cleanup — run (and await) during graceful shutdown |
+| `on_shutdown_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | cleanup — run (and await) during graceful shutdown, before the HTTP drain |
+| `on_shutdown_after_drain_async` | `<F: FnOnce() -> Fut + Send + 'static>(&mut self, F)` | cleanup — awaited after the HTTP drain and the after-drain services, before `on_stop` |
 
 Effects are buffered and applied per stage, **in plugin install order** within a
 stage (`.plugin(A)` before `.plugin(B)` ⇒ A's layers apply inside B's, even
-if B's `build` executed first because of dependencies) — and every surface stage
+if B's `build` executed first because of dependencies). For layers, that order
+only holds **within one `LayerSlot` band**: the band decides the position first
+(`Trace` > `Metrics` > `Cors` > `Auth` > `App`, outermost first) — and every surface stage
 is dropped when the plugin is disabled (shutdown hooks are not; see above).
 
 ### The Routes stage and the route registry
@@ -421,6 +425,13 @@ to hand-write a `PluginInstall` is to call arbitrary builder methods
 (`.register()`, `.provide()`, `.when()`, …) during install. It is `#[doc(hidden)]`
 and almost never needed — reach for it only when a plugin genuinely has to drive
 the builder itself.
+
+A hand-written impl spells out the bounds of `install`: `P: TAppend<Self::Provisions>`,
+`Self::Required: PushRequired<R>` (from `r2e::type_list`; since r2e-core 0.12 the
+requirement list is a list of groups, so the old `R: TAppend<Self::Required>`
+bound no longer compiles) and `Self::Controllers: PushPluginCtrls<Self, Mods>`,
+returning `r2e::builder::WithPluginInstalled<Self, P, R, Mods>`. See
+[Generic DI builder bounds](../reference/migrations/di-provision-index.md).
 
 ## Step-by-step: Request ID plugin
 
@@ -613,9 +624,23 @@ than by receiving the builder:
 |--------|-------------------|
 | `with_layer(layer)` | `ctx.add_layer(\|r\| r.layer(layer))` |
 | `with_layer_fn(\|router\| ...)` | `ctx.add_layer(f)` |
+| `with_layer_in(slot, layer)` / `with_layer_fn_in(slot, f)` | `ctx.add_layer_in(slot, f)` |
 | `register_routes(router)` / `merge_router(router)` | `ctx.after_routes(\|routes\| routes.register_routes(r))`, or `type Controllers` |
 | `on_start(\|state\| async { Ok(()) })` | `ctx.on_serve(f)` |
-| `on_stop(\|\| async { })` | `ctx.on_shutdown(f)` / `ctx.on_shutdown_async(f)` |
+| `on_drain(\|state\| async { })` | `ctx.on_shutdown(f)` / `ctx.on_shutdown_async(f)` (before the HTTP drain) |
+| `on_stop(\|_state\| async { })` | `ctx.on_shutdown_after_drain_async(f)` (after the HTTP drain) |
+
+`with_layer`, `with_layer_fn` and `ctx.add_layer` all land in the default
+`LayerSlot::App` band — innermost, inside every `Trace`/`Metrics`/`Cors`/`Auth`
+layer whatever the install order. A layer whose position matters (an auth gate,
+a hand-built CORS layer) declares its band with `add_layer_in` /
+`with_layer_in` — see [Layer bands](../core-concepts/plugins.md#layer-bands-layerslot).
+
+`on_stop` hooks receive the application state (`FnOnce(T) -> Fut`) and always
+run, last. Plugin `on_shutdown` / `on_shutdown_async` hooks run earlier, when
+shutdown starts and **before** in-flight requests drain;
+`on_shutdown_after_drain_async` runs after the drain, before `on_stop`. See the
+[execution sequence](lifecycle-hooks.md#execution-sequence).
 
 ## Example: Metrics plugin
 

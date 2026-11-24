@@ -737,6 +737,17 @@ async fn test_response_structure() {
 | `cookie(name)` | Get cookie from Set-Cookie |
 | `cookies()` | Get all Set-Cookie values |
 
+JSON paths take dot-separated fields (`meta.page`), array indices (`users[0].name`, `[0].name` on a root array) and a trailing `len()` / `size()`. A field read on an **array projects** over its elements, as in RestAssured / GPath:
+
+- `users.name` on a list of users is the list of their names;
+- an element missing the key reads as `null`, so the projection stays aligned with the source array.
+
+```rust
+resp.assert_json_path("users[0].name", "Alice")
+    .assert_json_path("users.name", serde_json::json!(["Alice", "Bob"]))
+    .assert_json_path("users.len()", 2);
+```
+
 All `assert_*` methods return `&Self` for chaining:
 
 ```rust
@@ -790,7 +801,7 @@ Tokens are signed with HMAC-SHA256 and contain:
 
 Beyond the in-process client, `r2e-test` re-exports a few specialized helpers:
 
-- **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects (`server.ws_with_protocols(path, &[..])` offers subprotocols, `ws.protocol()` reads the selected one; a handshake refused before the upgrade is an error whose `http_status()` is the response's status); the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, and `assert_no_message`.
+- **`WsTestClient`** (feature `ws`) — a real WebSocket client for `#[ws]` endpoints. Boot a live server with `TestApp::serve().await` (returns a `TestServer`), then `server.ws(path)` connects (`server.ws_with_protocols(path, &[..])` offers subprotocols, `ws.protocol()` reads the selected one; a handshake refused before the upgrade is an error whose `http_status()` is the response's status); the client exposes `send_text/send_json/send_binary`, `next_text/next_json/next_binary`, `close`, `assert_no_message`, and `assert_closed()`. `assert_closed()` waits, under the client timeout, for the server to end the connection: a close frame, the end of the stream, or a transport error such as a dropped socket, which is what refusing an oversized message looks like. It panics if a text or binary message arrives instead, or if the connection is still open when the timeout expires. Without a `TestServer`, `WsTestClient::connect(url)` and `WsTestClient::connect_with_protocols(url, &["v2", "v1"])` connect to any full `ws://` URL. The second form offers the subprotocols in `Sec-WebSocket-Protocol` in that order, as a browser's `new WebSocket(url, protocols)` does.
 - **`FiniteStream` / `ParsedSseEvent`** — consume and parse SSE responses; `TestResponse` also has `sse_events`, `assert_sse_event`, and `assert_sse_data`.
 - **`TestServer`** — a live TCP server (via `TestApp::serve()`) for cases that need a real socket rather than `oneshot` dispatch. On a booted `TestApp` it runs on the app's tracked lane, so `app.shutdown()` drains it under `drain_timeout`; dropping the `TestServer` first stops it on its own.
 - **`SetCookie`** — parsed `Set-Cookie` attributes, with `TestResponse` helpers `assert_cookie_secure`, `assert_cookie_http_only`, `assert_cookie_same_site`, `assert_cookie_path`.

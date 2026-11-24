@@ -23,6 +23,15 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
   yield a `ReadResourceResult` instead of `Vec<ResourceContents>` (#1474).
   Resource methods are unaffected; a hand-written impl wraps its contents in
   `ReadResourceResult::new(..)`.
+- Re-exported `r2e-core` 0.12.0 — DI requirement groups: the builder's
+  requirement list holds one group per registration (`TCons<Deps, R>`),
+  checked at `build_state()` with `AllGroupsSatisfied` against a
+  `ProvisionIndex`. Fluent chains are unaffected; a generic helper that spells
+  out the bounds drops `R: TAppend<..>` (use `Pl::Required: PushRequired<R>`
+  for `.plugin()`, the `Registered` / `WithPluginInstalled` result aliases)
+  and bounds `build_state` with `P: BuildHList + ProvisionIndex`,
+  `R: AllGroupsSatisfied<P::Index, W>`. Migration guide:
+  [`docs/migration/di-provision-index.md`](../docs/migration/di-provision-index.md).
 
 ### Added
 

@@ -7,8 +7,9 @@ Subsecond hot-reload integration for R2E.
 Wraps [Dioxus Subsecond](https://github.com/DioxusLabs/dioxus) to enable hot-patching of Rust code at runtime during development. Only used via the `dev-reload` feature flag.
 
 > **Application code should not call these directly.** Declare your app with the
-> `App` trait (`setup`/`build`) and run `r2e::launch::<MyApp>()` — `launch`
-> delegates to `serve_with_hotreload_env` internally under `dev-reload`. The
+> `App` trait (`setup`/`build`) and run `r2e::app_main!(MyApp)` (or
+> `r2e::launch!(MyApp)`) — the `launch!` macro delegates to
+> `serve_with_hotreload_env` internally under `dev-reload`. The
 > functions below are the low-level machinery that entry point wraps.
 
 ## Usage

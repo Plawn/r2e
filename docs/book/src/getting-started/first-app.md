@@ -13,7 +13,7 @@ Add dependencies to `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e = { version = "0.3" }
+r2e = { version = "0.15" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"

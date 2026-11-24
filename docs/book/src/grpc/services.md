@@ -7,7 +7,7 @@ R2E provides first-class gRPC support with the same developer experience as HTTP
 Enable the gRPC feature:
 
 ```toml
-r2e = { version = "0.3", features = ["grpc"] }
+r2e = { version = "0.15", features = ["grpc"] }
 ```
 
 Add the runtime proto crates and the R2E build helper that compiles your protos:
@@ -19,7 +19,7 @@ tonic-prost = "0.14"
 prost = "0.14"
 
 [build-dependencies]
-r2e-grpc-build = "0.3"
+r2e-grpc-build = "0.6"
 ```
 
 ## Defining a proto file
@@ -235,7 +235,7 @@ Use this when infrastructure constraints require a single port (e.g., certain Pa
 Browsers cannot speak native gRPC. With the `grpc-web` facade feature (`web` on `r2e-grpc`), `with_grpc_web()` adds a third arm to the multiplexer: requests with `content-type: application/grpc-web`, `grpc-web+proto` or `grpc-web-text` are translated by `tonic-web` into native gRPC calls against the same services, and the response carries the gRPC trailers as a trailer frame (base64-encoded for `-text`, chosen from the request `Accept` header). It works over HTTP/1.1 and HTTP/2. CORS preflights that name `x-grpc-web` are answered by the arm's own CORS layer — permissive by default, `with_grpc_web_cors(CorsLayer)` to restrict it.
 
 ```toml
-r2e = { version = "0.3", features = ["grpc", "grpc-web"] }
+r2e = { version = "0.15", features = ["grpc", "grpc-web"] }
 ```
 
 ```rust
@@ -288,7 +288,7 @@ This requires the `reflection` feature on `r2e-grpc` (`grpc-reflection` on the `
 
 ```toml
 [dependencies]
-r2e = { version = "0.3", features = ["grpc", "grpc-reflection"] }
+r2e = { version = "0.15", features = ["grpc", "grpc-reflection"] }
 ```
 
 With reflection enabled, clients can discover services without the proto file:

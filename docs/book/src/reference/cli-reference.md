@@ -5,8 +5,12 @@ The `r2e` CLI provides project scaffolding, code generation, development tools, 
 ## Installation
 
 ```bash
-cargo install r2e-cli
+cargo install --git https://github.com/plawn/r2e r2e-cli
+# or, from a checkout of the repository:
+cargo install --path r2e-cli
 ```
+
+The CLI is not published to crates.io (it bundles docs from outside its crate), so install it from the repository.
 
 This installs the `r2e` binary. Verify with `r2e --version`.
 
@@ -374,6 +378,8 @@ r2e docs [<module>] [options]
 Options:
   --full          Print the whole document instead of just the TL;DR
   --pretty, -p    Render markdown for the terminal instead of raw output
+  --llm           Use the agent-facing reference (llm.txt + llm/<topic>.md)
+  --export [DIR]  With --llm: write the whole reference into DIR (default docs/r2e)
 ```
 
 - **No argument** lists every module as `slug — Title (crate)`.
@@ -389,6 +395,31 @@ r2e docs                 # list all modules
 r2e docs events          # TL;DR for the events module
 r2e docs events --full   # the full Events guide
 r2e docs r2e-security    # resolve by crate name
+```
+
+### Agent reference (`--llm`)
+
+With `--llm`, `r2e docs` prints the AI/agent-facing reference instead of the
+module docs: a hub (`llm.txt` — golden rules and a task → topic routing table)
+plus one file per topic. It is embedded in the binary too, so it matches the
+installed R2E version.
+
+- `r2e docs --llm` prints the hub.
+- `r2e docs --llm <topic>` prints one topic (an unknown slug lists the available ones).
+- `r2e docs --llm --full` prints the hub followed by every topic as one document.
+- `r2e docs --llm --export [DIR]` writes `DIR/llm.txt` and `DIR/llm/<topic>.md`
+  (default `DIR` = `docs/r2e`) so coding agents can read the files locally. The
+  hub is stamped with the R2E version; existing files are overwritten.
+
+`r2e new` runs the export for every scaffolded project, and `r2e doctor` warns
+when the exported copy is from another R2E version — re-run the export after
+upgrading.
+
+```bash
+r2e docs --llm                 # the hub
+r2e docs --llm testing         # one topic
+r2e docs --llm --export        # write docs/r2e/llm.txt + docs/r2e/llm/*.md
+r2e docs --llm --export ai/r2e # custom directory
 ```
 
 ---
@@ -574,7 +605,7 @@ Add an R2E sub-crate dependency to `Cargo.toml`.
 r2e add <extension>
 ```
 
-Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.3` to `[dependencies]`. Errors if the extension is unknown or `Cargo.toml` is missing. Prints a warning (no error) if already present.
+Parses `Cargo.toml` using `toml_edit`, adds the crate with version `0.15` (the facade `major.minor` the CLI tracks) to `[dependencies]`. Errors if the extension is unknown or `Cargo.toml` is missing. Prints a warning (no error) if already present.
 
 Three extensions do more than a plain dependency insert:
 
@@ -603,9 +634,9 @@ Three extensions do more than a plain dependency insert:
 **Example:**
 
 ```bash
-r2e add security      # adds r2e-security = "0.3"
-r2e add data-sqlx     # adds r2e-data-sqlx = "0.3"
-r2e add test          # adds r2e-test = "0.3"
+r2e add security      # adds r2e-security = "0.15"
+r2e add data-sqlx     # adds r2e-data-sqlx = "0.15"
+r2e add test          # adds r2e-test = "0.15"
 ```
 
 ---

@@ -68,6 +68,40 @@ mark public exceptions with `#[anonymous]` (fail-closed, @PermitAll-style).
 
 `ContextConstruct` constructs a controller from the resolved `BeanContext` — each `#[inject]` field is fetched by type (`ctx.get::<T>()`). It replaces the old `StatefulConstruct`. The generated `Controller<S, W>` impl is generic over the state `S` and its `Controller::Deps` (the unique `#[inject]` types plus `R2eConfig`) are checked at `register_controller` time via `AllSatisfied` — a missing bean is a compile error naming the type. `#[consumer]` and `#[scheduled]` methods run on the controller core built this way.
 
+## Feature modules
+
+`#[module(...)]` (from `r2e-macros`) groups providers and controllers into a
+`FeatureModule` with **compile-time encapsulation**: a module's beans are
+private unless listed in `exports(...)`, and its providers/controllers may only
+depend on its own providers plus `imports(...)` — anything else is a compile
+error naming the module.
+
+```rust,ignore
+#[module(
+    providers(UserService),
+    controllers(UserController),
+    exports(UserService),
+    imports(LocalEventBus, R2eConfig),
+)]
+pub struct UserModule;
+
+#[module(providers(OrderService), controllers(OrderController), imports(module(UserModule)))]
+pub struct OrderModule;
+
+AppBuilder::new()
+    .provide(bus)
+    .register_module::<UserModule>()
+    .register_module::<OrderModule>()
+    .build_state()
+    .await
+```
+
+All keys are optional: `providers`, `controllers`, `grpc_services`, `exports`,
+`imports` (bean types or `module(Other)`), `plugins(Type = expr)` (plugins the
+module installs), `requires_plugins(Type)` and `prefix = "/api/v1"`.
+`#[module(modules(A, B))] struct AppModules;` declares an aggregate registered
+with `.register_modules::<AppModules>()`.
+
 ## Plugin system
 
 - `Plugin` — the one plugin trait, installed via `.plugin(plugin)` before `build_state()`. A plugin may provide beans (`Provided`), require beans (`Deps`), read typed config (`Config`), and ship controllers (`Controllers`).
@@ -495,6 +529,14 @@ pub struct RouteInfo {
 |---------|-------------|
 | `ws` | WebSocket support (`WsStream`, `WsBroadcaster`, `WsRooms`) |
 | `multipart` | File upload support (`TypedMultipart`, `UploadedFile`) |
+| `openapi` | Body-schema impls that need `schemars` (`Json<T: JsonSchema>`); enabled by `r2e-openapi` |
+| `test-util` | Paused-clock runtimes (`#[r2e::test(start_paused = true)]`) — dev graph only |
+| `quic` | HTTP/3 + raw QUIC endpoints (see `docs/features/18-quic.md`) |
+| `json-sonic` | `sonic-rs` codec behind `r2e_core::json` / `Json<T>` |
+| `dev-reload` | Subsecond hot-reload hooks used by `r2e-devtools` (never in production) |
+| `lazy-fallback-runtime` | Lets lazy beans resolve on a fallback runtime under a `current_thread` runtime without a control plane (otherwise this panics) |
+
+Applications normally enable these through the matching `r2e` facade features.
 
 ## License
 

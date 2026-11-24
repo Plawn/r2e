@@ -43,9 +43,9 @@ File-driven (the usual form):
 # application.yaml
 openapi:
   enabled: true                 # false → neither /openapi.json nor /docs (prod)
-  title: Mon API
+  title: My API
   version: 0.1.0
-  description: Description de mon API
+  description: Description of my API
   docs-ui: true                 # default false
 ```
 
@@ -71,7 +71,7 @@ file form; title / version / docs-ui set here win over the file):
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
 
     .plugin(OpenApiPlugin::new(
-        OpenApiConfig::new("Mon API", "0.1.0")
+        OpenApiConfig::new("My API", "0.1.0")
             .with_description("Description de mon API")
             .with_docs_ui(true),
     ))
@@ -116,6 +116,22 @@ pub struct RouteInfo {
 - The request body is the last parameter when it reads the body (`FromRequest`), documented through its `RequestBodySchema` impl; `Option<..>` makes it optional. A `#[derive(Params)]` struct last is recognised as non-body (it reads path + query only) and is never warned about.
 - The response body comes from the return type's `ResponseBodySchema` impl, probed through `Result<T, E>` and `(StatusCode, T)` tuples; `#[returns(T)]` declares it for `impl Trait` returns.
 - Both probes use autoref specialization — a type without the trait is documented without a body and warned about once at boot.
+- Success status: `response_status` is **200 for every verb** (r2e-macros 0.11.1+), because a plain body answers 200 whatever the method. There is no POST → 201 / DELETE → 204 default. A handler that really answers something else declares it with `#[status(N)]`. The attribute only changes the documented status; the handler still returns the status itself:
+
+  ```rust,ignore
+  #[post("/")]
+  #[status(201)]
+  async fn create(&self, Json(body): Json<CreateUser>) -> (StatusCode, Json<User>) {
+      (StatusCode::CREATED, Json(self.users.create(body).await))
+  }
+
+  #[delete("/{id}")]
+  #[status(204)]
+  async fn delete(&self, Path(id): Path<u64>) -> StatusCode {
+      self.users.delete(id).await;
+      StatusCode::NO_CONTENT
+  }
+  ```
 - Doc comments: first `///` line → `summary`, remaining → `description`.
 - Roles declared via `#[roles("admin")]` appear in security metadata.
 - Error responses are derived from `rejection_kinds` (see below), never hardcoded.
@@ -255,8 +271,8 @@ every `RouteInfo` the controller pushes carries it — no per-route annotation.
 ## OpenApiConfig
 
 ```rust
-let config = OpenApiConfig::new("Titre", "1.0.0")
-    .with_description("Description optionnelle")
+let config = OpenApiConfig::new("Title", "1.0.0")
+    .with_description("Optional description")
     .with_docs_ui(true)                     // Enables /docs (default: false)
     .with_schema::<WsMessage>()             // Extra schema from JsonSchema type
     .with_raw_schema("External", json!({    // Manual schema
@@ -315,7 +331,7 @@ The bundled assets are vendored from the [WTI](https://github.com/plawn/wti) mon
 ```bash
 # OpenAPI spec
 curl http://localhost:3000/openapi.json | jq .info.title
-# → "Mon API"
+# → "My API"
 
 # Documentation UI
 curl http://localhost:3000/docs | grep "wti-element"

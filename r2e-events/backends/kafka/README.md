@@ -10,7 +10,9 @@ Provides `KafkaEventBus`, a distributed implementation of the `EventBus` trait b
 
 ```toml
 [dependencies]
-r2e-events-kafka = { version = "0.1" }
+r2e = { version = "0.15", features = ["events-kafka"] }  # re-exported as r2e::r2e_events_kafka
+# or standalone:
+# r2e-events-kafka = "0.12"
 ```
 
 ```rust

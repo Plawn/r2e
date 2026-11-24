@@ -18,7 +18,7 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.3", features = ["openfga"] }
+r2e = { version = "0.15", features = ["openfga"] }
 ```
 
 ## Setup
@@ -241,7 +241,7 @@ A `MockBackend` provides an in-memory tuple store for tests:
 ```rust
 use r2e::r2e_openfga::{OpenFgaRegistry, MockBackend};
 
-#[tokio::test]
+#[r2e::test]
 async fn test_authorization() {
     // Seed the mock before wrapping it in a registry (MockBackend is not Clone).
     let mock = MockBackend::new();

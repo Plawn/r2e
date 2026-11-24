@@ -1,5 +1,7 @@
 # Plugin / module / lifecycle unification (Quarkus-extension parity)
 
+> **Archived 2026-11-24.** Status: shipped — plans 1, 3 and 4 done 2026-08-26, plan 2 (modules bring their plugins) done 2026-08-27 (see each plan's status block). Current reference: `docs/claude/plugins.md`, `docs/claude/di-builder-refactor.md`.
+
 Status, 2026-08-26: **plans 1, 3 and 4 are DONE** (see the per-plan status
 blocks); plan 2 is still a proposal. R2E is not in production, so every phase
 here is allowed to break the public API; breaking changes are listed per plan.

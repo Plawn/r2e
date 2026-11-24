@@ -10,7 +10,9 @@ Provides `IggyEventBus`, a distributed implementation of the `EventBus` trait ba
 
 ```toml
 [dependencies]
-r2e-events-iggy = { version = "0.1" }
+r2e = { version = "0.15", features = ["events-iggy"] }  # re-exported as r2e::r2e_events_iggy
+# or standalone:
+# r2e-events-iggy = "0.12"
 ```
 
 ```rust

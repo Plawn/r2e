@@ -1,3 +1,56 @@
+//! JWT / OIDC security for R2E: token validation, JWKS caching and the
+//! `AuthenticatedUser` identity.
+//!
+//! Enabled by default in the `r2e` facade (feature `security`) and reachable as
+//! `r2e::r2e_security`.
+//!
+//! # Main types
+//!
+//! - [`AuthenticatedUser`] — the default identity, injected with
+//!   `#[inject(identity)]` (struct field) or as a handler parameter. It
+//!   implements `Identity` and [`RoleBasedIdentity`], which `#[roles(..)]` /
+//!   `#[all_roles(..)]` require.
+//! - [`JwtClaimsValidator`] / [`JwtValidator`] — signature and claim
+//!   validation, against a [`JwksCache`] (production, OIDC providers) or a
+//!   static key (tests, development). The extractor resolves an
+//!   `Arc<JwtClaimsValidator>` bean **by type**, so it must be provided before
+//!   `build_state()`.
+//! - [`SecurityConfig`] — JWKS URL, issuer, audience, allowed algorithms.
+//! - [`RoleExtractor`] / [`IdentityBuilder`] — customise where roles come from
+//!   and which identity type a validated token produces.
+//! - [`RolesGuard`] / [`AllRolesGuard`] — the guards behind `#[roles]` and
+//!   `#[all_roles]`.
+//!
+//! ```rust,ignore
+//! use std::sync::Arc;
+//! use r2e::prelude::*;
+//! use r2e::r2e_security::{AuthenticatedUser, JwksCache, JwtClaimsValidator, SecurityConfig};
+//!
+//! let config = SecurityConfig::new(
+//!     "https://auth.example.com/.well-known/jwks.json",
+//!     "https://auth.example.com",
+//!     "my-api",
+//! );
+//! let jwks = Arc::new(JwksCache::new(config.clone()).await?);
+//! let validator = JwtClaimsValidator::new(jwks, config);
+//!
+//! AppBuilder::new()
+//!     .provide(Arc::new(validator))
+//!     // ...
+//!     .build_state().await;
+//!
+//! #[controller(path = "/me")]
+//! pub struct MeController {
+//!     #[inject(identity)] user: AuthenticatedUser,
+//! }
+//! ```
+//!
+//! # Guides
+//!
+//! [`docs/book/src/security/jwt-oidc.md`](https://github.com/plawn/r2e/blob/master/docs/book/src/security/jwt-oidc.md)
+//! and the crate README. With feature `grpc`, the same validator authenticates
+//! gRPC calls.
+
 pub mod config;
 pub mod error;
 pub mod extractor;

@@ -166,7 +166,7 @@ Shipped:
 ### Audit status
 
 An external read-only review of `f41d015` (2026-08-14) is recorded verbatim in
-`docs/claude/w14-tenancy-audit.md`, with its triage/fix status at the top.
+`docs/claude/archive/w14-tenancy-audit.md`, with its triage/fix status at the top.
 Findings 1/4/9, 2/5/6, 7 and 8 were addressed on 2026-08-14. Finding 3 is an
 accepted, documented limitation: concurrent-root cascade cycles end at
 `create-timeout` (504), or hang when the timeout is disabled.

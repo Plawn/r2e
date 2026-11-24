@@ -35,21 +35,30 @@ impl UserController {
 - **Guards** — Pre-auth and post-auth guards (`#[guard(...)]`, `#[pre_guard(...)]`) for custom authorization logic
 - **Interceptors** — AOP-style `#[intercept(...)]` for logging, timing, caching, and custom cross-cutting concerns
 - **Rate limiting** — Token-bucket rate limiting per user, per IP, or global via `RateLimit::per_user(5, 60)`
-- **Event bus** — Typed in-process pub/sub with `#[consumer]` for declarative event handlers
+- **Event bus** — Typed in-process pub/sub (`LocalEventBus`) with `#[consumer]` for declarative event handlers; distributed backends for Apache Iggy, Kafka, Pulsar and RabbitMQ (`events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq` features)
 - **Scheduling** — `#[scheduled(every = 30)]` and `#[scheduled(cron = "0 */5 * * * *")]` for background tasks
+- **Managed task pool** — `Executor` plugin (`PoolExecutor`), `#[async_exec]` methods returning a `JobHandle`, `#[derive(BackgroundService)]` workers, bounded concurrency and graceful drain
+- **Feature modules** — `#[module]` closed subgraphs with imports/exports, path prefixes and bundled plugins, registered with `register_module`
+- **Canonical entry point** — the `App` trait, booted by `r2e::app_main!`, `r2e::launch!` and `TestApp::boot` alike
 - **Managed resources** — `#[managed]` for automatic transaction lifecycle (begin/commit/rollback)
 - **Database ergonomics** — core `Pageable`/`Page` plus cancellation-safe managed SQLx and Diesel transactions
 - **Validation** — Automatic validation via `garde` crate — just derive `Validate` and use `Json<T>`
 - **OpenAPI** — Auto-generated OpenAPI 3.1.0 spec with interactive docs UI at `/docs`
 - **Prometheus metrics** — Request metrics with configurable namespace and path exclusions
 - **OpenTelemetry** — Distributed tracing and context propagation via OTLP exporter
-- **gRPC** — Tonic-based gRPC server support, multiplexed alongside HTTP on separate ports
+- **gRPC** — Tonic-based gRPC server on a separate port or multiplexed on the HTTP port, with reflection and grpc-web
+- **MCP server** — `#[tool]`, `#[resource]` and `#[prompt]` members in `#[routes]`, served over streamable HTTP by the `McpServer` plugin, with shared guards and OAuth 2.1 resource-server auth (`mcp` feature)
+- **Multi-tenancy** — `Tenant<T>` / `Tenanted<T>` per-tenant beans, `Tenancy` and `PerTenant` plugins, per-tenant SQLx/Diesel pools (`tenant` feature)
+- **OpenFGA** — schema-first fine-grained authorization: `model!` over a `.fga` file, typed `FgaCheck` guards, store lifecycle via the `OpenFga` plugin (`openfga` feature)
+- **HTTP/3 (QUIC)** — `serve_h3` and raw QUIC endpoints (`quic` feature)
+- **Sharded serving** — `server.workers: per-core` runs one runtime per core on `SO_REUSEPORT` sockets, with per-worker services and a control plane
 - **Embedded OIDC** — Local RS256 issuer with Authorization Code + PKCE, client credentials, and an optional development password grant
 - **Configuration** — YAML + env var overlay with typed `ConfigProperties` sections
 - **SSE & WebSocket** — Built-in `SseBroadcaster` and `WsRooms` for real-time communication
 - **Multipart** — Multipart form/file upload support
 - **Static file serving** — Embed frontend assets in the binary with SPA fallback via `EmbeddedFrontend` plugin
 - **Testing** — `TestApp`, `TestJwt`, and `r2e test --sonarqube` coverage for integration tests
+- **Dev services** — Testcontainers-backed `DevPostgres`, `DevRedis`, `DevKeycloak` and generic `DevService` for tests (`r2e-devservices`)
 - **CLI** — `r2e new`, `r2e add`, `r2e dev`, `r2e generate`, `r2e test` for scaffolding and workflows
 
 ## Quick start
@@ -58,7 +67,7 @@ Add R2E to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e = { git = "https://github.com/Plawn/r2e", tag = "v0.3.0", features = ["full"] }
+r2e = { version = "0.15", features = ["full"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -323,13 +332,15 @@ pub struct UserCreatedEvent {
     pub name: String,
 }
 
-// Emit events from services
-self.event_bus.emit(UserCreatedEvent { user_id: 1, name: "Alice".into() }).await;
+// Provide the bus once: AppBuilder::new().provide(LocalEventBus::new())
+
+// Emit events from services (`emit` resolves to a Result)
+self.event_bus.emit(UserCreatedEvent { user_id: 1, name: "Alice".into() }).await?;
 
 // Declarative consumer
 #[controller]
 pub struct UserEventConsumer {
-    #[inject] event_bus: EventBus,
+    #[inject] event_bus: LocalEventBus,
 }
 
 #[routes]
@@ -360,7 +371,7 @@ impl ScheduledJobs {
     #[scheduled(cron = "0 0 * * * *")]            // every hour
     async fn hourly_cleanup(&self) { /* ... */ }
 
-    #[scheduled(every = 60, delay = 10)]          // first run after 10s
+    #[scheduled(every = 60, initial_delay = 10)]  // first run after 10s
     async fn delayed_task(&self) { /* ... */ }
 }
 ```
@@ -461,20 +472,21 @@ async fn test_list_users() {
     );
 
     // Unauthenticated request
-    app.get("/users").await.assert_unauthorized();
+    app.get("/users").send().await.assert_unauthorized();
 
     // Authenticated request
     let token = jwt.token("user-1", &["user"]);
-    let resp = app.get_authenticated("/users", &token).await.assert_ok();
+    let resp = app.get("/users").bearer(&token).send().await;
+    resp.assert_ok();
     let users: Vec<User> = resp.json();
     assert_eq!(users.len(), 2);
 
     // Role-based access
     let admin_token = jwt.token("admin-1", &["admin"]);
-    app.get_authenticated("/admin/users", &admin_token).await.assert_ok();
+    app.get("/admin/users").bearer(&admin_token).send().await.assert_ok();
 
     let user_token = jwt.token("user-1", &["user"]);
-    app.get_authenticated("/admin/users", &user_token).await.assert_forbidden();
+    app.get("/admin/users").bearer(&user_token).send().await.assert_forbidden();
 }
 ```
 
@@ -499,33 +511,52 @@ R2E ships with built-in plugins. There is one plugin kind and one install call �
 | `OidcServer` | Embedded issuer (`/oauth/authorize`, `/oauth/token`, JWKS endpoints) |
 | `AdvancedHealth` | Liveness/readiness probes with pluggable health indicators (via `Health::builder()`) |
 | `EmbeddedFrontend` | Embedded static file serving with SPA fallback |
+| `Executor` | Managed task pool (`PoolExecutor` bean, `executor.*` config) behind `#[async_exec]`, `#[derive(BackgroundService)]` and `Scheduler`; drains on shutdown |
 | `Scheduler` | Background task scheduling — requires `Executor`; ticks run on its pool |
+| `MetricsFacade` | HTTP metrics through the `metrics` crate facade (`metrics-facade` feature), when the app already runs a `metrics` exporter |
+| `McpServer` | MCP server (streamable HTTP) for `#[tool]` / `#[resource]` / `#[prompt]` services, `mcp.*` config |
+| `Tenancy` / `PerTenant` | Tenant resolution (`TenantRouter`) and per-tenant copies of a resource (`Tenanted<T>`), `tenancy.*` config |
+| `OpenFga` | OpenFGA store lifecycle at boot (create/verify store, apply the compiled-in model) |
+| `WorkerHealth` | Readiness indicator for sharded serving: `/health/ready` turns 503 when the first worker starts draining |
 
 ## Crate map
 
 ```
-r2e               Facade crate — re-exports everything, feature-gated
-r2e-http          HTTP abstraction layer — sole owner of the axum dependency
-r2e-core          Runtime: AppBuilder, Controller, guards, interceptors, config, plugins, SSE, WS
-r2e-macros        Proc macros: #[controller], #[routes], #[bean]
-r2e-security      JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
-r2e-events        In-process typed EventBus with pub/sub
-r2e-scheduler     Background task scheduling (interval, cron)
-r2e-data-sqlx     Managed SQLx Tx (sqlite/postgres/mysql)
-r2e-data-diesel   Managed Diesel Tx (sqlite/postgres/mysql)
-r2e-cache         TTL cache with pluggable backends
-r2e-rate-limit    Token-bucket rate limiting with pluggable backends
-r2e-openapi       OpenAPI 3.1.0 spec generation + docs UI
-r2e-prometheus    Prometheus metrics middleware
-r2e-observability OpenTelemetry distributed tracing + context propagation (OTLP)
-r2e-grpc          gRPC server support via Tonic, multiplexed with HTTP
-r2e-oidc          Embedded issuer: JWT, Authorization Code + PKCE, client credentials
-r2e-openfga       OpenFGA fine-grained authorization (Zanzibar-style)
-r2e-utils         Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
-r2e-test          TestApp, TestJwt for integration testing
-r2e-devtools      Subsecond hot-reload (dev-reload feature only, not for production)
-r2e-static        Embedded static file serving with SPA support (wraps rust_embed)
-r2e-cli           CLI scaffolding tool
+r2e                  Facade crate — re-exports everything, feature-gated
+r2e-rt               Async-runtime facade — the only crate naming tokio
+r2e-tracing          Process-global tracing subscriber: options, one-shot install, boot-log buffer
+r2e-http             HTTP abstraction layer — sole owner of the axum dependency; QUIC/HTTP3
+r2e-core             Runtime: AppBuilder, Controller, guards, interceptors, config, plugins, SSE, WS
+r2e-macros           Proc macros: #[controller], #[routes], #[bean], #[module], …
+r2e-security         JWT/OIDC: AuthenticatedUser, JwtValidator, JWKS cache
+r2e-events           In-process typed EventBus (LocalEventBus) with pub/sub and request-reply
+r2e-events-iggy      Distributed EventBus backend: Apache Iggy
+r2e-events-kafka     Distributed EventBus backend: Apache Kafka
+r2e-events-pulsar    Distributed EventBus backend: Apache Pulsar
+r2e-events-rabbitmq  Distributed EventBus backend: RabbitMQ
+r2e-scheduler        Background task scheduling (interval, cron) on the Executor pool
+r2e-executor         Managed task pool: PoolExecutor, #[async_exec], #[derive(BackgroundService)]
+r2e-data-sqlx        Managed SQLx Tx + SqlxDataSource (sqlite/postgres/mysql)
+r2e-data-diesel      Managed Diesel Tx + DieselDataSource (sqlite/postgres/mysql)
+r2e-cache            TTL cache with pluggable backends
+r2e-rate-limit       Token-bucket rate limiting with pluggable backends
+r2e-openapi          OpenAPI 3.1.0 spec generation + docs UI
+r2e-prometheus       HTTP metrics (Prometheus, layer-only, or metrics facade)
+r2e-observability    OpenTelemetry distributed tracing + context propagation (OTLP)
+r2e-grpc             gRPC server support via Tonic, separate port or multiplexed with HTTP
+r2e-grpc-build       build.rs helper that compiles .proto files for r2e-grpc services
+r2e-mcp              MCP server: #[tool]/#[resource]/#[prompt], McpServer plugin, OAuth 2.1 auth
+r2e-oidc             Embedded issuer: JWT, Authorization Code + PKCE, client credentials
+r2e-openfga          OpenFGA fine-grained authorization (Zanzibar-style)
+r2e-openfga-model    OpenFGA DSL parser and model validation (schema 1.1)
+r2e-openfga-macros   model! macro: typed API generated from a .fga file
+r2e-tenant           Multi-tenant bean routing: Tenant<T>, Tenanted<T>, Tenancy/PerTenant plugins
+r2e-utils            Built-in interceptors: Logged, Timed, Cache, CacheInvalidate
+r2e-test             TestApp, TestJwt, TestSession, WsTestClient for integration testing
+r2e-devservices      Testcontainers dev services: DevPostgres, DevRedis, DevKeycloak, DevService
+r2e-devtools         Subsecond hot-reload (dev-reload feature only, not for production)
+r2e-static           Embedded static file serving with SPA support (wraps rust_embed)
+r2e-cli              CLI scaffolding tool (not on crates.io: cargo install --path r2e-cli)
 ```
 
 For a detailed file-by-file breakdown of every crate, see [REPO_MAP.md](REPO_MAP.md).
@@ -536,18 +567,25 @@ The `examples/` directory contains runnable demo apps:
 
 | Example | Description |
 |---------|-------------|
-| `example-app` | Kitchen-sink demo exercising all features |
-| `example-postgres` | CRUD with PostgreSQL, SQLx migrations, OpenAPI docs |
-| `example-multi-tenant` | JWT-based tenant isolation with custom `TenantGuard` |
-| `example-websocket-chat` | Real-time chat using `WsRooms` and event-driven persistence |
-| `example-grpc` | HTTP + gRPC multiplexing on separate ports |
-| `example-microservice` | Two services with inter-service HTTP calls and shared types |
-| `example-oidc` | Embedded issuer with password and client_credentials grants |
+| [`example-app`](examples/example-app/README.md) | Kitchen-sink demo exercising most features (modules, security, events, scheduling, SSE/WS, OpenFGA, proxy) |
+| [`example-executor`](examples/example-executor/README.md) | `#[async_exec]` jobs and a `#[derive(BackgroundService)]` worker on the `Executor` pool |
+| [`example-grpc`](examples/example-grpc/README.md) | HTTP + gRPC on separate ports, reflection, grpc-web, gRPC guards and interceptors |
+| [`example-mcp`](examples/example-mcp/README.md) | One bean behind an HTTP controller and two MCP services (tools, resources, prompts, opt-in groups) |
+| [`example-mcp-oauth`](examples/example-mcp-oauth/README.md) | MCP server behind an OAuth 2.1 resource server, ready for Claude / ChatGPT connectors |
+| [`example-microservice`](examples/example-microservice/README.md) | Two services with inter-service HTTP calls and shared types |
+| [`example-multi-tenant`](examples/example-multi-tenant/README.md) | Row-level tenant isolation with a custom `TenantGuard` |
+| [`example-multi-tenant-db`](examples/example-multi-tenant-db/README.md) | Database-per-tenant with the `tenant` feature (`Tenant<T>`, `Tenanted<T>`, `TenantTx`) |
+| [`example-oidc`](examples/example-oidc/README.md) | Embedded issuer with password and client_credentials grants |
+| [`example-openfga`](examples/example-openfga/README.md) | Schema-first OpenFGA authorization with typed `FgaCheck` guards |
+| [`example-postgres`](examples/example-postgres/README.md) | CRUD with PostgreSQL, SQLx migrations, pagination, validation |
+| [`example-sharded-bench`](examples/example-sharded-bench/README.md) | Benchmark target for sharded serving (`server.workers`) |
+| [`example-websocket-chat`](examples/example-websocket-chat/README.md) | Real-time chat using `WsRooms` and event-driven persistence |
+| [`example-worker-udp`](examples/example-worker-udp/README.md) | Per-worker services under `server.workers: per-core`: UDP echo, mailboxes, worker health |
 
 ```bash
-cargo run -p example-app             # port 3000
-cargo run -p example-postgres        # requires a running PostgreSQL
-cargo run -p example-grpc            # HTTP :3000, gRPC :50051
+cargo run -p example-app --bin example-app   # port 3001
+cargo run -p example-postgres                # requires a running PostgreSQL
+cargo run -p example-grpc                    # HTTP :3000, gRPC :50051
 ```
 
 ## Building
@@ -556,7 +594,7 @@ cargo run -p example-grpc            # HTTP :3000, gRPC :50051
 cargo build --workspace        # build all crates
 cargo check --workspace        # type-check (faster)
 cargo test --workspace         # run all tests
-cargo run -p example-app       # run the demo app on port 3001
+cargo run -p example-app --bin example-app   # run the demo app on port 3001
 ```
 
 ## Versioning
@@ -580,14 +618,31 @@ plugin-API rework ships from `v0.2.140` onward (see
 
 Migration guides for the breaking releases live under `docs/migration/`:
 
+- 0.3: the plugin API — post-state `.with()` becomes one `Plugin` trait:
+  [`plugin-api.md`](docs/migration/plugin-api.md).
 - 0.4 → 0.5 reworks error handling around `Rejection` and error envelopes
-  (task #1072): [`docs/migration/error-projection.md`](docs/migration/error-projection.md).
+  (task #1072): [`error-projection.md`](docs/migration/error-projection.md).
 - 0.5 → 0.6 documents OpenAPI bodies only through `RequestBodySchema` /
   `ResponseBodySchema` (no name-based `Json<T>` detection):
-  [`docs/migration/response-schema.md`](docs/migration/response-schema.md).
-- 0.6 → 0.7 (r2e-core) shrinks `Rejection` to 56 bytes; `details`/`headers`
+  [`response-schema.md`](docs/migration/response-schema.md).
+- r2e-mcp 0.6 → 0.7: the MCP global registry becomes a dynamic `McpRegistry`
+  bean: [`mcp-registry.md`](docs/migration/mcp-registry.md).
+- r2e-core 0.6 → 0.7 shrinks `Rejection` to 56 bytes; `details`/`headers`
   become accessors (task #1086):
-  [`docs/migration/rejection-layout.md`](docs/migration/rejection-layout.md).
+  [`rejection-layout.md`](docs/migration/rejection-layout.md).
+- r2e-core 0.7 → 0.8: `Routes` replaces `axum::Router`:
+  [`routes-newtype.md`](docs/migration/routes-newtype.md).
+- r2e-core 0.9: one tracing path through the builder:
+  [`tracing-single-path.md`](docs/migration/tracing-single-path.md)
+  (supersedes [`observability-tracing.md`](docs/migration/observability-tracing.md)).
+- r2e-core 0.9 → 0.10: HTTP layer bands (`LayerSlot`):
+  [`layer-slots.md`](docs/migration/layer-slots.md).
+- r2e-mcp 0.9 → 0.10: MCP mount stage and identity contract:
+  [`mcp-identity.md`](docs/migration/mcp-identity.md).
+- r2e-grpc 0.9 → 0.10: gRPC identity rides the HTTP extractor contract:
+  [`grpc-identity.md`](docs/migration/grpc-identity.md).
+- r2e-core 0.11 → 0.12: generic DI builder bounds (provision index):
+  [`di-provision-index.md`](docs/migration/di-provision-index.md).
 
 ## For AI agents
 

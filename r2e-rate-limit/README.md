@@ -12,7 +12,7 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["rate-limit"] }
+r2e = { version = "0.15", features = ["rate-limit"] }
 ```
 
 ## Declarative usage

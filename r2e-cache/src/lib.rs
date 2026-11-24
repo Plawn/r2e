@@ -1,3 +1,42 @@
+//! Caching primitives for R2E.
+//!
+//! Enabled in the `r2e` facade by feature `cache` and reachable as
+//! `r2e::r2e_cache`.
+//!
+//! # Main types
+//!
+//! - [`TtlCache`] — a thread-safe, `DashMap`-backed in-process cache whose
+//!   entries expire after a fixed TTL and are evicted lazily on access (or
+//!   eagerly with `evict_expired`).
+//! - [`CacheStore`] — the pluggable async backend (`get`, `set`, `remove`,
+//!   `clear`, `remove_by_prefix`) behind the `Cache` / `CacheInvalidate`
+//!   interceptors of `r2e-utils`. It is an application **bean**
+//!   (`Arc<dyn CacheStore>`), never a global: a missing store is a compile
+//!   error at controller registration.
+//! - [`InMemoryStore`] — the default `CacheStore`; [`InMemoryStore::shared`]
+//!   returns it ready to provide.
+//!
+//! ```rust,ignore
+//! use std::time::Duration;
+//! use r2e::prelude::*;
+//! use r2e::r2e_cache::{InMemoryStore, TtlCache};
+//!
+//! let cache = TtlCache::new(Duration::from_secs(60));
+//! cache.insert("key", "value");
+//! assert_eq!(cache.get(&"key"), Some("value"));
+//!
+//! AppBuilder::new()
+//!     .provide(InMemoryStore::shared()) // Arc<dyn CacheStore>, read by #[intercept(Cache::ttl(..))]
+//!     // ...
+//!     .build_state()
+//!     .await;
+//! ```
+//!
+//! Implement [`CacheStore`] for another backend (Redis, Memcached, …) and
+//! provide that instead. See the crate README and
+//! [`docs/claude/subsystems.md`](https://github.com/plawn/r2e/blob/master/docs/claude/subsystems.md)
+//! (section "Cache (r2e-cache)").
+
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::future::Future;

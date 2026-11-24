@@ -1,5 +1,7 @@
 # Plan — Containing the `tokio` and `axum` dependency surface
 
+> Status: **shipped** — phases 0–7 done 2026-08-24, merged via PR #39; follow-ups in `plans/axum-containment-roadmap.md` (shipped, r2e 0.9.0, PR #113). Baselines below are historical; the live ones are `scripts/boundaries/*.txt`.
+
 Goal: `tokio` is a direct dependency of exactly one crate (`r2e-rt`), `axum` of
 exactly one crate (`r2e-http`), and the amount of R2E code that *names* axum
 types is small enough that swapping the runtime or the HTTP layer is a
@@ -423,6 +425,12 @@ Status as of phase 6 (the last phase on this branch).
   at 3a, plus the 2 in `axum_compat.rs`, which is the one reviewed *addition*
   the baseline has ever taken (noted in the baseline header: that module's job
   IS to name axum).
+  *Update 2026-11-24:* the axum containment roadmap (`plans/axum-containment-roadmap.md`,
+  phases A–C, r2e 0.9.0) moved routing and serving into `r2e-http`, so the live
+  `src-baseline-axum.txt` is now **50 occurrences / 12 files** (still all in
+  `r2e-http/src/`, `routing.rs` alone 26), plus two new groups:
+  `src-baseline-axum-shape.txt` (3 files) and `src-baseline-axum-serve.txt`
+  (`server.rs`). The figure above is the 2026-08-24 snapshot.
 
 - **NOT MET, DELIBERATELY** — step **3c** (`Router` newtype) remains out of
   scope, now with a written decision (§5.3c, 2026-08-24) rather than as a

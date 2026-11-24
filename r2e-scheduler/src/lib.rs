@@ -1,7 +1,66 @@
 //! Background task scheduler for R2E.
 //!
-//! Provides interval, cron, and delayed task execution. Install with
-//! `.plugin(Scheduler)` before `build_state()`.
+//! Provides interval, cron, and delayed task execution. Enabled in the `r2e`
+//! facade by feature `scheduler` (which pulls in `executor`).
+//!
+//! # Declaring tasks
+//!
+//! `#[scheduled]` methods are discovered on controllers (at
+//! `register_controller`) and on `#[bean]` impls (at `build_state`):
+//!
+//! ```rust,ignore
+//! use r2e::prelude::*;
+//!
+//! #[routes]
+//! impl ScheduledJobs {
+//!     #[scheduled(every = "5m")]                         // duration string or integer seconds
+//!     async fn sync(&self) { /* ... */ }
+//!
+//!     #[scheduled(cron = "0 */5 * * * *")]               // validated at compile time
+//!     async fn report(&self) -> Result<(), MyError> { Ok(()) } // errors are logged
+//!
+//!     #[scheduled(every = "1m", initial_delay = "10s", skip_if = "maintenance_mode")]
+//!     async fn poll(&self) { /* ... */ }
+//!
+//!     fn maintenance_mode(&self) -> bool { false }
+//! }
+//! ```
+//!
+//! Other attribute keys: `overlap = "skip" | "concurrent"` ([`OverlapPolicy`],
+//! default `skip`) and `schedule = "method"` (the cadence comes from a sync
+//! `&self` method returning a [`ScheduleConfig`], evaluated once at
+//! registration). Tasks can also be built at runtime with [`ScheduledTaskDef`].
+//!
+//! # Wiring
+//!
+//! Install the [`Scheduler`] plugin (it requires the `PoolExecutor` bean of
+//! the `Executor` plugin, because every tick runs as a pool job) before
+//! `build_state()`:
+//!
+//! ```rust,ignore
+//! AppBuilder::new()
+//!     .plugin(Executor)
+//!     .plugin(Scheduler)
+//!     .build_state()
+//!     .await
+//!     .register_controller::<ScheduledJobs>()
+//!     .serve("0.0.0.0:3000")
+//!     .await
+//!     .unwrap();
+//! ```
+//!
+//! All schedules are driven by one driver task. [`SchedulerHandle`] (a handler
+//! parameter) pauses, resumes or triggers a job by name;
+//! [`ScheduledJobRegistry`] exposes live per-job stats ([`ScheduledJobInfo`]).
+//! Configuration lives under `scheduler.*` ([`SchedulerConfig`]: `enabled`,
+//! `executor = "shared" | "dedicated"` and the dedicated pool's sizing).
+//! Feature `testing` (facade `scheduler-testing`) adds `testing::SchedulerTestExt`
+//! (`app.scheduler().run("job")`).
+//!
+//! Details:
+//! [`docs/claude/subsystems.md`](https://github.com/plawn/r2e/blob/master/docs/claude/subsystems.md)
+//! (section "Scheduling (r2e-scheduler)") and
+//! [`docs/book/src/events-and-scheduling/scheduling.md`](https://github.com/plawn/r2e/blob/master/docs/book/src/events-and-scheduling/scheduling.md).
 
 mod driver;
 mod duration;

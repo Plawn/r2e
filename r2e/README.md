@@ -8,7 +8,7 @@ R2E is the main facade crate that re-exports all sub-crates through feature flag
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["sqlite", "scheduler", "openapi"] }
+r2e = { version = "0.15", features = ["sqlx-sqlite", "scheduler", "openapi"] }
 ```
 
 ```rust
@@ -31,7 +31,7 @@ impl HelloController {
     }
 }
 
-#[tokio::main]
+#[r2e::main]
 async fn main() {
     AppBuilder::new()
         .build_state()
@@ -71,11 +71,20 @@ dev-reload, and tests (`TestApp::boot::<MyApp>()` / `#[r2e::test(app = MyApp)]`)
 | `grpc` / `grpc-reflection` / `grpc-web` | no | `r2e-grpc` — Tonic gRPC server (`grpc-web`: browser clients on the multiplexed port) |
 | `events-{iggy,kafka,pulsar,rabbitmq}` | no | distributed EventBus backends |
 | `static`        | no      | `r2e-static` — embedded static files + SPA |
+| `tenant`        | no      | `r2e-tenant` — multi-tenant bean routing |
+| `tenant-{sqlx,diesel}` | no | Per-tenant SQLx/Diesel pools + transactions (enables `tenant`) |
+| `mcp`           | no      | `r2e-mcp` — MCP server (`#[tool]`/`#[resource]`/`#[prompt]`) |
+| `mcp-loopback`  | no      | In-process MCP sessions on the mounted endpoint |
+| `mcp-testing`   | no      | MCP test helpers (dev-dependencies only — pulls `r2e-test`) |
+| `scheduler-testing` | no  | Scheduler test helpers (dev-dependencies only — pulls `r2e-test`) |
+| `metrics-facade` | no     | HTTP metrics through the `metrics` crate (`MetricsFacade`; not in `full`) |
 | `ws`            | no      | WebSocket support                    |
 | `multipart`     | no      | File upload support                  |
+| `json-sonic`    | no      | `sonic-rs` JSON codec behind `r2e::json` |
+| `test-util`     | no      | Paused clocks for `#[r2e::main(start_paused = true)]` / `#[r2e::test]` (not in `full`) |
 | `quic`          | no      | HTTP/3 + raw QUIC (not in `full` — heavy crypto deps) |
 | `dev-reload`    | no      | `r2e-devtools` — Subsecond hot-reload (never in production) |
-| `full`          | no      | All bundled framework modules (excludes `quic` and `dev-reload`) |
+| `full`          | no      | Most framework modules; excludes stack choices and dev-only features (`quic`, `dev-reload`, `test-util`, `json-sonic`, `metrics-facade`, `openfga`, `mcp-loopback`, data/event backends, `*-testing`) |
 
 > Validation (via the `garde` crate) is always available and needs no feature flag.
 
@@ -98,6 +107,8 @@ dev-reload, and tests (`TestApp::boot::<MyApp>()` / `#[r2e::test(app = MyApp)]`)
 | [`r2e-observability`](../r2e-observability) | OpenTelemetry distributed tracing |
 | [`r2e-oidc`](../r2e-oidc) | Embedded OIDC server (JWT issuance) |
 | [`r2e-grpc`](../r2e-grpc) | Tonic-based gRPC server, multiplexed with HTTP |
+| [`r2e-mcp`](../r2e-mcp) | MCP server over the same beans and guards as HTTP |
+| [`r2e-tenant`](../r2e-tenant) | Multi-tenant bean routing |
 | [`r2e-openfga`](../r2e-openfga) | OpenFGA fine-grained authorization |
 | [`r2e-utils`](../r2e-utils) | Built-in interceptors (Logged, Timed, Cache) |
 | [`r2e-static`](../r2e-static) | Embedded static file serving with SPA support |

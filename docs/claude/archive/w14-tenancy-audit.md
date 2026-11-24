@@ -1,5 +1,7 @@
 # W14 tenancy — external audit findings
 
+> **Archived 2026-11-24.** Status: finished 2026-08-14 — all findings fixed or accepted, merged via PR #35. History: `docs/claude/roadmap-archive.md` § W14; current reference: `docs/features/24-tenancy.md`, `docs/claude/subsystems.md` § Multi-tenancy.
+
 Status (2026-08-14): findings 1/4/9 are fixed with the private resolve-once
 `TenantMemo` cell, the `Tenancy` router layer, and request-head snapshot ordering
 after handler parameters. Findings 2/5/6 are fixed under the narrowed contract:

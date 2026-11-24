@@ -1,5 +1,7 @@
 # `HttpTrace` — one reusable per-request tracing plugin
 
+> **Archived 2026-11-24.** Status: shipped — `HttpTrace` plugin in PR #63 (#1014). Current reference: `docs/claude/subsystems.md` § HttpTrace.
+
 Status: **implemented** (2026-09-02, branch `task/1014-http-trace`). Origin: Tasker #1014 (blumana-survey had to
 drop `.plugin(tracing)` entirely to own its request log), #1001 (data-catalog
 cannot reproduce its `TraceLayer` shape with the r2e plugins).

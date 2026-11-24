@@ -19,7 +19,7 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["security", "oidc"] }
+r2e = { version = "0.15", features = ["security", "oidc"] }
 ```
 
 ## Setup

@@ -1,7 +1,7 @@
 ---
 topic: coming-from-axum
 features: core
-tokens: ~1500
+tokens: ~1600
 requires: 
 ---
 
@@ -70,3 +70,9 @@ integration for control): 1. `#[any]`/`#[fallback]` controller routes →
 2. `merge_router(router)` (raw fragment, shares state + global plugins, no DI) →
 3. `with_layer_fn(|routes| ...)` (transform the final `Routes`) →
 4. `r2e::http::axum_compat` (the raw axum API, off the supported surface).
+
+A hand-written handler mounted with `merge_router` gets no `#[inject]`; read an
+app-scoped bean with the `BeanExtract` extractor (prelude) instead of a
+`State<Arc<…>>`: `BeanExtract(pool, _): BeanExtract<SqlitePool, I>`, the
+handler generic over the index witness `I` (inferred from the app state, like
+every bean lookup).

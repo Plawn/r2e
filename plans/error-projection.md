@@ -7,8 +7,10 @@ route**, so every way a request can fail (bad body, bad auth, guard, validation,
 managed resource, handler error) reaches the wire through the same envelope and
 is documented from the same source of truth.
 
-Status: **approved design, 2026-10-09**. Decisions in §10 are locked. Nothing
-implemented yet; branch `feat/1072-error-projection`.
+Status: **SHIPPED in r2e 0.5.0 (2026-10-10)** — PR #80 (implementation), #86
+(audit fixes), #87 (book + examples). Design approved 2026-10-09; decisions in
+§10 are locked. Kept in `plans/` (not archived) because source comments and
+`docs/migration/error-projection.md` cite it as the design record.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Quick-reference guide to the R2E workspace. Each section lists every file with a one-line description.
 
-> **Dependency flow:** `r2e-rt` <- `r2e-http` <- `r2e-macros` <- `r2e-core` (`r2e-tracing` also sits at the bottom, consumed first by `r2e-core`) <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, ...) <- `r2e` (facade) <- `example-*`
+> **Dependency flow:** `r2e-rt` <- `r2e-http` <- `r2e-macros` <- `r2e-core` (`r2e-tracing` also sits at the bottom, consumed first by `r2e-core`) <- feature crates (`security`, `events`, `scheduler`, `executor`, `data`, `static`, `tenant`, `grpc`, `mcp`, ...) <- `r2e` (facade) <- `example-*`
 >
 > **Only `r2e-http` depends on `axum` directly.** All other crates access HTTP types through `r2e_core::http` (which re-exports from `r2e-http`).
 
@@ -14,11 +14,43 @@ Quick-reference guide to the R2E workspace. Each section lists every file with a
 Cargo.toml              Workspace manifest (all members)
 Cargo.lock              Dependency lock file
 application.yaml        Base configuration (loaded by R2eConfig)
-CLAUDE.md               AI coding guidelines and full architecture reference
+CLAUDE.md               AI coding guidelines: golden rules + routing table to docs/claude/
+AGENTS.md               Entry point for AGENTS.md-aware agents; delegates to CLAUDE.md
 REPO_MAP.md             This file
 README.md               Project README with quick-start and feature overview
-LICENSE                  Apache-2.0
+CHANGELOG.md            Frozen workspace history up to 0.6.0 (per-crate CHANGELOG.md since)
+LICENSE                 Apache-2.0
 CONTRIBUTING.md         Contribution guidelines
+clippy.toml             Clippy configuration (disallowed methods, e.g. the tokio::spawn ban)
+rustfmt.toml            rustfmt configuration
+rust-toolchain.toml     Pinned toolchain (trybuild .stderr snapshots depend on it)
+Dioxus.toml             Subsecond / dx configuration for dev-reload
+llm.txt                 Agent-facing reference hub: golden rules + routing table to llm/
+llm-full.txt            Generated single-file version of llm.txt + llm/ (never edit by hand)
+llm/                    Agent-facing topic spokes (one .md per topic)
+llm-doctests/           Compiles every ```rust block of llm/ against the facade
+docs/                   mdBook (docs/book), feature guides (docs/features), agent docs
+                        (docs/claude), migration guides (docs/migration), CI notes (docs/ci.md)
+scripts/                CI and release scripts (boundaries, versions, publish, smoke, llm docs)
+tools/                  Benchmark drivers (bench-hotpath.sh, bench-sharded.sh)
+plans/                  Design plans and audits (archive/ for finished ones)
+misc/                   Historical notes and scratch documents
+requests/               Scratch directory for HTTP request files (currently empty)
+coverage/               Saved llvm-cov coverage reports
+.github/                CI workflows (see docs/ci.md)
+```
+
+---
+
+## r2e-rt — Async-runtime facade
+
+Bottom of the graph and the only crate that names `tokio` (re-exported as `r2e_core::rt`). Everything above goes through it — spawn, timers, sync primitives, `task_local!`, runtime ids.
+
+```
+src/
+  lib.rs                    The facade: re-exports and thin wrappers over tokio / tokio-util / tokio-stream
+tests/
+  rt/                       One target: runtime_id (RuntimeId), task_local (per-task scoping through the facade)
 ```
 
 ---
@@ -249,10 +281,33 @@ In-process typed pub/sub with backpressure.
 
 ```
 src/
-  lib.rs                    EventBus (subscribe, emit, emit_and_wait), concurrency control
+  lib.rs                    EventBus trait, subscriptions, EventMetadata, retry policy, re-exports
+  local.rs                  LocalEventBus — the in-process implementation (emit, emit_and_wait, request-reply)
+  sse_bridge.rs             Bridge events to an SSE broadcaster
+  backend/                  Shared plumbing for the distributed backends: dispatch, metadata codec,
+                            pending replies, reconnect, BackendState (dedup / event_id), topic, watermark
 
 tests/
   event_bus.rs              Emit/subscribe, backpressure, panic isolation, stress tests
+  backend_state.rs, backend_watermark.rs, event_id.rs, pending.rs, reconnect.rs, sse_bridge.rs
+```
+
+### Distributed backends — `r2e-events/backends/{iggy,kafka,pulsar,rabbitmq}`
+
+Crates `r2e-events-iggy`, `r2e-events-kafka`, `r2e-events-pulsar`, `r2e-events-rabbitmq` (facade features `events-iggy`, `events-kafka`, `events-pulsar`, `events-rabbitmq`). Each one implements `EventBus` over its broker with the same layout:
+
+```
+src/
+  lib.rs                    Entry point and re-exports
+  builder.rs                Builder for the bus (connection, topics, consumer group)
+  bus.rs                    The EventBus implementation
+  config.rs                 Connection / security settings
+  error.rs                  Broker error -> EventBusError mapping
+  inner.rs                  Shared inner state behind an Arc
+  (kafka) request.rs        Request-reply transport (reply topics)
+  (iggy) dispatch.rs, poller.rs, topic.rs   Consumer polling and topic management
+tests/
+  <backend>_event_bus.rs    Integration tests against a real broker
 ```
 
 ---
@@ -286,7 +341,7 @@ src/
 tests/
   executor.rs               submit/await, concurrency cap, queue rejection, graceful + abort shutdown
   bg_service.rs             #[derive(BackgroundService)] roundtrip
-  async_exec.rs              #[async_exec] codegen returns Result<JoinHandle<T>, RejectedError>
+  async_exec.rs             #[async_exec] codegen returns Result<JobHandle<T>, RejectedError>
 ```
 
 ---
@@ -376,6 +431,27 @@ tests/
   registry.rs               Registry check/cache integration tests
 ```
 
+### r2e-openfga-model — `r2e-openfga/model`
+
+```
+src/
+  lib.rs                    Parser for the OpenFGA DSL (schema 1.1), re-exports
+  model.rs                  Data model of an authorization model
+  parser.rs                 Hand-rolled DSL parser
+  validate.rs               Semantic validation of a parsed AuthorizationModel
+tests/
+  parser.rs                 DSL -> JSON round-trips against the vendored openfga/language transformer
+  validate.rs               Semantic validation
+```
+
+### r2e-openfga-macros — `r2e-openfga/macros`
+
+```
+src/
+  lib.rs                    Proc macros for r2e-openfga
+  model_macro.rs            Expansion of model!(pub mod authz = "fga/model.fga")
+```
+
 ---
 
 ## r2e-mcp — MCP server
@@ -419,6 +495,111 @@ tests/
   support/mod.rs            oneshot-driven MCP protocol harness (initialize/session/SSE parsing)
   server/                   plugin, registry, dispatch, schema, interceptors, lifecycle (sharded + stop), dynamic (per-session lists)
   auth/                     OAuth resource server, scopes/roles, session binding (sessions)
+```
+
+---
+
+## r2e-grpc — gRPC server
+
+Tonic gRPC on a separate port or multiplexed on the HTTP port, reflection, grpc-web; guards and identity reuse the HTTP contracts.
+
+```
+src/
+  lib.rs                    GrpcServer plugin, re-exports
+  server.rs                 Transport mode (separate port / multiplexed)
+  service.rs                Trait for gRPC services registered with the builder
+  registry.rs               Accumulates gRPC services during registration
+  module.rs                 Feature-module gRPC services — #[module(grpc_services(...))]
+  multiplex.rs              Routes a request to gRPC, grpc-web or HTTP by content type
+  head.rs                   Per-call request head: a gRPC call seen as HTTP Parts
+  identity.rs               Identity helpers for gRPC calls
+  status.rs                 Rejection -> tonic::Status projection
+tests/
+  guard.rs, head.rs, identity.rs, multiplex.rs, reflection.rs, registry.rs
+```
+
+### r2e-grpc-build — `r2e-grpc/build`
+
+```
+src/
+  lib.rs                    build.rs helper: compile() the crate's .proto files (paired with include_protos!)
+tests/
+  lib.rs
+```
+
+---
+
+## r2e-oidc — Embedded OAuth/JWT issuer
+
+`OidcServer` plugin: RS256 issuer with Authorization Code + PKCE, client_credentials and a dev-only password grant (no ID tokens, no federation).
+
+```
+src/
+  lib.rs                    OidcServer plugin, re-exports
+  config.rs                 Issuer configuration
+  handlers.rs               Discovery, JWKS, authorize, token, userinfo endpoints
+  authorization.rs          One-time Authorization Code + PKCE state
+  client.rs                 Confidential (client_credentials) clients
+  store.rs                  User store trait and results
+  token.rs                  JWT signing service
+  keys.rs                   RSA key pair, JWKS publication
+  state.rs                  Shared handler state
+  error.rs                  OAuth 2.0 error responses (RFC 6749 §5.2)
+tests/
+  config.rs, discovery.rs, hot_reload.rs, integration.rs, jwks.rs, token_endpoint.rs, userinfo.rs
+```
+
+---
+
+## r2e-tenant — Multi-tenant bean routing
+
+`Tenant<T>` / `TenantId` extractors, `Tenanted<T>` per-tenant resource map, `Tenancy` and `PerTenant` plugins, `tenancy.*` config.
+
+```
+src/
+  lib.rs                    Entry point and re-exports
+  id.rs                     Validated TenantId
+  config.rs                 The tenancy.* config section
+  error.rs                  TenantError and its HTTP mapping
+  extract.rs                Tenant<T> and TenantId extractors
+  resolver.rs               SPI #1 — request -> TenantId (TenantResolver, SyncTenantResolver)
+  source.rs                 SPI #2 — building one tenant's resource (TenantSource), TenantContext cascade
+  router.rs                 TenantRouter: one bean serving every per-tenant extractor
+  plugin.rs                 Tenancy (install once) and PerTenant<T> (one per resource type)
+  map/                      Tenanted<T>: api, resolve (single flight), eviction, negative cache,
+                            dispose, drain, epoch, metrics, settings, state, test_seams
+tests/
+  tenant/                   One target: cascade, error, extractor, id, map, plugin, resolver (+ fixtures)
+```
+
+---
+
+## r2e-devtools — Hot reload
+
+```
+src/
+  lib.rs                    Subsecond hot-reload integration (feature dev-reload, used by `r2e dev`)
+```
+
+---
+
+## r2e-devservices — Testcontainers dev services
+
+Exempt from the tokio boundary by design.
+
+```
+src/
+  lib.rs                    Entry point and re-exports
+  service.rs                DevService: how to start a containerized dev service
+  postgres.rs               DevPostgres
+  redis.rs                  DevRedis
+  keycloak.rs               DevKeycloak
+  openfga.rs                OpenFGA dev service
+  common.rs                 Shared settings (Ryuk / GC toggles, shared-container fingerprint)
+  ryuk.rs                   Process-wide TCP lease so the reaper cleans up killed processes
+tests/
+  dev_services.rs           Container smoke tests
+  openfga.rs                OpenFGA dev-service smoke test
 ```
 
 ---
@@ -525,46 +706,129 @@ src/
 ```
 src/
   lib.rs                    Test library setup
+cases/                      Trybuild cases (pass / fail, with .stderr snapshots)
 tests/
   compile_tests.rs          Trybuild compile-fail/pass UI tests for macros
+  test_suite_runtime.rs     Runtime checks for #[r2e::test_suite]
+```
+
+---
+
+## r2e-edition2024-tests — Edition 2024 canary
+
+`publish = false`. Built with edition 2024 to check generated handlers there.
+
+```
+src/
+  lib.rs                    Empty on purpose — the assertions live in tests/
+tests/
+  precise_capture.rs        Handlers returning impl Trait compile under edition 2024
+```
+
+---
+
+## r2e-featureless-tests — `default-features = false` canary
+
+`publish = false`. A "shared worker crate" built against `r2e` with `default-features = false`.
+
+```
+src/
+  lib.rs                    The featureless crate under test
+tests/
+  service_gate.rs           Runtime half of the canary: #[service(enabled = "…")] gating
+```
+
+---
+
+## llm-doctests — Doctests for llm/
+
+`publish = false`. Hosts the ```rust blocks of the agent-facing reference under `llm/` as doctests (`cargo test -p llm-doctests`).
+
+```
+build.rs                    Turns each llm/<topic>.md into a module doc (and collects the fixtures)
+src/
+  lib.rs                    include!s the generated topic modules
+  fixtures/<topic>.rs       Placeholder services/apps a topic's snippets name without defining
 ```
 
 ---
 
 ## examples/
 
+Every example except `example-microservice` (two binaries) and `example-worker-udp` (one `main.rs`) implements the `App` trait in `src/app.rs` (included by `lib.rs` so tests boot the same type), and its `main.rs` is `r2e::app_main!(...)`.
+
 ### example-app — Full-featured demo
 
-Exercises all major features: JWT auth, events, scheduling, WebSockets, SSE, file uploads, mixed auth.
+Exercises most features: feature modules, JWT auth, events, scheduling, executor, WebSockets, SSE, uploads, OpenFGA, error envelopes, proxy routing, mixed auth. Serves on port 3001 (`application.yaml`).
 
 ```
 src/
-  main.rs                   App entry point (AppBuilder with all plugins)
-  state.rs                  AppState definition
-  services.rs               UserService, NotificationService
-  models.rs                 User, Notification models
+  app.rs                    ExampleApp (App trait): plugins, beans, UserModule / OrderModule (#[module])
+  lib.rs                    include!("app.rs") so integration tests boot ExampleApp
+  main.rs                   r2e::app_main!(ExampleApp)
+  env.rs                    Cold, process-lifetime resources (App::setup)
+  error.rs                  Application error type (#[derive(ApiError)])
+  services.rs               UserService, OrderService, NotificationService, …
+  models.rs                 User, Order, Notification models
   db_identity.rs            Custom database-backed Identity impl
+  bin/
+    boot_failure.rs         Deliberately failing boot (driven by tests/app/boot_failure.rs)
+    boot_failure_graph.rs   Boot failing inside App::build, while the graph is built
   controllers/
     mod.rs                  Controller module exports
     user_controller.rs      CRUD with auth, caching, roles
+    order_controller.rs     Controller of the "orders" feature module
     account_controller.rs   Account management
     config_controller.rs    Configuration endpoints
     data_controller.rs      Data access demo
     db_identity_controller.rs  Custom identity demo
-    event_controller.rs     Event emission demo
+    document_controller.rs  OpenFGA fine-grained authorization
+    event_controller.rs     Event emission + #[consumer] handlers
     mixed_controller.rs     Mixed public/protected endpoints
     notification_controller.rs  Notification routes
+    problem_controller.rs   Error envelopes (error projection)
+    proxy_controller.rs     #[any("/proxy/{*path}")] + #[fallback]
+    report_controller.rs    Fail-closed auth with #[anonymous] opt-out
     scheduled_controller.rs Scheduled task demo
     sse_controller.rs       Server-Sent Events demo
     upload_controller.rs    File upload handling
     ws_controller.rs        WebSocket handler
+application.yaml            App config (port 3001)
+application-test.yaml       Test profile
+Dioxus.toml                 dev-reload configuration
 tests/
-  app/                      End-to-end boots of the demo app (users, orders, proxy, upload, config, ordering)
+  app/                      End-to-end boots of the demo app (users, orders, proxy, upload, config, ordering, boot failure, rollback)
   security/                 Guards, OpenFGA, mixed public/protected controllers
-  http/                     Verbs, SSE, WS, rate limiting, OpenAPI mapping
+  http/                     Verbs, SSE, WS, rate limiting, error envelope, OpenAPI mapping
   events/                   EventBus consumers (controllers + beans)
-  scheduling/               Scheduled tasks (controllers + beans)
+  scheduling/               Scheduled tasks (controllers + beans, skip_if, from method, manual tick)
   transverse/               Interceptors, lifecycle hooks
+  hotpath/                  Per-request hot-path checks (state, layers, decorators, JWT, accounting)
+```
+
+### example-executor — PoolExecutor + BackgroundService
+
+Demonstrates the `Executor` plugin, `#[async_exec]` returning `Result<JobHandle<T>, RejectedError>`, and a `#[derive(BackgroundService)]` tick worker that submits detached jobs.
+
+```
+src/
+  app.rs                    ExecutorApp, ReportController (POST/GET /reports/:id, GET /metrics), TickWorker
+  lib.rs, main.rs           include!("app.rs") / r2e::app_main!(ExecutorApp)
+```
+
+### example-grpc — HTTP + gRPC
+
+```
+build.rs                    r2e_grpc_build::compile()
+proto/
+  greeter.proto             Greeter service (SayHello, SayHelloAdmin)
+  ticker.proto              Streaming service used by the tests
+src/
+  app.rs                    GrpcApp, GreeterService (#[grpc_routes]), LogCalls interceptor, HealthController
+  lib.rs, main.rs           include!("app.rs") / r2e::app_main!(GrpcApp)
+tests/
+  grpc_guards.rs, grpc_intercept.rs, grpc_module.rs, grpc_reflection.rs,
+  grpc_serve.rs, grpc_test_client.rs, grpc_web.rs (+ common/)
 ```
 
 ### example-mcp — MCP server demo
@@ -574,31 +838,71 @@ serves HTTP (`GET /api/calc/add/{a}/{b}`), `MathTools` serves MCP tools with
 guards + interceptors, and `ScientificTools` is an opt-in group.
 `tests/mcp_e2e.rs` drives the full MCP session dance through `TestApp`.
 
-### example-postgres — Database integration
+```
+src/
+  app.rs                    McpApp, CalcService, MathTools, ScientificTools, CalcController, ApiKeyGuard
+  lib.rs, main.rs           include!("app.rs") / r2e::app_main!(McpApp)
+tests/
+  mcp_e2e.rs                End-to-end MCP session through TestApp
+```
 
-SQLx + PostgreSQL with migrations.
+### example-mcp-oauth — Authenticated MCP server
+
+One `whoami` tool behind an OAuth 2.1 resource server configured entirely in `application.yaml` (`mcp.auth.issuer` + `server.public-url`).
 
 ```
 src/
-  main.rs                   Postgres app entry point
-  state.rs                  State with SqlitePool
+  app.rs, lib.rs, main.rs
+application.yaml            mcp.auth.*, server.public-url, PORT (default 3333)
+```
+
+### example-oidc — Embedded issuer
+
+```
+src/
+  app.rs                    OidcApp, GreetingController (/public, /me, /admin), demo users and client
+  lib.rs, main.rs           include!("app.rs") / r2e::app_main!(OidcApp)
+```
+
+### example-openfga — Schema-first OpenFGA
+
+```
+fga/model.fga               Authorization model (OpenFGA DSL), compiled by model!
+src/
+  app.rs                    App, model!(pub mod authz = "fga/model.fga")
+  controllers/document_controller.rs   Typed FgaCheck guards
+tests/
+  openfga_test.rs           Against a real OpenFGA server (dev service)
+application.yaml            openfga.* config
+docker-compose.yml          Local OpenFGA server
+```
+
+### example-postgres — Database integration
+
+SQLx + PostgreSQL with migrations through the `SqlxDataSource` plugin.
+
+```
+src/
+  app.rs                    App, migrations compiled into the binary
+  lib.rs, main.rs
   error.rs                  Custom error type
   controllers/article_controller.rs   Article CRUD
   models/article.rs                   Article entity
   services/article_service.rs         Article service
-migrations/
-  20250101000001_create_articles.sql   Schema migration
-docker-compose.yml                     PostgreSQL container
+migrations/                 Schema migrations
+tests/
+  postgres_test.rs          Against a real PostgreSQL (dev service)
+application.yaml            datasource.* config
+docker-compose.yml          PostgreSQL container
 ```
 
-### example-multi-tenant — Custom identity & guards
+### example-multi-tenant — Row-level tenancy, custom identity & guards
 
-Custom Identity impl, tenant isolation guard.
+Custom Identity impl, tenant isolation guard, one shared database.
 
 ```
 src/
-  main.rs                   Multi-tenant app entry point
-  state.rs                  State
+  app.rs, lib.rs, main.rs
   tenant_identity.rs        Custom Identity impl for tenants
   tenant_guard.rs           Tenant validation guard
   controllers/tenant_controller.rs    Tenant-scoped routes
@@ -607,14 +911,28 @@ src/
   services/project_service.rs         Project service
 ```
 
+### example-multi-tenant-db — Database per tenant
+
+The `tenant` feature: `Tenant<T>`, `Tenanted<T>`, `TenantTx`, one SQLite database per tenant.
+
+```
+src/
+  app.rs, lib.rs, main.rs
+  directory.rs              The master directory: which tenants exist
+  tenancy.rs                The two SPIs: resolver and per-tenant source
+  controllers.rs            The four ways a route touches a tenant
+tests/
+  tenancy_test.rs
+application.yaml            tenancy.* config
+```
+
 ### example-websocket-chat — Real-time chat
 
 WebSocket connections + event consumers.
 
 ```
 src/
-  main.rs                   Chat app entry point
-  state.rs                  State with WsRooms
+  app.rs, lib.rs, main.rs
   models.rs                 Chat message model
   controllers/chat_controller.rs      WebSocket handler
   controllers/history_controller.rs   Message history
@@ -622,27 +940,41 @@ src/
   services/chat_service.rs            Chat service
 ```
 
-### example-executor — PoolExecutor + BackgroundService
-
-Demonstrates the `Executor` plugin, `#[async_exec]` returning `Result<JoinHandle<T>, RejectedError>`, and a `#[derive(BackgroundService)]` tick worker that submits detached jobs.
+### example-sharded-bench — Sharded serving benchmark target
 
 ```
 src/
-  main.rs                   Single-binary demo (POST /reports/:id, GET /metrics, TickWorker)
+  app.rs                    BenchApp, file-backed SQLite pool seeded at boot
+  controllers.rs            /plain, /json, /db
+  lib.rs, main.rs
+application.yaml            server.* (127.0.0.1:3000); workers via R2E_SERVER_WORKERS
+```
+
+Driven by `tools/bench-sharded.sh`.
+
+### example-worker-udp — Per-worker services
+
+Runs under `server.workers: per-core`: a UDP echo per worker, mailboxes, worker health and a control-plane aggregator.
+
+```
+src/
+  main.rs                   Whole demo in one file: #[r2e::main] + r2e::launch!(UdpApp)
+application.yaml            server.workers: per-core (required)
 ```
 
 ### example-microservice — Multi-service architecture
 
-Two services (order + product) communicating via HTTP.
+Two services (order + product) communicating via HTTP, two binaries.
 
 ```
 src/
+  lib.rs
   order/                    Order service (separate binary)
-    main.rs, state.rs, models.rs
+    main.rs, mod.rs, models.rs
     controllers/order_controller.rs
     services/order_service.rs, product_client.rs
   product/                  Product service (separate binary)
-    main.rs, state.rs, models.rs
+    main.rs, mod.rs, models.rs
     controllers/product_controller.rs
     services/product_service.rs
   shared/

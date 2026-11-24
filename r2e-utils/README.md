@@ -12,7 +12,7 @@ Via the facade crate (enabled by default):
 
 ```toml
 [dependencies]
-r2e = "0.1"  # utils is a default feature
+r2e = "0.15"  # utils is a default feature
 ```
 
 ## Interceptors

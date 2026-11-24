@@ -12,10 +12,10 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["grpc"] }
+r2e = { version = "0.15", features = ["grpc"] }
 
 [build-dependencies]
-r2e-grpc-build = "0.1"
+r2e-grpc-build = "0.6"
 ```
 
 ### Compiling protos

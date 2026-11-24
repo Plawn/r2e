@@ -1,14 +1,27 @@
 # R2E CLI
 
-Command-line tool for scaffolding and managing [R2E](https://github.com/anthropics/r2e) projects. Provides project creation, code generation, diagnostics, route listing, and a development server with hot-reload.
+Command-line tool for scaffolding and managing [R2E](https://github.com/plawn/r2e) projects. Provides project creation, code generation, diagnostics, route listing, bundled version-matched docs, and a development server with hot-reload.
 
 ## Installation
+
+From a checkout of the repository:
 
 ```bash
 cargo install --path r2e-cli
 ```
 
+Or straight from git (add `--tag <release tag>`, e.g. the `r2e-vX.Y.Z` tag of the facade you use, to pin a version):
+
+```bash
+cargo install --git https://github.com/plawn/r2e r2e-cli
+```
+
 This installs the `r2e` binary globally.
+
+> `r2e-cli` is deliberately **not published to crates.io**: it embeds the
+> workspace docs (`docs/features/*.md`, `llm.txt`, `llm/*.md`) with
+> `include_str!` from outside the crate directory, so `cargo install r2e-cli`
+> is not available.
 
 ## Commands
 
@@ -21,6 +34,7 @@ This installs the `r2e` binary globally.
 | [`r2e test`](#r2e-test) | Run tests, optionally with coverage for SonarQube |
 | [`r2e doctor`](#r2e-doctor) | Check project health |
 | [`r2e routes`](#r2e-routes) | List all declared routes |
+| [`r2e docs`](#r2e-docs-module) | Print bundled, version-matched module docs or the agent reference |
 
 ---
 
@@ -382,6 +396,28 @@ Declared routes:
 ```
 
 Methods are color-coded: GET (green), POST (blue), PUT (yellow), DELETE (red), PATCH (magenta).
+
+---
+
+### `r2e docs [<module>]`
+
+Print documentation embedded in the binary at compile time, so it always matches
+the installed `r2e` version. Raw markdown on stdout (agent-friendly) by default.
+
+```
+r2e docs [module] [options]
+
+Options:
+  --full            Print the whole document instead of just its TL;DR
+  -p, --pretty      Render markdown for a terminal
+  --llm             Use the agent-facing reference (llm.txt + llm/<topic>.md)
+  --export [DIR]    With --llm: write the whole reference into DIR (default docs/r2e)
+```
+
+- `r2e docs` lists every module (`slug — Title (crate)`).
+- `r2e docs <slug>` prints that module's `## TL;DR` section (e.g. `events`, `security`, `configuration`); a crate name such as `r2e-events` also works.
+- `r2e docs --llm` prints the hub; `r2e docs --llm <topic>` one topic file.
+- `r2e docs --llm --export` writes `docs/r2e/llm.txt` + `docs/r2e/llm/*.md`, stamped with the CLI version (`r2e new` does this for every scaffolded project, and `r2e doctor` warns when the export is missing or stale).
 
 ---
 

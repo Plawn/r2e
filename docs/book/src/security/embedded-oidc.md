@@ -12,7 +12,7 @@ register clients. Use an external provider for those cases.
 Enable the `oidc` feature:
 
 ```toml
-r2e = { version = "0.3", features = ["security", "oidc"] }
+r2e = { version = "0.15", features = ["security", "oidc"] }
 ```
 
 ## Quick start

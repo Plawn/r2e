@@ -144,9 +144,23 @@ AppBuilder::new()
     // ...
 ```
 
-## Shutdown grace period
+## Shutdown budgets
 
-By default, R2E waits indefinitely for shutdown hooks to complete. Use `shutdown_grace_period` to set a maximum duration — if hooks don't finish in time, the process force-exits:
+Two independent budgets bound graceful shutdown, each covering exactly one phase:
+
+- **`drain_timeout`** (builder) or **`server.drain-timeout`** (config) bounds the
+  **HTTP drain** — how long in-flight requests may keep running once the listener
+  stops accepting. It is bounded **by default at 30s**; the builder value wins over
+  the config key, and `drain_timeout_unbounded()` is the explicit, code-only opt-out.
+- **`shutdown_grace_period`** bounds the **join of tracked background tasks**
+  (`spawn_service`, `ServeContext::track`, gRPC/QUIC drains, WebSocket sessions),
+  applied **per handle**: a task that ignores its cancel token is abandoned with a
+  warning naming it after `duration`, without eating the budget of the others. By
+  default there is no grace period (wait indefinitely).
+
+`on_stop` hooks are outside **every** budget: they always run, even when the drain
+timed out and every tracked task overflowed its grace period. Put must-run
+reconciliation there (mark interrupted runs cancelled, release an advisory lock).
 
 ```rust
 use std::time::Duration;
@@ -154,14 +168,37 @@ use std::time::Duration;
 AppBuilder::new()
     .build_state()
     .await
-    .shutdown_grace_period(Duration::from_secs(5))
+    .drain_timeout(Duration::from_secs(10))        // in-flight requests
+    .shutdown_grace_period(Duration::from_secs(5)) // background tasks, per handle
     .on_stop(|_state| async {
         tracing::info!("Cleaning up...");
     })
     .serve("0.0.0.0:3000").await
 ```
 
+```yaml
+server:
+  drain-timeout: 10s      # integer = seconds; "500ms" / "2m" / "1h" also parse
+```
+
 This replaces the common pattern of manually spawning a shutdown handler with `CancellationToken` + `tokio::signal::ctrl_c()` + `process::exit()`.
+
+## Drain hooks
+
+`on_drain` hooks are awaited when shutdown is triggered, **before** the server
+stops accepting connections — the place to flip a readiness endpoint and wait for
+the load balancer to deregister:
+
+```rust
+AppBuilder::new()
+    .build_state()
+    .await
+    .on_drain(|state| async move {
+        state.get::<Readiness>().set_draining(); // your own readiness bean
+        r2e::rt::sleep(Duration::from_secs(5)).await; // LB deregistration
+    })
+    .serve("0.0.0.0:3000").await
+```
 
 ## Execution sequence
 
@@ -171,14 +208,26 @@ on_start hooks (in order)
 TCP bind
     ↓
 Serve requests
-    ↓ (Ctrl-C / SIGTERM)
-Stop accepting connections
+    ↓ (Ctrl-C / SIGTERM / StopHandle::stop())
+1. on_drain hooks (server still accepting)              — unbounded
     ↓
-Wait for in-flight requests
+2. plugin shutdown hooks, then #[pre_destroy] hooks
+   (cancel tokens of spawn_service / scheduler tasks)  — unbounded
     ↓
-on_stop hooks (in order)
-    ↓ (if grace period set and exceeded → force exit)
-Process exit
+3. stop accepting; in-flight requests drain            — drain_timeout (30s default)
+    ↓
+4. join tracked tasks, concurrently                    — shutdown_grace_period, per handle
+    ↓
+5. after-drain services, one at a time in stop_order,
+   then plugin after-drain hooks (executor drain)      — shutdown_grace_period, per service
+    ↓
+6. on_stop hooks (in order)                            — always run
+    ↓
+run() / serve() returns
 ```
+
+Services declared `#[service(stop = "after_drain")]` (sinks that consume what
+request handlers produce) are not cancelled at step 2 but at step 5, so the last
+requests' output is not lost.
 
 If any `on_start` hook fails, execution stops immediately — later hooks and the server don't run.

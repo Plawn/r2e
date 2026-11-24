@@ -66,7 +66,7 @@ three outcomes when `dev::hot_reload_loop_active()`:
 | **Partial rebuild** | otherwise (`nostate.rs:855-900`) | beans whose per-bean fingerprint is unchanged; **all provided values except the config-derived ones** |
 
 Because the graph fingerprint is seeded with the **entire** config
-(`beans.rs:1301-1311`), *any* config edit — declared by a bean or not — forces
+(`compute_fingerprint` in `r2e-core/src/beans/reuse.rs`), *any* config edit — declared by a bean or not — forces
 the partial-rebuild shape. Full-reuse therefore only ever happens with a
 byte-identical config. This single fact answers most of Q2.
 
@@ -86,7 +86,7 @@ re-providing them is both safe and cheap.
 ones, and except any TypeId in `forced_rebuild`.
 
 ```rust
-// r2e-core/src/beans.rs (Phase 1)
+// r2e-core/src/beans/resolve.rs (Phase 1)
 for (tid, value) in self.provided.iter_mut() {
     if self.config_derived.contains(tid) || forced_rebuild.contains(tid) { continue; }
     if let Some(clone_fn) = self.provided_reuse_clones.get(tid) {
@@ -122,7 +122,7 @@ it has nothing to do with the config, and that set is scoped by
 `config_derived_scope` around `load_config`.
 
 A clone fn is registered by `provide()`/`pin_provide()`
-(`beans.rs:790-812`), so every `.provide()`d value, the `R2eConfig`, the
+(`r2e-core/src/beans/registry_provide.rs`), so every `.provide()`d value, the `R2eConfig`, the
 `LiveConfigRegistry` and every typed `ConfigProperties` struct participate.
 
 **Which instance ends up in the rebuilt context when `load_config` re-provides
@@ -202,14 +202,14 @@ live-key edit reuses every bean and freshness arrives purely by push.
 
 ## Q3 — what exactly is in the graph fingerprint
 
-`BeanRegistry::compute_fingerprint` (`beans.rs:1294-1332`):
+`BeanRegistry::compute_fingerprint` (`r2e-core/src/beans/reuse.rs`):
 
 1. **Seed** = `R2eConfig::full_fingerprint()` of the config sitting in
-   `self.provided` at fingerprint time (`beans.rs:1296-1311`).
+   `self.provided` at fingerprint time.
    `full_fingerprint` (`config/mod.rs:450-460`) hashes **every key and value**
    of the resolved map, order-independent (keys sorted).
 2. Then each bean's fingerprint, in topological order, is folded in
-   (`beans.rs:1324-1330`). Per bean (`beans.rs:1908-1940`):
+   in the same function. Per bean (`compute_reg_fingerprint`, same file):
    `build_version` (constructor token hash) + `is_lazy` +
    `config_fingerprint(declared keys)` + transitive dep fingerprints.
    Since Phase 2, "declared keys" means the **copied** ones only:
@@ -394,8 +394,8 @@ Phase 2 gave it the same `ConfigKeyKind` shape as `Bean::config_keys`
 (consistency for whatever ends up consuming it) and dropped the false
 "fingerprint" claim from its doc comment; Phase 3 replaced that with an explicit
 statement of what it does *not* drive, and why. There is no call site in
-`beans.rs`, `nostate.rs`, `dev.rs`, the OpenAPI crate, or the CLI. (The many
-`config_keys()` hits in `beans.rs:853-1225` are `Bean::config_keys` /
+`r2e-core/src/beans/`, `nostate.rs`, `dev.rs`, the OpenAPI crate, or the CLI. (The many
+`config_keys()` hits in `beans/traits.rs` are `Bean::config_keys` /
 `Producer::config_keys`, a different trait method, consumed by
 `FingerprintReg`.)
 
@@ -617,7 +617,7 @@ and folds in B2.
 | `r2e-core/src/builder/mod.rs` | `live_config_registry_for_cycle(config, pinned_keys)` — the get-or-create/re-seed decision, with a non-dev-reload arm that always builds fresh |
 | `r2e-core/src/builder/nostate.rs` | `load_config` uses it and provides config-derived values inside `config_derived_scope` |
 | `r2e-core/src/config/runtime.rs` | `BootSnapshot` behind an `RwLock`; `reseed()` (dev-reload gated), publishing through the shared `publish(key, Option<ConfigValue>)` |
-| `r2e-core/src/beans.rs` | `config_derived: HashSet<TypeId>` + `config_derived_scope()`; pinning loop keyed on membership instead of `TypeId::of::<R2eConfig>()` |
+| `r2e-core/src/beans/` (`registry.rs`, `registry_provide.rs`, `resolve.rs`) | `config_derived: HashSet<TypeId>` + `config_derived_scope()`; pinning loop keyed on membership instead of `TypeId::of::<R2eConfig>()` |
 | `r2e-core/src/config/mod.rs` | `LoadableConfig for T: ConfigProperties` provides the typed struct inside `config_derived_scope` |
 
 `ConfigValue` has no `PartialEq` (it holds an `f64`), so the re-seed's
@@ -639,7 +639,7 @@ exactly one list to keep consistent.
 
 Updated in lockstep: `Bean::config_keys`, `AsyncBean::config_keys`,
 `Producer::config_keys`, `ContextConstruct::config_keys`, both validation
-filters and `compute_reg_fingerprint` in `beans.rs`, and the macro emitters —
+filters and `compute_reg_fingerprint` in `beans/reuse.rs`, and the macro emitters —
 which now share three helpers in `r2e-macros/src/model/field_resolver.rs`
 (`config_keys_ret_ty`, `copied_config_key_entry`, `live_config_key_entry`)
 instead of four hand-rolled `quote!`s, so the kind decision is single-sourced
@@ -735,7 +735,7 @@ can enumerate the keys to hash. Phase 3 adds a prefix-aware kind instead:
 | File | Change |
 |---|---|
 | `r2e-core/src/config/mod.rs` | `ConfigKeyKind::Section` (key = prefix) + `is_prefix()`; `R2eConfig::prefix_fingerprint(prefix)` — prefix, then every key equal to it or under `"{prefix}."` with its value, keys sorted, same hasher shape as `full_fingerprint` |
-| `r2e-core/src/beans.rs` | `compute_reg_fingerprint` splits the fingerprinted entries into exact keys (unchanged `config_fingerprint`) and prefixes (sorted + deduped, each folded in via `prefix_fingerprint`) |
+| `r2e-core/src/beans/reuse.rs` | `compute_reg_fingerprint` splits the fingerprinted entries into exact keys (unchanged `config_fingerprint`) and prefixes (sorted + deduped, each folded in via `prefix_fingerprint`) |
 | `r2e-macros/src/model/field_resolver.rs` | `section_config_key_entry(krate, prefix, ty)` — the single source of the `Section` entry |
 | `r2e-macros/{bean_derive,bean_attr,producer_attr,controller_codegen}.rs` | emit it wherever `#[config_section]` is accepted |
 
