@@ -5,7 +5,7 @@ connection pool. This crate intentionally contains no repository abstraction.
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["diesel-postgres"] }
+r2e = { version = "0.15", features = ["diesel-postgres"] }
 diesel = { version = "2", features = ["postgres", "r2d2"] }
 ```
 

@@ -14,7 +14,7 @@ Via the facade crate (enabled by default):
 
 ```toml
 [dependencies]
-r2e = "0.1"  # events is a default feature
+r2e = "0.15"  # events is a default feature
 ```
 
 ## API

@@ -2,6 +2,34 @@
 //!
 //! This crate should only be used in development via the `dev-reload` feature flag.
 //! It wraps Dioxus's Subsecond engine to enable hot-patching of Rust code at runtime.
+//!
+//! # How it is used
+//!
+//! Application code does not call this crate directly. Declare the app with
+//! the `App` trait (`setup` / `build`) and start it with `r2e::app_main!` (or
+//! the `r2e::launch!` macro it expands to); under the facade's `dev-reload`
+//! feature, `launch!` runs `setup` once and delegates to
+//! [`serve_with_hotreload_env`]. `r2e dev` (from `r2e-cli`)
+//! supervises `dx serve --hot-patch` with that feature enabled.
+//!
+//! The split between the two closures is what makes hot-patching safe:
+//!
+//! - the **setup** side runs once and produces an `Env` (DB pools, tracing,
+//!   anything expensive) that persists across patches;
+//! - the **server** side (`App::build`: builder, controllers, `serve`) is
+//!   re-run on every patch, so code changes in it take effect without a
+//!   restart. Configuration is re-read on each patch.
+//!
+//! # Items
+//!
+//! - [`serve_with_hotreload`] — setup closure + server closure.
+//! - [`serve_with_hotreload_env`] — the same with a pre-built `Env`; the
+//!   function the entry point delegates to.
+//! - [`dioxus_devtools`] — re-export of the underlying engine.
+//!
+//! See also
+//! [`docs/claude/dev-reload-config-semantics.md`](https://github.com/plawn/r2e/blob/master/docs/claude/dev-reload-config-semantics.md)
+//! for what persists between patch cycles.
 
 pub use dioxus_devtools;
 

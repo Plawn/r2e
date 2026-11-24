@@ -1,3 +1,46 @@
+//! Token-bucket rate limiting for R2E — global, per-IP or per-user budgets.
+//!
+//! Enabled in the `r2e` facade by feature `rate-limit` and reachable as
+//! `r2e::r2e_rate_limit`.
+//!
+//! # Main types
+//!
+//! - Guards, declared on route methods:
+//!   - [`PreRateLimit`] (`#[pre_guard]`, before JWT validation):
+//!     `PreRateLimit::global(max, window_secs)` and
+//!     `PreRateLimit::per_ip(max, window_secs)`;
+//!   - [`RateLimit`] (`#[guard]`, after identity extraction):
+//!     `RateLimit::per_user(max, window_secs)`;
+//!   - [`ConfiguredPreRateLimit`] / [`ConfiguredRateLimit`] — the same, with
+//!     the budget read from a config section.
+//! - [`RateLimitRegistry`] — the bean the guards resolve from the graph at
+//!   controller registration; provide one with
+//!   `.provide(RateLimitRegistry::default())` (or `RateLimitRegistry::new(backend)`
+//!   for a custom [`RateLimitBackend`]).
+//! - [`InMemoryRateLimiter`] — the default backend, **single-process**: N
+//!   replicas allow up to N × `max` per window. Implement [`RateLimitBackend`]
+//!   over a shared store for a cluster-wide limit.
+//! - [`RateLimiter`] — the generic keyed token bucket, usable on its own.
+//!
+//! ```rust,ignore
+//! use r2e::prelude::*;
+//! use r2e::r2e_rate_limit::{PreRateLimit, RateLimit};
+//!
+//! #[routes]
+//! impl AuthController {
+//!     #[post("/login")]
+//!     #[pre_guard(PreRateLimit::per_ip(5, 60))]   // 5 requests / 60 s per client IP
+//!     async fn login(&self) -> &'static str { "ok" }
+//!
+//!     #[get("/data")]
+//!     #[guard(RateLimit::per_user(30, 60))]       // 30 requests / 60 s per user
+//!     async fn data(&self) -> &'static str { "ok" }
+//! }
+//! ```
+//!
+//! See the crate README and
+//! [`docs/book/src/security/rate-limiting.md`](https://github.com/plawn/r2e/blob/master/docs/book/src/security/rate-limiting.md).
+
 pub mod guard;
 pub use guard::{
     ConfiguredPreRateLimit, ConfiguredRateLimit, IpSource, PreAuthRateLimitGuard, PreRateLimit,

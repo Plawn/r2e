@@ -1,3 +1,55 @@
+//! Procedural macros for R2E.
+//!
+//! Applications never depend on this crate directly: every macro is
+//! re-exported by the `r2e` facade (and its prelude), and the generated code
+//! targets `r2e-core`'s runtime contracts.
+//!
+//! # Macro families
+//!
+//! - **Controllers:** [`macro@controller`] on the struct (injection scopes
+//!   `#[inject]`, `#[inject(identity)]`, `#[inject(request)]`, `#[config(..)]`)
+//!   and [`macro@routes`] on the impl block, which generates the handlers.
+//!   Route methods: [`macro@get`], [`macro@post`], [`macro@put`],
+//!   [`macro@delete`], [`macro@patch`], [`macro@any`], [`macro@fallback`],
+//!   [`macro@sse`], [`macro@ws`]; decorators [`macro@roles`],
+//!   [`macro@anonymous`], [`macro@guard`], [`macro@pre_guard`],
+//!   [`macro@intercept`], [`macro@middleware`], [`macro@layer`].
+//! - **Beans and modules:** [`macro@bean`], [`macro@producer`],
+//!   [`macro@module`], `#[derive(Bean)]`, `#[derive(ProvideBundle)]`,
+//!   `#[derive(DecoratorBean)]`; lifecycle hooks [`macro@post_construct`],
+//!   [`macro@on_start`], [`macro@pre_destroy`].
+//! - **Background work:** [`macro@consumer`], [`macro@scheduled`],
+//!   [`macro@async_exec`], `#[derive(BackgroundService)]`.
+//! - **Configuration and errors:** `#[derive(ConfigProperties)]`,
+//!   `#[derive(FromConfigValue)]`, `#[derive(ApiError)]`, `#[derive(Params)]`,
+//!   `#[derive(FromMultipart)]`.
+//! - **Other transports:** [`macro@grpc_routes`]; MCP members [`macro@tool`],
+//!   [`macro@resource`], [`macro@prompt`] inside a `#[routes]` impl.
+//! - **Entry points and tests:** [`macro@main`], [`macro@test`],
+//!   [`macro@test_suite`].
+//!
+//! ```rust,ignore
+//! use r2e::prelude::*;
+//!
+//! #[controller(path = "/users")]
+//! pub struct UserController {
+//!     #[inject] user_service: UserService,
+//!     #[inject(identity)] user: AuthenticatedUser,
+//! }
+//!
+//! #[routes]
+//! impl UserController {
+//!     #[get("/")]
+//!     async fn list(&self) -> Json<Vec<User>> {
+//!         Json(self.user_service.list().await)
+//!     }
+//! }
+//! ```
+//!
+//! The crate README holds a one-table-per-family macro reference; the
+//! controller internals are described in
+//! [`docs/claude/core-concepts.md`](https://github.com/plawn/r2e/blob/master/docs/claude/core-concepts.md).
+
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
@@ -1158,7 +1210,7 @@ pub fn on_start(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// ```ignore
 /// #[bean]
 /// impl UserService {
-///     pub fn new(event_bus: EventBus) -> Self {
+///     pub fn new(event_bus: LocalEventBus) -> Self {
 ///         Self { event_bus, users: Default::default() }
 ///     }
 /// }
@@ -1288,7 +1340,7 @@ pub fn module(args: TokenStream, input: TokenStream) -> TokenStream {
 /// #[derive(Clone, Bean)]
 /// pub struct OrderService {
 ///     #[inject] user_service: UserService,
-///     #[inject] event_bus: EventBus,
+///     #[inject] event_bus: LocalEventBus,
 /// }
 /// ```
 #[proc_macro_derive(Bean, attributes(inject, config, live_config, config_section, default))]

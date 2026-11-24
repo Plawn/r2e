@@ -10,7 +10,7 @@ Starts Docker containers (via testcontainers) for databases and services needed 
 
 ```toml
 [dev-dependencies]
-r2e-devservices = { version = "0.1", features = ["postgres"] }
+r2e-devservices = { version = "0.7", features = ["postgres"] }
 ```
 
 The crate is not re-exported through the `r2e` facade: dev services belong to
@@ -22,7 +22,7 @@ The crate is not re-exported through the `r2e` facade: dev services belong to
 use r2e_devservices::DevPostgres;
 use r2e_test::TestApp;
 
-#[tokio::test]
+#[r2e::test]
 async fn users_are_persisted() {
     let pg = DevPostgres::shared().await;
     let app = TestApp::boot_with::<my_app::MyApp>(|b| {

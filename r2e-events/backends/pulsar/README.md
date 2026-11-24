@@ -10,7 +10,9 @@ Provides `PulsarEventBus`, a distributed implementation of the `EventBus` trait 
 
 ```toml
 [dependencies]
-r2e-events-pulsar = { version = "0.1" }
+r2e = { version = "0.15", features = ["events-pulsar"] }  # re-exported as r2e::r2e_events_pulsar
+# or standalone:
+# r2e-events-pulsar = "0.12"
 ```
 
 ```rust

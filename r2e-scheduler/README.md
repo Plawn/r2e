@@ -14,7 +14,7 @@ Via the facade crate:
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["scheduler"] }   # pulls in "executor"
+r2e = { version = "0.15", features = ["scheduler"] }   # pulls in "executor"
 ```
 
 ## Setup

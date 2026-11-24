@@ -12,7 +12,7 @@ Add as a dev dependency:
 
 ```toml
 [dev-dependencies]
-r2e-test = "0.1"
+r2e-test = "0.13"
 ```
 
 ## Key types
@@ -24,7 +24,7 @@ Wraps a `Routes` with a builder-based HTTP client for integration testing:
 ```rust
 use r2e_test::TestApp;
 
-#[tokio::test]
+#[r2e::test]
 async fn test_list_users() {
     let app = build_app().await; // your Routes
     let client = TestApp::new(app);
@@ -338,7 +338,7 @@ behind.
 ```rust
 use r2e_test::{TestApp, TestJwt};
 
-#[tokio::test]
+#[r2e::test]
 async fn test_protected_endpoint() {
     let jwt = TestJwt::new();
     let app = build_app_with_validator(jwt.claims_validator()).await;

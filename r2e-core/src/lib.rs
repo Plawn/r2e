@@ -1,3 +1,66 @@
+//! Runtime foundation of R2E — a Quarkus-like ergonomic layer over Axum with
+//! compile-time dependency injection.
+//!
+//! Applications depend on the `r2e` facade crate, which re-exports this crate
+//! (its prelude included). Depend on `r2e-core` directly only when writing an
+//! integration crate.
+//!
+//! # Main pieces
+//!
+//! - **Assembly:** [`AppBuilder`] — `.provide(..)` beans, `.plugin(..)`,
+//!   `.build_state().await` into a type-level HList state, then
+//!   `.register_controller::<T>()` and serve. The [`App`] trait plus [`launch`]
+//!   give one assembly path shared by `main`, dev-reload and tests.
+//! - **Controllers:** the [`Controller`] trait, implemented by the
+//!   `#[controller]` + `#[routes]` macros (re-exported from `r2e-macros`).
+//! - **Beans:** [`Bean`], [`AsyncBean`], [`Producer`] and the lifecycle hooks
+//!   [`PostConstruct`], [`OnStart`], [`PreDestroy`]; feature modules via
+//!   [`FeatureModule`].
+//! - **Plugins:** [`Plugin`] / [`PluginInstall`], the extension point used by
+//!   every integration crate.
+//! - **Guards and interceptors:** [`Guard`], [`PreAuthGuard`], [`Interceptor`],
+//!   built once at registration through [`DecoratorSpec`].
+//! - **Configuration:** [`R2eConfig`], [`ConfigProperties`], [`LiveConfig`].
+//! - **Errors:** [`HttpError`] and the [`Rejection`] error hub.
+//! - **Request-scoped resources:** [`ManagedResource`]; pagination with
+//!   [`Page`] / [`Pageable`].
+//! - **Facades:** [`rt`] (async runtime), [`http`] (the HTTP layer re-exported
+//!   from `r2e-http`) and [`json`] (the JSON codec).
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use r2e::prelude::*;
+//!
+//! #[controller(path = "/hello")]
+//! pub struct HelloController;
+//!
+//! #[routes]
+//! impl HelloController {
+//!     #[get("/")]
+//!     async fn hello(&self) -> &'static str {
+//!         "Hello, world!"
+//!     }
+//! }
+//!
+//! #[r2e::main]
+//! async fn main() {
+//!     AppBuilder::new()
+//!         .build_state()
+//!         .await
+//!         .register_controller::<HelloController>()
+//!         .serve("0.0.0.0:3000")
+//!         .await
+//!         .unwrap();
+//! }
+//! ```
+//!
+//! # Guides
+//!
+//! The user guide lives in the repository under
+//! [`docs/book`](https://github.com/plawn/r2e/tree/master/docs/book) and
+//! [`docs/features`](https://github.com/plawn/r2e/tree/master/docs/features).
+
 pub mod beans;
 pub mod builder;
 pub mod builtins;

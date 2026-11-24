@@ -6,7 +6,7 @@ abstraction.
 
 ```toml
 [dependencies]
-r2e = { version = "0.1", features = ["sqlx-sqlite"] }
+r2e = { version = "0.15", features = ["sqlx-sqlite"] }
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
 ```
 
