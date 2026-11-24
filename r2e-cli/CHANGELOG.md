@@ -15,6 +15,12 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-24
+
+### Changed
+
+- Tracks `r2e` 0.15.0: `r2e new`, `r2e add` and `r2e docs --llm` target that facade version.
+
 ## [0.14.0] - 2026-11-22
 
 ### Changed
