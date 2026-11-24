@@ -15,11 +15,19 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-24
+
 ### Added
 
 - `WsTestClient::assert_closed()` (#1469): waits for the server to end the
   connection — a close frame, the end of the stream or a transport error —
   and panics on a data message or on timeout.
+
+### Changed
+
+- Built against `r2e-core` 0.12.0 — its breaking changes surface through this crate's re-exports (see [`r2e-core/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-core-v0.12.0/r2e-core/CHANGELOG.md)).
+- Built against `r2e-grpc` 0.13.0 — its breaking changes surface through this crate's re-exports (see [`r2e-grpc/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-grpc-v0.13.0/r2e-grpc/CHANGELOG.md)).
+- Built against `r2e-security` 0.13.0 — its breaking changes surface through this crate's re-exports (see [`r2e-security/CHANGELOG.md`](https://github.com/Plawn/r2e/blob/r2e-security-v0.13.0/r2e-security/CHANGELOG.md)).
 
 ## [0.12.0] - 2026-11-22
 

@@ -15,6 +15,8 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-24
+
 ### Breaking
 
 - Codegen contract with `r2e-mcp` (#1474): a `#[resource]` method's generated
