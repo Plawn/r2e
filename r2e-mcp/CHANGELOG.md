@@ -17,12 +17,32 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ### Breaking
 
+- `IntoResourceResult::into_resource_result` and `ResourceFuture` yield a
+  `ReadResourceResult` instead of `Vec<ResourceContents>` (#1474). Resource
+  methods and `DynamicResource` handlers are unaffected. A hand-written
+  `IntoResourceResult` impl, or a hand-built `ResourceRoute::invoke` closure,
+  wraps its contents: `Ok(ReadResourceResult::new(contents))`. Needs the
+  `r2e-macros` release that ships with this one.
 - `McpError` gains the variant `Rpc(ErrorData)` (#1468). An exhaustive
   `match` on `McpError` adds an arm for it; constructing and returning
   errors is unaffected.
 
 ### Added
 
+- A resource sets the cache fields of the `resources/read` result (#1474),
+  at three levels: declared — `#[resource(ttl = "30s", cache_scope =
+  "private")]`, `DynamicResource::ttl(Duration)` / `.cache_scope(..)`;
+  computed per read — `ResourceRead<T>` wraps any resource return and adds
+  `ttl(Duration)` (`ttlMs`) and `cache_scope(CacheScope)`, overriding the
+  declaration field by field; or the whole `ReadResourceResult`, returned
+  from a `#[resource]` or a `DynamicResource` handler and sent as written.
+  `ReadResourceResult` and `CacheScope` are re-exported; `ResourceRead` is in
+  the prelude.
+- `WithMeta<T>` (in the prelude): wraps the return of a `#[tool]`,
+  `#[resource]` or `#[prompt]` (or of a dynamic member's handler) and sets
+  `_meta` on its result; the wrapped value keeps its own conversion (#1474).
+- `McpTestClient::read_resource_raw(uri)`: the `resources/read` result as
+  received (`ttl_ms`, `cache_scope`, `meta`) (#1474).
 - `McpError::Rpc(ErrorData)`, `McpError::rpc(code, message, data)` and
   `From<ErrorData> for McpError` (#1468): a handler returns a finished
   JSON-RPC error and the client receives its code, message and `data` as

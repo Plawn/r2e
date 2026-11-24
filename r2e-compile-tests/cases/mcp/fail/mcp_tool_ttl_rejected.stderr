@@ -1,0 +1,5 @@
+error: unknown #[tool] argument `ttl`; expected `name`, `title`, `description`, `read_only`, `destructive`, `idempotent`, `open_world`, `scopes`, `any_scopes`, `group`, `opt_in`, `meta`
+  --> cases/mcp/fail/mcp_tool_ttl_rejected.rs:10:12
+   |
+10 |     #[tool(ttl = "30s")]
+   |            ^^^

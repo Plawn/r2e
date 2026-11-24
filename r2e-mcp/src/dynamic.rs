@@ -22,9 +22,10 @@ use std::borrow::Cow;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 
 use r2e_core::http::Parts;
-use rmcp::model::MetaObject;
+use rmcp::model::{CacheScope, MetaObject};
 use schemars::JsonSchema;
 
 use crate::auth::tools::{check_access, ToolRequirements};
@@ -293,6 +294,8 @@ pub struct DynamicResource {
     title: Option<String>,
     description: Option<String>,
     mime_type: Option<String>,
+    ttl_ms: Option<u64>,
+    cache_scope: Option<CacheScope>,
     requirements: ToolRequirements,
     completions: Vec<CompletionProvider>,
     meta: Option<MetaObject>,
@@ -308,6 +311,8 @@ impl DynamicResource {
             title: None,
             description: None,
             mime_type: None,
+            ttl_ms: None,
+            cache_scope: None,
             requirements: ToolRequirements::NONE,
             completions: Vec::new(),
             meta: None,
@@ -330,6 +335,21 @@ impl DynamicResource {
     /// MIME type of text-shaped returns.
     pub fn mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
+        self
+    }
+
+    /// How long the client may treat a read as fresh (`ttlMs`), unless the
+    /// handler's own return ([`ResourceRead`](crate::ResourceRead)) says
+    /// otherwise.
+    pub fn ttl(mut self, ttl: Duration) -> Self {
+        self.ttl_ms = Some(crate::result::duration_ms(ttl));
+        self
+    }
+
+    /// Who may cache a read (`cacheScope`), unless the handler's own return
+    /// says otherwise.
+    pub fn cache_scope(mut self, cache_scope: CacheScope) -> Self {
+        self.cache_scope = Some(cache_scope);
         self
     }
 
@@ -373,6 +393,7 @@ impl DynamicResource {
         let name: Arc<str> = Arc::from(self.uri.as_ref());
         let mime: Option<Arc<str>> = self.mime_type.as_deref().map(Arc::from);
         let requirements = self.requirements;
+        let (ttl_ms, cache_scope) = (self.ttl_ms, self.cache_scope);
         let invoke: ResourceInvoke = Arc::new(move |call: ResourceCall| {
             let handler = Arc::clone(&handler);
             let name = Arc::clone(&name);
@@ -380,9 +401,13 @@ impl DynamicResource {
             Box::pin(async move {
                 check_member_access(call.parts.as_deref(), "resource", &name, &requirements)?;
                 let uri = call.uri.clone();
-                handler(call)
-                    .await
-                    .into_resource_result(&uri, mime.as_deref())
+                crate::result::resource_cache_defaults(
+                    handler(call)
+                        .await
+                        .into_resource_result(&uri, mime.as_deref()),
+                    ttl_ms,
+                    cache_scope,
+                )
             })
         });
         ResourceRoute {

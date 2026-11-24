@@ -1625,7 +1625,10 @@ pub fn tool(_args: TokenStream, input: TokenStream) -> TokenStream {
 /// Marker attribute declaring an MCP resource method inside `#[routes]`.
 ///
 /// Arguments: `uri = "..."` (required), `name = "..."`, `title = "..."`,
-/// `description = "..."`, `mime_type = "..."`, plus `scopes`/`any_scopes`.
+/// `description = "..."`, `mime_type = "..."`, `ttl = "30s"` (a duration
+/// string, or whole seconds: `ttl = 30`) and `cache_scope = "public"` /
+/// `"private"` (the `ttlMs` / `cacheScope` of the read result, unless the
+/// method's return sets them), plus `scopes`/`any_scopes`.
 /// This is a no-op on its own — it is consumed by `#[routes]`.
 #[proc_macro_attribute]
 pub fn resource(_args: TokenStream, input: TokenStream) -> TokenStream {

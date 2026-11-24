@@ -93,7 +93,7 @@ pub use plugin::RMCP_NOISE;
 pub use progress::Progress;
 pub use registry::{McpServiceRegistry, RegisteredMcpService};
 pub use resource_updates::McpResourceUpdates;
-pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
+pub use result::{IntoPromptResult, IntoResourceResult, IntoToolResult, ResourceRead, WithMeta};
 pub use route::{
     Completion, CompletionFuture, CompletionInvoke, CompletionProvider, CompletionRef, Completions,
     IntoCompletion, IntoMethodResult, McpGroup, McpRoutes, MethodCall, MethodFuture, MethodInvoke,
@@ -139,7 +139,10 @@ macro_rules! meta {
 }
 /// Raw wire result/content types, re-exported for tools, resources and
 /// prompts that build results by hand without importing rmcp directly.
-pub use rmcp::model::{CallToolResult, GetPromptResult, PromptMessage, ResourceContents};
+pub use rmcp::model::{
+    CacheScope, CallToolResult, GetPromptResult, PromptMessage, ReadResourceResult,
+    ResourceContents,
+};
 
 /// Re-export of `schemars` for generated code (input/output schema probes)
 /// and for deriving `JsonSchema` on tool parameter types without a direct
@@ -272,7 +275,10 @@ pub mod __macro_support {
         Params, ToolParams,
     };
     pub use crate::progress::Progress;
-    pub use crate::result::{IntoPromptResult, IntoResourceResult, IntoToolResult};
+    pub use rmcp::model::CacheScope;
+    pub use crate::result::{
+        resource_cache_defaults, IntoPromptResult, IntoResourceResult, IntoToolResult,
+    };
     pub use crate::route::{
         Completion, CompletionFuture, CompletionProvider, Completions, IntoCompletion,
         IntoMethodResult, McpGroup, McpRoutes, MethodCall, MethodFuture, MethodRoute, PromptCall,
@@ -282,7 +288,9 @@ pub mod __macro_support {
     pub use crate::service::McpService;
     pub use crate::session::McpSession;
     pub use r2e_core::NoIdentity;
-    pub use rmcp::model::{CallToolResult, GetPromptResult, MetaObject, ResourceContents};
+    pub use rmcp::model::{
+        CallToolResult, GetPromptResult, MetaObject, ReadResourceResult, ResourceContents,
+    };
     pub use serde_json::json;
     pub use serde_json::Value as MethodValue;
 
@@ -322,6 +330,7 @@ pub mod prelude {
     pub use crate::plugin::McpServer;
     pub use crate::progress::Progress;
     pub use crate::resource_updates::McpResourceUpdates;
+    pub use crate::result::{ResourceRead, WithMeta};
     pub use crate::route::{
         Completion, CompletionRef, Completions, MethodCall, PromptCall, ResourceCall, ToolCall,
     };

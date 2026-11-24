@@ -15,8 +15,21 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Breaking
+
+- MCP (`mcp`): `IntoResourceResult::into_resource_result` and `ResourceFuture`
+  yield a `ReadResourceResult` instead of `Vec<ResourceContents>` (#1474).
+  Resource methods are unaffected; a hand-written impl wraps its contents in
+  `ReadResourceResult::new(..)`.
+
 ### Added
 
+- MCP (`mcp`): a resource sets `ttlMs` and `cacheScope` on the
+  `resources/read` result — declared (`#[resource(ttl = "30s", cache_scope =
+  "private")]`), computed per read (`ResourceRead::new(body).ttl(..)
+  .cache_scope(..)`, in the prelude) or as a whole `ReadResourceResult`; and
+  `WithMeta::new(value, meta!({..}))` (in the prelude) sets `_meta` on a
+  tool, resource or prompt result (#1474).
 - WebSockets (`ws`): `#[ws("/path", max_message_size = .., max_frame_size =
   ..)]` bounds what a session reads, from a `usize` expression or a
   `&self -> usize` method (a config-driven bound); an oversized message closes

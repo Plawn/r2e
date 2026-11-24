@@ -419,9 +419,7 @@ fn generate_invoke_method(
     };
     let ok_ty = match kind {
         McpMemberKind::Tool => quote! { #mcp::__macro_support::CallToolResult },
-        McpMemberKind::Resource => quote! {
-            ::std::vec::Vec<#mcp::__macro_support::ResourceContents>
-        },
+        McpMemberKind::Resource => quote! { #mcp::__macro_support::ReadResourceResult },
         McpMemberKind::Prompt => quote! { #mcp::__macro_support::GetPromptResult },
         McpMemberKind::Completion => quote! { #mcp::__macro_support::Completions },
         McpMemberKind::Method => quote! { #mcp::__macro_support::MethodValue },
@@ -440,12 +438,34 @@ fn generate_invoke_method(
             } else {
                 quote! { &__call.uri }
             };
-            quote! {
+            let convert = quote! {
                 #mcp::__macro_support::IntoResourceResult::into_resource_result(
                     __result,
                     #uri,
                     #mime,
                 )
+            };
+            // `#[resource(ttl, cache_scope)]`: defaults for what the method's
+            // own return leaves unset.
+            if tool.meta.ttl_ms.is_none() && tool.meta.cache_private.is_none() {
+                convert
+            } else {
+                let ttl = match tool.meta.ttl_ms {
+                    Some(ms) => quote! { ::core::option::Option::Some(#ms) },
+                    None => quote! { ::core::option::Option::None },
+                };
+                let scope = match tool.meta.cache_private {
+                    Some(true) => quote! {
+                        ::core::option::Option::Some(#mcp::__macro_support::CacheScope::Private)
+                    },
+                    Some(false) => quote! {
+                        ::core::option::Option::Some(#mcp::__macro_support::CacheScope::Public)
+                    },
+                    None => quote! { ::core::option::Option::None },
+                };
+                quote! {
+                    #mcp::__macro_support::resource_cache_defaults(#convert, #ttl, #scope)
+                }
             }
         }
         McpMemberKind::Prompt => {

@@ -102,6 +102,12 @@ pub struct McpToolMeta {
     pub uri: Option<String>,
     /// The resource MIME type (`mime_type = "..."`), `#[resource]` only.
     pub mime_type: Option<String>,
+    /// Default freshness of the read result in milliseconds (`ttl = "30s"`
+    /// or `ttl = 30`, seconds), `#[resource]` only.
+    pub ttl_ms: Option<u64>,
+    /// Default cache scope of the read result (`cache_scope = "public"` /
+    /// `"private"`), `#[resource]` only. `true` = private.
+    pub cache_private: Option<bool>,
     /// Scopes the caller must ALL hold (`scopes = "a,b"` or
     /// `scopes = ["a", "b"]`).
     pub scopes: Vec<String>,
@@ -248,6 +254,8 @@ fn allowed_meta_keys(kind: McpMemberKind) -> &'static [&'static str] {
             "title",
             "description",
             "mime_type",
+            "ttl",
+            "cache_scope",
             "scopes",
             "any_scopes",
             "group",
@@ -344,6 +352,22 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
             "open_world" => meta.open_world = Some(parse_flag(&nested)?),
             "uri" => meta.uri = Some(parse_str(&nested)?),
             "mime_type" => meta.mime_type = Some(parse_str(&nested)?),
+            "ttl" => meta.ttl_ms = Some(parse_ttl_ms(&nested)?),
+            "cache_scope" => {
+                let lit: syn::LitStr = nested.value()?.parse()?;
+                meta.cache_private = Some(match lit.value().as_str() {
+                    "private" => true,
+                    "public" => false,
+                    other => {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            format!(
+                                "unknown cache scope `{other}`; expected `\"public\"` or `\"private\"`"
+                            ),
+                        ))
+                    }
+                });
+            }
             "scopes" => meta.scopes = parse_scope_list(&nested)?,
             "any_scopes" => meta.any_scopes = parse_scope_list(&nested)?,
             "group" => meta.group = Some(parse_group_name(&nested)?),
@@ -377,6 +401,29 @@ fn parse_tool_meta(attr: &syn::Attribute, kind: McpMemberKind) -> syn::Result<Mc
 }
 
 /// A flag: bare = true, `= <bool>` accepted.
+/// `ttl = "30s"` (a duration string: `ms`, `s`, `m`, `h`, `d`, combinable)
+/// or `ttl = 30` (whole seconds), in milliseconds. Zero is allowed: the
+/// result is stale as soon as it is read.
+fn parse_ttl_ms(nested: &syn::meta::ParseNestedMeta) -> syn::Result<u64> {
+    let value = nested.value()?;
+    if value.peek(syn::LitInt) {
+        let lit: syn::LitInt = value.parse()?;
+        let secs: u64 = lit.base10_parse()?;
+        secs.checked_mul(1_000)
+            .ok_or_else(|| syn::Error::new(lit.span(), "ttl is too large"))
+    } else {
+        let lit: syn::LitStr = value.parse().map_err(|e| {
+            syn::Error::new(
+                e.span(),
+                "expected a duration string (`ttl = \"30s\"`) or whole seconds (`ttl = 30`)",
+            )
+        })?;
+        crate::extract::duration::parse_duration_ms(&lit.value()).map_err(|e| {
+            syn::Error::new(lit.span(), format!("invalid ttl '{}': {e}", lit.value()))
+        })
+    }
+}
+
 fn parse_flag(nested: &syn::meta::ParseNestedMeta) -> syn::Result<bool> {
     if nested.input.peek(syn::Token![=]) {
         let lit: syn::LitBool = nested.value()?.parse()?;

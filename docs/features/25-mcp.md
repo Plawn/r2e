@@ -195,7 +195,22 @@ impl MathTools {
   (`IntoResourceResult`): `String`/`&str` (text contents
   with the declared MIME type), `Json<T>` (`application/json` unless
   overridden), `ResourceContents` / `Vec<ResourceContents>`, and `Result<_,
-  E: Into<McpError>>`.
+  E: Into<McpError>>`. The cache fields of the `resources/read` result —
+  `ttlMs`, `cacheScope` — have three levels: fixed values go on the attribute
+  (`ttl = "30s"` — a duration string, or whole seconds as `ttl = 30` — and
+  `cache_scope = "public" | "private"`; `DynamicResource::ttl(..)` /
+  `.cache_scope(..)` on a dynamic resource); values computed per read wrap
+  any of the returns above in `ResourceRead`
+  (`ResourceRead::new(body).ttl(Duration::from_secs(30)).cache_scope(CacheScope::Private)`;
+  the wrapped value keeps its URI and MIME handling, and what it sets
+  overrides the attribute field by field); the whole `ReadResourceResult` is
+  the escape hatch, sent as written. `DynamicResource::handler` accepts the
+  same types.
+- **Result `_meta`** — a `#[tool]`, `#[resource]` or `#[prompt]` wraps its
+  return in `WithMeta::new(value, meta!({ .. }))` to set `_meta` on the
+  `tools/call`, `resources/read` or `prompts/get` result; the wrapped value
+  keeps its own conversion, and keys it already set are kept unless named
+  again.
 - `#[prompt]` — optional `name` (unique across services), `title`,
   `description`, `scopes`/`any_scopes`. A `Params<T>` parameter drives BOTH
   deserialization and the advertised `arguments` list (one entry per schema
@@ -1230,7 +1245,7 @@ refused connection — use `.try_connect().await` to assert the refusal
 | `call_tool::<Out>(name, args)` | `Out` decoded from `structuredContent`, else from the first text block |
 | `call_tool_text(name, args)` | the text blocks, joined |
 | `call_tool_raw(name, args)` | the `CallToolResult` (`isError` results included) |
-| `list_resources()` / `list_resource_templates()` / `read_resource(uri)` / `read_resource_text(uri)` | resources |
+| `list_resources()` / `list_resource_templates()` / `read_resource(uri)` / `read_resource_text(uri)` / `read_resource_raw(uri)` (whole result: `ttl_ms`, `cache_scope`, `meta`) | resources |
 | `list_prompts()` / `get_prompt(name, args)` | prompts |
 
 `args` is any `Serialize` producing a JSON object (`json!({…})`, a struct) or
