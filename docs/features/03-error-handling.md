@@ -52,10 +52,10 @@ The enum is `#[non_exhaustive]`; the message variants carry `Cow<'static, str>`
 async fn get_by_id(
     &self,
     Path(id): Path<u64>,
-) -> Result<axum::Json<User>, r2e_core::HttpError> {
+) -> Result<r2e::http::Json<User>, r2e::HttpError> {
     match self.user_service.get_by_id(id).await {
-        Some(user) => Ok(axum::Json(user)),
-        None => Err(r2e_core::HttpError::NotFound("User not found".into())),
+        Some(user) => Ok(r2e::http::Json(user)),
+        None => Err(r2e::HttpError::NotFound("User not found".into())),
     }
 }
 ```
@@ -75,9 +75,9 @@ The `Custom` variant allows returning any HTTP code with a free-form JSON body:
 
 ```rust
 #[get("/error/custom")]
-async fn custom_error(&self) -> Result<axum::Json<()>, r2e_core::HttpError> {
-    Err(r2e_core::HttpError::Custom {
-        status: axum::http::StatusCode::from_u16(418).unwrap(),
+async fn custom_error(&self) -> Result<r2e::http::Json<()>, r2e::HttpError> {
+    Err(r2e::HttpError::Custom {
+        status: r2e::http::StatusCode::from_u16(418).unwrap(),
         body: serde_json::json!({
             "error": "I'm a teapot",
             "code": 418
@@ -114,7 +114,7 @@ built-in `From<sqlx::Error>` impl.
 To add additional conversions in your application code:
 
 ```rust
-r2e_core::map_error! {
+r2e::map_error! {
     serde_json::Error => Internal,
     reqwest::Error => Internal,
 }

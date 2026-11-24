@@ -46,6 +46,25 @@ list into an **HList state** — the state type is *inferred* from the `.provide
 > `#![recursion_limit = "512"]` in each crate root (`main.rs` and `lib.rs`). `r2e doctor` warns
 > as the bean count approaches the threshold.
 
+#### Generic helpers over the builder (r2e-core 0.12)
+
+Fluent chains infer every type parameter of `AppBuilder<P, R, Mods>` and need
+no annotation. A **helper function generic over the builder** has to spell the
+bounds out, and since r2e-core 0.12 (r2e 0.15) the requirement list `R` is a
+list of **groups** — one per registration (`TCons<Deps, R>`) — instead of one
+flat, concatenated list:
+
+| Helper calls | Bound to write |
+|---|---|
+| `.register::<B>()` / `.provide(..)` | none on `R` — name the result with `r2e::builder::Registered<B::Provided, B::Deps, P, R, Mods>` |
+| `.plugin(pl)` | `Pl::Required: PushRequired<R>` (`r2e::type_list`) — result alias `r2e::builder::WithPluginInstalled<Pl, P, R, Mods>` |
+| `.build_state()` / `.try_build_state()` | `P: BuildHList + ProvisionIndex`, `R: AllGroupsSatisfied<P::Index, W>` |
+
+The old `R: TAppend<..>` bounds no longer apply. `build_state()` checks every
+group against an index of the provision list, which keeps type-checking time
+linear in the number of beans. Step-by-step migration:
+[`docs/migration/di-provision-index.md`](../migration/di-provision-index.md).
+
 ### 1.2 Internal Construction (`build_inner`)
 
 The `build_inner()` method produces a `BuiltApp<T>` struct bundling the router, the collected hook lists (startup / drain / shutdown / async-shutdown / plugin-shutdown / serve), consumer and post-construct registrations, plugin data, the resolved state, and the shutdown grace period:
@@ -55,26 +74,58 @@ The `build_inner()` method produces a `BuiltApp<T>` struct bundling the router, 
 3. **OpenAPI** (if enabled) — invocation of the OpenAPI builder with collected metadata, adding `/openapi.json` and `/docs` routes
 4. **System routes** — `/health` and `/__r2e_dev/*` if enabled
 5. **State application** — `router.with_state(state.clone())`: a single clone at construction time
-6. **Layer stacking** — applied in reverse declaration order (the last added is the outermost)
+6. **Layer stacking** — applied **band by band** (`LayerSlot`): every layer declares a band, and the band decides its position — `Trace > Metrics > Cors > Auth > App` from the outside in. Install order only matters **within** a band (later = outer). `with_layer` / `with_layer_fn` / a plugin's `ctx.add_layer` land in the innermost `App` band; `with_layer_in` / `with_layer_fn_in` / `ctx.add_layer_in` pick another one (see [`docs/migration/layer-slots.md`](../migration/layer-slots.md))
 
 ### 1.3 Tower Layer Order
 
-Layers stack from inside to outside. At runtime, the request traverses them in reverse order:
+Layers stack from inside to outside; a request crosses them from the outermost
+in. The position of a layer is a property of its **band**
+(`r2e::LayerSlot`), not of where `.plugin(..)` was written:
 
 ```
 Incoming HTTP request
         |
         v
  [CatchPanicLayer]     -- last-resort net for panics in the layers below (outermost)
- [HttpTraceLayer]      -- per-request span + summary line
- [CorsLayer]           -- CORS validation
+ [NormalizePath]       -- trailing-slash rewrite, before routing (if enabled)
+ Trace band            -- HttpTrace, RequestIdPlugin, Observability
+ Metrics band          -- Prometheus, MetricsFacade
+ Cors band             -- Cors, SecureHeaders, with_layer_in(LayerSlot::Cors, ..)
+ Auth band             -- gates that reject early: add_layer_in(LayerSlot::Auth, ..)
+ App band              -- with_layer, with_layer_fn, ctx.add_layer (the default)
  [CatchPanicLayer]     -- catches handler panics → JSON 500 (closest to the handler)
         |
         v
-   Axum Handler
+   Routes / handler
 ```
 
-**Implication**: `HttpTraceLayer` sees all requests, including those rejected by CORS. A panic in the handler is caught by the **inner** `CatchPanicLayer` and converted into a clean JSON 500 *below* the instrumentation, so the panicking request still gets its summary line, its 5xx metric and its `x-request-id` — and the `error` event the layer emits is inside the request span, so it carries `request_id`. The outer copy exists only for panics raised by the layers themselves.
+| Band | Installed by |
+|---|---|
+| `LayerSlot::Trace` | `HttpTrace`, `RequestIdPlugin`, `Observability` |
+| `LayerSlot::Metrics` | `Prometheus`, `MetricsFacade` |
+| `LayerSlot::Cors` | `Cors`, `SecureHeaders` |
+| `LayerSlot::Auth` | your own gate plugins (`ctx.add_layer_in(LayerSlot::Auth, ..)`) |
+| `LayerSlot::App` | `AppBuilder::with_layer`, `with_layer_fn`, `PluginBuildContext::add_layer` |
+
+```rust,ignore
+use r2e::prelude::*; // LayerSlot is in the prelude
+
+app.with_layer(TimeoutLayer::new(Duration::from_secs(30)))   // App band (innermost)
+   .with_layer_in(LayerSlot::Cors, my_cors_layer)             // stays outside any auth gate
+   .with_layer_fn_in(LayerSlot::Trace, |routes| routes.layer(my_access_log))
+```
+
+**Implications**: the trace and metrics bands see every request, including
+CORS preflights and the `401`/`403` an `Auth`-band gate returns; CORS headers
+are present on gate rejections because `Cors` sits outside `Auth`. A panic in
+the handler is caught by the **inner** `CatchPanicLayer` and converted into a
+clean JSON 500 *below* the instrumentation, so the panicking request still
+gets its summary line, its 5xx metric and its `x-request-id` — and the `error`
+event the layer emits is inside the request span, so it carries `request_id`.
+The outer copy exists only for panics raised by the layers themselves.
+
+Upgrading from a stack that relied on `.plugin(..)` order (r2e-core ≤ 0.9):
+[`docs/migration/layer-slots.md`](../migration/layer-slots.md).
 
 ### 1.4 Startup Sequence (`serve`)
 
@@ -94,7 +145,7 @@ serve(addr)
     |
     |-- 4. TCP binding on the address
     |
-    |-- 5. axum::serve() with graceful shutdown
+    |-- 5. r2e::http::server::serve() with graceful shutdown
     |       The server accepts connections
     |       In the background: scheduled tasks active
     |
@@ -111,7 +162,7 @@ serve(addr)
 
 The scheduler uses an `r2e::rt::CancelToken` that is cancelled in an `on_stop` hook registered by `with_scheduler`. Each scheduled task watches this token via `rt::select!` and stops cleanly.
 
-In-flight HTTP requests are completed before closing (default Axum behavior).
+In-flight HTTP requests are drained before closing, bounded by `server.drain-timeout` (default `30s`; see [22-serve-lifecycle.md](./22-serve-lifecycle.md)).
 
 ### 1.6 Shutdown Grace Period
 
@@ -137,7 +188,7 @@ If the hooks (plugin + user) do not finish within the delay, the process forces 
 HTTP request
     |
     v
-[Tower Layers]  ← CatchPanicLayer → HttpTraceLayer → CorsLayer → CatchPanicLayer
+[Tower Layers]  ← CatchPanicLayer → Trace → Metrics → Cors → Auth → App bands → CatchPanicLayer
     |
     v
 [Axum Routing]  ← path + method matching

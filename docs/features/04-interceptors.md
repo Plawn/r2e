@@ -123,11 +123,11 @@ Adds traces on entry and exit via the `Interceptor` trait. Applied with `#[inter
 ```rust
 #[get("/users")]
 #[intercept(Logged::info())]                   // default: Info
-async fn list(&self) -> axum::Json<Vec<User>> { ... }
+async fn list(&self) -> r2e::http::Json<Vec<User>> { ... }
 
 #[get("/users")]
 #[intercept(Logged::debug())]                  // custom level
-async fn list(&self) -> axum::Json<Vec<User>> { ... }
+async fn list(&self) -> r2e::http::Json<Vec<User>> { ... }
 ```
 
 Level constructors: `Logged::trace()`, `Logged::debug()`, `Logged::info()`, `Logged::warn()`, `Logged::error()`, or `Logged::level(LogLevel::Debug)`.
@@ -146,11 +146,11 @@ Measures execution time. With an optional threshold, logs only if the time excee
 ```rust
 #[get("/users")]
 #[intercept(Timed::new())]                     // default: Info, no threshold
-async fn list(&self) -> axum::Json<Vec<User>> { ... }
+async fn list(&self) -> r2e::http::Json<Vec<User>> { ... }
 
 #[get("/users")]
 #[intercept(Timed::threshold_warn(100))]       // Warn, only if > 100ms
-async fn list(&self) -> axum::Json<Vec<User>> { ... }
+async fn list(&self) -> r2e::http::Json<Vec<User>> { ... }
 ```
 
 Constructors: `Timed::new()` / `Timed::info()` / `Timed::debug()` / `Timed::warn()` (no threshold), `Timed::threshold(ms)` (Info, only if exceeded), `Timed::threshold_warn(ms)` (Warn, only if exceeded).
@@ -167,7 +167,7 @@ INFO method="list" "elapsed_ms=3"
 #[get("/users")]
 #[intercept(Logged::debug())]
 #[intercept(Timed::threshold(50))]
-async fn list(&self) -> axum::Json<Vec<User>> { ... }
+async fn list(&self) -> r2e::http::Json<Vec<User>> { ... }
 ```
 
 Logs (if the request takes more than 50ms):
@@ -218,11 +218,11 @@ The cache key is `full_key(controller, method)`: with no `group`, it is `__{cont
 ```rust
 #[get("/users")]
 #[intercept(Cache::ttl(30).group("users"))]
-async fn list(&self) -> axum::Json<Vec<User>> { ... }
+async fn list(&self) -> r2e::http::Json<Vec<User>> { ... }
 
 #[post("/users")]
 #[intercept(CacheInvalidate::group("users"))]
-async fn create(&self, ...) -> axum::Json<User> { ... }
+async fn create(&self, ...) -> r2e::http::Json<User> { ... }
 ```
 
 ### Internal mechanism
@@ -301,12 +301,12 @@ Users can create their own interceptors by implementing the `Interceptor<R>` tra
 ```rust
 pub struct AuditLog;
 
-impl r2e_core::SelfBuilt for AuditLog {}
+impl r2e::SelfBuilt for AuditLog {}
 
-impl<R: Send> r2e_core::Interceptor<R> for AuditLog {
+impl<R: Send> r2e::Interceptor<R> for AuditLog {
     fn around<F, Fut>(
         &self,
-        ctx: r2e_core::InterceptorContext,
+        ctx: r2e::InterceptorContext,
         next: F,
     ) -> impl Future<Output = R> + Send
     where
@@ -327,8 +327,8 @@ impl<R: Send> r2e_core::Interceptor<R> for AuditLog {
 An interceptor that reads a bean holds it as a **field**; a separate **spec** type — named by the `#[intercept(...)]` expression — pulls the bean from the graph in `build`, once at registration:
 
 ```rust
-use r2e_core::{DecoratorSpec, Interceptor, InterceptorContext, BeanContext};
-use r2e_core::type_list::{TCons, TNil};
+use r2e::{DecoratorSpec, Interceptor, InterceptorContext, BeanContext};
+use r2e::type_list::{TCons, TNil};
 
 // Spec: the value the attribute expression evaluates to.
 pub struct DbAudit;
@@ -379,7 +379,7 @@ Usage:
 #[get("/users/audited")]
 #[intercept(Logged::info())]
 #[intercept(AuditLog)]
-async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
+async fn audited_list(&self) -> r2e::http::Json<Vec<User>> { ... }
 ```
 
 ### Constraints
@@ -391,7 +391,7 @@ async fn audited_list(&self) -> axum::Json<Vec<User>> { ... }
 
 ```rust
 use std::future::Future;
-use r2e_core::prelude::*;
+use r2e::prelude::*;
 
 /// Custom interceptor (self-contained: no bean deps)
 pub struct AuditLog;
@@ -431,40 +431,40 @@ impl UserController {
     #[get("/")]
     #[intercept(Logged::debug())]
     #[intercept(Timed::threshold(50))]
-    async fn list(&self) -> axum::Json<Vec<User>> {
-        axum::Json(self.user_service.list().await)
+    async fn list(&self) -> r2e::http::Json<Vec<User>> {
+        r2e::http::Json(self.user_service.list().await)
     }
 
     // Cache group + invalidation
     #[get("/cached")]
     #[intercept(Cache::ttl(30).group("users"))]
     #[intercept(Timed::new())]
-    async fn cached_list(&self) -> axum::Json<serde_json::Value> {
+    async fn cached_list(&self) -> r2e::http::Json<serde_json::Value> {
         let users = self.user_service.list().await;
-        axum::Json(serde_json::to_value(users).unwrap())
+        r2e::http::Json(serde_json::to_value(users).unwrap())
     }
 
     #[post("/")]
     #[intercept(CacheInvalidate::group("users"))]
-    async fn create(&self, axum::Json(body): axum::Json<CreateUserRequest>) -> axum::Json<User> {
-        axum::Json(self.user_service.create(body.name, body.email).await)
+    async fn create(&self, r2e::http::Json(body): r2e::http::Json<CreateUserRequest>) -> r2e::http::Json<User> {
+        r2e::http::Json(self.user_service.create(body.name, body.email).await)
     }
 
     // Rate limit per user (a guard, not an interceptor)
     #[post("/rate-limited")]
     #[guard(RateLimit::per_user(5, 60))]
-    async fn create_rate_limited(&self, axum::Json(body): axum::Json<CreateUserRequest>)
-        -> axum::Json<User>
+    async fn create_rate_limited(&self, r2e::http::Json(body): r2e::http::Json<CreateUserRequest>)
+        -> r2e::http::Json<User>
     {
-        axum::Json(self.user_service.create(body.name, body.email).await)
+        r2e::http::Json(self.user_service.create(body.name, body.email).await)
     }
 
     // Custom interceptor
     #[get("/audited")]
     #[intercept(Logged::info())]
     #[intercept(AuditLog)]
-    async fn audited_list(&self) -> axum::Json<Vec<User>> {
-        axum::Json(self.user_service.list().await)
+    async fn audited_list(&self) -> r2e::http::Json<Vec<User>> {
+        r2e::http::Json(self.user_service.list().await)
     }
 }
 ```

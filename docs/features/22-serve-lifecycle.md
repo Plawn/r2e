@@ -191,7 +191,7 @@ When shutdown is triggered, `WsStream::next()` sends the peer a close frame with
 
 A handler that never touches the receive side (or ignores the end-of-stream) gets nothing worse than any other stubborn task: after `shutdown_grace_period` it is abandoned — detached, not aborted — with `warn!(phase = "tracked-handle join", service = "ws:MyController::my_method", …)`, and shutdown proceeds to `on_stop`. With no grace period configured, shutdown waits for it indefinitely.
 
-An app that is never served through `run()` — `build_with_consumers()`, `TestApp`, or a router handed to `axum::serve` by hand — has no tracked lane to arm, and sessions there run detached exactly as they always did. Nothing panics; there is simply nothing to join them against.
+An app that is never served through `run()` — `build_with_consumers()`, `TestApp`, or a router served by hand through `r2e::http::server::serve` — has no tracked lane to arm, and sessions there run detached exactly as they always did. Nothing panics; there is simply nothing to join them against.
 
 Under sharded serving (`server.workers`) the guarantee is the same, and it is not free: the socket was accepted by a *worker* runtime while the session runs on the control plane, so the worker's I/O driver has to outlive the session. Workers therefore **park** once their HTTP drain is over and their per-worker services are down — they stay inside `block_on`, driving that I/O driver — until the control plane has finished step 4, and only then drop their runtime. Without that handshake a session that reacted slowly (anything past the first poll after cancellation) would find its socket dead well inside its own grace period, and the peer would see a TCP reset instead of the close frame.
 

@@ -1060,17 +1060,26 @@ the `dev` profile.
 
 **Mounting and app middleware.** `McpServer` mounts the endpoint (and, with
 `mcp.auth`, the public well-known routes) in the **Routes** stage, like a
-controller route. Every app layer installed through `add_layer` — `HttpTrace`,
-metrics, an app CORS layer, app-wide auth or rate-limit layers — therefore
-wraps `/mcp` as it wraps the rest of the router: MCP requests (including the
+controller route. Every app-wide layer therefore wraps `/mcp` as it wraps the
+rest of the router. Each of these layers sits in its
+[`LayerSlot` band](./26-http-stack.md), whatever the install order:
+
+- `HttpTrace` in `Trace`;
+- metrics in `Metrics`;
+- the `Cors` plugin, or a hand-built CORS layer installed with `with_layer_in(LayerSlot::Cors, ..)`, in `Cors`;
+- app-wide auth or API-key gates in `Auth`;
+- layers added with `with_layer` / `add_layer` in `App`.
+
+As a result: MCP requests (including the
 long-lived SSE `GET`) get a trace span, a request summary line and metrics, and
 an app-wide auth layer gates `/mcp` and the well-known routes too. Exempt those
 paths in such a layer when the MCP endpoint is meant to be reached with
 `mcp.auth` alone. The MCP service keeps its own CORS layer around its auth
 layer, so a `401` challenge stays readable by browser clients.
 
-**Double CORS.** An app CORS layer installed with `add_layer` sits *outside*
-the MCP one and answers preflights (`OPTIONS /mcp`) before the MCP layer sees
+**Double CORS.** An app CORS layer (the `Cors` plugin, or a hand-built layer
+installed with `with_layer_in(LayerSlot::Cors, ..)` / `add_layer_in`) sits
+*outside* the MCP one and answers preflights (`OPTIONS /mcp`) before the MCP layer sees
 them, so `mcp.cors.allowed-origins` no longer decides those. When the app has
 its own CORS layer, configure it for MCP browser clients:
 

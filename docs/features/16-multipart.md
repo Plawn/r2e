@@ -265,7 +265,7 @@ async fn upload_raw(&self, mut multipart: Multipart) -> JsonResult<Value> {
 }
 ```
 
-`Multipart` is a re-export of `axum::extract::Multipart`.
+`Multipart` is `r2e::http::multipart::Multipart` (also in the prelude), the HTTP backend's multipart extractor re-exported by `r2e-http`.
 
 ## OpenAPI
 

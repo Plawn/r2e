@@ -101,8 +101,8 @@ pub struct UserController {
 #[routes]
 impl UserController {
     #[get("/me")]
-    async fn me(&self) -> axum::Json<AuthenticatedUser> {
-        axum::Json(self.user.clone())
+    async fn me(&self) -> r2e::http::Json<AuthenticatedUser> {
+        r2e::http::Json(self.user.clone())
     }
 }
 ```
@@ -244,9 +244,9 @@ The same `Arc<JwtClaimsValidator>` bean validates the JWT once; the light
 ```rust
 #[get("/admin/users")]
 #[roles("admin")]
-async fn admin_list(&self) -> axum::Json<Vec<User>> {
+async fn admin_list(&self) -> r2e::http::Json<Vec<User>> {
     let users = self.user_service.list().await;
-    axum::Json(users)
+    r2e::http::Json(users)
 }
 ```
 

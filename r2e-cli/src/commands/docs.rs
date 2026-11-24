@@ -43,7 +43,7 @@ static DOCS: &[DocEntry] = &[
         slug: "interceptors",
         title: "Interceptors",
         crates: &["r2e-macros"],
-        body: include_str!("../../../docs/features/04-intercepteurs.md"),
+        body: include_str!("../../../docs/features/04-interceptors.md"),
     },
     DocEntry {
         slug: "openapi",
@@ -61,7 +61,7 @@ static DOCS: &[DocEntry] = &[
         slug: "events",
         title: "Events",
         crates: &["r2e-events"],
-        body: include_str!("../../../docs/features/07-evenements.md"),
+        body: include_str!("../../../docs/features/07-events.md"),
     },
     DocEntry {
         slug: "scheduling",
@@ -85,7 +85,7 @@ static DOCS: &[DocEntry] = &[
         slug: "security",
         title: "JWT Security / Roles",
         crates: &["r2e-security"],
-        body: include_str!("../../../docs/features/11-securite-jwt.md"),
+        body: include_str!("../../../docs/features/11-security-jwt.md"),
     },
     DocEntry {
         slug: "testing",
@@ -160,10 +160,22 @@ static DOCS: &[DocEntry] = &[
         body: include_str!("../../../docs/features/23-openfga.md"),
     },
     DocEntry {
+        slug: "tenancy",
+        title: "Multi-Tenancy (per-tenant beans)",
+        crates: &["r2e-tenant"],
+        body: include_str!("../../../docs/features/24-tenancy.md"),
+    },
+    DocEntry {
         slug: "mcp",
         title: "MCP Server (Model Context Protocol)",
         crates: &["r2e-mcp"],
         body: include_str!("../../../docs/features/25-mcp.md"),
+    },
+    DocEntry {
+        slug: "http-stack",
+        title: "HTTP Stack (Layer Bands, CORS, Request Tracing)",
+        crates: &["r2e-core"],
+        body: include_str!("../../../docs/features/26-http-stack.md"),
     },
 ];
 
