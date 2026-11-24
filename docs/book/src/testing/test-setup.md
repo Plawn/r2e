@@ -8,7 +8,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dev-dependencies]
-r2e-test = "0.3"
+r2e-test = "0.13"
 ```
 
 ## Recommended pattern: boot your `App`
@@ -136,6 +136,72 @@ Tune the timeout with `R2E_TEST_ORDER_TIMEOUT_SECS` (default `60`).
 > `group` without `order` is a compile error, as is `order`/`group` on
 > `#[r2e::main]`. Using `order` requires the `r2e-test` dev-dependency (already
 > present whenever you use `app = …`).
+
+## Test suites (`#[r2e::test_suite]`)
+
+When several tests share expensive setup (a booted app, a seeded database, a
+listening socket), put them on one suite type instead of free functions. Each
+`#[case]` method becomes its own Cargo test; one suite value is shared behind a
+per-suite lock, and **one runtime** drives the whole suite, so whatever
+`#[before_all]` opened is still alive in the last case:
+
+```rust,ignore
+use r2e_test::TestApp;
+
+struct UserSuite {
+    app: TestApp,
+    created: usize,
+}
+
+#[r2e::test_suite(app = my_app::MyApp)]
+impl UserSuite {
+    /// Runs once. Binds what `#[r2e::test]` would (`TestApp`, `TestJwt`,
+    /// `#[inject]` beans) and returns `Self` (or `Result<Self, E>`).
+    #[before_all]
+    async fn setup(app: TestApp) -> Self {
+        Self { app, created: 0 }
+    }
+
+    #[before_each]
+    async fn reset(&mut self) { /* runs before every case */ }
+
+    #[case(order = 1)]
+    async fn creates_user(&mut self) {
+        self.app.post("/users").json(&new_user()).send().await.assert_created();
+        self.created += 1;
+    }
+
+    #[case(order = 2)]
+    async fn lists_users(&mut self) {
+        self.app.get("/users").send().await.assert_ok();
+    }
+
+    #[after_each]
+    async fn check(&mut self) { /* runs after every case */ }
+
+    #[after_all]
+    async fn teardown(&mut self) { /* runs once, after the last case */ }
+}
+```
+
+- `#[before_all]` is an associated function (no `self`). Without one, the suite
+  is built with `Default`. The suite arguments are the same as `#[r2e::test]`'s:
+  `app = ...`, `with = ...`, `jwt = false`, `env = ...`, `resources(..)` and
+  the runtime knobs (`flavor`, `worker_threads`, `start_paused`, which is then
+  one paused clock shared by every case). `with`/`jwt`/`env`/`resources`
+  require a `#[before_all]` that binds the booted app; otherwise they are a
+  compile error.
+- `#[before_each]`, `#[after_each]`, `#[after_all]` and `#[case]` take only
+  `&self` or `&mut self`. CamelCase aliases (`#[beforeAll]`, `#[beforeEach]`,
+  `#[afterEach]`, `#[afterAll]`) are accepted.
+- Cases are unordered by default (access is still serialized);
+  `#[case(order = N)]` orders them like `order = N` above. A duplicate order is
+  a compile error.
+- `#[after_all]` and the suite teardown fire when the **last generated case
+  completes**. libtest does not say which tests were selected, so a filtered
+  `cargo test <filter>` run never reaches it (the suite value lives until
+  process exit). For the same reason `#[ignore]` on a `#[case]` is a compile
+  error; skip inside the case body instead.
 
 ## Hand-assembled apps: `TestApp::from_builder`
 

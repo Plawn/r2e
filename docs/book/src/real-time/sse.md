@@ -10,7 +10,7 @@ SSE support lives in `r2e-core` and is available through the prelude. No extra f
 
 ```toml
 [dependencies]
-r2e = { version = "0.3" }
+r2e = { version = "0.15" }
 ```
 
 ## The `#[sse]` attribute

@@ -1,6 +1,6 @@
 # Static Files
 
-R2E can serve static files embedded directly in your binary using the `r2e-static` crate. The `EmbeddedFrontend` plugin wraps [rust_embed](https://docs.rs/rust-embed) and provides SPA fallback support, cache control headers, and prefix-based routing out of the box.
+R2E can serve static files embedded directly in your binary using the `r2e-static` crate (the facade's `static` feature, re-exported as `r2e::r2e_static`). The `EmbeddedFrontend` plugin wraps [rust_embed](https://docs.rs/rust-embed) and provides SPA fallback support, cache control headers, and prefix-based routing out of the box.
 
 ## Quick start
 
@@ -93,8 +93,8 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-r2e-static = { path = "../r2e-static" }
-rust-embed = "8"
+r2e = { version = "0.15", features = ["static"] }
+rust-embed = "8"   # for the `#[derive(Embed)]` macro
 ```
 
 Point the `#[folder]` attribute at your frontend build output:
@@ -140,7 +140,7 @@ Requests for non-existent files will return 404 instead of falling back to `inde
 
 ```rust
 use r2e::prelude::*;
-use r2e_static::EmbeddedFrontend;
+use r2e::r2e_static::EmbeddedFrontend;
 use rust_embed::Embed;
 
 #[derive(Embed)]

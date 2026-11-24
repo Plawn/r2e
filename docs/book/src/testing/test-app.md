@@ -324,6 +324,55 @@ let users: Vec<User> = app
 > let users: Vec<User> = resp.json();
 > ```
 
+## WebSockets (`WsTestClient`)
+
+With `r2e-test`'s `ws` feature, serve the app on a real socket and connect a
+`WsTestClient`:
+
+```rust,ignore
+let server = app.serve().await;
+let mut ws = server.ws("/ws/echo").await;
+ws.send_text("hello").await?;
+assert_eq!(ws.next_text().await?, "hello");
+```
+
+`WsTestClient::connect_with_protocols(url, &["v2.chat", "v1.chat"])` offers
+subprotocols in `Sec-WebSocket-Protocol` (in that order, as a browser's
+`new WebSocket(url, protocols)` does); `ws.protocol()` then returns the one the
+server selected. When the server refuses the handshake before the upgrade (a
+guard, say), the error's `http_status()` is that response's status:
+
+```rust,ignore
+let url = format!("{}/ws/chat", server.ws_url());
+let ws = WsTestClient::connect_with_protocols(&url, &["v2.chat"]).await?;
+assert_eq!(ws.protocol(), Some("v2.chat"));
+
+// shorthand on the server (panics if the handshake fails):
+let ws = server.ws_with_protocols("/ws/chat", &["v2.chat"]).await;
+```
+
+## gRPC (`app.grpc()`)
+
+With `r2e-test`'s `grpc` feature, `app.grpc()` returns a `GrpcTestChannel`: an
+in-process channel onto the services the `GrpcServer` plugin serves, to pass to
+a generated tonic client in place of a `tonic::transport::Channel`. Guards,
+identity extraction and interceptors run as they do over the wire; only the
+socket is skipped, whichever transport (separate port or multiplexed) the app
+uses:
+
+```rust,ignore
+let grpc = app.grpc();
+let mut anonymous = GreeterClient::new(grpc.clone());
+let mut admin = GreeterClient::new(grpc.as_user("alice", &["admin"]));
+let reply = admin.say_hello(HelloRequest { name: "Bob".into() }).await?;
+```
+
+`as_user(sub, roles)` mints a bearer token with the app's `TestJwt`;
+`bearer(token)` and `metadata(key, value)` add raw metadata to every call (a
+call's own `tonic::Request::metadata_mut` wins). Each method returns a new
+channel, so one test can hold several callers side by side. `app.grpc()` panics
+if the app has no `GrpcServer` plugin or no registered gRPC service.
+
 ## Complete example
 
 ```rust

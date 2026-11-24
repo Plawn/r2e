@@ -159,12 +159,30 @@ when the effect is applied:
 | **Routes** | anything that needs the complete route table (OpenAPI) | after **every** controller is registered |
 | **Finalize** | transport-level wraps (a gRPC multiplexer) | outermost, after every HTTP layer |
 
-Within a stage, effects apply in install order, and a later layer ends up
+### Layer bands (`LayerSlot`)
+
+HTTP layers added in the Graph stage do not stack in install order either. Each
+layer declares the **band** (`LayerSlot`) it belongs to, and the band decides
+its position. From the outside in:
+
+```text
+Trace  >  Metrics  >  Cors  >  Auth  >  App  >  routes
+```
+
+| Band | What goes there | Built-ins |
+|---|---|---|
+| `LayerSlot::Trace` | request id, request span, access log | `HttpTrace`, `RequestIdPlugin`, `Observability` |
+| `LayerSlot::Metrics` | HTTP metrics | `Prometheus`, `MetricsFacade` |
+| `LayerSlot::Cors` | CORS and response-header policy | `Cors`, `SecureHeaders` |
+| `LayerSlot::Auth` | a layer that rejects before a handler runs | — (yours) |
+| `LayerSlot::App` | everything else — the default | `add_layer`, `with_layer`, `with_layer_fn` |
+
+Install order only matters **within one band**: there, a later layer ends up
 **outside** an earlier one. Practical consequences:
 
+- `HttpTrace`, `Prometheus` and `Cors` can be installed in any order: the trace is always outermost, metrics see CORS preflights and gate rejections, and a `401` from an `Auth`-band gate still carries CORS headers
 - `NormalizePath` can be installed at any point: it is applied at build time as a pre-routing URI rewrite wrapping the whole router
 - `EmbeddedFrontend` and `OpenApiPlugin` can be installed anywhere — their routes are mounted from a Routes-stage effect
-- `HttpTrace` early keeps it inside (and therefore observed by) later layers
 - Panic capture is not a plugin: the framework installs it innermost (so a handler panic is a plain 500 to the tracing and metrics layers) plus an outermost last-resort net
 
 ## Custom Tower layers
@@ -181,6 +199,24 @@ AppBuilder::new()
     .with_layer(TimeoutLayer::new(Duration::from_secs(30)))
     // ...
 ```
+
+`with_layer` (and `with_layer_fn`) put the layer in the default
+`LayerSlot::App` band — **innermost**, inside every plugin layer of the
+`Trace`, `Metrics`, `Cors` and `Auth` bands, whatever the call order. When the
+position matters, pick the band with `with_layer_in` / `with_layer_fn_in`. A
+hand-built CORS layer, for instance, must go in the `Cors` band, or it would sit
+inside any auth gate and a `401` would reach the browser without CORS headers
+(or switch to the `Cors` plugin):
+
+```rust,ignore
+use r2e::LayerSlot;
+
+app.with_layer_in(LayerSlot::Cors, my_cors_layer)
+```
+
+Routes added through `with_layer_fn` (`routes.nest(..)` / `routes.merge(..)`)
+are wrapped by the outer bands — including an `Auth` gate. Upgrading from
+r2e-core 0.9? See [Layer bands migration](../reference/migrations/layer-slots.md).
 
 ## Writing custom plugins
 
@@ -355,3 +391,6 @@ The lower-level `PluginInstall` trait (`#[doc(hidden)]`, HList-based) still
 backs `.plugin()` via a blanket impl, but you only need to implement it directly
 when a plugin must call arbitrary builder methods (`.register()`, `.provide()`,
 …) itself — a rare escape hatch.
+A hand-written impl bounds the requirement list with
+`Self::Required: PushRequired<R>` (r2e-core 0.12+, not `R: TAppend<..>`); see
+[Generic DI builder bounds](../reference/migrations/di-provision-index.md).

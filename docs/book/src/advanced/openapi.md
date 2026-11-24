@@ -8,7 +8,7 @@ R2E auto-generates an OpenAPI 3.1.0 specification from your controller route met
 
 ```toml
 [dependencies]
-r2e = { version = "0.3", features = ["openapi"] }
+r2e = { version = "0.15", features = ["openapi"] }
 ```
 
 **2. Add schemars for request/response schemas:**
@@ -44,7 +44,35 @@ pub struct User {
 }
 ```
 
-**4. Register the OpenAPI plugin:**
+**4. Register the OpenAPI plugin.**
+
+File-driven — `OpenApiPlugin::default()` reads the `openapi.*` config section:
+
+```yaml
+openapi:
+  title: My API          # info.title (default "API")
+  version: 1.0.0         # info.version (default "0.0.0")
+  description: What this service does
+  docs-ui: true          # mount Swagger UI at /docs (default false)
+  enabled: true          # false removes /openapi.json and /docs entirely
+```
+
+```rust,ignore
+use r2e::r2e_openapi::OpenApiPlugin;
+
+AppBuilder::new()
+    .load_config::<()>()
+    .plugin(OpenApiPlugin::default())   // reads `openapi.*`
+    .build_state()
+    .await
+    // ...
+```
+
+Programmatic — `OpenApiPlugin::new(cfg)` is needed for schema registries,
+overrides and a custom error schema. Its title, version and `docs_ui` win over
+the file; a `None` description falls through to `openapi.description`, and
+`openapi.enabled: false` still removes both routes (the usual way to keep the
+spec off a production deployment without touching the code):
 
 ```rust
 use r2e::r2e_openapi::{OpenApiConfig, OpenApiPlugin};
@@ -82,6 +110,7 @@ Route metadata is automatically collected via `Controller::register_meta()` duri
 | Request body | The last parameter's `RequestBodySchema` impl (`Json<T>`, `Form<T>`, `Bytes`, `String`, `Multipart`, `TypedMultipart<T>`, custom) |
 | Response body | The return type's `ResponseBodySchema` impl (`Json<T>`, `String`, `Html<T>`, `Bytes`, `()`, `StatusCode`, `Sse<S>`, custom), through `Result<T, E>` and `(StatusCode, T)` |
 | Path/query/header params | The path template's `{placeholders}` (typed by `Path<T>` / `Path<(A, B)>`), `Query`, `#[derive(Params)]` |
+| Parameter schemas | The parameter type's `JsonSchema` impl, inlined (a `JsonSchema` enum → its `enum` values); types without one fall back to `{ "type": … }` guessed from the type name |
 | Required roles | `#[roles("admin", "editor")]` |
 | Summary | First line of `///` doc comment |
 | Description | Remaining lines of `///` doc comment |

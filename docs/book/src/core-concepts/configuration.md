@@ -85,7 +85,21 @@ database:
 | `${VAR:default}` | Env var, falls back to `default` if unset |
 | `${env:VAR}` | Explicit env var lookup |
 | `${env:VAR:default}` | Explicit env var with fallback |
-| `${file:/path}` | Read file contents, trimmed |
+| `${file:/path}` | Read file contents, trimmed (no default: `:` belongs to the path) |
+
+Resolution rules:
+
+- **The default is verbatim.** Everything after the first colon is the default,
+  used only when the variable is **unset** (a variable set to the empty string
+  stays empty). There is no shell-style `:-` operator: `${PORT:-8080}` yields
+  `-8080` when `PORT` is unset — write `${PORT:8080}`.
+- **Placeholders nest.** A default may itself hold a placeholder
+  (`${PRIMARY_URL:${FALLBACK_URL:postgres://localhost/app}}`), and a resolved
+  value is rendered in turn.
+- **Cycles are an error, not a hang.** A value that refers back to itself fails
+  the boot with an error naming the chain (`A -> B -> A`).
+- **Every missing variable is reported at once.** The `ConfigError::NotFound`
+  lists all missing names, comma-separated, not only the first.
 
 ### Custom secret resolver
 
@@ -439,6 +453,80 @@ AppBuilder::new()
     // ...
 ```
 
+### Serde-backed sections: `SerdeConfig<T>`
+
+A settings struct that lives in a framework-free crate (or that needs serde
+features such as untagged enums or `#[serde(default = "fn")]`) does not need
+`#[derive(ConfigProperties)]`. Wrap it in `SerdeConfig<T>` (in the prelude):
+
+```rust,ignore
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct AppConfig {
+    pub name: String,
+    #[serde(default)]
+    pub engines: Vec<EngineConfig>,
+}
+
+AppBuilder::new()
+    .load_config::<SerdeConfig<AppConfig>>()   // provides SerdeConfig<AppConfig> AND AppConfig
+    // ...
+```
+
+`T` is registered as a bean next to the wrapper, so beans and controllers
+`#[inject] cfg: AppConfig` directly; `SerdeConfig<T>` also works as a plugin's
+`type Config` or a `#[config(section)]` field. The section is rebuilt from the
+flat keys (so `R2E_*` overrides and `override_config_value` are visible), and
+strings are coerced on typed fields like `FromConfigValue` does
+(`R2E_APP_PORT=8080` binds to a `u16`). Errors name the offending key
+(`app.engines.1.weight`).
+
+Trade-offs versus the derive: serde stops at the first error, so the boot
+report lists one problem at a time, and there is no `PropertyMeta`, so
+`r2e doctor` and docs listings cannot enumerate the section's fields.
+
+The nested tree (`R2eConfig::tree(prefix)`, also what `SerdeConfig` reads)
+keeps a YAML mapping key that contains a dot as **one** key — `gpt-4.1` under
+`models:` stays `gpt-4.1`, not `gpt-4` → `1` — and a digit-only mapping key
+(`"0"`) stays a key instead of turning its parent into a list.
+
+### Plugin config tiers: `Layered<C>`
+
+Plugin authors who expose both builder setters and a config section use
+`r2e::config::Layered<C>` instead of hand-written `.or(file.x).or(preset.x)`
+chains. It merges, in one fixed order:
+
+**explicit (builder setter) > file section > preset > `C::default()`**
+
+```rust,ignore
+use r2e::config::Layered;
+
+pub struct FrameGuard {
+    cfg: Layered<FrameGuardConfig>,
+}
+
+impl FrameGuard {
+    pub fn new() -> Self { Self { cfg: Layered::new() } }
+
+    /// Shared-baseline defaults: the app's file still has the last word.
+    pub fn preset(config: FrameGuardConfig) -> Self {
+        Self { cfg: Layered::with_preset(config) }
+    }
+
+    /// "I mean exactly this": beats the file.
+    pub fn policy(mut self, policy: impl Into<String>) -> Self {
+        self.cfg.set(|c| c.policy = Some(policy.into()));
+        self
+    }
+}
+
+// in `Plugin::build(self, _deps, config, ctx)`:
+let cfg = self.cfg.resolve(config);   // validate / convert after this
+```
+
+`C` must be **layerable**: every field an `Option<T>` or a `#[config(section)]`
+of a layerable type. A plain `bool` field has no "unset" state, so `resolve`
+rejects such a `C` at compile time rather than silently ignoring a file key.
+
 ### `override_config(config)` (tests only)
 
 `load_config` is the only config registration point. `override_config` is a
@@ -503,7 +591,8 @@ AppBuilder::new()
 
 `server.workers` enables SO_REUSEPORT sharded serving (N worker threads, each a
 `current_thread` runtime with its own listener). Unix only; unsupported with
-hot-reload. See the [Sharded Serving feature doc](../../../features/19-sharded-serving.md).
+hot-reload. See the sharded serving reference in the repository
+(`docs/features/19-sharded-serving.md`).
 
 If keys are missing, defaults are used. This replaces `.serve("0.0.0.0:3000")` for production setups where the address should be configurable per environment.
 

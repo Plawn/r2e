@@ -326,6 +326,35 @@ AppBuilder::new()
 
 Use `provide()` for values constructed outside the bean graph (e.g., configuration, tokens, pre-existing pools).
 
+### `provide_all()` with `#[derive(ProvideBundle)]`
+
+When an environment struct (typically your `App::Env`) carries several
+pre-built values, derive `ProvideBundle` (in the prelude) and provide them in one
+call instead of one `.provide(env.field)` per field:
+
+```rust,ignore
+#[derive(Clone, ProvideBundle)]
+pub struct AppEnv {
+    pub config: R2eConfig,      // → override_config(..), not a bean
+    pub pool: DbPool,           // → .provide(..)
+    pub s3: Option<S3Client>,   // → .provide(..): the bean type is Option<S3Client>
+}
+
+// in App::build
+b.provide_all(env).load_config::<Settings>()
+```
+
+The generated chain is exactly the one you would write by hand: one provision
+per field, in field order, each field `Clone + Send + Sync + 'static`.
+
+- At most one field may be an `R2eConfig`; it becomes `override_config` instead
+  of a provision (`provide_all` must still run before `load_config`). Detection
+  is textual (the type path ends in `R2eConfig`), so a type alias is not
+  recognised.
+- An `Option<T>` field is provided as-is, as the bean `Option<T>`; it is not
+  unwrapped or skipped when `None`.
+- Generic structs, tuple structs, unit structs and enums are rejected.
+
 ### Resolution order
 
 1. All `provide()`d values are available immediately
