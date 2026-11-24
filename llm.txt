@@ -66,13 +66,13 @@ extra).
 |---|---|---|
 | `HttpError`, `#[derive(ApiError)]`, `map_error!`, error responses, `Rejection` / `RejectionKind`, `ErrorSchema`, error envelopes, `#[error(rejection)]`, panic capture / `on_panic` | `llm/error-handling.md` | core |
 | `#[bean]`, `#[producer]`, `AsyncBean`, `.provide` / `.register`, `ProvideBundle`, `Option<T>` beans, same-typed beans (newtypes) | `llm/di-beans.md` | core |
-| writing a `Plugin`, `Provided` / `Deps`, plugin config, plugin-shipped controllers, `HealthRegistry` | `llm/plugins.md` | core |
+| writing a `Plugin`, `Provided` / `Deps`, plugin config (`Layered<C>` file overlay), plugin-shipped controllers, `HealthRegistry`, layer bands (`LayerSlot`, `add_layer_in` / `with_layer_in`), `Cors` / `CorsConfig` | `llm/plugins.md` | core |
 | `#[post_construct]`, `#[pre_destroy]`, `#[on_start]`, startup/shutdown hooks | `llm/lifecycle-hooks.md` | core |
 | `#[module]`, feature modules, imports/exports, module aggregates, path-prefixed modules | `llm/modules.md` | core |
-| `AppBuilder` assembly order, `serve_auto`, `ShutdownToken`, graceful shutdown | `llm/app-builder.md` | core |
-| `R2eConfig`, `#[config]`, typed sections, profiles, secrets `${…}`, env overlay, config providers/rotation, well-known keys | `llm/configuration.md` | core |
+| `AppBuilder` assembly order, `serve_auto`, `ShutdownToken`, graceful shutdown (layer bands: `LayerSlot` in `llm/plugins.md`) | `llm/app-builder.md` | core |
+| `R2eConfig`, `#[config]`, typed sections, `SerdeConfig<T>`, profiles, secrets `${VAR}` / `${VAR:default}` (no `:-`), placeholder cycle detection, env overlay, config providers/rotation, well-known keys (`cors.*`, `CorsConfig`, `Cors::preset`) | `llm/configuration.md` | core |
 | validation (`garde`), `#[derive(Params)]` for path/query/header params | `llm/validation.md` | core |
-| handler parameter types at a glance (`Json`, `Path`, `Query`, `Params`, raw `Request`, …) | `llm/handler-parameter-types.md` | core |
+| handler parameter types at a glance (`Json`, `Path`, `Query`, `Params`, raw `Request`, `RequestId`, `RequestSpan`, `MatchedPath`, `Bytes`, …) | `llm/handler-parameter-types.md` | core |
 | the list of method attributes (`#[get]`, `#[roles]`, `#[intercept]`, `#[consumer]`, `#[scheduled]`, …) | `llm/method-attribute-quick-reference.md` | core |
 | the list of builder methods (`provide`, `register`, `plugin`, `on_start`, `serve_auto`, …) | `llm/builder-method-quick-reference.md` | core |
 
@@ -108,27 +108,27 @@ extra).
 
 | Your task involves… | Read | features |
 |---|---|---|
-| Server-Sent Events, `#[sse]`, streams | `llm/sse.md` | core |
-| WebSockets, `#[ws]`, sessions, shutdown of open sockets | `llm/websockets.md` | ws |
+| Server-Sent Events, `#[sse]` (`keep_alive`), streams, `SseBroadcaster`, rooms (`SseRooms`), lag policy (`LagPolicy`, `subscribe_lagged`) | `llm/sse.md` | core |
+| WebSockets, `#[ws]` (`protocols`, `max_message_size` / `max_frame_size`), `requested_protocols`, sessions, `WsBroadcaster` / `WsRooms`, shutdown of open sockets | `llm/websockets.md` | ws |
 | `#[any]`, `#[fallback]`, `{*path}` wildcards, proxying, streaming bodies | `llm/proxy-catch-all.md` | core |
 | file upload, `Multipart`, typed upload builders | `llm/multipart.md` | multipart |
 | embedded static files, SPA fallback | `llm/static-files.md` | static |
-| OpenAPI 3.1 generation, Swagger UI, `schemars` | `llm/openapi.md` | openapi |
+| OpenAPI 3.1 generation, Swagger UI, `schemars`, parameter schemas from `JsonSchema` (path/query/header) | `llm/openapi.md` | openapi |
 | gRPC services, `#[grpc_routes]`, multiplexed / separate port, gRPC-Web | `llm/grpc.md` | grpc |
-| MCP server: `#[routes]` MCP members (one type = one port: MCP members and HTTP routes on separate types), `#[routes(group, opt_in)]`, `#[tool]` / `#[resource]` / `#[prompt]`, `mcp.*` config, MCP OAuth resource server, in-process loopback transport (`McpLoopback`, feature `mcp-loopback`) | `llm/mcp-server.md` | mcp |
+| MCP server: `#[routes]` MCP members (one type = one port: MCP members and HTTP routes on separate types), `#[routes(group, opt_in)]`, `#[tool]` / `#[resource]` / `#[prompt]`, `mcp.*` config, MCP OAuth resource server, in-process loopback transport (`McpLoopback`, feature `mcp-loopback`), `#[method]` extensions / `with_extension`, `McpViewFilter`, `ResourceRead` / `WithMeta` / resource caching (`ttl`, `cache_scope`), `McpError::rpc`, dynamic members / groups, `McpResourceUpdates`, `app.mcp()` test client | `llm/mcp-server.md` | mcp |
 
 ### Observability & operations
 
 | Your task involves… | Read | features |
 |---|---|---|
 | HTTP metrics, the `Prometheus` plugin, `layer_only`, `MetricsFacade` | `llm/prometheus.md` | prometheus |
-| per-request logging: the `HttpTrace` plugin, `trace.*`, request ids, `MakeRequestSpan`; OpenTelemetry tracing, OTLP export, context propagation | `llm/observability.md` | core, observability |
+| per-request logging: the `HttpTrace` plugin, `trace.*`, request ids, `MakeRequestSpan`; OpenTelemetry tracing, OTLP export, context propagation, `with_request` / `with_request_state`, `RequestSpan` | `llm/observability.md` | core, observability |
 | `RequestIdPlugin`, `SecureHeaders`, `Health` / `Health::builder()`, `NormalizePath` | `llm/additional-plugins.md` | core |
 
 ### Testing & tooling
 
 | Your task involves… | Read | features |
 |---|---|---|
-| `TestApp`, `#[r2e::test]`, `override_bean` / `override_config_value`, `as_user`, JSON assertions, SSE/WS test clients, test lifecycle | `llm/testing.md` | (dev-dependency `r2e-test`) |
+| `TestApp`, `#[r2e::test]`, `override_bean` / `override_config_value`, `as_user`, `.path_param`, JSON assertions, SSE/WS test clients, `TestResource` / `resources(..)`, per-test rollback, `app.grpc()`, `app.scheduler()`, test lifecycle (`app.mcp()`: `llm/mcp-server.md`) | `llm/testing.md` | (dev-dependency `r2e-test`) |
 | Dev services: `DevPostgres` / `DevRedis` / `DevKeycloak`, testcontainers, shared containers | `llm/devservices.md` | (dev-dependency `r2e-devservices`) |
 | `r2e new` / `r2e add` / `r2e dev` / `r2e generate` / `r2e doctor` / `r2e routes` / `r2e docs`, hot reload | `llm/dev-experience.md` | dev-reload |

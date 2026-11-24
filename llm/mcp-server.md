@@ -1,7 +1,7 @@
 ---
 topic: mcp-server
 features: mcp (`### In-process (loopback) transport`: mcp-loopback; `app.mcp()` test client: mcp-testing)
-tokens: ~14900
+tokens: ~15000
 requires: guards, security
 ---
 
@@ -399,6 +399,10 @@ impl Reviewer {
 # fn main() {}
 ```
 
+`Completion` fields: `reference` (`CompletionRef::Prompt(name)` /
+`CompletionRef::Resource(uri_template)`, `#[non_exhaustive]`), `argument`
+(the argument or template variable being completed), `value` (typed so far),
+`context` (`BTreeMap<String, String>` of already-resolved arguments).
 Provider params: `Completion`, `CancelToken`, `#[inject(identity)]` only (no
 `Progress`/`McpClient`/`McpSession`). Returns `Vec<String>`, `Completions`
 (`total`/`has_more`) or `Result<_, E: Into<McpError>>` (Err → JSON-RPC error).
@@ -541,7 +545,7 @@ async fn run_thread(
 
 - `connect(id, identity)` → `LoopbackSession` (derefs to rmcp's
   `RunningService<RoleClient, ()>`: `list_all_tools`, `call_tool`,
-  `read_resource`, `get_prompt`, …). Errors: `NotMounted` (`mcp.enabled =
+  `read_resource`, `get_prompt`, …). Errors (`LoopbackError`): `NotMounted` (`mcp.enabled =
   false`, or before/after the router exists), `Stateless` (`mcp.stateless`),
   `InvalidSessionId` (empty / not header-safe), `SessionInUse` (a live
   session already holds the id — free again the moment it is closed,
@@ -717,6 +721,12 @@ b.provide(RoleToolsets)                                    // the hook is a bean
   one (`-32002`), and invalidates delivery when the URI disappears or resolves
   to a replacement route. A replacement requires a new `resources/subscribe`,
   with a fresh access check.
+- Pushing updates: inject the `McpResourceUpdates` bean (provided by the
+  `McpServer` plugin; in the prelude), change the backing data, then
+  `updates.notify(uri)` → `usize` (live session listeners; 0 is normal).
+  Only sessions subscribed to that exact URI get
+  `notifications/resources/updated`. `McpServer::with_resource_updates(u)`
+  supplies your own handle when you need it before the graph is built.
 - Typed dynamic tool/prompt handlers retain the original arguments in
   `ToolCall.arguments` / `PromptCall.arguments` alongside their typed input.
 - `mcp.stateless: true`: groups, `session_init` and `McpRegistry` work

@@ -1,7 +1,7 @@
 ---
 topic: guards
 features: core, rate-limit
-tokens: ~2800
+tokens: ~3000
 requires: security
 ---
 
@@ -90,6 +90,21 @@ headers works on both. Building one by hand (rare — outside a request) can use
 `default_method()` / `no_extensions()`.
 Error helper: `GuardError::forbidden(...)`,
 `GuardError::unauthorized(...)`, `GuardError::new(status, msg)`.
+
+Typed path-parameter keys: inside a route's `#[guard(..)]` / `#[intercept(..)]`
+expression, `#[routes]` brings a `path` namespace into scope with one
+`path::<name>: PathParam<T>` constant per `{name}` in the route (`T` taken from
+the `Path<..>` parameter, `()` when there is none). Take a `PathParam<T>` in the
+guard constructor instead of a string literal, then read it with
+`ctx.parse_path_param::<T>(param.name())` (missing → 500, unparsable → 400).
+`ctx.path_params` is a `PathParams` (`get(name)`, `parse::<T>(name)`;
+`PathParams::from_pairs(&[("id", "7")])` in unit tests).
+
+```rust,ignore
+#[get("/projects/{id}")]
+#[guard(ProjectGuard::viewer(path::id))]           // path::id: PathParam<ProjectId>
+async fn show(&self, Path(id): Path<ProjectId>) -> Json<Project> { /* … */ }
+```
 
 ### Bean-reading guard — `#[derive(DecoratorBean)]`
 

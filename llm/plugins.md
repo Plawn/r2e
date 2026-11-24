@@ -50,7 +50,7 @@ requires: di-beans
   nested section), or `Layered` refuses to compile. Never read
   `b.r2e_config()` mid-chain to construct a plugin — that splits the builder
   and breaks "install order is irrelevant". Builtins on this contract:
-  `Cors::new()` (`cors.*`), `HttpTrace::new()` (`trace.*`),
+  `Cors::new()` (`cors.*`, typed `CorsConfig`; `Cors::preset(cfg)` / `Cors::custom(layer)`), `HttpTrace::new()` (`trace.*`, `HttpTraceConfig`),
   `OpenApiPlugin::default()` (`openapi.*`); `Config = ()` is only for plugins
   with nothing to configure (`Health`, `NormalizePath`, `DevReload`).
 

@@ -1,7 +1,7 @@
 ---
 topic: configuration
 features: core
-tokens: ~4800
+tokens: ~4900
 requires: di-beans
 ---
 
@@ -389,6 +389,11 @@ nothing set is permissive under the `dev` profile with a warning and a boot erro
 elsewhere (fail-closed, like auth). Kebab keys are not addressable via `R2E_`,
 and a `${VAR}` placeholder is one list entry, not a comma-separated list — list
 several origins in YAML.
+Typed view: `CorsConfig` (prelude, every field `Option`). `Cors::preset(CorsConfig)`
+is a shared baseline the file overrides key by key; `Cors::custom(layer)` installs
+a hand-built `r2e::http::layers::cors::CorsLayer` as-is (only `cors.enabled` is
+still read). The other builtin typed sections: `HttpTraceConfig` (`trace.*`,
+`HttpTrace::preset`) and `TracingConfig` (`tracing.*`).
 
 `openapi.*` — read by `OpenApiPlugin::default()` (feature `openapi`): `enabled`
 (default `true`; `false` removes `/openapi.json` and `/docs`), `title`
