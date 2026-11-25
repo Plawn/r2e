@@ -168,6 +168,7 @@ impl UserController {
 |---|---|
 | workspace layout, crate responsibilities in detail, dependency flow, axum/json/tokio boundary baselines and bridge points, checked-in generated code (OpenFGA proto client) | `docs/claude/architecture.md` |
 | test layout, adding a test target/module, `tests/<name>/main.rs` grouping, fixtures, `env_lock()` | `docs/claude/testing-conventions.md` |
+| mutation testing, `cargo mutants`, `.cargo/mutants.toml`, missed/unviable mutants, `mutants.yml` CI | `docs/claude/mutation-testing.md` |
 | injection scopes detail, `#[anonymous]` rules, generated items (`__r2e_meta`, façade, request-data extractor), lifecycle hook semantics (`#[post_construct]`/`#[on_start]`/`#[pre_destroy]`), r2e-macros internal layout | `docs/claude/core-concepts.md` |
 | `R2eConfig`, `ConfigProperties`, `ConfigValue`, `FromConfigValue`, `#[config(...)]`, `load_config`, `with_config`, secrets (`${...}`), YAML config, typed sections, `#[config(section)]`, env overlay, `serve_auto` | `docs/claude/configuration.md` |
 | `Guard`, `PreAuthGuard`, `GuardContext`, `#[guard]`, `#[roles]`, `Identity`, `RolesGuard`, `RateLimitGuard`, `PreRateLimit`, `Interceptor`, `#[intercept]`, `DecoratorSpec`, `SelfBuilt`, `#[derive(DecoratorBean)]`, `build_decorator`, `Logged`, `Timed`, `Cache` store bean, middleware ordering | `docs/claude/guards-interceptors.md` |

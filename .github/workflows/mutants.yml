@@ -1,0 +1,213 @@
+name: Mutation testing
+
+# Two legs, both driven by `.cargo/mutants.toml` (features, exclusions,
+# timeout floor, `mutants` profile) — see docs/claude/mutation-testing.md.
+#
+# - `diff` (pull requests): mutates only the lines the PR touches. Minutes,
+#   not hours. Informational: it fails when a mutant on a changed line
+#   survives, but it is not meant to be a required check.
+# - `full` (weekly + manual): the whole package, split into shards, with an
+#   aggregated report. This is the backlog of untested behaviour.
+
+on:
+  pull_request:
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yml"
+  schedule:
+    - cron: "0 2 * * 0" # Sunday 02:00 UTC
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package to mutate (`workspace` for every crate)"
+        default: r2e-core
+        required: true
+
+concurrency:
+  group: mutants-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  diff:
+    name: mutants on the PR diff
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute the Rust diff
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff "$BASE_SHA"...HEAD -- '*.rs' > pr.diff
+          if [ -s pr.diff ]; then
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "No Rust change: nothing to mutate." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Free disk space
+        if: steps.diff.outputs.empty == 'false'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+
+      # Same native deps as test.yml: a diff can touch any crate.
+      - name: Install native build deps
+        if: steps.diff.outputs.empty == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler libprotobuf-dev \
+            libcurl4-openssl-dev zlib1g-dev libssl-dev \
+            libsqlite3-dev libpq-dev
+
+      - name: Install toolchain (rust-toolchain.toml)
+        if: steps.diff.outputs.empty == 'false'
+        run: rustup show
+
+      - uses: taiki-e/install-action@v2
+        if: steps.diff.outputs.empty == 'false'
+        with:
+          tool: cargo-mutants,cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.diff.outputs.empty == 'false'
+        with:
+          key: mutants
+          save-if: false
+
+      # In place: no per-copy target dir on the 14 GB runner disk.
+      # Exit codes: 0 all caught, 2 missed, 3 timeouts only (a hang counts as
+      # caught), 4 baseline failed.
+      - name: cargo mutants --in-diff
+        if: steps.diff.outputs.empty == 'false'
+        run: |
+          set +e
+          cargo mutants --in-diff pr.diff --in-place --test-tool=nextest --no-shuffle
+          rc=$?
+          {
+            echo "## Mutants on changed lines"
+            for f in caught missed timeout unviable; do
+              n=$(wc -l < "mutants.out/$f.txt" 2>/dev/null || echo 0)
+              echo "- $f: $n"
+            done
+            if [ -s mutants.out/missed.txt ]; then
+              echo
+              echo "### Missed (no test fails when this line is changed)"
+              echo '```'
+              cat mutants.out/missed.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          case $rc in 0|3) exit 0 ;; *) exit $rc ;; esac
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.diff.outputs.empty == 'false'
+        with:
+          name: mutants-diff
+          path: mutants.out
+          if-no-files-found: ignore
+
+  full:
+    name: mutants shard ${{ matrix.shard }}/8
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+
+      - name: Install native build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler libprotobuf-dev \
+            libcurl4-openssl-dev zlib1g-dev libssl-dev \
+            libsqlite3-dev libpq-dev
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,cargo-nextest
+
+      # Only the first shard saves: all shards build the same tree.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mutants
+          save-if: ${{ matrix.shard == 0 && github.ref == 'refs/heads/master' }}
+
+      - name: cargo mutants --shard ${{ matrix.shard }}/8
+        env:
+          PACKAGE: ${{ inputs.package || 'r2e-core' }}
+        run: |
+          if [ "$PACKAGE" = workspace ]; then sel=--workspace; else sel="-p $PACKAGE"; fi
+          set +e
+          cargo mutants $sel --shard ${{ matrix.shard }}/8 --in-place \
+            --test-tool=nextest --no-shuffle
+          rc=$?
+          # 2/3 are findings, not failures: the aggregate job reports them.
+          case $rc in 0|2|3) exit 0 ;; *) exit $rc ;; esac
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
+
+  report:
+    name: mutants report
+    needs: full
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutants-shard-*
+          path: shards
+
+      - name: Aggregate
+        run: |
+          mkdir -p report
+          for f in caught missed timeout unviable; do
+            cat shards/*/"$f.txt" 2>/dev/null | sort > "report/$f.txt"
+          done
+          {
+            echo "## Mutation testing — ${{ inputs.package || 'r2e-core' }}"
+            for f in caught missed timeout unviable; do
+              echo "- $f: $(wc -l < "report/$f.txt")"
+            done
+            echo
+            echo "### Missed per file"
+            echo '```'
+            cut -d: -f1 report/missed.txt | sort | uniq -c | sort -rn
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: report
