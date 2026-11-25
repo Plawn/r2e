@@ -6,38 +6,49 @@ name: Mutation testing
 # - `diff` (pull requests): mutates only the lines the PR touches. Minutes,
 #   not hours. Informational: it fails when a mutant on a changed line
 #   survives, but it is not meant to be a required check.
-# - `full` (weekly + manual): the whole package, split into shards, with an
-#   aggregated report. This is the backlog of untested behaviour.
+# - `full` (weekly, manual, or a PR labelled `mutants-full`): every selected
+#   crate, each split into shards of ~MUTANTS_PER_SHARD mutants, all shards
+#   of all crates in one matrix (public repo: free runners, GitHub runs ~20
+#   jobs at once and queues the rest). One aggregated report per crate.
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - "**/*.rs"
       - "**/Cargo.toml"
       - ".cargo/mutants.toml"
       - ".github/workflows/mutants.yml"
   schedule:
-    - cron: "0 2 * * 0" # Sunday 02:00 UTC
+    - cron: "0 2 * * 0" # Sunday 02:00 UTC, every publishable crate
   workflow_dispatch:
     inputs:
-      package:
-        description: "Package to mutate (`workspace` for every crate)"
+      packages:
+        description: "Space-separated crates to mutate, or `all`"
         default: r2e-core
         required: true
 
 concurrency:
-  group: mutants-${{ github.workflow }}-${{ github.ref }}
+  group: mutants-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'labeled' && 'full' || 'diff' }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
+  MUTANTS_PER_SHARD: 200
+  # Crates the weekly run (and `all`) covers. r2e-cli is left out: its
+  # templates are exercised by `r2e new` smoke tests, not unit tests.
+  ALL_PACKAGES: >-
+    r2e-rt r2e-tracing r2e-http r2e-macros r2e-core r2e-security r2e-events
+    r2e-scheduler r2e-executor r2e-cache r2e-rate-limit r2e-utils r2e-openapi
+    r2e-prometheus r2e-oidc r2e-tenant r2e-mcp r2e-grpc r2e-openfga
+    r2e-openfga-model r2e-static r2e-data-sqlx r2e-data-diesel r2e-test
 
 jobs:
   diff:
     name: mutants on the PR diff
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -121,15 +132,52 @@ jobs:
           path: mutants.out
           if-no-files-found: ignore
 
+  # Lists the mutants of each selected crate (no build: source parsing only)
+  # and turns the counts into a {package, shard, shards} matrix.
+  plan:
+    name: plan shards
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'mutants-full')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Plan
+        id: plan
+        env:
+          REQUESTED: ${{ inputs.packages || 'all' }}
+        run: |
+          if [ "$REQUESTED" = all ]; then pkgs=$ALL_PACKAGES; else pkgs=$REQUESTED; fi
+          entries=()
+          echo "| crate | mutants | shards |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for p in $pkgs; do
+            n=$(cargo mutants -p "$p" --list | wc -l)
+            [ "$n" -eq 0 ] && continue
+            s=$(( (n + MUTANTS_PER_SHARD - 1) / MUTANTS_PER_SHARD ))
+            echo "| $p | $n | $s |" >> "$GITHUB_STEP_SUMMARY"
+            for ((i = 0; i < s; i++)); do
+              entries+=("{\"package\":\"$p\",\"shard\":$i,\"shards\":$s}")
+            done
+          done
+          matrix=$(IFS=,; echo "{\"include\":[${entries[*]}]}")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   full:
-    name: mutants shard ${{ matrix.shard }}/8
-    if: github.event_name != 'pull_request'
+    name: ${{ matrix.package }} ${{ matrix.shard }}/${{ matrix.shards }}
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
       fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -153,57 +201,68 @@ jobs:
         with:
           tool: cargo-mutants,cargo-nextest
 
-      # Only the first shard saves: all shards build the same tree.
+      # One cache per crate; only shard 0 on master saves it.
       - uses: Swatinem/rust-cache@v2
         with:
-          key: mutants
+          key: mutants-${{ matrix.package }}
           save-if: ${{ matrix.shard == 0 && github.ref == 'refs/heads/master' }}
 
-      - name: cargo mutants --shard ${{ matrix.shard }}/8
+      # r2e-macros has almost no tests of its own: its codegen is exercised by
+      # r2e-core's tests, so those run against every macro mutant.
+      - name: cargo mutants
         env:
-          PACKAGE: ${{ inputs.package || 'r2e-core' }}
+          PACKAGE: ${{ matrix.package }}
         run: |
-          if [ "$PACKAGE" = workspace ]; then sel=--workspace; else sel="-p $PACKAGE"; fi
+          case $PACKAGE in
+            r2e-macros) tests=(--test-package r2e-macros,r2e-core) ;;
+            *) tests=() ;;
+          esac
           set +e
-          cargo mutants $sel --shard ${{ matrix.shard }}/8 --in-place \
+          cargo mutants -p "$PACKAGE" "${tests[@]}" \
+            --shard ${{ matrix.shard }}/${{ matrix.shards }} --in-place \
             --test-tool=nextest --no-shuffle
           rc=$?
-          # 2/3 are findings, not failures: the aggregate job reports them.
+          # 2/3 are findings, not failures: the report job aggregates them.
           case $rc in 0|2|3) exit 0 ;; *) exit $rc ;; esac
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mutants-shard-${{ matrix.shard }}
+          name: mutants-${{ matrix.package }}-${{ matrix.shard }}
           path: mutants.out
           if-no-files-found: ignore
 
   report:
     name: mutants report
     needs: full
-    if: always() && github.event_name != 'pull_request'
+    if: always() && needs.full.result != 'skipped'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: mutants-shard-*
+          pattern: mutants-*
           path: shards
 
+      # shards/mutants-<package>-<shard>/ → report/<package>/<outcome>.txt
       - name: Aggregate
         run: |
-          mkdir -p report
-          for f in caught missed timeout unviable; do
-            cat shards/*/"$f.txt" 2>/dev/null | sort > "report/$f.txt"
+          echo "## Mutation testing" >> "$GITHUB_STEP_SUMMARY"
+          echo "| crate | caught | missed | timeout | unviable |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for pkg in $(ls shards | sed -E 's/^mutants-(.*)-[0-9]+$/\1/' | sort -u); do
+            mkdir -p "report/$pkg"
+            row="| $pkg"
+            for f in caught missed timeout unviable; do
+              cat shards/mutants-"$pkg"-[0-9]*/"$f.txt" 2>/dev/null | sort > "report/$pkg/$f.txt"
+              row="$row | $(wc -l < "report/$pkg/$f.txt")"
+            done
+            echo "$row |" >> "$GITHUB_STEP_SUMMARY"
           done
           {
-            echo "## Mutation testing — ${{ inputs.package || 'r2e-core' }}"
-            for f in caught missed timeout unviable; do
-              echo "- $f: $(wc -l < "report/$f.txt")"
-            done
             echo
             echo "### Missed per file"
             echo '```'
-            cut -d: -f1 report/missed.txt | sort | uniq -c | sort -rn
+            cat report/*/missed.txt | cut -d: -f1 | sort | uniq -c | sort -rn
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

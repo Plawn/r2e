@@ -54,7 +54,20 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
 - **Pull requests** — `diff` job: `--in-diff` on the PR's `.rs` changes,
   in place, nextest. Fails when a mutant on a changed line is missed; the
   missed list is in the job summary. Informational: not a required check.
-- **Weekly (Sunday 02:00 UTC) + manual** — `full` job: 8 shards
-  (`--shard k/8`) of `r2e-core` (manual input: any package, or `workspace`),
-  then `report` aggregates `caught/missed/timeout/unviable.txt` into one
-  artifact and a per-file summary.
+- **Full runs** — weekly (Sunday 02:00 UTC, every crate in `ALL_PACKAGES`),
+  manual (`gh workflow run mutants.yml -f packages="r2e-core r2e-http"` or
+  `-f packages=all`; only once the workflow is on master), or by adding the
+  label `mutants-full` to a PR (runs on the PR branch, no merge needed).
+  - `plan` lists each crate's mutants (parse only, no build) and splits it
+    into `ceil(n / MUTANTS_PER_SHARD)` shards; every shard of every crate is
+    one job of a single matrix. The repo is public: runners are free, GitHub
+    runs ~20 jobs at once and queues the rest (a full `all` run ≈ 50 jobs).
+  - `full` runs one shard in place with nextest, per-crate rust-cache.
+    `r2e-macros` mutants are tested with `r2e-core`'s tests too (its own
+    tests barely exercise the codegen).
+  - `report` aggregates `report/<crate>/{caught,missed,timeout,unviable}.txt`
+    into one artifact, with a per-crate table and missed-per-file summary.
+- Downstream coverage: a crate's mutants are tested by its own tests only.
+  Add `--test-package <crate>,<consumer>` (as for `r2e-macros`) when a crate's
+  behaviour is mostly asserted by its consumers — at the cost of building
+  them for every mutant.
