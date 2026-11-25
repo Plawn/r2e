@@ -1,0 +1,5 @@
+r2e-test/src/ordering.rs:174:5: replace groups -> &'static Mutex<GroupMap> with Box::leak(Box::new(Mutex::new(Default::default())))
+r2e-test/src/ordering.rs:234:29: replace < with <= in turn_inner
+r2e-test/src/ordering.rs:234:29: replace < with == in turn_inner
+r2e-test/src/ordering.rs:272:50: replace && with || in turn_inner
+r2e-test/src/ordering.rs:357:9: replace <impl Drop for TurnGuard>::drop with ()

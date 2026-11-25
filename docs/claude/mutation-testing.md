@@ -70,11 +70,18 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
     tests barely exercise the codegen).
   - `report` aggregates `report/<crate>/{caught,missed,timeout,unviable}.txt`
     into one artifact, with a per-crate table and missed-per-file summary.
-- Per-crate exceptions in the `full` step: `r2e-test` runs without nextest
-  (its ordered suites need one process for all cases); every process is
-  capped with `ulimit -v` at 10 GiB (a mutant that loops while allocating
-  otherwise kills the runner and loses the shard); `libmysqlclient-dev` is
-  installed because `all_features` turns on `r2e-data-diesel/mysql`.
+- Per-crate exceptions in the `full` step:
+  - `r2e-test` runs without nextest: its ordered suites need one process for
+    all cases.
+  - `r2e-openfga-model` runs without nextest: nextest gives each test its own
+    process group, so on a timeout cargo-mutants kills nextest but not the
+    looping test, which keeps allocating until the runner dies (shard lost).
+    Same orphans as in local runs. Move any crate whose mutants time out
+    while allocating to this list.
+  - `r2e-data-diesel` swaps `all_features` for `sqlite, postgres, tenant`
+    (sed on the checkout's `mutants.toml`): `mysql` needs a libmysqlclient
+    that mysqlclient-sys 0.5 accepts, and the runner's is too new.
+  - Every process is capped with `ulimit -v` at 10 GiB, as a backstop.
 - Downstream coverage: a crate's mutants are tested by its own tests only.
   Add `--test-package <crate>,<consumer>` (as for `r2e-macros`) when a crate's
   behaviour is mostly asserted by its consumers — at the cost of building
