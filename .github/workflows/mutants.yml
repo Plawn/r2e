@@ -6,8 +6,8 @@ name: Mutation testing
 # - `diff` (pull requests): mutates only the lines the PR touches. Minutes,
 #   not hours. Informational: it fails when a mutant on a changed line
 #   survives, but it is not meant to be a required check.
-# - `full` (weekly, manual, or a PR labelled `mutants-full`): every selected
-#   crate, each split into shards of ~MUTANTS_PER_SHARD mutants, all shards
+# - `full` (weekly, manual, or a PR label: `mutants-full` = every crate,
+#   `mutants:<crate>[,<crate>…]` = only those): every selected crate, each split into shards of ~MUTANTS_PER_SHARD mutants, all shards
 #   of all crates in one matrix (public repo: free runners, GitHub runs ~20
 #   jobs at once and queues the rest). One aggregated report per crate.
 
@@ -29,7 +29,8 @@ on:
         required: true
 
 concurrency:
-  group: mutants-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'labeled' && 'full' || 'diff' }}
+  # One group per label: `mutants:<crate>` runs never cancel each other.
+  group: mutants-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'labeled' && format('full-{0}', github.event.label.name) || 'diff' }}
   cancel-in-progress: true
 
 env:
@@ -138,7 +139,8 @@ jobs:
     name: plan shards
     if: >-
       github.event_name != 'pull_request' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'mutants-full')
+      (github.event.action == 'labeled' && (github.event.label.name == 'mutants-full' ||
+       startsWith(github.event.label.name, 'mutants:')))
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -153,7 +155,10 @@ jobs:
         id: plan
         env:
           REQUESTED: ${{ inputs.packages || 'all' }}
+          LABEL: ${{ github.event.label.name }}
         run: |
+          # `mutants:r2e-test,r2e-data-diesel` → "r2e-test r2e-data-diesel"
+          case $LABEL in mutants:*) REQUESTED=${LABEL#mutants:}; REQUESTED=${REQUESTED//,/ } ;; esac
           if [ "$REQUESTED" = all ]; then pkgs=$ALL_PACKAGES; else pkgs=$REQUESTED; fi
           entries=()
           echo "| crate | mutants | shards |" >> "$GITHUB_STEP_SUMMARY"
