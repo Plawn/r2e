@@ -339,3 +339,196 @@ fn checked_accepts_signature_use_and_verify_operation() {
 
     assert!(jwk.to_decoding_key_checked(Algorithm::RS256).is_ok());
 }
+
+// ── refresh policy, served over a scripted endpoint ──
+
+const ROTATED_JWKS: &str =
+    r#"{"keys":[{"kid":"rotated-key","kty":"RSA","alg":"RS256","use":"sig","n":"AQ","e":"AQAB"}]}"#;
+
+/// A JWKS endpoint answering connection `i` with `responses[i]` (the last
+/// one repeated), counting the requests it served.
+struct ScriptedJwks {
+    url: String,
+    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ScriptedJwks {
+    async fn start(responses: Vec<String>) -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let served = hits.clone();
+        // Detached: lives as long as the test's runtime.
+        drop(r2e_core::rt::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let index = served.fetch_add(1, Ordering::SeqCst);
+                let response = responses[index.min(responses.len() - 1)].clone();
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.shutdown().await;
+            }
+        }));
+        Self {
+            url: format!("http://{address}/jwks.json"),
+            hits,
+        }
+    }
+
+    fn hits(&self) -> usize {
+        self.hits.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn config(&self) -> SecurityConfig {
+        SecurityConfig::new(self.url.clone(), "iss", "aud").allow_insecure_jwks_url()
+    }
+}
+
+/// `200 OK` with a `Content-Length`.
+fn sized(body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len(),
+    )
+}
+
+/// `200 OK`, chunked, `body` in a single chunk: no `Content-Length` to
+/// check up front.
+fn chunked(body: &str) -> String {
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+        body.len(),
+    )
+}
+
+#[r2e_core::test]
+async fn an_unknown_kid_forces_a_refresh_of_a_fresh_cache() {
+    let server = ScriptedJwks::start(vec![sized(TEST_JWKS), sized(ROTATED_JWKS)]).await;
+    let config = server
+        .config()
+        .with_cache_ttl(3600)
+        .with_min_refresh_interval(0);
+    let cache = JwksCache::new(config).await.unwrap();
+    assert_eq!(server.hits(), 1);
+
+    // A fresh cache, but the kid is unknown: the refresh is forced.
+    assert!(cache.get_key("rotated-key", Algorithm::RS256).await.is_ok());
+    assert_eq!(server.hits(), 2);
+    // The rotated set replaced the old one.
+    let error = cache
+        .get_key("test-key", Algorithm::RS256)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), SecurityErrorKind::UnknownKid, "{error}");
+}
+
+#[r2e_core::test]
+async fn a_known_kid_in_a_fresh_cache_is_served_without_a_request() {
+    let server = ScriptedJwks::start(vec![sized(TEST_JWKS)]).await;
+    let config = server
+        .config()
+        .with_cache_ttl(3600)
+        .with_min_refresh_interval(0);
+    let cache = JwksCache::new(config).await.unwrap();
+    assert!(cache.get_key("test-key", Algorithm::RS256).await.is_ok());
+    assert_eq!(server.hits(), 1);
+}
+
+#[r2e_core::test]
+async fn a_stale_cache_refreshes_before_serving_a_known_kid() {
+    let server = ScriptedJwks::start(vec![sized(TEST_JWKS)]).await;
+    let config = server
+        .config()
+        .with_cache_ttl(0)
+        .with_max_stale(60)
+        .with_min_refresh_interval(0);
+    let cache = JwksCache::new(config).await.unwrap();
+    assert_eq!(server.hits(), 1);
+
+    assert!(cache.get_key("test-key", Algorithm::RS256).await.is_ok());
+    assert_eq!(server.hits(), 2, "a stale cache must be refreshed");
+}
+
+#[r2e_core::test]
+async fn the_refresh_cooldown_defers_the_refresh_of_an_unknown_kid() {
+    let server = ScriptedJwks::start(vec![sized(TEST_JWKS), sized(ROTATED_JWKS)]).await;
+    let config = server
+        .config()
+        .with_cache_ttl(3600)
+        .with_min_refresh_interval(3600);
+    let cache = JwksCache::new(config).await.unwrap();
+
+    // The refresh is deferred (`Ok`), no key was ever cached for that kid:
+    // an unknown kid, not an expired grace period.
+    let error = cache
+        .get_key("rotated-key", Algorithm::RS256)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), SecurityErrorKind::UnknownKid, "{error}");
+    assert_eq!(server.hits(), 1, "the cooldown must hold the request back");
+}
+
+#[r2e_core::test]
+async fn an_unknown_kid_after_a_successful_refresh_is_unknown() {
+    let server = ScriptedJwks::start(vec![sized(TEST_JWKS)]).await;
+    let config = server
+        .config()
+        .with_cache_ttl(3600)
+        .with_min_refresh_interval(0);
+    let cache = JwksCache::new(config).await.unwrap();
+
+    let error = cache.get_key("nobody", Algorithm::RS256).await.unwrap_err();
+    assert_eq!(error.kind(), SecurityErrorKind::UnknownKid, "{error}");
+    assert_eq!(server.hits(), 2);
+}
+
+#[r2e_core::test]
+async fn an_unusable_cached_key_reports_why() {
+    let body = r#"{"keys":[{"kid":"no-n","kty":"RSA","alg":"RS256","e":"AQAB"}]}"#;
+    let server = ScriptedJwks::start(vec![sized(body)]).await;
+    let cache = JwksCache::new(server.config().with_cache_ttl(3600))
+        .await
+        .unwrap();
+    let error = cache.get_key("no-n", Algorithm::RS256).await.unwrap_err();
+    assert_eq!(error.kind(), SecurityErrorKind::SigningKeyUnusable);
+    assert!(
+        error.to_string().contains("RSA key missing 'n' component"),
+        "{error}"
+    );
+}
+
+// ── response size limit ──
+
+#[r2e_core::test]
+async fn a_body_of_exactly_the_limit_is_accepted() {
+    let limit = TEST_JWKS.len() as u64;
+    for response in [sized(TEST_JWKS), chunked(TEST_JWKS)] {
+        let server = ScriptedJwks::start(vec![response]).await;
+        let cache = JwksCache::new(server.config().with_max_response_bytes(limit)).await;
+        assert!(cache.is_ok(), "{:?}", cache.err());
+    }
+}
+
+#[r2e_core::test]
+async fn an_advertised_length_over_the_limit_is_refused_up_front() {
+    let limit = TEST_JWKS.len() as u64 - 1;
+    let server = ScriptedJwks::start(vec![sized(TEST_JWKS)]).await;
+    let Err(error) = JwksCache::new(server.config().with_max_response_bytes(limit)).await else {
+        panic!("an oversized JWKS must be refused");
+    };
+    assert!(error.to_string().contains("too large"), "{error}");
+}
+
+#[r2e_core::test]
+async fn a_streamed_body_over_the_limit_is_refused() {
+    let limit = TEST_JWKS.len() as u64 - 1;
+    let server = ScriptedJwks::start(vec![chunked(TEST_JWKS)]).await;
+    let Err(error) = JwksCache::new(server.config().with_max_response_bytes(limit)).await else {
+        panic!("an oversized JWKS must be refused");
+    };
+    assert!(error.to_string().contains("exceeded max size"), "{error}");
+}
