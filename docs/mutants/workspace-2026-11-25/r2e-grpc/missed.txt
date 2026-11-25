@@ -1,0 +1,37 @@
+r2e-grpc/src/identity.rs:153:9: replace GrpcIdentityExtractor::extract_claims -> Result<StandardClaims, Status> with Ok(Default::default())
+r2e-grpc/src/lib.rs:246:5: replace register_service_unchecked -> Result<(), RegisterServiceError> with Ok(())
+r2e-grpc/src/lib.rs:248:12: delete ! in register_service_unchecked
+r2e-grpc/src/multiplex.rs:231:27: replace match guard rest.starts_with(b"-web") with true in GrpcContentType::classify
+r2e-grpc/src/multiplex.rs:297:9: replace <impl http_body::Body for RejectedBody>::is_end_stream -> bool with false
+r2e-grpc/src/multiplex.rs:297:9: replace <impl http_body::Body for RejectedBody>::is_end_stream -> bool with true
+r2e-grpc/src/multiplex.rs:301:9: replace <impl http_body::Body for RejectedBody>::size_hint -> http_body::SizeHint with Default::default()
+r2e-grpc/src/multiplex.rs:348:9: replace <impl http_body::Body for MultiplexBody<G, H, W>>::is_end_stream -> bool with false
+r2e-grpc/src/multiplex.rs:348:9: replace <impl http_body::Body for MultiplexBody<G, H, W>>::is_end_stream -> bool with true
+r2e-grpc/src/multiplex.rs:356:9: replace <impl http_body::Body for MultiplexBody<G, H, W>>::size_hint -> http_body::SizeHint with Default::default()
+r2e-grpc/src/multiplex.rs:376:9: replace web::default_cors -> CorsLayer with Default::default()
+r2e-grpc/src/multiplex.rs:385:56: replace * with + in web::default_cors
+r2e-grpc/src/multiplex.rs:385:56: replace * with / in web::default_cors
+r2e-grpc/src/multiplex.rs:385:61: replace * with + in web::default_cors
+r2e-grpc/src/multiplex.rs:385:61: replace * with / in web::default_cors
+r2e-grpc/src/registry.rs:123:9: replace GrpcServiceRegistry::snapshot -> Option<RegisteredServices> with None
+r2e-grpc/src/registry.rs:199:9: replace ServedServices::drain -> Option<RegisteredServices> with None
+r2e-grpc/src/registry.rs:210:9: replace ServedServices::current -> Option<(Routes, Vec<&'static str>)> with None
+r2e-grpc/src/registry.rs:210:9: replace ServedServices::current -> Option<(Routes, Vec<&'static str>)> with Some((Default::default(), vec![""]))
+r2e-grpc/src/registry.rs:210:9: replace ServedServices::current -> Option<(Routes, Vec<&'static str>)> with Some((Default::default(), vec!["xyzzy"]))
+r2e-grpc/src/registry.rs:210:9: replace ServedServices::current -> Option<(Routes, Vec<&'static str>)> with Some((Default::default(), vec![]))
+r2e-grpc/src/server.rs:341:9: replace GrpcMarker::served_routes -> Option<(tonic::service::Routes, Vec<&'static str>)> with None
+r2e-grpc/src/server.rs:341:9: replace GrpcMarker::served_routes -> Option<(tonic::service::Routes, Vec<&'static str>)> with Some((Default::default(), vec![""]))
+r2e-grpc/src/server.rs:341:9: replace GrpcMarker::served_routes -> Option<(tonic::service::Routes, Vec<&'static str>)> with Some((Default::default(), vec!["xyzzy"]))
+r2e-grpc/src/server.rs:341:9: replace GrpcMarker::served_routes -> Option<(tonic::service::Routes, Vec<&'static str>)> with Some((Default::default(), vec![]))
+r2e-grpc/src/service.rs:104:9: replace GrpcService::validate_config -> Vec<r2e_core::config::MissingKeyError> with vec![]
+r2e-grpc/src/service.rs:80:9: replace GrpcService::file_descriptor_set -> Option<&'static[u8]> with Some(Vec::leak(Vec::new()))
+r2e-grpc/src/service.rs:80:9: replace GrpcService::file_descriptor_set -> Option<&'static[u8]> with Some(Vec::leak(vec![0]))
+r2e-grpc/src/service.rs:80:9: replace GrpcService::file_descriptor_set -> Option<&'static[u8]> with Some(Vec::leak(vec![1]))
+r2e-grpc/src/status.rs:36:9: delete match arm RejectionKind::Unauthenticated in rejection_to_status
+r2e-grpc/src/status.rs:37:9: delete match arm RejectionKind::Forbidden in rejection_to_status
+r2e-grpc/src/status.rs:38:9: delete match arm RejectionKind::NotFound in rejection_to_status
+r2e-grpc/src/status.rs:39:9: delete match arm RejectionKind::Conflict in rejection_to_status
+r2e-grpc/src/status.rs:41:9: delete match arm RejectionKind::Unavailable in rejection_to_status
+r2e-grpc/src/status.rs:42:9: delete match arm RejectionKind::Timeout in rejection_to_status
+r2e-grpc/src/status.rs:43:9: delete match arm RejectionKind::Internal in rejection_to_status
+r2e-grpc/src/status.rs:44:9: delete match arm RejectionKind::MissingContentType | RejectionKind::UnsupportedMediaType | RejectionKind::BodyRead | RejectionKind::MalformedBody | RejectionKind::InvalidBody | RejectionKind::InvalidPath | RejectionKind::InvalidQuery | RejectionKind::InvalidForm | RejectionKind::InvalidHeader | RejectionKind::BadRequest | RejectionKind::Validation in rejection_to_status

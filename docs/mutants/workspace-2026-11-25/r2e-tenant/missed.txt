@@ -1,0 +1,47 @@
+r2e-tenant/src/config.rs:124:9: replace TenancyConfig::is_enabled -> bool with false
+r2e-tenant/src/config.rs:124:9: replace TenancyConfig::is_enabled -> bool with true
+r2e-tenant/src/config.rs:198:9: replace TenancyConfig::negative_ttl -> Option<Duration> with None
+r2e-tenant/src/config.rs:198:9: replace TenancyConfig::negative_ttl -> Option<Duration> with Some(Default::default())
+r2e-tenant/src/config.rs:204:9: replace TenancyConfig::max_negative -> usize with 0
+r2e-tenant/src/config.rs:204:9: replace TenancyConfig::max_negative -> usize with 1
+r2e-tenant/src/config.rs:37:63: replace * with +
+r2e-tenant/src/config.rs:37:63: replace * with /
+r2e-tenant/src/error.rs:154:9: replace <impl StdError for TenantError>::source -> Option<&(dyn StdError +'static)> with None
+r2e-tenant/src/error.rs:155:13: delete match arm Self::Unavailable{source, ..} in <impl StdError for TenantError>::source
+r2e-tenant/src/error.rs:175:9: replace <impl IntoHttpResponse for TenantError>::into_http_response -> Response with Default::default()
+r2e-tenant/src/error.rs:72:9: replace TenantError::tenant -> Option<&TenantId> with None
+r2e-tenant/src/error.rs:82:9: replace TenantError::is_bug -> bool with true
+r2e-tenant/src/map/dispose.rs:41:12: delete ! in Tenanted<T>::spawn_committed_dispose
+r2e-tenant/src/map/drain.rs:133:22: replace && with || in Tenanted<T>::drain
+r2e-tenant/src/map/epoch.rs:64:9: replace Tenanted<T>::touch with ()
+r2e-tenant/src/map/eviction.rs:104:34: replace - with / in Tenanted<T>::lru_victims
+r2e-tenant/src/map/eviction.rs:144:12: delete ! in Tenanted<T>::enforce_max_active
+r2e-tenant/src/map/eviction.rs:147:64: replace > with < in Tenanted<T>::enforce_max_active
+r2e-tenant/src/map/eviction.rs:147:64: replace > with == in Tenanted<T>::enforce_max_active
+r2e-tenant/src/map/eviction.rs:152:39: replace <= with > in Tenanted<T>::enforce_max_active
+r2e-tenant/src/map/eviction.rs:191:9: replace <impl r2e_core::runtime::service::ServiceComponent for Tenanted<T>>::start with ()
+r2e-tenant/src/map/eviction.rs:28:13: delete field negative_purged from struct SweepReport expression in Tenanted<T>::sweep
+r2e-tenant/src/map/eviction.rs:56:9: replace Tenanted<T>::ready_count -> usize with 0
+r2e-tenant/src/map/eviction.rs:56:9: replace Tenanted<T>::ready_count -> usize with 1
+r2e-tenant/src/map/eviction.rs:69:21: replace && with || in Tenanted<T>::idle_since
+r2e-tenant/src/map/eviction.rs:79:25: replace += with *= in Tenanted<T>::trim_to_max_active
+r2e-tenant/src/map/metrics.rs:77:15: replace == with != in SweepReport::is_empty
+r2e-tenant/src/map/metrics.rs:77:9: replace SweepReport::is_empty -> bool with false
+r2e-tenant/src/map/metrics.rs:77:9: replace SweepReport::is_empty -> bool with true
+r2e-tenant/src/map/negative.rs:21:55: replace < with <= in Tenanted<T>::negative_hit
+r2e-tenant/src/map/negative.rs:49:22: replace > with >= in Tenanted<T>::bound_negative
+r2e-tenant/src/map/negative.rs:49:55: replace > with >= in Tenanted<T>::bound_negative
+r2e-tenant/src/map/negative.rs:50:20: replace -= with += in Tenanted<T>::bound_negative
+r2e-tenant/src/map/negative.rs:50:20: replace -= with /= in Tenanted<T>::bound_negative
+r2e-tenant/src/map/negative.rs:58:45: replace != with == in Tenanted<T>::bound_negative
+r2e-tenant/src/map/negative.rs:71:9: replace Tenanted<T>::purge_negative -> usize with 0
+r2e-tenant/src/map/negative.rs:71:9: replace Tenanted<T>::purge_negative -> usize with 1
+r2e-tenant/src/map/negative.rs:81:65: replace < with <= in Tenanted<T>::purge_negative
+r2e-tenant/src/map/resolve.rs:204:20: delete ! in Tenanted<T>::resolve
+r2e-tenant/src/map/resolve.rs:245:49: replace && with || in Tenanted<T>::resolve
+r2e-tenant/src/map/resolve.rs:411:44: replace || with && in Tenanted<T>::remember_negative_owned
+r2e-tenant/src/map/resolve.rs:513:45: replace && with || in <impl Drop for EmptySlotGuard<'_, T>>::drop
+r2e-tenant/src/map/test_seams.rs:152:29: replace && with || in Tenanted<T>::force_take_slot_race
+r2e-tenant/src/map/test_seams.rs:201:51: replace && with || in Tenanted<T>::force_reattach_race
+r2e-tenant/src/source.rs:232:36: replace + with * in short_name
+r2e-tenant/src/source.rs:232:36: replace + with - in short_name

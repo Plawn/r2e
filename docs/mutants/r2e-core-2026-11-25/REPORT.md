@@ -92,6 +92,10 @@ below must be confirmed with `--test-package r2e-core,<consumer>` (or
     `invalidate_graph_fingerprint`, `request_head.rs` `query_string`/`extension`,
     `layers.rs` `is_end_stream`.
 
+Downstream confirmation of A.1/A.2: first local attempt failed (all
+timeouts, 120 s floor too low for four crates' tests) — see
+`../workspace-2026-11-25/REPORT.md`. Still to do.
+
 ## B. Likely covered downstream (confirm, don't test in core)
 
 - `web/body_schema.rs` (32), `error/schema.rs` (11), `di/meta.rs`

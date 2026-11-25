@@ -1,0 +1,17 @@
+r2e-static/src/lib.rs:100:24: replace || with && in parse_byte_range
+r2e-static/src/lib.rs:106:19: replace || with && in parse_byte_range
+r2e-static/src/lib.rs:106:24: replace > with == in parse_byte_range
+r2e-static/src/lib.rs:106:24: replace > with >= in parse_byte_range
+r2e-static/src/lib.rs:126:18: replace > with == in parse_byte_range
+r2e-static/src/lib.rs:126:18: replace > with >= in parse_byte_range
+r2e-static/src/lib.rs:126:24: replace || with && in parse_byte_range
+r2e-static/src/lib.rs:131:46: replace - with + in parse_byte_range
+r2e-static/src/lib.rs:131:46: replace - with / in parse_byte_range
+r2e-static/src/lib.rs:151:28: replace > with < in accepts_encoding
+r2e-static/src/lib.rs:312:20: replace > with < in EmbeddedFrontendBuilder::base_path
+r2e-static/src/lib.rs:312:20: replace > with == in EmbeddedFrontendBuilder::base_path
+r2e-static/src/lib.rs:312:20: replace > with >= in EmbeddedFrontendBuilder::base_path
+r2e-static/src/lib.rs:522:9: replace EmbeddedFrontend::into_routes -> r2e_core::http::Routes with Default::default()
+r2e-static/src/lib.rs:53:5: replace bytes_to_hex -> String with "xyzzy".into()
+r2e-static/src/lib.rs:53:5: replace bytes_to_hex -> String with String::new()
+r2e-static/src/lib.rs:569:43: replace match guard rest.is_empty() || rest.starts_with('/') with true in <impl r2e_core::plugin::Plugin for EmbeddedFrontend>::build

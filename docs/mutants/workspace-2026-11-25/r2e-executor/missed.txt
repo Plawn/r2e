@@ -1,0 +1,8 @@
+r2e-executor/src/lib.rs:250:17: replace == with != in <impl Drop for RunningGuard>::drop
+r2e-executor/src/lib.rs:250:22: replace && with || in <impl Drop for RunningGuard>::drop
+r2e-executor/src/lib.rs:404:9: replace PoolExecutor::report_scheduled_panic with ()
+r2e-executor/src/lib.rs:498:9: replace PoolExecutor::max_concurrent -> u64 with 0
+r2e-executor/src/lib.rs:498:9: replace PoolExecutor::max_concurrent -> u64 with 1
+r2e-executor/src/lib.rs:503:9: replace PoolExecutor::is_shut_down -> bool with true
+r2e-executor/src/lib.rs:514:9: replace PoolExecutor::shutdown_timeout -> Duration with Default::default()
+r2e-executor/src/lib.rs:574:12: delete ! in <impl Plugin for Executor>::build

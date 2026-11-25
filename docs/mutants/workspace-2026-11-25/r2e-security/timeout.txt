@@ -1,0 +1,2 @@
+r2e-security/src/jwks.rs:366:9: replace JwksCache::refresh -> Result<(), SecurityError> with Ok(())
+r2e-security/src/jwks.rs:508:5: replace build_jwks_client -> Result<reqwest::Client, SecurityError> with Ok(Default::default())

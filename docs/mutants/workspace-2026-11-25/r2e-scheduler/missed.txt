@@ -1,0 +1,6 @@
+r2e-scheduler/src/driver.rs:234:10: replace >= with < in instant_to_datetime
+r2e-scheduler/src/lib.rs:436:37: replace == with != in ScheduledJobRegistry::upsert
+r2e-scheduler/src/lib.rs:876:5: replace format_schedule -> String with "xyzzy".into()
+r2e-scheduler/src/lib.rs:876:5: replace format_schedule -> String with String::new()
+r2e-scheduler/src/manual.rs:176:27: replace match guard error.is_panic() with true in ManualJobs::run
+r2e-scheduler/src/types.rs:380:9: replace <impl ScheduledResult for Result<(), E>>::log_if_err with ()

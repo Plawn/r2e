@@ -70,7 +70,19 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
     tests barely exercise the codegen).
   - `report` aggregates `report/<crate>/{caught,missed,timeout,unviable}.txt`
     into one artifact, with a per-crate table and missed-per-file summary.
+- Per-crate exceptions in the `full` step: `r2e-test` runs without nextest
+  (its ordered suites need one process for all cases); every process is
+  capped with `ulimit -v` at 10 GiB (a mutant that loops while allocating
+  otherwise kills the runner and loses the shard); `libmysqlclient-dev` is
+  installed because `all_features` turns on `r2e-data-diesel/mysql`.
 - Downstream coverage: a crate's mutants are tested by its own tests only.
   Add `--test-package <crate>,<consumer>` (as for `r2e-macros`) when a crate's
   behaviour is mostly asserted by its consumers — at the cost of building
   them for every mutant.
+
+## Reports
+
+- `docs/mutants/r2e-core-2026-11-25/` — full local r2e-core run, triaged
+  (priority gaps A, downstream-covered B, noise C, timeouts D).
+- `docs/mutants/workspace-2026-11-25/` — first CI run over every crate
+  (partial), raw missed/timeout lists per crate, CI failures and their fixes.
