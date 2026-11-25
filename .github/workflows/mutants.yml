@@ -7,7 +7,7 @@ name: Mutation testing
 #   not hours. Informational: it fails when a mutant on a changed line
 #   survives, but it is not meant to be a required check.
 # - `full` (weekly, manual, or a PR label: `mutants-full` = every crate,
-#   `mutants:<crate>[,<crate>…]` = only those): every selected crate, each split into shards of ~MUTANTS_PER_SHARD mutants, all shards
+#   `mutants:<crate>` = that crate only): every selected crate, each split into shards of ~MUTANTS_PER_SHARD mutants, all shards
 #   of all crates in one matrix (public repo: free runners, GitHub runs ~20
 #   jobs at once and queues the rest). One aggregated report per crate.
 
@@ -157,8 +157,9 @@ jobs:
           REQUESTED: ${{ inputs.packages || 'all' }}
           LABEL: ${{ github.event.label.name }}
         run: |
-          # `mutants:r2e-test,r2e-data-diesel` → "r2e-test r2e-data-diesel"
-          case $LABEL in mutants:*) REQUESTED=${LABEL#mutants:}; REQUESTED=${REQUESTED//,/ } ;; esac
+          # `mutants:r2e-test` → r2e-test (one crate per label: `gh pr edit
+          # --add-label` splits on commas)
+          case $LABEL in mutants:*) REQUESTED=${LABEL#mutants:} ;; esac
           if [ "$REQUESTED" = all ]; then pkgs=$ALL_PACKAGES; else pkgs=$REQUESTED; fi
           entries=()
           echo "| crate | mutants | shards |" >> "$GITHUB_STEP_SUMMARY"

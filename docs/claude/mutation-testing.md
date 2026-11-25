@@ -58,9 +58,9 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
   manual (`gh workflow run mutants.yml -f packages="r2e-core r2e-http"` or
   `-f packages=all`; only once the workflow is on master), or by adding a
   label to a PR (runs on the PR branch, no merge needed): `mutants-full` for
-  every crate, `mutants:<crate>[,<crate>…]` for only those (e.g.
-  `mutants:r2e-test,r2e-data-diesel`; labels are capped at 50 characters, so
-  use one label per crate for long lists — each label is its own run).
+  every crate, `mutants:<crate>` for one crate (e.g. `mutants:r2e-test`; one
+  crate per label — `gh pr edit --add-label` splits on commas; each label is
+  its own run, several run side by side).
   - `plan` lists each crate's mutants (parse only, no build) and splits it
     into `ceil(n / MUTANTS_PER_SHARD)` shards; every shard of every crate is
     one job of a single matrix. The repo is public: runners are free, GitHub
