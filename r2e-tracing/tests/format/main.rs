@@ -8,6 +8,9 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
+mod enrich;
+mod flat_json;
+
 use r2e_tracing::{
     console_layer_with_writer, BoxedLayer, JsonOptions, LogFields, LogFormat, SpanEvents,
     TracingOptions,

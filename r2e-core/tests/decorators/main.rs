@@ -4,6 +4,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod accessors;
 mod bean;
 mod config_keys;
 mod controller_level;
