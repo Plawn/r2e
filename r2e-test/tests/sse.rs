@@ -80,3 +80,30 @@ fn test_empty_body_produces_no_events() {
     let resp = sse_response("");
     assert!(resp.sse_events().is_empty());
 }
+
+#[test]
+#[should_panic(expected = "SSE event assertion failed")]
+fn test_assert_sse_event_fails_on_wrong_data() {
+    // Right type, wrong data: both must match.
+    sse_response("event: ping\ndata: pong\n\n").assert_sse_event("ping", "other");
+}
+
+#[test]
+#[should_panic(expected = "SSE event assertion failed")]
+fn test_assert_sse_event_fails_on_wrong_type() {
+    // Right data, wrong type: both must match.
+    sse_response("event: ping\ndata: pong\n\n").assert_sse_event("other", "pong");
+}
+
+#[test]
+#[should_panic(expected = "SSE data assertion failed")]
+fn test_assert_sse_data_fails_on_typed_event() {
+    // The data matches but the event is typed: not a data-only event.
+    sse_response("event: ping\ndata: pong\n\n").assert_sse_data("pong");
+}
+
+#[test]
+#[should_panic(expected = "SSE data assertion failed")]
+fn test_assert_sse_data_fails_on_wrong_data() {
+    sse_response("data: hello\n\n").assert_sse_data("other");
+}
