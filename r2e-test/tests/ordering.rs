@@ -137,6 +137,7 @@ fn err_outcome_poisons_group() {
     let outcome: Result<(), &str> = Err("seed failed");
     assert!(TestOutcome::is_failed(&outcome));
     assert!(!TestOutcome::is_failed(&()));
+    assert!(!TestOutcome::is_failed(&Ok::<(), &str>(())));
 
     let h1 = std::thread::spawn(move || {
         let mut guard = turn("seq_err", 1, "e1");
