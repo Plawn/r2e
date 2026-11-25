@@ -725,7 +725,11 @@ fn http_error_schema_describes_the_documented_bodies() {
 #[test]
 fn rejection_is_small() {
     use std::mem::size_of;
-    assert_eq!(size_of::<Rejection>(), 56, "a new field goes in the cold block");
+    assert_eq!(
+        size_of::<Rejection>(),
+        56,
+        "a new field goes in the cold block"
+    );
     assert_eq!(size_of::<Result<(), Rejection>>(), 56);
     assert_eq!(size_of::<Option<Rejection>>(), 56);
 }
@@ -793,4 +797,169 @@ fn debug_shows_the_cold_block_through_accessors() {
     let debug = format!("{r:?}");
     assert!(debug.contains("opaque: true"), "{debug}");
     assert!(debug.contains("retry-after"), "{debug}");
+}
+
+// ── body extractors: 413 / 415 / 400 by source ───────────────────────────
+
+/// One byte over axum's default 2 MiB body limit.
+fn oversized_body() -> Body {
+    Body::from(vec![b'a'; 2 * 1024 * 1024 + 1])
+}
+
+/// A body whose stream fails: a read error that is not the size limit.
+fn broken_body() -> Body {
+    Body::from_stream(futures_util::stream::iter([Err::<
+        r2e_core::http::Bytes,
+        std::io::Error,
+    >(std::io::Error::other(
+        "connection reset",
+    ))]))
+}
+
+fn post(content_type: Option<&str>, body: Body) -> Request {
+    let mut builder = Request::builder().method("POST").uri("/");
+    if let Some(ct) = content_type {
+        builder = builder.header("content-type", ct);
+    }
+    builder.body(body).unwrap()
+}
+
+async fn reject_with<T>(req: Request) -> Rejection
+where
+    T: FromRequest<()>,
+    Rejection: From<T::Rejection>,
+{
+    match T::from_request(req, &()).await {
+        Ok(_) => panic!("extractor accepted the request"),
+        Err(r) => Rejection::from(r),
+    }
+}
+
+fn assert_kind(r: &Rejection, kind: RejectionKind, status: StatusCode, what: &str) {
+    assert_eq!(r.kind, kind, "{what}");
+    assert_eq!(r.status, status, "{what}");
+    assert!(r.source.is_some(), "{what}: source kept");
+}
+
+const FORM: Option<&str> = Some("application/x-www-form-urlencoded");
+
+#[r2e_core::test]
+async fn bytes_rejection_413_vs_body_read() {
+    use r2e_core::http::Bytes;
+    let r = reject_with::<Bytes>(post(None, oversized_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::PayloadTooLarge,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too large",
+    );
+    let r = reject_with::<Bytes>(post(None, broken_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::BodyRead,
+        StatusCode::BAD_REQUEST,
+        "broken",
+    );
+}
+
+#[r2e_core::test]
+async fn string_rejection_413_utf8_and_body_read() {
+    let r = reject_with::<String>(post(None, oversized_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::PayloadTooLarge,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too large",
+    );
+    let r = reject_with::<String>(post(None, broken_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::BodyRead,
+        StatusCode::BAD_REQUEST,
+        "broken",
+    );
+    let r = reject_with::<String>(post(None, Body::from(vec![0xff, 0xfe]))).await;
+    assert_kind(
+        &r,
+        RejectionKind::MalformedBody,
+        StatusCode::BAD_REQUEST,
+        "utf8",
+    );
+}
+
+#[r2e_core::test]
+async fn form_body_rejection_413_vs_body_read() {
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Q {
+        n: u32,
+    }
+    let r = reject_with::<Form<Q>>(post(FORM, oversized_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::PayloadTooLarge,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too large",
+    );
+    let r = reject_with::<Form<Q>>(post(FORM, broken_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::BodyRead,
+        StatusCode::BAD_REQUEST,
+        "broken",
+    );
+}
+
+#[r2e_core::test]
+async fn raw_form_rejection_415_413_and_body_read() {
+    use r2e_core::http::axum_compat::extract::RawForm;
+    let r = reject_with::<RawForm>(post(Some("text/plain"), Body::from("n=1"))).await;
+    assert_kind(
+        &r,
+        RejectionKind::UnsupportedMediaType,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        "media type",
+    );
+    let r = reject_with::<RawForm>(post(FORM, oversized_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::PayloadTooLarge,
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "too large",
+    );
+    let r = reject_with::<RawForm>(post(FORM, broken_body())).await;
+    assert_kind(
+        &r,
+        RejectionKind::BodyRead,
+        StatusCode::BAD_REQUEST,
+        "broken",
+    );
+}
+
+/// axum's only `MultipartRejection` is `InvalidBoundary` (400): a malformed
+/// body, never a 415.
+#[cfg(feature = "multipart")]
+#[r2e_core::test]
+async fn multipart_rejection_without_boundary_is_malformed() {
+    use r2e_core::http::multipart::Multipart;
+    let r = reject_with::<Multipart>(post(None, Body::empty())).await;
+    assert_kind(
+        &r,
+        RejectionKind::MalformedBody,
+        StatusCode::BAD_REQUEST,
+        "no boundary",
+    );
+}
+
+/// The hub status wins over the opaque response's own status when they
+/// differ (an envelope remap or a handler overriding `status`).
+#[r2e_core::test]
+async fn opaque_passthrough_takes_the_hub_status() {
+    let original = (StatusCode::IM_A_TEAPOT, "<html>tea</html>").into_response();
+    let mut r = Rejection::from(original);
+    r.status = StatusCode::SERVICE_UNAVAILABLE;
+    let resp = r.project::<HttpError>();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let (_, body) = parts(resp).await;
+    assert_eq!(body, b"<html>tea</html>");
 }
