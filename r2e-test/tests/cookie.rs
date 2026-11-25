@@ -97,3 +97,40 @@ fn test_missing_cookie_returns_none() {
     let resp = cookie_response(&["a=1"]);
     assert!(resp.set_cookie("nonexistent").is_none());
 }
+
+// ─── TestResponse::cookie / cookies (the `name=value` parser) ───
+
+#[test]
+fn test_cookie_picks_the_named_cookie_value() {
+    let resp = cookie_response(&["a=1; Path=/", "session=abc123; HttpOnly", "b=2"]);
+    assert_eq!(resp.cookie("session").as_deref(), Some("abc123"));
+    assert_eq!(resp.cookie("a").as_deref(), Some("1"));
+    assert_eq!(resp.cookie("b").as_deref(), Some("2"));
+    assert_eq!(resp.cookie("missing"), None);
+}
+
+#[test]
+fn test_cookie_value_without_attributes_and_trimmed_name() {
+    let resp = cookie_response(&[" token =xyz"]);
+    assert_eq!(resp.cookie("token").as_deref(), Some("xyz"));
+}
+
+#[test]
+fn test_cookie_empty_value_is_some_empty() {
+    let resp = cookie_response(&["cleared=; Max-Age=0"]);
+    assert_eq!(resp.cookie("cleared").as_deref(), Some(""));
+}
+
+#[test]
+fn test_cookie_without_equals_is_skipped() {
+    let resp = cookie_response(&["garbage", "c=v"]);
+    assert_eq!(resp.cookie("garbage"), None);
+    assert_eq!(resp.cookie("c").as_deref(), Some("v"));
+}
+
+#[test]
+fn test_cookies_returns_raw_headers_in_order() {
+    let resp = cookie_response(&["a=1; Path=/", "b=2; Secure"]);
+    assert_eq!(resp.cookies(), vec!["a=1; Path=/", "b=2; Secure"]);
+    assert!(cookie_response(&[]).cookies().is_empty());
+}
