@@ -66,8 +66,10 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
     one job of a single matrix. The repo is public: runners are free, GitHub
     runs ~20 jobs at once and queues the rest (a full `all` run ≈ 50 jobs).
   - `full` runs one shard in place with nextest, per-crate rust-cache.
-    `r2e-macros` mutants are tested with `r2e-core`'s tests too (its own
-    tests barely exercise the codegen).
+    `r2e-macros` mutants are tested with the tests of `r2e-core`,
+    `r2e-compile-tests` (trybuild `.stderr`) and `example-app` too (its own
+    tests barely exercise the codegen), in shards of 50 instead of 200 (the
+    first run, with `r2e-core` only, took ~2.5 h per 200).
   - `report` aggregates `report/<crate>/{caught,missed,timeout,unviable}.txt`
     into one artifact, with a per-crate table and missed-per-file summary.
 - Per-crate exceptions in the `full` step:
@@ -82,6 +84,9 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
     (sed on the checkout's `mutants.toml`): `mysql` needs a libmysqlclient
     that mysqlclient-sys 0.5 accepts, and the runner's is too new.
   - Every process is capped with `ulimit -v` at 10 GiB, as a backstop.
+  - The `diff` job drops nextest when the diff touches `r2e-test` or
+    `r2e-openfga-model`. It keeps `all_features`: a diff touching
+    `r2e-data-diesel` fails on `mysql` (see above) — known gap.
 - Downstream coverage: a crate's mutants are tested by its own tests only.
   Add `--test-package <crate>,<consumer>` (as for `r2e-macros`) when a crate's
   behaviour is mostly asserted by its consumers — at the cost of building
