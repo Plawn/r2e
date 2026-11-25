@@ -222,6 +222,11 @@ jobs:
             # the same process; nextest runs each test in its own process.
             r2e-test) tool=() ;;
           esac
+          # A mutant that loops while allocating (r2e-openfga-model's
+          # `next_raw -> Some((0, ""))`) fills the 16 GB runner before the
+          # test timeout fires, and the runner dies with every result. Cap
+          # each process at 10 GiB so only the runaway test binary aborts.
+          ulimit -v 10485760
           set +e
           cargo mutants -p "$PACKAGE" "${tests[@]}" "${tool[@]}" \
             --shard ${{ matrix.shard }}/${{ matrix.shards }} --in-place \
