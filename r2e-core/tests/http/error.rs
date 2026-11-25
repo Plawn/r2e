@@ -115,3 +115,54 @@ fn with_source_clone_preserves_source_type() {
         .expect("downcast should succeed after clone");
     assert_eq!(downcast.0, 42);
 }
+
+#[test]
+fn from_status_picks_the_dedicated_variant() {
+    use std::borrow::Cow;
+    let cases: [(StatusCode, fn(&HttpError) -> bool); 5] = [
+        (StatusCode::NOT_FOUND, |e| {
+            matches!(e, HttpError::NotFound(_))
+        }),
+        (StatusCode::UNAUTHORIZED, |e| {
+            matches!(e, HttpError::Unauthorized(_))
+        }),
+        (StatusCode::FORBIDDEN, |e| {
+            matches!(e, HttpError::Forbidden(_))
+        }),
+        (StatusCode::BAD_REQUEST, |e| {
+            matches!(e, HttpError::BadRequest(_))
+        }),
+        (StatusCode::INTERNAL_SERVER_ERROR, |e| {
+            matches!(e, HttpError::Internal(_))
+        }),
+    ];
+    for (status, is_variant) in cases {
+        let err = HttpError::from_status(status, Cow::Borrowed("boom"));
+        assert!(is_variant(&err), "{status}: {err:?}");
+        assert_eq!(err.status(), status);
+        assert_eq!(err.message(), Some("boom"));
+    }
+
+    let err = HttpError::from_status(StatusCode::CONFLICT, "dup");
+    assert!(matches!(err, HttpError::Custom { .. }), "{err:?}");
+    assert_eq!(err.status(), StatusCode::CONFLICT);
+    assert_eq!(err.message(), None);
+}
+
+#[test]
+fn status_and_message_of_every_shape() {
+    let with_source = HttpError::WithSource {
+        status: StatusCode::BAD_GATEWAY,
+        message: "upstream".into(),
+        source: std::sync::Arc::new(std::io::Error::other("io")),
+    };
+    assert_eq!(with_source.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(with_source.message(), Some("upstream"));
+
+    assert_eq!(HttpError::not_found("nf").status(), StatusCode::NOT_FOUND);
+    assert_eq!(HttpError::forbidden("no").message(), Some("no"));
+    assert_eq!(
+        HttpError::internal("oops").status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+}

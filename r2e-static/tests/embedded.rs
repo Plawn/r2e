@@ -514,3 +514,84 @@ async fn range_ignored_for_compressed_response() {
         "br",
     );
 }
+
+// ── Range edge cases (`parse_byte_range`) ──────────────────────────────────
+
+/// `style.css` is `"body { margin: 0; }\n"`: 20 bytes.
+const STYLE_CSS: &str = "body { margin: 0; }\n";
+
+async fn range_get(range: &str) -> (StatusCode, HeaderMap, String) {
+    let app = make_app(
+        EmbeddedFrontend::builder::<TestAssets>()
+            .compression(false)
+            .build(),
+    )
+    .await;
+    get_with_headers(app, "/style.css", &[("Range", range)]).await
+}
+
+#[r2e_core::test]
+async fn range_edge_cases_are_satisfied_or_clamped() {
+    let len = STYLE_CSS.len();
+    assert_eq!(len, 20);
+    // (header, expected body, expected content-range)
+    let cases: &[(&str, &str, &str)] = &[
+        ("bytes=0-0", "b", "bytes 0-0/20"),
+        ("bytes=3-3", "y", "bytes 3-3/20"),
+        ("bytes=0-19", STYLE_CSS, "bytes 0-19/20"),
+        // End past the file is clamped to the last byte.
+        ("bytes=15-999", &STYLE_CSS[15..], "bytes 15-19/20"),
+        ("bytes=0-20", STYLE_CSS, "bytes 0-19/20"),
+        ("bytes=19-", "\n", "bytes 19-19/20"),
+        // Suffix ranges: last N bytes, N == len is the whole file.
+        ("bytes=-1", "\n", "bytes 19-19/20"),
+        ("bytes=-20", STYLE_CSS, "bytes 0-19/20"),
+    ];
+    for &(range, body, content_range) in cases {
+        let (status, headers, got) = range_get(range).await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT, "{range}");
+        assert_eq!(got, body, "{range}");
+        assert_eq!(
+            headers.get("content-range").unwrap().to_str().unwrap(),
+            content_range,
+            "{range}",
+        );
+        assert_eq!(
+            headers.get("content-length").unwrap().to_str().unwrap(),
+            body.len().to_string(),
+            "{range}",
+        );
+    }
+}
+
+#[r2e_core::test]
+async fn unsatisfiable_ranges_return_416() {
+    for range in [
+        "bytes=20-",     // start == len
+        "bytes=20-25",   // start == len, bounded
+        "bytes=5-2",     // end < start
+        "bytes=-0",      // empty suffix
+        "bytes=-21",     // suffix longer than the file
+        "bytes=0-1,3-4", // multi-range is not supported
+        "items=0-1",     // unknown unit
+    ] {
+        let (status, headers, _) = range_get(range).await;
+        assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE, "{range}");
+        assert_eq!(
+            headers.get("content-range").unwrap().to_str().unwrap(),
+            "bytes */20",
+            "{range}",
+        );
+    }
+}
+
+#[r2e_core::test]
+async fn positive_quality_encoding_accepted() {
+    let app = make_app(EmbeddedFrontend::new::<TestAssets>()).await;
+    let (_, headers, _) =
+        get_with_headers(app, "/style.css", &[("Accept-Encoding", "br;q=0.5")]).await;
+    assert_eq!(
+        headers.get("content-encoding").unwrap().to_str().unwrap(),
+        "br",
+    );
+}
