@@ -1,0 +1,11 @@
+r2e-data/backends/diesel/src/datasource.rs:214:12: delete ! in <impl Plugin for DieselDataSource<Conn, Tag>>::build
+r2e-data/backends/diesel/src/health.rs:119:9: replace <impl HealthIndicator for PoolHealth<Conn, Tag>>::name -> &str with ""
+r2e-data/backends/diesel/src/health.rs:119:9: replace <impl HealthIndicator for PoolHealth<Conn, Tag>>::name -> &str with "xyzzy"
+r2e-data/backends/diesel/src/health.rs:136:9: replace <impl HealthIndicator for PoolHealth<Conn, Tag>>::affects_readiness -> bool with false
+r2e-data/backends/diesel/src/health.rs:136:9: replace <impl HealthIndicator for PoolHealth<Conn, Tag>>::affects_readiness -> bool with true
+r2e-data/backends/diesel/src/health.rs:60:9: replace DataSourceHealth<Conn, Tag>::named -> Self with Default::default()
+r2e-data/backends/diesel/src/health.rs:88:12: delete ! in <impl Plugin for DataSourceHealth<Conn, Tag>>::build
+r2e-data/backends/diesel/src/health.rs:88:9: replace <impl Plugin for DataSourceHealth<Conn, Tag>>::build -> Result<Self::Provided, PluginBuildError> with Ok(Default::default())
+r2e-data/backends/diesel/src/pool.rs:152:9: replace DbPool<Conn, Tag>::last_error -> Option<String> with None
+r2e-data/backends/diesel/src/pool.rs:191:9: replace DbPool<Conn, Tag>::record_error with ()
+r2e-data/backends/diesel/src/tx.rs:240:9: replace <impl ManagedResource<S> for ManagedTx<Conn, Src>>::abort with ()

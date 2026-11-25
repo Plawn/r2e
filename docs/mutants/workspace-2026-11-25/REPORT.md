@@ -14,8 +14,10 @@ any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
 - `r2e-data-diesel`, `r2e-test`, `r2e-openfga-model`: no result, CI
   setup failures (see "CI failures" below), re-run with `mutants:<crate>`
   labels. `r2e-test` came back from run `45639646766` (commit `e03703df`,
-  `cargo test`, not nextest) and is in the table. Diesel and openfga-model
-  failed again (second row of fixes below) and are not.
+  `cargo test`, not nextest). Diesel and openfga-model failed again
+  (second table of fixes below), then came back from runs `45649915524`
+  and `45649844254` (commit `7e2f1c2f`). All three are in the table, so
+  every crate now has results.
 
 | crate | caught | missed | timeout | unviable |
 |---|---|---|---|---|
@@ -38,6 +40,8 @@ any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
 | r2e-utils | 9 | 10 | 0 | 8 |
 | r2e-executor | 19 | 8 | 1 | 30 |
 | r2e-cache | 9 | 6 | 0 | 22 |
+| r2e-openfga-model | 171 | 20 | 8 | 25 |
+| r2e-data-diesel (no `mysql`) | 15 | 11 | 0 | 203 |
 | r2e-scheduler | 80 | 6 | 3 | 48 |
 | r2e-openapi | 61 | 1 | 0 | 21 |
 | r2e-rate-limit | 29 | 0 | 0 | 27 |
@@ -63,6 +67,13 @@ any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
   `json_shape_errors` (shape assertions accept anything), `assert_sse_*`
   `&&`→`||`, `tokenize_path`/`resolve_path`; 18 in `ws.rs`. A test helper
   whose assertion never fails turns into false greens in every consumer.
+- **r2e-openfga-model** — `scan_braces` depth counting (brace matching
+  is never tested for nesting), `is_identifier` → `true`, `tokenize`
+  identifier guard, `parse_param_type` `"bool"` arm, `strip_comment`,
+  `last_line_no` (error line numbers).
+- **r2e-data-diesel** — `PoolHealth::affects_readiness`, `DbPool::{last_error,
+  record_error}`, `ManagedTx::abort` → `()` (rollback on abort unchecked),
+  `!` in the plugin `build`s. 203 unviable: generic `Conn` code.
 - Well covered: r2e-openapi, r2e-rate-limit, r2e-scheduler.
 
 ## CI failures of this run (fixed in the workflow since)
