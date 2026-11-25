@@ -220,3 +220,50 @@ fn test_single_audience_still_string_shaped() {
     let token = jwt.token_builder("alice").audience("custom-aud").build();
     assert_eq!(decode_payload(&token)["aud"], "custom-aud");
 }
+
+#[test]
+fn test_malformed_token_looks_like_a_jwt_but_is_not() {
+    // Dot-separated and non-empty — it reaches the decoder — but four parts.
+    let token = TestJwt::malformed_token();
+    let parts: Vec<&str> = token.split('.').collect();
+    assert_eq!(parts.len(), 4, "got {token:?}");
+    assert!(parts.iter().all(|p| !p.is_empty()), "got {token:?}");
+}
+
+#[test]
+fn test_with_config_sets_issuer_and_audience() {
+    let jwt = TestJwt::with_config(b"another-secret", "my-iss", "my-aud");
+    assert_eq!(jwt.issuer(), "my-iss");
+    assert_eq!(jwt.audience(), "my-aud");
+    let claims = decode_payload(&jwt.token("alice", &[]));
+    assert_eq!(claims["iss"], "my-iss");
+    assert_eq!(claims["aud"], "my-aud");
+}
+
+#[test]
+fn test_default_token_expires_in_the_future() {
+    let jwt = TestJwt::new();
+    let exp = decode_exp(&jwt.token("alice", &[]));
+    let now = now_secs();
+    // Default lifetime is one hour.
+    assert!(
+        exp > now + 3500 && exp <= now + 3602,
+        "exp={exp}, now={now}"
+    );
+}
+
+#[r2e::test]
+async fn test_with_config_tokens_validate_against_their_own_validator() {
+    let jwt = TestJwt::with_config(b"another-secret", "my-iss", "my-aud");
+    let token = jwt.token("alice", &["admin"]);
+    jwt.claims_validator()
+        .validate(&token)
+        .await
+        .expect("a fresh token must validate");
+    // ...and not against the default secret.
+    assert!(TestJwt::new()
+        .claims_validator()
+        .validate(&token)
+        .await
+        .is_err());
+}
