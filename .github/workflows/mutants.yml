@@ -172,9 +172,10 @@ jobs:
           for p in $pkgs; do
             n=$(cargo mutants -p "$p" --list | wc -l)
             [ "$n" -eq 0 ] && continue
-            # r2e-macros mutants run three consumers' tests: smaller shards
+            # r2e-macros mutants run three consumers' tests (~6 min per
+            # mutant, trybuild alone ~3 min): smaller shards
             per=$MUTANTS_PER_SHARD
-            [ "$p" = r2e-macros ] && per=50
+            [ "$p" = r2e-macros ] && per=20
             s=$(( (n + per - 1) / per ))
             echo "| $p | $n | $s |" >> "$GITHUB_STEP_SUMMARY"
             for ((i = 0; i < s; i++)); do
@@ -231,7 +232,9 @@ jobs:
           tests=()
           tool=(--test-tool=nextest)
           case $PACKAGE in
-            r2e-macros) tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app) ;;
+            # The 120 s floor timed out 921 of ~960 mutants: trybuild rebuilds
+            # its fixtures against every mutant.
+            r2e-macros) tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900) ;;
             # Ordered suites (#[r2e::test(order)]) wait for earlier cases of
             # the same process; nextest runs each test in its own process.
             r2e-test) tool=() ;;

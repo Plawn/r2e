@@ -68,8 +68,9 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
   - `full` runs one shard in place with nextest, per-crate rust-cache.
     `r2e-macros` mutants are tested with the tests of `r2e-core`,
     `r2e-compile-tests` (trybuild `.stderr`) and `example-app` too (its own
-    tests barely exercise the codegen), in shards of 50 instead of 200 (the
-    first run, with `r2e-core` only, took ~2.5 h per 200).
+    tests barely exercise the codegen), in shards of 20 with `--timeout 900` (~6 min per mutant:
+    trybuild rebuilds its fixtures against each mutant; with the 120 s
+    floor 921 of ~960 mutants timed out).
   - `report` aggregates `report/<crate>/{caught,missed,timeout,unviable}.txt`
     into one artifact, with a per-crate table and missed-per-file summary.
 - Per-crate exceptions in the `full` step:
