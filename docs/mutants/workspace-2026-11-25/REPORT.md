@@ -2,14 +2,13 @@
 
 CI run `45582247997` (PR #172, `mutants-full` label, commit `0835aab3`),
 cargo-mutants 27.1.0, `.cargo/mutants.toml` as committed, nextest, each crate
-tested by **its own tests only** (`r2e-macros` also by `r2e-core`'s). Before
+tested by **its own tests only** (`r2e-macros`: see its own section). Before
 any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
 (caught/unviable are left out: bulk, no action).
 
 **Partial.** The run was cancelled after ~4 h when the workflow was fixed:
 
-- `r2e-core` shard 7/12 and `r2e-macros` shard 7/10 were cancelled — their
-  counts below miss one shard each. `r2e-core`'s complete local run is in
+- `r2e-core` shard 7/12 was cancelled — its counts below miss one shard. `r2e-core`'s complete local run is in
   `../r2e-core-2026-11-25/`.
 - `r2e-data-diesel`, `r2e-test`, `r2e-openfga-model`: no result, CI
   setup failures (see "CI failures" below), re-run with `mutants:<crate>`
@@ -22,7 +21,7 @@ any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
 | crate | caught | missed | timeout | unviable |
 |---|---|---|---|---|
 | r2e-core (11/12 shards) | 979 | 529 | 28 | 747 |
-| r2e-macros (9/10 shards) | 216 | 808 | 3 | 756 |
+| r2e-macros (+ core, compile-tests, example-app) | 943 | 0 | 1 | 1023 |
 | r2e-mcp | 1042 | 285 | 16 | 420 |
 | r2e-test | 123 | 87 | 5 | 164 |
 | r2e-http | 49 | 81 | 0 | 92 |
@@ -53,9 +52,8 @@ any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
   `JobHandle::abort/is_finished`, `set_control_plane`,
   `control_plane_handle`, `yield_now`) — the drain/cancel guards of r2e-core
   rely on them.
-- **r2e-macros: 808 missed** even with r2e-core's tests: most codegen
-  branches are never compiled by them. Candidate: add `r2e-compile-tests`
-  (and the example apps) to its `--test-package`.
+- **r2e-macros: 0 missed** once tested with `r2e-compile-tests` and
+  `example-app` too (808 with r2e-core's tests alone): see below.
 - **r2e-static `parse_byte_range`** (HTTP `Range` bounds, `>`/`>=`,
   `||`/`&&`, length `-`) — off-by-one goes unnoticed.
 - **r2e-tracing `push_json_escaped`** — the `< 0x20` control-character guard
@@ -75,6 +73,33 @@ any fix. Raw lists per crate: `<crate>/missed.txt`, `<crate>/timeout.txt`
   record_error}`, `ManagedTx::abort` → `()` (rollback on abort unchecked),
   `!` in the plugin `build`s. 203 unviable: generic `Conn` code.
 - Well covered: r2e-openapi, r2e-rate-limit, r2e-scheduler.
+
+## r2e-macros with its consumers' tests (2026-11-27)
+
+CI run `45973310310` (commit `f89947c7`), `--test-package
+r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900`, `cargo
+test` (not nextest), 99 shards of 20. 98 shards finished: 938 caught, 0
+missed, 0 timeout, 1011 unviable. Shard 69/99 hung (one mutant makes the
+macro loop at expansion time, and the build phase had no timeout) and hit
+the 350 min job limit; its mutants were re-run locally with `--build-timeout
+600`: 18 found (of the shard's 20), 5 caught, 12 unviable, 1 timeout
+(`route.rs:391:20` `+=`→`*=` in `extract_doc_comments`: `desc_start` never
+advances — a real hang, counts as caught).
+
+**Every viable mutant of r2e-macros is caught.** Nothing to triage. The
+first run's 808 missed were codegen branches only `r2e-compile-tests`
+(trybuild `.stderr`) and `example-app` compile and run. Half the mutants are
+unviable (generated code that no longer type-checks).
+
+Two earlier attempts measured nothing and are not counted:
+
+| run | result | cause | fix |
+|---|---|---|---|
+| `45657601293` | 21 caught, 921 timeout, cancelled | auto timeout = 120 s floor; trybuild alone takes ~3 min | `--timeout 900`, shards of 20 |
+| `45770605284` | 20 caught, 922 timeout, cancelled | nextest: example-app's ordered suites fail (one process per test); `boot_failure` tests waited forever on a boot binary that a mutant had stopped from failing | `cargo test`; `boot_failure.rs` kills the child after 30 s |
+
+Then `--build-timeout 600` for shard 69's hang. The baseline only builds
+the mutated package, so none of this showed before the mutants ran.
 
 ## CI failures of this run (fixed in the workflow since)
 

@@ -1,3 +1,1 @@
-r2e-macros/src/codegen/controller_impl.rs:1051:5: replace generate_transverse -> (TokenStream, TokenStream) with (Default::default(), Default::default())
-r2e-macros/src/codegen/controller_impl.rs:1300:8: delete ! in generate_transverse
-r2e-macros/src/util/type_utils.rs:20:5: replace is_result_like -> bool with false
+r2e-macros/src/extract/route.rs:391:20: replace += with *= in extract_doc_comments

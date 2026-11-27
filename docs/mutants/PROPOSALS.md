@@ -58,8 +58,8 @@ should turn caught.
   some cases are Linux-only.
 - r2e-mcp catalog/handler/uri_template (~90 outside lot 1).
 - r2e-http QUIC (12), routing (16).
-- r2e-macros — wait for the run with `r2e-compile-tests` and `example-app`
-  (in progress), then triage what is still missed.
+- r2e-macros — nothing: with `r2e-compile-tests` and `example-app` every
+  viable mutant is caught (2026-11-27, `workspace-2026-11-25/REPORT.md`).
 
 ## Not proposed
 
