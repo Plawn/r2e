@@ -1,0 +1,529 @@
+r2e-core/src/beans/context.rs:158:9: replace BeanContext::lazy_slot -> Option<Arc<dyn crate::di::lazy::LazyResolve>> with None
+r2e-core/src/beans/error.rs:235:13: delete match arm BeanError::PluginBuild{source, ..} in <impl std::error::Error for BeanError>::source
+r2e-core/src/beans/error.rs:236:13: delete match arm BeanError::ConfigLoad{source, ..} in <impl std::error::Error for BeanError>::source
+r2e-core/src/beans/error.rs:237:13: delete match arm BeanError::ControllerConfig{source, ..} in <impl std::error::Error for BeanError>::source
+r2e-core/src/beans/error.rs:238:13: delete match arm BeanError::EndpointConfig{source, ..} in <impl std::error::Error for BeanError>::source
+r2e-core/src/beans/graph.rs:106:29: replace > with >= in BeanRegistry::duplicate_error
+r2e-core/src/beans/graph.rs:339:21: delete match arm DONE in BeanRegistry::find_cycle::dfs
+r2e-core/src/beans/graph.rs:355:29: replace > with >= in BeanRegistry::find_cycle
+r2e-core/src/beans/graph.rs:367:39: replace > with < in BeanRegistry::find_cycle
+r2e-core/src/beans/graph.rs:367:39: replace > with == in BeanRegistry::find_cycle
+r2e-core/src/beans/graph.rs:367:39: replace > with >= in BeanRegistry::find_cycle
+r2e-core/src/beans/graph.rs:53:36: replace && with || in BeanRegistry::overridable_indices_to_remove
+r2e-core/src/beans/plugin_nodes.rs:107:60: replace + with * in BeanRegistry::register_plugin_group
+r2e-core/src/beans/plugin_nodes.rs:44:29: replace ^ with & in BeanRegistry::register_plugin_group
+r2e-core/src/beans/plugin_nodes.rs:44:29: replace ^ with | in BeanRegistry::register_plugin_group
+r2e-core/src/beans/registry.rs:306:9: replace <impl RegMeta for LazyBeanRegistration>::reg_type_name -> &'static str with ""
+r2e-core/src/beans/registry.rs:306:9: replace <impl RegMeta for LazyBeanRegistration>::reg_type_name -> &'static str with "xyzzy"
+r2e-core/src/beans/registry.rs:309:9: replace <impl RegMeta for LazyBeanRegistration>::reg_dependencies -> &[(TypeId, &'static str)] with Vec::leak(Vec::new())
+r2e-core/src/beans/registry_provide.rs:336:9: replace BeanRegistry::register_scheduled_source with ()
+r2e-core/src/beans/registry_provide.rs:337:61: replace == with != in BeanRegistry::register_scheduled_source
+r2e-core/src/beans/registry_provide.rs:373:9: replace BeanRegistry::register_event_subscriber with ()
+r2e-core/src/beans/registry_provide.rs:374:61: replace == with != in BeanRegistry::register_event_subscriber
+r2e-core/src/beans/registry_provide.rs:427:57: replace == with != in BeanRegistry::register_service_source
+r2e-core/src/beans/registry_provide.rs:492:51: replace == with != in BeanRegistry::register_deco_fill
+r2e-core/src/beans/registry_provide.rs:511:9: replace BeanRegistry::take_scheduled_sources -> Vec<(&'static str, ScheduledSourceHook)> with vec![]
+r2e-core/src/beans/registry_provide.rs:524:9: replace BeanRegistry::take_event_subscribers -> Vec<(&'static str, EventSubscriberHook)> with vec![]
+r2e-core/src/beans/registry_provide.rs:74:9: replace BeanRegistry::set_panic_hook_slot with ()
+r2e-core/src/beans/registry_provide.rs:87:9: replace BeanRegistry::is_pinned -> bool with true
+r2e-core/src/beans/resolve.rs:279:28: delete ! in BeanRegistry::resolve_reusing
+r2e-core/src/beans/reuse.rs:117:30: delete ! in BeanRegistry::compute_fingerprint
+r2e-core/src/beans/reuse.rs:66:9: replace <impl RegMeta for FingerprintReg<'_>>::reg_type_name -> &'static str with ""
+r2e-core/src/beans/reuse.rs:66:9: replace <impl RegMeta for FingerprintReg<'_>>::reg_type_name -> &'static str with "xyzzy"
+r2e-core/src/beans/reuse.rs:73:9: replace <impl RegMeta for FingerprintReg<'_>>::reg_overridable -> bool with true
+r2e-core/src/beans/traits.rs:155:9: replace AsyncBean::config_keys -> Vec<(&'static str, &'static str, ConfigKeyKind)> with vec![]
+r2e-core/src/beans/traits.rs:241:9: replace Producer::config_keys -> Vec<(&'static str, &'static str, ConfigKeyKind)> with vec![]
+r2e-core/src/beans/traits.rs:63:9: replace Bean::config_keys -> Vec<(&'static str, &'static str, ConfigKeyKind)> with vec![]
+r2e-core/src/builder/app.rs:144:5: replace launch -> Result<(), BootError> with Ok(())
+r2e-core/src/builder/app.rs:178:5: replace launch_with -> Result<(), BootError> with Ok(())
+r2e-core/src/builder/app.rs:198:5: replace boot_error_report -> String with "xyzzy".into()
+r2e-core/src/builder/app.rs:198:5: replace boot_error_report -> String with String::new()
+r2e-core/src/builder/app.rs:208:12: delete ! in boot_error_report
+r2e-core/src/builder/app.rs:231:5: replace exit_on_boot_error with ()
+r2e-core/src/builder/bootable.rs:97:9: replace <impl BootableApp for AppBuilder<T>>::into_routes -> crate::http::Routes with Default::default()
+r2e-core/src/builder/mod.rs:1012:9: replace AppBuilder<T, P, R, Mods>::r2e_config -> Option<&crate::config::R2eConfig> with None
+r2e-core/src/builder/mod.rs:330:9: replace ServeContext::task_registry -> TaskRegistryHandle with Default::default()
+r2e-core/src/builder/mod.rs:511:28: delete ! in ServiceHandles::push
+r2e-core/src/builder/mod.rs:527:9: replace ServiceHandles::has_live -> bool with false
+r2e-core/src/builder/mod.rs:527:9: replace ServiceHandles::has_live -> bool with true
+r2e-core/src/builder/mod.rs:531:22: delete ! in ServiceHandles::has_live
+r2e-core/src/builder/mod.rs:543:9: replace ServiceHandles::abort_all -> usize with 0
+r2e-core/src/builder/mod.rs:543:9: replace ServiceHandles::abort_all -> usize with 1
+r2e-core/src/builder/mod.rs:546:16: delete ! in ServiceHandles::abort_all
+r2e-core/src/builder/mod.rs:547:25: replace += with *= in ServiceHandles::abort_all
+r2e-core/src/builder/mod.rs:547:25: replace += with -= in ServiceHandles::abort_all
+r2e-core/src/builder/mod.rs:624:9: replace PostDrainServices::has_live -> bool with true
+r2e-core/src/builder/mod.rs:639:25: replace += with *= in PostDrainServices::abort_all
+r2e-core/src/builder/nostate.rs:1213:31: replace != with == in AppBuilder<NoState, P, R, Mods>::try_build_state
+r2e-core/src/builder/nostate.rs:1222:49: replace != with == in AppBuilder<NoState, P, R, Mods>::try_build_state
+r2e-core/src/builder/prepared.rs:1007:36: replace += with *= in PreparedApp<T>::run_inner
+r2e-core/src/builder/prepared.rs:1007:36: replace += with -= in PreparedApp<T>::run_inner
+r2e-core/src/builder/prepared.rs:1008:39: replace == with != in PreparedApp<T>::run_inner
+r2e-core/src/builder/prepared.rs:1013:35: replace > with < in PreparedApp<T>::run_inner
+r2e-core/src/builder/prepared.rs:1013:35: replace > with == in PreparedApp<T>::run_inner
+r2e-core/src/builder/prepared.rs:1013:35: replace > with >= in PreparedApp<T>::run_inner
+r2e-core/src/builder/prepared.rs:1181:9: replace PluginShutdownCell::is_pending -> bool with false
+r2e-core/src/builder/prepared.rs:1181:9: replace PluginShutdownCell::is_pending -> bool with true
+r2e-core/src/builder/prepared.rs:1185:34: delete ! in PluginShutdownCell::is_pending
+r2e-core/src/builder/prepared.rs:1212:5: replace disarm_ws_sessions with ()
+r2e-core/src/builder/prepared.rs:1252:33: replace match guard e.is_panic() with false in drain_tracked_handles
+r2e-core/src/builder/prepared.rs:1252:33: replace match guard e.is_panic() with true in drain_tracked_handles
+r2e-core/src/builder/prepared.rs:1255:33: replace match guard e.is_cancelled() with false in drain_tracked_handles
+r2e-core/src/builder/prepared.rs:1255:33: replace match guard e.is_cancelled() with true in drain_tracked_handles
+r2e-core/src/builder/prepared.rs:1292:8: delete ! in stop_post_drain_services
+r2e-core/src/builder/prepared.rs:1309:29: replace match guard e.is_panic() with false in stop_post_drain_services
+r2e-core/src/builder/prepared.rs:1309:29: replace match guard e.is_panic() with true in stop_post_drain_services
+r2e-core/src/builder/prepared.rs:1312:29: replace match guard e.is_cancelled() with false in stop_post_drain_services
+r2e-core/src/builder/prepared.rs:1312:29: replace match guard e.is_cancelled() with true in stop_post_drain_services
+r2e-core/src/builder/prepared.rs:156:9: replace PreparedApp<T>::routes -> &crate::http::Routes with Box::leak(Box::new(Default::default()))
+r2e-core/src/builder/prepared.rs:161:9: replace PreparedApp<T>::routes_mut -> &mut crate::http::Routes with Box::leak(Box::new(Default::default()))
+r2e-core/src/builder/prepared.rs:171:9: replace PreparedApp<T>::addr -> &str with ""
+r2e-core/src/builder/prepared.rs:171:9: replace PreparedApp<T>::addr -> &str with "xyzzy"
+r2e-core/src/builder/prepared.rs:182:9: replace PreparedApp<T>::worker_set -> crate::runtime::worker_set::WorkerSet with Default::default()
+r2e-core/src/builder/prepared.rs:289:9: replace PreparedApp<T>::run_sharded -> Result<(), crate::beans::BootError> with Ok(())
+r2e-core/src/builder/prepared.rs:951:20: delete ! in PreparedApp<T>::run_inner
+r2e-core/src/builder/running.rs:104:9: replace RunningApp::routes -> &crate::http::Routes with Box::leak(Box::new(Default::default()))
+r2e-core/src/builder/running.rs:127:9: replace RunningApp::stop_handle -> StopHandle with Default::default()
+r2e-core/src/builder/running.rs:133:9: replace RunningApp::shutdown_token -> CancelToken with Default::default()
+r2e-core/src/builder/running.rs:138:9: replace RunningApp::drain_timeout -> Option<Duration> with None
+r2e-core/src/builder/running.rs:138:9: replace RunningApp::drain_timeout -> Option<Duration> with Some(Default::default())
+r2e-core/src/builder/running.rs:143:9: replace RunningApp::shutdown_grace_period -> Option<Duration> with None
+r2e-core/src/builder/running.rs:143:9: replace RunningApp::shutdown_grace_period -> Option<Duration> with Some(Default::default())
+r2e-core/src/builder/running.rs:171:9: delete ! in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:171:9: replace RunningApp::has_shutdown_work -> bool with true
+r2e-core/src/builder/running.rs:172:13: replace || with && in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:172:16: delete ! in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:173:13: replace || with && in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:173:16: delete ! in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:174:13: replace || with && in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:174:16: delete ! in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:175:13: replace || with && in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:176:13: replace || with && in RunningApp::has_shutdown_work
+r2e-core/src/builder/running.rs:188:9: replace RunningApp::track_named with ()
+r2e-core/src/builder/running.rs:207:9: replace RunningApp::serve_tracked with ()
+r2e-core/src/builder/running.rs:298:29: delete ! in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:299:13: replace || with && in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:299:16: delete ! in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:300:13: replace || with && in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:300:16: delete ! in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:301:13: replace || with && in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:301:16: delete ! in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:302:13: replace || with && in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:308:48: replace + with * in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:310:26: replace || with && in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:310:37: replace > with < in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:310:37: replace > with == in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/running.rs:310:37: replace > with >= in <impl Drop for RunningApp>::drop
+r2e-core/src/builder/task_registry.rs:35:9: replace TaskRegistryHandle::add_boxed_for with ()
+r2e-core/src/builder/task_registry.rs:44:9: replace TaskRegistryHandle::add_boxed with ()
+r2e-core/src/builder/task_registry.rs:49:9: replace TaskRegistryHandle::take_of -> Vec<Box<dyn Any +Send>> with vec![]
+r2e-core/src/builder/task_registry.rs:54:28: replace == with != in TaskRegistryHandle::take_of
+r2e-core/src/builder/task_registry.rs:70:9: replace TaskRegistryHandle::take_all -> Vec<Box<dyn Any +Send>> with vec![]
+r2e-core/src/builder/typed.rs:1398:9: replace AppBuilder<T>::serve -> Result<(), crate::beans::BootError> with Ok(())
+r2e-core/src/builder/typed.rs:1407:9: replace AppBuilder<T>::serve_auto -> Result<(), crate::beans::BootError> with Ok(())
+r2e-core/src/builder/typed.rs:779:37: replace > with >= in AppBuilder<T>::try_register_controller_unchecked_at
+r2e-core/src/builder/typed.rs:860:16: delete ! in AppBuilder<T>::wire_controller_lifecycle
+r2e-core/src/builder/ws_sessions.rs:124:9: replace WsSessions::disarm with ()
+r2e-core/src/builder/ws_sessions.rs:132:9: replace WsSessions::is_armed -> bool with false
+r2e-core/src/builtins/cors.rs:128:9: replace Cors::custom -> Self with Default::default()
+r2e-core/src/builtins/cors.rs:129:13: delete field fixed from struct Self expression in Cors::custom
+r2e-core/src/builtins/cors.rs:170:9: replace Cors::allowed_methods -> Self with Default::default()
+r2e-core/src/builtins/cors.rs:181:9: replace Cors::allowed_headers -> Self with Default::default()
+r2e-core/src/builtins/cors.rs:192:9: replace Cors::expose_headers -> Self with Default::default()
+r2e-core/src/builtins/cors.rs:200:9: replace Cors::allow_credentials -> Self with Default::default()
+r2e-core/src/builtins/health.rs:128:9: replace <impl HealthIndicatorErased for T>::affects_readiness -> bool with false
+r2e-core/src/builtins/health.rs:151:9: replace HealthBuilder::cache_ttl -> Self with Default::default()
+r2e-core/src/builtins/health.rs:241:9: replace HealthRegistry::set_cache_ttl -> &Self with Box::leak(Box::new(Default::default()))
+r2e-core/src/builtins/health.rs:247:9: replace HealthRegistry::cache_ttl -> Option<Duration> with None
+r2e-core/src/builtins/health.rs:247:9: replace HealthRegistry::cache_ttl -> Option<Duration> with Some(Default::default())
+r2e-core/src/builtins/health.rs:252:9: replace HealthRegistry::names -> Vec<String> with vec!["xyzzy".into()]
+r2e-core/src/builtins/health.rs:252:9: replace HealthRegistry::names -> Vec<String> with vec![String::new()]
+r2e-core/src/builtins/health.rs:252:9: replace HealthRegistry::names -> Vec<String> with vec![]
+r2e-core/src/builtins/health.rs:257:9: replace HealthRegistry::len -> usize with 0
+r2e-core/src/builtins/health.rs:257:9: replace HealthRegistry::len -> usize with 1
+r2e-core/src/builtins/health.rs:262:20: replace == with != in HealthRegistry::is_empty
+r2e-core/src/builtins/health.rs:262:9: replace HealthRegistry::is_empty -> bool with false
+r2e-core/src/builtins/health.rs:262:9: replace HealthRegistry::is_empty -> bool with true
+r2e-core/src/builtins/health.rs:316:40: replace < with <= in HealthState::aggregate
+r2e-core/src/builtins/health.rs:316:40: replace < with == in HealthState::aggregate
+r2e-core/src/builtins/health.rs:316:40: replace < with > in HealthState::aggregate
+r2e-core/src/builtins/health.rs:371:40: replace < with <= in HealthState::aggregate_readiness
+r2e-core/src/builtins/health.rs:371:40: replace < with == in HealthState::aggregate_readiness
+r2e-core/src/builtins/health.rs:371:40: replace < with > in HealthState::aggregate_readiness
+r2e-core/src/builtins/health.rs:66:9: replace HealthIndicator::affects_readiness -> bool with false
+r2e-core/src/builtins/http_trace.rs:148:9: replace HttpTrace::builder -> HttpTraceBuilder with Default::default()
+r2e-core/src/builtins/http_trace.rs:176:9: replace HttpTrace::preset -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:213:9: replace HttpTraceBuilder::exclude_paths -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:220:9: replace HttpTraceBuilder::request_id -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:227:9: replace HttpTraceBuilder::record_path -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:234:9: replace HttpTraceBuilder::record_query -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:241:9: replace HttpTraceBuilder::capture_header -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:256:9: replace HttpTraceBuilder::capture_headers -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:263:9: replace HttpTraceBuilder::summary -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:270:9: replace HttpTraceBuilder::request_event -> Self with Default::default()
+r2e-core/src/builtins/http_trace.rs:285:9: replace HttpTraceBuilder::preset -> Self with Default::default()
+r2e-core/src/builtins/mod.rs:126:9: replace Health::builder -> crate::builtins::health::HealthBuilder with Default::default()
+r2e-core/src/config/de.rs:258:38: replace match guard map.len() == 1 with true in <impl de::Deserializer<'de> for ValueDeserializer<'de>>::deserialize_enum
+r2e-core/src/config/de.rs:309:26: replace + with * in visit_seq
+r2e-core/src/config/de.rs:309:26: replace + with - in visit_seq
+r2e-core/src/config/de.rs:336:31: replace += with *= in <impl SeqAccess<'de> for SeqDeserializer<'de>>::next_element_seed
+r2e-core/src/config/de.rs:344:9: replace <impl SeqAccess<'de> for SeqDeserializer<'de>>::size_hint -> Option<usize> with None
+r2e-core/src/config/de.rs:344:9: replace <impl SeqAccess<'de> for SeqDeserializer<'de>>::size_hint -> Option<usize> with Some(0)
+r2e-core/src/config/de.rs:344:9: replace <impl SeqAccess<'de> for SeqDeserializer<'de>>::size_hint -> Option<usize> with Some(1)
+r2e-core/src/config/de.rs:379:9: replace <impl MapAccess<'de> for MapDeserializer<'de>>::size_hint -> Option<usize> with None
+r2e-core/src/config/de.rs:379:9: replace <impl MapAccess<'de> for MapDeserializer<'de>>::size_hint -> Option<usize> with Some(0)
+r2e-core/src/config/de.rs:379:9: replace <impl MapAccess<'de> for MapDeserializer<'de>>::size_hint -> Option<usize> with Some(1)
+r2e-core/src/config/de.rs:408:9: replace <impl VariantAccess<'de> for VariantDeserializer<'de>>::unit_variant -> Result<(), DeError> with Ok(())
+r2e-core/src/config/layered.rs:98:9: replace Layered<C>::explicit -> &C with Box::leak(Box::new(Default::default()))
+r2e-core/src/config/loader.rs:35:25: replace && with || in Flat::insert
+r2e-core/src/config/loader.rs:83:31: replace && with || in flatten_yaml
+r2e-core/src/config/mod.rs:100:9: replace ConfigKeyKind::is_prefix -> bool with true
+r2e-core/src/config/mod.rs:385:9: replace R2eConfig::current_env_overlay_keys -> Vec<String> with vec!["xyzzy".into()]
+r2e-core/src/config/mod.rs:385:9: replace R2eConfig::current_env_overlay_keys -> Vec<String> with vec![String::new()]
+r2e-core/src/config/mod.rs:385:9: replace R2eConfig::current_env_overlay_keys -> Vec<String> with vec![]
+r2e-core/src/config/mod.rs:494:44: replace match guard map.is_empty() with true in R2eConfig::has_prefix
+r2e-core/src/config/registry.rs:16:5: replace register_section with ()
+r2e-core/src/config/registry.rs:25:5: replace registered_sections -> Vec<RegisteredSection> with vec![]
+r2e-core/src/config/runtime.rs:156:38: replace >= with < in supervise_config_watch_with_backoff
+r2e-core/src/config/runtime.rs:196:9: replace LiveConfigSnapshot::last_error -> Option<&str> with None
+r2e-core/src/config/runtime.rs:204:9: replace LiveConfigSnapshot::is_stale -> bool with false
+r2e-core/src/config/runtime.rs:40:9: replace ConfigWatchContext::profile -> &str with ""
+r2e-core/src/config/runtime.rs:40:9: replace ConfigWatchContext::profile -> &str with "xyzzy"
+r2e-core/src/config/runtime.rs:431:9: replace LiveConfigRegistry::snapshot -> LiveConfigSnapshot with Default::default()
+r2e-core/src/config/runtime.rs:461:9: replace LiveConfigRegistry::set_error with ()
+r2e-core/src/config/runtime.rs:536:9: replace ConfigUpdateSink::set_error with ()
+r2e-core/src/config/runtime.rs:541:9: replace ConfigUpdateSink::registry -> LiveConfigRegistry with Default::default()
+r2e-core/src/config/runtime.rs:640:9: replace LiveConfigReceiver<T>::changed -> Result<(), watch::error::RecvError> with Ok(())
+r2e-core/src/config/runtime.rs:649:9: replace LiveConfigReceiver<T>::snapshot -> LiveConfigSnapshot with Default::default()
+r2e-core/src/config/runtime.rs:669:9: replace LiveConfigReceiver<T>::drive with ()
+r2e-core/src/config/secrets.rs:160:55: replace || with && in Renderer<'_>::nested
+r2e-core/src/config/secrets.rs:184:21: replace match guard bytes.get(i + 1) == Some(&b'{') with true in closing_brace
+r2e-core/src/config/secrets.rs:186:19: replace += with *= in closing_brace
+r2e-core/src/config/tree.rs:159:9: delete match arm (Some(ConfigValue::List(seed)), Some(indices)) in materialize
+r2e-core/src/config/tree.rs:243:5: replace is_index -> bool with true
+r2e-core/src/config/tree.rs:32:28: replace && with || in Node<'a>::insert_path
+r2e-core/src/config/tree.rs:83:21: replace > with == in below
+r2e-core/src/config/tree.rs:83:21: replace > with >= in below
+r2e-core/src/config/typed.rs:152:9: replace ConfigProperties::properties_metadata -> Vec<PropertyMeta> with vec![]
+r2e-core/src/config/value.rs:195:13: delete match arm ConfigValue::Integer(i) in <impl FromConfigValue for f64>::from_config_value
+r2e-core/src/config/value.rs:196:13: delete match arm ConfigValue::String(s) in <impl FromConfigValue for f64>::from_config_value
+r2e-core/src/config/value.rs:213:17: delete match arm "true" | "1" | "yes" in <impl FromConfigValue for bool>::from_config_value
+r2e-core/src/config/value.rs:280:9: replace <impl FromConfigValue for PathBuf>::from_config_value -> Result<Self, ConfigError> with Ok(Default::default())
+r2e-core/src/config/value.rs:319:35: replace * with + in parse_duration_string
+r2e-core/src/config/value.rs:319:35: replace * with / in parse_duration_string
+r2e-core/src/config/value.rs:319:9: delete match arm "m" | "min" | "mins" in parse_duration_string
+r2e-core/src/controller.rs:162:9: replace Controller::scheduled_tasks_boxed -> Vec<Box<dyn std::any::Any +Send>> with vec![]
+r2e-core/src/controller.rs:206:9: replace Controller::on_start -> Vec<(i32, crate::beans::OnStartHook)> with vec![]
+r2e-core/src/controller.rs:241:9: replace Controller::validate_config -> Vec<crate::config::MissingKeyError> with vec![]
+r2e-core/src/controller.rs:57:9: replace ContextConstruct::config_keys -> Vec<(&'static str, &'static str, crate::config::ConfigKeyKind)> with vec![]
+r2e-core/src/decorators/claims.rs:164:9: replace StandardClaims::realm_roles -> &[String] with Vec::leak(Vec::new())
+r2e-core/src/decorators/claims.rs:164:9: replace StandardClaims::realm_roles -> &[String] with Vec::leak(vec!["xyzzy".into()])
+r2e-core/src/decorators/claims.rs:164:9: replace StandardClaims::realm_roles -> &[String] with Vec::leak(vec![String::new()])
+r2e-core/src/decorators/claims.rs:172:9: replace StandardClaims::client_roles -> &[String] with Vec::leak(Vec::new())
+r2e-core/src/decorators/claims.rs:172:9: replace StandardClaims::client_roles -> &[String] with Vec::leak(vec!["xyzzy".into()])
+r2e-core/src/decorators/claims.rs:172:9: replace StandardClaims::client_roles -> &[String] with Vec::leak(vec![String::new()])
+r2e-core/src/decorators/claims.rs:181:9: replace StandardClaims::scopes -> impl Iterator<Item =&str> with ::std::iter::empty()
+r2e-core/src/decorators/claims.rs:181:9: replace StandardClaims::scopes -> impl Iterator<Item =&str> with ::std::iter::once("")
+r2e-core/src/decorators/claims.rs:181:9: replace StandardClaims::scopes -> impl Iterator<Item =&str> with ::std::iter::once("xyzzy")
+r2e-core/src/decorators/claims.rs:38:9: replace Audience::iter -> impl Iterator<Item =&str> with ::std::iter::empty()
+r2e-core/src/decorators/claims.rs:38:9: replace Audience::iter -> impl Iterator<Item =&str> with ::std::iter::once("")
+r2e-core/src/decorators/claims.rs:38:9: replace Audience::iter -> impl Iterator<Item =&str> with ::std::iter::once("xyzzy")
+r2e-core/src/decorators/claims.rs:48:31: replace == with != in Audience::contains
+r2e-core/src/decorators/claims.rs:48:9: replace Audience::contains -> bool with false
+r2e-core/src/decorators/claims.rs:48:9: replace Audience::contains -> bool with true
+r2e-core/src/decorators/decorator.rs:139:9: replace SharedDecoSlot::fill with ()
+r2e-core/src/decorators/decorator.rs:144:9: replace SharedDecoSlot::get -> Option<&T> with None
+r2e-core/src/decorators/decorator.rs:152:9: replace <impl Clone for SharedDecoSlot>::clone -> Self with Default::default()
+r2e-core/src/decorators/decorator.rs:225:9: replace Decorate::decorate with ()
+r2e-core/src/decorators/decorator.rs:296:9: replace DecoratorSpec::config_keys -> Vec<(&'static str, &'static str, crate::config::ConfigKeyKind)> with vec![]
+r2e-core/src/decorators/decorator.rs:316:9: replace DecoratorSpec::config_sections -> Vec<crate::config::SectionValidator> with vec![]
+r2e-core/src/decorators/decorator.rs:73:9: replace DecoSlot::fill with ()
+r2e-core/src/decorators/decorator.rs:78:9: replace DecoSlot::get -> Option<&T> with None
+r2e-core/src/decorators/decorator.rs:86:9: replace <impl Clone for DecoSlot>::clone -> Self with Default::default()
+r2e-core/src/decorators/guards.rs:285:5: replace default_method -> &'static Method with Box::leak(Box::new(Default::default()))
+r2e-core/src/decorators/guards.rs:293:5: replace no_extensions -> &'static Extensions with Box::leak(Box::new(Default::default()))
+r2e-core/src/decorators/guards.rs:400:9: replace GuardContext<'a, I>::forwarded_for -> Option<&str> with None
+r2e-core/src/decorators/guards.rs:400:9: replace GuardContext<'a, I>::forwarded_for -> Option<&str> with Some("")
+r2e-core/src/decorators/guards.rs:400:9: replace GuardContext<'a, I>::forwarded_for -> Option<&str> with Some("xyzzy")
+r2e-core/src/decorators/guards.rs:408:9: replace GuardContext<'a, I>::forwarded_ip -> Option<IpAddr> with None
+r2e-core/src/decorators/guards.rs:481:9: replace PreAuthGuardContext<'a>::path -> &str with ""
+r2e-core/src/decorators/guards.rs:481:9: replace PreAuthGuardContext<'a>::path -> &str with "xyzzy"
+r2e-core/src/decorators/guards.rs:519:9: replace PreAuthGuardContext<'a>::query_string -> Option<&str> with None
+r2e-core/src/decorators/guards.rs:519:9: replace PreAuthGuardContext<'a>::query_string -> Option<&str> with Some("")
+r2e-core/src/decorators/guards.rs:519:9: replace PreAuthGuardContext<'a>::query_string -> Option<&str> with Some("xyzzy")
+r2e-core/src/decorators/guards.rs:532:9: replace PreAuthGuardContext<'a>::path_param -> Option<&str> with None
+r2e-core/src/decorators/guards.rs:532:9: replace PreAuthGuardContext<'a>::path_param -> Option<&str> with Some("")
+r2e-core/src/decorators/guards.rs:532:9: replace PreAuthGuardContext<'a>::path_param -> Option<&str> with Some("xyzzy")
+r2e-core/src/decorators/guards.rs:68:9: replace Identity::email -> Option<&str> with Some("")
+r2e-core/src/decorators/guards.rs:68:9: replace Identity::email -> Option<&str> with Some("xyzzy")
+r2e-core/src/decorators/guards.rs:77:9: replace Identity::claims -> Option<&crate::decorators::claims::StandardClaims> with Some(Box::leak(Box::new(Default::default())))
+r2e-core/src/di/lazy.rs:59:9: replace <impl Drop for ResolutionGuard>::drop with ()
+r2e-core/src/di/lazy.rs:61:46: replace == with != in <impl Drop for ResolutionGuard>::drop
+r2e-core/src/di/meta.rs:184:9: replace RequestBodySchema::body_schema -> Option<(String, Value)> with Some(("xyzzy".into(), Default::default()))
+r2e-core/src/di/meta.rs:184:9: replace RequestBodySchema::body_schema -> Option<(String, Value)> with Some((String::new(), Default::default()))
+r2e-core/src/di/meta.rs:29:9: replace MetaRegistry::push with ()
+r2e-core/src/di/meta.rs:358:5: replace param_schema_of -> Option<Value> with None
+r2e-core/src/di/meta.rs:358:5: replace param_schema_of -> Option<Value> with Some(Default::default())
+r2e-core/src/di/meta.rs:362:8: delete ! in param_schema_of
+r2e-core/src/di/module.rs:746:14: replace match guard p.starts_with('/') with true in join_path_prefix
+r2e-core/src/error/mod.rs:115:13: delete match arm StatusCode::FORBIDDEN in HttpError::from_status
+r2e-core/src/error/mod.rs:116:13: delete match arm StatusCode::BAD_REQUEST in HttpError::from_status
+r2e-core/src/error/mod.rs:117:13: delete match arm StatusCode::INTERNAL_SERVER_ERROR in HttpError::from_status
+r2e-core/src/error/mod.rs:160:9: replace HttpError::status -> StatusCode with Default::default()
+r2e-core/src/error/mod.rs:174:9: replace HttpError::message -> Option<&str> with None
+r2e-core/src/error/mod.rs:174:9: replace HttpError::message -> Option<&str> with Some("")
+r2e-core/src/error/mod.rs:174:9: replace HttpError::message -> Option<&str> with Some("xyzzy")
+r2e-core/src/error/rejection.rs:438:32: replace != with == in Rejection::project
+r2e-core/src/error/rejection.rs:597:13: delete match arm FormRejection::InvalidFormContentType(_) in <impl From<FormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:598:13: delete match arm FormRejection::FailedToDeserializeFormBody(_) in <impl From<FormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:600:18: replace match guard status == StatusCode::PAYLOAD_TOO_LARGE with false in <impl From<FormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:600:18: replace match guard status == StatusCode::PAYLOAD_TOO_LARGE with true in <impl From<FormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:600:25: replace == with != in <impl From<FormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:601:13: delete match arm FormRejection::BytesRejection(_) in <impl From<FormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:615:13: delete match arm StatusCode::UNSUPPORTED_MEDIA_TYPE in <impl From<crate::http::multipart::MultipartRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:616:13: delete match arm StatusCode::PAYLOAD_TOO_LARGE in <impl From<crate::http::multipart::MultipartRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:680:30: replace == with != in <impl From<BytesRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:695:13: delete match arm StringRejection::InvalidUtf8(_) in <impl From<StringRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:696:18: replace match guard status == StatusCode::PAYLOAD_TOO_LARGE with false in <impl From<StringRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:696:18: replace match guard status == StatusCode::PAYLOAD_TOO_LARGE with true in <impl From<StringRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:696:25: replace == with != in <impl From<StringRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:708:13: delete match arm RawFormRejection::InvalidFormContentType(_) in <impl From<RawFormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:709:18: replace match guard r.status() == StatusCode::PAYLOAD_TOO_LARGE with false in <impl From<RawFormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:709:18: replace match guard r.status() == StatusCode::PAYLOAD_TOO_LARGE with true in <impl From<RawFormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:709:29: replace == with != in <impl From<RawFormRejection> for Rejection>::from
+r2e-core/src/error/rejection.rs:710:13: delete match arm RawFormRejection::BytesRejection(_) in <impl From<RawFormRejection> for Rejection>::from
+r2e-core/src/error/schema.rs:115:9: replace ErrorSchemaInfo::body_schema_for -> Option<(String, Value)> with None
+r2e-core/src/error/schema.rs:115:9: replace ErrorSchemaInfo::body_schema_for -> Option<(String, Value)> with Some(("xyzzy".into(), Default::default()))
+r2e-core/src/error/schema.rs:115:9: replace ErrorSchemaInfo::body_schema_for -> Option<(String, Value)> with Some((String::new(), Default::default()))
+r2e-core/src/error/schema.rs:121:9: replace ErrorSchemaInfo::extra_statuses -> Vec<(StatusCode, &'static str)> with vec![(Default::default(), "")]
+r2e-core/src/error/schema.rs:121:9: replace ErrorSchemaInfo::extra_statuses -> Vec<(StatusCode, &'static str)> with vec![(Default::default(), "xyzzy")]
+r2e-core/src/error/schema.rs:121:9: replace ErrorSchemaInfo::extra_statuses -> Vec<(StatusCode, &'static str)> with vec![]
+r2e-core/src/error/schema.rs:127:9: replace ErrorSchemaInfo::opaque_passthrough -> bool with false
+r2e-core/src/error/schema.rs:127:9: replace ErrorSchemaInfo::opaque_passthrough -> bool with true
+r2e-core/src/error/schema.rs:39:9: replace ErrorSchema::body_schema_for -> Option<(String, Value)> with Some(("xyzzy".into(), Default::default()))
+r2e-core/src/error/schema.rs:39:9: replace ErrorSchema::body_schema_for -> Option<(String, Value)> with Some((String::new(), Default::default()))
+r2e-core/src/error/schema.rs:46:9: replace ErrorSchema::extra_statuses -> Vec<(StatusCode, &'static str)> with vec![]
+r2e-core/src/plugin/contexts.rs:276:9: replace RoutesContext<'a>::config -> Option<&crate::config::R2eConfig> with None
+r2e-core/src/plugin/contexts.rs:282:9: replace RoutesContext<'a>::take_data -> Option<D> with None
+r2e-core/src/plugin/contexts.rs:392:9: replace PluginBuildContext::panic_hook_slot -> crate::runtime::panic::PanicHookSlot with Default::default()
+r2e-core/src/plugin/contexts.rs:575:9: replace PluginBuildContext::on_shutdown_after_drain_async with ()
+r2e-core/src/plugin/deferred.rs:215:9: replace DeferredContext<'_>::config -> Option<&crate::config::R2eConfig> with None
+r2e-core/src/plugin/deferred.rs:303:9: replace DeferredContext<'_>::mark_dev_reload_applied -> bool with true
+r2e-core/src/plugin/deferred.rs:397:9: replace DeferredContext<'_>::on_shutdown_after_drain_async with ()
+r2e-core/src/runtime/dev.rs:143:5: replace unmark_hot_reload_loop with ()
+r2e-core/src/runtime/dev.rs:206:5: replace parse_port -> Option<u16> with None
+r2e-core/src/runtime/dev.rs:206:5: replace parse_port -> Option<u16> with Some(0)
+r2e-core/src/runtime/dev.rs:206:5: replace parse_port -> Option<u16> with Some(1)
+r2e-core/src/runtime/dev.rs:550:5: replace invalidate_graph_fingerprint with ()
+r2e-core/src/runtime/dev.rs:601:5: replace boot_time -> u64 with 0
+r2e-core/src/runtime/dev.rs:601:5: replace boot_time -> u64 with 1
+r2e-core/src/runtime/harness.rs:216:9: replace WorkerHarness::workers -> usize with 0
+r2e-core/src/runtime/harness.rs:216:9: replace WorkerHarness::workers -> usize with 1
+r2e-core/src/runtime/harness.rs:226:9: replace WorkerHarness::shutdown_token -> CancelToken with Default::default()
+r2e-core/src/runtime/harness.rs:279:9: replace WorkerHarness::shutdown with ()
+r2e-core/src/runtime/harness.rs:295:9: replace <impl Drop for WorkerHarness>::drop with ()
+r2e-core/src/runtime/http_trace.rs:206:9: replace SpanState::get_arc -> Option<Arc<T>> with None
+r2e-core/src/runtime/http_trace.rs:284:36: replace * with + in RequestOutcome<'_>::latency_ms
+r2e-core/src/runtime/http_trace.rs:284:36: replace * with / in RequestOutcome<'_>::latency_ms
+r2e-core/src/runtime/http_trace.rs:284:9: replace RequestOutcome<'_>::latency_ms -> f64 with -1.0
+r2e-core/src/runtime/http_trace.rs:284:9: replace RequestOutcome<'_>::latency_ms -> f64 with 0.0
+r2e-core/src/runtime/http_trace.rs:284:9: replace RequestOutcome<'_>::latency_ms -> f64 with 1.0
+r2e-core/src/runtime/http_trace.rs:336:9: replace MakeRequestSpan::make_state -> Option<SpanState> with None
+r2e-core/src/runtime/http_trace.rs:421:5: replace captured_headers -> Option<String> with None
+r2e-core/src/runtime/http_trace.rs:421:5: replace captured_headers -> Option<String> with Some("xyzzy".into())
+r2e-core/src/runtime/http_trace.rs:421:5: replace captured_headers -> Option<String> with Some(String::new())
+r2e-core/src/runtime/http_trace.rs:429:12: delete ! in captured_headers
+r2e-core/src/runtime/http_trace.rs:436:6: delete ! in captured_headers
+r2e-core/src/runtime/ingress.rs:155:9: replace imp::reuseport_tcp -> Result<std::net::TcpListener, AffinityError> with Ok(Default::default())
+r2e-core/src/runtime/ingress.rs:159:9: replace imp::reuseport_udp -> Result<std::net::UdpSocket, AffinityError> with Ok(Default::default())
+r2e-core/src/runtime/ingress.rs:223:27: replace || with && in attach_reuseport_cbpf
+r2e-core/src/runtime/ingress.rs:223:44: replace > with == in attach_reuseport_cbpf
+r2e-core/src/runtime/ingress.rs:223:44: replace > with >= in attach_reuseport_cbpf
+r2e-core/src/runtime/ingress.rs:264:18: delete - in cbpf::attach
+r2e-core/src/runtime/ingress.rs:278:9: replace cbpf::attach -> Result<(), AffinityError> with Ok(())
+r2e-core/src/runtime/ingress.rs:302:9: replace WorkerContext::assert_on_worker with ()
+r2e-core/src/runtime/ingress.rs:81:9: replace <impl std::error::Error for AffinityError>::source -> Option<&(dyn std::error::Error +'static)> with None
+r2e-core/src/runtime/ingress.rs:98:5: replace reuseport_supported -> bool with true
+r2e-core/src/runtime/layers.rs:181:9: replace <impl http_body::Body for GraphBody<B>>::is_end_stream -> bool with false
+r2e-core/src/runtime/mailbox.rs:143:9: replace Mailboxes<M>::worker_set -> &WorkerSet with Box::leak(Box::new(Default::default()))
+r2e-core/src/runtime/mailbox.rs:263:9: replace Mailboxes<M>::broadcast -> usize with 0
+r2e-core/src/runtime/mailbox.rs:263:9: replace Mailboxes<M>::broadcast -> usize with 1
+r2e-core/src/runtime/mailbox.rs:267:27: replace += with *= in Mailboxes<M>::broadcast
+r2e-core/src/runtime/mailbox.rs:267:27: replace += with -= in Mailboxes<M>::broadcast
+r2e-core/src/runtime/mailbox.rs:276:9: replace Mailboxes<M>::broadcast_with -> usize with 0
+r2e-core/src/runtime/mailbox.rs:276:9: replace Mailboxes<M>::broadcast_with -> usize with 1
+r2e-core/src/runtime/mailbox.rs:280:27: replace += with *= in Mailboxes<M>::broadcast_with
+r2e-core/src/runtime/mailbox.rs:280:27: replace += with -= in Mailboxes<M>::broadcast_with
+r2e-core/src/runtime/mailbox.rs:314:20: replace > with >= in Mailboxes<M>::missing
+r2e-core/src/runtime/mailbox.rs:340:9: replace Mailbox<M>::worker -> usize with 0
+r2e-core/src/runtime/mailbox.rs:340:9: replace Mailbox<M>::worker -> usize with 1
+r2e-core/src/runtime/mailbox.rs:354:9: replace Mailbox<M>::try_recv -> Option<M> with None
+r2e-core/src/runtime/mailbox.rs:363:9: replace Mailbox<M>::close with ()
+r2e-core/src/runtime/panic.rs:148:9: replace PanicReport<'a>::route_label -> &'a str with ""
+r2e-core/src/runtime/panic.rs:148:9: replace PanicReport<'a>::route_label -> &'a str with "xyzzy"
+r2e-core/src/runtime/service.rs:148:9: replace ServiceComponent::stop_phase -> StopPhase with Default::default()
+r2e-core/src/runtime/service.rs:238:5: replace log_services_globally_disabled with ()
+r2e-core/src/runtime/service.rs:255:5: replace log_service_disabled with ()
+r2e-core/src/runtime/service.rs:82:9: replace ServiceComponent::config_keys -> Vec<(&'static str, &'static str, crate::config::ConfigKeyKind)> with vec![]
+r2e-core/src/runtime/service.rs:95:9: replace ServiceComponent::config_sections -> Vec<crate::config::SectionValidator> with vec![]
+r2e-core/src/runtime/sharded.rs:173:13: replace imp::<impl Drop for ExitGuard>::drop with ()
+r2e-core/src/runtime/sharded.rs:175:38: replace != with == in imp::<impl Drop for ExitGuard>::drop
+r2e-core/src/runtime/sharded.rs:381:49: replace == with != in imp::serve_sharded
+r2e-core/src/runtime/sharded.rs:96:14: replace > with >= in parse_workers
+r2e-core/src/runtime/tracing.rs:109:28: replace match guard options.json.flatten with false in install_summary
+r2e-core/src/runtime/tracing.rs:109:28: replace match guard options.json.flatten with true in install_summary
+r2e-core/src/runtime/tracing.rs:114:20: replace match guard EnvFilter::try_from_default_env().is_ok() with false in install_summary
+r2e-core/src/runtime/tracing.rs:114:20: replace match guard EnvFilter::try_from_default_env().is_ok() with true in install_summary
+r2e-core/src/runtime/tracing.rs:115:14: replace match guard EnvFilter::try_new(&options.filter).is_err() with false in install_summary
+r2e-core/src/runtime/tracing.rs:123:17: replace match guard std::io::stdout().is_terminal() with false in install_summary
+r2e-core/src/runtime/tracing.rs:123:17: replace match guard std::io::stdout().is_terminal() with true in install_summary
+r2e-core/src/runtime/tracing.rs:140:20: replace > with >= in install_summary
+r2e-core/src/runtime/tracing.rs:230:5: replace ensure_tracing_installed -> Option<&'static TracingOptions> with Some(Box::leak(Box::new(Default::default())))
+r2e-core/src/runtime/tracing.rs:50:25: replace match guard bind_error.is_none() && config.has_prefix("tracing") with true in install_tracing
+r2e-core/src/runtime/tracing.rs:50:46: replace && with || in install_tracing
+r2e-core/src/runtime/tracing.rs:63:28: replace > with < in install_tracing
+r2e-core/src/runtime/tracing.rs:63:28: replace > with == in install_tracing
+r2e-core/src/runtime/tracing.rs:63:28: replace > with >= in install_tracing
+r2e-core/src/runtime/tracing.rs:71:28: replace > with < in install_tracing
+r2e-core/src/runtime/tracing.rs:71:28: replace > with == in install_tracing
+r2e-core/src/runtime/tracing.rs:71:28: replace > with >= in install_tracing
+r2e-core/src/runtime/tracing_config.rs:116:9: replace TracingConfig::with_enabled -> Self with Default::default()
+r2e-core/src/runtime/tracing_config.rs:182:9: replace TracingConfig::effective_format -> LogFormat with Default::default()
+r2e-core/src/runtime/worker.rs:215:9: replace WorkerContext::cpu -> Option<usize> with None
+r2e-core/src/runtime/worker.rs:215:9: replace WorkerContext::cpu -> Option<usize> with Some(0)
+r2e-core/src/runtime/worker.rs:215:9: replace WorkerContext::cpu -> Option<usize> with Some(1)
+r2e-core/src/runtime/worker.rs:296:9: replace WorkerRole::as_str -> &'static str with ""
+r2e-core/src/runtime/worker.rs:296:9: replace WorkerRole::as_str -> &'static str with "xyzzy"
+r2e-core/src/runtime/worker.rs:391:9: replace WorkerInfo::uninstall with ()
+r2e-core/src/runtime/worker.rs:406:9: replace WorkerInfo::cpu -> Option<usize> with None
+r2e-core/src/runtime/worker.rs:406:9: replace WorkerInfo::cpu -> Option<usize> with Some(0)
+r2e-core/src/runtime/worker.rs:406:9: replace WorkerInfo::cpu -> Option<usize> with Some(1)
+r2e-core/src/runtime/worker_local.rs:248:9: replace WorkerLocal<T>::type_name -> &'static str with ""
+r2e-core/src/runtime/worker_local.rs:248:9: replace WorkerLocal<T>::type_name -> &'static str with "xyzzy"
+r2e-core/src/runtime/worker_local.rs:288:9: replace <impl Drop for WorkerLocalGuard<T>>::drop with ()
+r2e-core/src/runtime/worker_set.rs:150:9: replace WorkerSlot::id -> usize with 0
+r2e-core/src/runtime/worker_set.rs:150:9: replace WorkerSlot::id -> usize with 1
+r2e-core/src/runtime/worker_set.rs:177:9: replace WorkerSlot::cpu -> Option<usize> with None
+r2e-core/src/runtime/worker_set.rs:177:9: replace WorkerSlot::cpu -> Option<usize> with Some(0)
+r2e-core/src/runtime/worker_set.rs:177:9: replace WorkerSlot::cpu -> Option<usize> with Some(1)
+r2e-core/src/runtime/worker_set.rs:182:9: replace WorkerSlot::set_cpu with ()
+r2e-core/src/runtime/worker_set.rs:183:31: delete - in WorkerSlot::set_cpu
+r2e-core/src/runtime/worker_set.rs:384:9: replace WorkerSet::wait_all_exited with ()
+r2e-core/src/runtime/worker_set.rs:426:9: replace WorkerHealth::name -> Self with Default::default()
+r2e-core/src/runtime/worker_set.rs:443:12: delete ! in <impl Plugin for WorkerHealth>::build
+r2e-core/src/runtime/worker_set.rs:443:9: replace <impl Plugin for WorkerHealth>::build -> Result<Self::Provided, PluginBuildError> with Ok(Default::default())
+r2e-core/src/runtime/worker_set.rs:461:9: replace <impl HealthIndicator for WorkerReadiness>::name -> &str with ""
+r2e-core/src/runtime/worker_set.rs:461:9: replace <impl HealthIndicator for WorkerReadiness>::name -> &str with "xyzzy"
+r2e-core/src/runtime/worker_set.rs:469:33: replace != with == in <impl HealthIndicator for WorkerReadiness>::check
+r2e-core/src/runtime/worker_set.rs:66:13: delete match arm 1 in WorkerState::from_u8
+r2e-core/src/runtime/worker_set.rs:67:13: delete match arm 2 in WorkerState::from_u8
+r2e-core/src/runtime/worker_set.rs:69:13: delete match arm 4 in WorkerState::from_u8
+r2e-core/src/runtime/worker_set.rs:71:13: delete match arm 6 in WorkerState::from_u8
+r2e-core/src/type_list.rs:398:9: replace <impl BeanLookup for std::sync::Arc<S>>::bean -> Option<T> with None
+r2e-core/src/web/body_schema.rs:108:9: replace <impl RequestBodySchema for crate::web::multipart::TypedMultipart<T>>::content_type -> &'static str with ""
+r2e-core/src/web/body_schema.rs:108:9: replace <impl RequestBodySchema for crate::web::multipart::TypedMultipart<T>>::content_type -> &'static str with "xyzzy"
+r2e-core/src/web/body_schema.rs:111:9: replace <impl RequestBodySchema for crate::web::multipart::TypedMultipart<T>>::body_schema -> Option<(String, serde_json::Value)> with None
+r2e-core/src/web/body_schema.rs:111:9: replace <impl RequestBodySchema for crate::web::multipart::TypedMultipart<T>>::body_schema -> Option<(String, serde_json::Value)> with Some(("xyzzy".into(), Default::default()))
+r2e-core/src/web/body_schema.rs:111:9: replace <impl RequestBodySchema for crate::web::multipart::TypedMultipart<T>>::body_schema -> Option<(String, serde_json::Value)> with Some((String::new(), Default::default()))
+r2e-core/src/web/body_schema.rs:114:9: replace <impl RequestBodySchema for crate::web::multipart::TypedMultipart<T>>::rejection_kinds -> Vec<RejectionKind> with vec![]
+r2e-core/src/web/body_schema.rs:122:5: replace multipart_kinds -> Vec<RejectionKind> with vec![]
+r2e-core/src/web/body_schema.rs:134:9: replace <impl ResponseBodySchema for Json<T>>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:141:9: replace <impl ResponseBodySchema for Json<T>>::response_contents -> Vec<ResponseContent> with vec![Default::default()]
+r2e-core/src/web/body_schema.rs:141:9: replace <impl ResponseBodySchema for Json<T>>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:147:9: replace <impl ResponseBodySchema for String>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:159:9: replace <impl ResponseBodySchema for Cow<'static, str>>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:165:9: replace <impl ResponseBodySchema for Html<T>>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:171:9: replace <impl ResponseBodySchema for Bytes>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:177:9: replace <impl ResponseBodySchema for Vec<u8>>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:190:9: replace <impl ResponseBodySchema for StatusCode>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:196:9: replace <impl ResponseBodySchema for Redirect>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:204:9: replace <impl ResponseBodySchema for Sse<S>>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:221:9: replace <impl ResponseBodySchema for (StatusCode, T)>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:227:9: replace <impl ResponseBodySchema for (HeaderMap, T)>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:233:9: replace <impl ResponseBodySchema for (StatusCode, HeaderMap, T)>::response_contents -> Vec<ResponseContent> with vec![]
+r2e-core/src/web/body_schema.rs:27:9: replace <impl RequestBodySchema for Json<T>>::body_schema -> Option<(String, serde_json::Value)> with None
+r2e-core/src/web/body_schema.rs:37:9: replace <impl RequestBodySchema for Json<T>>::content_type -> &'static str with ""
+r2e-core/src/web/body_schema.rs:37:9: replace <impl RequestBodySchema for Json<T>>::content_type -> &'static str with "xyzzy"
+r2e-core/src/web/body_schema.rs:40:9: replace <impl RequestBodySchema for Json<T>>::rejection_kinds -> Vec<RejectionKind> with vec![Default::default()]
+r2e-core/src/web/body_schema.rs:40:9: replace <impl RequestBodySchema for Json<T>>::rejection_kinds -> Vec<RejectionKind> with vec![]
+r2e-core/src/web/body_schema.rs:56:9: replace <impl RequestBodySchema for Bytes>::content_type -> &'static str with ""
+r2e-core/src/web/body_schema.rs:56:9: replace <impl RequestBodySchema for Bytes>::content_type -> &'static str with "xyzzy"
+r2e-core/src/web/body_schema.rs:59:9: replace <impl RequestBodySchema for Bytes>::rejection_kinds -> Vec<RejectionKind> with vec![]
+r2e-core/src/web/body_schema.rs:65:9: replace <impl RequestBodySchema for String>::content_type -> &'static str with ""
+r2e-core/src/web/body_schema.rs:65:9: replace <impl RequestBodySchema for String>::content_type -> &'static str with "xyzzy"
+r2e-core/src/web/body_schema.rs:68:9: replace <impl RequestBodySchema for String>::rejection_kinds -> Vec<RejectionKind> with vec![]
+r2e-core/src/web/body_schema.rs:81:9: replace <impl RequestBodySchema for Form<T>>::content_type -> &'static str with ""
+r2e-core/src/web/body_schema.rs:81:9: replace <impl RequestBodySchema for Form<T>>::content_type -> &'static str with "xyzzy"
+r2e-core/src/web/body_schema.rs:96:9: replace <impl RequestBodySchema for crate::web::multipart::Multipart>::content_type -> &'static str with ""
+r2e-core/src/web/body_schema.rs:96:9: replace <impl RequestBodySchema for crate::web::multipart::Multipart>::content_type -> &'static str with "xyzzy"
+r2e-core/src/web/body_schema.rs:99:9: replace <impl RequestBodySchema for crate::web::multipart::Multipart>::rejection_kinds -> Vec<RejectionKind> with vec![]
+r2e-core/src/web/multipart.rs:121:9: replace UploadedFile::len -> usize with 0
+r2e-core/src/web/multipart.rs:121:9: replace UploadedFile::len -> usize with 1
+r2e-core/src/web/multipart.rs:126:9: replace UploadedFile::is_empty -> bool with false
+r2e-core/src/web/multipart.rs:126:9: replace UploadedFile::is_empty -> bool with true
+r2e-core/src/web/multipart.rs:177:58: replace > with < in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:177:58: replace > with == in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:177:58: replace > with >= in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:183:60: replace > with < in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:183:60: replace > with == in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:183:60: replace > with >= in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:188:29: replace += with *= in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:188:29: replace += with -= in MultipartFields::collect_from_with_limits
+r2e-core/src/web/multipart.rs:214:9: replace MultipartFields::take_text -> Result<String, MultipartError> with Ok("xyzzy".into())
+r2e-core/src/web/multipart.rs:214:9: replace MultipartFields::take_text -> Result<String, MultipartError> with Ok(String::new())
+r2e-core/src/web/multipart.rs:228:9: replace MultipartFields::take_text_opt -> Option<String> with None
+r2e-core/src/web/multipart.rs:228:9: replace MultipartFields::take_text_opt -> Option<String> with Some("xyzzy".into())
+r2e-core/src/web/multipart.rs:228:9: replace MultipartFields::take_text_opt -> Option<String> with Some(String::new())
+r2e-core/src/web/multipart.rs:253:9: replace MultipartFields::take_file_opt -> Option<UploadedFile> with None
+r2e-core/src/web/multipart.rs:264:9: replace MultipartFields::take_files -> Vec<UploadedFile> with vec![]
+r2e-core/src/web/multipart.rs:270:9: replace MultipartFields::take_bytes -> Result<Bytes, MultipartError> with Ok(Default::default())
+r2e-core/src/web/params.rs:101:9: replace __ParamSchemaProbe<T>::param_schema -> Option<serde_json::Value> with None
+r2e-core/src/web/params.rs:101:9: replace __ParamSchemaProbe<T>::param_schema -> Option<serde_json::Value> with Some(Default::default())
+r2e-core/src/web/params.rs:108:9: replace __NoParamSchema::param_schema -> Option<serde_json::Value> with Some(Default::default())
+r2e-core/src/web/params.rs:42:9: replace <impl From<ParamError> for Response>::from -> Self with Default::default()
+r2e-core/src/web/params.rs:84:9: replace __NoParamsMeta::param_infos -> Vec<ParamInfo> with vec![]
+r2e-core/src/web/request_head.rs:69:9: replace RequestHead<'a>::query_string -> Option<&'a str> with None
+r2e-core/src/web/request_head.rs:69:9: replace RequestHead<'a>::query_string -> Option<&'a str> with Some("")
+r2e-core/src/web/request_head.rs:69:9: replace RequestHead<'a>::query_string -> Option<&'a str> with Some("xyzzy")
+r2e-core/src/web/request_head.rs:99:9: replace RequestHead<'a>::extension -> Option<&'a T> with None
+r2e-core/src/web/sse.rs:100:9: replace SseBroadcaster::len -> usize with 0
+r2e-core/src/web/sse.rs:100:9: replace SseBroadcaster::len -> usize with 1
+r2e-core/src/web/sse.rs:105:9: replace SseBroadcaster::is_empty -> bool with false
+r2e-core/src/web/sse.rs:105:9: replace SseBroadcaster::is_empty -> bool with true
+r2e-core/src/web/sse.rs:381:9: replace SseTopic<E>::subscriber_count -> usize with 0
+r2e-core/src/web/sse.rs:381:9: replace SseTopic<E>::subscriber_count -> usize with 1
+r2e-core/src/web/sse.rs:386:9: replace SseTopic<E>::capacity -> usize with 0
+r2e-core/src/web/sse.rs:386:9: replace SseTopic<E>::capacity -> usize with 1
+r2e-core/src/web/sse.rs:515:70: replace > with == in SseRooms<K>::reap_empty
+r2e-core/src/web/sse.rs:526:9: replace SseRooms<K>::is_empty -> bool with true
+r2e-core/src/web/ws.rs:227:9: replace WsStream::protocol -> Option<&str> with None
+r2e-core/src/web/ws.rs:227:9: replace WsStream::protocol -> Option<&str> with Some("")
+r2e-core/src/web/ws.rs:227:9: replace WsStream::protocol -> Option<&str> with Some("xyzzy")
+r2e-core/src/web/ws.rs:232:9: replace WsStream::shutdown_token -> Option<&CancelToken> with None
+r2e-core/src/web/ws.rs:232:9: replace WsStream::shutdown_token -> Option<&CancelToken> with Some(Box::leak(Box::new(Default::default())))
+r2e-core/src/web/ws.rs:275:9: replace WsStream::send_json -> Result<(), WsError> with Ok(())
+r2e-core/src/web/ws.rs:281:9: replace WsStream::send_binary -> Result<(), WsError> with Ok(())
+r2e-core/src/web/ws.rs:383:9: replace WsStream::next_text -> Option<Result<String, WsError>> with None
+r2e-core/src/web/ws.rs:383:9: replace WsStream::next_text -> Option<Result<String, WsError>> with Some(Ok("xyzzy".into()))
+r2e-core/src/web/ws.rs:383:9: replace WsStream::next_text -> Option<Result<String, WsError>> with Some(Ok(String::new()))
+r2e-core/src/web/ws.rs:385:17: delete match arm Ok(Message::Text(text)) in WsStream::next_text
+r2e-core/src/web/ws.rs:386:17: delete match arm Ok(Message::Close(_)) in WsStream::next_text
+r2e-core/src/web/ws.rs:387:17: delete match arm Err(e) in WsStream::next_text
+r2e-core/src/web/ws.rs:398:9: replace WsStream::next_json -> Option<Result<T, WsError>> with None
+r2e-core/src/web/ws.rs:400:17: delete match arm Ok(Message::Text(bytes)) in WsStream::next_json
+r2e-core/src/web/ws.rs:403:17: delete match arm Ok(Message::Close(_)) in WsStream::next_json
+r2e-core/src/web/ws.rs:404:17: delete match arm Err(e) in WsStream::next_json
+r2e-core/src/web/ws.rs:416:9: replace WsStream::on_each with ()
+r2e-core/src/web/ws.rs:458:9: replace <impl Sink<Message> for WsStream>::poll_close -> Poll<Result<(), WsError>> with Poll::from(Ok(()))
+r2e-core/src/web/ws.rs:492:5: replace run_ws_handler with ()
+r2e-core/src/web/ws.rs:543:9: replace WsBroadcaster::send_json -> Result<(), crate::json::JsonError> with Ok(())
+r2e-core/src/web/ws.rs:550:9: replace WsBroadcaster::send with ()
+r2e-core/src/web/ws.rs:571:9: replace WsBroadcaster::send_json_from -> Result<(), crate::json::JsonError> with Ok(())
+r2e-core/src/web/ws.rs:578:9: replace WsBroadcaster::send_from with ()
+r2e-core/src/web/ws.rs:602:9: replace WsBroadcaster::is_empty -> bool with false
+r2e-core/src/web/ws.rs:602:9: replace WsBroadcaster::is_empty -> bool with true
+r2e-core/src/web/ws.rs:615:9: replace WsBroadcastReceiver::client_id -> u64 with 1
+r2e-core/src/web/ws.rs:696:70: replace > with == in WsRooms<K>::reap_empty
+r2e-core/src/web/ws.rs:707:9: replace WsRooms<K>::is_empty -> bool with false
+r2e-core/src/web/ws.rs:707:9: replace WsRooms<K>::is_empty -> bool with true
+r2e-core/src/web/ws.rs:75:42: replace << with >>

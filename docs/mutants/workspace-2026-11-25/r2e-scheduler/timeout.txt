@@ -1,0 +1,3 @@
+r2e-scheduler/src/driver.rs:260:24: replace <= with > in compute_next
+r2e-scheduler/src/driver.rs:285:5: replace wait_until with ()
+r2e-scheduler/src/driver.rs:293:5: replace next_command -> Option<Command> with None

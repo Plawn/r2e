@@ -1,0 +1,6 @@
+r2e-events/src/backend/pending.rs:65:9: replace PendingRequests::complete with ()
+r2e-events/src/backend/pending.rs:83:9: replace PendingRequests::complete_reply with ()
+r2e-events/src/backend/reconnect.rs:43:34: replace || with && in reconnect_loop
+r2e-events/src/backend/reconnect.rs:43:37: delete ! in reconnect_loop
+r2e-events/src/local.rs:83:59: replace == with != in <impl Drop for InFlightGuard>::drop
+r2e-events/src/local.rs:83:9: replace <impl Drop for InFlightGuard>::drop with ()

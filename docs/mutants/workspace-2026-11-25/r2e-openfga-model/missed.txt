@@ -1,0 +1,20 @@
+r2e-openfga/model/src/parser.rs:122:9: replace Parser<'a>::last_line_no -> usize with 0
+r2e-openfga/model/src/parser.rs:122:9: replace Parser<'a>::last_line_no -> usize with 1
+r2e-openfga/model/src/parser.rs:142:24: replace match guard !v.is_empty() && v.starts_with(char::is_whitespace) with true in Parser<'a>::parse_model
+r2e-openfga/model/src/parser.rs:142:38: replace && with || in Parser<'a>::parse_model
+r2e-openfga/model/src/parser.rs:355:5: replace is_identifier -> bool with true
+r2e-openfga/model/src/parser.rs:356:9: replace && with || in is_identifier
+r2e-openfga/model/src/parser.rs:359:9: replace && with || in is_identifier
+r2e-openfga/model/src/parser.rs:380:25: replace < with <= in scan_braces
+r2e-openfga/model/src/parser.rs:381:33: replace == with != in scan_braces
+r2e-openfga/model/src/parser.rs:382:27: replace += with *= in scan_braces
+r2e-openfga/model/src/parser.rs:382:27: replace += with -= in scan_braces
+r2e-openfga/model/src/parser.rs:387:13: delete match arm b'{' in scan_braces
+r2e-openfga/model/src/parser.rs:387:27: replace += with *= in scan_braces
+r2e-openfga/model/src/parser.rs:387:27: replace += with -= in scan_braces
+r2e-openfga/model/src/parser.rs:453:9: delete match arm "bool" in parse_param_type
+r2e-openfga/model/src/parser.rs:547:18: replace match guard c.is_ascii_alphabetic() || c == b'_' with true in tokenize
+r2e-openfga/model/src/parser.rs:547:47: replace == with != in tokenize
+r2e-openfga/model/src/parser.rs:720:51: replace match guard !is_reserved(ts) with true in ExprParser<'a, 't>::parse_term
+r2e-openfga/model/src/parser.rs:73:44: replace - with + in strip_comment
+r2e-openfga/model/src/validate.rs:120:50: replace && with || in validate_rewrite

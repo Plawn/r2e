@@ -1,0 +1,6 @@
+r2e-cache/src/lib.rs:168:39: replace < with <= in <impl CacheStore for InMemoryStore>::get
+r2e-cache/src/lib.rs:70:35: replace < with <= in TtlCache<K, V>::get
+r2e-cache/src/lib.rs:97:9: replace TtlCache<K, V>::evict_expired with ()
+r2e-cache/src/lib.rs:98:59: replace < with <= in TtlCache<K, V>::evict_expired
+r2e-cache/src/lib.rs:98:59: replace < with == in TtlCache<K, V>::evict_expired
+r2e-cache/src/lib.rs:98:59: replace < with > in TtlCache<K, V>::evict_expired

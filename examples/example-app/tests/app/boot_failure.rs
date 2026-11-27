@@ -6,13 +6,54 @@
 //! a real process, so the assertions are about what an operator or a supervisor
 //! actually observes — not about the internals of the boot path.
 
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// A failing boot exits in well under a second. A boot that does not fail
+/// serves forever: kill it and fail here instead of hanging the test binary
+/// (cargo-mutants would otherwise wait out its whole timeout per mutant).
+const BOOT_DEADLINE: Duration = Duration::from_secs(30);
+
+fn output_within_deadline(command: &mut Command) -> std::process::Output {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the failing-boot binary runs");
+    // Drain both pipes on their own threads so a chatty child cannot block.
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            buf
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().expect("piped stdout")));
+    let stderr = drain(Box::new(child.stderr.take().expect("piped stderr")));
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait for the boot binary") {
+            break status;
+        }
+        if started.elapsed() > BOOT_DEADLINE {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the boot did not fail within {BOOT_DEADLINE:?}: the binary kept running");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    std::process::Output {
+        status,
+        stdout: stdout.join().expect("stdout drain"),
+        stderr: stderr.join().expect("stderr drain"),
+    }
+}
 
 fn run_failing_boot() -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_boot_failure"))
-        .env("RUST_BACKTRACE", "0")
-        .output()
-        .expect("the failing-boot binary runs")
+    output_within_deadline(
+        Command::new(env!("CARGO_BIN_EXE_boot_failure")).env("RUST_BACKTRACE", "0"),
+    )
 }
 
 #[test]
@@ -66,11 +107,11 @@ fn a_failing_boot_exits_non_zero_with_a_single_error_message() {
 // load. The subject is `src/bin/boot_failure_graph.rs`.
 
 fn run_graph_boot(kind: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_boot_failure_graph"))
-        .env("RUST_BACKTRACE", "0")
-        .env("R2E_BOOT_FAILURE_KIND", kind)
-        .output()
-        .expect("the failing-boot binary runs")
+    output_within_deadline(
+        Command::new(env!("CARGO_BIN_EXE_boot_failure_graph"))
+            .env("RUST_BACKTRACE", "0")
+            .env("R2E_BOOT_FAILURE_KIND", kind),
+    )
 }
 
 /// Asserts the parts of the contract that do not depend on which step failed.

@@ -1,0 +1,36 @@
+# cargo-mutants configuration — see docs/claude/mutation-testing.md.
+#
+# Applies to every run in this workspace (local and CI). Command-line flags
+# override these values.
+
+# Feature-gated code (`ws`, `multipart`, `openapi`, `dev-reload`, `quic`, …)
+# is invisible to a default-feature build: its mutants would all report
+# "missed" without ever being exercised. The first r2e-core run lost ~110
+# mutants to this.
+all_features = true
+
+# Doctests are almost all `ignore` and cost a full rustdoc pass per mutant.
+# A mutant only a doctest could kill therefore shows up as missed.
+additional_cargo_test_args = ["--lib", "--tests"]
+
+# The auto timeout (derived from the baseline) is too tight once several
+# copies build in parallel: the first r2e-core run produced 484 false
+# timeouts at 28 s. Real hangs still time out at this floor.
+minimum_test_timeout = 120
+
+# No debuginfo: every mutant relinks every test binary of the crate.
+profile = "mutants"
+
+# Mutants no test can (or should) kill. Each costs a build and a full test
+# run for a guaranteed "missed".
+exclude_re = [
+  # Debug / Display formatting.
+  "<impl (std::)?(fmt::)?(Debug|Display) for ",
+  # Unit / HList-terminator impls already return the empty value.
+  "<impl .* for \\(\\)>",
+  "<impl .* for TNil>",
+  # tower `poll_ready` that just forwards readiness.
+  "::poll_ready -> ",
+  # Log-only helpers.
+  "warn_unresolved_ip",
+]

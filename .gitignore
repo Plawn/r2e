@@ -5,3 +5,5 @@ target
 .DS_Store
 docs/book/book/
 __pycache__/
+mutants.out/
+mutants.out.old/

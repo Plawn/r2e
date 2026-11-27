@@ -1,0 +1,8 @@
+r2e-openfga/model/src/parser.rs:104:22: replace += with *= in Parser<'a>::next
+r2e-openfga/model/src/parser.rs:114:9: replace Parser<'a>::next_raw -> Option<(usize, &'a str)> with Some((0, ""))
+r2e-openfga/model/src/parser.rs:114:9: replace Parser<'a>::next_raw -> Option<(usize, &'a str)> with Some((1, ""))
+r2e-openfga/model/src/parser.rs:379:19: replace += with -= in scan_braces
+r2e-openfga/model/src/parser.rs:384:23: replace += with *= in scan_braces
+r2e-openfga/model/src/parser.rs:396:11: replace += with *= in scan_braces
+r2e-openfga/model/src/parser.rs:514:31: replace += with *= in tokenize
+r2e-openfga/model/src/parser.rs:552:23: replace += with *= in tokenize

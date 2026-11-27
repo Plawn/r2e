@@ -1,0 +1,47 @@
+r2e-tracing/src/boot.rs:114:30: replace << with >>
+r2e-tracing/src/boot.rs:194:9: replace <impl Visit for Render>::record_u64 with ()
+r2e-tracing/src/boot.rs:198:9: replace <impl Visit for Render>::record_i128 with ()
+r2e-tracing/src/boot.rs:202:9: replace <impl Visit for Render>::record_u128 with ()
+r2e-tracing/src/boot.rs:206:9: replace <impl Visit for Render>::record_f64 with ()
+r2e-tracing/src/boot.rs:214:9: replace <impl Visit for Render>::record_error with ()
+r2e-tracing/src/boot.rs:264:5: replace is_reserved -> bool with true
+r2e-tracing/src/boot.rs:268:29: replace || with && in is_reserved
+r2e-tracing/src/boot.rs:268:53: replace + with * in is_reserved
+r2e-tracing/src/boot.rs:288:5: replace close_reserved -> bool with false
+r2e-tracing/src/boot.rs:288:5: replace close_reserved -> bool with true
+r2e-tracing/src/boot.rs:296:12: replace -= with += in close_reserved
+r2e-tracing/src/boot.rs:296:12: replace -= with /= in close_reserved
+r2e-tracing/src/boot.rs:297:15: replace > with >= in close_reserved
+r2e-tracing/src/boot.rs:312:9: replace <impl Subscriber for Forwarder>::on_register_dispatch with ()
+r2e-tracing/src/boot.rs:323:21: replace match guard DISABLED.load(Ordering::Relaxed) with false in <impl Subscriber for Forwarder>::register_callsite
+r2e-tracing/src/boot.rs:329:9: replace <impl Subscriber for Forwarder>::max_level_hint -> Option<LevelFilter> with None
+r2e-tracing/src/boot.rs:331:21: replace match guard DISABLED.load(Ordering::Relaxed) with false in <impl Subscriber for Forwarder>::max_level_hint
+r2e-tracing/src/boot.rs:339:21: replace match guard DISABLED.load(Ordering::Relaxed) with false in <impl Subscriber for Forwarder>::enabled
+r2e-tracing/src/boot.rs:355:33: replace match guard is_reserved(parent) with true in <impl Subscriber for Forwarder>::new_span
+r2e-tracing/src/boot.rs:365:9: replace <impl Subscriber for Forwarder>::record with ()
+r2e-tracing/src/boot.rs:373:9: replace <impl Subscriber for Forwarder>::record_follows_from with ()
+r2e-tracing/src/boot.rs:374:16: delete ! in <impl Subscriber for Forwarder>::record_follows_from
+r2e-tracing/src/boot.rs:375:16: delete ! in <impl Subscriber for Forwarder>::record_follows_from
+r2e-tracing/src/boot.rs:407:9: replace <impl Subscriber for Forwarder>::enter with ()
+r2e-tracing/src/boot.rs:408:16: delete ! in <impl Subscriber for Forwarder>::enter
+r2e-tracing/src/boot.rs:415:9: replace <impl Subscriber for Forwarder>::exit with ()
+r2e-tracing/src/boot.rs:416:16: delete ! in <impl Subscriber for Forwarder>::exit
+r2e-tracing/src/boot.rs:434:9: replace <impl Subscriber for Forwarder>::try_close -> bool with false
+r2e-tracing/src/boot.rs:434:9: replace <impl Subscriber for Forwarder>::try_close -> bool with true
+r2e-tracing/src/boot.rs:562:22: replace && with || in <impl Drop for BootLogs>::drop
+r2e-tracing/src/boot.rs:562:48: replace && with || in <impl Drop for BootLogs>::drop
+r2e-tracing/src/boot.rs:562:51: delete ! in <impl Drop for BootLogs>::drop
+r2e-tracing/src/boot.rs:562:9: replace <impl Drop for BootLogs>::drop with ()
+r2e-tracing/src/boot.rs:578:16: replace > with < in flush_boot_logs_to
+r2e-tracing/src/enrich.rs:161:18: replace match guard (c as u32) < 0x20 with false in push_json_escaped
+r2e-tracing/src/enrich.rs:161:18: replace match guard (c as u32) < 0x20 with true in push_json_escaped
+r2e-tracing/src/enrich.rs:161:29: replace < with <= in push_json_escaped
+r2e-tracing/src/enrich.rs:161:29: replace < with == in push_json_escaped
+r2e-tracing/src/enrich.rs:161:29: replace < with > in push_json_escaped
+r2e-tracing/src/enrich.rs:56:9: replace LogFields::is_empty -> bool with true
+r2e-tracing/src/flat_json.rs:165:39: delete ! in FlatJson::insert_spans
+r2e-tracing/src/flat_json.rs:227:9: replace <impl Visit for FieldVisitor<'_>>::record_u64 with ()
+r2e-tracing/src/flat_json.rs:231:9: replace <impl Visit for FieldVisitor<'_>>::record_f64 with ()
+r2e-tracing/src/flat_json.rs:239:9: replace <impl Visit for FieldVisitor<'_>>::record_error with ()
+r2e-tracing/src/noise.rs:87:25: replace == with != in <impl Visit for MessageField>::record_str
+r2e-tracing/src/noise.rs:87:9: replace <impl Visit for MessageField>::record_str with ()

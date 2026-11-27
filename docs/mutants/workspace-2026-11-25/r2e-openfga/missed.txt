@@ -1,0 +1,73 @@
+r2e-openfga/src/backend.rs:160:9: replace GrpcBackend::store_id -> &str with ""
+r2e-openfga/src/backend.rs:160:9: replace GrpcBackend::store_id -> &str with "xyzzy"
+r2e-openfga/src/backend.rs:165:9: replace GrpcBackend::model_id -> Option<&str> with None
+r2e-openfga/src/backend.rs:165:9: replace GrpcBackend::model_id -> Option<&str> with Some("")
+r2e-openfga/src/backend.rs:165:9: replace GrpcBackend::model_id -> Option<&str> with Some("xyzzy")
+r2e-openfga/src/backend.rs:218:13: delete field store_id from struct CheckRequest expression in <impl OpenFgaBackend for GrpcBackend>::check
+r2e-openfga/src/backend.rs:219:13: delete field authorization_model_id from struct CheckRequest expression in <impl OpenFgaBackend for GrpcBackend>::check
+r2e-openfga/src/backend.rs:220:13: delete field tuple_key from struct CheckRequest expression in <impl OpenFgaBackend for GrpcBackend>::check
+r2e-openfga/src/cache.rs:114:9: replace DecisionCache::invalidate with ()
+r2e-openfga/src/cache.rs:132:9: replace DecisionCache::invalidate_user with ()
+r2e-openfga/src/cache.rs:133:31: replace != with == in DecisionCache::invalidate_user
+r2e-openfga/src/cache.rs:134:16: delete ! in DecisionCache::invalidate_user
+r2e-openfga/src/cache.rs:151:37: replace > with >= in DecisionCache::evict_expired
+r2e-openfga/src/cache.rs:169:9: replace DecisionCache::is_empty -> bool with true
+r2e-openfga/src/cache.rs:174:9: replace DecisionCache::maybe_evict with ()
+r2e-openfga/src/cache.rs:177:40: replace >= with < in DecisionCache::maybe_evict
+r2e-openfga/src/cache.rs:74:33: replace > with >= in DecisionCache::get
+r2e-openfga/src/config.rs:10:5: replace default_request_timeout -> u64 with 0
+r2e-openfga/src/config.rs:10:5: replace default_request_timeout -> u64 with 1
+r2e-openfga/src/config.rs:119:9: replace OpenFgaConfig::validate -> Result<(), OpenFgaError> with Ok(())
+r2e-openfga/src/config.rs:13:5: replace default_cache_enabled -> bool with false
+r2e-openfga/src/config.rs:16:5: replace default_cache_ttl -> u64 with 0
+r2e-openfga/src/config.rs:16:5: replace default_cache_ttl -> u64 with 1
+r2e-openfga/src/config.rs:7:5: replace default_connect_timeout -> u64 with 0
+r2e-openfga/src/config.rs:7:5: replace default_connect_timeout -> u64 with 1
+r2e-openfga/src/error.rs:64:13: delete match arm tonic::Code::DeadlineExceeded in <impl From<tonic::Status> for OpenFgaError>::from
+r2e-openfga/src/guard.rs:37:9: replace <impl PathParamName for PathParam<T>>::param_name -> &'static str with ""
+r2e-openfga/src/guard.rs:37:9: replace <impl PathParamName for PathParam<T>>::param_name -> &'static str with "xyzzy"
+r2e-openfga/src/model_convert.rs:298:9: delete match arm Some(Oneof::Difference(diff)) in normalize_userset
+r2e-openfga/src/model_convert.rs:313:5: replace normalize_conditions -> HashMap<String, crate::proto::Condition> with HashMap::from_iter([("xyzzy".into(), Default::default())])
+r2e-openfga/src/model_convert.rs:313:5: replace normalize_conditions -> HashMap<String, crate::proto::Condition> with HashMap::from_iter([(String::new(), Default::default())])
+r2e-openfga/src/model_convert.rs:313:5: replace normalize_conditions -> HashMap<String, crate::proto::Condition> with HashMap::new()
+r2e-openfga/src/model_convert.rs:412:5: replace condition_diffs -> Vec<String> with vec![]
+r2e-openfga/src/model_convert.rs:415:28: replace match guard other == cond with true in condition_diffs
+r2e-openfga/src/plugin.rs:230:20: replace match guard !e.is_empty() with true in validate_config
+r2e-openfga/src/plugin.rs:240:26: delete ! in validate_config
+r2e-openfga/src/plugin.rs:240:26: replace match guard !id.is_empty() with false in validate_config
+r2e-openfga/src/plugin.rs:240:26: replace match guard !id.is_empty() with true in validate_config
+r2e-openfga/src/plugin.rs:241:28: replace match guard !name.is_empty() with true in validate_config
+r2e-openfga/src/plugin.rs:251:20: replace && with || in validate_config
+r2e-openfga/src/plugin.rs:298:9: replace OpenFgaHandle::try_backend -> Option<GrpcBackend> with None
+r2e-openfga/src/plugin.rs:303:9: replace OpenFgaHandle::store_id -> String with "xyzzy".into()
+r2e-openfga/src/plugin.rs:303:9: replace OpenFgaHandle::store_id -> String with String::new()
+r2e-openfga/src/plugin.rs:308:9: replace OpenFgaHandle::model_id -> String with "xyzzy".into()
+r2e-openfga/src/plugin.rs:308:9: replace OpenFgaHandle::model_id -> String with String::new()
+r2e-openfga/src/plugin.rs:358:5: replace resolve_store -> Result<String, BootError> with Ok("xyzzy".into())
+r2e-openfga/src/plugin.rs:358:5: replace resolve_store -> Result<String, BootError> with Ok(String::new())
+r2e-openfga/src/plugin.rs:381:22: replace match guard settings.apply_model with false in resolve_store
+r2e-openfga/src/plugin.rs:381:22: replace match guard settings.apply_model with true in resolve_store
+r2e-openfga/src/plugin.rs:404:22: replace match guard settings.apply_model with false in resolve_store
+r2e-openfga/src/plugin.rs:404:22: replace match guard settings.apply_model with true in resolve_store
+r2e-openfga/src/plugin.rs:438:5: replace stores_by_name -> Result<Vec<Store>, BootError> with Ok(vec![Default::default()])
+r2e-openfga/src/plugin.rs:438:5: replace stores_by_name -> Result<Vec<Store>, BootError> with Ok(vec![])
+r2e-openfga/src/plugin.rs:455:66: replace == with != in stores_by_name
+r2e-openfga/src/plugin.rs:471:5: replace resolve_model -> Result<String, BootError> with Ok("xyzzy".into())
+r2e-openfga/src/plugin.rs:471:5: replace resolve_model -> Result<String, BootError> with Ok(String::new())
+r2e-openfga/src/plugin.rs:502:8: delete ! in resolve_model
+r2e-openfga/src/plugin.rs:551:5: replace latest_model -> Result<Option<AuthorizationModel>, BootError> with Ok(None)
+r2e-openfga/src/plugin.rs:551:5: replace latest_model -> Result<Option<AuthorizationModel>, BootError> with Ok(Some(Default::default()))
+r2e-openfga/src/plugin.rs:576:5: replace verify -> Result<String, BootError> with Ok("xyzzy".into())
+r2e-openfga/src/plugin.rs:576:5: replace verify -> Result<String, BootError> with Ok(String::new())
+r2e-openfga/src/registry.rs:135:9: replace OpenFgaRegistry::invalidate_user with ()
+r2e-openfga/src/registry.rs:142:9: replace OpenFgaRegistry::clear_cache with ()
+r2e-openfga/src/typed.rs:198:23: replace == with != in <impl PartialEq for FgaUserset<T, R>>::eq
+r2e-openfga/src/typed.rs:198:9: replace <impl PartialEq for FgaUserset<T, R>>::eq -> bool with false
+r2e-openfga/src/typed.rs:198:9: replace <impl PartialEq for FgaUserset<T, R>>::eq -> bool with true
+r2e-openfga/src/typed.rs:204:9: replace <impl std::hash::Hash for FgaUserset<T, R>>::hash with ()
+r2e-openfga/src/typed.rs:232:9: replace <impl Clone for FgaWildcard<T>>::clone -> Self with Default::default()
+r2e-openfga/src/typed.rs:238:9: replace <impl PartialEq for FgaWildcard<T>>::eq -> bool with false
+r2e-openfga/src/typed.rs:83:23: replace == with != in <impl PartialEq for FgaObject<T>>::eq
+r2e-openfga/src/typed.rs:83:9: replace <impl PartialEq for FgaObject<T>>::eq -> bool with false
+r2e-openfga/src/typed.rs:83:9: replace <impl PartialEq for FgaObject<T>>::eq -> bool with true
+r2e-openfga/src/typed.rs:89:9: replace <impl std::hash::Hash for FgaObject<T>>::hash with ()

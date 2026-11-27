@@ -1,0 +1,27 @@
+r2e-security/src/error.rs:115:17: delete match arm msg::MISSING_KID in SecurityError::kind
+r2e-security/src/jwks.rs:208:5: replace validation_error_message -> String with "xyzzy".into()
+r2e-security/src/jwks.rs:208:5: replace validation_error_message -> String with String::new()
+r2e-security/src/jwks.rs:357:23: replace match guard had_cached_key with true in JwksCache::get_shared_key
+r2e-security/src/jwks.rs:410:9: replace JwksCache::try_refresh -> Result<(), SecurityError> with Ok(())
+r2e-security/src/jwks.rs:415:16: delete ! in JwksCache::try_refresh
+r2e-security/src/jwks.rs:415:23: replace && with || in JwksCache::try_refresh
+r2e-security/src/jwks.rs:415:26: delete ! in JwksCache::try_refresh
+r2e-security/src/jwks.rs:418:16: delete ! in JwksCache::try_refresh
+r2e-security/src/jwks.rs:427:16: delete ! in JwksCache::try_refresh
+r2e-security/src/jwks.rs:427:23: replace && with || in JwksCache::try_refresh
+r2e-security/src/jwks.rs:427:26: delete ! in JwksCache::try_refresh
+r2e-security/src/jwks.rs:430:16: delete ! in JwksCache::try_refresh
+r2e-security/src/jwks.rs:527:16: replace > with == in read_body_limited
+r2e-security/src/jwks.rs:527:16: replace > with >= in read_body_limited
+r2e-security/src/jwks.rs:542:23: replace + with * in read_body_limited
+r2e-security/src/jwks.rs:542:37: replace > with == in read_body_limited
+r2e-security/src/jwks.rs:542:37: replace > with >= in read_body_limited
+r2e-security/src/jwt.rs:235:17: delete match arm jsonwebtoken::errors::ErrorKind::InvalidSubject in JwtClaimsValidator::validate_as
+r2e-security/src/jwt.rs:43:9: replace <impl JwtClaimSet for serde_json::Value>::subject -> Option<&str> with Some("xyzzy")
+r2e-security/src/keycloak.rs:180:9: replace RoleExtractor::includes_realm -> bool with false
+r2e-security/src/keycloak.rs:180:9: replace RoleExtractor::includes_realm -> bool with true
+r2e-security/src/keycloak.rs:185:9: replace RoleExtractor::client_ids -> impl Iterator<Item =&str> with ::std::iter::empty()
+r2e-security/src/keycloak.rs:185:9: replace RoleExtractor::client_ids -> impl Iterator<Item =&str> with ::std::iter::once("")
+r2e-security/src/keycloak.rs:185:9: replace RoleExtractor::client_ids -> impl Iterator<Item =&str> with ::std::iter::once("xyzzy")
+r2e-security/src/keycloak.rs:95:9: replace ClientRoleExtractor::client_id -> &str with ""
+r2e-security/src/keycloak.rs:95:9: replace ClientRoleExtractor::client_id -> &str with "xyzzy"

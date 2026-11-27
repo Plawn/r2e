@@ -1,0 +1,47 @@
+r2e-oidc/src/authorization.rs:119:5: replace valid_code_challenge -> bool with true
+r2e-oidc/src/authorization.rs:120:9: replace && with || in valid_code_challenge
+r2e-oidc/src/authorization.rs:126:5: replace valid_code_verifier -> bool with true
+r2e-oidc/src/authorization.rs:127:9: replace && with || in valid_code_verifier
+r2e-oidc/src/authorization.rs:133:5: replace verify_s256 -> bool with true
+r2e-oidc/src/authorization.rs:138:9: replace && with || in verify_s256
+r2e-oidc/src/authorization.rs:142:28: replace | with & in verify_s256
+r2e-oidc/src/authorization.rs:142:28: replace | with ^ in verify_s256
+r2e-oidc/src/authorization.rs:39:49: replace > with < in AuthorizationCodeStore::issue
+r2e-oidc/src/authorization.rs:39:49: replace > with == in AuthorizationCodeStore::issue
+r2e-oidc/src/authorization.rs:39:49: replace > with >= in AuthorizationCodeStore::issue
+r2e-oidc/src/authorization.rs:52:27: replace > with >= in AuthorizationCodeStore::take
+r2e-oidc/src/authorization.rs:80:49: replace > with < in LoginFormStore::issue
+r2e-oidc/src/authorization.rs:80:49: replace > with == in LoginFormStore::issue
+r2e-oidc/src/authorization.rs:80:49: replace > with >= in LoginFormStore::issue
+r2e-oidc/src/authorization.rs:93:55: replace > with >= in LoginFormStore::consume
+r2e-oidc/src/client.rs:263:9: replace ClientRegistry::all_scopes -> BTreeSet<String> with BTreeSet::from_iter(["xyzzy".into()])
+r2e-oidc/src/client.rs:263:9: replace ClientRegistry::all_scopes -> BTreeSet<String> with BTreeSet::from_iter([String::new()])
+r2e-oidc/src/client.rs:263:9: replace ClientRegistry::all_scopes -> BTreeSet<String> with BTreeSet::new()
+r2e-oidc/src/client.rs:87:41: replace || with && in ClientRegistry::try_add_public_client
+r2e-oidc/src/config.rs:152:24: replace > with < in validate_base_path
+r2e-oidc/src/config.rs:152:24: replace > with == in validate_base_path
+r2e-oidc/src/config.rs:152:24: replace > with >= in validate_base_path
+r2e-oidc/src/config.rs:158:32: replace || with && in validate_base_path
+r2e-oidc/src/config.rs:84:37: replace || with && in OidcServerConfig::validate
+r2e-oidc/src/error.rs:103:13: delete match arm OidcError::InvalidClient(_) in OidcError::www_authenticate
+r2e-oidc/src/error.rs:107:13: delete match arm OidcError::InsufficientScope(_) in OidcError::www_authenticate
+r2e-oidc/src/error.rs:85:9: replace OidcError::public_description -> &str with ""
+r2e-oidc/src/error.rs:85:9: replace OidcError::public_description -> &str with "xyzzy"
+r2e-oidc/src/handlers.rs:128:9: replace || with && in handle_authorization_code_grant
+r2e-oidc/src/handlers.rs:129:9: replace || with && in handle_authorization_code_grant
+r2e-oidc/src/handlers.rs:132:9: replace || with && in handle_authorization_code_grant
+r2e-oidc/src/handlers.rs:665:29: replace || with && in extract_basic_client_credentials
+r2e-oidc/src/keys.rs:62:27: delete ! in OidcKeyPair::from_private_key
+r2e-oidc/src/keys.rs:87:9: replace OidcKeyPair::kid -> &str with ""
+r2e-oidc/src/keys.rs:87:9: replace OidcKeyPair::kid -> &str with "xyzzy"
+r2e-oidc/src/lib.rs:126:9: replace OidcServer::authorization_code_ttl -> Self with Default::default()
+r2e-oidc/src/lib.rs:138:9: replace OidcServer::key_id -> Self with Default::default()
+r2e-oidc/src/lib.rs:148:9: replace OidcServer::with_signing_key_pem -> Self with Default::default()
+r2e-oidc/src/lib.rs:177:9: replace OidcServer::max_credential_verifications -> Self with Default::default()
+r2e-oidc/src/lib.rs:218:18: delete ! in OidcServer::try_build
+r2e-oidc/src/lib.rs:221:18: delete ! in OidcServer::try_build
+r2e-oidc/src/store.rs:159:24: replace != with == in InMemoryUserStore::try_add_user
+r2e-oidc/src/store.rs:206:28: replace && with || in <impl UserStore for InMemoryUserStore>::verify_password
+r2e-oidc/src/token.rs:122:9: replace <impl r2e_security::jwt::JwtClaimSet for AccessTokenClaims>::subject -> Option<&str> with Some("xyzzy")
+r2e-oidc/src/token.rs:164:5: replace has_scope -> bool with true
+r2e-oidc/src/token.rs:166:36: replace == with != in has_scope

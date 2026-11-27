@@ -1,0 +1,10 @@
+r2e-utils/src/interceptors.rs:129:9: replace Timed::info -> Self with Default::default()
+r2e-utils/src/interceptors.rs:182:36: replace match guard elapsed_ms <= threshold with false in <impl Interceptor<R> for Timed>::around
+r2e-utils/src/interceptors.rs:182:36: replace match guard elapsed_ms <= threshold with true in <impl Interceptor<R> for Timed>::around
+r2e-utils/src/interceptors.rs:182:47: replace <= with > in <impl Interceptor<R> for Timed>::around
+r2e-utils/src/interceptors.rs:18:5: replace log_at_level with ()
+r2e-utils/src/interceptors.rs:254:9: replace Cache::full_key -> String with "xyzzy".into()
+r2e-utils/src/interceptors.rs:254:9: replace Cache::full_key -> String with String::new()
+r2e-utils/src/interceptors.rs:255:48: delete ! in Cache::full_key
+r2e-utils/src/interceptors.rs:30:5: replace log_args_at_level with ()
+r2e-utils/src/interceptors.rs:55:9: replace Logged::info -> Self with Default::default()

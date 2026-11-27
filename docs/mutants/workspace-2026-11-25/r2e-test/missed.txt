@@ -1,0 +1,87 @@
+r2e-test/src/app.rs:1151:9: replace TestResponse::header -> Option<&str> with None
+r2e-test/src/app.rs:1151:9: replace TestResponse::header -> Option<&str> with Some("")
+r2e-test/src/app.rs:1151:9: replace TestResponse::header -> Option<&str> with Some("xyzzy")
+r2e-test/src/app.rs:1159:9: replace TestResponse::cookie -> Option<String> with None
+r2e-test/src/app.rs:1159:9: replace TestResponse::cookie -> Option<String> with Some("xyzzy".into())
+r2e-test/src/app.rs:1159:9: replace TestResponse::cookie -> Option<String> with Some(String::new())
+r2e-test/src/app.rs:1165:22: replace == with != in TestResponse::cookie
+r2e-test/src/app.rs:1175:9: replace TestResponse::cookies -> Vec<&str> with vec![""]
+r2e-test/src/app.rs:1175:9: replace TestResponse::cookies -> Vec<&str> with vec!["xyzzy"]
+r2e-test/src/app.rs:1175:9: replace TestResponse::cookies -> Vec<&str> with vec![]
+r2e-test/src/app.rs:1197:9: replace TestResponse::bytes -> &Bytes with Box::leak(Box::new(Default::default()))
+r2e-test/src/app.rs:1202:9: replace TestResponse::content_type -> Option<&str> with None
+r2e-test/src/app.rs:1202:9: replace TestResponse::content_type -> Option<&str> with Some("")
+r2e-test/src/app.rs:1202:9: replace TestResponse::content_type -> Option<&str> with Some("xyzzy")
+r2e-test/src/app.rs:1207:9: replace TestResponse::is_json -> bool with false
+r2e-test/src/app.rs:1207:9: replace TestResponse::is_json -> bool with true
+r2e-test/src/app.rs:1214:9: replace TestResponse::json_optional -> Option<T> with None
+r2e-test/src/app.rs:1239:61: replace && with || in TestResponse::assert_sse_event
+r2e-test/src/app.rs:1252:40: replace && with || in TestResponse::assert_sse_data
+r2e-test/src/app.rs:428:9: replace TestApp::test_jwt -> &crate::TestJwt with Box::leak(Box::new(Default::default()))
+r2e-test/src/app.rs:776:34: replace + with * in tokenize_path
+r2e-test/src/app.rs:776:34: replace + with - in tokenize_path
+r2e-test/src/app.rs:79:5: replace parse_set_cookie -> Option<(&str, &str)> with None
+r2e-test/src/app.rs:79:5: replace parse_set_cookie -> Option<(&str, &str)> with Some(("", ""))
+r2e-test/src/app.rs:79:5: replace parse_set_cookie -> Option<(&str, &str)> with Some(("", "xyzzy"))
+r2e-test/src/app.rs:79:5: replace parse_set_cookie -> Option<(&str, &str)> with Some(("xyzzy", ""))
+r2e-test/src/app.rs:79:5: replace parse_set_cookie -> Option<(&str, &str)> with Some(("xyzzy", "xyzzy"))
+r2e-test/src/app.rs:811:54: replace match guard !v.is_array() with false in resolve_path
+r2e-test/src/app.rs:81:37: replace + with * in parse_set_cookie
+r2e-test/src/app.rs:81:37: replace + with - in parse_set_cookie
+r2e-test/src/app.rs:870:5: replace json_type_name -> &'static str with ""
+r2e-test/src/app.rs:870:5: replace json_type_name -> &'static str with "xyzzy"
+r2e-test/src/app.rs:881:5: replace json_shape_errors -> Vec<String> with vec!["xyzzy".into()]
+r2e-test/src/app.rs:881:5: replace json_shape_errors -> Vec<String> with vec![String::new()]
+r2e-test/src/app.rs:881:5: replace json_shape_errors -> Vec<String> with vec![]
+r2e-test/src/app.rs:883:9: delete match arm (Value::Object(a), Value::Object(s)) in json_shape_errors
+r2e-test/src/app.rs:896:9: delete match arm (Value::Array(a), Value::Array(s)) in json_shape_errors
+r2e-test/src/app.rs:907:30: replace != with == in json_shape_errors
+r2e-test/src/app.rs:947:9: replace TestResponse::json_value -> &Value with Box::leak(Box::new(Default::default()))
+r2e-test/src/grpc.rs:135:9: replace GrpcTestChannel::service_names -> &[&'static str] with Vec::leak(Vec::new())
+r2e-test/src/grpc.rs:135:9: replace GrpcTestChannel::service_names -> &[&'static str] with Vec::leak(vec![""])
+r2e-test/src/grpc.rs:135:9: replace GrpcTestChannel::service_names -> &[&'static str] with Vec::leak(vec!["xyzzy"])
+r2e-test/src/grpc.rs:158:16: delete ! in <impl Service<Request<Body>> for GrpcTestChannel>::call
+r2e-test/src/jwt.rs:106:9: replace TestJwt::malformed_token -> String with "xyzzy".into()
+r2e-test/src/jwt.rs:106:9: replace TestJwt::malformed_token -> String with String::new()
+r2e-test/src/jwt.rs:272:45: replace + with - in TokenBuilder<'a>::build
+r2e-test/src/jwt.rs:29:9: replace TestJwt::with_config -> Self with Default::default()
+r2e-test/src/ordering.rs:104:9: replace <impl TestOutcome for Result<T, E>>::is_failed -> bool with true
+r2e-test/src/ordering.rs:192:28: replace > with < in env_timeout
+r2e-test/src/ordering.rs:192:28: replace > with == in env_timeout
+r2e-test/src/ordering.rs:192:28: replace > with >= in env_timeout
+r2e-test/src/ordering.rs:243:23: replace < with <= in turn_inner
+r2e-test/src/ordering.rs:284:60: replace - with + in turn_inner
+r2e-test/src/resource.rs:62:9: replace TestResource::config -> Vec<(String, String)> with vec![]
+r2e-test/src/server.rs:124:9: replace <impl Drop for TestServer>::drop with ()
+r2e-test/src/server.rs:85:9: replace TestServer::url -> String with "xyzzy".into()
+r2e-test/src/server.rs:85:9: replace TestServer::url -> String with String::new()
+r2e-test/src/server.rs:91:9: replace TestServer::ws_url -> String with "xyzzy".into()
+r2e-test/src/server.rs:91:9: replace TestServer::ws_url -> String with String::new()
+r2e-test/src/session.rs:115:9: replace TestSession<'a>::cookie_header_value -> Option<String> with None
+r2e-test/src/session.rs:115:9: replace TestSession<'a>::cookie_header_value -> Option<String> with Some("xyzzy".into())
+r2e-test/src/session.rs:115:9: replace TestSession<'a>::cookie_header_value -> Option<String> with Some(String::new())
+r2e-test/src/session.rs:121:18: replace > with < in TestSession<'a>::cookie_header_value
+r2e-test/src/session.rs:121:18: replace > with == in TestSession<'a>::cookie_header_value
+r2e-test/src/session.rs:121:18: replace > with >= in TestSession<'a>::cookie_header_value
+r2e-test/src/session.rs:133:9: replace TestSession<'a>::capture_cookies with ()
+r2e-test/src/sse.rs:35:9: replace <impl futures_core::Stream for FiniteStream<T>>::poll_next -> Poll<Option<T>> with Poll::from(None)
+r2e-test/src/suite.rs:200:9: replace SuiteRuntime<'_>::is_live -> bool with false
+r2e-test/src/suite.rs:254:9: replace <impl SuiteOutcome for Result<T, E>>::assert_passed with ()
+r2e-test/src/ws.rs:115:9: replace WsTestClient::protocol -> Option<&str> with None
+r2e-test/src/ws.rs:115:9: replace WsTestClient::protocol -> Option<&str> with Some("")
+r2e-test/src/ws.rs:115:9: replace WsTestClient::protocol -> Option<&str> with Some("xyzzy")
+r2e-test/src/ws.rs:128:9: replace WsTestClient::send_text -> Result<(), WsTestError> with Ok(())
+r2e-test/src/ws.rs:137:9: replace WsTestClient::send_json -> Result<(), WsTestError> with Ok(())
+r2e-test/src/ws.rs:143:9: replace WsTestClient::send_binary -> Result<(), WsTestError> with Ok(())
+r2e-test/src/ws.rs:151:9: replace WsTestClient::close -> Result<(), WsTestError> with Ok(())
+r2e-test/src/ws.rs:159:9: replace WsTestClient::next_text -> Result<String, WsTestError> with Ok("xyzzy".into())
+r2e-test/src/ws.rs:159:9: replace WsTestClient::next_text -> Result<String, WsTestError> with Ok(String::new())
+r2e-test/src/ws.rs:182:9: replace WsTestClient::next_binary -> Result<Vec<u8>, WsTestError> with Ok(vec![0])
+r2e-test/src/ws.rs:182:9: replace WsTestClient::next_binary -> Result<Vec<u8>, WsTestError> with Ok(vec![1])
+r2e-test/src/ws.rs:182:9: replace WsTestClient::next_binary -> Result<Vec<u8>, WsTestError> with Ok(vec![])
+r2e-test/src/ws.rs:209:9: replace WsTestClient::assert_closed with ()
+r2e-test/src/ws.rs:234:9: replace WsTestClient::assert_no_message with ()
+r2e-test/src/ws.rs:58:9: replace WsTestError::http_status -> Option<r2e_core::http::StatusCode> with None
+r2e-test/src/ws.rs:58:9: replace WsTestError::http_status -> Option<r2e_core::http::StatusCode> with Some(Default::default())
+r2e-test/src/ws.rs:59:13: delete match arm Self::Protocol(tokio_tungstenite::tungstenite::Error::Http(response)) in WsTestError::http_status
+r2e-test/src/ws.rs:92:12: delete ! in WsTestClient::connect_with_protocols

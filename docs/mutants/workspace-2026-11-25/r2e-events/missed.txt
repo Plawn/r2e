@@ -1,0 +1,60 @@
+r2e-events/src/backend/metadata_codec.rs:76:13: delete match arm HEADER_TIMESTAMP in decode_metadata
+r2e-events/src/backend/metadata_codec.rs:87:18: replace match guard k.starts_with(HEADER_USER_PREFIX) with true in decode_metadata
+r2e-events/src/backend/mod.rs:39:5: replace process_id -> u64 with 0
+r2e-events/src/backend/mod.rs:39:5: replace process_id -> u64 with 1
+r2e-events/src/backend/pending.rs:105:9: replace PendingRequests::is_empty -> bool with true
+r2e-events/src/backend/pending.rs:122:9: replace PendingGuard::id -> u128 with 0
+r2e-events/src/backend/pending.rs:122:9: replace PendingGuard::id -> u128 with 1
+r2e-events/src/backend/reconnect.rs:48:28: replace > with < in reconnect_loop
+r2e-events/src/backend/reconnect.rs:48:28: replace > with == in reconnect_loop
+r2e-events/src/backend/reconnect.rs:48:28: replace > with >= in reconnect_loop
+r2e-events/src/backend/reconnect.rs:48:38: replace * with / in reconnect_loop
+r2e-events/src/backend/reconnect.rs:57:28: replace * with / in reconnect_loop
+r2e-events/src/backend/state.rs:152:5: replace spawn_completion_forwarder with ()
+r2e-events/src/backend/state.rs:211:9: replace BackendState::check_shutdown -> Result<(), EventBusError> with Ok(())
+r2e-events/src/backend/state.rs:220:9: replace BackendState::next_handler_id -> u64 with 0
+r2e-events/src/backend/state.rs:220:9: replace BackendState::next_handler_id -> u64 with 1
+r2e-events/src/backend/state.rs:239:9: replace BackendState::register_poller_cancel -> CancelToken with Default::default()
+r2e-events/src/backend/state.rs:275:9: replace BackendState::is_topic_ensured -> bool with false
+r2e-events/src/backend/state.rs:275:9: replace BackendState::is_topic_ensured -> bool with true
+r2e-events/src/backend/state.rs:283:9: replace BackendState::set_topic_ensured with ()
+r2e-events/src/backend/state.rs:294:9: replace BackendState::register_handler -> (u64, bool) with (0, false)
+r2e-events/src/backend/state.rs:294:9: replace BackendState::register_handler -> (u64, bool) with (0, true)
+r2e-events/src/backend/state.rs:294:9: replace BackendState::register_handler -> (u64, bool) with (1, false)
+r2e-events/src/backend/state.rs:294:9: replace BackendState::register_handler -> (u64, bool) with (1, true)
+r2e-events/src/backend/state.rs:574:72: delete ! in BackendState::dispatch_from_poller_tracked
+r2e-events/src/backend/state.rs:589:46: replace && with || in BackendState::dispatch_from_poller_tracked
+r2e-events/src/backend/state.rs:719:9: replace BackendState::configure_handler with ()
+r2e-events/src/backend/state.rs:725:36: replace == with != in BackendState::configure_handler
+r2e-events/src/backend/state.rs:736:32: replace == with != in BackendState::configure_handler
+r2e-events/src/backend/state.rs:759:36: replace * with / in BackendState::invoke_with_retry
+r2e-events/src/backend/state.rs:782:9: replace BackendState::cancel_all_pollers with ()
+r2e-events/src/backend/topic.rs:14:9: replace TopicRegistry::register with ()
+r2e-events/src/backend/topic.rs:19:9: replace TopicRegistry::register_by_type_id with ()
+r2e-events/src/backend/topic.rs:26:9: replace TopicRegistry::get -> Option<Arc<str>> with None
+r2e-events/src/backend/topic.rs:93:8: replace ^ with & in instance_id
+r2e-events/src/backend/topic.rs:93:8: replace ^ with | in instance_id
+r2e-events/src/backend/watermark.rs:107:40: replace > with >= in WatermarkTracker<P, O>::on_ack
+r2e-events/src/backend/watermark.rs:123:9: replace WatermarkTracker<P, O>::on_nack with ()
+r2e-events/src/backend/watermark.rs:125:48: replace < with <= in WatermarkTracker<P, O>::on_nack
+r2e-events/src/backend/watermark.rs:125:48: replace < with == in WatermarkTracker<P, O>::on_nack
+r2e-events/src/backend/watermark.rs:125:48: replace < with > in WatermarkTracker<P, O>::on_nack
+r2e-events/src/backend/watermark.rs:129:40: replace < with <= in WatermarkTracker<P, O>::on_nack
+r2e-events/src/backend/watermark.rs:129:40: replace < with == in WatermarkTracker<P, O>::on_nack
+r2e-events/src/backend/watermark.rs:129:40: replace < with > in WatermarkTracker<P, O>::on_nack
+r2e-events/src/backend/watermark.rs:145:9: replace WatermarkTracker<P, O>::clear with ()
+r2e-events/src/backend/watermark.rs:71:49: replace >= with < in WatermarkTracker<P, O>::on_receive
+r2e-events/src/lib.rs:118:9: replace EmitReceipt::confirm -> Result<(), EventBusError> with Ok(())
+r2e-events/src/lib.rs:242:9: replace RequestOptions::with_metadata -> Self with Default::default()
+r2e-events/src/lib.rs:259:5: replace generate_process_id -> u64 with 0
+r2e-events/src/lib.rs:259:5: replace generate_process_id -> u64 with 1
+r2e-events/src/lib.rs:264:5: replace process_id -> u64 with 0
+r2e-events/src/lib.rs:264:5: replace process_id -> u64 with 1
+r2e-events/src/lib.rs:272:34: replace | with ^ in compose_event_id
+r2e-events/src/lib.rs:456:9: replace Event::topic -> &'static str with ""
+r2e-events/src/lib.rs:456:9: replace Event::topic -> &'static str with "xyzzy"
+r2e-events/src/local.rs:132:44: replace + with - in LocalEventBus::concurrency_limit
+r2e-events/src/local.rs:137:9: replace LocalEventBus::active_handlers -> usize with 0
+r2e-events/src/local.rs:189:34: replace match guard !entries.is_empty() with true in LocalEventBus::dispatch
+r2e-events/src/local.rs:193:80: delete ! in LocalEventBus::dispatch
+r2e-events/src/local.rs:466:50: replace > with >= in <impl EventBus for LocalEventBus>::shutdown

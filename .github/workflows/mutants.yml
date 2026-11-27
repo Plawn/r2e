@@ -1,0 +1,315 @@
+name: Mutation testing
+
+# Two legs, both driven by `.cargo/mutants.toml` (features, exclusions,
+# timeout floor, `mutants` profile) — see docs/claude/mutation-testing.md.
+#
+# - `diff` (pull requests): mutates only the lines the PR touches. Minutes,
+#   not hours. Informational: it fails when a mutant on a changed line
+#   survives, but it is not meant to be a required check.
+# - `full` (weekly, manual, or a PR label: `mutants-full` = every crate,
+#   `mutants:<crate>` = that crate only): every selected crate, each split into shards of ~MUTANTS_PER_SHARD mutants, all shards
+#   of all crates in one matrix (public repo: free runners, GitHub runs ~20
+#   jobs at once and queues the rest). One aggregated report per crate.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths:
+      - "**/*.rs"
+      - "**/Cargo.toml"
+      - ".cargo/mutants.toml"
+      - ".github/workflows/mutants.yml"
+  schedule:
+    - cron: "0 2 * * 0" # Sunday 02:00 UTC, every publishable crate
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated crates to mutate, or `all`"
+        default: r2e-core
+        required: true
+
+concurrency:
+  # One group per label: `mutants:<crate>` runs never cancel each other.
+  group: mutants-${{ github.workflow }}-${{ github.ref }}-${{ github.event.action == 'labeled' && format('full-{0}', github.event.label.name) || 'diff' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  MUTANTS_PER_SHARD: 200
+  # Crates the weekly run (and `all`) covers. r2e-cli is left out: its
+  # templates are exercised by `r2e new` smoke tests, not unit tests.
+  ALL_PACKAGES: >-
+    r2e-rt r2e-tracing r2e-http r2e-macros r2e-core r2e-security r2e-events
+    r2e-scheduler r2e-executor r2e-cache r2e-rate-limit r2e-utils r2e-openapi
+    r2e-prometheus r2e-oidc r2e-tenant r2e-mcp r2e-grpc r2e-openfga
+    r2e-openfga-model r2e-static r2e-data-sqlx r2e-data-diesel r2e-test
+
+jobs:
+  diff:
+    name: mutants on the PR diff
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute the Rust diff
+        id: diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git diff "$BASE_SHA"...HEAD -- '*.rs' > pr.diff
+          if [ -s pr.diff ]; then
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "No Rust change: nothing to mutate." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Free disk space
+        if: steps.diff.outputs.empty == 'false'
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+
+      # Same native deps as test.yml: a diff can touch any crate.
+      - name: Install native build deps
+        if: steps.diff.outputs.empty == 'false'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler libprotobuf-dev \
+            libcurl4-openssl-dev zlib1g-dev libssl-dev \
+            libsqlite3-dev libpq-dev
+
+      - name: Install toolchain (rust-toolchain.toml)
+        if: steps.diff.outputs.empty == 'false'
+        run: rustup show
+
+      - uses: taiki-e/install-action@v2
+        if: steps.diff.outputs.empty == 'false'
+        with:
+          tool: cargo-mutants,cargo-nextest
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.diff.outputs.empty == 'false'
+        with:
+          key: mutants
+          save-if: false
+
+      # In place: no per-copy target dir on the 14 GB runner disk.
+      # Exit codes: 0 all caught, 2 missed, 3 timeouts only (a hang counts as
+      # caught), 4 baseline failed.
+      - name: cargo mutants --in-diff
+        if: steps.diff.outputs.empty == 'false'
+        run: |
+          # Same exceptions as the `full` step: crates whose ordered suites
+          # or looping mutants need a single test process.
+          tool=(--test-tool=nextest)
+          if grep -qE '^\+\+\+ b/(r2e-test|r2e-openfga/model)/' pr.diff; then tool=(); fi
+          ulimit -v 10485760
+          set +e
+          cargo mutants --in-diff pr.diff --in-place "${tool[@]}" --no-shuffle
+          rc=$?
+          {
+            echo "## Mutants on changed lines"
+            for f in caught missed timeout unviable; do
+              n=$(wc -l < "mutants.out/$f.txt" 2>/dev/null || echo 0)
+              echo "- $f: $n"
+            done
+            if [ -s mutants.out/missed.txt ]; then
+              echo
+              echo "### Missed (no test fails when this line is changed)"
+              echo '```'
+              cat mutants.out/missed.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          case $rc in 0|3) exit 0 ;; *) exit $rc ;; esac
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.diff.outputs.empty == 'false'
+        with:
+          name: mutants-diff
+          path: mutants.out
+          if-no-files-found: ignore
+
+  # Lists the mutants of each selected crate (no build: source parsing only)
+  # and turns the counts into a {package, shard, shards} matrix.
+  plan:
+    name: plan shards
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && (github.event.label.name == 'mutants-full' ||
+       startsWith(github.event.label.name, 'mutants:')))
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Plan
+        id: plan
+        env:
+          REQUESTED: ${{ inputs.packages || 'all' }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          # `mutants:r2e-test` → r2e-test (one crate per label: `gh pr edit
+          # --add-label` splits on commas)
+          case $LABEL in mutants:*) REQUESTED=${LABEL#mutants:} ;; esac
+          if [ "$REQUESTED" = all ]; then pkgs=$ALL_PACKAGES; else pkgs=$REQUESTED; fi
+          entries=()
+          echo "| crate | mutants | shards |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for p in $pkgs; do
+            n=$(cargo mutants -p "$p" --list | wc -l)
+            [ "$n" -eq 0 ] && continue
+            # r2e-macros mutants run three consumers' tests (~6 min per
+            # mutant, trybuild alone ~3 min): smaller shards
+            per=$MUTANTS_PER_SHARD
+            [ "$p" = r2e-macros ] && per=20
+            s=$(( (n + per - 1) / per ))
+            echo "| $p | $n | $s |" >> "$GITHUB_STEP_SUMMARY"
+            for ((i = 0; i < s; i++)); do
+              entries+=("{\"package\":\"$p\",\"shard\":$i,\"shards\":$s}")
+            done
+          done
+          matrix=$(IFS=,; echo "{\"include\":[${entries[*]}]}")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  full:
+    name: ${{ matrix.package }} ${{ matrix.shard }}/${{ matrix.shards }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+
+      - name: Install native build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            protobuf-compiler libprotobuf-dev \
+            libcurl4-openssl-dev zlib1g-dev libssl-dev \
+            libsqlite3-dev libpq-dev
+
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup show
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,cargo-nextest
+
+      # One cache per crate; only shard 0 on master saves it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mutants-${{ matrix.package }}
+          save-if: ${{ matrix.shard == 0 && github.ref == 'refs/heads/master' }}
+
+      # r2e-macros has almost no tests of its own: its codegen is exercised by
+      # r2e-core's tests, its error messages by r2e-compile-tests (trybuild
+      # `.stderr`), and the full controller/bean surface by example-app.
+      - name: cargo mutants
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          tests=()
+          tool=(--test-tool=nextest)
+          case $PACKAGE in
+            # The 120 s floor timed out 921 of ~960 mutants: trybuild rebuilds
+            # its fixtures against every mutant. No nextest: example-app has
+            # ordered suites (see r2e-test below), and under nextest they and
+            # `boot_failure` timed out on every mutant.
+            r2e-macros)
+              # --build-timeout: a mutant can make the macro itself loop (route.rs
+              # `desc_start *= 1`), and the build phase has no timeout by default.
+              tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900 --build-timeout 600)
+              tool=() ;;
+            # Ordered suites (#[r2e::test(order)]) wait for earlier cases of
+            # the same process; nextest runs each test in its own process.
+            r2e-test) tool=() ;;
+            # nextest puts every test in its own process group: on a timeout
+            # cargo-mutants kills nextest but the looping test keeps running
+            # and allocating, and a few timeouts later the runner runs out of
+            # memory. cargo test is one process, killed with its group.
+            r2e-openfga-model) tool=() ;;
+            # all_features would turn on `mysql`: mysqlclient-sys 0.5 rejects
+            # the runner's libmysqlclient. sqlite + postgres, as in test.yml.
+            r2e-data-diesel)
+              sed -i 's/^all_features = true/features = ["sqlite", "postgres", "tenant"]/' .cargo/mutants.toml
+              grep -q '^features = ' .cargo/mutants.toml ;;
+          esac
+          # A mutant that loops while allocating (r2e-openfga-model's
+          # `next_raw -> Some((0, ""))`) fills the 16 GB runner before the
+          # test timeout fires, and the runner dies with every result. Cap
+          # each process at 10 GiB so only the runaway test binary aborts.
+          ulimit -v 10485760
+          set +e
+          cargo mutants -p "$PACKAGE" "${tests[@]}" "${tool[@]}" \
+            --shard ${{ matrix.shard }}/${{ matrix.shards }} --in-place \
+            --no-shuffle
+          rc=$?
+          # 2/3 are findings, not failures: the report job aggregates them.
+          case $rc in 0|2|3) exit 0 ;; *) exit $rc ;; esac
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutants-${{ matrix.package }}-${{ matrix.shard }}
+          path: mutants.out
+          if-no-files-found: ignore
+
+  report:
+    name: mutants report
+    needs: full
+    if: always() && needs.full.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutants-*
+          path: shards
+
+      # shards/mutants-<package>-<shard>/ → report/<package>/<outcome>.txt
+      - name: Aggregate
+        run: |
+          echo "## Mutation testing" >> "$GITHUB_STEP_SUMMARY"
+          echo "| crate | caught | missed | timeout | unviable |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|---|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          for pkg in $(ls shards | sed -E 's/^mutants-(.*)-[0-9]+$/\1/' | sort -u); do
+            mkdir -p "report/$pkg"
+            row="| $pkg"
+            for f in caught missed timeout unviable; do
+              cat shards/mutants-"$pkg"-[0-9]*/"$f.txt" 2>/dev/null | sort > "report/$pkg/$f.txt"
+              row="$row | $(wc -l < "report/$pkg/$f.txt")"
+            done
+            echo "$row |" >> "$GITHUB_STEP_SUMMARY"
+          done
+          {
+            echo
+            echo "### Missed per file"
+            echo '```'
+            cat report/*/missed.txt | cut -d: -f1 | sort | uniq -c | sort -rn
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: report

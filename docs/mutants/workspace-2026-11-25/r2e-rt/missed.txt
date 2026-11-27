@@ -1,0 +1,36 @@
+r2e-rt/src/lib.rs:153:9: replace JoinError::is_panic -> bool with false
+r2e-rt/src/lib.rs:153:9: replace JoinError::is_panic -> bool with true
+r2e-rt/src/lib.rs:158:9: replace JoinError::is_cancelled -> bool with false
+r2e-rt/src/lib.rs:158:9: replace JoinError::is_cancelled -> bool with true
+r2e-rt/src/lib.rs:201:9: replace JobHandle<T>::abort with ()
+r2e-rt/src/lib.rs:207:9: replace JobHandle<T>::is_finished -> bool with false
+r2e-rt/src/lib.rs:207:9: replace JobHandle<T>::is_finished -> bool with true
+r2e-rt/src/lib.rs:304:5: replace set_control_plane with ()
+r2e-rt/src/lib.rs:313:5: replace control_plane_handle -> Option<RuntimeHandle> with None
+r2e-rt/src/lib.rs:397:5: replace yield_now with ()
+r2e-rt/src/lib.rs:426:5: replace in_runtime -> bool with false
+r2e-rt/src/lib.rs:426:5: replace in_runtime -> bool with true
+r2e-rt/src/lib.rs:455:5: replace lookup_host -> std::io::Result<Vec<std::net::SocketAddr>> with Ok(vec![])
+r2e-rt/src/lib.rs:470:5: replace shutdown_signal with ()
+r2e-rt/src/lib.rs:571:9: replace CancelToken::child_token -> Self with Default::default()
+r2e-rt/src/lib.rs:576:9: replace CancelToken::cancel with ()
+r2e-rt/src/lib.rs:582:9: replace CancelToken::is_cancelled -> bool with false
+r2e-rt/src/lib.rs:582:9: replace CancelToken::is_cancelled -> bool with true
+r2e-rt/src/lib.rs:589:9: replace CancelToken::cancelled with ()
+r2e-rt/src/lib.rs:620:9: replace CancelToken::into_inner -> tokio_util::sync::CancellationToken with Default::default()
+r2e-rt/src/lib.rs:631:9: replace CancelToken::inner -> &tokio_util::sync::CancellationToken with Box::leak(Box::new(Default::default()))
+r2e-rt/src/lib.rs:641:9: replace <impl From<tokio_util::sync::CancellationToken> for CancelToken>::from -> Self with Default::default()
+r2e-rt/src/lib.rs:651:9: replace <impl From<CancelToken> for tokio_util::sync::CancellationToken>::from -> Self with Default::default()
+r2e-rt/src/lib.rs:665:9: replace CancelDropGuard::disarm -> CancelToken with Default::default()
+r2e-rt/src/lib.rs:728:9: replace ShutdownToken::is_cancelled -> bool with false
+r2e-rt/src/lib.rs:728:9: replace ShutdownToken::is_cancelled -> bool with true
+r2e-rt/src/lib.rs:735:9: replace ShutdownToken::cancelled with ()
+r2e-rt/src/lib.rs:749:9: replace ShutdownToken::child_token -> CancelToken with Default::default()
+r2e-rt/src/lib.rs:759:9: replace ShutdownToken::token -> &CancelToken with Box::leak(Box::new(Default::default()))
+r2e-rt/src/lib.rs:765:9: replace <impl From<ShutdownToken> for CancelToken>::from -> Self with Default::default()
+r2e-rt/src/lib.rs:808:9: replace Runtime::shutdown_timeout with ()
+r2e-rt/src/lib.rs:817:9: replace Runtime::shutdown_background with ()
+r2e-rt/src/lib.rs:883:9: replace RuntimeHandle::try_current -> Option<Self> with None
+r2e-rt/src/lib.rs:924:33: replace == with != in RuntimeHandle::is_multi_thread
+r2e-rt/src/lib.rs:924:9: replace RuntimeHandle::is_multi_thread -> bool with false
+r2e-rt/src/lib.rs:924:9: replace RuntimeHandle::is_multi_thread -> bool with true

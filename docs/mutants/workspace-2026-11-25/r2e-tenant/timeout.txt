@@ -1,0 +1,10 @@
+r2e-tenant/src/map/api.rs:172:9: replace Tenanted<T>::evict -> bool with true
+r2e-tenant/src/map/dispose.rs:145:9: replace Tenanted<T>::take_slot -> Option<DisposalDebt<T>> with None
+r2e-tenant/src/map/dispose.rs:252:64: replace == with != in <impl Drop for Pending<T>>::drop
+r2e-tenant/src/map/dispose.rs:252:9: replace <impl Drop for Pending<T>>::drop with ()
+r2e-tenant/src/map/dispose.rs:35:9: replace Tenanted<T>::spawn_committed_dispose with ()
+r2e-tenant/src/map/drain.rs:109:69: replace == with != in Tenanted<T>::drain
+r2e-tenant/src/map/drain.rs:127:16: delete ! in Tenanted<T>::drain
+r2e-tenant/src/map/drain.rs:133:69: replace == with != in Tenanted<T>::drain
+r2e-tenant/src/map/eviction.rs:147:64: replace > with >= in Tenanted<T>::enforce_max_active
+r2e-tenant/src/map/eviction.rs:76:9: replace Tenanted<T>::trim_to_max_active -> usize with 1

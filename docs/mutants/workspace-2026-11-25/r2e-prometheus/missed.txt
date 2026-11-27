@@ -1,0 +1,25 @@
+r2e-prometheus/src/facade.rs:100:9: replace MetricsFacadeRecorder::describe with ()
+r2e-prometheus/src/facade.rs:244:9: replace MetricsFacade::preset -> Self with Default::default()
+r2e-prometheus/src/facade.rs:249:9: replace MetricsFacade::builder -> MetricsFacadeBuilder with Default::default()
+r2e-prometheus/src/facade.rs:262:9: replace MetricsFacadeBuilder::preset -> Self with Default::default()
+r2e-prometheus/src/facade.rs:268:9: replace MetricsFacadeBuilder::namespace -> Self with Default::default()
+r2e-prometheus/src/facade.rs:275:9: replace MetricsFacadeBuilder::exclude_paths -> Self with Default::default()
+r2e-prometheus/src/handler.rs:6:5: replace metrics_handler -> ([(&'static str, &'static str); 1], String) with ([("xyzzy", ""); 1], "xyzzy".into())
+r2e-prometheus/src/handler.rs:6:5: replace metrics_handler -> ([(&'static str, &'static str); 1], String) with ([("xyzzy", ""); 1], String::new())
+r2e-prometheus/src/handler.rs:6:5: replace metrics_handler -> ([(&'static str, &'static str); 1], String) with ([("xyzzy", "xyzzy"); 1], "xyzzy".into())
+r2e-prometheus/src/handler.rs:6:5: replace metrics_handler -> ([(&'static str, &'static str); 1], String) with ([("xyzzy", "xyzzy"); 1], String::new())
+r2e-prometheus/src/lib.rs:171:9: replace PrometheusRegistry::register -> prometheus::Result<()> with Ok(())
+r2e-prometheus/src/lib.rs:182:9: replace PrometheusRegistry::inner -> &'static prometheus::Registry with Box::leak(Box::new(Default::default()))
+r2e-prometheus/src/lib.rs:261:9: replace Prometheus::builder -> PrometheusBuilder with Default::default()
+r2e-prometheus/src/lib.rs:358:5: replace unset_empty_exclusions with ()
+r2e-prometheus/src/lib.rs:374:9: replace PrometheusBuilder::preset -> Self with Default::default()
+r2e-prometheus/src/lib.rs:395:9: replace PrometheusBuilder::namespace -> Self with Default::default()
+r2e-prometheus/src/lib.rs:401:9: replace PrometheusBuilder::buckets -> Self with Default::default()
+r2e-prometheus/src/lib.rs:411:9: replace PrometheusBuilder::exclude_paths -> Self with Default::default()
+r2e-prometheus/src/lib.rs:420:9: replace PrometheusBuilder::exclude_path -> Self with Default::default()
+r2e-prometheus/src/lib.rs:451:9: replace PrometheusBuilder::register_all -> Self with Default::default()
+r2e-prometheus/src/metrics.rs:135:5: replace status_label -> &str with ""
+r2e-prometheus/src/metrics.rs:135:5: replace status_label -> &str with "xyzzy"
+r2e-prometheus/src/metrics.rs:141:13: replace - with / in status_label
+r2e-prometheus/src/worker.rs:131:23: replace < with <= in WorkerCollector::refresh
+r2e-prometheus/src/worker.rs:177:9: replace <impl Collector for WorkerCollector>::desc -> Vec<&Desc> with vec![]
