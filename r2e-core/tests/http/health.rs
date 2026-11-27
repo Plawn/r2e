@@ -183,3 +183,192 @@ async fn advanced_health_readiness_filters() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["status"], "UP");
 }
+
+// ── Cache TTL and readiness filtering ────────────────────────────────────
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+/// An `Up` indicator that counts how many times it was actually run, so a
+/// test can tell a cache hit from a re-run without sleeping.
+struct Counting {
+    name: &'static str,
+    hits: Arc<AtomicUsize>,
+    readiness: bool,
+}
+
+impl Counting {
+    fn new(name: &'static str, readiness: bool) -> (Self, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                name,
+                hits: hits.clone(),
+                readiness,
+            },
+            hits,
+        )
+    }
+}
+
+impl HealthIndicator for Counting {
+    fn name(&self) -> &str {
+        self.name
+    }
+    async fn check(&self) -> HealthStatus {
+        self.hits.fetch_add(1, Ordering::SeqCst);
+        HealthStatus::Up
+    }
+    fn affects_readiness(&self) -> bool {
+        self.readiness
+    }
+}
+
+#[r2e_core::test]
+async fn a_fresh_cache_entry_skips_rerunning_the_checks() {
+    let (check, hits) = Counting::new("counted", true);
+    let state = HealthState::new(
+        vec![Box::new(check) as Box<dyn HealthIndicatorErased>],
+        Some(Duration::from_secs(3600)),
+    );
+    state.aggregate().await;
+    state.aggregate().await;
+    state.aggregate().await;
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "cached result must be reused"
+    );
+}
+
+#[r2e_core::test]
+async fn an_expired_cache_entry_reruns_the_checks() {
+    // A zero TTL is always expired (`elapsed < 0` never holds).
+    let (check, hits) = Counting::new("counted", true);
+    let state = HealthState::new(
+        vec![Box::new(check) as Box<dyn HealthIndicatorErased>],
+        Some(Duration::ZERO),
+    );
+    state.aggregate().await;
+    state.aggregate().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+}
+
+#[r2e_core::test]
+async fn without_a_ttl_every_call_reruns_the_checks() {
+    let (check, hits) = Counting::new("counted", true);
+    let state = HealthState::new(
+        vec![Box::new(check) as Box<dyn HealthIndicatorErased>],
+        None,
+    );
+    state.aggregate().await;
+    state.aggregate().await;
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert!(state.cache.read().await.is_none());
+}
+
+#[r2e_core::test]
+async fn readiness_reads_the_fresh_full_health_cache_filtered_by_name() {
+    let (ready, ready_hits) = Counting::new("ready", true);
+    let (live, live_hits) = Counting::new("live-only", false);
+    let state = HealthState::new(
+        vec![
+            Box::new(ready) as Box<dyn HealthIndicatorErased>,
+            Box::new(live) as Box<dyn HealthIndicatorErased>,
+        ],
+        Some(Duration::from_secs(3600)),
+    );
+    let full = state.aggregate().await;
+    assert_eq!(full.checks.len(), 2);
+
+    let readiness = state.aggregate_readiness().await;
+    assert_eq!(
+        ready_hits.load(Ordering::SeqCst),
+        1,
+        "served from the cache"
+    );
+    assert_eq!(live_hits.load(Ordering::SeqCst), 1, "served from the cache");
+    assert!(matches!(readiness.status, HealthCheckStatus::Up));
+    let names: Vec<&str> = readiness.checks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["ready"]);
+}
+
+#[r2e_core::test]
+async fn readiness_with_an_expired_cache_reruns_only_readiness_checks() {
+    let (ready, ready_hits) = Counting::new("ready", true);
+    let (live, live_hits) = Counting::new("live-only", false);
+    let state = HealthState::new(
+        vec![
+            Box::new(ready) as Box<dyn HealthIndicatorErased>,
+            Box::new(live) as Box<dyn HealthIndicatorErased>,
+        ],
+        Some(Duration::ZERO),
+    );
+    state.aggregate().await;
+    let readiness = state.aggregate_readiness().await;
+    assert_eq!(ready_hits.load(Ordering::SeqCst), 2);
+    assert_eq!(live_hits.load(Ordering::SeqCst), 1);
+    let names: Vec<&str> = readiness.checks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["ready"]);
+}
+
+#[r2e_core::test]
+async fn indicators_affect_readiness_by_default() {
+    // `AlwaysDown` does not override `affects_readiness`: it must count.
+    let state = HealthState::new(
+        vec![
+            Box::new(AlwaysDown) as Box<dyn HealthIndicatorErased>,
+            Box::new(LivenessOnly) as Box<dyn HealthIndicatorErased>,
+        ],
+        None,
+    );
+    assert!(state.readiness_names.contains("down-check"));
+    assert!(!state.readiness_names.contains("liveness-only"));
+
+    let readiness = state.aggregate_readiness().await;
+    assert!(matches!(readiness.status, HealthCheckStatus::Down));
+    let names: Vec<&str> = readiness.checks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["down-check"]);
+    assert_eq!(readiness.checks[0].reason.as_deref(), Some("broken"));
+}
+
+#[test]
+fn the_erased_indicator_forwards_affects_readiness() {
+    let default: Box<dyn HealthIndicatorErased> = Box::new(AlwaysUp);
+    let liveness: Box<dyn HealthIndicatorErased> = Box::new(LivenessOnly);
+    assert!(default.affects_readiness());
+    assert!(!liveness.affects_readiness());
+}
+
+#[r2e_core::test]
+async fn a_default_indicator_that_is_down_fails_the_readiness_route() {
+    let router = AppBuilder::new()
+        .plugin(Health::builder().check(AlwaysUp).check(AlwaysDown).build())
+        .build_state()
+        .await
+        .build();
+    let (status, body) = send_get(router, "/health/ready").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["status"], "DOWN");
+}
+
+#[r2e_core::test]
+async fn the_builder_cache_ttl_caches_the_health_route() {
+    let (check, hits) = Counting::new("counted", true);
+    let router = AppBuilder::new()
+        .plugin(
+            Health::builder()
+                .check(check)
+                .cache_ttl(Duration::from_secs(3600))
+                .build(),
+        )
+        .build_state()
+        .await
+        .build();
+    let (status, _) = send_get(router.clone(), "/health").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = send_get(router, "/health").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
