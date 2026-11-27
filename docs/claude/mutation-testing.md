@@ -75,7 +75,13 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
     into one artifact, with a per-crate table and missed-per-file summary.
 - Per-crate exceptions in the `full` step:
   - `r2e-test` runs without nextest: its ordered suites need one process for
-    all cases.
+    all cases. Same for `r2e-macros`, whose `example-app` tests have ordered
+    suites too (under nextest every mutant timed out, run 45770605284).
+    The baseline only builds the mutated package, so it does not catch a
+    consumer suite that cannot pass under the chosen test tool: check it
+    locally before a long run. `example-app`'s `boot_failure` tests bound
+    the child process (30 s): a mutant that breaks the failure path boots a
+    server that never exits, which used to cost the full 900 s per mutant.
   - `r2e-openfga-model` runs without nextest: nextest gives each test its own
     process group, so on a timeout cargo-mutants kills nextest but not the
     looping test, which keeps allocating until the runner dies (shard lost).

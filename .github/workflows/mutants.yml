@@ -233,8 +233,12 @@ jobs:
           tool=(--test-tool=nextest)
           case $PACKAGE in
             # The 120 s floor timed out 921 of ~960 mutants: trybuild rebuilds
-            # its fixtures against every mutant.
-            r2e-macros) tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900) ;;
+            # its fixtures against every mutant. No nextest: example-app has
+            # ordered suites (see r2e-test below), and under nextest they and
+            # `boot_failure` timed out on every mutant.
+            r2e-macros)
+              tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900)
+              tool=() ;;
             # Ordered suites (#[r2e::test(order)]) wait for earlier cases of
             # the same process; nextest runs each test in its own process.
             r2e-test) tool=() ;;
