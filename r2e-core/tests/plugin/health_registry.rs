@@ -148,3 +148,54 @@ async fn several_plugins_contribute_to_the_same_registry() {
     names.sort_unstable();
     assert_eq!(names, vec!["builder-check", "plugin-a", "plugin-b"]);
 }
+
+// ── Registry accessors ───────────────────────────────────────────────────
+
+#[test]
+fn a_new_registry_is_empty() {
+    let registry = HealthRegistry::new();
+    assert!(registry.is_empty());
+    assert_eq!(registry.len(), 0);
+    assert!(registry.names().is_empty());
+    assert_eq!(registry.cache_ttl(), None);
+}
+
+#[test]
+fn registered_checks_are_counted_and_named_in_order() {
+    let registry = HealthRegistry::new();
+    registry.register(NamedCheck {
+        name: "first",
+        up: true,
+    });
+    assert!(!registry.is_empty());
+    assert_eq!(registry.len(), 1);
+    registry.register(NamedCheck {
+        name: "second",
+        up: false,
+    });
+    assert_eq!(registry.len(), 2);
+    assert_eq!(
+        registry.names(),
+        vec!["first".to_string(), "second".to_string()]
+    );
+
+    // Clones share the same registry.
+    let clone = registry.clone();
+    assert_eq!(clone.len(), 2);
+}
+
+#[test]
+fn set_cache_ttl_is_read_back_and_last_writer_wins() {
+    let registry = HealthRegistry::new();
+    registry
+        .set_cache_ttl(std::time::Duration::from_secs(5))
+        .set_cache_ttl(std::time::Duration::from_secs(7));
+    assert_eq!(
+        registry.cache_ttl(),
+        Some(std::time::Duration::from_secs(7))
+    );
+    assert_eq!(
+        registry.into_state().cache_ttl,
+        Some(std::time::Duration::from_secs(7))
+    );
+}
