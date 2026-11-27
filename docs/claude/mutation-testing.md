@@ -82,6 +82,9 @@ RUSTC_WRAPPER="" cargo mutants --in-diff <(git diff master...) --in-place       
     locally before a long run. `example-app`'s `boot_failure` tests bound
     the child process (30 s): a mutant that breaks the failure path boots a
     server that never exits, which used to cost the full 900 s per mutant.
+    `--build-timeout 600` too: a mutant can make a macro loop at expansion
+    time (`route.rs` `desc_start *= 1`) and the build phase has no timeout by
+    default (shard 69/99 of run 45973310310 hit the 350 min job limit).
   - `r2e-openfga-model` runs without nextest: nextest gives each test its own
     process group, so on a timeout cargo-mutants kills nextest but not the
     looping test, which keeps allocating until the runner dies (shard lost).

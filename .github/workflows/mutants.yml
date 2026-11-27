@@ -237,7 +237,9 @@ jobs:
             # ordered suites (see r2e-test below), and under nextest they and
             # `boot_failure` timed out on every mutant.
             r2e-macros)
-              tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900)
+              # --build-timeout: a mutant can make the macro itself loop (route.rs
+              # `desc_start *= 1`), and the build phase has no timeout by default.
+              tests=(--test-package r2e-macros,r2e-core,r2e-compile-tests,example-app --timeout 900 --build-timeout 600)
               tool=() ;;
             # Ordered suites (#[r2e::test(order)]) wait for earlier cases of
             # the same process; nextest runs each test in its own process.
