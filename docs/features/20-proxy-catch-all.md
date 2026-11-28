@@ -66,7 +66,7 @@ Rules (all compile errors when violated):
 
 Runtime constraints:
 
-- If **two registered controllers** both declare a `#[fallback]`, the router build panics (axum allows a single fallback per app: `Cannot merge two Routers that both have a fallback`).
+- An application has **one** fallback. A second one — another controller `#[fallback]`, or a hand-written router with `.fallback(..)` passed to `merge_router` / `register_routes` — panics at its registration with a message naming both (`two router fallbacks: the `#[fallback]` route of controller `…` and the router registered at src/main.rs:42:10 …`).
 - **Declared routes always win.** A path that matches with the wrong method returns **405**, not the fallback (correct HTTP semantics).
 - **NormalizePath composes**: with the `NormalizePath` plugin enabled, the trailing slash is stripped by a pre-routing URI rewrite; the trimmed request is routed once, and if it matches nothing it lands in the controller fallback. Note the rewrite also collapses a leading run of slashes (`//x` → `/x`), so a gateway fallback forwards the normalized path, not the raw one.
 
@@ -94,7 +94,7 @@ Redirect::temporary(&url).into_response()
 Reach for the first rung that fits; each step down trades framework integration for control:
 
 1. **`#[any]` / `#[fallback]` controller routes** — full DI, guards, interceptors, TestApp. This is the right level for proxies and gateways.
-2. **`merge_router(router)` / `register_routes(router)`** — merge a raw `Routes<T>` fragment before state application: raw routes share the app state and global plugins (CORS, tracing, error handling) but get no controller DI, guards, or interceptors.
+2. **`merge_router(router)` / `register_routes(router)`** — merge a raw `Routes<T>` fragment before state application: raw routes share the app state and global plugins (CORS, tracing, error handling) but get no controller DI, guards, or interceptors. Fragments are **merged, not mounted**: a `.fallback(..)` on the fragment becomes the fallback of the whole application — it answers every unmatched request, replaces the framework 404, and so takes those responses out of the error envelope installed with `error_projection::<E>()` (R2E logs a warning at boot when both are present). To keep a fallback local to the fragment, nest it under a prefix first: `merge_router(Routes::new().nest("/legacy", legacy))` — requests outside `/legacy` then keep the framework 404.
 3. **`with_layer_fn(|router| ...)`** — transform the final state-erased `Routes` (add tower layers, nest sub-apps). Runs **after** `with_state`, so the `State` extractor is unusable inside — capture what you need in the closure. It runs in the default `LayerSlot::App` band. Routes the closure adds (`routes.nest(..)`, `routes.merge(..)`) are therefore wrapped by the four outer bands: trace, metrics, CORS and **auth gates**. They are not wrapped by the `App` layers registered before the closure. Use `with_layer_fn_in(LayerSlot::X, ..)` (or `with_layer_in` for a plain layer) when the position matters. See [HTTP stack § Layer bands](./26-http-stack.md).
 4. **`r2e::http::axum_compat`** — the raw axum API, for what `r2e::http` does not re-export (a tower layer with axum-typed bounds, `axum::debug_handler`, a third-party crate spelled in axum types). This rung is **outside R2E's public promise** ("R2E types under `r2e::http`") and is deliberately greppable; prefer asking for a re-export from `r2e::http`. See `plans/runtime-http-dependency-containment.md` §5.3d.
 

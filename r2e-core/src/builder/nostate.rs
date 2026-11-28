@@ -22,6 +22,7 @@ impl AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
                 deferred_actions: Vec::new(),
                 plugin_data: HashMap::new(),
                 routes_effects: Vec::new(),
+                fallback_origin: None,
                 normalize_path: false,
                 panic_hook: Default::default(),
                 dev_reload_applied: false,

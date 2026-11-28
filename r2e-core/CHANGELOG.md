@@ -15,6 +15,19 @@ in the root [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- Two router fallbacks are now reported by R2E, at the registration (#1501).
+  A second fallback — a controller `#[fallback]`, or a router with
+  `.fallback(..)` passed to `merge_router` / `register_routes` — panics with a
+  message naming both registrations (controller type, call site) and the way
+  out (`Routes::nest`), instead of the backend's `Cannot merge two Routers
+  that both have a fallback` raised from `build()`.
+- A hand-written router fallback registered next to `error_projection::<E>()`
+  logs a warning at boot: it answers every unmatched request of the
+  application in its own format, outside the error envelope. The behaviour is
+  unchanged and now documented on `register_routes` / `merge_router`.
+
 ## [0.12.0] - 2026-11-24
 
 ### Breaking

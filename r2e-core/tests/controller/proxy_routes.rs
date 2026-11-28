@@ -180,6 +180,82 @@ async fn fallback_router() -> r2e_core::http::Routes {
         .build()
 }
 
+#[controller]
+struct SecondFallbackController;
+
+#[routes]
+impl SecondFallbackController {
+    #[fallback]
+    async fn dispatch(&self) -> &'static str {
+        "second"
+    }
+}
+
+/// The message of the panic `f` raises.
+fn panic_message(f: impl FnOnce()) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .expect_err("expected a boot panic");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .expect("a formatted panic message")
+}
+
+fn raw_fallback<S: Clone + Send + Sync + 'static>() -> r2e_core::http::Routes<S> {
+    r2e_core::http::Routes::new().fallback(|_, _| async { "raw" })
+}
+
+// An application has one fallback (#1501): the second claim panics at its
+// registration, naming both — the controller by type, the router by call site.
+
+#[r2e_core::test]
+async fn two_fallback_controllers_panic_naming_both() {
+    let builder = r2e_core::AppBuilder::new()
+        .provide(Greeting("sorry".to_string()))
+        .build_state()
+        .await
+        .register_controller::<FallbackController>();
+    let message = panic_message(|| {
+        let _ = builder.register_controller::<SecondFallbackController>();
+    });
+    assert!(message.starts_with("two router fallbacks: "), "{message}");
+    assert!(message.contains("FallbackController`"), "{message}");
+    assert!(message.contains("SecondFallbackController`"), "{message}");
+}
+
+#[r2e_core::test]
+async fn a_merged_fallback_after_a_fallback_controller_panics_naming_both() {
+    let builder = r2e_core::AppBuilder::new()
+        .provide(Greeting("sorry".to_string()))
+        .build_state()
+        .await
+        .register_controller::<FallbackController>();
+    let message = panic_message(|| {
+        let _ = builder.merge_router(raw_fallback());
+    });
+    assert!(message.starts_with("two router fallbacks: "), "{message}");
+    assert!(
+        message.contains("`#[fallback]` route of controller"),
+        "{message}"
+    );
+    assert!(message.contains(file!()), "{message}");
+}
+
+#[r2e_core::test]
+async fn a_fallback_controller_after_a_merged_fallback_panics_naming_both() {
+    let builder = r2e_core::AppBuilder::new()
+        .provide(Greeting("sorry".to_string()))
+        .build_state()
+        .await
+        .merge_router(raw_fallback());
+    let message = panic_message(|| {
+        let _ = builder.register_controller::<FallbackController>();
+    });
+    assert!(message.starts_with("two router fallbacks: "), "{message}");
+    assert!(message.contains("FallbackController`"), "{message}");
+    assert!(message.contains(file!()), "{message}");
+}
+
 #[r2e_core::test]
 async fn fallback_handles_unmatched_with_bean_access() {
     let router = fallback_router().await;

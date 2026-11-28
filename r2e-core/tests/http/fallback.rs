@@ -262,6 +262,64 @@ async fn a_merged_custom_fallback_is_not_overridden() {
     assert_eq!(header(&resp, "x-envelope"), Some("wire"));
 }
 
+// ── One fallback per application (#1501) ───────────────────────────────────
+
+fn teapot<S: Clone + Send + Sync + 'static>() -> Routes<S> {
+    Routes::new().fallback(|_, _| async { (StatusCode::IM_A_TEAPOT, "mine") })
+}
+
+/// The message of the panic `f` raises.
+fn panic_message(f: impl FnOnce()) -> String {
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .expect_err("expected a boot panic");
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+        .expect("a string panic payload")
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn two_merged_fallbacks_panic_naming_both_registrations() {
+    let builder = AppBuilder::new().build_state().await;
+    let first_line = line!() + 1;
+    let builder = builder.merge_router(teapot());
+    let second_line = line!() + 2;
+    let message = panic_message(|| {
+        let _ = builder.register_routes(teapot());
+    });
+
+    assert!(
+        message.starts_with("two router fallbacks: "),
+        "an R2E message, not the backend's: {message}"
+    );
+    for line in [first_line, second_line] {
+        let site = format!("{}:{line}:", file!());
+        assert!(message.contains(&site), "missing `{site}` in: {message}");
+    }
+    assert!(message.contains(".nest("), "names the way out: {message}");
+}
+
+#[r2e_core::test(flavor = "current_thread")]
+async fn a_nested_fallback_is_scoped_to_its_prefix_and_claims_nothing() {
+    let app = AppBuilder::new()
+        .error_projection::<Wire>()
+        .build_state()
+        .await
+        .merge_router(routes())
+        .merge_router(Routes::new().nest("/legacy", teapot()))
+        .merge_router(Routes::new().nest("/other", teapot()))
+        .build();
+
+    let resp = raw(app.clone(), "GET", "/legacy/missing", &[], Body::empty()).await;
+    assert_eq!(resp.status(), StatusCode::IM_A_TEAPOT);
+
+    // Outside the prefixes the framework 404 still answers, in the envelope.
+    let resp = raw(app, "GET", "/missing", &[], Body::empty()).await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(header(&resp, "x-envelope"), Some("wire"));
+}
+
 #[r2e_core::test(flavor = "current_thread")]
 async fn a_route_level_method_fallback_is_not_overridden() {
     let app = AppBuilder::new()

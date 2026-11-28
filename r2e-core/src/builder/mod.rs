@@ -780,6 +780,10 @@ struct BuilderConfig {
     /// Routes-stage plugin effects: queued by the Graph-stage deferred action
     /// and drained in `build()`, once every controller has registered.
     routes_effects: Vec<RoutesEffect>,
+    /// Who installed the application's router fallback, once a registered
+    /// route fragment carried one. A router has a single fallback: the second
+    /// claim is a boot error naming both (see `claim_fallback`).
+    fallback_origin: Option<FallbackOrigin>,
     /// Whether to install the pre-routing trailing-slash normalization rewrite.
     normalize_path: bool,
     /// Application callback invoked once per caught panic, set via
@@ -1137,4 +1141,74 @@ impl Default for AppBuilder<NoState, BuiltinProvisions, TNil, TNil> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The registration that installed the application's router fallback.
+#[derive(Debug, Clone)]
+pub(crate) struct FallbackOrigin {
+    /// What registered it, for diagnostics: a controller type or a call site.
+    label: String,
+    /// A hand-written router (`merge_router` / `register_routes`), as opposed
+    /// to a controller `#[fallback]`: its responses are whatever the router
+    /// answers, outside the application's error envelope.
+    raw: bool,
+}
+
+impl FallbackOrigin {
+    pub(crate) fn controller(type_name: &str) -> Self {
+        Self {
+            label: format!("the `#[fallback]` route of controller `{type_name}`"),
+            raw: false,
+        }
+    }
+
+    pub(crate) fn raw_router(at: &std::panic::Location<'_>) -> Self {
+        Self {
+            label: format!("the router registered at {at}"),
+            raw: true,
+        }
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
+
+    pub(crate) fn is_raw(&self) -> bool {
+        self.raw
+    }
+}
+
+impl BuilderConfig {
+    /// Record that `routes` — about to be merged into the application — is
+    /// what answers unmatched requests, when it carries a fallback.
+    ///
+    /// # Panics
+    ///
+    /// When another fragment already claimed the fallback. The backend would
+    /// panic on the merge anyway, at build time and without saying which two
+    /// registrations collide; this names both, at the registration.
+    pub(crate) fn claim_fallback<S>(
+        &mut self,
+        routes: &crate::http::Routes<S>,
+        origin: impl FnOnce() -> FallbackOrigin,
+    ) {
+        if !routes.has_custom_fallback() {
+            return;
+        }
+        let origin = origin();
+        if let Some(first) = &self.fallback_origin {
+            panic!("{}", two_fallbacks_message(first.label(), origin.label()));
+        }
+        self.fallback_origin = Some(origin);
+    }
+}
+
+/// The boot error for a second router fallback.
+pub(crate) fn two_fallbacks_message(first: &str, second: &str) -> String {
+    format!(
+        "two router fallbacks: {first} and {second} both answer unmatched requests, and an \
+         application has a single fallback. Keep one of them; to scope a hand-written \
+         router's fallback to a path prefix, mount it with `Routes::new().nest(\"/prefix\", \
+         router)` before registering it. See docs/features/20-proxy-catch-all.md."
+    )
 }

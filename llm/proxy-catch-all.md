@@ -1,7 +1,7 @@
 ---
 topic: proxy-catch-all
 features: core
-tokens: ~400
+tokens: ~500
 requires: core-concepts
 ---
 
@@ -11,6 +11,7 @@ requires: core-concepts
 
 - Stay in a controller: `#[any("/prefix/{*path}")]` for every method + wildcard path, `#[fallback]` for the app-wide catch-all — do NOT hand-mount an axum fallback.
 - `#[fallback]` takes no path argument, and its controller must have no path prefix.
+- One fallback per app: a second `#[fallback]` controller, or a `merge_router(routes)` whose `routes` has `.fallback(..)`, panics at registration. A merged router's fallback is app-wide and replaces the enveloped 404 — scope it with `merge_router(Routes::new().nest("/legacy", legacy))`.
 - `req: Request` (from `r2e::http::extract::Request`) must be the LAST handler parameter.
 - Stream through with `Body::from_stream(...)` or `Body::new(req.into_body())`.
 - Guards, interceptors, DI and TestApp all work here, but `#[any]`/`#[fallback]`/wildcard routes are excluded from OpenAPI.

@@ -551,7 +551,27 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
 
     /// Register a hand-written [`Routes`](crate::http::Routes) fragment to be
     /// merged into the application.
+    ///
+    /// # The fragment's fallback is the application's
+    ///
+    /// Routes are merged, not mounted: a `.fallback(..)` on the fragment
+    /// answers **every** unmatched request of the application, not only those
+    /// near the fragment's own paths. It replaces the framework 404, so those
+    /// responses leave the application's error envelope
+    /// (`error_projection::<E>()`) — a warning is logged at boot when both are
+    /// present. To keep a fallback local to a prefix, nest the fragment first:
+    /// `register_routes(Routes::new().nest("/legacy", legacy))`.
+    ///
+    /// # Panics
+    ///
+    /// When the fragment carries a fallback and one is already registered
+    /// (another fragment, or a controller `#[fallback]`): an application has a
+    /// single fallback. The message names both registrations.
+    #[track_caller]
     pub fn register_routes(mut self, routes: crate::http::Routes<T>) -> Self {
+        let at = std::panic::Location::caller();
+        self.shared
+            .claim_fallback(&routes, || super::FallbackOrigin::raw_router(at));
         self.routes.push(routes);
         self
     }
@@ -563,7 +583,10 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
     /// pre-existing backend router, bridge it first with
     /// `r2e::http::axum_compat::from_router`.
     ///
-    /// This is a convenience alias for [`register_routes`](Self::register_routes).
+    /// This is a convenience alias for [`register_routes`](Self::register_routes),
+    /// with the same fallback rule: the router's `.fallback(..)` becomes the
+    /// application's, and a second one is a boot panic.
+    #[track_caller]
     pub fn merge_router(self, routes: crate::http::Routes<T>) -> Self {
         self.register_routes(routes)
     }
@@ -819,10 +842,14 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         }
 
         let routes = C::routes(state, Arc::clone(&core), &self.bean_context);
-        self.routes.push(match prefix {
+        let routes = match prefix {
             Some(prefix) => crate::http::Routes::new().nest(prefix, routes),
             None => routes,
+        };
+        self.shared.claim_fallback(&routes, || {
+            super::FallbackOrigin::controller(std::any::type_name::<C>())
         });
+        self.routes.push(routes);
 
         if first {
             self.wire_controller_lifecycle::<C, W>(core);
@@ -1113,6 +1140,20 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
                 effect(&mut rctx);
             }
             for r in rctx.into_routers() {
+                // A plugin router with a fallback (the SPA shell) against one
+                // the application registered: say which, instead of letting
+                // the backend panic on the merge.
+                if r.has_custom_fallback() && app.has_custom_fallback() {
+                    let first = self
+                        .shared
+                        .fallback_origin
+                        .as_ref()
+                        .map_or("a router registered by a plugin", |o| o.label());
+                    panic!(
+                        "{}",
+                        super::two_fallbacks_message(first, "a router registered by a plugin")
+                    );
+                }
                 app = app.merge(r);
             }
         }
@@ -1122,8 +1163,23 @@ impl<T: Clone + Send + Sync + 'static> AppBuilder<T> {
         // and the router's 404/405 below. `HttpError` when none was installed.
         let projector = self
             .bean_context
-            .try_get::<crate::ErrorProjector>()
-            .unwrap_or_default();
+            .try_get::<crate::ErrorProjector>();
+        // A hand-written router's fallback answers every unmatched request in
+        // its own format. With an application envelope installed, that is a
+        // second wire shape for 404s — legitimate (a proxy, a legacy backend),
+        // but never something to discover in production.
+        if projector.is_some()
+            && let Some(origin) = self.shared.fallback_origin.as_ref().filter(|o| o.is_raw())
+        {
+            tracing::warn!(
+                fallback = origin.label(),
+                "unmatched requests are answered by a hand-written router fallback, outside \
+                 the application's error envelope (`error_projection`): nest that router \
+                 under a prefix to scope its fallback, or answer through a controller \
+                 `#[fallback]`"
+            );
+        }
+        let projector = projector.unwrap_or_default();
 
         // Framework 404/405 in the envelope — after every route, controller
         // `#[fallback]` and Routes-stage router has been merged (a custom
