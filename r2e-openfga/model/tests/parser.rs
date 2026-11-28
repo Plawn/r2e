@@ -160,3 +160,110 @@ fn condition_body_is_verbatim_hash_in_cel_string_is_not_a_comment() {
     let model = parse(&dsl).unwrap();
     assert_eq!(model.conditions["c1"].expression, "region == \"EU # west\"");
 }
+
+#[test]
+fn schema_keyword_requires_a_separated_version() {
+    let e = parse_err("model\n  schema\ntype user\n");
+    assert_eq!(e, "line 2: expected `schema <version>`, found `schema`");
+    let e = parse_err("model\n  schema1.1\ntype user\n");
+    assert_eq!(e, "line 2: expected `schema <version>`, found `schema1.1`");
+}
+
+#[test]
+fn identifiers_must_start_with_a_letter_or_underscore() {
+    let e = parse_err(&format!("{HEADER}type 9lives\n"));
+    assert_eq!(e, "line 3: invalid type name `9lives`");
+
+    // `_` may lead, `-` and digits may follow.
+    let model = parse(&format!("{HEADER}type _user-2\n")).unwrap();
+    assert_eq!(model.type_definitions[0].type_name, "_user-2");
+}
+
+#[test]
+fn relation_tokens_reject_a_leading_digit_and_accept_a_leading_underscore() {
+    let e = parse_err(&format!(
+        "{HEADER}type user\ntype doc\n  relations\n    define viewer: [1user]\n"
+    ));
+    assert_eq!(e, "line 6: unexpected character `1`");
+
+    let model = parse(&format!(
+        "{HEADER}type _user\ntype doc\n  relations\n    define _viewer: [_user]\n"
+    ))
+    .unwrap();
+    let doc = model.type_definition("doc").unwrap();
+    assert_eq!(
+        doc.directly_related_user_types("_viewer")[0].type_name,
+        "_user"
+    );
+}
+
+#[test]
+fn tupleset_after_from_cannot_be_a_keyword() {
+    let e = parse_err(&format!(
+        "{HEADER}type user\ntype doc\n  relations\n    define viewer: owner from or\n"
+    ));
+    assert_eq!(e, "line 6: expected relation name after `from`, found `or`");
+}
+
+#[test]
+fn comment_needs_preceding_whitespace_not_following() {
+    // `#comment` (no space after `#`) is still a comment once preceded by
+    // whitespace; a `#` ending the line is one too.
+    let model = parse(&format!(
+        "{HEADER}type user\ntype doc\n  relations\n    define viewer: [user] #comment\n    define editor: [user] #\n"
+    ))
+    .unwrap();
+    let doc = model.type_definition("doc").unwrap();
+    assert_eq!(doc.directly_related_user_types("viewer").len(), 1);
+    assert_eq!(doc.directly_related_user_types("editor").len(), 1);
+}
+
+#[test]
+fn bool_condition_parameter_type() {
+    let model = parse(&format!(
+        "{HEADER}type user\n\ncondition c(flag: bool) {{ flag }}\n"
+    ))
+    .unwrap();
+    let param = &model.conditions["c"].parameters["flag"];
+    assert_eq!(param.type_name, "TYPE_NAME_BOOL");
+    assert!(param.generic_types.is_empty());
+}
+
+#[test]
+fn condition_body_tracks_nested_braces() {
+    let model = parse(&format!(
+        "{HEADER}type user\n\ncondition c(m: map<string>) {{ m == {{\"k\": {{\"v\": 1}}}} }}\n"
+    ))
+    .unwrap();
+    assert_eq!(model.conditions["c"].expression, "m == {\"k\": {\"v\": 1}}");
+}
+
+#[test]
+fn condition_body_skips_escaped_quotes_in_strings() {
+    let model = parse(&format!(
+        "{HEADER}type user\n\ncondition c(s: string) {{ s == \"a\\\"}}\" }}\n"
+    ))
+    .unwrap();
+    assert_eq!(model.conditions["c"].expression, "s == \"a\\\"}\"");
+}
+
+#[test]
+fn unterminated_string_literal_ends_with_its_line() {
+    // String state does not carry across lines: the `}` on the next line
+    // closes the body (CEL itself rejects the literal later, server-side).
+    let model = parse(&format!(
+        "{HEADER}type user\n\ncondition c(s: string) {{\n  s == \"abc\n}}\n"
+    ))
+    .unwrap();
+    assert_eq!(model.conditions["c"].expression, "s == \"abc");
+}
+
+#[test]
+fn unterminated_condition_body_reports_the_last_line() {
+    let err = parse(&format!(
+        "{HEADER}type user\n\ncondition c(s: string) {{\n  s == \"a\"\n\n\n"
+    ))
+    .unwrap_err();
+    assert_eq!(err.line, 8);
+    assert_eq!(err.message, "unterminated condition body for `c`");
+}

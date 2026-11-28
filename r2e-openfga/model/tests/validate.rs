@@ -87,3 +87,14 @@ fn all_errors_are_collected() {
     ));
     assert_eq!(errs.len(), 2, "{errs:?}");
 }
+
+#[test]
+fn tupleset_with_only_userset_or_wildcard_subjects_is_not_cross_checked() {
+    // The lenient cross-type check only looks at plain subject types:
+    // `team#member` and `user:*` are skipped, so `reader` is not required
+    // on `team` / `user`.
+    let dsl = format!(
+        "{HEADER}type user\ntype team\n  relations\n    define member: [user]\ntype doc\n  relations\n    define parent: [team#member, user:*]\n    define viewer: reader from parent\n"
+    );
+    validate(&parse(&dsl).unwrap()).unwrap();
+}
