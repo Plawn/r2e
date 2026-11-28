@@ -1,10 +1,14 @@
 // diesel's `QueryableByName` derive expands to `field: field` with our spans.
 #![allow(clippy::redundant_field_names)]
 
+use std::time::Duration;
+
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{sql_query, QueryableByName, RunQueryDsl, SqliteConnection};
 use r2e_core::http::StatusCode;
-use r2e_core::{AppBuilder, BeanLookup, ManagedContext, ManagedGuard, ManagedOutcome};
+use r2e_core::{
+    AppBuilder, BeanLookup, ManagedContext, ManagedGuard, ManagedOutcome, ManagedResource,
+};
 use r2e_data_diesel::{DbPool, DbTx, DieselTx};
 
 use crate::support::{cleanup_sqlite_file, live_url, sqlite_file_path};
@@ -78,6 +82,70 @@ async fn commits_and_rolls_back_from_http_outcome() {
         .get_result::<Count>(&mut connection)
         .unwrap();
     assert_eq!(count.count, 1);
+}
+
+/// `abort` is the synchronous fallback for a handler that never reached
+/// `finalize` (panic, cancellation): it must give the connection — still
+/// inside its open transaction — back *now*, so r2d2 discards it and the
+/// uncommitted row is gone. The pool has a single slot, so a connection the
+/// aborted transaction kept would make the next checkout time out.
+#[r2e_core::test]
+async fn abort_releases_the_connection_and_discards_the_open_transaction() {
+    let path = sqlite_file_path("tx-abort");
+    let pool = Pool::builder()
+        .max_size(1)
+        .connection_timeout(Duration::from_millis(500))
+        .build(ConnectionManager::<SqliteConnection>::new(path.as_str()))
+        .unwrap();
+    sql_query(CREATE_ITEMS)
+        .execute(&mut pool.get().unwrap())
+        .unwrap();
+    let app = AppBuilder::new().provide(pool.clone()).build_state().await;
+
+    let mut guard = ManagedGuard::<DieselTx<SqliteConnection>, _>::acquire(ManagedContext::new(
+        app.state(),
+        "Test",
+        "abort",
+    ))
+    .await
+    .unwrap();
+    guard
+        .resource_mut()
+        .run(|connection| {
+            sql_query("INSERT INTO items(name) VALUES ('aborted')").execute(connection)
+        })
+        .await
+        .unwrap();
+
+    abort(&mut guard);
+
+    // The guard is still alive: only `abort` can have freed the single slot.
+    let mut connection = pool
+        .get()
+        .expect("abort must hand the transaction's connection back to the pool");
+    let count = sql_query("SELECT COUNT(*) AS count FROM items")
+        .get_result::<Count>(&mut connection)
+        .unwrap();
+    assert_eq!(
+        count.count, 0,
+        "the aborted transaction must not be committed"
+    );
+    drop(connection);
+
+    // Nothing is left to finalize once aborted.
+    guard
+        .finalize(&ManagedOutcome::from_status(StatusCode::OK))
+        .await
+        .unwrap();
+
+    cleanup_sqlite_file(&path);
+}
+
+fn abort<R, S>(guard: &mut ManagedGuard<R, S>)
+where
+    R: ManagedResource<S>,
+{
+    guard.resource_mut().abort();
 }
 
 /// `DbTx::generation()` must describe the pool the transaction actually ran on.

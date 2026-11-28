@@ -1,13 +1,14 @@
 // diesel's `QueryableByName` derive expands to `field: field` with our spans.
 #![allow(clippy::redundant_field_names)]
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::{sql_query, QueryableByName, RunQueryDsl, SqliteConnection};
-use r2e_core::ServiceComponent;
-use r2e_data_diesel::DbPool;
 use r2e_core::rt::CancelToken;
+use r2e_core::ServiceComponent;
+use r2e_data_diesel::{DbPool, PoolError, PoolFactory};
 
 use crate::support::{cleanup_sqlite_file, live_url, sqlite_file_path};
 
@@ -88,6 +89,69 @@ async fn snapshot_pairs_the_active_pool_with_its_generation() {
 
     cleanup_sqlite_file(&initial_url);
     cleanup_sqlite_file(&rotated_url);
+}
+
+/// A rotation the factory refuses is recorded on the pool — `last_error()` is
+/// the only place a failed live-config rotation surfaces — and the pool stays
+/// on the generation it had. The next successful rotation clears it.
+#[r2e_core::test]
+async fn failed_rotation_is_recorded_and_cleared_by_the_next_success() {
+    let initial_url = sqlite_file_path("rotate-error-initial");
+    let recovered_url = sqlite_file_path("rotate-error-recovered");
+    let (url, registry) = live_url("db.url", &initial_url);
+    let factory: PoolFactory<SqliteConnection> = Arc::new(|url: String| {
+        if let Some(reason) = url.strip_prefix("refuse:") {
+            return Err(PoolError(format!("refused {reason}")));
+        }
+        Pool::builder()
+            .build(ConnectionManager::<SqliteConnection>::new(url))
+            .map_err(|error| PoolError(error.to_string()))
+    });
+    let pool = DbPool::<SqliteConnection>::connect_with(factory, url)
+        .await
+        .unwrap();
+    assert_eq!(pool.last_error(), None);
+
+    let token = CancelToken::new();
+    let service = pool.clone();
+    let service_token = token.clone();
+    let handle = r2e_core::rt::spawn(async move {
+        service.start(service_token).await;
+    });
+
+    assert!(registry.set("db.url", "refuse:the-bad-url"));
+    for _ in 0..200 {
+        if pool.last_error().is_some() {
+            break;
+        }
+        r2e_core::rt::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(pool.last_error().as_deref(), Some("refused the-bad-url"));
+    assert_eq!(
+        pool.generation(),
+        0,
+        "a refused rotation must not swap the pool"
+    );
+
+    assert!(registry.set("db.url", recovered_url.as_str()));
+    for _ in 0..200 {
+        if pool.generation() == 1 {
+            break;
+        }
+        r2e_core::rt::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(pool.generation(), 1);
+    assert_eq!(
+        pool.last_error(),
+        None,
+        "a successful rotation clears the error"
+    );
+
+    token.cancel();
+    handle.await.unwrap();
+
+    cleanup_sqlite_file(&initial_url);
+    cleanup_sqlite_file(&recovered_url);
 }
 
 fn table_count(pool: &Pool<ConnectionManager<SqliteConnection>>, table: &str) -> i64 {

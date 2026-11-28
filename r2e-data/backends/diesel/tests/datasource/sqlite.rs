@@ -14,7 +14,8 @@ use crate::support::{cleanup_sqlite_file, live_url, sqlite_file_path};
 static MIGRATIONS: EmbeddedMigrations = embed_migrations!("tests/fixtures/migrations");
 
 /// A migration set whose SQL cannot parse — the failure path.
-static BROKEN_MIGRATIONS: EmbeddedMigrations = embed_migrations!("tests/fixtures/broken-migrations");
+static BROKEN_MIGRATIONS: EmbeddedMigrations =
+    embed_migrations!("tests/fixtures/broken-migrations");
 
 r2e_data_diesel::datasource_tag!(
     /// A second datasource, reading `datasource.reporting.*` and providing
@@ -39,10 +40,11 @@ fn config(url: &str, migrate_at_start: bool) -> R2eConfig {
 /// Whether the migrator's table exists — the proof that migrations ran.
 fn has_items_table(pool: &Pool<ConnectionManager<SqliteConnection>>) -> bool {
     let mut connection = pool.get().unwrap();
-    let rows: Vec<Count> =
-        sql_query("SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='items'")
-            .load(&mut *connection)
-            .unwrap();
+    let rows: Vec<Count> = sql_query(
+        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type='table' AND name='items'",
+    )
+    .load(&mut *connection)
+    .unwrap();
     rows[0].count == 1
 }
 
@@ -187,4 +189,82 @@ async fn missing_url_fails_with_a_pointed_error() {
         error.contains("`datasource.url` is not set"),
         "boot error should name the missing key, got: {error}"
     );
+}
+
+/// `<prefix>.enabled = false` cannot disable a datasource, so the plugin warns
+/// that the flag is ignored — and only then: an enabled datasource boots
+/// without that warning.
+#[r2e_core::test]
+async fn only_a_disabled_datasource_warns_that_the_flag_is_ignored() {
+    let path = sqlite_file_path("ds-enabled-warning");
+
+    let enabled = warnings_during_boot(config(&path, false)).await;
+    assert!(
+        !enabled.iter().any(|w| w.contains("is ignored")),
+        "an enabled datasource must not warn, got: {enabled:?}"
+    );
+
+    let mut disabled_config = config(&path, false);
+    disabled_config.set("datasource.enabled", false.into());
+    let disabled = warnings_during_boot(disabled_config).await;
+    assert!(
+        disabled
+            .iter()
+            .any(|w| w.contains("`datasource.enabled = false` is ignored")),
+        "a disabled datasource must warn that the flag is ignored, got: {disabled:?}"
+    );
+
+    cleanup_sqlite_file(&path);
+}
+
+/// The `WARN` messages emitted on this thread while booting a datasource.
+async fn warnings_during_boot(config: R2eConfig) -> Vec<String> {
+    let capture = WarnCapture::default();
+    let _guard = tracing::subscriber::set_default(capture.clone());
+    let _app = AppBuilder::new()
+        .override_config(config)
+        .load_config::<()>()
+        .plugin(DieselDataSource::<SqliteConnection>::new())
+        .build_state()
+        .await;
+    capture.0.lock().unwrap().clone()
+}
+
+/// Minimal subscriber recording the `message` of every `WARN` event.
+#[derive(Clone, Default)]
+struct WarnCapture(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for WarnCapture {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        if *event.metadata().level() != tracing::Level::WARN {
+            return;
+        }
+        struct Message(String);
+        impl tracing::field::Visit for Message {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut message = Message(String::new());
+        event.record(&mut message);
+        self.0.lock().unwrap().push(message.0);
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
 }
